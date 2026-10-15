@@ -8,11 +8,11 @@
 # The fixture mirrors the shapes the three CI catches of gh-ocannl-1235 had: a
 # library module reached from tests in other directories through a chain of
 # libraries; a test whose alias runs an executable of another name; a scan that
-# reads library sources as data and links none of them. Each leg compares the
-# printed list with the exact expected one, so an over-reach fails as surely as
-# a miss. The real repository's three commits are the PR's reproduction, since
-# reading its graph needs the full opam switch, which this harness's CI job
-# does not install.
+# reads library sources as data and links none of them. It adds a ppx rewriter
+# and a library this build does not compile. Each leg compares the printed list
+# with the exact expected one, so an over-reach fails as surely as a miss. The
+# real repository's three commits are the PR's reproduction, since reading its
+# graph needs the full opam switch, which this harness's CI job does not install.
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
 harness_args "$@"
@@ -37,6 +37,8 @@ printf '(lang dune 3.20)\n' >"$repo/dune-project"
 cat >"$repo/lib/dune" <<'DUNE'
 (library (name core) (modules core helper))
 (library (name leaf) (modules leaf))
+(library (name myppx) (kind ppx_rewriter) (modules myppx))
+(library (name optlib) (modules optlib) (optional) (libraries not_installed_anywhere))
 DUNE
 cat >"$repo/mid/dune" <<'DUNE'
 (library
@@ -48,7 +50,7 @@ cat >"$repo/t1/dune" <<'DUNE'
 (test (name t_core) (modules t_core) (libraries mid))
 (test (name t_leaf) (modules t_leaf) (libraries leaf))
 (tests (names ta tb) (modules ta tb shared) (libraries leaf))
-(library (name tlib) (modules m_one m_two))
+(library (name tlib) (modules m_one m_two) (preprocess (pps myppx)))
 (rule (alias runtest-m_one) (action (progn)))
 DUNE
 cat >"$repo/t2/dune" <<'DUNE'
@@ -67,7 +69,7 @@ cat >"$repo/t2/dune" <<'DUNE'
 (rule (alias runtest-orphan) (action (progn)))
 (rule (alias scans) (deps (alias runtest-scan)) (action (progn)))
 DUNE
-for f in lib/core.ml lib/helper.ml lib/leaf.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
+for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
   t1/t_core.ml t1/t_leaf.ml t1/ta.ml t1/tb.ml t1/shared.ml t1/m_one.ml t1/m_two.ml \
   t2/gen.ml t2/scan.ml; do
   printf 'let () = ()\n' >"$repo/$f"
@@ -121,6 +123,20 @@ fi
 if harness_leg 'library module alias'; then
   affected --files t1/m_one.ml
   expect 'a per-module alias of a library is attributed by the module name' 0 @t1/runtest-m_one
+fi
+
+if harness_leg 'ppx rewriter'; then
+  affected --files lib/myppx.ml
+  expect 'a ppx rewriter reaches a library it preprocesses (an edge dune describe workspace omits)' 0 \
+    @t1/runtest-m_one @t2/runtest-scan
+fi
+
+if harness_leg 'undescribed stanza'; then
+  affected --files lib/optlib.ml
+  if [ "$rc" = 3 ] && grep -q 'UNMAPPED: lib/optlib.ml' "$err" &&
+     grep -q 'does not build: library optlib (lib)' "$err" && [ "$(cat "$out")" = @t2/runtest-scan ]; then
+    report 0 'a module of a library this build does not compile is UNMAPPED, exit 3, its rule readers still listed'
+  else report 1 'a module of a library this build does not compile is UNMAPPED, exit 3, its rule readers still listed' "exit $rc; $(cat "$out" "$err")"; fi
 fi
 
 if harness_leg 'dune file'; then
@@ -251,6 +267,9 @@ if harness_leg 'negative controls'; then
   control 'an undescribed tests module reaches its directory'"'"'s tests stanzas' \
     '@ix = @named ? @named : @tests;' '@ix = @named;' \
     --files t1/shared.ml -- @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
+  control 'external-lib-deps'"'"' edges are what carry a ppx rewriter to a described library' \
+    'push @edges, [$i, field($v, "internal_deps")];' 'push @edges, [$i, field($v, "internal_deps")] if $kind eq "tests";' \
+    --files lib/myppx.ml -- @t1/runtest-m_one @t2/runtest-scan
 fi
 
 finish

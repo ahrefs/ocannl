@@ -2198,16 +2198,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh run build`
   or `fresh`; stderr says what each changed path reached and gives per-directory counts. Run it
   before the pre-push batch, with the branch's base as REV (gh-ocannl-1235). It reads dune's own
-  description, never a hand-kept map: `dune describe workspace` (modules and library edges, ppx
-  rewriters included), `dune describe external-lib-deps` (the `tests` stanzas the first omits),
-  `dune show aliases`/`targets`, and `dune rules` for each alias's own targets, whose dependencies
-  are how a scan that READS a changed file (an `.ml`, an agent note, a script) is found without
-  linking it. Its header states the boundary as an allowlist; what falls outside is reported on
-  stderr, and a changed `.ml`/`.mli` no stanza of this build owns (a deleted module, a CUDA-only
-  one on a box without cudajit) exits 3. `tools/test-affected-tests.sh` pins it on a fixture project,
-  with negative controls for the glob, rule and `tests`-module paths.
-  - Reach is link-level: a module reaches its whole library, and every stanza requiring that library.
-    So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 320
+  description, never a hand-kept map: `dune describe workspace` (modules and library edges),
+  `dune describe external-lib-deps` (the ppx-rewriter edges and the `tests` stanzas the first
+  omits), `dune show aliases`/`targets`, and `dune rules` for each alias's own targets, whose
+  dependencies are how a scan that READS a changed file (an `.ml`, an agent note, a script) is
+  found without linking it. Its header states the boundary as an allowlist; what falls outside is
+  reported on stderr, and a changed `.ml`/`.mli` no stanza of this build owns (a deleted module, a
+  CUDA-only one on a box without cudajit) exits 3. `tools/test-affected-tests.sh` pins it on a
+  fixture project, with negative controls for the glob, rule, ppx-edge and `tests`-module paths.
+  - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
+    So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380
     to 470 of the ~500 per-test aliases, including `arrayjit/test` and the `test/training` members:
     a cross-cutting change in AGENTS.md's sense, and the list is the reach CI will exercise. The
     three misses that filed the issue are all inside it: `Cost_model` (staging#1011) lists

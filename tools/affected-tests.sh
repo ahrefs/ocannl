@@ -23,10 +23,12 @@
 # What dune is asked (each answer is checked against the forms listed below,
 # and an answer of any other form stops the run, exit 2):
 #   - `dune describe workspace --with-pps`: each library and `executables`
-#     stanza, its modules, and the project libraries it requires (ppx
-#     rewriters included). It omits `tests` stanzas.
-#   - `dune describe external-lib-deps`: the `tests` stanzas, with the project
-#     libraries each one names.
+#     stanza this build compiles, its modules, and the libraries it requires.
+#     It omits `tests` stanzas and leaves preprocessing out of `requires`.
+#   - `dune describe external-lib-deps`: every stanza with the project
+#     libraries it names, ppx rewriters included (`tests` ones and those this
+#     build does not compile too, such as an optional backend library; their
+#     modules stay unknown). Its edges are added to the first answer's.
 #   - `dune show aliases DIR...` and `dune show targets DIR...`: the aliases
 #     and the targets of every directory holding a `dune` file.
 #   - `dune rules TARGET...`, for each per-test alias's own targets (below):
@@ -50,15 +52,15 @@
 #     directory and module name: `foo.ml`, `foo.mli`, a `(select)` choice
 #     `foo.cudajit.ml` are `Foo`); failing that, in a directory with `tests`
 #     stanzas, the one named after it or else every one there, since dune does
-#     not describe their modules. A changed `dune` file reaches every stanza and
-#     every per-test alias of its directory. Reach then spreads to each stanza
-#     requiring a reached library, to a fixpoint.
+#     not describe their modules; failing that, the stanzas of its directory
+#     this build does not compile, and the path is UNMAPPED. A changed `dune`
+#     file reaches every stanza and every per-test alias of its directory.
+#     Reach then spreads to each stanza requiring a reached library, to a
+#     fixpoint.
 #   - An alias is printed when its directory's `dune` file changed, when an
 #     owner is reached, or when a rule of its own targets reads a changed path
 #     (a file, or a glob over source files): the repository scans are found
-#     this way. A changed `.ml`/`.mli` reaching nothing (a deleted module, one
-#     no stanza of this build compiles) is UNMAPPED; any other changed path
-#     reaching nothing is listed as unread.
+#     this way. A changed path reaching nothing else is listed as unread.
 #   - Not seen: an alias's action itself (dune does not dump it) and anything
 #     its own targets' rules reach only through another generated file.
 #
@@ -238,27 +240,47 @@ for my $i (0 .. $#st) {   # a uid outside %lib_by_uid is an installed library
   $st[$i]{to} = [map { $lib_by_uid{$_} } grep { defined $lib_by_uid{$_} } @{$requires[$i]}];
 }
 
-# Test stanzas: ((CONTEXT (ENTRY...))), each ENTRY (KIND FIELDS).
+# Every stanza with its project-library edges, ppx rewriters included:
+# ((CONTEXT (ENTRY...))), each ENTRY (KIND FIELDS). `dune describe workspace`
+# leaves preprocessing out of `requires` and omits `tests` stanzas, and this
+# listing leaves out stanzas with no dependency at all, so the two are merged:
+# an entry here adds its edges to the described stanza of the same kind,
+# directory and names, and one with no such stanza is added -- a `tests`
+# stanza, or one this build does not compile (an optional backend library),
+# whose modules are then unknown.
 my $ext = parse_sexp(slurp("$tmp/lib-deps"), "dune describe external-lib-deps");
 @$ext == 1 or fail("dune describe external-lib-deps printed " . scalar(@$ext) . " contexts, expected one");
 my (undef, $entries) = pair($ext->[0], "dune describe external-lib-deps");
-my %skipped_optional;
+my %described = map { join("\0", $st[$_]{kind}, $st[$_]{dir}, sort @{$st[$_]{names}}) => $_ } 0 .. $#st;
+my @edges;   # [stanza index, internal_deps]
 for my $e (@$entries) {
   my ($kind, $v) = pair($e, "dune describe external-lib-deps");
   $kind =~ /^(executables|tests|library)$/
     or fail("dune describe external-lib-deps entry \"$kind\" is outside this helper's boundary (executables, tests, library)");
-  next unless $kind eq "tests";
   my @names = map { atom($_, "names") } items(field($v, "names"));
   my $dir = atom(field($v, "source_dir"), "source_dir");
-  @names or fail("a tests entry without names in $dir");
-  my @to;
-  for my $d (items(field($v, "internal_deps"))) {
-    my ($n, $k) = pair($d, "internal_deps");
-    if (defined $lib_by_name{$n}) { push @to, $lib_by_name{$n} }
-    elsif ($k eq "optional") { $skipped_optional{$n} = 1 }
-    else { fail("tests @names ($dir) uses project library $n, which dune describe workspace does not list") }
+  @names or fail("a $kind entry without names in $dir");
+  my $i = $described{join("\0", $kind, $dir, sort @names)};
+  unless (defined $i) {
+    push @st, { kind => $kind, dir => $dir, names => \@names, units => { map { $_ => 1 } @names }, to => [],
+                undescribed => $kind ne "tests" };
+    $i = $#st;
+    if ($kind eq "library") {
+      !defined $lib_by_name{$names[0]} or fail("two libraries answer to the name $names[0]");
+      $lib_by_name{$names[0]} = $i;
+    }
   }
-  push @st, { kind => "tests", dir => $dir, names => \@names, units => { map { $_ => 1 } @names }, to => \@to };
+  push @edges, [$i, field($v, "internal_deps")];
+}
+my %skipped_optional;
+for my $edge (@edges) {
+  my ($i, $deps) = @$edge;
+  for my $d (items($deps)) {
+    my ($n, $k) = pair($d, "internal_deps");
+    if (defined $lib_by_name{$n}) { push @{$st[$i]{to}}, $lib_by_name{$n} }
+    elsif ($k eq "optional") { $skipped_optional{$n} = 1 }
+    else { fail("$st[$i]{kind} @{$st[$i]{names}} ($st[$i]{dir}) uses project library $n, which dune does not describe") }
+  }
 }
 
 # Per-directory listings: "DIR:" headers, one name per line.
@@ -372,7 +394,6 @@ if (@own_targets) {
 
 # Changed paths -> stanzas, and the aliases whose own targets read them.
 my (%hit, %dune_dirs, %read_by, @unmapped, @unread);
-my $unowned = 0;   # a changed module no stanza of this build owns
 my @changed = grep { $_ ne "" } map { s{^\./}{}r } split /\n/, slurp("$tmp/changed");
 sub label { my $s = $st[$_[0]]; "$s->{kind} @{$s->{names}} ($s->{dir})" }
 for my $p (@changed) {
@@ -382,33 +403,36 @@ for my $p (@changed) {
       if ($reads{$t}{$p} || grep { $_->[0] eq $d && $_->[1]->($b) } @{$globs{$t}}) { $read_by{$p}{$a->{name}} = 1; last }
     }
   }
-  my @ix;
-  my $how = "";
+  my $n_read = keys %{$read_by{$p} // {}};
+  my (@ix, @parts, $unmapped);
   if ($b eq "dune") {
     $dune_dirs{$d} = 1;
     @ix = grep { $st[$_]{dir} eq $d } 0 .. $#st;
-    $how = "every per-test alias of $d, and its stanzas:";
+    push @parts, "every per-test alias of $d, and its " . scalar(@ix) . " stanza(s)";
   } elsif ($b =~ /^([^.]+)(?:\.[^.]+)*\.mli?$/) {
     my $mod = ucfirst $1;
+    my $how = "module $mod of";
     @ix = @{$by_modkey{"$d\0$mod"} // []};
-    $how = "module $mod of";
     unless (@ix) {
       my @tests = grep { $st[$_]{kind} eq "tests" && $st[$_]{dir} eq $d } 0 .. $#st;
       my @named = grep { $st[$_]{units}{lcfirst $mod} } @tests;
       @ix = @named ? @named : @tests;
       $how = @named ? "test module $mod of" : "a module of a tests stanza here (dune does not describe theirs), so all of";
     }
+    unless (@ix) {
+      # No stanza of this build owns it. One that dune lists but does not
+      # compile here (an optional backend) may: those are reached, unknown
+      # modules and all, and the path stays UNMAPPED either way.
+      @ix = grep { $st[$_]{undescribed} && $st[$_]{dir} eq $d } 0 .. $#st;
+      $how = "no stanza of this build owns $mod; reaching the stanzas dune lists here but does not build:";
+      $unmapped = 1;
+    }
+    push @parts, "$how " . (@ix > 3 ? scalar(@ix) . " stanzas" : join(", ", map { label($_) } @ix)) if @ix;
   }
   $hit{$_} = 1 for @ix;
-  my $n_read = keys %{$read_by{$p} // {}};
-  my @parts;
-  push @parts, "$how " . (@ix > 3 ? scalar(@ix) . " stanzas" : join(", ", map { label($_) } @ix)) if @ix || $how =~ /^every/;
-  $unowned = 1 if !@ix && $b =~ /\.mli?$/;
-  push @parts, "a module no stanza of this build owns" if !@ix && $how =~ /^(?:module|a module)/ && $n_read;
   push @parts, "read by the rules of $n_read alias(es)" if $n_read;
-  if (@parts) { print STDERR "affected: $p: " . join("; ", @parts) . "\n" }
-  elsif ($b =~ /\.mli?$/) { push @unmapped, $p }
-  else { push @unread, $p }
+  print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
+  if ($unmapped) { push @unmapped, $p } elsif (!@parts) { push @unread, $p }
 }
 
 # Reach, to a fixpoint: a stanza requiring a reached library is reached.
@@ -447,12 +471,12 @@ my %bare;
 $bare{$st[$_]{dir}}++ for grep { !$aliased{$_} && $st[$_]{kind} ne "library" } keys %reached;
 printf STDERR "affected: %s: %d reached executable stanza(s) no per-test alias runs\n", $_, $bare{$_} for sort keys %bare;
 # Only worth saying when a changed module has no stanza here: it may belong to one of these.
-if ($unowned) {
+if (@unmapped) {
   print STDERR "affected: optional library $_ is not in this build; edges to it skipped\n" for sort keys %skipped_optional;
 }
 print STDERR "affected: listed as unattributed: $_ (no stanza of its directory has that name, no targets of its own; its directory is touched)\n" for sort keys %unattributed;
 print STDERR "affected: unread: $_ (no stanza owns it, no per-test alias's rules read it)\n" for @unread;
-print STDERR "affected: UNMAPPED: $_ (no stanza dune describes owns this module, no rule reads it)\n" for @unmapped;
+print STDERR "affected: UNMAPPED: $_ (no stanza of this build owns this module)\n" for @unmapped;
 printf STDERR "affected: %d alias(es) from %d changed path(s)%s\n", scalar(keys %out), scalar(@changed),
   @unmapped ? "; INCOMPLETE, see UNMAPPED above" : "";
 exit(@unmapped ? 3 : 0);
