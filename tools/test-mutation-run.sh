@@ -40,6 +40,7 @@ case "$*" in
   'build -j 4 @runtest-manifest') name=manifest ;;
   'build -j 4 @runtest-tail') name=tail ;;
   'build -j 4 @runtest-trailer') name=trailer ;;
+  'build -j 4 @runtest-replay') name=replay ;;
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
@@ -146,6 +147,9 @@ case "$PROBE_MODE" in
     printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
   trailermultibare) rows "first: false\nFAIL: first: the emit child failed:\n  detail one\n$section$m2"'last: true\n'
     printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
+  # A real Verdict run's streams, staged by the harness from verdict_teardown's golden.
+  replay) rm -f "$out/$name.exe.output"; cp "$PROBE_HOME/replay.stdout" "$out/$name.exe.output"
+    cat "$PROBE_HOME/replay.stderr"; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -254,13 +258,6 @@ for mode in casemid caselast; do
     "$fixture/result" || { cat "$fixture/result"; echo "$mode: no cases-raised line"; exit 1; }
   reached
 done
-# The two lines the runner reads are Verdict's own text; a rewording there must fail here.
-grep -qF '(label ^ ": the case ran to completion") ("raised " ^ text)' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict.case no longer prints "<label>: the case ran to completion (raised …)"'; exit 1; }
-grep -qF 'Printf.sprintf "FAILED: %d check%s did not hold: %s%s."' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict.teardown_line no longer prints "FAILED: <n> check(s) did not hold: <names>."'; exit 1; }
-grep -qF '"STOPPED EARLY: an exit inside case %S ended the run' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict no longer prints "STOPPED EARLY: an exit inside case …"'; exit 1; }
 # DUNE_BUILD_DIR moves the tree the output is read from; _build keeps a full stale output.
 export PROBE_MODE=raise DUNE_BUILD_DIR="$fixture/build-elsewhere"
 run_case 4
@@ -339,9 +336,44 @@ reached
 export PROBE_MODE=trailermultibare
 PROBE_ALIAS=@runtest-trailer run_case 4
 flagged "STOPPED EARLY: the mutated run printed 7 of the golden's 8 rows"
-grep -qF 'List.map lines ~f:(fun line -> "FAIL: " ^ line ^ "\n")' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict.fail no longer prefixes every line of its message with "FAIL: "'; exit 1; }
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
+# The text above is this fixture's own; what the runner reads is Verdict's. So the runner also reads
+# real Verdict runs: the streams of verdict_teardown's children, which its golden pins byte for byte
+# (each line prefixed with its child and stream). A refactor of verdict.ml that keeps its text
+# changes nothing here; a rewording the runner no longer reads fails here once that golden is
+# promoted. Each golden below is what the child's run would print had every claim held.
+teardown_golden="$root/test/operations/verdict_teardown.expected"
+replay() {
+  for stream in stdout stderr; do
+    sed -n "s/^  $1 $stream | //p" "$teardown_golden" > "$fixture/replay.$stream"
+    [ -s "$fixture/replay.$stream" ] ||
+      { echo "verdict_teardown.expected carries no $1 $stream transcript"; exit 1; }
+  done
+  printf "$2" > replay.expected
+  export PROBE_MODE=replay
+  PROBE_ALIAS=@runtest-replay run_case "$3"
+  if grep -q '^(none)$' "$fixture/result"; then
+    cat "$fixture/result"; echo "$1: the runner listed none of Verdict's false claims"; exit 1
+  fi
+}
+# A raising Verdict.case: its claim line, and the teardown line saying the process ended through exit.
+replay case_raise 'first: setup: true\nfirst: result: true\nsecond: reached: true\n' 1
+grep -q '^rows: 2 printed of 3 in replay.expected$' "$fixture/result"
+grep -q '^cases raised: 1 ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'case_raise: Verdict.case raising read as no case raise'; exit 1; }
+reached
+# An exit inside a case once a check failed: Verdict's own STOPPED EARLY line names that ending.
+replay case_exit 'the claim: true\nexits: done: true\nafter the exit: true\n' 4
+flagged 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran'
+# A scan-shaped run short by its success trailer: every line of a multi-line Verdict.fail carries
+# `FAIL: `, and the teardown names several checks. Its `FAIL: ` rows count among the rows printed,
+# and the runner reads a trailer only on a run short of the golden, hence a trailer of two rows.
+replay trailer_omitted 'first claim: true\nthird claim: true\nlast claim: true\n\nOK: every claim held.\nOK: four claims checked.\n' 1
+grep -q '^rows: 5 printed of 6 in replay.expected$' "$fixture/result"
+grep -q '^success trailer omitted: 3 rows ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'trailer_omitted: no omitted-trailer line'; exit 1; }
+reached
+printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac

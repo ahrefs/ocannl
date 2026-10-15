@@ -57,6 +57,20 @@ let one_line_err =
   ^ Verdict.teardown_line [ broken_label; broken_label; broken_label; broken_label ]
   ^ "\n"
 
+(* What [tools/test-mutation-run.sh] replays through [tools/mutation-run.sh]: the runner reads
+   Verdict's own text -- a raising case's claim, the teardown line, an exit inside a case, the
+   [FAIL: ] prefix on every line of a failure -- and that harness, which builds no OCaml, takes the
+   text from these transcripts, which this golden pins byte for byte, rather than from
+   [verdict.ml]'s source. A refactor of Verdict that keeps its text keeps the harness green; a
+   rewording the runner no longer reads turns it red. Every line is prefixed with its child and
+   stream, so no Verdict marker starts a row of this golden. *)
+let print_transcript mode ((_, stdout_text, stderr_text) : Fresh_process.t) =
+  List.iter
+    [ ("stdout", stdout_text); ("stderr", stderr_text) ]
+    ~f:(fun (stream, text) ->
+      List.iter (String.split_lines text) ~f:(fun line ->
+          Stdio.printf "  %s %s | %s\n" mode stream line))
+
 (* Byte-for-byte comparisons below, so both streams are binary (Windows would rewrite "\n"): the
    children's stderr is matched line-exactly too. *)
 let () =
@@ -152,12 +166,23 @@ let () =
         "a claim whose computed label carries line breaks reports on one line of each stream"
         (run_child "label_line_breaks") ~holds:(fun status out err ->
           exited 1 status && String.equal out one_line_out && String.equal err one_line_err);
+      (* A scan's shape: its success trailer prints only when every claim held. *)
+      let trailer_omitted = run_child "trailer_omitted" in
+      about "trailer_omitted"
+        "a failing run omits the success trailer it prints only when no claim failed"
+        trailer_omitted ~holds:(fun status out _ ->
+          exited 1 status && not (has out ~substring:"OK: "));
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
         (exited 0 pass_status && exited 0 case_status
         && String.equal pass_out "the claim: true\n"
-        && String.equal pass_out case_out)
+        && String.equal pass_out case_out);
+      Stdio.printf
+        "\nTranscripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:\n";
+      print_transcript "case_raise" case_raise;
+      print_transcript "case_exit" case_exit;
+      print_transcript "trailer_omitted" trailer_omitted
   | [ _; mode ] -> (
       (* Only on the paths whose stdout is not compared byte for byte. *)
       if String.is_prefix mode ~prefix:"fail_then_" then Stdlib.Format.printf "%s@\n" formatted;
@@ -177,6 +202,9 @@ let () =
           p "the claim" false;
           try Stdlib.exit 0 with _ -> ())
       | "case_raise" ->
+          (* No backtrace, which names [verdict.ml]'s lines: its transcript is replayed, and a
+             refactor of Verdict must leave it as it is. *)
+          Stdlib.Printexc.record_backtrace false;
           case "first" (fun () -> failwith "boom");
           case "second" (fun () -> p "second: reached" true)
       | "case_exit" ->
@@ -201,6 +229,13 @@ let () =
           claim broken_label false;
           pass_fail ~detail:(fun () -> "got 1\nwant 2") broken_label false;
           p_all broken_label [] ~f:Fn.id
+      | "trailer_omitted" ->
+          p "first claim" false;
+          fail "second claim\n  expected a, got b";
+          p "third claim" false;
+          p "last claim" true;
+          if not (Verdict.any_failed ()) then
+            Stdio.printf "\nOK: every claim held.\nOK: four claims checked.\n"
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))

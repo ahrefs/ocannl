@@ -559,8 +559,9 @@ let case label f =
       raise e
   | exception e ->
       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-      (* [short_fail] puts the exception's text on the claim's one line. tools/test-mutation-run.sh
-         pins the call below by its text. *)
+      (* [short_fail] puts the exception's text on the claim's one line, the line
+         tools/mutation-run.sh reads; [verdict_teardown]'s golden pins it, and
+         tools/test-mutation-run.sh replays it through the runner. *)
       let text = Stdlib.Printexc.to_string e in
       short_fail (label ^ ": the case ran to completion") ("raised " ^ text);
       if Stdlib.Printexc.raw_backtrace_length backtrace > 0 then (
