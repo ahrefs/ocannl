@@ -53,7 +53,9 @@
 # `--test-cap` are passed to every phase's run (a cap per phase, not per
 # bisect). First-parent by default (`git bisect start --first-parent`): on a
 # merge-commit master each step is a merged state CI saw; `--no-first-parent`
-# walks into the merged branches. Before bisecting, both ends are run: BAD
+# walks into the merged branches; under it, GOOD must be on BAD's first-parent
+# chain, or git would test commits that do not descend from it (refused, exit
+# 2). Before bisecting, both ends are run: BAD
 # must fail and GOOD must pass HERE, or there is no regression in the range
 # on this box to find (exit 1, nothing bisected).
 #
@@ -181,6 +183,14 @@ bisect_main() {
   [ "$good_sha" != "$bad_sha" ] || die "bisect: GOOD and BAD are one commit ($good_sha)"
   git merge-base --is-ancestor "$good_sha" "$bad_sha" ||
     die "bisect: GOOD $good is not an ancestor of BAD $bad"
+  # A first-parent bisect walks BAD's first parents only: a GOOD reached
+  # through a merge's second parent bounds nothing on that chain, and git
+  # would test (and could name) commits that are not GOOD's descendants.
+  if [ -n "$first_parent" ] &&
+     ! git rev-list --first-parent "$bad_sha" | grep -Fxq "$good_sha"; then
+    die "bisect: GOOD $good is not on BAD's first-parent chain (it was merged in through a second parent);
+  give a GOOD on that chain, such as the merge that brought it in, or pass --no-first-parent"
+  fi
 
   # Every runner the bisect starts keeps its runs here, under the path this
   # launch resolved: a relative OCANNL_TOOL_TEST_RUNS would otherwise be

@@ -3712,7 +3712,8 @@ three easy ways to lie; the verb encodes each once (tools/bisect-steps.sh says h
   hand-launched run; `--cap`/`--test-cap` go to every one of them.
 
 It is first-parent by default (each step a merged state CI saw; `--no-first-parent` walks into the
-merged branches) and runs both ends before bisecting: BAD must fail and GOOD must pass on this box,
+merged branches), so GOOD must then lie on BAD's first-parent chain (a GOOD merged in through a
+second parent is refused), and it runs both ends before bisecting: BAD must fail and GOOD must pass on this box,
 or there is nothing to find. Exit 0 names the first bad commit; 1 means the range does not bisect
 (an end does not hold here, or only skipped commits are left, listed); 2 a refusal before any step;
 an abort exits with the aborting run's status (126 when it gave none); 129/130/143 cancelled. The

@@ -270,7 +270,8 @@
 #      (75, 142; git stopped by the step's 128) judging nothing; ends that do
 #      not hold here bisect nothing; no backend, an unrelated GOOD or a
 #      misplaced option is refused before any step; first-parent by default
-#      never steps into a merged branch; a TERM reaps the step's dune and
+#      never steps into a merged branch, and refuses a GOOD merged in through
+#      a second parent (--no-first-parent takes it); a TERM reaps the step's dune and
 #      exits 143; a descendant a step's run leaves holding the tree is
 #      waited for before git moves the tree; a relative runs directory keeps
 #      every step's runs under it; a dune-workspace above the runs directory
@@ -6248,7 +6249,7 @@ EOF
 
   # (g) first-parent by default: the commits of a merged branch are never
   # stepped on, though one of them is red.
-  l_fp="bisect: first-parent by default never steps into a merged branch"
+  l_fp="bisect: first-parent by default never steps into a merged branch, and refuses a GOOD only a second parent reaches"
   bi_detail=
   bi_repo pass fail || bi_detail="fixture"
   if [ -z "$bi_detail" ]; then
@@ -6272,6 +6273,19 @@ EOF
       bi_detail="a merged branch's commit was stepped on: $(cat "$bi_dir/steps.tsv")"
     elif [ -z "$bi_merge" ]; then
       bi_detail="fixture: no merge"
+    fi
+    # A GOOD merged in through a second parent bounds nothing on the
+    # first-parent chain: refused, unless the walk takes every parent.
+    if [ -z "$bi_detail" ]; then
+      bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "$bi_side2" fp @t
+      if [ "$bi_rc" != 2 ] || ! grep -q "not on BAD's first-parent chain" <<<"$bi_err" ||
+         [ -s "$TMP/bisect.calls" ]; then
+        bi_detail="a second-parent GOOD: exit $bi_rc: $bi_err"
+      else
+        bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- --no-first-parent "$bi_side2" fp @t
+        [ "$bi_rc" = 0 ] && grep -q "^result: FIRST BAD COMMIT $bi_fpbad " <<<"$bi_out" ||
+          bi_detail="a second-parent GOOD under --no-first-parent: exit $bi_rc: $bi_out $bi_err"
+      fi
     fi
   fi
   if [ -z "$bi_detail" ]; then report 0 "$l_fp"; else report 1 "$l_fp" "$bi_detail"; fi
