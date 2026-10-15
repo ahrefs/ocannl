@@ -63,7 +63,8 @@ on_error() {
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
     guard_absent \
-    after_cancel local_remote local_replaced local_busy local_prep_error local_control; do
+    after_cancel local_remote local_replaced local_busy local_prep_error local_control \
+    box_gap box_ready box_broken; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -3489,6 +3490,41 @@ local_credentials=$(GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key \
 grep -q '^  m4-max/cc: pass ' <<<"$local_credentials"
 credential_free "$tmp/local-credentials" 2
 grep -q '^exec -- dune clean	' "$tmp/local-credentials"
+
+# The per-lane box check (gh-ocannl-1062). Every case above swept a ref without
+# benchmarks/check-box.sh, and its lane said so. Here the fixture repository gains a stand-in that
+# records its arguments and answers SWEEP_TEST_BOX_CHECK_RC: on a two-unit lane it runs ONCE, its
+# GAP is the box's line, relayed with the GAP item, and both units keep the rows the suite gave.
+grep -q '^  m4-max: box check: not at ' <<<"$incremental"
+cat >"$main/benchmarks/check-box.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$SWEEP_TEST_BOX_CHECK_CALLS"
+echo 'check-box: venv: ok -- the venv'
+echo 'check-box: fixture lenet: GAP -- absent from the store'
+echo '  repair: copy it in'
+echo 'check-box: m4-max: GAP (1 of 2 items)'
+exit "${SWEEP_TEST_BOX_CHECK_RC:-1}"
+EOF
+git -C "$main" add benchmarks/check-box.sh
+git -C "$main" commit -qm 'stand-in box check'
+git -C "$main" push -q origin master
+box_gap=$(SWEEP_TEST_BOX_CHECK_CALLS=$tmp/box-check.calls run_sweep_args --only cc --only metal)
+[ "$(grep -c 'box check' <<<"$box_gap")" -eq 1 ]
+grep -q "^  m4-max: box check: ENVIRONMENT GAP (not a test failure) -- $state/logs/[^ ]*-m4-max-box-check.log\$" \
+  <<<"$box_gap"
+grep -qx '    check-box: fixture lenet: GAP -- absent from the store' <<<"$box_gap"
+[ "$(grep -c '^    check-box: ' <<<"$box_gap")" -eq 1 ]
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$box_gap"
+grep -q '^  m4-max/metal: incremental-pass ' <<<"$box_gap"
+[ "$(wc -l <"$tmp/box-check.calls")" -eq 1 ]
+[ "$(cat "$tmp/box-check.calls")" = "--box m4-max --box-only --fixture-dir $main/benchmarks/fixtures" ]
+box_ready=$(SWEEP_TEST_BOX_CHECK_CALLS=$tmp/box-check.calls SWEEP_TEST_BOX_CHECK_RC=0 run_sweep)
+grep -q '^  m4-max: box check: ready -- ' <<<"$box_ready"
+box_broken=$(SWEEP_TEST_BOX_CHECK_CALLS=$tmp/box-check.calls SWEEP_TEST_BOX_CHECK_RC=2 run_sweep)
+grep -q '^  m4-max: box check: could not run (exit 2) -- ' <<<"$box_broken"
+git -C "$main" rm -q benchmarks/check-box.sh
+git -C "$main" commit -qm 'drop the stand-in box check'
+git -C "$main" push -q origin master
 
 . "$(dirname "$0")/sweep_remote_fixture.sh"
 

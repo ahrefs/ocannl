@@ -3043,6 +3043,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   closes the race both ways. The local lane takes no lab lock, so on this host nothing refuses a
   measurement reserved mid-unit; the per-unit read is its only check. The harness pins its
   registry reader to a fake, since the default candidates reach the real registry on a fleet box.
+- **Each lane runs `benchmarks/check-box.sh --box-only` once** (gh-ocannl-1062), after its first
+  unit whose suite ran (`pass`, `incremental-pass` or `fail`; a `timeout` leaves it to the next
+  unit, its device possibly wedged), in that unit's worktree and under its lock, against the box's
+  main-checkout fixture store. The verdict is the box's measurement readiness, not coverage: it is
+  said as `<box>: box check: ready`, `ENVIRONMENT GAP (not a test failure)` with the GAP lines,
+  `not at <sha>` for a ref without the script, or `could not run`, and logged to
+  `logs/<stamp>-<box>-box-check.log`; no history row, unit state or run-record field reads it.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a

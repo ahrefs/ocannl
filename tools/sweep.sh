@@ -1875,14 +1875,14 @@ suite_completion_cmd() { # backend wt
 }
 
 # Run a post-unit shell command where the unit's worktree lives, under its lock
-# and the unit's CAP, appending to the log (the serial rerun's legs).
-run_on_unit_host() { # host wt cmd log path_prefix
-  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5
+# and the unit's CAP, appending to the log (the serial rerun's legs, the box check).
+run_on_unit_host() { # host wt cmd log path_prefix [leg]
+  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5 leg=${6:-serial-rerun}
   if [ -n "$host" ]; then
     run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
       -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
       "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
-        "$(sleep_guard_why "$host" serial-rerun)")" \
+        "$(sleep_guard_why "$host" "$leg")")" \
       >>"$log" 2>&1
   else
     run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
@@ -2349,6 +2349,38 @@ run_unit() { # machine backend host
   # guard refused to any of them is reported, not only one refused to the suite.
   say_unguarded "$log" "$machine/$backend"
   WRITTEN_FINGERPRINT=
+  case $outcome in
+    pass | incremental-pass | fail)
+      box_check "$machine" "$host" "$wt" "${remote_repo:-$MAIN}" "${path_prefix:-}" ;;
+  esac
+}
+
+# The box's measurement prerequisites (gh-ocannl-1062): benchmarks/check-box.sh, once per lane, in
+# the worktree of the lane's first unit whose suite ran -- so pinned to $run_sha -- against the
+# box's shared venv, toolchain and the fixture store of its main checkout. Its verdict is the
+# BOX's, never the unit's: no sweep unit measures, so a gap is an environment gap for the next
+# measurement session, said on a line of its own and kept in <stamp>-<machine>-box-check.log,
+# and no history row changes. A swept ref without the script says so; a timed-out unit leaves
+# the check to the lane's next unit, since its device may still be wedged.
+LANE_BOX_CHECKED=0
+box_check() { # machine host wt repo path_prefix
+  local machine=$1 host=$2 wt=$3 repo=$4 path_prefix=$5 log rc line
+  [ "$LANE_BOX_CHECKED" = 0 ] || return 0
+  LANE_BOX_CHECKED=1
+  log=$LOGS/$stamp-$machine-box-check.log
+  run_on_unit_host "$host" "$wt" "cd \"$wt\" && if [ -f benchmarks/check-box.sh ]; then \
+bash benchmarks/check-box.sh --box \"$machine\" --box-only --fixture-dir \"$repo/benchmarks/fixtures\"; \
+else echo 'check-box: not at this revision'; exit 3; fi" "$log" "$path_prefix" box-check
+  rc=$?
+  case $rc in
+    0) say "  $machine: box check: ready -- $log" ;;
+    1)
+      say "  $machine: box check: ENVIRONMENT GAP (not a test failure) -- $log"
+      while IFS= read -r line; do say "    $line"; done < <(grep '^check-box: .*: GAP -- ' "$log")
+      ;;
+    3) say "  $machine: box check: not at $run_sha" ;;
+    *) say "  $machine: box check: could not run (exit $rc) -- $log" ;;
+  esac
 }
 
 # Publish the lane's buffered unit lines as one block, under a run-wide lock so
@@ -2464,6 +2496,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   local lane=$1 unit machine backend host lane_host= lab_box= lab_lock_rc lane_names
   LANE_PIDS=
   LANE_REACHED=0
+  LANE_BOX_CHECKED=0
   LANE_DIALLING=0
   # The gated box this lane holds, once it holds one; the EXIT trap puts it to sleep if the lane
   # stops before the normal path does (sleep_gated_box_after_early_exit).

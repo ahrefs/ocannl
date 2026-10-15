@@ -719,6 +719,49 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
 (`.venv/lib/python*/site-packages/nvidia/cu*/lib`) and wipe `~/.cache/tinygrad` once
 (compiled PTX is cached by source hash, so a stale-toolkit artifact survives the switch).
 
+## Measurement boxes
+
+**Start every measurement session with `benchmarks/check-box.sh`** (gh-ocannl-1062), from the
+checkout you will measure in, and measure only on exit 0:
+
+```bash
+benchmarks/check-box.sh --box rog-nv --fixture gpt2_mini_train --fixture gpt2_mini_train_s512
+```
+
+`--box` is the box's ID in `fixtures/DIGESTS.txt`'s `measurement-boxes` field; the script's
+`box_profile` names what that box's torch must reach (cuda on rog-nv, hip on minix and tuf, mps on
+m4-max) and the toolchain its drivers compile with (`nvcc`, `hipcc`, the macOS SDK). It prints one
+`ok`/`GAP`/`skip` line per item -- the venv (`~/.venvs/ocannl-bench`, `--venv` moves it), its
+packages, `pip freeze` against the `~/.venvs/ocannl-bench.requirements.txt` provisioning recorded,
+one tensor round-tripped through the device (minix's rocm7.1 torch passed `is_available()` and
+segfaulted on that copy), `Python.h` for torch.compile, the interpreter this checkout's drivers
+resolve through `bench_venv.py`, the toolchain, and each fixture against this checkout's
+`DIGESTS.txt` -- then `READY`, or `GAP (<n> of <m> items)` with exit 1; usage errors exit 2.
+`--fixture` (a workload stem, repeatable) narrows the fixtures to the session's; without it,
+every fixture `DIGESTS.txt` records under the box's origin is required. A fixture that MATCHes
+another box's row is measurable and its line says so, as the report's origin field will.
+
+It checks and never provisions. Each GAP line is followed by its repair: on a Linux box
+lukstafi/ludics-lite's `scripts/install-linux.sh --bench-venv [nvidia|amd]` (the venv, its
+recorded freeze, the `benchmarks/.venv` link and the anchor's fixtures copied into
+`~/ocannl-staging/benchmarks/fixtures`); on m4-max the venv is built by hand per [Setup](#setup).
+A fresh worktree's `fixtures/` holds only `DIGESTS.txt`, so copy or link the session's fixtures
+in from the box's store and re-run the check, or pass `--fixture-dir` to check the store a driver
+reads (`gh1133_cells.sh`'s `FIXTURE_DIR`) -- never regenerate one to get past a GAP (see above).
+
+`tools/sweep.sh` runs it once per box (`--box-only`, which skips the checkout-relative
+interpreter, against `<main checkout>/benchmarks/fixtures`) and reports
+`<box>: box check: ready` or `ENVIRONMENT GAP (not a test failure)` with the GAP lines, logging
+the full output to `logs/<stamp>-<box>-box-check.log`; no unit's row changes, since no sweep unit
+measures.
+
+Per-box state, from `check-box.sh --box-only` against each box's store
+(`~/ocannl-staging/benchmarks/fixtures`) at the revision named:
+
+| Box | Checked | torch (device) | Toolchain | Gaps |
+| --- | --- | --- | --- | --- |
+| m4-max (mac-studio) | 2026-10-15 | 2.13.0 (mps) | macOS SDK (CommandLineTools) | fixtures `gpt2_mini_b1`, `gpt2_mini_train_b256` absent from the store (recorded as m4-max's bytes) |
+
 ## Methodology notes / fairness pitfalls
 
 - **The regime column: exact vs `approximate`** (gh-ocannl-719, the first leg of the
