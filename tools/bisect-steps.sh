@@ -107,7 +107,9 @@ bisect_drain() {
   local i=0 lock
   lock=$RUNS/lock-$(wt_key_of "$bisect_tree")
   while :; do
-    if ! { [ -n "$bisect_pgid" ] && kill -0 -- "-$bisect_pgid" 2>/dev/null; }; then
+    # group_alive, not a bare signal probe: a group holding only zombies (an
+    # init that is slow to reap them) is gone, not still draining.
+    if ! { [ -n "$bisect_pgid" ] && group_alive "$bisect_pgid"; }; then
       probe_locks "$lock"
       [ $? = 3 ] || { bisect_pgid=; return 0; }
     fi
@@ -171,14 +173,33 @@ bisect_main() {
   # re-read from each step's own directory, scattering the runs (some inside
   # the tree the end removes) away from the locks the bisect reads.
   export OCANNL_TOOL_TEST_RUNS=$RUNS
+  # Dune roots at the outermost ancestor holding a dune-workspace (failing
+  # that, a dune-project): one above the tree would build another tree.
+  # Checked before anything is created; the tree's ancestors are the runs
+  # directory's (resolved physically at startup) and the bisect directory.
+  anc=$RUNS
+  while :; do
+    [ ! -e "$anc/dune-workspace" ] || die "bisect: $anc/dune-workspace would root dune above the bisect's tree"
+    [ "$anc" != / ] && [ "$anc" != . ] || break
+    anc=$(dirname "$anc")
+  done
   dir=$RUNS/bisect-$(date -u +%Y%m%dT%H%M%SZ)-$$
   tree=$dir/tree
-  mkdir "$dir" "$dir/steps" "$dir/runner" "$dir/runner/tools" "$dir/runner/scripts" ||
-    die "cannot create $dir"
+  # A refusal from here until the first step leaves nothing behind: no
+  # registered worktree, no bisect directory.
+  bisect_setup_fail() { # <message>
+    git worktree remove --force "$tree" >/dev/null 2>&1
+    git worktree prune >/dev/null 2>&1
+    rm -rf "${dir:?}"
+    die "$1"
+  }
+  mkdir "$dir" || die "cannot create $dir"
+  mkdir "$dir/steps" "$dir/runner" "$dir/runner/tools" "$dir/runner/scripts" ||
+    bisect_setup_fail "cannot create $dir"
   # The runner: this script and its helpers as they are now (uncommitted
   # edits included, recorded in `runner-source`).
   cp "$runner_root"/tools/*.sh "$dir/runner/tools/" && cp "$runner_root"/scripts/*.sh "$dir/runner/scripts/" ||
-    die "cannot copy the runner into $dir/runner"
+    bisect_setup_fail "cannot copy the runner into $dir/runner"
   {
     printf '%s\n' "$backend" >"$dir/backend" &&
       printf '%s\n' "$cap" >"$dir/cap" &&
@@ -191,20 +212,15 @@ bisect_main() {
         "$(git status --porcelain=v1 2>/dev/null | grep -q . && echo ', with uncommitted changes')" \
         >"$dir/runner-source" &&
       : >"$dir/steps.tsv"
-  } || die "cannot write the bisect's records in $dir"
-  git worktree add --detach "$tree" "$bad_sha" >"$dir/worktree.log" 2>&1 ||
-    die "cannot add the bisect's worktree $tree (see $dir/worktree.log)"
-  bisect_tree=$(cd -P "$tree" && pwd -P) || die "cannot resolve $tree"
-  # Dune roots at the outermost ancestor holding a dune-workspace (failing
-  # that, a dune-project): one above would build another tree.
-  anc=$(dirname "$bisect_tree")
-  while :; do
-    [ ! -e "$anc/dune-workspace" ] || die "bisect: $anc/dune-workspace would root dune above $tree"
-    [ "$anc" != / ] && [ "$anc" != . ] || break
-    anc=$(dirname "$anc")
-  done
+  } || bisect_setup_fail "cannot write the bisect's records in $dir"
+  if ! git worktree add --detach "$tree" "$bad_sha" >"$dir/worktree.log" 2>&1; then
+    sed 's/^/  /' "$dir/worktree.log" >&2
+    bisect_setup_fail "cannot add the bisect's worktree $tree"
+  fi
+  bisect_tree=$(cd -P "$tree" && pwd -P) || bisect_setup_fail "cannot resolve $tree"
   lang=$(grep -m1 '^(lang dune ' "$tree/dune-project" 2>/dev/null)
-  printf '%s\n' "${lang:-(lang dune 3.18)}" >"$tree/dune-workspace" || die "cannot write $tree/dune-workspace"
+  printf '%s\n' "${lang:-(lang dune 3.18)}" >"$tree/dune-workspace" ||
+    bisect_setup_fail "cannot write $tree/dune-workspace"
 
   trap 'bisect_cancel INT' INT
   trap 'bisect_cancel TERM' TERM

@@ -273,7 +273,8 @@
 #      never steps into a merged branch; a TERM reaps the step's dune and
 #      exits 143; a descendant a step's run leaves holding the tree is
 #      waited for before git moves the tree; a relative runs directory keeps
-#      every step's runs under it. Every dune call sees the pinned backend and neither of the
+#      every step's runs under it; a dune-workspace above the runs directory
+#      is refused leaving no worktree behind. Every dune call sees the pinned backend and neither of the
 #      runner's own variables, and the invoking checkout and its worktree
 #      list end as they began.
 #  70 sits at the very end, after every leg that fakes a device: a leg that
@@ -6311,6 +6312,25 @@ EOF
     done <"$bi_dir/steps.tsv"
   fi
   if [ -z "$bi_detail" ]; then report 0 "$l_rel"; else report 1 "$l_rel" "$bi_detail"; fi
+
+  # (k) a setup refusal leaves nothing behind: a dune-workspace above the
+  # runs directory would root dune above the tree, and is refused before
+  # any worktree is registered or bisect directory made.
+  l_setup="bisect: a dune-workspace above the runs directory is refused (exit 2) leaving no worktree or bisect directory"
+  bi_detail=
+  bi_repo pass fail || bi_detail="fixture"
+  mkdir -p "$TMP/bisect-wsanc/runs" && printf '(lang dune 3.18)\n' >"$TMP/bisect-wsanc/dune-workspace"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none \
+    OCANNL_TOOL_TEST_RUNS=$TMP/bisect-wsanc/runs -- "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 2 ] || ! grep -q 'would root dune above' <<<"$bi_err" || [ -s "$TMP/bisect.calls" ]; then
+    bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif [ "$(bi_git -C "$bi_root" worktree list | grep -c '')" != 1 ] ||
+       ls "$TMP/bisect-wsanc/runs" | grep -q '^bisect-'; then
+    bi_detail="the refusal left a worktree or bisect directory: $(bi_git -C "$bi_root" worktree list; ls "$TMP/bisect-wsanc/runs")"
+  fi
+  rm -f "$TMP/bisect-wsanc/dune-workspace"
+  if [ -z "$bi_detail" ]; then report 0 "$l_setup"; else report 1 "$l_setup" "$bi_detail"; fi
 
   # (h) a TERM to the bisect stops the step's run (its dune reaped), exits
   # 143 and removes the tree.
