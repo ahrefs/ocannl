@@ -2191,20 +2191,27 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertTrue(expected, "no GPT workload specs found")
         copied = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
         self.assertEqual(copied, expected, "TUF must record every GPT fixture copy")
+        # Further boxes recorded on m4-max's bytes for a GPT fixture, each verified where it sits:
+        # rog-nv's gpt2_mini_train_b256 row was recorded on rog against the gh-ocannl-1183 copy.
+        also_on_m4_max = {"gpt2_mini_train_b256.safetensors": {"rog-nv"}}
+        self.assertLessEqual(set(also_on_m4_max), copied)
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
             by_origin = {e.origin: e for e in recorded}
+            copies = {"m4-max", "tuf"} | also_on_m4_max.get(name, set())
             if name in copied:
                 self.assertIn("m4-max", by_origin, name)
-                for origin in ("m4-max", "tuf"):
-                    self.assertEqual(by_origin[origin].kind, "content-v1", name)
-                self.assertEqual(by_origin["tuf"].sha256, by_origin["m4-max"].sha256, name)
+                for origin in copies:
+                    self.assertEqual(by_origin[origin].kind, "content-v1", f"{name} on {origin}")
+                    self.assertEqual(
+                        by_origin[origin].sha256, by_origin["m4-max"].sha256, f"{name} on {origin}"
+                    )
 
             for entry in recorded:
                 same = {entry.origin}
-                if name in copied and entry.origin in {"m4-max", "tuf"}:
-                    same = {"m4-max", "tuf"}
+                if name in copied and entry.origin in copies:
+                    same = copies
                 self.assertEqual(
                     set(fixture_digest.divergent_origins(digests, [name], entry.origin)),
                     set(declared) - same,
