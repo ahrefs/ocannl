@@ -974,7 +974,15 @@ files.
   expanded in full, so the round keeps its size and spends three quarters of it on hopeless parents.
   `test/operations/autotune_round_expansion` scripts an additive landscape over the playoff chain
   and pins that `differing` times exactly `full`'s round minus the near-copy's shared-segment moves
-  and crowns `full`'s round best. The `autotune_log` line `round N: K candidate(s) from a beam of
+  and crowns `full`'s round best. Its searches, like the playoff test's, run on
+  `test/support/fissioned_chain.ml`'s small menu (the roofline pre-filter at 0.2 with a synthetic
+  envelope, about five singles per segment), and unlike the playoff's its claims depend on WHICH
+  alternate seats as the beam's near-copy: its differing segment must offer round moves. The
+  tensorized `mma-cpu 16x0x0`/`0x0x0` alternates offer none (their rounds move only the shared
+  segments), so the test seats the last alternate, a register-tiled `cpu` single; a menu change
+  that seats a moveless one fails `full: the round extends the near-copy on its differing segment`.
+  To see each alternate's moves at once, probe with a beam wide enough to hold them all and read
+  the round line below. The `autotune_log` line `round N: K candidate(s) from a beam of
   W, expansion <rule>: ...` gives each entry's `units differing` from the head and how many of its
   units the rule expanded. Measured on rog (gpt2_mini, CUDA, approximate profile, beam 4, a
   correctness-grade probe on a shared box, two legs at an equal 2100 s cap): arm A's round 1 took

@@ -1,3 +1,5 @@
+menu: the pre-filtered seeding keys two segments: true
+menu: each segment offers three or more singles: true
 setup: every rule ran its round: true
 setup: every rule entered round 1 with the same beam: true
 setup: the near-copy differs from the head in exactly one segment: true

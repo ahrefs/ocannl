@@ -12,54 +12,43 @@
    The ranking is the test's: every admitted window is scripted through
    [Autotune.on_candidate_measured] (gh-ocannl-1027), with the windows opted out of host contention
    ([with_uncontended_test_windows], gh-ocannl-1156). The seeds are scripted as the playoff test's
-   [slower] scenario: singles tie, so every keyed segment plays alternates, and each later composite
-   is slower, so nothing swaps and the beam (width 2) enters round 1 as the recombined composite
-   plus its first alternate. A round child is scripted additively from its parent's time: a move on
-   the near-copy's differing segment gains a full unit (it starts from the alternate geometry the
-   head lacks); every other move loses a little. That landscape is the one the rule is built for,
-   and on it a rule that expanded the head alone would lose the round's best, while one that skipped
-   a differing segment would too.
+   [slower] scenario: singles tie, so every keyed segment plays alternates, and every alternate is
+   slower than the recombined composite, so nothing swaps; but each later alternate is faster than
+   the one before, so the beam (width 2) enters round 1 as the recombined composite plus its LAST
+   alternate (why the last, below). A round child is scripted additively from its parent's time: a
+   move on the near-copy's differing segment gains a full unit (it starts from the alternate
+   geometry the head lacks); every other move loses a little. That landscape is the one the rule is
+   built for, and on it a rule that expanded the head alone would lose the round's best, while one
+   that skipped a differing segment would too.
 
    One search per rule, then the claims comparing them: [differing] times exactly [full]'s round
    candidates minus the near-copy's moves on the segments it shares with the head, and crowns the
    same round best; [head] times exactly the head's moves and misses that best. A malformed setting
    is refused before the search compiles anything.
 
+   Every search runs on [Fissioned_chain]'s small menu: the roofline pre-filter keeps a fifth of
+   each segment's sketches, about five singles per segment instead of 21, and those compiles were
+   most of the test's cost. That each segment still offers three or more is claimed ([menu]), as the
+   playoff test claims it: the beam's second entry is a playoff alternate, and a segment offers one
+   only beside its best single. Unlike the playoff's, these claims also depend on WHICH alternate
+   seats: its differing segment must offer round moves, or the rule has nothing to tell apart. On
+   the small menu the first segment's alternates are tensorized geometries that offer none, and the
+   second segment's last alternate is a register-tiled one that does, hence the last alternate. The
+   seating is the scripting's choice, but the moves are the menu's: a cost-model or sketch change
+   that seats a moveless alternate fails [full: the round extends the near-copy on its differing
+   segment] loudly, and the remedy is to re-pick the seated window, not to weaken the claim.
+
    Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
    available. *)
 open Base
-open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')
-let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem label ','
-let q = 32
+let is_single = Fissioned_chain.is_single
+let is_composite = Fissioned_chain.is_composite
 
-let matrix ~label ~modulus ~offset ~stride =
-  TDSL.ndarray
-    (Array.init (q * q) ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus ~offset ~stride))
-    ~label:[ label ] ~input_dims:[ q ] ~output_dims:[ q ] ()
-
-(* The playoff test's chain: two matmul segments of different shapes, each a keyed segment of its
-   own behind a materialized sum. *)
-let chain () =
-  let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
-  let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
-  let qc = matrix ~label:"qc" ~modulus:5 ~offset:(-2.) ~stride:0.5 in
-  let qc16 =
-    TDSL.ndarray
-      (Array.init (16 * q)
-         ~f:(Ll_test.cycle_flat ~dims:[| 16; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
-      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ 16 ] ()
-  in
-  let%op qd = qa + qb in
-  Train.set_materialized qd.Tensor.value;
-  let%op qe = qd * qc in
-  Train.set_materialized qe.Tensor.value;
-  let%op qg = qc16 * qe in
-  Train.forward qg
-
+(* The small menu (see the header), for every search here: stated before the first search. *)
+let () = Fissioned_chain.small_menu ()
 let expansion_key = "autotune_round_expansion"
 
 (* A beam-round candidate's parent tag and the segment its move extends: [F_saved[<n> segs from
@@ -82,6 +71,7 @@ type child = { label : string; parent : string; segment : int; ms : float }
 
 type observed = {
   report : Autotune.report;
+  measured : string list;  (** Every admitted window's label, in attempt order. *)
   head : string;  (** The beam head's digest tag as round 1 starts. *)
   near_copy : string;  (** The other beam entry's. *)
   differing : int list;  (** The segments where the near-copy differs from the head. *)
@@ -93,7 +83,7 @@ let loss = 0.05
 
 (* One search under [rule] (stated at the config-file level for this search only). *)
 let search rule =
-  let report = ref None and composites = ref 0 and children = ref [] in
+  let report = ref None and composites = ref 0 and children = ref [] and measured = ref [] in
   (* Every timed candidate's digest tag -> (full digest, scripted time). *)
   let timed = Hashtbl.create (module String) in
   (* The two fastest composites: the beam round 1 expands (its singles, presets and baseline are
@@ -107,12 +97,15 @@ let search rule =
     ~f:(fun () ->
       Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:rule;
       ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest _ms ->
+        measured := label :: !measured;
         let ms =
           if is_single label then 100.
           else if is_composite label then (
+            (* The recombined composite, then its alternates: each faster than the one before and
+               all slower than it, however many play. *)
             let n = !composites in
             Int.incr composites;
-            10. +. (0.1 *. Float.of_int n))
+            if n = 0 then 10. else 10. +. (1. /. Float.of_int (n + 1)))
           else
             match round_move label with
             | None -> 1000.
@@ -162,7 +155,7 @@ let search rule =
             Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
               ~progress:false
               ~report:(fun r -> report := Some r)
-              (Context.cpu ()) (chain ()) Ir.Indexing.Empty)
+              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
       in
       Context.release ctx);
   match (!report, !beam) with
@@ -175,7 +168,7 @@ let search rule =
         rule head near_copy
         (String.concat ~sep:"," (List.map differing ~f:Int.to_string))
         (List.length children) report.Autotune.best_label report.Autotune.best_ms;
-      { report; head; near_copy; differing; children }
+      { report; measured = List.rev !measured; head; near_copy; differing; children }
   | Some _, None -> failwith (rule ^ ": the search timed no round candidate")
   | None, _ -> failwith (rule ^ ": the search delivered no report")
 
@@ -191,6 +184,9 @@ let () =
   let full = search "full" in
   let differing = search "differing" in
   let head = search "head" in
+  (* The beam's near-copy is a playoff alternate, so the claims below can fail only where each
+     segment offers alternates to its best single. *)
+  Fissioned_chain.menu_claim full.measured;
   (* The setup the rule is about, read off the [full] search. *)
   p_all "setup: every rule ran its round" [ full; differing; head ] ~f:(fun o ->
       o.report.Autotune.rounds_run = 1);
@@ -261,7 +257,7 @@ let () =
         (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun _ -> Int.incr attempts);
         match
           Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false ~progress:false
-            (Context.cpu ()) (chain ()) Ir.Indexing.Empty
+            (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty
         with
         | ctx, _ ->
             Context.release ctx;

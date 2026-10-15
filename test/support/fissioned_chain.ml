@@ -1,0 +1,91 @@
+(* The two-matmul chain the scripted-ranking autotune tests search ([autotune_composite_playoff],
+   [autotune_round_expansion]), and the small seeding menu that keeps their searches cheap
+   (lukstafi/ocannl-staging#1143).
+
+   The chain fissions into two keyed matmul segments of different shapes. Unpruned, each segment
+   offers 21 per-segment sketch singles, and a search compiles every single it times: those compiles
+   are such a test's whole cost (about 25 s of CPU per search on mac-studio). [small_menu] keeps a
+   fifth of each segment's sketches by the roofline model -- [autotune_keep_fraction=0.2] with a
+   synthetic envelope ([model_peak_flops], [model_peak_memory_bandwidth]), since cc advertises none
+   and without an envelope the pre-filter keeps everything -- which leaves about five singles per
+   segment. The envelope only ranks a segment's sketches against each other, so it need not describe
+   the machine.
+
+   Which singles survive is the model's choice, and no claim may depend on it. How many survive is
+   what the claims depend on: a width-2 playoff claim, or a beam whose second entry is a playoff
+   alternate, cannot fail over a segment offering one or two. So a test that prunes states
+   [menu_claim] over what its search timed, and a cost-model change that ever kept fewer fails that
+   claim loudly instead of the others passing vacuously.
+
+   The envelope overrides are read once per process, at the first pre-filter, so [small_menu] (or
+   [small_menu_envelope]) runs at a test's top level before its first search, at the config-file
+   level; the test's stanza declares the keys' environment variables, so an ambient override reruns
+   it rather than serving the previous result. *)
+open Base
+open Ocannl
+open Ocannl.Operation.DSL_modules
+open Verdict.Claims
+
+let q = 32
+
+let matrix ~label ~modulus ~offset ~stride =
+  TDSL.ndarray
+    (Array.init (q * q) ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus ~offset ~stride))
+    ~label:[ label ] ~input_dims:[ q ] ~output_dims:[ q ] ()
+
+(* Two matmul segments of different shapes (the multi-site chain of [autotune_fission_sketch]): the
+   materialized sums cut the chain so each product is a keyed segment of its own. *)
+let chain () =
+  let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
+  let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
+  let qc = matrix ~label:"qc" ~modulus:5 ~offset:(-2.) ~stride:0.5 in
+  let qc16 =
+    TDSL.ndarray
+      (Array.init (16 * q)
+         ~f:(Ll_test.cycle_flat ~dims:[| 16; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
+      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ 16 ] ()
+  in
+  let%op qd = qa + qb in
+  Train.set_materialized qd.Tensor.value;
+  let%op qe = qd * qc in
+  Train.set_materialized qe.Tensor.value;
+  let%op qg = qc16 * qe in
+  Train.forward qg
+
+(* The fraction of each segment's sketches the small menu keeps, for a test that passes it to one
+   search ([Autotune.tune ~keep_fraction]) rather than stating it for all of them. *)
+let keep_fraction = 0.2
+
+let state settings =
+  List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)
+
+(* The envelope alone: what a test that prunes only some of its searches states. *)
+let small_menu_envelope () =
+  state [ ("model_peak_flops", "1e12"); ("model_peak_memory_bandwidth", "1e11") ]
+
+(* The envelope and the keep fraction, for every search of the process. *)
+let small_menu () =
+  small_menu_envelope ();
+  state [ ("autotune_keep_fraction", Float.to_string keep_fraction) ]
+
+let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')
+let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem label ','
+
+(* A single's keyed segment: the tag its label ends with ([@<digests>:u<n>]). *)
+let segment_of label = List.last_exn (String.split label ~on:'@')
+
+(* The singles among [measured] (a search's timed labels, in attempt order), counted per keyed
+   segment. *)
+let singles_per_segment measured =
+  List.filter measured ~f:is_single
+  |> List.sort_and_group ~compare:(fun a b -> String.compare (segment_of a) (segment_of b))
+  |> List.map ~f:List.length
+
+(* The claims a pruned search's menu owes the claims built on it: [chain]'s two segments are both
+   keyed, and each still offers three or more singles. *)
+let menu_claim measured =
+  let per_segment = singles_per_segment measured in
+  Stdio.eprintf "menu (not part of the golden): singles per segment %s\n%!"
+    (String.concat ~sep:" " (List.map per_segment ~f:Int.to_string));
+  p "menu: the pre-filtered seeding keys two segments" (List.length per_segment = 2);
+  p_all "menu: each segment offers three or more singles" per_segment ~f:(fun n -> n >= 3)

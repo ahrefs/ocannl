@@ -119,3 +119,14 @@
  (package neural_nets_lib)
  (modules ll_test)
  (libraries base stdio ocannl arrayjit.ll_builders))
+
+; The two-matmul fissioned chain of the scripted-ranking autotune tests and its small seeding menu
+; (the roofline pre-filter's settings, and the claim that guards the claims built on them).
+
+(library
+ (name fissioned_chain)
+ (package neural_nets_lib)
+ (modules fissioned_chain)
+ (libraries base stdio ocannl arrayjit.utils arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))

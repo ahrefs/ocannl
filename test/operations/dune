@@ -4735,7 +4735,14 @@
 (executable
  (name autotune_fission_sketch)
  (modules autotune_fission_sketch)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test
+  fissioned_chain)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4766,7 +4773,10 @@
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_CC_VECTOR_BYTES))
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  ; The small menu's envelope, stated on the CPU backends (Fissioned_chain).
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -8137,12 +8147,13 @@
   (env_var OCANNL_MODEL_PEAK_FLOPS)
   (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
  (modules autotune_composite_playoff)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-1229: which units of each beam entry a round expands (autotune_round_expansion).
-; Scripted timings, pinned to cc.
+; Scripted timings, pinned to cc; its searches run on Fissioned_chain's small menu, so the model
+; pre-filter's three keys are declared beside the rule's own.
 
 (test
  (name autotune_round_expansion)
@@ -8152,9 +8163,12 @@
   ocannl_config
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
-  (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION))
+  (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
  (modules autotune_round_expansion)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict fissioned_chain)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
