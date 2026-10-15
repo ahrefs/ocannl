@@ -323,7 +323,9 @@ $(sed -n "s/^# possible first '\{0,1\}bad'\{0,1\} commit: \[\([0-9a-f]*\)\] \(.*
       result="git bisect ended without a verdict (status $bisect_rc; see git-bisect.out and bisect-log)"
     fi
   fi
-  trap - INT TERM HUP
+  # The verdict is decided; the traps stay armed until the exit, so a signal
+  # landing during the cleanup below (the drain is bounded at 60s) only flags
+  # itself, and the tree is still removed and the verdict still reported.
   printf '%s\n' "$result" >"$dir/result" 2>/dev/null
   # The tree goes; the records stay. Not while anything the bisect started
   # could still be building in it.
