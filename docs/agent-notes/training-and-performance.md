@@ -179,7 +179,9 @@ files.
   --record` pins them as they are (stdlib-only, no venv, and it leaves other origins alone);
   `--check` reports disk against record, and `--check --expect-origin <box>` answers a driver
   pinned to one box's records by its exit status -- never grep the report for the box, since its
-  origin field joins every agreeing box (`m4-max,tuf's bytes`). Regeneration is a cross-box
+  origin field joins every agreeing box (`m4-max,tuf's bytes`). `--check` names each fixture's
+  declared boxes with no entry, and `--expect-recorded <box>` fails on any, so confirming a
+  newly recorded box needs no `python -c` over `missing_origins`. Regeneration is a cross-box
   event to be coordinated across every origin in `DIGESTS.txt`'s `# measurement-boxes:` header
   field at once (gh-ocannl-759, gh-ocannl-850). That list is independent of the entry rows, so
   `divergent_origins` and generated reports name a declared box even when its fixture entry is
