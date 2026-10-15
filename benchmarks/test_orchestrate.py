@@ -6412,5 +6412,123 @@ class DisplaySafeSweepTest(unittest.TestCase):
                 self.assertIn(shown, line)
 
 
+
+class TableRowTest(unittest.TestCase):
+    """Every report table row is built by `table_row`, which refuses a raw `|` or line break at
+    render time (post-wave follow-up of gh-ocannl-1273): display safety checked where the row is
+    rendered, not remembered at each interpolation."""
+
+    # The builders themselves, and `display_value`, which spells the `|` it escapes.
+    BUILDERS = ("table_row", "table_lines", "display_value")
+
+    @staticmethod
+    def breaks_a_cell(char):
+        return char == "|" or len(f"a{char}b".splitlines()) != 1
+
+    def test_a_row_renders_its_cells_and_an_empty_one_as_a_blank(self):
+        self.assertEqual(orchestrate.table_row("a", "", "b c"), "| a | | b c |")
+        self.assertEqual(
+            orchestrate.table_lines(["x", "y"], [("1", "2")]), ["| x | y |", "|---|---|", "| 1 | 2 |"]
+        )
+
+    def test_it_refuses_exactly_the_characters_that_break_a_cell(self):
+        # Derived, not restated: the refusal set is `|` plus every character `str.splitlines` (and
+        # so `markdown_tables`, and any line-based reader of the report) breaks a line at.
+        refused = [chr(c) for c in range(0x110000) if orchestrate._TABLE_CELL_BREAKERS_RE.match(chr(c))]
+        breaking = [chr(c) for c in range(0x110000) if self.breaks_a_cell(chr(c))]
+        self.assertEqual(refused, breaking)
+        for char in breaking:
+            with self.subTest(char=char):
+                with self.assertRaises(orchestrate.UnsafeTableRow) as refusal:
+                    orchestrate.table_row("fine", f"odd{char}value")
+                self.assertIn("table cell 1", str(refusal.exception))
+                self.assertIn("display_value", str(refusal.exception))
+                # The remedy the refusal names is sufficient: the shown value renders in one cell.
+                row = orchestrate.table_row("fine", orchestrate.display_value(f"odd{char}value"))
+                self.assertEqual(row.count("|"), 3, row)
+                self.assertEqual(len(row.splitlines()), 1, row)
+
+    def test_it_refuses_a_non_string_cell_and_a_row_of_the_wrong_width(self):
+        with self.assertRaises(TypeError):
+            orchestrate.table_row("a", 1.5)
+        for row in (("1",), ("1", "2", "3")):
+            with self.subTest(row=row):
+                with self.assertRaises(orchestrate.UnsafeTableRow):
+                    orchestrate.table_lines(["x", "y"], [row])
+
+    def test_a_raw_value_in_a_row_fails_the_report_and_writes_nothing(self):
+        # The planted raw interpolation: a failure label that skipped `display_value`.
+        failures = [orchestrate.Failure("odd|work ocannl/cc/default", "exit 1")]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(orchestrate.UnsafeTableRow):
+                    orchestrate.report([], out, (), failures)
+            # Refused before results.jsonl or report.md was written, as the report's other
+            # refusals are.
+            self.assertEqual(list(out.iterdir()), [])
+
+    def test_no_table_row_is_written_outside_the_builders(self):
+        self.assertEqual(
+            table_row_literals(Path(orchestrate.__file__).read_text(), self.BUILDERS),
+            [],
+            "build report table rows with orchestrate.table_row",
+        )
+
+    def test_the_scan_finds_a_planted_row(self):
+        for planted in (
+            'def report(lines, x):\n    lines.append(f"| {x} | y |")\n',
+            'def report(lines, x):\n    lines.append("\\n| a | " + x + " |")\n',
+            'def report(lines):\n    lines.append("|---|---|")\n',
+        ):
+            with self.subTest(planted=planted):
+                self.assertTrue(table_row_literals(planted, self.BUILDERS))
+        for clean in (
+            'def table_row(*cells):\n    return "| " + " | ".join(cells) + " |"\n',
+            'def f():\n    """| a | b |"""\n',
+            'def f(a, b):\n    return f"{a} | {b}"\n',
+        ):
+            with self.subTest(clean=clean):
+                self.assertEqual(table_row_literals(clean, self.BUILDERS), [])
+
+
+def table_row_literals(source, builders):
+    """The string literals in `source` that open a Markdown table line (`| ...`, or a `|---` rule)
+    outside the functions named `builders` and outside docstrings: each is a table row written
+    around `table_row`, so its cells are never checked."""
+    import ast
+
+    tree = ast.parse(source)
+    skip = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in builders:
+            skip.update(id(n) for n in ast.walk(node))
+        # Docstrings document rows; they do not write them.
+        if (
+            isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+        ):
+            skip.add(id(node.body[0].value))
+    found = []
+    # Breadth-first, so an f-string is met before its literal pieces: only its FIRST piece can open
+    # a line (`f"platform: {p} | commit"` does not).
+    for node in ast.walk(tree):
+        if id(node) in skip:
+            continue
+        if isinstance(node, ast.JoinedStr):
+            skip.update(id(v) for v in node.values)
+            first = node.values[0] if node.values else None
+            text = first.value if isinstance(first, ast.Constant) else ""
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            text = node.value
+        else:
+            continue
+        if text.lstrip().startswith("|") or "|---" in text:
+            found.append(f"line {node.lineno}: {text!r}")
+    return found
+
+
 if __name__ == "__main__":
     unittest.main()
