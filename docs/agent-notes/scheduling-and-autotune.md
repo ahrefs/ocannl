@@ -982,7 +982,12 @@ files.
   segments), so the test seats the last alternate, a register-tiled `cpu` single; a menu change
   that seats a moveless one fails `full: the round extends the near-copy on its differing segment`.
   To see each alternate's moves at once, probe with a beam wide enough to hold them all and read
-  the round line below. The `autotune_log` line `round N: K candidate(s) from a beam of
+  the round line below. `autotune_sketch_placements` runs on the same small menu on CPU backends
+  (its claims ask which segments a single sketched, so they need one single per key, not particular
+  ones). Before reaching for it elsewhere, count the search's `F_sketch`/`W_sketch` labels in its
+  autotune log or progress lines: `autotune_split_reduce`, `autotune_labels` and `flip_abandonment`
+  search matvec and pointwise chains that seed no sketch at all, so the pre-filter prunes nothing
+  there and their wall time is presets, split-reduce seeds and round moves. The `autotune_log` line `round N: K candidate(s) from a beam of
   W, expansion <rule>: ...` gives each entry's `units differing` from the head and how many of its
   units the rule expanded. Measured on rog (gpt2_mini, CUDA, approximate profile, beam 4, a
   correctness-grade probe on a shared box, two legs at an equal 2100 s cap): arm A's round 1 took

@@ -1,6 +1,7 @@
 (* The two-matmul chain the scripted-ranking autotune tests search ([autotune_composite_playoff],
    [autotune_round_expansion]), and the small seeding menu that keeps their searches cheap
-   (lukstafi/ocannl-staging#1143).
+   (lukstafi/ocannl-staging#1143) -- and the searches of [autotune_sketch_placements], whose own
+   chain also fissions into two keyed matmul segments on cc.
 
    The chain fissions into two keyed matmul segments of different shapes. Unpruned, each segment
    offers 21 per-segment sketch singles, and a search compiles every single it times: those compiles
@@ -81,11 +82,15 @@ let singles_per_segment measured =
   |> List.sort_and_group ~compare:(fun a b -> String.compare (segment_of a) (segment_of b))
   |> List.map ~f:List.length
 
-(* The claims a pruned search's menu owes the claims built on it: [chain]'s two segments are both
-   keyed, and each still offers three or more singles. *)
-let menu_claim measured =
+(* The claims a pruned search's menu owes the claims built on it: the search keyed two segments
+   ([chain]'s two products; [autotune_sketch_placements]' structural twins and closing layer), and
+   each still offers three or more singles. A test that prunes on some backends only passes [~when_]
+   (whether this run pruned) and [~on] (the backend), and the claims are skipped where it did
+   not. *)
+let menu_claim ?(when_ = true) ?(on = "") measured =
   let per_segment = singles_per_segment measured in
   Stdio.eprintf "menu (not part of the golden): singles per segment %s\n%!"
     (String.concat ~sep:" " (List.map per_segment ~f:Int.to_string));
-  p "menu: the pre-filtered seeding keys two segments" (List.length per_segment = 2);
-  p_all "menu: each segment offers three or more singles" per_segment ~f:(fun n -> n >= 3)
+  gated ~when_ ~on "menu: the pre-filtered seeding keys two segments" (List.length per_segment = 2);
+  gated_all ~when_ ~on "menu: each segment offers three or more singles" per_segment ~f:(fun n ->
+      n >= 3)
