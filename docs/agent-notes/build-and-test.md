@@ -1434,7 +1434,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - **To genuinely re-execute an unchanged `.expected` test N times, use the harness's repeat
   mode**: `tools/test-run.sh repeat N build @<dir>/runtest-<name>` runs every iteration in its own
   freshly cleaned, cache-disabled build directory, keeps each stdout/stderr and exit status, and
-  diffs the pairs (about 45 s per iteration for a 35 s test on an M4 Max, the rebuild included).
+  diffs the pairs (about 45 s per iteration for a 35 s test on an M4 Max, the rebuild included; 21-23
+  s for `runtest-hello_world_op` at `-j 4` on mac-studio, nearly all of it the rebuild). The rebuild
+  cannot come from dune's shared cache (gh-ocannl-1252, dune 3.24.2): the default
+  `--cache=enabled-except-user-rules` stores nothing for this workspace, compiles included (a fresh
+  `DUNE_CACHE_ROOT` held 0 files after building `arrayjit/lib`, and an iteration took as long under
+  it as under `--cache=disabled`), while `--cache=enabled` also stores the test runs and restores
+  their outputs instead of re-running them. A GPU batch's repeat has `run`'s two bounds (next
+  section's GPU bullet).
   For one fresh, TIMED run of named tests (a before/after wall-time comparison),
   `tools/test-run.sh fresh @<dir>/runtest-<name> [@<dir>/slow-<name>...]` hands dune a build
   directory of the run's own with `--force --cache=disabled`: the closure compiles there (some
@@ -3474,9 +3481,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   4 bytes off (gh-ocannl-1222, removed by staging#1005). The fault is probably that miscompile,
   but this is not proven: after the removal, `bandwidth_calibration` ran four times alone on tuf
   (the same 16 rows, golden matched, device queries clean before and after, no kernel line), and
-  it had also passed once with the flag. Two bounds now apply to `run`/`start` (not `repeat` or
-  `tools/machine-verify.sh`, which run their own supervisors); the per-test cap applies to each GPU
-  unit of `tools/sweep.sh` too (below). (1) **The per-test cap**: a watcher beside dune times every child of a `dune` process, and the first one
+  it had also passed once with the flag. Two bounds now apply to `run`/`start`, and since
+  gh-ocannl-1252 to every other supervisor that runs GPU tests, from the same sourced helpers
+  (`tools/per-test-cap.sh`, `tools/device-probe.sh`): `repeat`, each GPU unit of `tools/sweep.sh`
+  and its serial rerun, and `tools/machine-verify.sh` (all below). (1) **The per-test cap**: a watcher beside dune times every child of a `dune` process, and the first one
   past the cap ENDS the run. The supervisor gets the SIGALRM the run's own cap sends, so it is the
   same reap and the same `TIMEOUT` (142), with the digest naming the test from the run's
   `test-cap` record and the remedy (`--test-cap 0`, or a larger one); only on a GPU batch does it
@@ -3492,8 +3500,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   batches keep only the run's cap unless asked; `plan` says which applies and why. The default and
   the watcher live in `tools/per-test-cap.sh`, which `tools/sweep.sh` sources as well: a sweep unit
   on a non-CPU backend runs the same watcher beside its `@runtest @train` leg (not its `@slow`
-  leg), signalling the unit's own supervisor, so a hung test ends the unit as `timeout` and the
-  lane's line names it (`OCANNL_TOOL_SWEEP_TEST_CAP`, 0 lifts it). Before that, the 2026-10-14
+  leg), and beside each stanza of its serial rerun and its completion pass (unless they reach
+  `@slow`), signalling the leg's own supervisor, so a hung test ends the unit as `timeout`, or the
+  rerun with the stanzas it did not reach `unjudged`, and the lane's line names it
+  (`OCANNL_TOOL_SWEEP_TEST_CAP`, 0 lifts it). The serial rerun needed it most: what triggers it is a
+  kernel-side refusal signature, when the device is most likely faulted. `repeat` runs the watcher
+  beside each iteration's dune, its default decided by `run`'s own resolution of the batch, and a
+  test past it ends the whole set; `tools/machine-verify.sh` runs it beside each `--test` and
+  `--record-golden` alias of a GPU trip (`--test-cap N` for any operation, `--run` included; 0
+  lifts it), the trip ending with 142. Before that, the 2026-10-14
   sweep (stamp 20261014T051751Z) had sixteen tuf hip tests hung at once burn the unit's full
   5400 s cap with no test named. Tests are found as children of `dune`, because dune
   starts each action as its own process-group leader. The run's group kill therefore reaches dune
@@ -3514,12 +3529,24 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `DEVICE UNHEALTHY` (exit 69) without starting dune. A query that fails fast (cuda or metal
   asked on an AMD box, as every unread batch asks) is recorded in `device-probe` and passed over:
   its tests fail fast too rather than spin. A batch whose backends were never resolved (no width
-  hazard and no fleet slot) is not probed, and gets no default per-test cap. Both bounds are deliberately outside the driver: the
+  hazard and no fleet slot) is not probed, and gets no default per-test cap. The query and the
+  per-backend loop are `tools/device-probe.sh` (POSIX sh), shared since gh-ocannl-1252: `repeat`
+  probes before every iteration (its `_probe`, inside the iteration), and a refusal ends the set; a
+  GPU unit of `tools/sweep.sh` probes after its compile-only prebuild and before any test leg, and
+  again before its serial rerun, a refusal filing the unit as `error` with a `DEVICE UNHEALTHY,
+  dune not started` line (rerun: `serial rerun: DEVICE UNHEALTHY`, every stanza unjudged) rather
+  than at the first test's cap (`OCANNL_TOOL_SWEEP_DEVICE_PROBE=none` turns it off, a path names a
+  stand-in, `_CAP` bounds it); and `tools/machine-verify.sh` probes the pinned GPU backend before
+  its first device use, a refusal ending the trip with 69 (`--probe-cap`). None of them probes a
+  local unit on macOS without a stand-in, for the XProtect reason above. Both bounds are deliberately outside the driver: the
   recommendation on the issue preferred them to a device-health watchdog inside the batch, which a
   faulted driver can hang along with everything else. On a 69, or a per-test 142 on a GPU
   batch, stop GPU work on that box and read `journalctl -k` before retrying. Legs 75-77 of
   `tools/test-test-run.sh` pin the cap, its controls (a slow dune, the slot's holder), the probe
-  and `plan`'s report.
+  and `plan`'s report, and leg 82 both bounds under `repeat`; `test/operations/sweep_harness.sh`
+  pins them in a sweep unit, its serial rerun and its completion pass (a local and a remote unit),
+  and `tools/test-machine-verify.sh` in a trip (`test-cap-*`, `probe-*` cases; a fake `uname`
+  stands for a Linux far side).
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
   dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
   batch's into the run directory and keeps only the five slowest, below) and

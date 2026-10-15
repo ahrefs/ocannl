@@ -157,6 +157,11 @@
 #  77. `plan` reports the probe and the per-test cap as `run` would apply them
 #      (GPU batches only, not @slow, not where run resolves nothing), and asks
 #      no device.
+#  82. `repeat` has both bounds (gh-ocannl-1252): a test past the per-test cap
+#      ends the set as TIMEOUT (142) naming it, killed; a GPU batch's wedged
+#      device ends it as DEVICE UNHEALTHY (69) before any dune; the default is
+#      run's (1500s on a GPU batch, none on a CPU one), and a test inside the
+#      cap or an answering device lets every iteration run.
 #  64-65 sit between legs 51 and 52: `plan`, and the run's first phase, in
 #      which the supervisor's child resolves the backends (gh-ocannl-1066,
 #      gh-ocannl-1106).
@@ -2363,7 +2368,7 @@ escape_pid=
 escape_release=
 
 pre_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || break$' "$SRC" | head -1 | cut -d: -f1)
-launch_line=$(grep -n '^        perl -e "$supervisor_perl" -- "$cap" /bin/bash -c \\' "$SRC" | head -1 | cut -d: -f1)
+launch_line=$(grep -n '^        perl -e "$supervisor_perl" -- "$cap" "${iter_cmd\[@\]}" \\$' "$SRC" | head -1 | cut -d: -f1)
 supervisor_line=$(grep -n '^      repeat_sup=\$!$' "$SRC" | cut -d: -f1)
 post_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || kill "-\$repeat_cancelled" "\$repeat_sup" 2>/dev/null$' "$SRC" | cut -d: -f1)
 if [ -n "$pre_launch_line" ] && [ -n "$launch_line" ] \
@@ -5602,7 +5607,7 @@ test_cap_named_ok=
 ps -A -o pid= -o comm= 2>/dev/null | grep -Eq "^ *$test_cap_named +(.*/)?dune$" && test_cap_named_ok=1
 kill "$test_cap_named" 2>/dev/null
 wait "$test_cap_named" 2>/dev/null
-if [ -z "$test_cap_named_ok" ]; then
+if [ -z "${test_cap_named_ok:-}" ]; then
   skip "$test_cap_label" "a process renamed through \$0 does not read back as dune in ps here"
 else
   test_cap_detail=
@@ -5697,6 +5702,13 @@ cat >"$probe_fake" <<'FAKE'
 #!/usr/bin/env bash
 b=${1#--ocannl_backend=}
 printf '%s %s\n' "$PWD" "$*" >>"$FAKE_PROBE_CALLS"
+# A stand-in that forks its query rather than exec'ing it leaves the query behind its own exit
+# unless the probe's bound reaches the whole tree (FAKE_PROBE_FORK; gh-ocannl-1252).
+if [ -n "${FAKE_PROBE_FORK:-}" ]; then
+  case " ${FAKE_PROBE_HANG:-} " in
+    *" $b "*) sleep 30 & printf '%s\n' "$!" >"$FAKE_PROBE_CALLS.child"; wait; exit 0 ;;
+  esac
+fi
 case " ${FAKE_PROBE_HANG:-} " in *" $b "*) printf '%s\n' "$$" >"$FAKE_PROBE_CALLS.pid"; exec sleep 30 ;; esac
 case " ${FAKE_PROBE_ABSENT:-} " in *" $b "*) echo "no $b here" >&2; exit 2 ;; esac
 echo "static.device[0].device_name = fake $b"
@@ -5740,6 +5752,21 @@ if [ -z "$probe_detail" ]; then
     '' | Z) ;;
     *) probe_detail="hang: the query (pid $probe_pid) survived its bound"; kill -KILL "$probe_pid" 2>/dev/null ;;
   esac
+fi
+# A query a forking stand-in left behind is killed with it: the bound KILLs the query's whole
+# process group (Codex review round 2 on PR #1172).
+if [ -z "$probe_detail" ]; then
+  FAKE_PROBE_FORK=1 probe_run probe-fork hip cc hip "" run build @cheap
+  probe_child=$(cat "$TMP/probe-fork.probe.child" 2>/dev/null)
+  if [ "$argv_rc" != 69 ] || [ -z "$probe_child" ]; then
+    probe_detail="fork: exit $argv_rc (want 69); forked query: ${probe_child:-none recorded}"
+  else
+    case $(pstate "$probe_child") in
+      '' | Z) ;;
+      *) probe_detail="fork: the forked query (pid $probe_child) outlived the bound"
+         kill -KILL "$probe_child" 2>/dev/null ;;
+    esac
+  fi
 fi
 # An answer, and a fast failure, start dune once under the same slot call.
 for probe in "answer::hip: answered in" "absent:hip:hip: failed fast (exit 2"; do
@@ -5818,6 +5845,129 @@ else
   report 1 "plan: reports the device probe and the per-test cap, asking no device" "$plan_probe_detail"
 fi
 fi # leg 77
+
+# Leg 82: `repeat` has both bounds (gh-ocannl-1252). A repeat samples timing-dependent goldens,
+# often GPU tests, and ran with neither: a wedged device held it for N times the iteration cap.
+# Now a test past the per-test cap ends its iteration as TIMEOUT (142) naming the test, the test
+# killed, and ENDS the set, since every later iteration would hang the same way; one inside it does
+# not. The default follows `run`'s decision from the same resolution of the batch (a GPU batch:
+# 1500s, announced in the log; a CPU batch: none), and an explicit cap applies to any batch. A GPU
+# batch's device probe runs before each iteration, inside it: a query that does not answer ends
+# the set as DEVICE UNHEALTHY (69) with dune never started -- not even its clean -- and an answer
+# lets every iteration run, the device asked once each.
+if harness_leg '82: repeat has both bounds'; then
+rb_label="repeat bounds: a test past the per-test cap ends the set as TIMEOUT naming it, a wedged device ends it as DEVICE UNHEALTHY; inside the cap, an answering device and a CPU batch's default do not"
+if [ -z "${test_cap_named_ok:-}" ]; then
+  perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
+  rb_named=$!
+  sleep 0.3
+  ps -A -o pid= -o comm= 2>/dev/null | grep -Eq "^ *$rb_named +(.*/)?dune$" && test_cap_named_ok=1
+  kill "$rb_named" 2>/dev/null
+  wait "$rb_named" 2>/dev/null
+fi
+rb_detail=
+if [ -z "${test_cap_named_ok:-}" ]; then
+  skip "$rb_label" "a process renamed through \$0 does not read back as dune in ps here"
+else
+  export REPEAT_TEST_ACTION_PID=$TMP/rb-action.pid
+  rb_start=$SECONDS
+  argv_mode=action argv_probe rb-hung repeat --test-cap 2 3 build @cheap
+  rb_took=$((SECONDS - rb_start))
+  rb_action=$(cat "$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+  { [ "$argv_rc" = 142 ] &&
+    grep -qF "repeat result: TIMEOUT -- in iteration 1 a test outlived the per-test cap (sleep 60), and the set stopped there (1 of 3 iterations started)" <<<"$argv_out"; } ||
+    rb_detail="hung: exit $argv_rc (want 142): $argv_out"
+  [ -n "$rb_detail" ] || [ "$rb_took" -lt 20 ] || rb_detail="hung: the set took ${rb_took}s under a 2s test cap"
+  [ -n "$rb_detail" ] || [ "$(grep -c '^clean ' "$TMP/rb-hung.calls")" = 1 ] ||
+    rb_detail="hung: the set went on past the hung iteration: $(cat "$TMP/rb-hung.calls")"
+  [ -n "$rb_detail" ] || [ -n "$rb_action" ] || rb_detail="hung: the test never started"
+  if [ -z "$rb_detail" ]; then
+    case $(pstate "$rb_action") in
+      '' | Z) ;;
+      *) rb_detail="hung: the test (pid $rb_action) survived the set"; kill -KILL "$rb_action" 2>/dev/null ;;
+    esac
+  fi
+  [ -n "$rb_detail" ] || grep -q "^test-run: per-test cap: pid $rb_action has run" "$argv_dir/iteration-1/stdout" ||
+    rb_detail="hung: the iteration's output does not name the test: $(cat "$argv_dir/iteration-1/stdout")"
+  # The run's digest reads the record the iteration left, as for a run's own.
+  if [ -z "$rb_detail" ]; then
+    rb_status=$(OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-rb-hung "$repeat_root/tools/test-run.sh" status last 2>&1)
+    case $rb_status in
+      *"verdict: TIMEOUT (a test outlived the per-test cap; run was killed, not judged) (exit 142)"*"hung test: sleep 60"*) ;;
+      *) rb_detail="hung: the digest does not read the record: $rb_status" ;;
+    esac
+  fi
+  [ -n "$rb_detail" ] ||
+    OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-rb-hung "$repeat_root/tools/test-run.sh" idle >/dev/null 2>&1 ||
+    rb_detail="hung: the worktree is not idle after the set"
+  # Inside the cap, every iteration runs and the set compares as before.
+  if [ -z "$rb_detail" ]; then
+    REPEAT_TEST_ACTION_SECS=1 argv_mode=action argv_probe rb-inside repeat --test-cap 4 2 build @cheap
+    { [ "$argv_rc" = 0 ] && grep -q '^repeat result: IDENTICAL -- ' <<<"$argv_out" &&
+      [ ! -e "$argv_dir/test-cap" ]; } || rb_detail="inside: exit $argv_rc: $argv_out"
+  fi
+  # The default is run's: 1500s for a GPU batch (resolved here under the fake slot), said in the
+  # log; none for a CPU one. OCANNL_TOOL_PER_TEST_CAP is explicit, and on a GPU batch the hung test
+  # is blamed on the device.
+  if [ -z "$rb_detail" ]; then
+    REPEAT_TEST_ACTION_SECS=1 argv_mode=action slot_probe rb-gpu-default hold hip cc repeat 2 build @cheap
+    { [ "$argv_rc" = 0 ] && [ -z "$slot_calls" ] &&
+      grep -qF "test-run: repeat: per-test cap: 1500s for each process dune starts (the default for a GPU batch)" "$argv_dir/log"; } ||
+      rb_detail="gpu default: exit $argv_rc; slot calls: ${slot_calls:-<none>}; log: $(cat "$argv_dir/log")"
+  fi
+  if [ -z "$rb_detail" ]; then
+    REPEAT_TEST_ACTION_SECS=1 argv_mode=action slot_probe rb-cpu-default hold cc cc repeat 2 build @cheap
+    { [ "$argv_rc" = 0 ] && grep -qF "test-run: repeat: per-test cap: none (no default: a CPU batch)" "$argv_dir/log"; } ||
+      rb_detail="cpu default: exit $argv_rc; log: $(cat "$argv_dir/log")"
+  fi
+  if [ -z "$rb_detail" ]; then
+    OCANNL_TOOL_PER_TEST_CAP=2 argv_mode=action slot_probe rb-gpu-hung hold hip cc repeat 2 build @cheap
+    { [ "$argv_rc" = 142 ] && grep -q "a wedged device hangs every test after it" "$argv_dir/iteration-1/stdout"; } ||
+      rb_detail="gpu hung: exit $argv_rc: $argv_out"
+    rb_action=$(cat "$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+    case $(pstate "${rb_action:-0}") in
+      '' | Z) ;;
+      *) kill -KILL "$rb_action" 2>/dev/null
+         [ -n "$rb_detail" ] || rb_detail="gpu hung: the test (pid $rb_action) survived the set" ;;
+    esac
+  fi
+  unset REPEAT_TEST_ACTION_PID
+  # The device probe: a query that never answers ends the set before the first iteration's dune
+  # -- its clean included -- and one that answers lets each iteration run, asked once each.
+  if [ -z "$rb_detail" ]; then
+    probe_run rb-probe-hang hip cc hip "" repeat 3 build @cheap
+    { [ "$argv_rc" = 69 ] && [ -z "$argv_calls" ] && [ "$(grep -c . "$TMP/rb-probe-hang.probe")" = 1 ] &&
+      grep -qF "repeat result: DEVICE UNHEALTHY -- iteration 1's device probe got no answer, and the set stopped there (1 of 3 iterations started)" <<<"$argv_out" &&
+      grep -qF "hip: NO ANSWER within 1s" "$argv_dir/device-probe"; } ||
+      rb_detail="probe hang: exit $argv_rc; dune calls: ${argv_calls:-<none>}; probes: $probe_calls; output: $argv_out"
+    rb_probe_pid=$(cat "$TMP/rb-probe-hang.probe.pid" 2>/dev/null)
+    case $(pstate "${rb_probe_pid:-0}") in
+      '' | Z) ;;
+      *) kill -KILL "$rb_probe_pid" 2>/dev/null
+         [ -n "$rb_detail" ] || rb_detail="probe hang: the query (pid $rb_probe_pid) survived its bound" ;;
+    esac
+  fi
+  if [ -z "$rb_detail" ]; then
+    probe_run rb-probe-answer hip cc "" "" repeat 2 build @cheap
+    { [ "$argv_rc" = 0 ] && grep -q '^repeat result: IDENTICAL -- ' <<<"$argv_out" &&
+      [ "$(grep -c '^clean ' "$TMP/rb-probe-answer.calls")" = 2 ] &&
+      [ "$(grep -c . "$TMP/rb-probe-answer.probe")" = 2 ] &&
+      grep -qF "hip: answered in" "$argv_dir/iteration-2/device-probe"; } ||
+      rb_detail="probe answer: exit $argv_rc; dune calls: ${argv_calls:-<none>}; probes: $probe_calls; output: $argv_out"
+  fi
+  # A resolution the cap cuts short runs no iteration and keeps the cap's status: TIMEOUT, 142,
+  # never a usage error (local Codex review).
+  if [ -z "$rb_detail" ]; then
+    FAKE_REACH_SLEEP=5 slot_probe rb-resolve-cap hold hip cc repeat --cap 1 2 build @cheap
+    rb_status=$(OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-rb-resolve-cap "$repeat_root/tools/test-run.sh" status last 2>&1)
+    { [ "$argv_rc" = 142 ] && [ -z "$argv_calls" ] &&
+      grep -qF "the bounds were not resolved (exit 142" <<<"$argv_out" &&
+      grep -qF "verdict: TIMEOUT (cap expired; run was killed, not judged) (exit 142)" <<<"$rb_status"; } ||
+      rb_detail="resolution past the cap: exit $argv_rc; dune calls: ${argv_calls:-<none>}; output: $argv_out; status: $rb_status"
+  fi
+  if [ -z "$rb_detail" ]; then report 0 "$rb_label"; else report 1 "$rb_label" "$rb_detail"; fi
+fi
+fi # leg 82
 
 # ---------------------------------------------------------------------------
 # Leg 79: credentials never reach dune (gh-ocannl-1280)

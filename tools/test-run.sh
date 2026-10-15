@@ -13,7 +13,7 @@
 #     wedged backend) otherwise strands whatever is waiting on it. And one per
 #     TEST, with a device query before a GPU batch starts: a faulted GPU makes
 #     every later test spin, which the run's cap alone let run for 32 minutes
-#     (gh-ocannl-1211; see test_cap_watch and probe_perl).
+#     (gh-ocannl-1211; see tools/per-test-cap.sh and tools/device-probe.sh).
 #   - A verdict FILE, not a process probe: waiter loops on `pgrep -x dune`
 #     match the editor's immortal `dune ocaml-merlin` daemons and spin forever
 #     (one PR review accumulated ten such stranded shells); `kill -0 $pid` can
@@ -31,7 +31,7 @@
 #   tools/test-run.sh run   [--cap N] [--test-cap N] [DUNE ARGS...]   # foreground; digest; dune's status (2: refused)
 #   tools/test-run.sh start [--cap N] [--test-cap N] [DUNE ARGS...]   # detached; survives the session
 #   tools/test-run.sh plan  [--cap N] [--test-cap N] [DUNE ARGS...]   # what `run` would inject and take; runs nothing
-#   tools/test-run.sh repeat [--cap N] [--alone] N [DUNE ARGS...]
+#   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] N [DUNE ARGS...]
 #                                                      # compare N isolated runs
 #   tools/test-run.sh fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]
 #                                                      # one fresh, timed run of named tests
@@ -76,7 +76,24 @@
 # runs at the width it is given, so on a capped box pass `--alone` or `-j` yourself. Its cap is per
 # iteration; N must be at least 2. An stdout/status difference is red (exit 1
 # when dune itself stayed green); stderr-only drift is reported distinctly but
-# is not red. Any red dune iteration keeps a nonzero dune status.
+# is not red. Any red dune iteration keeps a nonzero dune status. It has `run`'s
+# two bounds (gh-ocannl-1252), decided once by the same resolution of the batch:
+# the per-test cap beside each iteration's dune, and on a GPU batch the device
+# probe before each iteration; a test past the cap, or a device that does not
+# answer, ends the whole set (TIMEOUT 142, DEVICE UNHEALTHY 69), since every
+# later iteration would hang on the same wedged device.
+#
+# The clean context per iteration is the price of re-executing through dune
+# (gh-ocannl-1252 asked whether it is needed): dune 3.24 re-runs a
+# target-producing rule only when its dependencies change, and the rebuild half
+# of the price cannot come from dune's shared cache. Measured on mac-studio
+# (dune 3.24.2): under the default `--cache=enabled-except-user-rules` dune
+# stores nothing for this workspace's rules, compiles included (a fresh
+# DUNE_CACHE_ROOT held 0 files after building arrayjit/lib), and a
+# `runtest-hello_world_op` iteration took 21-23s at -j 4 under it and under
+# `--cache=disabled` alike; `--cache=enabled` stores everything, the test runs
+# too, which restores a test's output instead of re-running it. So `repeat`
+# keeps `--cache=disabled`, which says what it means.
 #
 # `fresh` runs the named per-test aliases once, as `run` does (cap, slot, width,
 # digest), but fresh: dune is given a build directory of the run's own
@@ -130,8 +147,8 @@
 # first nonzero dune status, or exits 1 when otherwise-green stdout/statuses
 # differ, and exits 2 with the same verdict when its first iteration is refused
 # (there is nothing to repeat) (142 = the cap expired -- for `run`/`start`
-# the run's or a test's, 69 = a `run`/`start` GPU batch's device probe found
-# the device wedged and dune never started, 143/130 = cancelled, 137 = SIGKILLed, 124 = `wait` itself
+# the run's or a test's, for `repeat` an iteration's or a test's -- 69 = a GPU
+# batch's device probe found the device wedged and dune never started, 143/130 = cancelled, 137 = SIGKILLed, 124 = `wait` itself
 # timed out; dune never reaches those on its own). `status` exits 0 finished, 3 still running
 # (or verdict publication in flight), 1 died without a verdict. Usage and lock
 # refusals exit 2 -- every one of them, including EITHER misplacement of this
@@ -161,7 +178,7 @@
 # reaching `@slow` gets 1500s (see plan_test_cap, test_cap_watch). A GPU batch
 # also first asks each of its GPU backends for a fresh device query, and
 # refuses to start dune when one does not answer (DEVICE UNHEALTHY, exit 69;
-# see probe_perl). Neither bound applies to `repeat`, which runs as given.
+# see tools/device-probe.sh). `repeat` takes both bounds too (see above).
 #
 # One run at a time per worktree, enforced with an flock: a second `run`/`start`/`repeat`
 # refuses loudly, pointing at the active run, instead of queueing behind dune's
@@ -229,7 +246,7 @@ reject_misplaced_options() {
       --) return 0 ;;
       --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=*)
         case $sub in
-          repeat) form='repeat [--cap N] [--alone] N [DUNE ARGS...]' ;;
+          repeat) form='repeat [--cap N] [--test-cap N] [--alone] N [DUNE ARGS...]' ;;
           fresh) form='fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]' ;;
           bisect) form=$bisect_usage ;;
           *) form="$sub [--cap N] [--test-cap N] [DUNE ARGS...]" ;;
@@ -534,8 +551,8 @@ plan_device_probe() { # after plan_batch
   done < <(batch_backends)
   probe_backends=${probe_backends# }
   [ -n "$probe_backends" ] || return 0
-  probe_cap=${OCANNL_TOOL_DEVICE_PROBE_CAP:-60}
-  case $probe_cap in '' | 0 | *[!0-9]*) probe_cap=60 ;; esac
+  probe_cap=${OCANNL_TOOL_DEVICE_PROBE_CAP:-$DEVICE_PROBE_CAP_DEFAULT}
+  case $probe_cap in '' | 0 | *[!0-9]*) probe_cap=$DEVICE_PROBE_CAP_DEFAULT ;; esac
   probe_announce="a fresh device query for $probe_backends before dune starts${slot_fw:+, inside the slot}; one
   that does not answer within ${probe_cap}s refuses the batch as DEVICE UNHEALTHY (gh-ocannl-1211)."
 }
@@ -618,6 +635,12 @@ runner_root=$PWD
 [ -r tools/per-test-cap.sh ] || die "cannot read tools/per-test-cap.sh"
 # shellcheck source=per-test-cap.sh
 . tools/per-test-cap.sh
+# The device probe -- probe_perl, one bounded query, and device_probe_sh, the
+# per-backend loop and its DEVICE UNHEALTHY refusal -- shared with tools/sweep.sh
+# and tools/machine-verify.sh.
+[ -r tools/device-probe.sh ] || die "cannot read tools/device-probe.sh"
+# shellcheck source=device-probe.sh
+. tools/device-probe.sh
 # Which backends a batch holds -- the resolution the width and the fleet slot
 # both read (plan_batch).
 [ -r tools/batch-backends.sh ] || die "cannot read tools/batch-backends.sh"
@@ -1162,46 +1185,6 @@ supervisor_perl='
   }
   $pid = 0;
   $finish->($code_of->($st));
-'
-
-# A GPU batch's device probe (gh-ocannl-1211): one fresh device query, bounded.
-# A wedged device does not fail a query, it never answers one -- the recovery
-# trip after the tuf fault found `device_props` spinning at 100% CPU before
-# printing anything -- so the answer read here is whether the query FINISHED
-# within the bound, and a query that fails fast (no such device on this box)
-# is recorded and passed over: its tests fail fast too, rather than spin.
-# Prints `exit <code> <seconds>`, or `hung <seconds>` for a query KILLed at
-# the bound; the query's own output goes to the file given. Polled rather
-# than waited for, so a query stuck where even KILL cannot reach it (in the
-# driver, uninterruptibly) still gets its verdict on time; it stays in the
-# run's process group, which the supervisor reaps.
-probe_perl='
-  use POSIX ();
-  use Time::HiRes ();
-  my ($bound, $out, @cmd) = @ARGV;
-  my $t0 = Time::HiRes::time();
-  my $pid = fork();
-  defined $pid or do { print "error fork: $!\n"; exit 0 };
-  if (!$pid) {
-    open STDIN, "<", "/dev/null";
-    open STDOUT, ">", $out or exit 126;
-    open STDERR, ">&", \*STDOUT;
-    exec @cmd or exit 127;
-  }
-  my $st;
-  while (1) {
-    if (waitpid($pid, POSIX::WNOHANG()) == $pid) { $st = $?; last }
-    last if Time::HiRes::time() - $t0 >= $bound;
-    Time::HiRes::sleep(0.05);
-  }
-  my $took = sprintf "%.1f", Time::HiRes::time() - $t0;
-  if (defined $st) {
-    print "exit ", (($st & 127) ? 128 + ($st & 127) : $st >> 8), " $took\n";
-  } else {
-    kill "KILL", $pid;
-    for (1 .. 50) { last if waitpid($pid, POSIX::WNOHANG()) != 0; Time::HiRes::sleep(0.1) }
-    print "hung $took\n";
-  }
 '
 
 # Take the per-worktree lock on fd 9, non-blocking. perl takes it and exits;
@@ -2400,16 +2383,20 @@ case $sub in
     ;;
   repeat)
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
+    # As for `run`: empty is the default, which the resolution phase decides.
+    test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
     alone=0
     while [ $# -gt 0 ]; do
       case $1 in
         --cap) [ $# -ge 2 ] || die "--cap requires a value"; cap=$2; shift 2 ;;
+        --test-cap) [ $# -ge 2 ] || die "--test-cap requires a value"; test_cap=$2; shift 2 ;;
         --alone) alone=1; shift ;;
         --) shift; break ;;
         *) break ;;
       esac
     done
     normalize_cap
+    [ -z "$test_cap" ] || normalize_cap test_cap --test-cap
     [ $# -gt 0 ] || die "repeat requires a count of at least 2"
     repeats=$1
     shift
@@ -2536,7 +2523,60 @@ case $sub in
     # verdict even if stop or a group signal lands in the publication gap.
     publish_run || die "cannot publish repeat run $run_dir"
 
+    # The two bounds `run` gives a GPU batch (gh-ocannl-1252), decided once, as `run` decides them
+    # (`_resolve`'s repeat mode: the same resolution of the batch's backends, under the same cap,
+    # in a phase of its own with the coordinator's cancellation), and applied to every iteration:
+    # the device probe before it starts (`_probe`, recording into the iteration's directory), the
+    # per-test cap's watcher beside its dune. A wedged device hangs every test after it, so a probe
+    # that finds one, or a test the cap ends, ends the set (repeat_bounded below).
+    resolve_dir=$run_dir/resolution
+    mkdir "$resolve_dir" || die "cannot create $resolve_dir"
+    # Named before the phase: reap_repeat_group's refusals name it (Codex review round 2 on PR #1172).
     repeat_build=$run_dir/build
+    OCANNL_TOOL_TESTRUN_BG=0 OCANNL_TOOL_TESTRUN_RD=$resolve_dir \
+      perl -e "$supervisor_perl" -- "$cap" env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" \
+      "${BASH:-bash}" "$PWD/tools/test-run.sh" _resolve repeat "$cap" "$test_cap" "$DUNE" "$@" \
+      </dev/null >>"$run_dir/log" 2>&1 &
+    repeat_sup=$!
+    [ -z "$repeat_cancelled" ] || kill "-$repeat_cancelled" "$repeat_sup" 2>/dev/null
+    { printf '%s\n' "$repeat_sup" >"$resolve_dir/pid" &&
+      ps_token "$repeat_sup" >"$resolve_dir/ptoken"; } ||
+      kill -TERM "$repeat_sup" 2>/dev/null
+    while :; do
+      wait "$repeat_sup"
+      resolve_rc=$?
+      proc_alive "$resolve_dir/pid" "$resolve_dir/ptoken" || break
+    done
+    repeat_sup=
+    # The resolution touches nothing repeat_build holds, so a group of only zombies it leaves behind
+    # is inert: a process substitution's child its shell never reaped, handed at its exit to a PID
+    # 1 that reaps no orphans -- a leaderless group the iterations' reap must refuse (Codex review
+    # round 3 on PR #1172). Anything live, or a group still led by its own leader, goes through
+    # that fail-closed reap as before.
+    resolve_pg=$(cat "$resolve_dir/pgid" 2>/dev/null) || resolve_pg=
+    if [ -n "$resolve_pg" ] && kill -0 -- "-$resolve_pg" 2>/dev/null &&
+       ! group_identity_matches "$resolve_dir" && ! group_alive "$resolve_pg"; then
+      printf 'repeat: the resolution left only zombies in group %s: inert, not reaped\n' "$resolve_pg" \
+        >>"$run_dir/log"
+    else
+      reap_repeat_group "$resolve_dir"
+    fi
+    repeat_test_cap=0 repeat_watch_kind=cpu repeat_probe_cap= repeat_probe_prog= repeat_probe_backends=
+    if [ -z "$repeat_cancelled" ]; then
+      # A resolution its supervisor ended -- its cap (142), a kill -- ran no iteration, and the set
+      # exits with that status, as a run whose resolution was cut short does (repeat_exit records
+      # it); a resolution that finished without its bounds is this script's own failure.
+      if [ "$resolve_rc" != 0 ]; then
+        printf 'test-run: repeat: the bounds were not resolved (exit %s; see %s/log), so no iteration ran\n' \
+          "$resolve_rc" "$run_dir" | tee -a "$run_dir/log"
+        exit "$resolve_rc"
+      fi
+      [ -s "$run_dir/bounds" ] || die "the repeat's resolution recorded no bounds (see $run_dir/log)"
+      { read -r repeat_test_cap && read -r repeat_watch_kind && read -r repeat_probe_cap &&
+          read -r repeat_probe_prog && read -r repeat_probe_backends; } <"$run_dir/bounds" ||
+        die "cannot read the repeat's bounds from $run_dir/bounds"
+    fi
+    repeat_bounded=
     i=1
     while [ "$i" -le "$repeats" ] && [ -z "$repeat_cancelled" ]; do
       iter=$run_dir/iteration-$i
@@ -2582,10 +2622,37 @@ case $sub in
       exec 8<"$descendant_fifo" || die "cannot read descendant witness for iteration $i"
       exec 6>"$descendant_fifo" || die "cannot write descendant witness for iteration $i"
       exec 7>&-
+      # The iteration: a clean build context, then dune -- beside the per-test cap's watcher,
+      # whose resolver is this `bash -c` and whose supervisor ($PPID) the iteration's -- and, on a
+      # probed batch, after `_probe`, which execs it in its own place once the device answered.
+      # The shell outlives both its children, a signal to the group included: the supervisor's
+      # TERM ends dune and the watcher too, and the trap (run once dune has exited) reaps the
+      # watcher before the shell exits, so no member of the iteration's group is left to a parent
+      # that may never reap it -- a zombie-only group without its leader, which reap_repeat_group
+      # must refuse, under a PID 1 that does not reap orphans (Codex review round 1 on PR #1172).
+      iter_cmd=(/bin/bash -c '
+        dune=$1 build=$2 tcap=$3 watch=$4 kind=$5 rd=$6
+        shift 6
+        "$dune" clean --build-dir="$build" || exit 126
+        [ "$tcap" -gt 0 ] || exec "$dune" "$@"
+        watcher=
+        trap '\''[ -z "$watcher" ] || { kill "$watcher"; wait "$watcher"; } 2>/dev/null; exit 143'\'' TERM INT HUP
+        perl -e "$watch" "$tcap" "$$" "$PPID" "$rd" "$kind" </dev/null 9>&- &
+        watcher=$!
+        "$dune" "$@"
+        rc=$?
+        kill "$watcher" 2>/dev/null
+        wait "$watcher" 2>/dev/null
+        exit "$rc"' \
+        -- "$DUNE" "$repeat_build" "$repeat_test_cap" "$test_cap_watch" "$repeat_watch_kind" "$iter" \
+        "${repeat_cmd[@]:1}")
+      if [ -n "$repeat_probe_backends" ]; then
+        # shellcheck disable=SC2086  # the backend list is word-split on purpose
+        iter_cmd=(env "OCANNL_TOOL_TESTRUN_OWN=$iter" "${BASH:-bash}" "$PWD/tools/test-run.sh" _probe
+          "$DUNE" "$repeat_probe_prog" "$repeat_probe_cap" $repeat_probe_backends -- "${iter_cmd[@]}")
+      fi
       OCANNL_TOOL_TESTRUN_BG=0 OCANNL_TOOL_TESTRUN_RD=$iter \
-        perl -e "$supervisor_perl" -- "$cap" /bin/bash -c \
-        'dune=$1; build=$2; shift 2; "$dune" clean --build-dir="$build" || exit 126; exec "$dune" "$@"' \
-        -- "$DUNE" "$repeat_build" "${repeat_cmd[@]:1}" \
+        perl -e "$supervisor_perl" -- "$cap" "${iter_cmd[@]}" \
         >"$iter/stdout" 2>"$iter/stderr" &
       repeat_sup=$!
       exec 6>&-
@@ -2640,6 +2707,19 @@ case $sub in
       # this -- every iteration runs the same argv.
       if [ "$i" = 1 ] && [ "$iter_rc" = 1 ] && dune_refusal "$iter/stderr" >/dev/null; then
         repeat_refused=1
+        break
+      fi
+      # Nor after a bound ended the iteration (gh-ocannl-1252): the device probe found the device
+      # wedged (69, nothing ran), or a test outlived the per-test cap (142 with its `test-cap`
+      # record), and on a wedged device every later iteration would hang the same way. Its records
+      # are copied up to the run, where the digest reads them, as a run's own would be.
+      if { [ "$iter_rc" = 69 ] && grep -q ': NO ANSWER within ' "$iter/device-probe" 2>/dev/null; } ||
+         { [ "$iter_rc" = 142 ] && [ -s "$iter/test-cap" ]; }; then
+        repeat_bounded=$iter_rc
+        for record in device-probe test-cap; do
+          [ ! -s "$iter/$record" ] || cp "$iter/$record" "$run_dir/$record" ||
+            die "cannot copy iteration $i's $record record"
+        done
         break
       fi
       [ -z "$repeat_cancelled" ] || break
@@ -2708,6 +2788,14 @@ case $sub in
     elif [ -n "$repeat_refused" ]; then
       repeat_result="INVOCATION REFUSED -- dune rejected the arguments; nothing ran, so nothing was repeated"
       final_rc=$first_nonzero
+    # A bound's verdict outranks every comparison, and its code the first red: the set did not
+    # finish, and the box needs attention before it is run again.
+    elif [ "$repeat_bounded" = 69 ]; then
+      repeat_result="DEVICE UNHEALTHY -- iteration $completed's device probe got no answer, and the set stopped there ($completed of $repeats iterations started)"
+      final_rc=69
+    elif [ "$repeat_bounded" = 142 ]; then
+      repeat_result="TIMEOUT -- in iteration $completed a test outlived the per-test cap ($(sed -n 's/^command //p' "$run_dir/test-cap")), and the set stopped there ($completed of $repeats iterations started)"
+      final_rc=142
     elif [ "$differing" -gt 0 ]; then
       repeat_result="DIFFERING -- stdout or exit status moved across $differing pair(s)"
       final_rc=$first_nonzero
@@ -2766,6 +2854,25 @@ case $sub in
     plan_slot_kind
     plan_device_probe
     plan_test_cap "$test_cap" "$@"
+    # A repeat's resolution phase (gh-ocannl-1252) ends here: the two bounds `run` would give this
+    # batch, for the coordinator to apply to every iteration (`repeat`), and said in the log. No
+    # width and no slot: a repeat runs as given.
+    if [ "$mode" = repeat ]; then
+      watch_kind=cpu
+      ! run_reads_batch || [ "$(batch_kind)" != gpu ] || watch_kind=gpu
+      { printf '%s\n' "$test_cap" "$watch_kind" "${probe_cap:-0}" "${probe_prog:--}" "$probe_backends" \
+          >"$run_dir/bounds.tmp" && mv -f "$run_dir/bounds.tmp" "$run_dir/bounds"; } ||
+        { echo "test-run: cannot record the repeat's bounds in $run_dir"; exit 126; }
+      if [ "$test_cap" -gt 0 ]; then
+        echo "test-run: repeat: per-test cap: ${test_cap}s for each process dune starts ($test_cap_why); one past it ends the iteration and the set"
+      else
+        echo "test-run: repeat: per-test cap: none ($test_cap_why)"
+      fi
+      if [ -n "$probe_backends" ]; then
+        echo "test-run: repeat: device probe: $probe_backends before each iteration, bounded at ${probe_cap}s; one that does not answer ends the set as DEVICE UNHEALTHY"
+      fi
+      exit 0
+    fi
     # A fresh run's own build directory (see the header), recorded in its
     # command: the digest's `command:` line names where the run built.
     if [ "$mode" = fresh ]; then
@@ -2892,7 +2999,7 @@ case $sub in
     ;;
   _probe)
     # A probed GPU batch's first act inside its slot, and not a command for
-    # callers (gh-ocannl-1211; plan_device_probe decides, probe_perl reads):
+    # callers (gh-ocannl-1211; plan_device_probe decides, tools/device-probe.sh asks):
     # one bounded device query per GPU backend, then dune in this process's
     # place. A program of `-` is bin/device_props, built here, under the slot,
     # with its build output in `device-probe-build.log`. Each answer goes to
@@ -2921,33 +3028,10 @@ case $sub in
         exec "$@"
       fi
     fi
-    wedged=
-    for b in $probe_backends; do
-      answer=$(cd test/config &&
-        perl -e "$probe_perl" "$probe_cap" "$run_dir/device-probe-$b.out" \
-          "$probe_prog" "--ocannl_backend=$b" 9>&-)
-      read -r how code took <<<"$answer"
-      case $how in
-        exit)
-          if [ "$code" = 0 ]; then line="$b: answered in ${took}s"
-          else line="$b: failed fast (exit $code in ${took}s; no such device here?), not counted against the device"
-          fi ;;
-        hung)
-          line="$b: NO ANSWER within ${probe_cap}s; the query was killed"
-          wedged="$wedged $b" ;;
-        *) line="$b: the query could not be run ($answer)" ;;
-      esac
-      printf '%s\n' "$line" >>"$run_dir/device-probe"
-    done
-    if [ -n "$wedged" ]; then
-      printf 'test-run: device probe: a fresh device query for%s did not answer within %ss: the\n' \
-        "$wedged" "$probe_cap"
-      echo "  device is taken as wedged, and dune was not started -- a faulted GPU makes every test spin"
-      echo "  rather than fail (gh-ocannl-1211). Stop GPU work on this box and read its kernel journal"
-      echo "  (journalctl -k: gfxhub/CPC page faults, ring timeouts, NVRM Xid); recovery may need a reboot."
-      sed 's/^/  /' "$run_dir/device-probe"
-      exit 69
-    fi
+    # shellcheck disable=SC2086  # the backend list is word-split on purpose
+    sh -c "$device_probe_sh" device-probe test-run "$probe_perl" "$probe_cap" "$run_dir" \
+      "$probe_prog" $probe_backends
+    [ $? -ne 69 ] || exit 69
     exec "$@"
     ;;
   run | start | plan | fresh)
