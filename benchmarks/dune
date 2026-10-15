@@ -12,8 +12,11 @@
  ; the golden of test/operations/bench_result_line, which holds OCANNL result lines this
  ; orchestrator's own parser has to accept (gh-ocannl-676). ocannl_config.reference is where the
  ; orchestrator reads the configuration keys a per-cell flag may name and the keys each profile's
- ; payload sets (gh-ocannl-1273).
+ ; payload sets (gh-ocannl-1273); this directory's own ocannl_config is what the test checks sets no
+ ; key that would stand between a cell and its cache (unlisted, it is present in _build only when
+ ; some other rule happened to copy it).
  (deps
+  ocannl_config
   (glob_files *.py)
   (glob_files test/*.py)
   (glob_files runners/*.py)

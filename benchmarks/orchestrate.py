@@ -415,7 +415,7 @@ def flag_problems(flags, cells):
     for cell in sorted(cells, key=lambda c: tuple(map(str, c))):
         keys = collections.Counter(f.key for f in flags if flag_applies(f, cell))
         problems += [
-            f"--cell-flag sets {key} {n} times on {'/'.join(cell)}"
+            f"--cell-flag sets {key} {n} times on {'/'.join(map(display_value, cell))}"
             for key, n in sorted(keys.items())
             if n > 1
         ]
@@ -664,8 +664,13 @@ _DISPLAY_PLAIN_RE = re.compile(r"[A-Za-z0-9_.,:/=+@%~-]*")
 def display_value(value):
     """An operator-supplied value as a label, a report cell, a failure note or a message shows it.
 
-    Every human-facing rendering of a `--cell-flag` value or an ambient path goes through this (or
-    through `json.dumps`, as the report's header lines do); only the records keep the raw value.
+    Every human-facing rendering of a string the operator or the environment supplied goes through
+    this (or through `json.dumps`, as the report's header lines do): a `--cell-flag` value, a
+    `--skip-cell` workload, a fixture's name and the workload a result row or checkpoint names after
+    it, a cache path from the environment, an exception's text, the value a regime knob resolved to.
+    Only the records keep the raw value. A label built from such a string (`<workload> ocannl/...`)
+    is a display string from the start, so the report and the run log print labels as they are.
+    Origins need nothing: `fixture_digest.check_origin` holds them to a portable alphabet.
 
     Plain values (`16`, `/tmp/cache`) are shown as they are. Anything else is JSON-quoted with `|`
     and the backtick escaped as well, so a value cannot add a column to a report table, a line to
@@ -783,7 +788,10 @@ def regime_knob_leaks(result, regime=None, ocannl_flags=None):
             else source.startswith("profile 'approximate'")
         )
         if not owned:
-            leaks[key] = f"{key}={knob.get('value', '?')} ({source})"
+            # The value is whatever the process resolved -- an ambient variable's, say -- so it
+            # is shown as an operator-supplied value is.
+            value = display_value(str(knob["value"])) if "value" in knob else "?"
+            leaks[key] = f"{key}={value} ({source})"
     return leaks
 
 
@@ -960,7 +968,8 @@ def precision_unavailable(model, mode, precision):
     run: an empty row and an unrun row are otherwise indistinguishable (gh-ocannl-551).
     """
     if model not in PRECISION_MODELS:
-        return f"the {model} runner has no BENCH_PRECISION support"
+        # The model is the fixture's own metadata, shown as any fixture-supplied string is.
+        return f"the {display_value(model)} runner has no BENCH_PRECISION support"
     if (precision in GATE_LEG_ENV or GATED_RE.match(precision)) and mode != "train":
         return (
             "gate-cost legs measure the optimizer's loss-scaling gate; this workload is "
@@ -1135,9 +1144,29 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None, o
         return _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint)
 
 
+# The longest a cell log's file name may be, in bytes: below the 255-byte component limit of
+# every file system the fleet writes logs to.
+CELL_LOG_NAME_MAX = 200
+
+
 def cell_log_name(label):
-    """The file name a cell's log gets under BENCH_CELL_LOG_DIR."""
-    return "".join(c if c.isalnum() or c in "-._" else "_" for c in label) + ".log"
+    """The file name a cell's log gets under BENCH_CELL_LOG_DIR: the label, sanitized and bounded,
+    then a digest of the whole label.
+
+    The digest is what makes the name the label's own. Sanitizing is lossy (`a b` and `a_b` both
+    read `a_b`, and a case-folding file system merges `A` and `a`), and every cell opens its log
+    with `wb`, so two labels on one name lose the first cell's durable log to the second. The
+    sanitized prefix is for the reader and stops at `CELL_LOG_NAME_MAX` bytes: a long fixture
+    name -- and a non-ASCII one, which `display_value` spells as `\\uXXXX`, six bytes a character
+    -- would otherwise make a name the file system refuses, and the sweep would fall back to a
+    temporary log that is deleted.
+    """
+    name = "".join(c if c.isalnum() or c in "-._" else "_" for c in label)
+    digest = hashlib.sha256(label.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    suffix = f"-{digest}.log"
+    while len((name + suffix).encode("utf-8", "surrogatepass")) > CELL_LOG_NAME_MAX:
+        name = name[:-1]
+    return name + suffix
 
 
 def open_cell_log(label):
@@ -1161,7 +1190,10 @@ def open_cell_log(label):
             path = CELL_LOG_DIR / cell_log_name(label)
             return open(path, "wb"), path, False
         except OSError as exc:
-            print(f"!!! {label}: could not write the cell log ({exc})", flush=True)
+            print(
+                f"!!! {label}: could not write the cell log ({display_value(str(exc))})",
+                flush=True,
+            )
     fd, name = tempfile.mkstemp(prefix="orchestrate-cell-", suffix=".log")
     return os.fdopen(fd, "wb"), Path(name), True
 
@@ -1272,7 +1304,10 @@ def read_cell_log(path):
         with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError as exc:
-        return f"(the cell's output could not be read back from {path}: {exc})\n"
+        return (
+            f"(the cell's output could not be read back from {display_value(str(path))}: "
+            f"{display_value(str(exc))})\n"
+        )
 
 
 def _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint):
@@ -1521,10 +1556,12 @@ def quarantine_tinygrad_cache(env=None, enabled=True, killed=True):
     torn; what a retry over it costs is a mixed pass, which `ocannl_cache_note` states.
     """
     db = tinygrad_cachedb(env)
+    # The path comes from the cell's environment, and the note lands in the report's failure table.
+    shown = display_value(str(db))
     if not db.exists():
-        return f"tinygrad kernel cache {db} does not exist; nothing to quarantine"
+        return f"tinygrad kernel cache {shown} does not exist; nothing to quarantine"
     risk = (
-        f"a search killed midway leaves {db} holding a partial result, and the next run over it "
+        f"a search killed midway leaves {shown} holding a partial result, and the next run over it "
         "reports a `searched` verdict nobody wrote deliberately"
     )
     if not killed:
@@ -1573,12 +1610,18 @@ def quarantine_tinygrad_cache(env=None, enabled=True, killed=True):
                 try:
                     os.replace(done, origin)
                 except OSError:
-                    undone.append(done.name)
+                    undone.append(display_value(done.name))
             trouble = f" (and {', '.join(undone)} could not be put back)" if undone else ""
-            return f"CACHE AT RISK: {risk}; could not quarantine it ({exc}){trouble}"
+            return (
+                f"CACHE AT RISK: {risk}; could not quarantine it ({display_value(str(exc))})"
+                f"{trouble}"
+            )
         rolled_back.append((dest, path))
-        moved.append(dest.name)
-    return f"quarantined the tinygrad kernel cache to {db.parent}/{{{', '.join(moved)}}} — {risk}"
+        moved.append(display_value(dest.name))
+    return (
+        f"quarantined the tinygrad kernel cache to {display_value(str(db.parent))}/"
+        f"{{{', '.join(moved)}}} — {risk}"
+    )
 
 
 def beam_cell_env(base_env, beam_parallel):
@@ -1801,7 +1844,9 @@ def saved_loss_parity(checkpoint, regime, results, ocannl_flags=None):
         notes.append(f"outside the {gated} regime: " + ", ".join(leaks.values()))
     if ref is None or diverged_at(ref["losses"]) is not None:
         # Only the drift needs the reference; what the trajectory says about itself still stands.
-        notes.append(f"no usable reference row for `{checkpoint.get('workload')}`")
+        notes.append(
+            f"no usable reference row for `{display_value(str(checkpoint.get('workload')))}`"
+        )
     else:
         drift = trajectory_drift(losses, ref["losses"])
         if drift is None:
@@ -1848,11 +1893,14 @@ def check_fixture_digests(fixtures, digests_path=None, allow_unpinned=False):
         verdict, sha, size, origins = fixture_digest.status(fx, entries)
         measured[fx] = (sha, origins)
         where = f" — {origins}'s bytes" if verdict == "MATCH" else ""
-        print(f"fixture {fx.name}: sha256 {sha} ({size} bytes) — {verdict}{where}", flush=True)
+        print(
+            f"fixture {display_value(fx.name)}: sha256 {sha} ({size} bytes) — {verdict}{where}",
+            flush=True,
+        )
         if verdict != "MATCH":
             print(f"  recorded: {fixture_digest.describe(fx.name, entries)}", flush=True)
             unpinned.append((fx, verdict))
-    named = ", ".join(f"{fx.name} ({verdict})" for fx, verdict in unpinned)
+    named = ", ".join(f"{display_value(fx.name)} ({verdict})" for fx, verdict in unpinned)
     if unpinned and not allow_unpinned:
         sys.exit(
             f"refusing to measure {named}: these bytes are not the ones "
@@ -2023,12 +2071,7 @@ def tensorization_check(results):
 
 def tensorization_notice(mismatches):
     """Describe scalar emission in any variant, including untuned compiled defaults."""
-    labels = ", ".join(
-        f"{r['workload']} {r['backend']}/"
-        f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-        f" ({r['tensorization']})"
-        for r in mismatches
-    )
+    labels = ", ".join(f"{gate_label(r)} ({r['tensorization']})" for r in mismatches)
     return (
         f"TENSORIZATION NOTICE: {len(mismatches)} cell(s) emitted scalar fallbacks "
         f"or omitted requested tensorization: {labels}"
@@ -2206,6 +2249,16 @@ def failure_line(failure):
     """One runner failure, as the run log names it."""
     failure = Failure(*failure)
     return f"{failure.label} ({failure.note})" if failure.note else failure.label
+
+
+def gate_label(result):
+    """A result row as a gate's run-log line names it. The workload is the fixture's own name,
+    so it is shown through `display_value` like the cell labels built from it."""
+    return (
+        f"{display_value(result['workload'])} {result['framework']}/{result['backend']}/"
+        f"{cell_name(result['variant'], result.get('precision', 'f32'))}"
+        f"{regime_label(regime_of(result))}"
+    )
 
 
 def beam_parallel_arg(text):
@@ -2408,7 +2461,7 @@ def report(
     if shadowed_line:
         lines.append(shadowed_line + "\n")
     for workload in sorted({r["workload"] for r in results}):
-        lines.append(f"\n## {workload}\n")
+        lines.append(f"\n## {display_value(workload)}\n")
         rows = [r for r in results if r["workload"] == workload]
         # Which bytes these numbers are on (gh-ocannl-645), and whose (gh-ocannl-759). A report is
         # compared across sessions and machines; without this the comparison rests on the
@@ -2431,11 +2484,11 @@ def report(
             # whose GENERATOR drew these bytes, which is not necessarily the box now measuring them
             # (fixtures get copied between boxes, and that is fine as long as the report says so).
             whose = f", {origin}'s bytes" if origin else ", bytes no origin records"
-            lines.append(f"measured on `{fixture}`, sha256 `{sha}`{whose}\n")
+            lines.append(f"measured on `{display_value(fixture)}`, sha256 `{sha}`{whose}\n")
             if missing:
                 lines.append(
                     "**MISSING DIGEST RECORD:** declared measurement box(es) with no entry for "
-                    f"`{fixture}`: {', '.join(missing)}\n"
+                    f"`{display_value(fixture)}`: {', '.join(missing)}\n"
                 )
         # What the parity reference computed in, read back from its run (gh-ocannl-1208): every
         # row's parity verdict is against it, so a reader auditing one needs this, and before the
@@ -2691,7 +2744,7 @@ def report(
         lines.append("| workload | precision | why |")
         lines.append("|---|---|---|")
         for workload, precision, reason in unavailable:
-            lines.append(f"| {workload} | {precision} | {reason} |")
+            lines.append(f"| {display_value(workload)} | {precision} | {reason} |")
     if skipped:
         # A skipped cell is as absent from the tables as a failed one, and once the run log is gone
         # only this says it was left out on purpose -- and by whom.
@@ -2936,7 +2989,7 @@ def main():
     if unmatched:
         sys.exit(
             "--skip-cell names no cell of this sweep: "
-            + ", ".join("/".join(p for p in entry if p) for entry in unmatched)
+            + ", ".join("/".join(display_value(p) for p in entry if p) for entry in unmatched)
         )
     # The cells the sweep will actually dispatch: a flag is checked against these, so one whose
     # selector reaches only skipped cells is refused rather than silently applied to nothing.
@@ -3048,6 +3101,9 @@ def main():
 
     for fx in fixtures:
         name = fx.stem
+        # The fixture's name is a file name, so anything a file name can hold: matched raw against
+        # the operator's selectors, shown through `display_value` in every label, line and row.
+        shown = display_value(name)
         model = models[fx]
         stamp.clear()
         sha, origin = fixture_ids[fx]
@@ -3065,7 +3121,7 @@ def main():
             precisions, not_applicable = available_precisions(model, mode, args.precision)
             for precision, reason in not_applicable:
                 unavailable.append((name, precision, reason))
-                print(f"--- {name} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
+                print(f"--- {shown} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
             for backend in swept_backends(gpu_ocannl):
                 for precision in precisions:
                     for variant in variants:
@@ -3074,10 +3130,10 @@ def main():
                             name, backend, variant, precision, operator_skips, args.no_skip_cells
                         )
                         if why:
-                            print(f"--- {name} ocannl/{backend}/{cell}: SKIPPED ({why})")
+                            print(f"--- {shown} ocannl/{backend}/{cell}: SKIPPED ({why})")
                             for regime in args.profile:
                                 skipped.append(
-                                    (f"{name} ocannl/{backend}/{cell}{regime_label(regime)}", why)
+                                    (f"{shown} ocannl/{backend}/{cell}{regime_label(regime)}", why)
                                 )
                             continue
                         env = cell_env(os.environ, fx, variant, precision)
@@ -3092,7 +3148,7 @@ def main():
                                 model, backend, regime, variant, flags, ambient
                             )
                             label = (
-                                f"{name} ocannl/{backend}/{cell}{regime_label(regime)}"
+                                f"{shown} ocannl/{backend}/{cell}{regime_label(regime)}"
                                 + ocannl_flags_note(cell_stamp["ocannl_flags"])
                             )
                             # The cell's identity is what was dispatched, not what the runner chose
@@ -3158,7 +3214,7 @@ def main():
                         regimes.insert(0, "exact")
                     for regime in regimes:
                         collect(
-                            f"{name} pytorch/{device}/{'compiled' if compiled else 'eager'}"
+                            f"{shown} pytorch/{device}/{'compiled' if compiled else 'eager'}"
                             f"{regime_label(regime)}",
                             [str(VENV_PY), str(HERE / "runners/pytorch/run.py"), "--fixture", str(fx), "--device", device]
                             + (["--compile"] if compiled else [])
@@ -3175,7 +3231,7 @@ def main():
             for device in ["CPU"] + ([gpu_tiny] if gpu_tiny else []):
                 for jit in [1] + ([0] if args.nojit else []):
                     collect(
-                        f"{name} tinygrad/{device}/{'jit' if jit else 'nojit'}"
+                        f"{shown} tinygrad/{device}/{'jit' if jit else 'nojit'}"
                         f"{regime_label(tiny_regime)}",
                         [str(VENV_PY), str(HERE / "runners/tinygrad/run.py"), "--fixture", str(fx), "--device", device, "--jit", str(jit)],
                         override={"regime": tiny_regime},
@@ -3190,7 +3246,7 @@ def main():
                         # The pool is in the LABEL as well as in the row, because a failure has
                         # only the label: a wedged cell records no result, and which pool it
                         # wedged with is the first thing anyone asks (gh-ocannl-760 review).
-                        f"{name} tinygrad/{device}/beam"
+                        f"{shown} tinygrad/{device}/beam"
                         + ("" if args.beam_parallel is None else f" P={args.beam_parallel}")
                         + regime_label(tiny_regime),
                         [str(VENV_PY), str(HERE / "runners/tinygrad/run.py"), "--fixture", str(fx), "--device", device, "--beam", str(args.beam)],
@@ -3225,7 +3281,7 @@ def main():
         # is the point — an unavailable cell and an unrun one otherwise look identical.
         print(
             f"NOT APPLICABLE: {len(unavailable)} requested cell(s) the workload cannot express: "
-            + ", ".join(f"{w}/{p}" for w, p, _ in unavailable),
+            + ", ".join(f"{display_value(w)}/{p}" for w, p, _ in unavailable),
             flush=True,
         )
     if skipped:
@@ -3255,11 +3311,7 @@ def main():
         # search process's, which the two-pass protocol exists to keep out of a report — and which
         # nothing downstream can detect once the numbers are quoted (gh-ocannl-644).
         ok = False
-        labels = ", ".join(
-            f"{r['workload']} {r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-            for r in provenance_violations
-        )
+        labels = ", ".join(map(gate_label, provenance_violations))
         print(
             f"PROVENANCE GATE: {len(provenance_violations)} tuned cell(s) reported step times "
             f"from a process that searched: {labels}",
@@ -3276,10 +3328,7 @@ def main():
         # its number would be quoted as the other regime's (gh-ocannl-719).
         ok = False
         labels = ", ".join(
-            f"{r['workload']} {r['framework']}/{r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-            f" (runner reports {r['regime_mismatch']})"
-            for r in regime_mismatches
+            f"{gate_label(r)} (runner reports {r['regime_mismatch']})" for r in regime_mismatches
         )
         print(
             f"REGIME GATE: {len(regime_mismatches)} cell(s) ran under a regime other than the "
@@ -3291,10 +3340,7 @@ def main():
         # precision label is what its number is quoted at, and the run says otherwise.
         ok = False
         labels = ", ".join(
-            f"{r['workload']} {r['framework']}/{r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-            f" (runner ran {r['precision_mismatch']})"
-            for r in precision_mismatches
+            f"{gate_label(r)} (runner ran {r['precision_mismatch']})" for r in precision_mismatches
         )
         print(
             f"PRECISION GATE: {len(precision_mismatches)} cell(s) ran at a precision other than "
@@ -3311,12 +3357,7 @@ def main():
         # any other parity failure, named separately because the finding is different: nothing is
         # wrong with the runner, and the trajectory that shows it is in results.jsonl.
         ok = False
-        labels = ", ".join(
-            f"{r['workload']} {r['framework']}/{r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-            f" (from step {r['diverged_at']})"
-            for r in diverged
-        )
+        labels = ", ".join(f"{gate_label(r)} (from step {r['diverged_at']})" for r in diverged)
         print(
             f"PARITY GATE: {len(diverged)} cell(s) DIVERGED (non-finite loss): {labels}",
             flush=True,
@@ -3326,11 +3367,7 @@ def main():
     ]
     if stationary:
         ok = False
-        labels = ", ".join(
-            f"{r['workload']} {r['framework']}/{r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-            for r in stationary
-        )
+        labels = ", ".join(map(gate_label, stationary))
         print(
             f"LOSS-MOVEMENT GATE: {len(stationary)} stationary cell(s): {labels}",
             flush=True,

@@ -355,7 +355,8 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   `fixtures/DIGESTS.txt`),
   `--cell-timeout SECONDS` / `--beam-parallel N` / `--no-cache-quarantine` (the wedged-cell
   mitigations below). Env: `BENCH_CELL_LOG_DIR=<dir>` keeps every cell's raw combined
-  output, one file per cell label, written as the cell runs (gh-ocannl-1061) — so it can be
+  output, one file per cell label (the label sanitized, then a digest of it, so no two labels
+  share a file), written as the cell runs (gh-ocannl-1061) — so it can be
   tailed live, and a cell killed at its cap, or a sweep that is itself killed, leaves everything
   printed up to then. A successful cell's output is otherwise discarded, which throws away the
   candidate-level evidence a measurement sweep has to report. Tuned OCANNL cells run with

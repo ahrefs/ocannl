@@ -241,6 +241,25 @@ def golden_checkpoint_lines():
     ]
 
 
+def golden_checkpoint_line(workload, **stages):
+    """The one golden checkpoint line of `workload` whose stages are as given, e.g.
+    `golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel="running")`.
+
+    Looked up by identity, never by position: a checkpoint added to the golden mid-list must not
+    silently change what a test reads. None or several matching is a failure, not a pick."""
+    found = [
+        line
+        for line in golden_checkpoint_lines()
+        if (c := orchestrate.last_checkpoint(line))["workload"] == workload
+        and all(c["stages"].get(stage) == status for stage, status in stages.items())
+    ]
+    if len(found) != 1:
+        raise AssertionError(
+            f"{len(found)} golden checkpoints of {workload} with stages {stages}, expected one"
+        )
+    return found[0]
+
+
 class CheckpointLineTest(unittest.TestCase):
     """gh-ocannl-1209: the checkpoints an OCANNL runner writes before its later stages, as the
     driver reads them."""
@@ -259,7 +278,9 @@ class CheckpointLineTest(unittest.TestCase):
                 self.assertFalse(line.startswith("{"))
 
     def test_the_last_whole_checkpoint_wins_over_a_line_the_kill_cut(self):
-        first, second = golden_checkpoint_lines()[:2]
+        # Cut mid-parity, then the one written before the dominant-kernel instrument.
+        first = golden_checkpoint_line("gpt2_mini_train_s1024", parity="running")
+        second = golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel="running")
         text = "\n".join(["bench: parity step 0 loss 10.4", first, second[: len(second) // 2]])
 
         self.assertEqual(orchestrate.last_checkpoint(text), strict_loads(
@@ -275,14 +296,11 @@ class SavedLossParityTest(unittest.TestCase):
     """
 
     def checkpoint(self, complete):
-        lines = [
-            orchestrate.last_checkpoint(line)
-            for line in golden_checkpoint_lines()
-            if orchestrate.last_checkpoint(line)["workload"] == "gpt2_mini_train_s1024"
-        ]
-        found = [c for c in lines if (c["stages"]["parity"] == "complete") == complete]
-        self.assertEqual(len(found), 1, lines)
-        return found[0]
+        return orchestrate.last_checkpoint(
+            golden_checkpoint_line(
+                "gpt2_mini_train_s1024", parity="complete" if complete else "running"
+            )
+        )
 
     def reference(self, checkpoint, scale):
         ref = result("pytorch", "cpu", "eager", [x * scale for x in checkpoint["losses"]])
@@ -340,13 +358,7 @@ class SavedLossParityTest(unittest.TestCase):
 
     def leaked(self):
         """The golden's exact cell an ambient knob reached with no profile behind it."""
-        found = [
-            orchestrate.last_checkpoint(line)
-            for line in golden_checkpoint_lines()
-            if orchestrate.last_checkpoint(line)["workload"] == "mlp_wide"
-        ]
-        self.assertEqual(len(found), 1, found)
-        return found[0]
+        return orchestrate.last_checkpoint(golden_checkpoint_line("mlp_wide", parity="running"))
 
     def test_an_ambient_knob_no_profile_shows_is_named_from_the_checkpoint(self):
         """gh-ocannl-1297: the checkpoint's `regime_knobs`, read as the row gate reads a row's."""
@@ -535,7 +547,9 @@ class FailureRecordTest(unittest.TestCase):
 
     def test_a_checkpoint_is_kept_whole_beside_the_fixture_stamp_and_source(self):
         checkpoint = strict_loads(
-            golden_checkpoint_lines()[1][len(orchestrate.CHECKPOINT_PREFIX):]
+            golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel="running")[
+                len(orchestrate.CHECKPOINT_PREFIX):
+            ]
         )
         stamp = {"fixture": "gpt2_mini_train_s1024.safetensors", "fixture_sha256": "ab" * 32,
                  "fixture_origin": "tuf"}
@@ -3478,7 +3492,7 @@ class CellTimeoutTest(unittest.TestCase):
 
     def golden_checkpoint(self, name):
         """A checkpoint line as the OCaml emitter built it (see CheckpointLineTest)."""
-        return next(l for l in golden_checkpoint_lines() if f'"dominant_kernel":"{name}"' in l)
+        return golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel=name)
 
     # What a runner writes before its dominant-kernel instrument, as the first line of a child's
     # source: the golden checkpoint arrives as the child's last argument.
@@ -4466,6 +4480,35 @@ class CellTimeoutTest(unittest.TestCase):
         log = (logs / orchestrate.cell_log_name("gpt2 ocannl/cc/tuned (search pass)")).read_text()
         self.assertIn("event=arm_start", log)
         self.assertIn("stderr evidence", log)
+
+    def test_a_cell_log_name_stays_within_the_file_system_limit(self):
+        # Review round 1: a non-ASCII fixture name reaches the label as `\uXXXX` escapes, six bytes
+        # a character, and a long one past 255 bytes would lose the log to a temporary file.
+        short = orchestrate.cell_log_name("gpt2 ocannl/cc/tuned (search pass)")
+        self.assertTrue(short.startswith("gpt2_ocannl_cc_tuned__search_pass_-"), short)
+        # Review round 2: sanitizing is lossy and a file system may fold case, so labels the
+        # sanitizer or the file system would merge still get files of their own.
+        merged = [
+            orchestrate.cell_log_name(f"{orchestrate.display_value(stem)} ocannl/cc/default")
+            for stem in ("_a_b_", "a b", "A b")
+        ]
+        self.assertEqual(len({name.lower() for name in merged}), 3, merged)
+        stem = orchestrate.display_value("\u5b57" * 40)
+        names = {
+            orchestrate.cell_log_name(f"{stem} ocannl/cc/{variant}")
+            for variant in ("default", "tuned")
+        }
+        self.assertEqual(len(names), 2, names)
+        for name in names | {orchestrate.cell_log_name("\u5b57" * 200)}:
+            with self.subTest(name=name[:40]):
+                self.assertLessEqual(len(name.encode()), orchestrate.CELL_LOG_NAME_MAX)
+                self.assertTrue(name.endswith(".log"))
+        # And the bounded name is one the file system takes (POSIX: a Windows temp directory plus
+        # 200 bytes can pass MAX_PATH, which is the path's limit, not the component's).
+        if os.name == "posix":
+            path = self.dir / orchestrate.cell_log_name(f"{stem} ocannl/cc/default")
+            path.write_text("log")
+            self.assertEqual(path.read_text(), "log")
 
     def test_the_cell_log_grows_while_the_cell_runs(self):
         # Streaming, not written at the end: the cell reads its own log back mid-run and reports
@@ -5957,6 +6000,12 @@ class OcannlFlagTest(unittest.TestCase):
         self.assertEqual(len(problems), 2, problems)
         self.assertIn("gpt2_mini/metal/*/*:tf32_matmuls=false names no OCANNL cell", problems[0])
         self.assertIn("sets tune_inline_flips 2 times on gpt2_mini/cc/tuned/f32", problems[1])
+        # The cell is named as a label names it: a workload carrying a newline cannot forge a
+        # second line of the refusal.
+        odd = orchestrate.dispatchable_cells({"a\nb|c": ["f32"]}, ["cc"], ["default"])
+        [dup] = orchestrate.flag_problems([everywhere, everywhere], odd)
+        self.assertIn(f"on {orchestrate.display_value('a' + chr(10) + 'b|c')}/cc/default/f32", dup)
+        self.assertNotIn("\n", dup)
         # A sweep with no OCANNL cells at all (`--only pytorch`) has nothing for a flag to reach.
         self.assertEqual(len(orchestrate.flag_problems([everywhere], set())), 1)
 
@@ -6221,6 +6270,139 @@ class OcannlFlagSweepTest(unittest.TestCase):
         self.assertNotIn("regime_mismatch", row)
         self.assertIn("| default +tune_inline_flips=16 |", report_text)
         self.assertNotIn("ambient OCANNL_* variables outranked", report_text)
+
+
+def markdown_tables(text):
+    """Every Markdown table in `text`, as `(header, rows)`: a `|` line followed by its `|---` rule,
+    then the `|` lines after it up to the first line that is not one."""
+    lines = text.splitlines()
+    tables = []
+    i = 0
+    while i + 1 < len(lines):
+        if lines[i].startswith("|") and lines[i + 1].startswith("|---"):
+            rows = []
+            j = i + 2
+            while j < len(lines) and lines[j].startswith("|"):
+                rows.append(lines[j])
+                j += 1
+            tables.append((lines[i], rows))
+            i = j
+        else:
+            i += 1
+    return tables
+
+
+@unittest.skipUnless(
+    os.name == "posix", "the hostile fixture name is a file name Windows cannot hold"
+)
+class DisplaySafeSweepTest(unittest.TestCase):
+    """Operator- and environment-supplied strings, through `main` to the report and the run log
+    (post-wave follow-up of gh-ocannl-1273): a fixture's file name, the workload a runner names
+    after it, a cache path from the environment and a knob value an ambient variable set. Each
+    carries a `|`, a backtick and a newline; every one must reach the report's tables without
+    adding a column or a line, and the run log without adding a line or opening a code span.
+
+    Only the cell is faked, as in `OcannlFlagSweepTest`; the failure note is the real cache note.
+    """
+
+    NAME = "odd|work`load\nTAIL1"
+    KNOB = "x|y`z\nTAIL2"
+    RAW = ("|work", "`load", "\nTAIL", "x|y", "y`z", "c|a", "a`che")
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        fixtures = self.dir / "fixtures"
+        fixtures.mkdir()
+        (fixtures / fixture_digest.DIGEST_FILE).write_bytes(
+            (HERE / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes()
+        )
+        # Forward-only, so the requested f16-static gate leg is NOT APPLICABLE and fills that
+        # table too.
+        header = json.dumps({"__metadata__": {"model": "gpt", "mode": "infer"}}).encode()
+        (fixtures / f"{self.NAME}.safetensors").write_bytes(
+            len(header).to_bytes(8, "little") + header
+        )
+        self.cachedb = self.dir / "c|a`che\nTAIL3" / "cache.db"
+
+    def leaking(self):
+        return {"tf32_matmuls": {"value": self.KNOB, "source": "environment"}}
+
+    def fake_cell(self, label, cmd, env=None, on_checkpoint=None, **_):
+        if "ocannl/cc/materialized" in label:
+            checkpoint = orchestrate.last_checkpoint(
+                golden_checkpoint_line("mlp_wide", parity="running")
+            )
+            checkpoint.update(workload=self.NAME, regime_knobs=self.leaking())
+            on_checkpoint(checkpoint)
+            return None, orchestrate.quarantine_tinygrad_cache({"CACHEDB": str(self.cachedb)})
+        row = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        row.update(workload=self.NAME, profile=None, regime_knobs=self.leaking(), searched=False)
+        return row, None
+
+    def sweep(self):
+        environ = {k: v for k, v in os.environ.items() if not k.startswith("OCANNL_")}
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.dict(os.environ, environ, clear=True))
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "HERE", self.dir))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate, "RESULTS_DIR", self.dir / "results")
+            )
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "run_cell", self.fake_cell))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate, "install_termination_handler", lambda: None)
+            )
+            stack.enter_context(
+                unittest.mock.patch.object(
+                    sys,
+                    "argv",
+                    ["orchestrate.py", "--only", "ocannl", "--gpu", "none", "--skip-build",
+                     "--no-fixture-digest-check", "--materialized", "--tuned",
+                     "--precision", "f16-static",
+                     "--skip-cell", f"{self.NAME}/cc/tuned"],
+                )
+            )
+            stack.enter_context(contextlib.redirect_stdout(out))
+            # A regime mismatch and a runner failure: the sweep fails, after writing the report.
+            with self.assertRaises(SystemExit) as failed:
+                orchestrate.main()
+        self.assertEqual(failed.exception.code, 1)
+        return out.getvalue(), (self.dir / "results" / "report.md").read_text()
+
+    def test_report_tables_keep_their_columns_and_the_log_its_lines(self):
+        stdout, report_text = self.sweep()
+
+        tables = {header: rows for header, rows in markdown_tables(report_text)}
+        # Every table the sweep can fill is filled: the results, NOT APPLICABLE, skipped, failures.
+        self.assertEqual(len(tables), 4, report_text)
+        for header, rows in tables.items():
+            with self.subTest(header=header):
+                self.assertEqual(len(rows), 1, rows)
+                for row in rows:
+                    self.assertEqual(row.count("|"), header.count("|"), row)
+        shown = orchestrate.display_value(self.NAME)
+        failure = tables["| cell | why | saved losses vs reference (diagnostic, never acceptance) |"]
+        self.assertTrue(failure[0].startswith(f"| {shown} ocannl/cc/materialized |"), failure)
+        self.assertIn("does not exist; nothing to quarantine", failure[0])
+        self.assertIn(f"no usable reference row for `{shown}`", failure[0])
+        self.assertIn(f"tf32_matmuls={orchestrate.display_value(self.KNOB)} (environment)",
+                      failure[0])
+        self.assertIn(f"\n## {shown}\n", report_text)
+        [measured] = [rows for header, rows in tables.items() if header.startswith("| framework")]
+        self.assertIn("**REGIME MISMATCH**", measured[0])
+        for text in (report_text, stdout):
+            for raw in self.RAW:
+                self.assertNotIn(raw, text)
+        # The run log names the fixture, the failure and the regime gate, each on its own line.
+        [line] = [l for l in stdout.splitlines() if l.startswith("fixture ")]
+        self.assertTrue(
+            line.startswith(f"fixture {orchestrate.display_value(self.NAME + '.safetensors')}: "),
+            line,
+        )
+        for prefix in ("  - ", "REGIME GATE", "NOT APPLICABLE", "SKIPPED"):
+            with self.subTest(prefix=prefix):
+                [line] = [l for l in stdout.splitlines() if l.startswith(prefix)]
+                self.assertIn(shown, line)
 
 
 if __name__ == "__main__":
