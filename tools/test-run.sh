@@ -80,6 +80,9 @@
 # (`<run>/build`, removed when the run ends), `--force` and `--cache=disabled`,
 # so every action the aliases reach executes -- and none of it lands in the
 # worktree's `_build`, so nothing there is cleaned, invalidated or rebuilt.
+# (The runner's own helpers -- the backend readers on a fleet box, a GPU
+# batch's device probe -- still build there, as they do for `run`, which only
+# brings those helpers up to date.)
 # The price is compiling the tests' closure in that directory (some ten
 # seconds at -j 4 on mac-studio). There is no in-place alternative: dune 3.24 re-runs a
 # target-producing rule -- a `(test)` stanza's run, a `(target x.actual)`

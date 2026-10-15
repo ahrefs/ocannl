@@ -1411,8 +1411,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   For one fresh, TIMED run of named tests (a before/after wall-time comparison),
   `tools/test-run.sh fresh @<dir>/runtest-<name> [@<dir>/slow-<name>...]` hands dune a build
   directory of the run's own with `--force --cache=disabled`: the closure compiles there (some
-  ten seconds at -j 4 on mac-studio), the worktree's `_build` is left as it was, and the digest
-  prints each named test's seconds from the run's dune trace. A named test none of whose
+  ten seconds at -j 4 on mac-studio), nothing the tests build lands in the worktree's `_build`
+  (only the runner's own helpers, as for `run`), and the digest prints each named test's
+  seconds from the run's dune trace. A named test none of whose
   processes is in that trace is refused as `NOT RUN` (exit 2) rather than timed at zero: the
   guard against every stale-green reflex below, and against the one that cost a timing baseline
   (gh-ocannl-staging#1154): `--cache=disabled` without `--force` serves an unchanged `@slow` rule
