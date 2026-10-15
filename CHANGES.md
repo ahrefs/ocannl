@@ -52,7 +52,7 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 ### Changed
 
 - Tuned sketch candidates fold a reduction's zero initialization into the reduction's kernel,
-  making tuned `gpt2_mini` forward passes 4–8% faster on CUDA and HIP; untuned pipelines keep the
+  cutting tuned `gpt2_mini` forward latency by 4–8% on CUDA and HIP; untuned pipelines keep the
   separate zero kernel (gh-ocannl-1175).
 - Fission splits large gradient-zeroing segments into per-shape kernels that keep each node's lane
   plan, making zeroing 4–5× faster on CUDA (gh-ocannl-1169).
@@ -149,9 +149,9 @@ gh-ocannl-1325, gh-ocannl-1326).
 
 With CUDA's attention-block fallback, tuned f32 `gpt2_mini` inference under `approximate` replays
 at **2.48 ms against 3.50 ms exact** on an RTX 5070 Ti, reversing 1.1's 28% slowdown, with a
-roughly 3× higher allocator high-water mark. Multi-simdgroup lane reductions make default
-fused-attention training steps at head widths 64 and 128 **16–63% faster on CUDA** and up to 31%
-faster on Metal; `admitted` serial lanes train 4–10% faster on HIP at longer sequences.
+roughly 3× higher allocator high-water mark. Multi-simdgroup lane reductions cut default
+fused-attention training step times at head widths 64 and 128 by **16–63% on CUDA** and up to 31%
+on Metal; `admitted` serial lanes cut HIP training step times by up to 10% at longer sequences.
 
 ## [1.1] -- 2026-10-04
 
