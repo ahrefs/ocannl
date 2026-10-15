@@ -219,6 +219,12 @@ files.
   before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it.
   `benchmarks/gh834_session.py` is the shape; its harness `benchmarks/test-gh834-cells.sh` renders
   `Bench_json`'s own templates, so a renamed field fails there rather than in a box's session.
+- `orchestrate.py`'s report writes every Markdown table row through `table_row`/`table_lines`,
+  which refuse (`UnsafeTableRow`) a cell holding a raw `|` or line break when the row is rendered.
+  A string the operator, the environment or a runner supplies -- a fixture's file name, a cache
+  path, a knob value -- reaches a cell through `display_value`, which escapes exactly what the
+  builder refuses; the records keep the raw value. `TableRowTest` scans the source for a row
+  literal (`| ...`, `|---`) written outside the builders, so a new table cannot bypass them.
 
 - Before its later stages a cell CHECKPOINTS what it completed (gh-ocannl-1209):
   `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every
