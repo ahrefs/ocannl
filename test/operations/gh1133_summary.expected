@@ -5,3 +5,4 @@ a treatment's cells are summarized by its name, and only the given treatments': 
 a step stage whose cells produced no result line fails: true
 a run without a step stage passes on its training tables alone: true
 a run without a step stage still fails on a refused training table: true
+a result line spelling NaN, Infinity or 1e999 is unreadable, not a timing: true

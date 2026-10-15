@@ -40,6 +40,7 @@ from pathlib import Path
 import bench_venv
 import fixture_digest
 import cell_group
+import strict_json
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -1272,8 +1273,8 @@ def last_checkpoint(text):
         if not line.startswith(CHECKPOINT_PREFIX):
             continue
         try:
-            obj = json.loads(line[len(CHECKPOINT_PREFIX):])
-        except ValueError:
+            obj = strict_json.loads(line[len(CHECKPOINT_PREFIX):])
+        except ValueError:  # strict_json.NonFinite included: a runner emits null there
             continue
         if isinstance(obj, dict) and obj.get("record") == "checkpoint":
             return obj
@@ -1470,6 +1471,15 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint
     elif not timed_out:
         proc.close()
     line = next((l for l in reversed(stdout.splitlines()) if l.startswith("{")), None)
+    result, unreadable = None, None
+    if line is not None:
+        try:
+            result = strict_json.loads(line)
+        except ValueError as e:
+            # Truncated, or spelling a non-finite number JSON has no word for (strict_json): a
+            # line no other reader of results.jsonl could take is no result, and the cell fails
+            # with the reason rather than taking the sweep down with it.
+            unreadable = f"its result line is not strict JSON ({e})"
     if timed_out:
         # A cell over the cap is a FAILURE, not a slow measurement: whatever it was doing, it was
         # not making progress in the time the same search takes in every other repeat, and a
@@ -1520,10 +1530,10 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint
         if _cancellation.held_signal is not None:
             raise cell_group.CleanupFailed(note)
         return None, note
-    if proc.returncode != 0 or line is None:
+    if proc.returncode != 0 or result is None:
         print(stdout[-4000:])
         print(f"!!! {label} failed (exit {proc.returncode})", flush=True)
-        note = f"exit {proc.returncode}" if proc.returncode else "no result line"
+        note = f"exit {proc.returncode}" if proc.returncode else (unreadable or "no result line")
         if leftovers:
             note += f"; {leftovers}"
         # A search that exits nonzero partway through leaves the same partial cache a killed one
@@ -1541,7 +1551,6 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint
         if failed_note:
             print(f"!!! {label}: {failed_note}", flush=True)
         return None, with_checkpoint(note)
-    result = json.loads(line)
     if leftovers and on_incomplete:
         # The row stands — the cell ran and printed its result — but a member of its group was
         # killed on the way out, possibly mid-write, and the cache it shares with every later

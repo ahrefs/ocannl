@@ -35,6 +35,7 @@ import time
 import fixture_digest
 import cell_group
 import bench_venv
+import strict_json
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / 'benchmarks'
@@ -126,7 +127,14 @@ def result(path):
     rows = []
     for line in path.read_text().splitlines():
         try:
-            row = json.loads(line)
+            row = strict_json.loads(line)
+        except strict_json.NonFinite as e:
+            # A runner writes null for a number JSON cannot spell; a result line spelling one is
+            # a regressed emitter, not noise to skip past.
+            lenient = json.loads(line)
+            if isinstance(lenient, dict) and 'losses' in lenient:
+                raise RuntimeError(f'{path}: its result line is not strict JSON ({e})') from e
+            continue
         except json.JSONDecodeError:
             continue
         if isinstance(row, dict) and 'losses' in row:

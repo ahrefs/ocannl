@@ -20,6 +20,8 @@ SRC=$here/gh834_cells.sh
 CHECKER=$here/gh834_session.py
 tree=$TMP/tree
 mkdir -p "$tree/benchmarks" "$TMP/runs"
+# The checker's strict result-line loader, beside it as in the shipping tree.
+cp "$here/strict_json.py" "$tree/benchmarks/" || exit 2
 
 # The trace summary of a session whose timing calls all completed.
 GOOD_TRACE='timing-trace: summary: 12.5s wall, 9 candidate attempts, 31 timing calls'
@@ -104,7 +106,7 @@ leg 'a non-JSON NaN timing is not a timing' \
   rejects nan "$(line "$A" "$(arm B best_ms=NaN)")" 'INCOMPLETE SESSION: the result line is not JSON'
 overflow=$(line "$A" "$(arm B best_ms=7.5)")
 leg 'an overflowing timing is not a timing' \
-  rejects overflow "${overflow/\"best_ms\":7.5/\"best_ms\":1e999}" 'INCOMPLETE SESSION: arm B timed no candidate'
+  rejects overflow "${overflow/\"best_ms\":7.5/\"best_ms\":1e999}" 'INCOMPLETE SESSION: the result line is not JSON'
 leg 'an arm that died is incomplete and its failure is named' \
   rejects died "$(line "$(arm A state='"search-died"' \
     terminal_failure='{"phase":"timing","candidate":"c","detail":"d"}')" "$B")" \

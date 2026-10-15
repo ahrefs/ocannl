@@ -13,21 +13,27 @@
  ; repository; the source-identity test builds a repository of its own.
  ;
  ; The Python modules are globbed rather than named: the test grows imports faster than anyone
- ; remembers to pin them. Today it imports orchestrate, gh675_cells, gen_fixtures, bench_venv,
- ; cell_group, fixture_digest, runners.bench_common and test.test_cell_group, and its venv-
- ; interpreter scan reads every `*.py` here and under runners/ at any depth -- hence the recursive
- ; glob, the same population as the scan's `runners/**/*.py`. fixtures/DIGESTS.txt and the
- ; workload specs are data it reads (gh-ocannl-645), pinned so a change to them fails the suite
- ; rather than drifting -- and so is the golden of test/operations/bench_result_line, which holds
- ; OCANNL result lines this orchestrator's own parser has to accept (gh-ocannl-676).
- ; ocannl_config.reference is where the orchestrator reads the configuration keys a per-cell flag
- ; may name and the keys each profile's payload sets (gh-ocannl-1273); this directory's own
- ; ocannl_config is what the test checks sets no key that would stand between a cell and its cache.
+ ; remembers to pin them. Today it imports orchestrate, strict_json, gh675_cells, gh998_cells,
+ ; gh1002_cells, gen_fixtures, bench_venv, cell_group, fixture_digest, runners.bench_common and
+ ; test.test_cell_group, and its venv-interpreter scan reads every `*.py` here and under runners/ at
+ ; any depth -- hence the recursive glob, the same population as the scan's `runners/**/*.py`. The
+ ; shell scripts are listed for the same reason: the test runs the drivers' inline result-line
+ ; readers from their text, and its json.loads inventory scans every `*.py` and `*.sh` here and
+ ; under runners/ (an unlisted script is one the inventory silently cannot see).
+ ; fixtures/DIGESTS.txt and the workload specs are data it reads (gh-ocannl-645), pinned so a
+ ; change to them fails the suite rather than drifting -- and so is the golden of
+ ; test/operations/bench_result_line, which holds OCANNL result lines this orchestrator's own
+ ; parser has to accept (gh-ocannl-676). ocannl_config.reference is where the orchestrator reads
+ ; the configuration keys a per-cell flag may name and the keys each profile's payload sets
+ ; (gh-ocannl-1273); this directory's own ocannl_config is what the test checks sets no key that
+ ; would stand between a cell and its cache.
  (deps
   ocannl_config
   (glob_files *.py)
   (glob_files test/*.py)
   (glob_files_rec runners/*.py)
+  (glob_files *.sh)
+  (glob_files_rec runners/*.sh)
   fixtures/DIGESTS.txt
   ../ocannl_config.reference
   ../test/operations/bench_result_line.expected

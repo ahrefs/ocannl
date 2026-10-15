@@ -7,7 +7,9 @@ from pathlib import Path
 import sys
 import tempfile
 
-spec = importlib.util.spec_from_file_location("summary", sys.argv[1])
+owner = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(owner.parent))  # the summary's own imports (strict_json) live beside it
+spec = importlib.util.spec_from_file_location("summary", owner)
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
 
@@ -97,3 +99,24 @@ with tempfile.TemporaryDirectory() as scratch:
     code, text = render(step_stage=False)
     check(code == 1 and "REFUSED:" in text and "sentinel-prep-table" not in text, text)
     print("a run without a step stage still fails on a refused training table: true")
+
+# A result line that spells a non-finite number is no measurement (benchmarks/strict_json.py):
+# Python's json.loads would read all three spellings, and statistics over them would print `nan`.
+with tempfile.TemporaryDirectory() as scratch:
+    out = Path(scratch)
+    spellings = ("NaN", "Infinity", "1e999")
+    for i, spelled in enumerate(spellings, 1):
+        (out / f"hip-gpt2_mini_train-keep-r{i}.out").write_text(
+            '{"step_ms":{"p10":1,"p50":%s,"p90":3},"losses":[7]}\n' % spelled)
+    (out / "hip-gpt2_mini_train-keep-r4.out").write_text(json.dumps(step) + "\n")
+    text = io.StringIO()
+    with contextlib.redirect_stdout(text):
+        code = report.summary(str(out), "keep", "keep")
+    text = text.getvalue()
+    check(code == 1, text)
+    for i in range(1, len(spellings) + 1):
+        check(f"UNREADABLE RESULT: hip-gpt2_mini_train-keep-r{i}.out:" in text, text)
+    check("| hip | gpt2_mini_train | keep | 2.00 | 2.00 |" in text, text)
+    rows = [ln for ln in text.splitlines() if ln.startswith("| hip |")]
+    check(len(rows) == 1 and "nan" not in rows[0] and "inf" not in rows[0], text)
+    print("a result line spelling NaN, Infinity or 1e999 is unreadable, not a timing: true")

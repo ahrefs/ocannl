@@ -61,6 +61,7 @@ import sys
 from pathlib import Path
 
 import cell_group
+import strict_json
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -136,12 +137,12 @@ def result_line(path):
     """The cell's result, only if its process exited 0 and its loss trajectory is complete and
     finite: a result line followed by a failed teardown or a signal is not a measurement."""
     try:
-        if open(str(path) + ".status").read().strip() != "0":
+        if Path(str(path) + ".status").read_text().strip() != "0":
             return None
-        for line in open(str(path) + ".out"):
+        for line in Path(str(path) + ".out").read_text().splitlines():
             line = line.strip()
             if line.startswith("{"):
-                res = json.loads(line)
+                res = strict_json.loads(line)  # NonFinite is a ValueError: no result
                 fixture = Path(str(path)).name.split("__")[1]
                 return res if valid_losses(res.get("losses"), fixture) else None
     except (OSError, ValueError, IndexError):
@@ -341,7 +342,7 @@ def torch_losses(out, fx):
     tf = out / "torch" / f"{fx}.out"
     try:
         lines = tf.read_text().strip().splitlines()
-        losses = json.loads(lines[-1])["losses"] if lines else None
+        losses = strict_json.loads(lines[-1])["losses"] if lines else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return losses if valid_losses(losses, fx) else None

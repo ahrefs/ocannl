@@ -40,6 +40,7 @@ from pathlib import Path
 
 import bench_venv
 import cell_group
+import strict_json
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / "benchmarks"
@@ -217,12 +218,17 @@ def run(cmd, env=None, cwd=None, timeout=None):
     )
     wall = time.monotonic() - t0
     p = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
-    line = None
+    line, rejected = None, None
     for ln in reversed(p.stdout.strip().splitlines()):
         ln = ln.strip()
         if ln.startswith("{") and ln.endswith("}"):
             try:
-                line = json.loads(ln)
+                line = strict_json.loads(ln)
+                break
+            except strict_json.NonFinite as ex:
+                # A number JSON cannot spell: the runner's emitter regressed (it writes null), and
+                # an earlier line is not this cell's result either.
+                rejected = str(ex)
                 break
             except Exception:
                 pass
@@ -236,6 +242,8 @@ def run(cmd, env=None, cwd=None, timeout=None):
                "stderr_tail": p.stderr[-3000:]}
         if line is not None:
             rec["result_despite_nonzero_exit"] = line
+        if rejected is not None:
+            rec["result_line_not_strict_json"] = rejected
         return rec
     line["wall_s"] = round(wall, 2)
     line["rc"] = p.returncode

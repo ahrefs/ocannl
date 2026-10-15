@@ -1,10 +1,11 @@
 """Step matrix and validated training tables for gh1133_cells.sh (stdlib only)."""
-import json
 import os
 from pathlib import Path
 import re
 import statistics
 import sys
+
+import strict_json
 
 
 def training_output(out, name):
@@ -25,23 +26,32 @@ def step_matrix(out, treatments, ref_treatment, ref_all):
     # The cells of exactly the treatments the driver ran: its TREATMENTS list, not a second copy of
     # the names its flags_of knows.
     cell_name = re.compile(r"(\w+)-(gpt2_mini\w*)-(%s)-(r\d+)\.out" % "|".join(map(re.escape, treatments)))
-    cells, missing = {}, []
+    cells, missing, unreadable = {}, [], []
     for name in sorted(os.listdir(out)):
         m = cell_name.fullmatch(name)
         if not m:
             continue
-        rec = None
+        rec, error = None, None
         for line in open(os.path.join(out, name)):
             line = line.strip()
             if line.startswith("{") and '"step_ms"' in line:
-                rec = json.loads(line)
+                try:
+                    rec, error = strict_json.loads(line), None
+                except ValueError as e:
+                    # Truncated, or a non-finite number JSON cannot spell (strict_json).
+                    rec, error = None, e
+        if error is not None:
+            unreadable.append((name, error))
+            continue
         if rec is None:
             missing.append(name)
             continue
         cells.setdefault(m.group(1, 2, 3), []).append((m.group(4), rec))
-    incomplete = bool(missing) or not cells
+    incomplete = bool(missing) or bool(unreadable) or not cells
     for name in missing:
         print("MISSING RESULT: %s has no result line" % name)
+    for name, error in unreadable:
+        print("UNREADABLE RESULT: %s: its result line is not strict JSON (%s)" % (name, error))
     if not cells:
         print("NO MEASUREMENT: no numbered cell produced a result line")
     print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs %s | p10..p90 spread | queued (median) | loss vs %s |" % (ref_treatment, ref_treatment))

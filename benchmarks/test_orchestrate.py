@@ -20,6 +20,7 @@ import bench_venv
 import fixture_digest
 import cell_group
 import orchestrate
+import strict_json
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
 from test.test_cell_group import kill_the_group_on_cleanup, publish_pid
@@ -51,13 +52,8 @@ def cell(framework, backend, variant, losses, precision="f32", p50=1.0):
     return r
 
 
-def _reject(token):
-    raise ValueError(f"not JSON: {token}")
-
-
-def strict_loads(text):
-    """`json.loads` without its NaN/Infinity extension -- JSON as every other reader has it."""
-    return json.loads(text, parse_constant=_reject)
+# JSON as every other reader has it: the loader the result-line readers use, not a second copy.
+strict_loads = strict_json.loads
 
 
 class ParityCheckTest(unittest.TestCase):
@@ -192,6 +188,309 @@ class DivergenceTest(unittest.TestCase):
 
         parsed = strict_loads(buf.getvalue().strip())
         self.assertEqual(parsed, {"losses": [1.0, None], "step_ms": {"p50": None}})
+
+
+# A result line in each spelling of a non-finite number that `json.loads` accepts: its two
+# constants (and the negated one) and an overflowing literal. Each spelling sits in its own line, so
+# a loader that refuses only some of them fails on the others.
+NON_FINITE_LINES = {
+    "NaN": '{"losses":[2.5,NaN],"step_ms":{"p50":1.0}}',
+    "Infinity": '{"losses":[2.5,1.75],"step_ms":{"p50":Infinity}}',
+    "-Infinity": '{"losses":[-Infinity,1.75],"step_ms":{"p50":1.0}}',
+    "1e999": '{"losses":[2.5,1.75],"step_ms":{"p50":1e999}}',
+}
+
+
+def refuses_every_non_finite_line(loads):
+    """Whether `loads` raises `ValueError` on every line of NON_FINITE_LINES."""
+    for line in NON_FINITE_LINES.values():
+        try:
+            loads(line)
+        except ValueError:
+            continue
+        return False
+    return True
+
+
+class StrictJsonTest(unittest.TestCase):
+    """The one loader every reader of a runner's result line goes through (benchmarks/strict_json.py,
+    from lukstafi/ocannl-staging#1138): Python's `json.loads` reads NaN, Infinity and 1e999, which
+    no other consumer of results.jsonl does."""
+
+    def mutant(self, name, old, new):
+        """strict_json with `old` replaced by `new` in its source, loaded as a module of its own."""
+        source = (HERE / "strict_json.py").read_text()
+        self.assertIn(old, source, f"mutant {name} no longer applies")
+        module = types.ModuleType(f"strict_json_{name}")
+        exec(compile(source.replace(old, new, 1), f"<strict_json {name}>", "exec"), module.__dict__)
+        return module
+
+    def test_the_lines_are_the_trap(self):
+        # Precondition: the stdlib reads every line, and each carries a non-finite number.
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                parsed = json.loads(line)
+                numbers = parsed["losses"] + [parsed["step_ms"]["p50"]]
+                self.assertFalse(all(orchestrate.finite(x) for x in numbers))
+
+    def test_every_non_finite_spelling_is_refused(self):
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                with self.assertRaises(strict_json.NonFinite) as caught:
+                    strict_json.loads(line)
+                self.assertIn(spelled.lstrip("-"), str(caught.exception))
+                # A ValueError, as JSONDecodeError is, so a reader's existing handler covers it.
+                self.assertIsInstance(caught.exception, ValueError)
+        self.assertTrue(refuses_every_non_finite_line(strict_json.loads))
+
+    def test_finite_json_reads_as_the_stdlib_reads_it(self):
+        line = '{"losses":[2.5,null,-0.0,1e308,3],"step_ms":{"p50":12},"note":"NaN Infinity"}'
+        self.assertEqual(strict_json.loads(line), json.loads(line))
+
+    def test_mutants_that_drop_either_hook_accept_a_line(self):
+        # Mutation control: the refusal above holds only while both hooks are in place.
+        hooks = "parse_constant=_reject_constant, parse_float=_finite_float"
+        for name, new in [
+            ("no_hooks", ""),
+            ("no_constant_hook", "parse_float=_finite_float"),
+            ("no_float_hook", "parse_constant=_reject_constant"),
+        ]:
+            with self.subTest(mutant=name):
+                mutant = self.mutant(name, hooks, new)
+                self.assertFalse(refuses_every_non_finite_line(mutant.loads))
+        self.assertFalse(refuses_every_non_finite_line(json.loads))
+
+
+class NonFiniteResultLineReadersTest(unittest.TestCase):
+    """Each reader of a runner's result line refuses one that spells a non-finite number, as
+    `strict_json` does, instead of taking it as a measurement."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_run_cell_fails_the_cell_and_names_the_line(self):
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                cell = [sys.executable, "-c", "import sys; print(sys.argv[1])", line]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result, note = orchestrate.run_cell(f"non-finite {spelled}", cell, timeout=60)
+                self.assertIsNone(result)
+                self.assertIn("its result line is not strict JSON", note)
+        # Negative control: the same cell with a finite line is a result.
+        finite = '{"losses":[2.5,null],"step_ms":{"p50":1.0},"compile_s":0.5}'
+        cell = [sys.executable, "-c", "import sys; print(sys.argv[1])", finite]
+        with contextlib.redirect_stdout(io.StringIO()):
+            result, note = orchestrate.run_cell("finite", cell, timeout=60)
+        self.assertIsNone(note)
+        self.assertEqual(result["losses"], [2.5, None])
+
+    def test_a_checkpoint_spelling_a_non_finite_loss_is_skipped(self):
+        prefix = orchestrate.CHECKPOINT_PREFIX
+        good = prefix + '{"record":"checkpoint","losses":[2.5]}'
+        bad = prefix + '{"record":"checkpoint","losses":[2.5,NaN]}'
+        self.assertEqual(orchestrate.last_checkpoint(good + "\n" + bad)["losses"], [2.5])
+
+    def test_gh998_result_refuses_and_skips_only_noise(self):
+        import gh998_cells
+
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                path = self.dir / f"gh998-{spelled}.stdout"
+                path.write_text("noise\n" + line + "\n")
+                with self.assertRaisesRegex(RuntimeError, "not strict JSON"):
+                    gh998_cells.result(path)
+        # A non-finite JSON line that is no result line is noise, as any other non-result is.
+        path = self.dir / "gh998-noise.stdout"
+        path.write_text('{"probe":NaN}\n{"losses":[2.5],"step_ms":{"p50":1.0}}\n')
+        self.assertEqual(gh998_cells.result(path)["losses"], [2.5])
+
+    def test_gh1002_result_line_is_no_result(self):
+        import gh1002_cells
+
+        fixture = "gpt2_mini_train"
+        steps = gh1002_cells.parity_steps(fixture)
+        losses = ",".join(["2.5"] * steps)
+        base = self.dir / f"cc__{fixture}__A__r0"
+        Path(str(base) + ".status").write_text("0\n")
+        # The losses are finite and complete, so only the non-finite timing can refuse the line.
+        for spelled in ("NaN", "Infinity", "1e999"):
+            with self.subTest(spelled=spelled):
+                Path(str(base) + ".out").write_text(
+                    '{"losses":[%s],"step_ms":{"p50":%s}}\n' % (losses, spelled))
+                self.assertIsNone(gh1002_cells.result_line(base))
+        Path(str(base) + ".out").write_text('{"losses":[%s],"step_ms":{"p50":1.0}}\n' % losses)
+        self.assertEqual(gh1002_cells.result_line(base)["step_ms"]["p50"], 1.0)
+
+
+def shipped_heredoc(script, tag, within=None):
+    """The Python a shell driver feeds to `python3 -` through its `<<'TAG'` heredoc, as it ships;
+    with `within`, the first such heredoc after that shell function's definition line (for a tag
+    the script reuses)."""
+    lines = (HERE / script).read_text().splitlines()
+    starts = [i for i, line in enumerate(lines) if f"<<'{tag}'" in line]
+    if within is not None:
+        found = [i for i, line in enumerate(lines) if line.startswith(f"{within}() {{")]
+        if len(found) != 1:
+            raise AssertionError(f"{script}: {len(found)} definitions of {within}, expected one")
+        starts = [i for i in starts if i > found[0]][:1]
+    if len(starts) != 1:
+        raise AssertionError(f"{script}: {len(starts)} heredocs tagged {tag}, expected one")
+    end = next(i for i in range(starts[0] + 1, len(lines)) if lines[i] == tag)
+    return "\n".join(lines[starts[0] + 1:end]) + "\n"
+
+
+class ShellResultLineReadersTest(unittest.TestCase):
+    """The inline Python result-line readers of the shell drivers, run from the shipping text:
+    each refuses NaN, Infinity and 1e999 through strict_json, which it imports from the directory
+    the driver names in STRICT_JSON_DIR (the scratch cwd here holds no copy)."""
+
+    SPELLINGS = ("NaN", "Infinity", "1e999")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def run_heredoc(self, script, tag, *argv, within=None):
+        return subprocess.run(
+            [sys.executable, "-", *map(str, argv)],
+            input=shipped_heredoc(script, tag, within),
+            text=True,
+            capture_output=True,
+            cwd=self.dir,
+            env=dict(os.environ, STRICT_JSON_DIR=str(HERE)),
+            timeout=60,
+        )
+
+    def test_gh1003_summary_names_each_unreadable_cell(self):
+        out = self.dir / "out"
+        out.mkdir()
+        for i, spelled in enumerate(self.SPELLINGS, 1):
+            (out / f"metal-gpt2_mini_train-composed-r{i}.out").write_text(
+                '{"step_ms":{"p10":1,"p50":%s,"p90":3},"losses":[7]}\n' % spelled)
+        (out / "metal-gpt2_mini_train-composed-r9.out").write_text(
+            '{"step_ms":{"p10":1,"p50":2,"p90":3},"losses":[7]}\n')
+        proc = self.run_heredoc("gh1003_fold_cells.sh", "PY", out, "composed")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        for i in range(1, len(self.SPELLINGS) + 1):
+            self.assertIn(f"UNREADABLE RESULT: metal-gpt2_mini_train-composed-r{i}.out:", proc.stdout)
+        rows = [line for line in proc.stdout.splitlines() if line.startswith("| metal |")]
+        self.assertEqual(len(rows), 1, proc.stdout)
+        self.assertIn("| composed | 2.0 | 2.0 |", rows[0])
+
+    def test_gh612_parity_fails_on_the_line_not_with_a_traceback(self):
+        for spelled in self.SPELLINGS:
+            with self.subTest(spelled=spelled):
+                cell = self.dir / spelled / "cell" / "r1"
+                cell.mkdir(parents=True)
+                (cell / "search.out").write_text('{"losses":[2.5,%s]}\n' % spelled)
+                proc = self.run_heredoc(
+                    "gh612_cells.sh", "EOF", self.dir / spelled, 64, 0, "", 2, within="cmd_parity")
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn("the result line is not strict JSON", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
+
+    def test_gh728_protocol_check_refuses_the_line(self):
+        line = ('{"framework":"ocannl","searched":true,"step_ms":{"p50":%s},'
+                '"tune":{"searches":1,"replays":0,"no_searches":0,"arms":[]}}\n')
+        for spelled in self.SPELLINGS:
+            with self.subTest(spelled=spelled):
+                path = self.dir / f"gh728-{spelled}.out"
+                path.write_text(line % spelled)
+                proc = self.run_heredoc("gh728_cells.sh", "VERIFY", path, "search")
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertIn("a result line is not strict JSON", proc.stderr)
+        # Negative control: the same line with a finite timing is a search pass.
+        path = self.dir / "gh728-finite.out"
+        path.write_text(line % "1.5")
+        proc = self.run_heredoc("gh728_cells.sh", "VERIFY", path, "search")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("protocol: search pass", proc.stdout)
+
+
+# Every `json.load`/`json.loads` call in the benchmark drivers, runners and their inline shell
+# Python that does NOT read a runner's result or checkpoint line, with why: a judgment list, so a
+# new reader has to choose between strict_json and a stated reason here. Keyed by file and a
+# fragment of the call's line; an entry that matches nothing fails as stale.
+JSON_LOADS_NOT_RESULT_LINES = {
+    ("fixture_digest.py", "json.loads(raw_header"): "safetensors fixture header",
+    ("runners/bench_common.py", "json.loads(f.read(n))"): "safetensors fixture header",
+    ("gen_fixtures.py", "spec = json.loads(spec_path"): "workload spec",
+    ("gen_fixtures.py", 'name = json.loads(spec_path'): "workload spec",
+    ("gh1002_cells.py", "recorded = json.loads(pf.read_text())"): "the driver's own preflight.json",
+    ("gh1002_cells.py", '"workloads"'): "workload spec",
+    ("gh1002_cells.py", "pre = json.loads((out"): "the driver's own preflight.json",
+    ("gh1181_cells.py", "return [json.loads(line) for line in path"):
+        "the driver's own timings.jsonl/failures.jsonl (json_safe, allow_nan=False)",
+    ("gh1181_cells.py", "versions = json.loads(supporting_output"): "the venv's version probe",
+    ("gh1181_cells.py", 'env = json.loads((out / "env.json")'): "the driver's own env.json",
+    ("gh1181_cells.py", 'old = json.loads((out / "summary.json")'): "the driver's own summary.json",
+    ("gh675_cells.py", "r = json.loads(ln)"): "the driver's own records file",
+    ("gh998_cells.py", "lenient = json.loads(line)"):
+        "re-reads a line strict_json refused, only to tell a result line from noise",
+    ("gh998_cells.py", "if json.loads(paths[0]"): "the driver's own source manifests",
+    ("gh998_cells.py", "matrix = json.loads("): "the driver's own matrix.json",
+    ("gh998_cells.py", "preflight = json.loads("): "the driver's own preflight.json",
+    ("gh998_cells.py", "controls.append(json.loads("): "the driver's own result.json (allow_nan=False)",
+    ("gh998_cells.py", "json.loads((baseline / 'result.json')"):
+        "the driver's own result.json (allow_nan=False)",
+    ("gh998_cells.py", "row = json.loads((out"): "the driver's own result.json (allow_nan=False)",
+    ("gh998_cells.py", "on = json.loads((out"): "the driver's own result.json (allow_nan=False)",
+    ("gh998_cells.py", "if json.loads(preflight.read_text())"): "the driver's own preflight.json",
+    ("gh998_cells.py", "json.loads((out / 'dry-ok.json')"): "the driver's own dry-ok.json",
+}
+
+
+JSON_LOAD_CALL = re.compile(r"\bjson\.loads?\(")
+
+
+def json_load_calls(texts):
+    """`(file, line)` for every json.load(s) call line in `texts` ({relative path: source}) that
+    JSON_LOADS_NOT_RESULT_LINES does not exempt, and the exemptions that matched nothing."""
+    used, bare = set(), []
+    for path, text in sorted(texts.items()):
+        for line in text.splitlines():
+            if not JSON_LOAD_CALL.search(line):
+                continue
+            keys = [k for k in JSON_LOADS_NOT_RESULT_LINES if k[0] == path and k[1] in line]
+            used.update(keys)
+            if not keys:
+                bare.append((path, line.strip()))
+    return bare, sorted(set(JSON_LOADS_NOT_RESULT_LINES) - used)
+
+
+class ResultLineReaderInventoryTest(unittest.TestCase):
+    """No reader of a runner's result line can bypass strict_json unnoticed: a json.load(s) call in
+    a driver, a runner or a driver's inline Python is either exempt with a reason or a failure."""
+
+    @staticmethod
+    def shipped_sources():
+        files = [
+            p for p in sorted(HERE.rglob("*"))
+            if p.suffix in (".py", ".sh") and p.is_file()
+            and ".venv" not in p.relative_to(HERE).parts
+            and p.relative_to(HERE).parts[0] != "test"  # the tests' own fixtures and probes
+            and not p.name.startswith(("test_", "test-"))
+            and p.name != "strict_json.py"  # the loader itself
+        ]
+        return {p.relative_to(HERE).as_posix(): p.read_text() for p in files}
+
+    def test_every_json_load_is_strict_or_exempt(self):
+        sources = self.shipped_sources()
+        self.assertIn("orchestrate.py", sources)
+        self.assertIn("gh728_cells.sh", sources)
+        bare, stale = json_load_calls(sources)
+        self.assertEqual(bare, [], "read these through strict_json.loads, or exempt them with a reason")
+        self.assertEqual(stale, [], "exemptions that match no call any more")
+
+    def test_a_bare_result_line_read_is_caught(self):
+        # Negative control: the shape gh728_cells.sh shipped before this scan.
+        sources = self.shipped_sources()
+        sources["gh728_cells.sh"] += "rows = [json.loads(l) for l in open(path)]\n"
+        bare, _ = json_load_calls(sources)
+        self.assertEqual(bare, [("gh728_cells.sh", "rows = [json.loads(l) for l in open(path)]")])
 
 
 class OcannlResultLineTest(unittest.TestCase):

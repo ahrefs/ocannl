@@ -745,9 +745,11 @@ cmd_replay() { (
 # noise that different schedules produce, far below anything a real correctness regression shows.
 # EXPECT_RUNS, if set, additionally pins how many cells the gate must have covered.
 cmd_parity() { (
-  python3 - "$OUT_ROOT" "${PARITY_MAX_ULP:-64}" "${EXPECT_RUNS:-0}" "${EXPECT_CELLS:-}" \
-           "${EXPECT_STEPS:-8}" <<'EOF'
-import json,glob,os,sys,math,collections
+  STRICT_JSON_DIR=$HERE python3 - "$OUT_ROOT" "${PARITY_MAX_ULP:-64}" "${EXPECT_RUNS:-0}" \
+           "${EXPECT_CELLS:-}" "${EXPECT_STEPS:-8}" <<'EOF'
+import glob,os,sys,math,collections
+sys.path.insert(0, os.environ["STRICT_JSON_DIR"])
+import strict_json
 root=sys.argv[1]
 seqs=collections.defaultdict(list)
 # BOTH passes. Every quoted tuned p50 comes from a pass-2 process, and `replay` validates only its
@@ -760,7 +762,12 @@ for kind in ("search.out","replay2.out"):
     if os.sep + ".staging" in f: continue
     t=[l for l in open(f).read().splitlines() if l.startswith("{")]
     if not t: continue
-    d=json.loads(t[-1])
+    try:
+      d=strict_json.loads(t[-1])
+    except strict_json.NonFinite as e:
+      # A runner writes null for a number JSON cannot spell (gh-ocannl-676); NaN, Infinity or 1e999
+      # here is a regressed emitter, and a finding rather than a traceback.
+      sys.exit(f"FAILED: {f}: the result line is not strict JSON ({e})")
     if "losses" not in d: continue
     tag="/".join(f.split(os.sep)[-3:-1]) + ("" if kind=="search.out" else " [pass2]")
     seqs[tuple(d["losses"])].append(tag)
