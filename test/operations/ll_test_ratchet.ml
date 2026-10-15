@@ -44,9 +44,6 @@ let exemptions =
     ( "test/operations/schedule_split_reduce.ml",
       Scan.Migration { records = 0; traversals = 7 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/scratch_value_variance.ml",
-      Scan.Migration { records = 5; traversals = 0 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/test_bounds_folded_gather.ml",
       Scan.Migration { records = 0; traversals = 2 },
       "existing migration debt; adopt ll_test when touched" );

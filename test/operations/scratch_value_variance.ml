@@ -19,21 +19,11 @@ module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Idx = Ir.Indexing
 module Sched = Ir.Schedule
+module B = Ll_builders
 open Verdict.Claims
 
-let fresh_tn =
-  let c = ref 960_000_000 in
-  fun label dims ->
-    Int.incr c;
-    Tn.create (Tn.Specified Ir.Ops.single) ~id:!c ~label:[ label ]
-      ~unpadded_dims:(lazy dims)
-      ~padding:(lazy None)
-      ()
-
-let sp = Ir.Ops.single
-
-let for_over ?(extent = 64) sym body =
-  LL.For_loop { index = sym; from_ = 0; to_ = extent - 1; body; axis = LL.Serial }
+let fresh_tn = B.node_factory ~first_id:960_000_000 ~dims:[| 1 |] ()
+let for_over ?(extent = 64) sym body = B.loop_n sym extent body
 
 let hand_built ~stmts ~tns_on_device ~tns_local =
   let optimize_ctx = LL.empty_optimize_ctx () in
@@ -74,24 +64,19 @@ let hardware_syms (sched : Sched.schedule) : Idx.symbol list =
    through a scalar scope-local ([Set_local] then [Get_local]) — the value scan must resolve it
    (Codex P1 on the direct-only scan). *)
 let build ~variant =
-  let x = fresh_tn "x" [| 64; 4 |] in
-  let out1 = fresh_tn "out1" [| 64; 64 |] in
-  let out2 = fresh_tn "out2" [| 64; 64 |] in
-  let tmp = fresh_tn "tmp" [| 4 |] in
-  let s0 = Idx.get_symbol () and s1 = Idx.get_symbol () and u = Idx.get_symbol () in
-  let t0 = Idx.get_symbol () and t1 = Idx.get_symbol () in
-  let vtn = fresh_tn "v" [| 1 |] in
+  let x = fresh_tn ~dims:[| 64; 4 |] "x" in
+  let out1 = fresh_tn ~dims:[| 64; 64 |] "out1" in
+  let out2 = fresh_tn ~dims:[| 64; 64 |] "out2" in
+  let tmp = fresh_tn ~dims:[| 4 |] "tmp" in
+  let s0 = B.sym () and s1 = B.sym () and u = B.sym () in
+  let t0 = B.sym () and t1 = B.sym () in
+  let vtn = fresh_tn "v" in
   let v = LL.get_scope vtn in
   let pre_stmts, tmp_value =
     match variant with
-    | `No -> ([], LL.Get (x, [| Idx.Fixed_idx 0; Idx.Iterator u |]))
-    | `Direct -> ([], LL.Get (x, [| Idx.Iterator s1; Idx.Iterator u |]))
-    | `Via_local ->
-        ( [
-            LL.Declare_local { id = v; needs_init = false };
-            LL.Set_local (v, LL.Get (x, [| Idx.Iterator s1; Idx.Iterator u |]));
-          ],
-          LL.Get_local v )
+    | `No -> ([], B.get x [| B.fixed 0; B.iter u |])
+    | `Direct -> ([], B.get x [| B.iter s1; B.iter u |])
+    | `Via_local -> (B.define_local v (B.get x [| B.iter s1; B.iter u |]), LL.Get_local v)
   in
   let nest1 =
     for_over s0
@@ -99,31 +84,12 @@ let build ~variant =
          (LL.unflat_lines
             [
               for_over ~extent:4 u
-                (LL.unflat_lines
-                   (pre_stmts
-                   @ [
-                       LL.Set
-                         { tn = tmp; idcs = [| Idx.Iterator u |]; llsc = tmp_value; debug = "" };
-                     ]));
-              LL.Set
-                {
-                  tn = out1;
-                  idcs = [| Idx.Iterator s0; Idx.Iterator s1 |];
-                  llsc = LL.Get (tmp, [| Idx.Fixed_idx 0 |]);
-                  debug = "";
-                };
+                (LL.unflat_lines (pre_stmts @ [ B.set_at tmp (B.iter u) tmp_value ]));
+              B.set out1 [| B.iter s0; B.iter s1 |] (B.get tmp [| B.fixed 0 |]);
             ]))
   in
   let nest2 =
-    for_over t0
-      (for_over t1
-         (LL.Set
-            {
-              tn = out2;
-              idcs = [| Idx.Iterator t0; Idx.Iterator t1 |];
-              llsc = LL.Get (tmp, [| Idx.Fixed_idx 1 |]);
-              debug = "";
-            }))
+    for_over t0 (for_over t1 (B.set out2 [| B.iter t0; B.iter t1 |] (B.get tmp [| B.fixed 1 |])))
   in
   let opt =
     hand_built ~stmts:[ nest1; nest2 ] ~tns_on_device:[ x; out1; out2 ] ~tns_local:[ tmp ]
@@ -144,5 +110,4 @@ let () =
   in
   check "variant scratch" `Direct ~expect_serial:true;
   check "variant via scalar local" `Via_local ~expect_serial:true;
-  check "invariant scratch" `No ~expect_serial:false;
-  ignore sp
+  check "invariant scratch" `No ~expect_serial:false
