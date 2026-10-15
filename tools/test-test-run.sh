@@ -5800,6 +5800,16 @@ else
       grep -qF "hip: answered in" "$argv_dir/iteration-2/device-probe"; } ||
       rb_detail="probe answer: exit $argv_rc; dune calls: ${argv_calls:-<none>}; probes: $probe_calls; output: $argv_out"
   fi
+  # A resolution the cap cuts short runs no iteration and keeps the cap's status: TIMEOUT, 142,
+  # never a usage error (local Codex review).
+  if [ -z "$rb_detail" ]; then
+    FAKE_REACH_SLEEP=5 slot_probe rb-resolve-cap hold hip cc repeat --cap 1 2 build @cheap
+    rb_status=$(OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-rb-resolve-cap "$repeat_root/tools/test-run.sh" status last 2>&1)
+    { [ "$argv_rc" = 142 ] && [ -z "$argv_calls" ] &&
+      grep -qF "the bounds were not resolved (exit 142" <<<"$argv_out" &&
+      grep -qF "verdict: TIMEOUT (cap expired; run was killed, not judged) (exit 142)" <<<"$rb_status"; } ||
+      rb_detail="resolution past the cap: exit $argv_rc; dune calls: ${argv_calls:-<none>}; output: $argv_out; status: $rb_status"
+  fi
   if [ -z "$rb_detail" ]; then report 0 "$rb_label"; else report 1 "$rb_label" "$rb_detail"; fi
 fi
 fi # leg 82

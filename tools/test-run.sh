@@ -2503,8 +2503,15 @@ case $sub in
     reap_repeat_group "$resolve_dir"
     repeat_test_cap=0 repeat_watch_kind=cpu repeat_probe_cap= repeat_probe_prog= repeat_probe_backends=
     if [ -z "$repeat_cancelled" ]; then
-      [ "$resolve_rc" = 0 ] && [ -s "$run_dir/bounds" ] ||
-        die "the repeat's bounds were not resolved (exit $resolve_rc; see $run_dir/log)"
+      # A resolution its supervisor ended -- its cap (142), a kill -- ran no iteration, and the set
+      # exits with that status, as a run whose resolution was cut short does (repeat_exit records
+      # it); a resolution that finished without its bounds is this script's own failure.
+      if [ "$resolve_rc" != 0 ]; then
+        printf 'test-run: repeat: the bounds were not resolved (exit %s; see %s/log), so no iteration ran\n' \
+          "$resolve_rc" "$run_dir" | tee -a "$run_dir/log"
+        exit "$resolve_rc"
+      fi
+      [ -s "$run_dir/bounds" ] || die "the repeat's resolution recorded no bounds (see $run_dir/log)"
       { read -r repeat_test_cap && read -r repeat_watch_kind && read -r repeat_probe_cap &&
           read -r repeat_probe_prog && read -r repeat_probe_backends; } <"$run_dir/bounds" ||
         die "cannot read the repeat's bounds from $run_dir/bounds"
