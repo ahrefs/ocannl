@@ -21,6 +21,8 @@
 # 130 interrupted; 2 usage. A crown or build that hits CAP, or a session capped before its first
 # candidate attempt or after the runner's "search done" marker, is a failure: none of them leaves a
 # partial search measurement.
+# The session steps check their result line with python3 (stdlib only, gh834_session.py); a
+# session step requested where python3 is missing is a usage error before any step runs.
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls (OMP_*, GOMP_*, KMP_*);
 # device-selection variables (CUDA_*, HIP_*, ROCR_*, HSA_*, ...) are kept and recorded.
 #
@@ -205,28 +207,20 @@ require() {
 # are not comparable across modes: a placement arm that dies can still ship its sibling
 # (Train.tune_placements), and "searched":true covers a died search too.
 require_complete_session() {
-  local line arm
-  line=$(grep '^{' "$out/$1.out" | tail -1)
-  for arm in A B; do
-    case $line in
-    *"\"arm\":\"$arm\",\"state\":\"searched\""*) ;;
-    *) echo "== step $1: INCOMPLETE SESSION: arm $arm did not complete a search"; status=1 ;;
-    esac
-    # A search can complete having timed nothing (every candidate declined; the GPU serial baseline
-    # is never dispatched): such an arm holds no evidence about timing cost.
-    case $(printf '%s' "$line" | sed -n "s/.*\"arm\":\"$arm\"[^}]*\"best_ms\":\([^,}]*\).*/\1/p") in
-    '' | null) echo "== step $1: INCOMPLETE SESSION: arm $arm timed no candidate"; status=1 ;;
-    esac
-  done
+  # The result line's arm checks parse it as JSON (gh834_session.py): an arm's field order and
+  # nesting are the runner's to choose, and a scan from an arm's name to its first closing brace
+  # read a nested object placed before best_ms as a missing best_ms. Each problem comes back as one
+  # line; a checker that could not run fails the session too.
+  local verdicts rc=0
+  verdicts=$(python3 -I "$root/benchmarks/gh834_session.py" "$out/$1.out") || rc=$?
+  [ -n "$verdicts" ] && printf '%s\n' "$verdicts" | sed "s/^/== step $1: /"
+  if [ "$rc" -ne 0 ]; then
+    [ -n "$verdicts" ] || echo "== step $1: INCOMPLETE SESSION: the result-line check exited $rc"
+    status=1
+  fi
   if ! grep -q '^timing-trace: summary: [0-9.]*s wall, [0-9]* candidate attempts, [1-9][0-9]* timing calls' \
     "$out/$1.err"; then
     echo "== step $1: INCOMPLETE SESSION: the trace recorded no timing call"
-    status=1
-  fi
-  # Whatever shape a terminal failure takes, it is not null; and every contention count is zero.
-  if [ "$(printf '%s' "$line" | grep -o '"terminal_failure":' | wc -l)" -ne \
-    "$(printf '%s' "$line" | grep -o '"terminal_failure":null' | wc -l)" ]; then
-    echo "== step $1: INCOMPLETE SESSION: an arm carries a terminal failure"
     status=1
   fi
   # A timing call that raised is in none of the trace's totals, so its cost split is not the session's.
@@ -234,22 +228,17 @@ require_complete_session() {
     echo "== step $1: INCOMPLETE SESSION: the trace summary is missing raised timing calls"
     status=1
   fi
-  # Per arm, [timings_contended] counts every refused window and [timings_unbatched] the ones refused
-  # because queued calibration measured no batch within its target (gh-ocannl-1098). Either leaves
-  # the session incomplete. They are named apart because the readings behind a no-batch refusal
-  # cannot tell a queue threshold from a stall on every probe: one that repeats on an idle rerun is
-  # the threshold. The two fields are adjacent on each arm.
-  refusals=$(printf '%s' "$line" | grep -o '"timings_contended":[0-9]*,"timings_unbatched":[0-9]*')
-  if printf '%s\n' "$refusals" | awk -F'[:,]' 'NF && $2 > $4 { f = 1 } END { exit !f }'; then
-    echo "== step $1: CONTENDED SESSION: timing windows were refused for host contention"
-    status=1
-  fi
-  if printf '%s\n' "$refusals" | awk -F'[:,]' 'NF && $4 > 0 { f = 1 } END { exit !f }'; then
-    echo "== step $1: UNBATCHED SESSION: queued calibration measured no batch within the target" \
-      "(a queue threshold if it repeats on an idle rerun, else a stall)"
-    status=1
-  fi
 }
+
+# A session's completeness is read by Python; finding it missing after a session's search ran would
+# discard the measurement, so it is refused before any step.
+for s in "$@"; do
+  case $s in
+  session-*)
+    command -v python3 >/dev/null 2>&1 ||
+      { echo "gh834: step $s needs python3 to check its result line" >&2; exit 2; } ;;
+  esac
+done
 
 built= identified=
 need_build() {

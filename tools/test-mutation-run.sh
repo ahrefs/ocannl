@@ -66,7 +66,7 @@ case "$PROBE_MODE" in
   # row printed of three, the other two never evaluated.
   raise)
     rows 'first: false\n'
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'
     printf 'STOPPED EARLY: an uncaught exception ended the run, so no check after it ran:\n'
     printf 'Fatal error: exception Failure("injected")\n'
     exit 1 ;;
@@ -80,10 +80,10 @@ case "$PROBE_MODE" in
   # rows the raise kept from printing, and the cases after it still run.
   casemid) rows 'nested: the case ran to completion (raised Failure("injected")): false\nlast: true\n'
     printf 'FAIL: nested: the case ran to completion (raised Failure("injected")): false\n'
-    printf 'FAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAILED: 1 check did not hold: "nested: the case ran to completion".\n'; exit 1 ;;
   caselast) rows 'first: true\nlast: the case ran to completion (raised Failure("injected")): false\n'
     printf 'FAIL: last: the case ran to completion (raised Failure("injected")): false\n'
-    printf 'FAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAILED: 1 check did not hold: "last: the case ran to completion".\n'; exit 1 ;;
   # The same raise, then a crash: no teardown line, so nothing says a later case ran.
   casecrash) rows 'nested: the case ran to completion (raised Failure("injected")): false\n'
     printf 'FAIL: nested: the case ran to completion (raised Failure("injected")): false\n'
@@ -92,13 +92,13 @@ case "$PROBE_MODE" in
   # stdout alone ends on a raise exactly as a run whose last case raised does.
   caseexit) rows 'nested: the case ran to completion (raised Failure("injected")): false\n'
     printf 'FAIL: nested: the case ran to completion (raised Failure("injected")): false\n'
-    printf 'FAILED: 1 check did not hold.\n'
+    printf 'FAILED: 1 check did not hold: "nested: the case ran to completion".\n'
     printf 'STOPPED EARLY: an exit inside case "last" ended the run, so no case after it ran\n'
     exit 1 ;;
   # A teardown, but the stdout ends on neither the golden's last row nor a raise.
   casecut) rows 'first: the case ran to completion (raised Failure("injected")): false\nnested: label: true\n'
     printf 'FAIL: first: the case ran to completion (raised Failure("injected")): false\n'
-    printf 'FAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAILED: 1 check did not hold: "first: the case ran to completion".\n'; exit 1 ;;
   # The test never ran this time: the output a previous run left must not count.
   stale) printf 'FAIL: first: false\n'; exit 1 ;;
   reused) exit 0 ;;
@@ -107,45 +107,45 @@ case "$PROBE_MODE" in
   # A failed claim's refusal marker is not printed (gh-ocannl-1216): a row short of
   # the golden, every other row printed -- the failed claim the first or the last.
   omitted) rows "first: false\n$section$m2"'last: true\n'
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   omittedlast) rows "first: true\n$section$m1"'last: false\n'
-    printf 'FAIL: last: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: last: false\nFAILED: 1 check did not hold: "last".\n'; exit 1 ;;
   # The same shortfall from a run cut short: the golden's last row never printed,
   # or every row did but no teardown says the process ended through Verdict.
   omittedcut) rows "first: false\n$section$m2"
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   omittedkilled) rows "first: false\n$section$m2"'last: true\n'
     printf 'FAIL: first: false\nCommand got signal SEGV.\n'; exit 1 ;;
   # A row swapped for another while a marker is missing: the counts and the last row agree,
   # the rows do not.
   omittedswap) rows "first: false\nswapped in$section$m2"'last: true\n'
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   # tail.expected ends on its markers, as every real manifest golden does: a run cut inside
   # them with a teardown reads exactly as one whose claim failed. The runner's header names
   # this residual; only a trailer row after the section would separate the two.
   tailcut) rows "first: false\n$section$m1"
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   # A failed claim leaves no success trailer (`OK: ` rows a scan prints only when no claim
   # failed), nor the blank row before it; nor, here, its own marker. The blank row kept, and
   # every marker printed (a failed claim with none). Then the same shortfall cut short, with
   # no teardown, or with a row swapped.
   trailer) rows "first: false\n$section$m2"'last: true\n'
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   trailerblank) rows "first: false\n\n$section$m1$m2"'last: true\n'
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   trailercut) rows "first: false\n$section$m2"
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   trailerkilled) rows "first: false\n$section$m2"'last: true\n'
     printf 'FAIL: first: false\nCommand got signal SEGV.\n'; exit 1 ;;
   trailerswap) rows "first: false\nswapped in$section$m2"'last: true\n'
-    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   # A failed claim elaborated by a multi-line Verdict.fail, on a run short by its success
   # trailer: every row of the message carries `FAIL: `, as Verdict.fail prints it; then the
   # shape it printed before, a continuation row with no prefix -- a row the golden lacks.
   trailermulti) rows "first: false\nFAIL: first: the emit child failed:\nFAIL:   detail one\n$section$m2"'last: true\n'
-    printf 'FAIL: first: false\nFAILED: 2 checks did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
   trailermultibare) rows "first: false\nFAIL: first: the emit child failed:\n  detail one\n$section$m2"'last: true\n'
-    printf 'FAIL: first: false\nFAILED: 2 checks did not hold.\n'; exit 1 ;;
+    printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -257,8 +257,8 @@ done
 # The two lines the runner reads are Verdict's own text; a rewording there must fail here.
 grep -qF '(label ^ ": the case ran to completion") ("raised " ^ text)' "$root/test/support/verdict.ml" ||
   { echo 'Verdict.case no longer prints "<label>: the case ran to completion (raised …)"'; exit 1; }
-grep -qF 'Printf.sprintf "FAILED: %d check%s did not hold."' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict.teardown_line no longer prints "FAILED: <n> check(s) did not hold."'; exit 1; }
+grep -qF 'Printf.sprintf "FAILED: %d check%s did not hold: %s%s."' "$root/test/support/verdict.ml" ||
+  { echo 'Verdict.teardown_line no longer prints "FAILED: <n> check(s) did not hold: <names>."'; exit 1; }
 grep -qF '"STOPPED EARLY: an exit inside case %S ended the run' "$root/test/support/verdict.ml" ||
   { echo 'Verdict no longer prints "STOPPED EARLY: an exit inside case …"'; exit 1; }
 # DUNE_BUILD_DIR moves the tree the output is read from; _build keeps a full stale output.

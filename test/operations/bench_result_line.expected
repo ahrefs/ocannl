@@ -38,7 +38,6 @@ every arm names the objective its times were measured under: true
 a contention-affected arm preserves its refusal count: true
 an arm's no-batch refusals reach the wire apart from its contention count: true
 an arm's settle-by-admission counts reach the wire, one settle carrying two admissions: true
-every arm's scalars precede its first closing brace: true
 an arm that timed nothing carries an empty matrix, not null: true
 an arm with no crowned candidate reports a null tensorization, not a label: true
 the three tensorization labels reach the wire: true

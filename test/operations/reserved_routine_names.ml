@@ -327,4 +327,72 @@ let () =
   gated ~aggregation:`Environment ~when_:collides_here
     ~on:(backend_name ^ " on " ^ Stdlib.Sys.os_type)
     "where the C headers declare random, the routine's compile failure names the routine"
-    (match outcome with `Attributed msg -> names_random msg | `Ran _ | `Other _ -> false)
+    (match outcome with `Attributed msg -> names_random msg | `Ran _ | `Other _ -> false);
+  (* The message blames the name, so the cc report it quotes must not go on to call itself a bug in
+     OCANNL -- while still quoting what the compiler said. *)
+  gated ~aggregation:`Environment ~when_:collides_here
+    ~on:(backend_name ^ " on " ^ Stdlib.Sys.os_type)
+    "where the C headers declare random, the name's failure quotes the compiler without the \
+     codegen-bug claim"
+    (match outcome with
+    | `Attributed msg ->
+        (not (String.is_substring msg ~substring:Ir.C_syntax.codegen_bug_claim_prefix))
+        && String.is_substring msg ~substring:"Compiler output:"
+        && String.is_substring msg ~substring:"random("
+    | `Ran _ | `Other _ -> false)
+
+(* --- 10. The two cases side by side, on the report the cc backend actually raises
+   ([Cc_backend.compile_failure_detail]) and on every host: attributed to the routine's name, the
+   compiler's output is quoted without the codegen-bug claim; a body error is not attributed and
+   propagates unchanged, claim included. The second half is what keeps the first from passing
+   vacuously: it pins that cc's report carries the claim the attribution drops. --- *)
+let () =
+  let attribute compiler_output =
+    let detail =
+      Context.Cc_backend.compile_failure_detail ~exit_code:1 ~source_note:"the generated .c file"
+        ~command:"cc k.c -o k.so" ~compiler_output
+    in
+    let exn =
+      Ir.Schedule_outcome.Cause_at
+        ( Ir.Schedule_outcome.Backend_compile,
+          Ir.Schedule_outcome.Backend_rejected
+            {
+              backend = "cc";
+              stage = "compiler";
+              severity = Ir.Schedule_outcome.Compiler_bug;
+              detail;
+            } )
+    in
+    let raised =
+      try
+        Ir.C_syntax.attribute_routine_name_failure
+          ~routine_names:[ ("random", "random") ]
+          exn (Stdlib.Printexc.get_callstack 1)
+      with exn -> exn
+    in
+    (detail, raised)
+  in
+  let claims text = String.is_substring text ~substring:Ir.C_syntax.codegen_bug_claim_prefix in
+  let collision = "k.c:6:6: error: conflicting types for 'random'\n    6 | void random(" in
+  (match attribute collision with
+  | _, Utils.User_error msg ->
+      p "a name-attributed cc compile failure drops the codegen-bug claim" (not (claims msg));
+      p "a name-attributed cc compile failure keeps the compiler's output"
+        (String.is_substring msg ~substring:collision)
+  | _, exn ->
+      Stdio.eprintf "name-attributed cc report raised: %s\n%!" (Exn.to_string exn);
+      p "a name-attributed cc compile failure drops the codegen-bug claim" false;
+      p "a name-attributed cc compile failure keeps the compiler's output" false);
+  let body_error =
+    "k.c: In function 'random':\nk.c:9:5: error: 'x' undeclared (first use in this function)"
+  in
+  match attribute body_error with
+  | detail, Ir.Schedule_outcome.Cause_at (_, cause) ->
+      let propagated = Ir.Schedule_outcome.detail_of_cause cause in
+      p "an unattributed cc compile failure keeps the codegen-bug claim" (claims propagated);
+      p "an unattributed cc compile failure propagates its report unchanged"
+        (String.equal propagated detail)
+  | _, exn ->
+      Stdio.eprintf "unattributed cc report raised: %s\n%!" (Exn.to_string exn);
+      p "an unattributed cc compile failure keeps the codegen-bug claim" false;
+      p "an unattributed cc compile failure propagates its report unchanged" false

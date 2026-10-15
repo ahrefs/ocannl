@@ -528,9 +528,14 @@ files.
   `Schedule.pipeline_violation` (gh-ocannl-1231): `op_legality` refuses any op leaving one — a
   `Split` or materializing `Unroll` of the rotor (its binder vanishes, so the reads fall outside),
   an in-place `Unroll` or retype of it — so the beam menu, seeding's `schedule_legality` and the
-  renderer agree, and the renderer's declines are the backstop. A new op whose output can move a
-  tile read or rewrite a loop needs nothing extra; a new pipelined-rendering precondition belongs
-  in both places (`pipelined_move_legality` pins their agreement on GPU backends).
+  renderer agree, and the renderer's declines are the backstop. The renderer builds those declines
+  from the same type (`Schedule.pipeline_violation_cause`), so each fact has one wording and one
+  decline feature. A new op whose output can move a tile read or rewrite a loop needs nothing
+  extra; a new pipelined-rendering precondition is a new constructor, raised by the renderer
+  through that function, plus a fixture producing it: `pipelined_move_legality` derives the
+  oracle's reasons from the type (ppx_variants_conv) and fails until the fixtures exercise every
+  one, and on GPU backends it relates each renderer decline to the oracle's violations of the
+  very IR it was compiled from, in both directions.
 - Autotune fault injection keyed by ATTEMPT INDEX (`Autotune.on_candidate_attempt`) is
   backend-dependent and silently vacuous: how many attempts precede an arm's first *timed* candidate
   varies. On Metal a small matmul's materialize-all arm has a baseline binding no hardware dimension
@@ -544,6 +549,15 @@ files.
   grows, and inject relative to that. Relatedly, hoisted (link-time packed) `Stage` candidates are a CPU family only —
   `matmul_seed_params` proposes `sk_hoist` from its `is_cpu` branch — so any test precondition about
   packed-constant pools is false on GPU backends and has to be stated as an equivalence.
+- The search's test seams (`on_candidate_attempt`, `_preflight`, `_timed`, `_measured`,
+  `_callback`, and the `with_uncontended_test_windows` scope) are `Autotune.Seam.t` values, one per
+  DOMAIN: scope one with `Seam.with_value` (restores on exit, nests), set one for the domain's life
+  with `Seam.set`, read it with `Seam.get`. A search reaches only its own domain's values, and a
+  freshly spawned domain starts with the defaults — so a fixture that searches from a spawned domain
+  sets its seams inside that domain. Setting REPLACES (a harness that also wants the enclosing value
+  reads it first and calls it); only the timing-call observers chain. A new seam is a `Seam.t`, never
+  a process-wide ref: two domains' searches would otherwise overwrite and observe each other
+  (`autotune_seam_domains` pins the isolation).
 - Scripted search fixtures opt into `Autotune.with_uncontended_test_windows` (gh-ocannl-1156)
   around `on_candidate_measured`: the measurement callback alone only sees windows the host already
   admitted, so a loaded runner could time nothing and leave cache controls vacuous. The scoped seam
@@ -570,10 +584,14 @@ files.
 - A label names one candidate (gh-ocannl-1230). A beam-round candidate prints as
   `F_saved[N segs from <tag>]+seg<i>:<move>` (`W_saved[N ops from <tag>]+<move>` whole-routine):
   `<tag>` is the parent's digest tag, the one the `round k:` beam line and the parent's timing line
-  print, and `<move>` the appended op's s-expression; a replay prints no suffix. An `F_sketch`
+  print, and `<move>` the appended op's s-expression; a cache replay prints no suffix, while the
+  winner rebuilt into the caller's context (`?timing_ctx`) compiles under the label it was timed
+  under, so a failed winner replay names the round candidate. An `F_split` entry renders every
+  `sr_site` field (target `name#id`, axis, `red`/`out`/`cost`, `b`, `dyn`, `swap:o/i+…`). An `F_sketch`
   entry ends in ` @<tag>:u<units>` of its segment key: the structural digest's tag, then the keyed
   segments' first units joined by `+u`, since two keys can share the digest (gh-ocannl-1243). A sketch label renders every `sketch_params` field, and `autotune_labels` reads the field list off the type's
-  derived s-expression, so a new field fails that test until `sketch_params_label` renders it.
+  derived s-expression, so a new field fails that test until `sketch_params_label` renders it; the same
+  test pins `sr_site`'s fields to `split_sites_label`.
 - A per-kernel profile's sum may only be validated against the step time of **the compile it came
   from**. Each search rep crowns a different artifact with different tile sizes, so holding one rep's
   profile against another rep's step p50 measures the search lottery, not the reconstruction — on

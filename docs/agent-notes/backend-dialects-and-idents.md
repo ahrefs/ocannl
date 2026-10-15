@@ -188,7 +188,12 @@ files.
   fails through `C_syntax.attribute_routine_name_failure`, which turns a compiler report quoting a
   routine's `void <name>(` line, or an error line quoting the name, into a `Utils.User_error`
   naming the routine. A Metal compile error is a `Failure` carrying the whole source, where every
-  declaration appears, so attribution there reads the compiler's message alone.
+  declaration appears, so attribution there reads the compiler's message alone. The attributed
+  message quotes the report less its "This is a bug in OCANNL. Please file an issue with …" line,
+  which cc's report carries for the unattributed case. cc builds that line with
+  `C_syntax.codegen_bug_claim`, and the attribution drops exactly that line; a backend whose
+  compile-time report gains the sentence must build it the same way. (CUDA's copy lives in its
+  exception classifier, which only sees an nvrtc failure attribution let through.)
 - `test/config/ocannl_config` pins `backend=cc`, so `dune runtest` never exercises GPU codegen —
   a Metal/CUDA-only rendering bug passes a fully green suite. The bf16 bug above was already
   covered by `test/training/mixed_prec_parity.ml` (its "loss trajectory parity within 0.1" check

@@ -39,37 +39,38 @@ let () =
   let attempt ~name ~scratch site =
     (* Labels of the admitted windows, newest first; the k-th admitted window measures k ms. *)
     let admitted = ref [] and injected_at = ref None and report = ref None in
-    let old = !Autotune.on_candidate_callback
-    and old_timed = !Autotune.on_candidate_timed
-    and old_measured = !Autotune.on_candidate_measured in
+    let old = Autotune.Seam.get Autotune.on_candidate_callback
+    and old_timed = Autotune.Seam.get Autotune.on_candidate_timed
+    and old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
     let result =
       Exn.protect
         ~finally:(fun () ->
-          Autotune.on_candidate_callback := old;
-          Autotune.on_candidate_timed := old_timed;
-          Autotune.on_candidate_measured := old_measured)
+          Autotune.Seam.set Autotune.on_candidate_callback old;
+          Autotune.Seam.set Autotune.on_candidate_timed old_timed;
+          Autotune.Seam.set Autotune.on_candidate_measured old_measured)
         ~f:(fun () ->
-          (Autotune.on_candidate_measured :=
-             fun ~label ~digest:_ _ms ->
-               admitted := label :: !admitted;
-               Float.of_int (List.length !admitted));
-          (Autotune.on_candidate_callback :=
-             fun boundary ~candidate_ms ~incumbent_ms ->
-               if
-                 Option.exists site ~f:(fun s -> Poly.equal s boundary)
-                 && Float.(candidate_ms > incumbent_ms)
-               then (
-                 Stdio.eprintf "nonwinner callback: candidate %.9g ms > incumbent %.9g ms\n%!"
-                   candidate_ms incumbent_ms;
-                 (* The callback follows the seam for the same window, so the newest admitted label
-                    is the candidate this callback is about. *)
-                 let inject () =
-                   injected_at := List.hd !admitted;
-                   raise Callback_failure
-                 in
-                 match boundary with
-                 | `Timed -> Autotune.on_candidate_timed := fun _ ~timed_so_far:_ -> inject ()
-                 | `Calibration -> inject ()));
+          ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest:_ _ms ->
+            admitted := label :: !admitted;
+            Float.of_int (List.length !admitted) );
+          ( Autotune.Seam.set Autotune.on_candidate_callback
+          @@ fun boundary ~candidate_ms ~incumbent_ms ->
+            if
+              Option.exists site ~f:(fun s -> Poly.equal s boundary)
+              && Float.(candidate_ms > incumbent_ms)
+            then (
+              Stdio.eprintf "nonwinner callback: candidate %.9g ms > incumbent %.9g ms\n%!"
+                candidate_ms incumbent_ms;
+              (* The callback follows the seam for the same window, so the newest admitted label is
+                 the candidate this callback is about. *)
+              let inject () =
+                injected_at := List.hd !admitted;
+                raise Callback_failure
+              in
+              match boundary with
+              | `Timed ->
+                  Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
+                  inject ()
+              | `Calibration -> inject ()) );
           try
             let ctx, routine =
               Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1

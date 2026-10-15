@@ -3,7 +3,7 @@
    CUDA's [--use_fast_math] lowers to [exp2(y * log2(x))]: NaN for every negative base, the integral
    exponents included, at f32 and -- through the widened f32 [powf] of gh-ocannl-1198 -- at f16
    alike. CUDA and HIP therefore route a run-time float power through a device helper
-   ([Builtins_cc.runtime_power_builtins]) that takes an integral exponent on the base's magnitude
+   ([Builtins_cc.cuda_like_power_builtins]) that takes an integral exponent on the base's magnitude
    and restores the sign from the exponent's parity; every other exponent keeps the vendor domain,
    so a negative base under a fractional exponent stays NaN as in IEEE/C [pow]. This is a domain
    fix, not a correctly rounded [pow]: the magnitude is still the vendor's [pow] of [|x|]. Metal

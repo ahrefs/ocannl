@@ -899,12 +899,30 @@ let rescue_depth ~observed =
       let rescue = Int.max 2 rescue in
       if rescue < d then Some rescue else None)
 
+(* The search's test seams, per domain (the treatment [timing_call_observer] got, gh-ocannl-1263): a
+   value set in one domain is what that domain's searches call, a search running in another domain
+   neither reaches nor disturbs it, and a newly spawned domain starts with the default. Unlike the
+   timing-call observers, a seam holds ONE value -- a later setting replaces it rather than chaining
+   -- because several of them return or raise into the search. *)
+module Seam = struct
+  type 'a t = 'a Stdlib.Domain.DLS.key
+
+  let make default : 'a t = Stdlib.Domain.DLS.new_key (fun () -> default)
+  let get = Stdlib.Domain.DLS.get
+  let set = Stdlib.Domain.DLS.set
+
+  let with_value seam value body =
+    let previous = get seam in
+    set seam value;
+    Exn.protect ~f:body ~finally:(fun () -> set seam previous)
+end
+
 (* Sibling fault-injection seam to [on_candidate_attempt], at a timing run's pre-dispatch validation
    rather than at a candidate's compile (gh-ocannl-564). Default no-op, no config key selects it.
    Needed because the causes this phase contains — an unsatisfied dependency, an out-of-range
    binding — belong to the lineage and the bindings, so a genuine one hits every candidate at once
    and cannot express "this one declined, the search went on". *)
-let on_candidate_preflight : (string -> unit) ref = ref (fun _routine_name -> ())
+let on_candidate_preflight : (string -> unit) Seam.t = Seam.make (fun _routine_name -> ())
 
 (* Observation seam for the containment tests (gh-ocannl-898), fired with a routine's name exactly
    where a timing run's window yields an ADMITTED measurement — the moment the [candidates_timed]
@@ -917,15 +935,15 @@ let on_candidate_preflight : (string -> unit) ref = ref (fun _routine_name -> ()
    than left to the observer to re-derive, so such a precondition pins the tuner's number instead of
    maintaining a second counter that can drift from it (PR #593 P1). Default a no-op; no
    configuration selects it. *)
-let on_candidate_timed : (string -> timed_so_far:int -> unit) ref =
-  ref (fun _routine_name ~timed_so_far:_ -> ())
+let on_candidate_timed : (string -> timed_so_far:int -> unit) Seam.t =
+  Seam.make (fun _routine_name ~timed_so_far:_ -> ())
 
 (* Fault-injection seam at the two post-admission callback boundaries (gh-ocannl-975). The measured
    candidate and incumbent times let a cleanup probe select an actual nonwinner, rather than
    guessing from attempt order. Default no-op; no configuration selects it. *)
 let on_candidate_callback :
-    ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) ref =
-  ref (fun _ ~candidate_ms:_ ~incumbent_ms:_ -> ())
+    ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) Seam.t =
+  Seam.make (fun _ ~candidate_ms:_ ~incumbent_ms:_ -> ())
 
 (* Measurement seam (gh-ocannl-1027): the one place a test can decide what an ADMITTED window
    measured. Without it, whether a search ever admits a candidate slower than its incumbent is a
@@ -934,8 +952,8 @@ let on_candidate_callback :
    admitted timing window -- the dispatched baseline's and each candidate's -- by
    [apply_measurement_seam] below, before the admission gate that everything ranking or recording
    the time goes through. Default the identity; no configuration selects it. *)
-let on_candidate_measured : (label:string -> digest:string -> float -> float) ref =
-  ref (fun ~label:_ ~digest:_ ms -> ms)
+let on_candidate_measured : (label:string -> digest:string -> float -> float) Seam.t =
+  Seam.make (fun ~label:_ ~digest:_ ms -> ms)
 
 (* Explicit test-only admission seam (gh-ocannl-1156). Scripted candidate measurements need their
    branches to run even when the host stalls every physical window. This scope clears ONLY the
@@ -943,15 +961,8 @@ let on_candidate_measured : (label:string -> digest:string -> float -> float) re
    unresolved queued batching retain their ordinary rules. No configuration selects it. Production
    callers of [on_candidate_measured] still see only admitted windows. Restore the prior mode even
    on an injected failure, including when test scopes nest. *)
-let test_windows_uncontended = ref false
-
-let with_uncontended_test_windows f =
-  let previous = !test_windows_uncontended in
-  Exn.protect
-    ~finally:(fun () -> test_windows_uncontended := previous)
-    ~f:(fun () ->
-      test_windows_uncontended := true;
-      f ())
+let test_windows_uncontended : bool Seam.t = Seam.make false
+let with_uncontended_test_windows f = Seam.with_value test_windows_uncontended true f
 
 (* Unless the test-only scope above is active, only an admitted window reaches the seam; its result
    then passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses
@@ -960,11 +971,12 @@ let with_uncontended_test_windows f =
    boundaries. *)
 let apply_measurement_seam ~label ~digest timing_result =
   let timing_result =
-    if !test_windows_uncontended then { timing_result with contended = false } else timing_result
+    if Seam.get test_windows_uncontended then { timing_result with contended = false }
+    else timing_result
   in
   match admitted_timing_ms timing_result with
   | None -> timing_result
-  | Some ms -> { timing_result with ms = !on_candidate_measured ~label ~digest ms }
+  | Some ms -> { timing_result with ms = Seam.get on_candidate_measured ~label ~digest ms }
 
 (* Which of the calibration's branches dispatched a batch probe. *)
 type calibration_probe_role =
@@ -1612,7 +1624,7 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
          see the comments at those two sites (gh-ocannl-569). *)
       if tag_failures then
         Outcome.tag Outcome.Preflight (fun () ->
-            !on_candidate_preflight routine.Context.name;
+            Seam.get on_candidate_preflight routine.Context.name;
             Context.check_launch_bindings routine);
       (* Warmup run: absorbs lazy initialization and fills caches like a steady-state iteration. *)
       let ctx = ref (run cctx) in
@@ -1811,6 +1823,7 @@ type sr_site = {
           before the [Split_reduce]: each hoists an accumulation-cell loop outside [sr_axis]. Empty
           when the site is splittable as lowered. *)
 }
+[@@deriving sexp_of]
 
 (* Sites with more output cells than this have enough output parallelism that the default presets
    already fill a device; splitting the reduction would only add combine traffic. *)
@@ -2529,6 +2542,30 @@ let fiss_sketch_label ~fine entries =
     (String.concat ~sep:","
        (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ seg_key_tag key)))
 
+(* A split-reduce candidate's label renders EVERY field of each [(site, num_blocks)] entry
+   (post-wave task of gh-ocannl-1230), as {!sketch_params_label} does for a sketch: the target by
+   its debug name AND its id, since two nodes can share a debug name (two [x.grad]s of one model),
+   the split axis, and the interchange chain pair by pair, since two chains of equal length hoist
+   different loops. test/operations/autotune_labels enumerates the fields from the type's derived
+   s-expression, so a new field fails there until it is rendered here. No token contains [','], the
+   entries' separator. *)
+let split_site_label (s, num_blocks) =
+  let name = Ir.Tnode.debug_name s.sr_target and id = Ir.Tnode.id s.sr_target in
+  Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s"
+    (if String.equal name id then name else name ^ "#" ^ id)
+    (Idx.symbol_ident s.sr_axis) s.sr_red s.sr_out s.sr_cost num_blocks
+    (if s.sr_dynamic then " dyn" else "")
+    (match s.sr_swaps with
+    | [] -> ""
+    | swaps ->
+        " swap:"
+        ^ String.concat ~sep:"+"
+            (List.map swaps ~f:(fun (outer, inner) ->
+                 Idx.symbol_ident outer ^ "/" ^ Idx.symbol_ident inner)))
+
+let split_sites_label sites =
+  Printf.sprintf "F_split[%s]" (String.concat ~sep:"," (List.map sites ~f:split_site_label))
+
 let spec_label = function
   | Whole (W_saved (s, move)) ->
       let from, extension = move_label move in
@@ -2543,14 +2580,7 @@ let spec_label = function
       let from, extension = move_label move in
       Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
   | Fiss (F_sketch { entries; fine; _ }) -> fiss_sketch_label ~fine entries
-  | Fiss (F_split { sites }) ->
-      Printf.sprintf "F_split[%s]"
-        (String.concat ~sep:","
-           (List.map sites ~f:(fun (s, b) ->
-                Printf.sprintf "%s%s red%d out%d b%d%s" (Ir.Tnode.debug_name s.sr_target)
-                  (if s.sr_dynamic then " dyn" else "")
-                  s.sr_red s.sr_out b
-                  (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n))))
+  | Fiss (F_split { sites }) -> split_sites_label sites
   | Fiss (F_split_saved (prelude, segs, move)) ->
       let from, extension = move_label move in
       Printf.sprintf "F_split_saved[%d prelude ops, %d segs%s]%s" (List.length prelude)
@@ -2590,9 +2620,9 @@ let default_seed_label ~backend_name =
    buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the lineage
    table anew. The traced store is copied from the base (schedule ops register their tiles in
    it). *)
-let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx
-    comp bindings spec : compiled Outcome.outcome =
-  let candidate = spec_label spec in
+let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+    ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+  let candidate = match label with Some l -> l | None -> spec_label spec in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let rebase (fresh : LL.optimized) =
     {
@@ -4083,7 +4113,7 @@ let model_default ?name ?report ctx comp bindings =
    — it is a candidate (gh-ocannl-533) — which is what makes a failure BEFORE the search has
    reported anything injectable, the case the positional-arm-slot handling in
    [Train.tune_placements] exists for. *)
-let on_candidate_attempt : (string -> unit) ref = ref (fun _label -> ())
+let on_candidate_attempt : (string -> unit) Seam.t = Seam.make (fun _label -> ())
 let search_setting () = Utils.get_global_flag ~arg_name:"autotune_search" ~default:true
 
 (* The schedule cache directory a tuning call uses, or [""] for none. Whether the directory was
@@ -4456,7 +4486,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              (phase [Transform], provenance [Candidate]) and reaches [raise_pre_search] below with a
              real phase and a report — rather than escaping the whole call unreported, which would
              break the exactly-once contract for direct [tune] callers. *)
-          !on_candidate_attempt "baseline";
+          Seam.get on_candidate_attempt "baseline";
           base_capture := Some (opt, SC.canonicalize ~static_indices opt);
           [ opt ])
         ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
@@ -4509,9 +4539,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
        base lowering as the search's candidates. *)
-    let compile_spec_real provenance =
-      compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance
-        ctx comp bindings
+    let compile_spec_real ?label provenance =
+      compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+        ~provenance ctx comp bindings
     in
     let flat_schedule = function
       | Whole_saved saved -> saved
@@ -4915,7 +4945,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
            [timed_so_far] is the accounting value and not a restatement of it. *)
         if baseline_timed then
           Option.iter baseline ~f:(fun b ->
-              !on_candidate_timed b.routine.Context.name ~timed_so_far:!n_timed);
+              Seam.get on_candidate_timed b.routine.Context.name ~timed_so_far:!n_timed);
         let n_timings_contended = ref (if !baseline_contended then 1 else 0) in
         (* The subset of those windows refused because queued calibration measured no batch within
            its target (gh-ocannl-1098). Not a diagnosis (a stall on every probe reads the same), but
@@ -5215,7 +5245,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              seeds in the denominator would let [mma_timed] exceed [mma_candidates] on a
              multi-segment routine. *)
           let try_spec spec =
-            !on_candidate_attempt (spec_label spec);
+            Seam.get on_candidate_attempt (spec_label spec);
             let pruned_by_bound =
               bound_prunable spec
               && Option.value_map (Lazy.force floor_bound_ms) ~default:false ~f:(fun fb ->
@@ -5395,11 +5425,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                           (* A timing tie can evict the old best from the beam while the best
                              reference retains it. Replacing that last owner must release it. *)
                           Option.iter previous ~f:release_candidate);
-                        !on_candidate_callback `Timed ~candidate_ms:ms
+                        Seam.get on_candidate_callback `Timed ~candidate_ms:ms
                           ~incumbent_ms:(snd !best_so_far);
-                        !on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
+                        Seam.get on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
                         logf "%s: %.4f ms (digest %s)" (spec_label spec) ms (dshort c.digest_after);
-                        !on_candidate_callback `Calibration ~candidate_ms:ms
+                        Seam.get on_candidate_callback `Calibration ~candidate_ms:ms
                           ~incumbent_ms:(snd !best_so_far);
                         emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
                           ~label:(spec_label spec) ~digest:c.digest_after ~timing_result c.all_opts;
@@ -6172,12 +6202,20 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   | Fiss_saved segs -> Fiss (F_saved (segs, None))
                   | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
                 in
+                (* The rebuilt spec has lost what the winner was timed as: a round candidate's
+                   parent and move, a sketch's or preset's parameters -- its saved form alone would
+                   print as the bare [F_saved[N segs]] every round candidate of one parent shares.
+                   So the replay, and a failure it reports, carry the label the winner was timed
+                   under, which is also the report's [best_label]. *)
+                let label =
+                  match winner_label (Some best_c) with "" -> spec_label spec | l -> l
+                in
                 (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
                    schedule — so the whole beam goes before the compile that reproduces it
                    (gh-ocannl-550). *)
                 release_all_candidates ~keep:[] ();
                 progress_stage "winner_compile";
-                match compile_spec_real Outcome.Candidate spec with
+                match compile_spec_real ~label Outcome.Candidate spec with
                 | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
                     (* Completes the invariant rather than fixing an observed bug: the winner was
                        timed, so it was dispatchable when measured, and the replay is
@@ -6185,19 +6223,17 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                        routine, and none of them may return an unparallelized GPU routine
                        (gh-ocannl-532). The default compile is the same fallback a failed replay
                        takes. *)
-                    logf "winner replay produced an unparallelized routine, falling back: %s"
-                      (spec_label spec);
+                    logf "winner replay produced an unparallelized routine, falling back: %s" label;
                     (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
                        memory. Same one-liner as the rejected cache replay above; the pre-replay
                        sweep could not cover this context, which did not exist yet. *)
                     release_quietly ~what:"the rejected winner replay" c.cctx;
                     untuned_default_or_raise ()
                 | Ok c ->
-                    logf "winner replay ok: %s" (spec_label spec);
+                    logf "winner replay ok: %s" label;
                     (c.cctx, c.routine)
                 | Error (Outcome.Classified classified) ->
-                    logf "winner replay FAILED (%s), falling back to the default compile: %s"
-                      (spec_label spec)
+                    logf "winner replay FAILED (%s), falling back to the default compile: %s" label
                       (Outcome.detail_of_cause classified.cause);
                     untuned_default_or_raise ()
                 | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal

@@ -119,10 +119,9 @@ let () =
      running before any arm has reported. --- *)
   let both_arms_fail ship_arm =
     let reported = ref 0 in
-    (Autotune.on_candidate_attempt :=
-       fun _ -> failwith (Printf.sprintf "tsa arm %s" (if !reported = 0 then "A" else "B")));
-    Exn.protect
-      ~f:(fun () ->
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun _ -> failwith (Printf.sprintf "tsa arm %s" (if !reported = 0 then "A" else "B")))
+      (fun () ->
         match
           Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
             ~report:(fun _ -> Int.incr reported)
@@ -131,7 +130,6 @@ let () =
         | _ -> "no failure"
         | exception Failure msg -> msg
         | exception exn -> Exn.to_string exn)
-      ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
   in
   (* Discriminating, not merely nonzero: the two settings must name DIFFERENT arms, or the claim
      would hold for a [tune_placements] that always propagated arm A. *)

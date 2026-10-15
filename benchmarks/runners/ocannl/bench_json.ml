@@ -81,10 +81,10 @@ let string s =
     [{"measured_batch":{"admitted":12,"refused_contended":1},"singles_reach_target":{"admitted":40}}]
     — [{}] for an arm that timed nothing — so a sweep compares how calibration settled across boxes
     without scraping the stderr trace. Its calls sum to every timing call of the arm's search,
-    whereas [timings_contended] counts the refused windows of the baseline and candidates alike. It
-    is the arm's LAST field, and its only nested object: shell consumers read an arm's scalars with
-    a [[^}]*] scan from ["arm":"<name>"] ([benchmarks/gh834_cells.sh] reads [best_ms] that way),
-    which stops at the first closing brace.
+    whereas [timings_contended] counts the refused windows of the baseline and candidates alike. Its
+    position among the arm's fields carries no contract: consumers parse the line as JSON
+    ([benchmarks/gh834_cells.sh] reads its arms through [benchmarks/gh834_session.py], whose harness
+    [benchmarks/test-gh834-cells.sh] renders this module's own templates).
 
     [tensorized] and [tensorization] are the two halves of the honesty of a tensorized timing
     (gh-ocannl-626). [tensorized] says the crowned SCHEDULE carries a [Tensorize]; [tensorization]

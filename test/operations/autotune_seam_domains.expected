@@ -1,0 +1,18 @@
+a fresh domain starts with the default measurement seam, not its parent's: true
+the spawned domain's searching left this domain's seam in place: true
+main domain: every attempt event came from its own search: true
+main domain: every preflight event came from its own search: true
+main domain: every timed event came from its own search: true
+main domain: every measured event came from its own search: true
+main domain: every callback event came from its own search: true
+main domain: every timing-call event came from its own search: true
+main domain: the timed seam saw as many admissions as its search's report counts: true
+main domain: its search was ranked by its own measurement seam: true
+spawned domain: every attempt event came from its own search: true
+spawned domain: every preflight event came from its own search: true
+spawned domain: every timed event came from its own search: true
+spawned domain: every measured event came from its own search: true
+spawned domain: every callback event came from its own search: true
+spawned domain: every timing-call event came from its own search: true
+spawned domain: the timed seam saw as many admissions as its search's report counts: true
+spawned domain: its search was ranked by its own measurement seam: true

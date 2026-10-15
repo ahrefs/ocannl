@@ -430,24 +430,24 @@ let () =
      observed family preflight a completed window at admission or normal return. Count all promised
      MMA specs, including per-segment sketches, so even all-refused whole seeds keep exact scope. *)
   let partial_mma = ref None and injected_mma = ref false and mma_attempt = ref false in
-  let mma_windows = ref 0 and old_preflight = !Autotune.on_candidate_preflight in
-  let old_attempt = !Autotune.on_candidate_attempt and old_timed = !Autotune.on_candidate_timed in
-  (Autotune.on_candidate_attempt :=
-     fun label ->
-       mma_attempt :=
-         (String.is_prefix label ~prefix:"W_sketch[" || String.is_prefix label ~prefix:"F_sketch[")
-         && String.is_substring label ~substring:"mma-cpu");
-  (Autotune.on_candidate_preflight := fun _ -> if !mma_attempt then Int.incr mma_windows);
-  (Autotune.on_candidate_timed :=
-     fun _ ~timed_so_far:_ ->
-       if !mma_attempt then (
-         injected_mma := true;
-         raise Stdlib.Exit));
+  let mma_windows = ref 0 and old_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt
+  and old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
+  ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+    mma_attempt :=
+      (String.is_prefix label ~prefix:"W_sketch[" || String.is_prefix label ~prefix:"F_sketch[")
+      && String.is_substring label ~substring:"mma-cpu" );
+  ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun _ ->
+    if !mma_attempt then Int.incr mma_windows );
+  ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
+    if !mma_attempt then (
+      injected_mma := true;
+      raise Stdlib.Exit) );
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_attempt := old_attempt;
-      Autotune.on_candidate_preflight := old_preflight;
-      Autotune.on_candidate_timed := old_timed)
+      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+      Autotune.Seam.set Autotune.on_candidate_preflight old_preflight;
+      Autotune.Seam.set Autotune.on_candidate_timed old_timed)
     ~f:(fun () ->
       match
         Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
@@ -478,18 +478,17 @@ let () =
   (if not is_gpu then skipped ~backend:backend_name best_claim
    else
      let partial_best = ref None and injected_best = ref false and attempt = ref "" in
-     let old_attempt = !Autotune.on_candidate_attempt
-     and old_timed = !Autotune.on_candidate_timed in
-     (Autotune.on_candidate_attempt := fun label -> attempt := label);
-     (Autotune.on_candidate_timed :=
-        fun _ ~timed_so_far ->
-          if timed_so_far = 1 then (
-            injected_best := true;
-            raise Stdlib.Exit));
+     let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt
+     and old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
+     (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label -> attempt := label);
+     ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far ->
+       if timed_so_far = 1 then (
+         injected_best := true;
+         raise Stdlib.Exit) );
      Exn.protect
        ~finally:(fun () ->
-         Autotune.on_candidate_attempt := old_attempt;
-         Autotune.on_candidate_timed := old_timed)
+         Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+         Autotune.Seam.set Autotune.on_candidate_timed old_timed)
        ~f:(fun () ->
          match
            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
@@ -668,23 +667,21 @@ let () =
      where the normal leg's exact singles count establishes that both sites are viable; GPU
      transform-capability differences must not gate a bookkeeping control. *)
   let partial = ref None and injected = ref false and composite_attempt = ref false in
-  let old_attempt = !Autotune.on_candidate_attempt in
-  let old_timed = !Autotune.on_candidate_timed in
-  (Autotune.on_candidate_attempt :=
-     fun label ->
-       composite_attempt :=
-         String.is_prefix label ~prefix:"F_sketch["
-         && (not (String.is_prefix label ~prefix:"F_sketch[fine "))
-         && String.mem label ',');
-  (Autotune.on_candidate_timed :=
-     fun _ ~timed_so_far:_ ->
-       if !composite_attempt then (
-         injected := true;
-         raise Stdlib.Exit));
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+  let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
+  ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+    composite_attempt :=
+      String.is_prefix label ~prefix:"F_sketch["
+      && (not (String.is_prefix label ~prefix:"F_sketch[fine "))
+      && String.mem label ',' );
+  ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
+    if !composite_attempt then (
+      injected := true;
+      raise Stdlib.Exit) );
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_attempt := old_attempt;
-      Autotune.on_candidate_timed := old_timed)
+      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+      Autotune.Seam.set Autotune.on_candidate_timed old_timed)
     ~f:(fun () ->
       match
         Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""

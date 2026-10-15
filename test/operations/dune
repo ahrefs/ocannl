@@ -8019,6 +8019,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; The search's test seams (Autotune.Seam) are per domain: two searches in two domains, each domain
+; with its own value in every seam, and each observer sees only its own domain's search.
+
+(test
+ ; ocannl-backend: cc -- both searches run on an explicit Context.cpu (); the property is the seams', not a backend's.
+ (name autotune_seam_domains)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_seam_domains)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1199: the BENCH_TIMING_TRACE decision line, formatted by Bench_harness from
 ; each Autotune.timing_call record on an injected clock, agrees with the decision each call took.
 
@@ -8365,7 +8378,14 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
- (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
+  integer_power_cases))
 
 ; gh-ocannl-1198: fractional and dynamic half powers compile and execute on CUDA/HIP.
 
@@ -8401,7 +8421,13 @@
  (deps
   ocannl_config
   (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
- (libraries arrayjit.context arrayjit.verdict ctypes ctypes.foreign))
+ (libraries
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.verdict
+  integer_power_cases
+  ctypes
+  ctypes.foreign))
 
 ; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
 ; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
@@ -8543,9 +8569,10 @@
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
 
-; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter reaches
-; its label, and each beam-round candidate names its parent, segment and move. Scripted ranking,
-; pinned to cc.
+; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter and
+; every split-reduce site field reaches its label, each beam-round candidate names its parent,
+; segment and move, and a winner replayed into the caller's context keeps the label it was timed
+; under. Scripted ranking, pinned to cc; unix captures the replay's log line.
 
 (test
  (name autotune_labels)
@@ -8553,7 +8580,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules autotune_labels)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

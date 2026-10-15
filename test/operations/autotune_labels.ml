@@ -20,6 +20,14 @@
    only saved forms a search with no cache attempts -- all print apart, and that each fissioned one
    names a segment of its parent.
 
+   A split-reduce candidate's label printed a site's target name, extents and only the NUMBER of its
+   interchange swaps, so two sites on alike-named targets, or with equal-length chains, printed
+   alike. Part 1b reads [Autotune.sr_site]'s fields off its derived s-expression and claims that
+   changing any one of them changes the label. And the winner a [timing_ctx] search rebuilds in the
+   caller's context lost its round move, so its replay -- and a failure it reported -- printed as
+   the bare [F_saved[N segs]] its parent's every round candidate shares. Part 3 crowns a round
+   candidate and claims its replay is labeled exactly as it was timed.
+
    Pinned to cc ([Context.cpu]): the scripted ranking is backend-independent, and cc is always
    available. *)
 open Base
@@ -145,6 +153,98 @@ let () =
          List.map keys ~f:(fun key -> Autotune.fiss_sketch_label ~fine [ (key, lo) ])))
     ~equal:String.equal ~to_string:Fn.id
 
+(* --- Part 1b: every field of a split-reduce site reaches its label --- *)
+
+(* Two targets of one debug name -- two nodes labeled alike: the label must tell them apart by more
+   than the name. *)
+let labeled_x () = (TDSL.ndarray [| 1.; 2. |] ~label:[ "x" ] ~output_dims:[ 2 ] ()).Tensor.value
+let x1 = labeled_x ()
+let x2 = labeled_x ()
+let sym i = Ir.Indexing.Symbol i
+
+(* The two base points, differing in every field (claimed below). [sr_swaps] has equal length at
+   both, so the chain is claimed to reach the label pair by pair, not by its length. *)
+let site_lo : Autotune.sr_site =
+  {
+    sr_axis = sym 1;
+    sr_target = x1;
+    sr_red = 64;
+    sr_out = 16;
+    sr_cost = 1024;
+    sr_dynamic = false;
+    sr_swaps = [ (sym 2, sym 1) ];
+  }
+
+let site_hi : Autotune.sr_site =
+  {
+    sr_axis = sym 3;
+    sr_target = x2;
+    sr_red = 128;
+    sr_out = 32;
+    sr_cost = 4096;
+    sr_dynamic = true;
+    sr_swaps = [ (sym 4, sym 3) ];
+  }
+
+(* The fields as the type's derived s-expression lists them, in declaration order. *)
+let site_fields s =
+  match Autotune.sexp_of_sr_site s with
+  | Sexp.List l ->
+      List.map l ~f:(function
+        | Sexp.List [ Sexp.Atom name; v ] -> (name, v)
+        | s -> failwith ("unexpected record field " ^ Sexp.to_string s))
+  | s -> failwith ("unexpected record " ^ Sexp.to_string s)
+
+(* One field of [s] taken from [donor]. The type has no reader (a tensor node cannot be rebuilt from
+   its s-expression), so the update is written per field here -- and claimed below to name exactly
+   the derived field list, so a field added to the type fails this test until it gets an entry. *)
+let site_updates : (string * (donor:Autotune.sr_site -> Autotune.sr_site -> Autotune.sr_site)) list
+    =
+  [
+    ("sr_axis", fun ~donor s -> { s with sr_axis = donor.sr_axis });
+    ("sr_target", fun ~donor s -> { s with sr_target = donor.sr_target });
+    ("sr_red", fun ~donor s -> { s with sr_red = donor.sr_red });
+    ("sr_out", fun ~donor s -> { s with sr_out = donor.sr_out });
+    ("sr_cost", fun ~donor s -> { s with sr_cost = donor.sr_cost });
+    ("sr_dynamic", fun ~donor s -> { s with sr_dynamic = donor.sr_dynamic });
+    ("sr_swaps", fun ~donor s -> { s with sr_swaps = donor.sr_swaps });
+  ]
+
+let () =
+  let names = List.map (site_fields site_lo) ~f:fst in
+  p "the per-field updates name exactly the site type's fields, in order"
+    (List.equal String.equal names (List.map site_updates ~f:fst));
+  p_all "the two base sites differ in every field" (site_fields site_lo) ~f:(fun (name, v) ->
+      not (Sexp.equal v (List.Assoc.find_exn (site_fields site_hi) ~equal:String.equal name)));
+  p "the two base targets share a debug name"
+    (String.equal (Ir.Tnode.debug_name x1) (Ir.Tnode.debug_name x2));
+  p "the two base chains have equal length"
+    (List.length site_lo.sr_swaps = List.length site_hi.sr_swaps);
+  let label s = Autotune.split_sites_label [ (s, 32) ] in
+  let changes ~which ~base ~donor =
+    p_all (Printf.sprintf "changing any one field of the %s base site changes its label" which)
+      site_updates ~f:(fun (name, update) ->
+        let differs = not (String.equal (label (update ~donor base)) (label base)) in
+        if not differs then Stdio.eprintf "%s does not reach the label: %s\n" name (label base);
+        differs)
+  in
+  changes ~which:"first" ~base:site_lo ~donor:site_hi;
+  changes ~which:"second" ~base:site_hi ~donor:site_lo;
+  p "changing the block count changes the label"
+    (not
+       (String.equal
+          (Autotune.split_sites_label [ (site_lo, 32) ])
+          (Autotune.split_sites_label [ (site_lo, 16) ])));
+  p_none "no site label carries a comma"
+    (List.concat_map site_updates ~f:(fun (_, update) ->
+         [
+           label site_lo;
+           label site_hi;
+           label (update ~donor:site_hi site_lo);
+           label (update ~donor:site_lo site_hi);
+         ]))
+    ~f:(fun l -> String.mem (Option.value_exn (String.chop_prefix l ~prefix:"F_split[")) ',')
+
 (* --- Part 2: round candidates name their segment and move --- *)
 
 let n = 8
@@ -185,19 +285,19 @@ let segment_of label =
 
 let () =
   let attempts = ref [] and report = ref None in
-  let old_attempt = !Autotune.on_candidate_attempt
-  and old_measured = !Autotune.on_candidate_measured in
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt
+  and old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_attempt := old_attempt;
-      Autotune.on_candidate_measured := old_measured)
+      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+      Autotune.Seam.set Autotune.on_candidate_measured old_measured)
     ~f:(fun () ->
-      (Autotune.on_candidate_attempt := fun label -> attempts := label :: !attempts);
+      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+        attempts := label :: !attempts );
       (* The fissioned presets lead the seeds, so the beam holds a fissioned parent; everything
          else, this round's candidates included, is slower, so the search stops after one round. *)
-      (Autotune.on_candidate_measured :=
-         fun ~label ~digest:_ _ms ->
-           if String.is_prefix label ~prefix:"F_preset[" then 1. else 1000.);
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest:_ _ms ->
+        if String.is_prefix label ~prefix:"F_preset[" then 1. else 1000. );
       let ctx, _routine =
         Autotune.with_uncontended_test_windows (fun () ->
             Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
@@ -221,3 +321,65 @@ let () =
       | None -> false);
   p_pairwise_distinct "the round's candidates all print apart" rounds ~equal:String.equal
     ~to_string:Fn.id
+
+(* --- Part 3: a winner replay keeps the label its winner was timed under --- *)
+
+(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote; the
+   captured text is echoed back once stderr is restored, so nothing the run wrote is hidden. *)
+let with_stderr_captured f =
+  let file = Stdlib.Filename.temp_file "autotune_labels" ".stderr" in
+  Exn.protect
+    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
+    ~f:(fun () ->
+      Stdio.Out_channel.flush Stdio.stderr;
+      let saved = Unix.dup Unix.stderr in
+      let result =
+        Exn.protect
+          ~finally:(fun () ->
+            Stdio.Out_channel.flush Stdio.stderr;
+            Unix.dup2 saved Unix.stderr;
+            Unix.close saved)
+          ~f:(fun () ->
+            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
+            f ())
+      in
+      let text = Stdio.In_channel.read_all file in
+      Stdio.eprintf "%s%!" text;
+      (result, String.split_lines text))
+
+(* With a [timing_ctx] the search times against a scratch lineage and the winner is rebuilt from its
+   saved schedule in the caller's context. That rebuilt spec carries no round move, so the replay
+   used to print -- and a failed one to be reported -- as the bare [F_saved[N segs]] every round
+   candidate of that parent shares. The ranking is scripted so a round candidate wins (the fissioned
+   presets lead the seeds, the round's extensions beat them), and the replay's log line is claimed
+   to name exactly the crowned label. *)
+let () =
+  let report = ref None in
+  let measured ~label ~digest:_ _ms =
+    if String.is_prefix label ~prefix:"F_preset[" then 1.
+    else if is_saved label && String.is_substring label ~substring:" from " then 0.5
+    else 1000.
+  in
+  let (), lines =
+    with_stderr_captured (fun () ->
+        Autotune.Seam.with_value Autotune.on_candidate_measured measured (fun () ->
+            let ctx = Context.cpu () in
+            let ctx, _routine =
+              Autotune.with_uncontended_test_windows (fun () ->
+                  Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:true
+                    ~progress:false ~timing_ctx:ctx
+                    ~report:(fun r -> report := Some r)
+                    ctx (chain ()) Ir.Indexing.Empty)
+            in
+            Context.release ctx))
+  in
+  let best = Option.value_map !report ~default:"" ~f:(fun r -> r.Autotune.best_label) in
+  Stdio.eprintf "crowned (not part of the golden): %s\n" best;
+  p "the crowned candidate is a round candidate, named by its parent and move"
+    (is_saved best && String.is_substring best ~substring:" from ");
+  let replays =
+    List.filter_map lines ~f:(String.chop_prefix ~prefix:"autotune: winner replay ok: ")
+  in
+  p "the winner replayed once" (List.length replays = 1);
+  p_all "the winner replay is labeled as its winner was timed" replays ~f:(String.equal best)

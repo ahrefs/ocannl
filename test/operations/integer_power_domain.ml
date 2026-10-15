@@ -20,8 +20,8 @@ let bitwise a b =
   if Float.is_nan b then Float.is_nan a
   else Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
-let bases = [ -2.; -0.5; -1.; 0.; -0.; Float.infinity; Float.neg_infinity; Float.nan ]
-let exponents = [ 0; 1; 2; 3; -1; -2; -3; 8; -8; 31; -31 ]
+let bases = Integer_power_cases.bases
+let exponents = Integer_power_cases.exponents
 
 (* Independent, linear materialized-multiplication oracle: dyadic inputs keep the finite answers
    exact, so this check asks about domain and exceptional values without assuming pow rounding. *)
@@ -213,18 +213,10 @@ let () =
   end
 
 (* Exponents outside every machine int range still retain parity and sign, without narrowing a
-   host-double exponent to float. All powers of +/-1 are exact even at these magnitudes. *)
+   host-double exponent to float. *)
 let () =
   Verdict.case "large exponents" (fun () ->
-      let cases =
-        [
-          (-1., 0x1p63, 1.);
-          (-1., -0x1p63, 1.);
-          (-1., 0x1.fffffffffffffp52, -1.);
-          (-1., 0x1.fffffffffffffp1023, 1.);
-          (-1., -0x1.fffffffffffffp1023, 1.);
-        ]
-      in
+      let cases = Integer_power_cases.large_exponents in
       let len = List.length cases in
       let node = Ll_test.node_factory ~first_id:18200 ~dims:[| len |] () in
       let input = node "ipow_large_input" and output = node "ipow_large_output" in

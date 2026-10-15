@@ -358,24 +358,23 @@ let () =
   List.iter [ false; true ] ~f:(fun composite ->
       let partial = ref None and injected = ref false and selected = ref false in
       let split_attempt = ref false and windows = ref 0 in
-      let old_preflight = !Autotune.on_candidate_preflight in
-      let old_attempt = !Autotune.on_candidate_attempt in
-      let old_timed = !Autotune.on_candidate_timed in
-      (Autotune.on_candidate_attempt :=
-         fun label ->
-           split_attempt := String.is_prefix label ~prefix:"F_split[";
-           selected := !split_attempt && Bool.equal composite (String.mem label ','));
-      (Autotune.on_candidate_preflight := fun _ -> if !split_attempt then Int.incr windows);
-      (Autotune.on_candidate_timed :=
-         fun _ ~timed_so_far:_ ->
-           if !selected then (
-             injected := true;
-             raise Stdlib.Exit));
+      let old_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
+      let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+      let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
+      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+        split_attempt := String.is_prefix label ~prefix:"F_split[";
+        selected := !split_attempt && Bool.equal composite (String.mem label ',') );
+      ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun _ ->
+        if !split_attempt then Int.incr windows );
+      ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
+        if !selected then (
+          injected := true;
+          raise Stdlib.Exit) );
       Exn.protect
         ~finally:(fun () ->
-          Autotune.on_candidate_attempt := old_attempt;
-          Autotune.on_candidate_preflight := old_preflight;
-          Autotune.on_candidate_timed := old_timed)
+          Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+          Autotune.Seam.set Autotune.on_candidate_preflight old_preflight;
+          Autotune.Seam.set Autotune.on_candidate_timed old_timed)
         ~f:(fun () ->
           match
             Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""

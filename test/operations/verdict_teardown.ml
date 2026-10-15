@@ -30,6 +30,14 @@ let has text ~substring = String.is_substring text ~substring
 let escaped_after_fail = "escaped after a failed check"
 let formatted = "printed through Format, never flushed by the test"
 
+(* The teardown line of a child whose one failed check is ["the claim"]. *)
+let one_failed = Verdict.teardown_line [ "the claim" ] ^ "\n"
+
+(* A label longer than the teardown line keeps, with a three-byte character straddling the cut: the
+   cut backs off to the character's start rather than splitting it. *)
+let long_label = String.make 58 'x' ^ "\u{2014}and the rest of a very long label"
+let last_line text = List.last (String.split_lines text)
+
 (* Byte-for-byte comparisons below, so both streams are binary (Windows would rewrite "\n"): the
    children's stderr is matched line-exactly too. *)
 let () =
@@ -42,9 +50,7 @@ let () =
       let fail_then_end = run_child "fail_then_end" in
       about "fail_then_end" "a failed check ends a run that reaches its end with status 1"
         fail_then_end ~holds:(fun status _ err ->
-          exited 1 status
-          && has err ~substring:"FAILED: 1 check did not hold."
-          && not (has err ~substring:"Fatal error"));
+          exited 1 status && has err ~substring:one_failed && not (has err ~substring:"Fatal error"));
       about "fail_then_end" "the handlers registered before Verdict's still run at a failing end"
         fail_then_end ~holds:(fun _ out _ -> has out ~substring:formatted);
       let fail_then_raise = run_child "fail_then_raise" in
@@ -54,7 +60,7 @@ let () =
       about "fail_then_raise" "a run an exception ended says it stopped early" fail_then_raise
         ~holds:(fun _ _ err -> has err ~substring:"STOPPED EARLY");
       about "fail_then_raise" "a run an exception ended still counts its failed checks"
-        fail_then_raise ~holds:(fun _ _ err -> has err ~substring:"FAILED: 1 check did not hold.");
+        fail_then_raise ~holds:(fun _ _ err -> has err ~substring:one_failed);
       about "fail_then_raise" "a run an exception ended exits with the runtime's status 2"
         fail_then_raise ~holds:(fun status _ _ -> exited 2 status);
       about "fail_then_raise"
@@ -71,8 +77,7 @@ let () =
           && not (has err ~substring:"STOPPED EARLY"));
       about "fail_then_exit0" "an explicit exit 0 after a failed check exits 1"
         (run_child "fail_then_exit0") ~holds:(fun status _ err ->
-          exited 1 status
-          && has err ~substring:"FAILED: 1 check did not hold."
+          exited 1 status && has err ~substring:one_failed
           && not (has err ~substring:"STOPPED EARLY"));
       about "exit_swallowed" "a catch-all that swallows the exit still ends the run with status 1"
         (run_child "exit_swallowed") ~holds:(fun status _ _ -> exited 1 status);
@@ -103,6 +108,24 @@ let () =
       about "fail_multiline" "every line of a multi-line failure carries the FAIL prefix"
         (run_child "fail_multiline") ~holds:(fun status out err ->
           exited 1 status && String.equal out multi_line_fail && has err ~substring:multi_line_fail);
+      (* What a reader of a truncated log is left with (dune keeps a long stderr's head and tail):
+         the last line names the claims that failed, not only how many. *)
+      about "fail_three" "a run with three failed checks names all three on its last stderr line"
+        (run_child "fail_three") ~holds:(fun status _ err ->
+          exited 1 status
+          && Option.equal String.equal (last_line err)
+               (Some
+                  {|FAILED: 3 checks did not hold: "first claim", "second claim", "third claim".|}));
+      about "fail_many"
+        "a run with more failed checks than the line shows names the first ones, cut and on one \
+         line, and counts the rest"
+        (run_child "fail_many") ~holds:(fun status _ err ->
+          exited 1 status
+          && Option.equal String.equal (last_line err)
+               (Some
+                  (Printf.sprintf
+                     {|FAILED: 5 checks did not hold: "%s...", "second claim", "third claim " and 2 more.|}
+                     (String.make 58 'x'))));
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
@@ -135,6 +158,18 @@ let () =
           case "exits" (fun () -> Stdlib.exit 0);
           p "after the exit" true
       | "fail_multiline" -> fail "the first line\n  expected a\n  got      b\n"
+      | "fail_three" ->
+          p "first claim" false;
+          p "a passing claim" true;
+          fail "second claim\n  expected a\n  got      b";
+          pass_fail "third claim" false
+      | "fail_many" ->
+          p long_label false;
+          p "second claim" false;
+          (* A label carrying line breaks: the teardown names it on its own one line. *)
+          claim "third\nclaim\r" false;
+          p "fourth claim" false;
+          p "fifth claim" false
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))

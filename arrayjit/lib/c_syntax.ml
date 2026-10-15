@@ -23,6 +23,25 @@ let warp_shuffle_stages ~width =
   let rec halvings mask = if mask = 0 then [] else mask :: halvings (mask / 2) in
   halvings (width / 2)
 
+(** The exponent operands of the [ocannl_powi_*] helpers ([Builtins_cc.integer_power_builtins]):
+    [|exponent|] as two unsigned 32-bit words [(lo, hi)] times [2^shift], and whether the exponent
+    is negative. Binary decomposition avoids machine-int overflow and narrowing the exponent; an
+    integral float of magnitude at least [2^53] keeps its 53-bit mantissa and moves the rest into
+    [shift]. The emitter writes exactly these, and a test that calls a helper on the host takes them
+    from here. *)
+let integer_power_operands exponent =
+  let magnitude = Float.abs exponent in
+  let magnitude, shift =
+    if Float.(magnitude < 0x1p53) then (Int64.of_float magnitude, 0)
+    else
+      let mantissa, exponent = Float.frexp magnitude in
+      (Int64.of_float Float.(mantissa * 0x1p53), exponent - 53)
+  in
+  ( Stdlib.Int64.logand magnitude 0xffffffffL,
+    Stdlib.Int64.shift_right_logical magnitude 32,
+    shift,
+    Float.(exponent < 0.) )
+
 (* gh-ocannl-344: integer width of the Metal pooled slot table (pool_index, byte_offset per node).
    With [large_models] the per-pool 4 GB cap is lifted (see {!Backends.plan_pool_segments}), so a
    byte offset can exceed [UINT32_MAX] and the slot table -- together with the MSL type the shader
@@ -1943,6 +1962,16 @@ let routine_name_in_diagnostics ~routine_names report =
   List.find routine_names ~f:(fun name ->
       (not (String.is_empty name)) && (quotes_declaration name || error_line_quotes name))
 
+(** The opening of the sentence a backend's compile-failure report blames OCANNL's codegen with.
+    {!codegen_bug_claim} is the only producer, and {!attribute_routine_name_failure} the only
+    reader: a report it hands to the user as the routine NAME's failure must not go on to call
+    itself "a bug in OCANNL". *)
+let codegen_bug_claim_prefix = "This is a bug in OCANNL. Please file an issue with "
+
+(** [codegen_bug_claim ~artifact] is that sentence, asking for [artifact] (the generated source the
+    issue should carry). One line, so {!attribute_routine_name_failure} removes exactly it. *)
+let codegen_bug_claim ~artifact = codegen_bug_claim_prefix ^ artifact
+
 (** [attribute_routine_name_failure ~routine_names exn backtrace] re-raises a failed compile's
     exception: as a [Utils.User_error] naming the routine when {!routine_name_in_diagnostics}
     attributes the failure to a routine's name, unchanged otherwise. [routine_names] pairs each
@@ -1950,7 +1979,10 @@ let routine_name_in_diagnostics ~routine_names report =
     name is shared by every candidate of a search, so the failure would repeat identically, and
     nothing about it is OCANNL's codegen. [?report] overrides the report read off [exn] for a
     backend whose exception embeds more than the compiler's output -- Metal's carries the whole
-    source, in which every routine's declaration appears. *)
+    source, in which every routine's declaration appears. The attributed message quotes the report
+    less every line opening with {!codegen_bug_claim_prefix}, keeping the rest -- the compiler's own
+    output in particular -- verbatim: cc's report carries that claim for the unattributed case, and
+    here it would contradict the message quoting it (the unattributed re-raise keeps it). *)
 let attribute_routine_name_failure ?report ~routine_names exn backtrace =
   let report =
     match (report, exn) with
@@ -1968,6 +2000,11 @@ let attribute_routine_name_failure ?report ~routine_names exn backtrace =
       let given =
         List.Assoc.find routine_names ~equal:String.equal emitted |> Option.value ~default:emitted
       in
+      let quoted =
+        String.split report ~on:'\n'
+        |> List.filter ~f:(fun line -> not (String.is_prefix line ~prefix:codegen_bug_claim_prefix))
+        |> String.concat ~sep:"\n"
+      in
       let spelled =
         if String.equal given emitted then Printf.sprintf "%S" given
         else Printf.sprintf "%S (emitted as %S)" given emitted
@@ -1982,7 +2019,7 @@ let attribute_routine_name_failure ?report ~routine_names exn backtrace =
                label it was derived from). If a fresh name fails the same way, this is a bug in \
                OCANNL. The compiler's report follows.\n\
                %s"
-              spelled report))
+              spelled quoted))
         backtrace
 
 (** {!C_syntax_config.full_printf_support} for a dialect whose [printf] does support [%g] — every
@@ -2358,16 +2395,7 @@ module C_syntax (B : C_syntax_config) = struct
     let pow_prec = match prec with Ops.Double_prec _ -> Ops.double | _ -> Ops.single in
     let prefix, suffix = B.convert_precision ~from:prec ~to_:pow_prec in
     let base_doc = string prefix ^^ base_doc ^^ string suffix in
-    (* Binary decomposition avoids machine-int overflow and exponent narrowing. *)
-    let magnitude = Float.abs exponent in
-    let magnitude, shift =
-      if Float.(magnitude < 0x1p53) then (Int64.of_float magnitude, 0)
-      else
-        let mantissa, exponent = Float.frexp magnitude in
-        (Int64.of_float Float.(mantissa * 0x1p53), exponent - 53)
-    in
-    let lo = Stdlib.Int64.logand magnitude 0xffffffffL in
-    let hi = Stdlib.Int64.shift_right_logical magnitude 32 in
+    let lo, hi, shift, negative = integer_power_operands exponent in
     let name =
       if Ops.equal_prec pow_prec Ops.double then "ocannl_powi_f64" else "ocannl_powi_f32"
     in
@@ -2375,9 +2403,8 @@ module C_syntax (B : C_syntax_config) = struct
       string name
       ^^ parens
            (base_doc
-           ^^ string
-                (Printf.sprintf ", %LuU, %LuU, %d, %d" lo hi shift
-                   (if Float.(exponent < 0.) then 1 else 0)))
+           ^^ string (Printf.sprintf ", %LuU, %LuU, %d, %d" lo hi shift (if negative then 1 else 0))
+           )
     in
     let prefix, suffix = B.convert_precision ~from:pow_prec ~to_:prec in
     group (string prefix ^^ call ^^ string suffix)
@@ -4236,18 +4263,14 @@ module C_syntax (B : C_syntax_config) = struct
              still renders it as the same [Invalid_argument] carrying this message. Since
              gh-ocannl-1231 [Schedule.op_legality] refuses the moves that produce such a read
              ([Schedule.pipeline_violation] states this fact and the rotor-Serial one below over the
-             applied IR), so this is the backstop for schedules that bypass the oracle. *)
+             applied IR), so this is the backstop for schedules that bypass the oracle — and the
+             decline is built from the oracle's own typed reason, so the two cannot drift apart in
+             wording. *)
           raise
             (Schedule_outcome.Cause_at
                ( Schedule_outcome.Backend_codegen,
-                 Schedule_outcome.Unsupported
-                   {
-                     feature = "pipelined tile read outside its rotor loop";
-                     detail =
-                       "C_syntax: read of pipelined tile " ^ Tn.debug_name tn
-                       ^ " outside its rotor loop (the schedule only remaps reads within the \
-                          staging scope)";
-                   } ))
+                 Schedule.pipeline_violation_cause ~site:"C_syntax"
+                   (Schedule.Read_outside_rotor { tile = tn; rotor = pt_rotor }) ))
 
   (* Recognize the exact scalar fallback region synthesized by
      [Schedule.contract_tensorized_accumulator]:
@@ -7769,7 +7792,8 @@ module C_syntax (B : C_syntax_config) = struct
        selection at copy 0 ([serial_loop_stack] only tracks serial loops). Typed for the same reason
        as the read-position check in [pp_pipelined_rotation]: both say "this renderer cannot express
        that pipelined tile", and a candidate composing its way into one is a decline, not a fatal
-       that ends the search around it. *)
+       that ends the search around it. Like that one, the decline is [Schedule.pipeline_violation]'s
+       own typed reason. *)
     (if not (Map.is_empty pipelined) then
        let check_rotor index axis =
          Map.iteri pipelined ~f:(fun ~key:tn ~data:{ Low_level.pt_rotor; _ } ->
@@ -7780,13 +7804,8 @@ module C_syntax (B : C_syntax_config) = struct
                    raise
                      (Schedule_outcome.Cause_at
                         ( Schedule_outcome.Backend_codegen,
-                          Schedule_outcome.Unsupported
-                            {
-                              feature = "pipelined tile whose rotor loop is not Serial";
-                              detail =
-                                "C_syntax.compile_proc: the rotor loop of pipelined tile "
-                                ^ Tn.debug_name tn ^ " is no longer Serial";
-                            } )))
+                          Schedule.pipeline_violation_cause ~site:"C_syntax.compile_proc"
+                            (Schedule.Rotor_not_serial { tile = tn; rotor = pt_rotor; axis }) )))
        in
        let rec scan (llc : Low_level.t) =
          match llc with

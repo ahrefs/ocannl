@@ -24,7 +24,11 @@
 
 open Base
 
-let failures = ref 0
+(* The names of the checks that failed, most recent first: the label of a claim, or the first line
+   of a {!fail} message. Their number is the run's failure count, so the teardown line can name them
+   without a second counter to drift from it. *)
+let failed_names = ref []
+let record_failure name = failed_names := name :: !failed_names
 
 (* What the teardown at the end of this file raises out of [at_exit] once a check has failed; see
    there. Declared up here because {!case} must let it through. *)
@@ -58,7 +62,7 @@ let fail_lines msg =
     nonzero exit). [msg] should read as the thing that is wrong, without a "FAIL" prefix of its own;
     it may span lines, each of which is printed with the prefix. *)
 let fail msg =
-  Int.incr failures;
+  record_failure (match String.lsplit2 msg ~on:'\n' with Some (first, _) -> first | None -> msg);
   let text = fail_lines msg in
   Stdio.print_string text;
   Stdio.eprintf "%s" text
@@ -68,7 +72,7 @@ let fail msg =
 let claim name b =
   if b then record_pass name
   else (
-    Int.incr failures;
+    record_failure name;
     Stdio.eprintf "FAIL: %s: false\n" name)
 
 (** [p name b] prints the named boolean fact [name: b] and fails the run when [b] is false. Booleans
@@ -137,7 +141,7 @@ let claimf fmt = Printf.ksprintf (fun label b -> claim label b) fmt
    mean anything, so the line says so where a reader will find it rather than printing the bare
    [false] a satisfied-looking claim shares. *)
 let short_fail name detail =
-  Int.incr failures;
+  record_failure name;
   Stdio.printf "%s (%s): false\n%!" name detail;
   Stdio.eprintf "FAIL: %s (%s): false\n" name detail
 
@@ -491,7 +495,7 @@ let pass_fail ?detail label b =
     Stdio.printf "%s: PASS\n" label)
   else
     let detail = match detail with None -> "" | Some f -> " (" ^ f () ^ ")" in
-    Int.incr failures;
+    record_failure label;
     Stdio.printf "%s: FAIL%s\n" label detail;
     Stdio.eprintf "FAIL: %s%s\n" label detail
 
@@ -548,7 +552,7 @@ let case label f =
 
 (** Whether any check has failed so far. For a test that wants to say something extra about a bad
     run; the exit status is taken care of without it. *)
-let any_failed () = !failures > 0
+let any_failed () = not (List.is_empty !failed_names)
 
 (** Ends a NEGATIVE-CONTROL run, one whose failures are the output its golden pins: exits 1 when
     something failed and 0 when nothing did, without the teardown's ["FAILED: n checks …"] line.
@@ -557,8 +561,8 @@ let any_failed () = !failures > 0
     rule running such a control accepts exit 1 alone, so a control that stopped refusing still
     fails. *)
 let exit_negative_control () =
-  let failed = !failures > 0 in
-  failures := 0;
+  let failed = any_failed () in
+  failed_names := [];
   Stdio.Out_channel.flush Stdio.stdout;
   Stdio.Out_channel.flush Stdio.stderr;
   Stdlib.exit (if failed then 1 else 0)
@@ -615,20 +619,51 @@ end
 let settling = ref false
 
 let rec teardown () =
-  if !failures > 0 && not !settling then (
+  if any_failed () && not !settling then (
     Stdio.Out_channel.flush Stdio.stdout;
     Stdlib.at_exit teardown;
     raise Checks_failed)
 
-(** The teardown line for [n] failed checks, without its newline. Exposed so that
-    [census_total_ratchet], which refuses this line in scan goldens, builds its control from the
-    text the teardown really writes. *)
-let teardown_line n =
-  Printf.sprintf "FAILED: %d check%s did not hold." n (if n = 1 then "" else "s")
+(* How many failed checks the teardown line names, and the most of each name it keeps, in bytes. *)
+let teardown_names_shown = 3
+let teardown_name_bytes = 60
+
+(* [name] on one physical line -- every control character a space, since a label can carry a newline
+   ([test_random_histograms] passes one) and the teardown must stay the LAST line, the one
+   [tools/mutation-run.sh] and a truncated log read -- cut to {!teardown_name_bytes}, at a character
+   boundary of its UTF-8 so a cut never splits one, and marked as cut. *)
+let shorten name =
+  let name =
+    String.map name ~f:(fun c -> if Char.to_int c < 0x20 || Char.equal c '\x7f' then ' ' else c)
+  in
+  if String.length name <= teardown_name_bytes then name
+  else
+    let rec boundary i =
+      if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then boundary (i - 1) else i
+    in
+    String.prefix name (boundary teardown_name_bytes) ^ "..."
+
+(** The teardown line for the failed checks [names], in the order they failed, without its newline:
+    [FAILED: <n> check(s) did not hold: "<first>", "<second>", "<third>" and <k> more.] It names the
+    first {!teardown_names_shown} of them, each cut to {!teardown_name_bytes} bytes, so the line
+    stays short however many failed and however long their labels are. The names are on this line,
+    not only on the [FAIL:] lines above it, because dune cuts a long stderr down to its head and
+    tail ([...TRUNCATED BY DUNE...]), and then this line is the one that survives.
+
+    Exposed so that [census_total_ratchet], which refuses this line in scan goldens, and
+    [verdict_teardown] build their controls from the text the teardown really writes. *)
+let teardown_line names =
+  let n = List.length names in
+  let shown, rest = List.split_n names teardown_names_shown in
+  let quoted =
+    String.concat ~sep:", " (List.map shown ~f:(fun name -> "\"" ^ shorten name ^ "\""))
+  in
+  let more = match List.length rest with 0 -> "" | k -> Printf.sprintf " and %d more" k in
+  Printf.sprintf "FAILED: %d check%s did not hold: %s%s." n (if n = 1 then "" else "s") quoted more
 
 let report_failures () =
   Stdio.Out_channel.flush Stdio.stdout;
-  Stdio.eprintf "%s\n" (teardown_line !failures);
+  Stdio.eprintf "%s\n" (teardown_line (List.rev !failed_names));
   Stdio.Out_channel.flush Stdio.stderr
 
 let () =
@@ -642,7 +677,7 @@ let () =
                 "STOPPED EARLY: an exit inside case %S ended the run, so no case after it ran\n%!"
                 label);
           Stdlib.exit 1
-      | _ when !failures > 0 ->
+      | _ when any_failed () ->
           settling := true;
           report_failures ();
           Stdio.eprintf

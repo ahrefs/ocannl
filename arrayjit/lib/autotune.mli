@@ -570,8 +570,17 @@ type sr_site = {
           before the [Split_reduce], each hoisting an accumulation-cell loop outside [sr_axis].
           Empty when the site is splittable as lowered. *)
 }
+[@@deriving sexp_of]
 (** A reduction-dominated accumulation site eligible for {!Ir.Schedule.constructor-Split_reduce}
     seeding (gh-ocannl-484 task 3); see the implementation's field docs. Exposed for tests. *)
+
+val split_sites_label : (sr_site * int) list -> string
+(** The label of a split-reduce candidate ([F_split[...]]) over its [(site, num_blocks)] entries, in
+    the [autotune_log] lines and {!report.best_label}: each entry renders every field of its site —
+    the target by debug name and, where that differs, its id ([name#id]), the split axis, [red],
+    [out], [cost], the block count, [dyn], and the interchange chain pair by pair ([swap:o/i+o/i]) —
+    so two sites that differ in any one field never share a label (gh-ocannl-1230). Entries are
+    separated by [','], which no entry contains. *)
 
 val split_reduce_sites :
   ?static_indices:Ir.Indexing.static_symbol list -> Ir.Low_level.optimized -> sr_site list
@@ -2010,7 +2019,29 @@ val calibrate_and_time_with_retry_observer :
 val retry_contended_window_for_backend : string -> bool
 (** The backend whose contended queued windows get one immediate retry: Metal only. *)
 
-val on_candidate_attempt : (string -> unit) ref
+module Seam : sig
+  type 'a t
+  (** A test seam of the search: one value PER DOMAIN (the treatment the timing-call observers got,
+      gh-ocannl-1263). A domain's searches call the value set in that domain; a search running in
+      another domain neither reaches nor disturbs it, so concurrent searches in different domains
+      can each be observed and injected into on their own. A newly spawned domain starts with the
+      seam's default. Unlike {!install_timing_call_observer}, setting a seam REPLACES its value
+      rather than chaining onto it: a caller that wants the enclosing value too reads it with {!get}
+      first and calls it. *)
+
+  val get : 'a t -> 'a
+  (** The calling domain's current value. *)
+
+  val set : 'a t -> 'a -> unit
+  (** Replaces the calling domain's value for the rest of the domain's life (or until set again);
+      what a long-lived harness installs. *)
+
+  val with_value : 'a t -> 'a -> (unit -> 'b) -> 'b
+  (** [with_value seam v body] runs [body] with the calling domain's value replaced by [v],
+      restoring the previous value on return or exception, so scopes nest. *)
+end
+
+val on_candidate_attempt : (string -> unit) Seam.t
 (** Fault-injection seam for the containment tests (gh-ocannl-550), called with each candidate's
     label just before its compile — including the baseline's, which is a candidate (gh-ocannl-533);
     that one is called inside the base compile's transform, so a fault injected there is classified
@@ -2021,7 +2052,7 @@ val on_candidate_attempt : (string -> unit) ref
     must survive without losing the other arm's winner. Not a production seam: candidate failures
     that a backend {e can} attribute are contained without it (see [declines]). *)
 
-val on_candidate_preflight : (string -> unit) ref
+val on_candidate_preflight : (string -> unit) Seam.t
 (** Fault-injection seam for the pre-dispatch containment tests (gh-ocannl-564), called with a
     routine's name inside the {!Ir.Schedule_outcome.Preflight} region of its timing run, just before
     {!Context.check_launch_bindings}. Raising from it classifies exactly as a real per-candidate
@@ -2036,7 +2067,7 @@ val on_candidate_preflight : (string -> unit) ref
     their exceptions here exercises the containment machinery with a realistic payload but does not
     mirror where a real one is now raised. Default a no-op; no configuration selects it. *)
 
-val on_candidate_timed : (string -> timed_so_far:int -> unit) ref
+val on_candidate_timed : (string -> timed_so_far:int -> unit) Seam.t
 (** Observation seam for the containment tests (gh-ocannl-898), called with a routine's name each
     time a timing run's window yields an admitted measurement — the moment the search's
     [candidates_timed] accounting grows, for the dispatched baseline and candidates alike.
@@ -2172,12 +2203,12 @@ val tune :
     [test/operations/autotune_candidate_release]. *)
 
 val on_candidate_callback :
-  ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) ref
+  ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) Seam.t
 (** Default-no-op fault-injection seam immediately before each post-admission callback. The times
     are the admitted measurements the search ranks, after {!on_candidate_measured}; a strictly
     larger [candidate_ms] selects a nonwinner while an already measured incumbent exists. *)
 
-val on_candidate_measured : (label:string -> digest:string -> float -> float) ref
+val on_candidate_measured : (label:string -> digest:string -> float -> float) Seam.t
 (** Measurement seam (gh-ocannl-1027), called once per ADMITTED timing window — the dispatched
     baseline's (label ["baseline"]) and each candidate's — with the candidate's label, its schedule
     digest and the admitted time in milliseconds. The returned time replaces the reading before the
@@ -2198,7 +2229,8 @@ val with_uncontended_test_windows : (unit -> 'a) -> 'a
     scripted readings and unresolved queued batching still refuse admission. Calibration and
     dispatch remain real. Restores the previous mode on return or exception, including for nested
     scopes. No configuration selects it; normal searches retain production contention refusal. Like
-    the other process-wide test hooks, scopes must not run concurrently. *)
+    the {!Seam} test hooks it is per domain: it covers the searches the calling domain runs, and
+    neither reaches nor disturbs a search in another domain. *)
 
 val apply_measurement_seam : label:string -> digest:string -> timing_result -> timing_result
 (** Candidate-window admission and scripted measurement, shared by real searches and deterministic
