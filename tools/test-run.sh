@@ -2485,6 +2485,8 @@ case $sub in
     # that finds one, or a test the cap ends, ends the set (repeat_bounded below).
     resolve_dir=$run_dir/resolution
     mkdir "$resolve_dir" || die "cannot create $resolve_dir"
+    # Named before the phase: reap_repeat_group's refusals name it (Codex review round 2 on PR #1172).
+    repeat_build=$run_dir/build
     OCANNL_TOOL_TESTRUN_BG=0 OCANNL_TOOL_TESTRUN_RD=$resolve_dir \
       perl -e "$supervisor_perl" -- "$cap" env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" \
       "${BASH:-bash}" "$PWD/tools/test-run.sh" _resolve repeat "$cap" "$test_cap" "$DUNE" "$@" \
@@ -2517,7 +2519,6 @@ case $sub in
         die "cannot read the repeat's bounds from $run_dir/bounds"
     fi
     repeat_bounded=
-    repeat_build=$run_dir/build
     i=1
     while [ "$i" -le "$repeats" ] && [ -z "$repeat_cancelled" ]; do
       iter=$run_dir/iteration-$i

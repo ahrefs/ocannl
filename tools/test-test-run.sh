@@ -5569,6 +5569,13 @@ cat >"$probe_fake" <<'FAKE'
 #!/usr/bin/env bash
 b=${1#--ocannl_backend=}
 printf '%s %s\n' "$PWD" "$*" >>"$FAKE_PROBE_CALLS"
+# A stand-in that forks its query rather than exec'ing it leaves the query behind its own exit
+# unless the probe's bound reaches the whole tree (FAKE_PROBE_FORK; gh-ocannl-1252).
+if [ -n "${FAKE_PROBE_FORK:-}" ]; then
+  case " ${FAKE_PROBE_HANG:-} " in
+    *" $b "*) sleep 30 & printf '%s\n' "$!" >"$FAKE_PROBE_CALLS.child"; wait; exit 0 ;;
+  esac
+fi
 case " ${FAKE_PROBE_HANG:-} " in *" $b "*) printf '%s\n' "$$" >"$FAKE_PROBE_CALLS.pid"; exec sleep 30 ;; esac
 case " ${FAKE_PROBE_ABSENT:-} " in *" $b "*) echo "no $b here" >&2; exit 2 ;; esac
 echo "static.device[0].device_name = fake $b"
@@ -5612,6 +5619,21 @@ if [ -z "$probe_detail" ]; then
     '' | Z) ;;
     *) probe_detail="hang: the query (pid $probe_pid) survived its bound"; kill -KILL "$probe_pid" 2>/dev/null ;;
   esac
+fi
+# A query a forking stand-in left behind is killed with it: the bound KILLs the query's whole
+# process group (Codex review round 2 on PR #1172).
+if [ -z "$probe_detail" ]; then
+  FAKE_PROBE_FORK=1 probe_run probe-fork hip cc hip "" run build @cheap
+  probe_child=$(cat "$TMP/probe-fork.probe.child" 2>/dev/null)
+  if [ "$argv_rc" != 69 ] || [ -z "$probe_child" ]; then
+    probe_detail="fork: exit $argv_rc (want 69); forked query: ${probe_child:-none recorded}"
+  else
+    case $(pstate "$probe_child") in
+      '' | Z) ;;
+      *) probe_detail="fork: the forked query (pid $probe_child) outlived the bound"
+         kill -KILL "$probe_child" 2>/dev/null ;;
+    esac
+  fi
 fi
 # An answer, and a fast failure, start dune once under the same slot call.
 for probe in "answer::hip: answered in" "absent:hip:hip: failed fast (exit 2"; do

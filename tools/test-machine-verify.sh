@@ -612,6 +612,14 @@ report $? 'width-readers-built: the readers were built in the pushed worktree' "
 check_refusal width-zero '^machine-verify: jobs must be a positive integer$' -j 0
 check_refusal width-word '^machine-verify: jobs must be a positive integer$' --jobs auto
 
+# Whether a process is still running: a zombie is not. Where PID 1 reaps no orphans, a test its
+# fake dune killed stays a zombie, which `kill -0` still answers for (Codex review round 2 on PR
+# #1172).
+running() { # pid
+  local st
+  st=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+  case $st in '' | Z*) return 1 ;; esac
+}
 # The two bounds of a GPU trip (gh-ocannl-1252). The per-test cap: a test past it ends the trip
 # with 142 long before the per-command cap (10s here) would, the hung test named and killed; the
 # default is a GPU backend's alone, and --test-cap 0 lifts any. The device probe: one query of the
@@ -623,23 +631,34 @@ check_case test-cap-hung hung-test 142 \
 mv_ok=0
 mv_hung=$(cat "$TMP/runs/test-cap-hung/audit.hung-pid" 2>/dev/null)
 [ -n "$mv_hung" ] || mv_ok=1
-if [ -n "$mv_hung" ] && kill -0 "$mv_hung" 2>/dev/null; then kill -KILL "$mv_hung"; mv_ok=1; fi
+if [ -n "$mv_hung" ] && running "$mv_hung"; then kill -KILL "$mv_hung"; mv_ok=1; fi
 grep -qx 'per-test cap:  2s for each process an operation'\''s dune starts (--test-cap); one past it ends the trip' \
   "$TMP/runs/test-cap-hung/stdout" || mv_ok=1
 report "$mv_ok" "test-cap-hung: killed at the per-test cap, not the per-command one, and the test is gone" \
   "$TMP/runs/test-cap-hung"
 # The defaults, as the provenance states them.
 BACKEND=hip UNAME=Darwin check_case test-cap-gpu-default success 0 'verified .*backend=hip' --test @fixture
-grep -q '^per-test cap:  1500s for each process dune starts in a --test or --record-golden alias not reaching @slow (the default for a GPU backend); none for --run' \
+grep -q '^per-test cap:  1500s for each process dune starts in a --test or --record-golden alias not reaching @slow (the default for a trip holding a GPU backend: hip); none for --run' \
   "$TMP/runs/test-cap-gpu-default/stdout" &&
   grep -qx 'device probe:  none on macOS (a freshly linked bin/device_props can sit in dlopen for minutes under XProtect, which would read as a hung device)' \
     "$TMP/runs/test-cap-gpu-default/stdout" &&
   ! grep -q '^machine-verify: device probe: ' "$TMP/runs/test-cap-gpu-default/stdout"
 report $? 'test-cap-gpu-default: a GPU trip states the default cap, and no probe on macOS' "$TMP/runs/test-cap-gpu-default"
 check_case test-cap-cpu-default success 0 'verified .*backend=cc' --test @fixture
-grep -qx 'per-test cap:  none (no default for a CPU backend; --test-cap N sets one)' "$TMP/runs/test-cap-cpu-default/stdout" &&
+grep -qx 'per-test cap:  none (no default for a trip holding no GPU backend; --test-cap N sets one)' "$TMP/runs/test-cap-cpu-default/stdout" &&
   grep -qx 'device probe:  none (no GPU backend)' "$TMP/runs/test-cap-cpu-default/stdout"
 report $? 'test-cap-cpu-default: a CPU trip has neither bound by default' "$TMP/runs/test-cap-cpu-default"
+# The bounds follow every GPU backend the trip can hold, not the pinned one alone: a stanza naming
+# cuda under --backend cc gets the default cap and a probe of cuda (Codex review round 2 on PR #1172).
+BACKEND=cc NVIDIA=present NAMES='cuda:arrayjit/test/dune names it' UNAME=Linux \
+  check_case bounds-reached-gpu success 0 'verified .*backend=cc' --test @fixture
+grep -q '^per-test cap:  1500s .*(the default for a trip holding a GPU backend: cuda)' \
+  "$TMP/runs/bounds-reached-gpu/stdout" &&
+  grep -qx 'device probe:  cuda, through bin/device_props before the first device use, bounded at 60s' \
+    "$TMP/runs/bounds-reached-gpu/stdout" &&
+  grep -q '^machine-verify: device probe: cuda: answered in ' "$TMP/runs/bounds-reached-gpu/stdout"
+report $? 'bounds-reached-gpu: a CPU pin over a reached GPU stanza gets both bounds for that GPU' \
+  "$TMP/runs/bounds-reached-gpu"
 BACKEND=hip UNAME=Linux check_case test-cap-lifted slow-test 0 'verified .*backend=hip' --test @fixture --test-cap 0
 grep -qx 'per-test cap:  none (--test-cap 0)' "$TMP/runs/test-cap-lifted/stdout"
 report $? 'test-cap-lifted: --test-cap 0 lets a GPU trip'\''s slow test finish' "$TMP/runs/test-cap-lifted"
@@ -653,7 +672,7 @@ mv_ok=0
 grep -q '^  hip: NO ANSWER within 1s; the query was killed$' "$TMP/runs/probe-hang/stdout" || mv_ok=1
 read -r mv_query mv_args <"$TMP/runs/probe-hang/audit.probe" || mv_ok=1
 [ "$mv_args" = --ocannl_backend=hip ] || mv_ok=1
-if [ -n "${mv_query:-}" ] && kill -0 "$mv_query" 2>/dev/null; then kill -KILL "$mv_query"; mv_ok=1; fi
+if [ -n "${mv_query:-}" ] && running "$mv_query"; then kill -KILL "$mv_query"; mv_ok=1; fi
 report "$mv_ok" 'probe-hang: the wedged device ends the trip before any operation, the query killed' "$TMP/runs/probe-hang"
 # A per-command cap shorter than --probe-cap ends the query first: the device is unjudged, and the
 # trip stops there with the cap's 142 rather than going on to use it (Codex review round 1 on PR
@@ -664,7 +683,7 @@ BACKEND=hip UNAME=Linux check_case probe-past-command-cap probe-hang 142 \
 ! grep -q '@fixture' "$TMP/runs/probe-past-command-cap/audit"
 report $? 'probe-past-command-cap: no operation ran after the unfinished query' "$TMP/runs/probe-past-command-cap"
 read -r mv_query mv_args <"$TMP/runs/probe-past-command-cap/audit.probe" &&
-  if kill -0 "$mv_query" 2>/dev/null; then kill -KILL "$mv_query"; fi
+  if running "$mv_query"; then kill -KILL "$mv_query"; fi
 BACKEND=hip UNAME=Linux check_case probe-answer success 0 'verified .*backend=hip' --test @fixture
 grep -q '^machine-verify: device probe: hip: answered in [0-9.]*s$' "$TMP/runs/probe-answer/stdout" &&
   grep -q '|hip|build -j 4 @fixture$' "$TMP/runs/probe-answer/audit"

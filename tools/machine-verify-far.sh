@@ -47,10 +47,10 @@ eval "$device_probe_source" && [ -n "${device_probe_sh:-}" ] && [ -n "${probe_pe
   echo "machine-verify: cannot evaluate the device probe from tools/device-probe.sh" >&2
   exit 2
 }
-# Whether the pinned backend holds a GPU: the bounds' defaults follow it (with_test_cap,
-# probe_device), as tools/test-run.sh's follow a batch's resolved backends.
-gpu_backend='' leg_kind=cpu
-case $backend in cuda | hip | metal) gpu_backend=1 leg_kind=gpu ;; esac
+# The GPU backends the trip can hold, which the bounds' defaults follow (with_test_cap,
+# probe_device) as tools/test-run.sh's follow a batch's: set with the width below, from the same
+# resolution. Empty until then.
+gpu_backends='' leg_kind=cpu
 
 # Non-login SSH shells on rog need both locations; harmless when the
 # directories do not exist (tools/sweep.sh uses the same prefix), as on macOS.
@@ -269,7 +269,7 @@ opam_exec() {
 with_test_cap() { # kind value command...
   if [ -n "$test_cap_arg" ]; then
     leg_cap=$test_cap_arg
-  elif [ -n "$gpu_backend" ] && [ "$1" != run ] && ! test_cap_reaches_slow "$2" >/dev/null; then
+  elif [ -n "$gpu_backends" ] && [ "$1" != run ] && ! test_cap_reaches_slow "$2" >/dev/null; then
     leg_cap=$TEST_CAP_DEFAULT
   else
     leg_cap=0
@@ -307,30 +307,6 @@ echo "requested backend: ${backend:-none (@check compiles only)}"
 echo "expected optional library: ${expect_lib:-none}"
 echo "per-command cap: ${cap}s"
 echo "whole-trip cap: ${trip_cap}s"
-# The per-test cap and the device probe (gh-ocannl-1252): a GPU backend's bounds, as
-# tools/test-run.sh gives a GPU batch -- an explicit --test-cap bounds every operation's dune.
-if [ -n "$test_cap_arg" ] && [ "$test_cap_arg" -gt 0 ]; then
-  echo "per-test cap:  ${test_cap_arg}s for each process an operation's dune starts (--test-cap); one past it ends the trip"
-elif [ -n "$test_cap_arg" ]; then
-  echo "per-test cap:  none (--test-cap 0)"
-elif [ -n "$gpu_backend" ]; then
-  echo "per-test cap:  ${TEST_CAP_DEFAULT}s for each process dune starts in a --test or --record-golden alias not reaching @slow (the default for a GPU backend); none for --run; one past it ends the trip"
-else
-  echo "per-test cap:  none (no default for a CPU backend; --test-cap N sets one)"
-fi
-probe_story=
-if [ -z "$gpu_backend" ]; then
-  probe_story="none (no GPU backend)"
-elif [ $# -eq 0 ] && [ -z "$expect_lib" ]; then
-  probe_story="none (no operation, and no --expect-lib readback, touches the device)"
-elif [ "$(uname -s)" = Darwin ]; then
-  probe_story="none on macOS (a freshly linked bin/device_props can sit in dlopen for minutes under XProtect, which would read as a hung device)"
-fi
-if [ -n "$probe_story" ]; then
-  echo "device probe:  $probe_story"
-else
-  echo "device probe:  $backend, through bin/device_props before the first device use, bounded at ${probe_cap}s"
-fi
 echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
 echo "credential variables: removed inside every opam exec (tools/credential-env.sh)"
 
@@ -422,42 +398,64 @@ cd "$wt" || fail "cannot enter $wt"
 # may predate the readers), which costs width, never a GPU leg above its cap.
 # Where no backend meets a cap on this box, nothing is built and the width
 # is 4.
+# The same resolution names the GPU backends the trip can hold, for the two bounds below
+# (gh-ocannl-1252): a reached stanza naming a GPU holds it under `--backend cc` too, and a --run
+# probe or an unread answer may hold any. So it runs under an explicit -j as well, where its width
+# is not used; a resolution that fails there leaves every GPU backend held, never none.
+mkdir -p _build || fail "cannot create _build for the backend resolution"
+batch_log=_build/.machine-verify-backends.log
+: >"$batch_log" || fail "cannot write $batch_log"
+resolution=$(opam_exec "OCANNL_BACKEND=$backend" bash -c '
+  eval "$1" && eval "$2" || exit 1
+  backend=$3 log=$4
+  shift 4
+  aliases=() probe=
+  while [ $# -ge 2 ]; do
+    case $1 in run) probe=1 ;; *) aliases+=("$2") ;; esac
+    shift 2
+  done
+  [ -n "$backend" ] || unset OCANNL_BACKEND
+  batch_holds= batch_unknown=
+  gpus() { # the line naming the batch'"'"'s GPU backends
+    local b
+    printf "gpu"
+    while IFS= read -r b; do box_jobs_cpu_backend "$b" || printf " %s" "$b"; done < <(batch_backends)
+    printf "\n"
+  }
+  if ! batch_box_has_hazard; then
+    printf "none\n"
+    [ -z "$backend" ] || batch_add "$backend" "pinned by --backend"
+    gpus
+    exit 0
+  elif [ -n "$probe" ]; then
+    batch_unknown="a --run probe may pick its own backend"
+  elif [ ${#aliases[@]} -gt 0 ]; then
+    batch_resolve dune "$log" build "${aliases[@]}" || exit 1
+  fi
+  [ -z "$backend" ] || batch_add "$backend" "pinned by --backend"
+  batch_width
+  if [ -z "$batch_width_cap" ]; then
+    printf "none\n"
+  else
+    printf "%s %s %s %s\n" "$batch_width_cap" "$batch_width_hazard" "$batch_width_backend" \
+      "$(batch_why "$batch_width_backend")"
+  fi
+  gpus
+' machine-verify-width "$box_jobs_source" "$batch_backends_source" "$backend" "$batch_log" "$@")
+resolution_rc=$?
+sed -n 's/^test-run: batch: /machine-verify: batch: /p' "$batch_log"
+width=$(printf '%s\n' "$resolution" | sed -n 1p)
+gpu_line=$(printf '%s\n' "$resolution" | sed -n 2p)
+case $resolution_rc:$gpu_line in
+  0:gpu | 0:gpu\ *) gpu_backends=${gpu_line#gpu} gpu_backends=${gpu_backends# } ;;
+  *) gpu_backends="cuda hip metal" ;;
+esac
+[ -z "$gpu_backends" ] || leg_kind=gpu
 if [ -n "$jobs" ]; then
   jobs_story="$jobs (explicit -j)"
 else
-  mkdir -p _build || fail "cannot create _build for the backend resolution"
-  batch_log=_build/.machine-verify-backends.log
-  : >"$batch_log" || fail "cannot write $batch_log"
-  width=$(opam_exec "OCANNL_BACKEND=$backend" bash -c '
-    eval "$1" && eval "$2" || exit 1
-    backend=$3 log=$4
-    shift 4
-    aliases=() probe=
-    while [ $# -ge 2 ]; do
-      case $1 in run) probe=1 ;; *) aliases+=("$2") ;; esac
-      shift 2
-    done
-    [ -n "$backend" ] || unset OCANNL_BACKEND
-    batch_holds= batch_unknown=
-    if ! batch_box_has_hazard; then
-      printf "none\n"
-      exit 0
-    elif [ -n "$probe" ]; then
-      batch_unknown="a --run probe may pick its own backend"
-    elif [ ${#aliases[@]} -gt 0 ]; then
-      batch_resolve dune "$log" build "${aliases[@]}" || exit 1
-    fi
-    [ -z "$backend" ] || batch_add "$backend" "pinned by --backend"
-    batch_width
-    if [ -z "$batch_width_cap" ]; then
-      printf "none\n"
-    else
-      printf "%s %s %s %s\n" "$batch_width_cap" "$batch_width_hazard" "$batch_width_backend" \
-        "$(batch_why "$batch_width_backend")"
-    fi
-  ' machine-verify-width "$box_jobs_source" "$batch_backends_source" "$backend" "$batch_log" \
-    "$@") || fail "cannot resolve this box's dune width from tools/box-jobs.sh; pass -j N to name one"
-  sed -n 's/^test-run: batch: /machine-verify: batch: /p' "$batch_log"
+  [ "$resolution_rc" -eq 0 ] ||
+    fail "cannot resolve this box's dune width from tools/box-jobs.sh; pass -j N to name one"
   case $width in
     none)
       jobs=4
@@ -478,6 +476,31 @@ else
   esac
 fi
 echo "dune jobs:     $jobs_story"
+# The per-test cap and the device probe (gh-ocannl-1252): the bounds of a trip that can hold a GPU
+# backend (gpu_backends, above), as tools/test-run.sh gives a GPU batch -- an explicit --test-cap
+# bounds every operation's dune.
+if [ -n "$test_cap_arg" ] && [ "$test_cap_arg" -gt 0 ]; then
+  echo "per-test cap:  ${test_cap_arg}s for each process an operation's dune starts (--test-cap); one past it ends the trip"
+elif [ -n "$test_cap_arg" ]; then
+  echo "per-test cap:  none (--test-cap 0)"
+elif [ -n "$gpu_backends" ]; then
+  echo "per-test cap:  ${TEST_CAP_DEFAULT}s for each process dune starts in a --test or --record-golden alias not reaching @slow (the default for a trip holding a GPU backend: $gpu_backends); none for --run; one past it ends the trip"
+else
+  echo "per-test cap:  none (no default for a trip holding no GPU backend; --test-cap N sets one)"
+fi
+probe_story=
+if [ -z "$gpu_backends" ]; then
+  probe_story="none (no GPU backend)"
+elif [ $# -eq 0 ] && [ -z "$expect_lib" ]; then
+  probe_story="none (no operation, and no --expect-lib readback, touches the device)"
+elif [ "$(uname -s)" = Darwin ]; then
+  probe_story="none on macOS (a freshly linked bin/device_props can sit in dlopen for minutes under XProtect, which would read as a hung device)"
+fi
+if [ -n "$probe_story" ]; then
+  echo "device probe:  $probe_story"
+else
+  echo "device probe:  $gpu_backends, through bin/device_props before the first device use, bounded at ${probe_cap}s"
+fi
 echo "=== end provenance ==="
 
 assert_source_state() {
@@ -681,8 +704,9 @@ probe_device() {
     echo "machine-verify: device probe: not probed, bin/device_props did not build"
     return 0
   fi
+  # shellcheck disable=SC2086  # the backend list is word-split on purpose
   opam_exec env "OCANNL_BACKEND=$backend" sh -c "$device_probe_sh" device-probe machine-verify \
-    "$probe_perl" "$probe_cap" "$probe_dir" "$wt/_build/default/bin/device_props.exe" "$backend"
+    "$probe_perl" "$probe_cap" "$probe_dir" "$wt/_build/default/bin/device_props.exe" $gpu_backends
   probe_rc=$?
   # 69 is the probe's own refusal; any other failure -- the per-command cap expiring before
   # --probe-cap did (142), a switch that would not run it -- leaves the device unjudged, and the

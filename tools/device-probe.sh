@@ -21,16 +21,31 @@ DEVICE_PROBE_CAP_DEFAULT=60
 # `hung <seconds>` for a query KILLed at the bound; the query's own output goes
 # to the file given. Polled rather than waited for, so a query stuck where even
 # KILL cannot reach it (in the driver, uninterruptibly) still gets its verdict
-# on time; it stays in the caller's process group, which the caller's
-# supervisor reaps.
+# on time.
+#
+# The query leads a process group of its own, and the bound KILLs that whole
+# group: a stand-in that forks the real query rather than exec'ing it must not
+# leave it running on the faulted device behind a DEVICE UNHEALTHY verdict,
+# whose callers do not all reap their groups on a normal exit (Codex review
+# round 2 on PR #1172). Out of the caller's group, the query no longer gets
+# the caller's signals, so a TERM, INT or HUP to this process KILLs the query's
+# group before it exits with the signal's status.
 probe_perl='
   use POSIX ();
   use Time::HiRes ();
   my ($bound, $out, @cmd) = @ARGV;
   my $t0 = Time::HiRes::time();
-  my $pid = fork();
+  my $pid;
+  my $kill_query = sub { kill("KILL", -$pid) or kill("KILL", $pid) if $pid };
+  for my $sig ([TERM => 143], [INT => 130], [HUP => 129]) {
+    my $code = $sig->[1];
+    $SIG{ $sig->[0] } = sub { $kill_query->(); exit $code };
+  }
+  $pid = fork();
   defined $pid or do { print "error fork: $!\n"; exit 0 };
   if (!$pid) {
+    $SIG{$_} = "DEFAULT" for qw(TERM INT HUP);
+    setpgrp(0, 0);
     open STDIN, "<", "/dev/null";
     open STDOUT, ">", $out or exit 126;
     open STDERR, ">&", \*STDOUT;
@@ -46,7 +61,7 @@ probe_perl='
   if (defined $st) {
     print "exit ", (($st & 127) ? 128 + ($st & 127) : $st >> 8), " $took\n";
   } else {
-    kill "KILL", $pid;
+    $kill_query->();
     for (1 .. 50) { last if waitpid($pid, POSIX::WNOHANG()) != 0; Time::HiRes::sleep(0.1) }
     print "hung $took\n";
   }
