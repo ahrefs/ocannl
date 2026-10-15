@@ -135,9 +135,27 @@ NATIVE_QUEUE_REFUSED='DQM create queue type [0-9]+ failed'
 NATIVE_SDMA_EXHAUSTED='No more SDMA queue to allocate'
 NATIVE_XID='NVRM: Xid '
 
+# A SYSTEM SLEEP inside the window (gh-ocannl-1039). A suspend and resume keeps the boot id, so the
+# replaced-guest check cannot see it, and the unit's tests were frozen across it: a test's elapsed
+# time jumps past the per-test cap, a GPU context may not survive the resume, and whatever the unit
+# recorded is about the box. The kernel's power-management core says so in the window, one line at
+# each end, and those are the only lines read for it -- a fail-closed allowlist, the kernel's own
+# `pr_info`s in kernel/power/{suspend,hibernate}.c as the journal and `dmesg -T` print them:
+#   `PM: suspend entry (<state>)`, `PM: suspend exit`               (s2idle and deep, on every box)
+#   `PM: hibernation: hibernation entry`, `... hibernation exit`    (refused under lockdown today)
+# NOT the device-side echoes a resume also logs -- amdgpu's ring table (`ring sdma0 uses VM inv eng
+# ...`), the nvme queue census -- because tuf's idle dGPU runtime-suspends and resumes on its own
+# all day, printing the same ring table with no system sleep at all. Either PM line counts (the
+# exit is the one a box that came back always logs; an entry alone in a window that ends before the
+# exit cannot be collected, since the box is asleep). Measured 2026-10-15: rog 17 suspend exits
+# since 10-01, tuf 15 since 09-25, each paired with its entry, `(s2idle)` on both.
+NATIVE_SLEPT=' PM: (suspend (entry|exit)|hibernation: hibernation (entry|exit))'
+
 native_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on stdin, block on stdout
-  local kept refusals xids
-  kept=$(grep -E "$NATIVE_KEEP") || true
+  local all kept refusals xids slept
+  all=$(cat)
+  kept=$(printf '%s\n' "$all" | grep -E "$NATIVE_KEEP") || true
+  slept=$(printf '%s\n' "$all" | grep -E "$NATIVE_SLEPT") || true
   refusals=$(printf '%s\n' "$kept" | grep -cE "$NATIVE_QUEUE_REFUSED") || true
   [ "$refusals" -gt 0 ] ||
     refusals=$(printf '%s\n' "$kept" | grep -c "$NATIVE_SDMA_EXHAUSTED") || true
@@ -150,9 +168,11 @@ native_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on 
   # fingerprint compares these bytewise, and a pid would make a standing SDMA red report
   # `fingerprint moved` on every run. The first two expressions strip the timestamp in the
   # journal's form and in `dmesg -T`'s.
-  printf '%s\n' "$kept" | window_lines native \
+  # The sleep's own lines are shown and become signatures too, after the drivers' lines: what moves
+  # a fingerprint is that the box slept, which these say in a stable form.
+  { [ -z "$kept" ] || printf '%s\n' "$kept"; [ -z "$slept" ] || printf '%s\n' "$slept"; } | window_lines native \
     's/^.* kernel: //; s/^\[[^]]*\] //; s/pid [0-9][0-9]*/pid N/g; s/pid=[0-9][0-9]*/pid=N/g'
-  window_verdict native "$refusals" "${3:-}"
+  window_verdict native "$refusals" "${3:-}" "${slept:+slept}"
 }
 
 # ---------------------------------------------------------------- the block, either kind
@@ -198,8 +218,16 @@ window_lines() { # kind signature-sed
 # every reader of this block already looks.
 WINDOW_VM_REPLACED=vm-replaced
 
-# The block's closing half, either kind: the boot finding, then the verdict line.
-window_verdict() { # kind count [boot-verdict]
+# What a window in which the BOX SLEPT records instead of a count (NATIVE_SLEPT above). Like a
+# replaced guest it takes the verdict, since the count no longer describes one uninterrupted device
+# session, and it makes the unit environment-red (window_red): a `fail` gets its serial rerun, and a
+# `timeout` or `error` -- what a sleep mid-unit mostly produces, the per-test cap reading the frozen
+# hours as a hung test -- is said to be about the box (finish_remote_window).
+WINDOW_SUSPENDED=suspended
+
+# The block's closing half, either kind: the boot finding, then the verdict line. A replaced guest
+# outranks a sleep: a box that slept and came back as another boot is the replacement's finding.
+window_verdict() { # kind count [boot-verdict] [slept]
   local kind=$1 count=$2
   # A replaced guest is reported with the count still visible above it -- the lines are real and
   # worth reading -- but it TAKES THE VERDICT, because the count no longer describes one machine
@@ -214,6 +242,11 @@ window_verdict() { # kind count [boot-verdict]
     unknown)
       printf 'the guest boot id could not be read: this window is not known to cover one VM.\n' ;;
   esac
+  if [ -n "${4:-}" ] && [ "$count" != "$WINDOW_VM_REPLACED" ]; then
+    printf 'the box SUSPENDED during this window: the unit was frozen across a system sleep, so\n'
+    printf 'the count above describes no uninterrupted device session, and its result is about the box.\n'
+    count=$WINDOW_SUSPENDED
+  fi
   # The line environment_red keys on, and the field the run record carries. Last,
   # so that a truncated block still ends with its verdict.
   printf '=== %s window: %s %s ===\n' "$kind" "$count" "$(window_noun "$kind")"
@@ -302,6 +335,7 @@ window_fingerprint_lines() { # log
   case $(window_count "$1"):$kind in
     "$WINDOW_UNAVAILABLE":*) printf '%s window: collection unavailable\n' "$kind" ;;
     "$WINDOW_VM_REPLACED":*) printf '%s window: guest replaced mid-window\n' "$kind" ;;
+    "$WINDOW_SUSPENDED":*) printf '%s window: box suspended mid-window\n' "$kind" ;;
     0:dxg) printf 'dxg window: no burst\n' ;;
     0:*) printf '%s window: no refusal\n' "$kind" ;;
     :*) ;;
@@ -330,13 +364,20 @@ window_guest_replaced() { # log
   [ "$(window_count "$1")" = "$WINDOW_VM_REPLACED" ]
 }
 
-# Whether a unit's collected evidence makes it environment-red. A POSITIVE count
-# only: `0` is a positive finding the other way (the device was fine), and
-# `unavailable` establishes nothing in either direction -- an unread box must not
-# buy a rerun any more than it may certify a clean one. Absent evidence (a local
-# unit, one that never ran, a transport with no window) is likewise not red.
+# Whether a unit's collected evidence makes it environment-red. A POSITIVE count,
+# a replaced guest or a box that slept: `0` is a positive finding the other way (the
+# device was fine), and `unavailable` establishes nothing in either direction -- an
+# unread box must not buy a rerun any more than it may certify a clean one. Absent
+# evidence (a local unit, one that never ran, a transport with no window) is
+# likewise not red.
 window_red() { # log
-  window_count "$1" | grep -qE "^([1-9][0-9]*|$WINDOW_VM_REPLACED)$"
+  window_count "$1" | grep -qE "^([1-9][0-9]*|$WINDOW_VM_REPLACED|$WINDOW_SUSPENDED)$"
+}
+
+# Whether the box slept during a unit's window: a plain fact about the box, for the `error` and
+# `timeout` paths, where no rerun exists (window_guest_replaced's twin).
+window_box_slept() { # log
+  [ "$(window_count "$1")" = "$WINDOW_SUSPENDED" ]
 }
 
 # ---------------------------------------------------------------- the collection query

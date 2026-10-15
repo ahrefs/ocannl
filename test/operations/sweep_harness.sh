@@ -146,7 +146,8 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_FLEET_WORKER SWEEP_TEST_FLEET_CALLS SWEEP_TEST_FLEET_BOX SWEEP_TEST_REGISTRY \
   SWEEP_TEST_REGISTRY_FROM SWEEP_TEST_REMOTE_DRIVER SWEEP_TEST_REMOTE_ROOT \
   SWEEP_TEST_REMOTE_CASE SWEEP_TEST_CREDENTIALS SWEEP_TEST_CREDENTIAL_PLAIN \
-  SWEEP_TEST_SWITCH_CREDENTIALS SWEEP_TEST_OPAM_SELF
+  SWEEP_TEST_SWITCH_CREDENTIALS SWEEP_TEST_OPAM_SELF SWEEP_TEST_SLOT_UNREACHABLE \
+  SWEEP_TEST_PROC_LOCKS SWEEP_TEST_TOKEN_WAIT
 # And the directory the launching sweep collects its own actions' verdict records in
 # (gh-ocannl-1114): the probe runs below are this harness's fixtures, and a skip they record
 # there would reach the OUTER sweep's aggregation as a claim the suite left unexecuted. Unset
@@ -490,6 +491,9 @@ case ${SWEEP_TEST_SSH_MODE:-} in
     # without silently turning this control into a 60-second sleep.
     case $* in
       *'"$HOME"'*) printf '%s\n%s\n' "$HOME" "$(date +%s)"; exit 0 ;;
+      # A GPU unit's token reading (gh-ocannl-1177), unread at once: the control is about the
+      # preparation leg, not the reading before it.
+      *'execution slot --probe'*) exit 1 ;;
     esac
     printf '%s\n' "$$" >>"$SWEEP_TEST_WAIT_PREFIX.ssh-pids"
     : >"$SWEEP_TEST_WAIT_PREFIX.ssh-running"
@@ -597,17 +601,61 @@ chmod +x "$fake_bin/wake-lab.sh"
 # script's exit 4. With SWEEP_TEST_REGISTRY_FROM=<n>, reads before the n-th of the run find the
 # registry empty and the n-th and later find the file: a measurement reserved while a lane is
 # between units. Anything else is refused, so a verb the sweep should not be asking fails loudly.
+#
+# On a fixture GPU BOX (the remote fixture's driver names it in SWEEP_TEST_REMOTE_HOST) it is that
+# box's own fleet-worker.sh, for a GPU unit's token readings and take (gh-ocannl-1177): the probe
+# answers the box's slots and tokens -- rog-nv-linux's four and two, where the tokens bind; four and
+# four elsewhere -- and `execution slot --gpu --wait <n> -- <command>` takes a token as the real one
+# does, a REAL flock on the first free of `slot.1`..`slot.<tokens>` under the box's slot state,
+# waited for up to <n> seconds and inherited by the command it then execs, or refuses with the real
+# refusal line. SWEEP_TEST_SLOT_UNREACHABLE answers as an anchor whose registry did not.
 cat >"$fake_bin/fleet-worker.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_FLEET_CALLS"
+case ${SWEEP_TEST_REMOTE_HOST:-} in
+  rog-nv-linux) slots=4 tokens=2 ;;
+  *) slots=4 tokens=4 ;;
+esac
 case $* in
   'execution slot --probe')
+    if [ -n "${SWEEP_TEST_REMOTE_HOST:-}" ]; then
+      echo "EXECUTION SLOT PROBE $SWEEP_TEST_REMOTE_HOST $slots $tokens"
+      exit 0
+    fi
     box=${FLEET_LOCAL_BOX-mac-studio}
     if [ -z "$box" ]; then
       echo 'fake fleet-worker.sh: this host has no fleet name; set FLEET_LOCAL_BOX' >&2
       exit 2
     fi
     echo "EXECUTION SLOT PROBE $box 6 6"
+    ;;
+  'execution slot --gpu --wait '*' -- '*)
+    [ -n "${SWEEP_TEST_REMOTE_HOST:-}" ] || { echo 'fake fleet-worker.sh: a take off a GPU box' >&2; exit 2; }
+    if [ -n "${SWEEP_TEST_SLOT_UNREACHABLE:-}" ]; then
+      echo 'EXECUTION SLOT UNREACHABLE mac-studio: registry unread, no slot taken'
+      exit 4
+    fi
+    wait=$5
+    shift 6
+    dir=$HOME/.local/state/fleet-execution-slots/$SWEEP_TEST_REMOTE_HOST
+    mkdir -p "$dir"
+    exec perl -e '
+      use Fcntl qw(:flock F_GETFD F_SETFD FD_CLOEXEC);
+      my ($dir, $box, $slots, $tokens, $wait, @cmd) = @ARGV;
+      my $deadline = time + $wait;
+      while (1) {
+        for my $i (1 .. $tokens) {
+          open(my $h, ">>", "$dir/slot.$i") or die "slot.$i: $!";
+          next unless flock($h, LOCK_EX | LOCK_NB);
+          fcntl($h, F_SETFD, fcntl($h, F_GETFD, 0) & ~FD_CLOEXEC);
+          print STDERR "EXECUTION SLOT $box: slot $i of $slots, GPU token $i of $tokens held for: @cmd\n";
+          exec @cmd or exit 127;
+        }
+        last if time >= $deadline;
+        select undef, undef, undef, 0.2;
+      }
+      print "EXECUTION SLOT REFUSED $box: all $tokens GPU tokens (slots 1-$tokens of $slots) busy after ${wait}s; a batch that holds no GPU declares --cpu\n";
+      exit 1' "$dir" "$SWEEP_TEST_REMOTE_HOST" "$slots" "$tokens" "$wait" "$@"
     ;;
   'execution list --active --compact')
     reads=$(grep -c '^execution list' "$SWEEP_TEST_FLEET_CALLS")
@@ -742,6 +790,9 @@ run_sweep_args() {
     "SWEEP_TEST_REMOTE_DRIVER=${SWEEP_TEST_REMOTE_DRIVER:-}" \
     "SWEEP_TEST_REMOTE_ROOT=${SWEEP_TEST_REMOTE_ROOT:-}" \
     "SWEEP_TEST_REMOTE_CASE=${SWEEP_TEST_REMOTE_CASE:-}" \
+    "SWEEP_TEST_SLOT_UNREACHABLE=${SWEEP_TEST_SLOT_UNREACHABLE:-}" \
+    "OCANNL_TOOL_PROC_LOCKS=${SWEEP_TEST_PROC_LOCKS:-}" \
+    "OCANNL_TOOL_SWEEP_TOKEN_WAIT=${SWEEP_TEST_TOKEN_WAIT:-}" \
     "SWEEP_TEST_CREDENTIALS=${SWEEP_TEST_CREDENTIALS:-}" \
     "SWEEP_TEST_SWITCH_CREDENTIALS=${SWEEP_TEST_SWITCH_CREDENTIALS:-}" \
     "SWEEP_TEST_KERNEL_LINES=${SWEEP_TEST_KERNEL_LINES:-}" \
@@ -1840,8 +1891,13 @@ done
 # tests stanza, and an inline expectation located in a source file. Every name
 # in the tests stanza gets its own generated alias; the one inline site gets a
 # bounded directory fallback. The fake opam holds the first stanza red on its
-# own and clears the others. One unit (`--only cc`): every local unit would
-# rerun the same fixture, and the remote ones would reach for ssh.
+# own and clears the others. One unit (`--only metal`, the local GPU unit: the
+# log's refusal names are a GPU unit's evidence only, gh-ocannl-1039, and a cc
+# unit with this log is the opposing control further down); the remote ones
+# would reach for ssh. A red metal unit also collects its RTC context first,
+# which is one more dune call between the suite and the rerun.
+# ROCr's abort after a refused SDMA queue, as one log line (ENVIRONMENT_ASSERTIONS in the sweep).
+native_abort_fixture='schedule_conv_gemm.exe: ./runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp:2003: virtual void rocr::AMD::GpuAgent::ReleaseQueueMainScratch(rocr::AMD::ScratchInfo&): Assertion `scratch.main_queue_base'"'"' failed.'
 environment_failure='File "test/dune", line 2, characters 7-28:
 2 |  (alias runtest-serial-probe)
 Fatal error: exception hip_init:
@@ -1863,20 +1919,21 @@ serial_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
   SWEEP_TEST_OPAM_SERIAL_RED='@test/runtest-serial-probe' \
   SWEEP_TEST_OPAM_OUT_SERIAL='File "test/dune", line 2, characters 7-28:
 2 |  (alias runtest-serial-probe)
-Error: the claim itself' run_sweep_backend cc --target serial-probe)
-grep -q 'm4-max/cc: fail ' <<<"$serial_red"
-# One dune call per stanza, so each has its own verdict; sorted, after the unit.
-[ "$(tail -6 "$calls" | sed -n '1p')" = 'exec -- dune runtest serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest-pre-diff-probe' ]
-[ "$(tail -6 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 @test/runtest-serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 @test/runtest-serial-alpha' ]
-[ "$(tail -6 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 @test/runtest-serial-beta' ]
-[ "$(tail -6 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 @test/runtest' ]
+Error: the claim itself' run_sweep_backend metal --target serial-probe)
+grep -q 'm4-max/metal: fail ' <<<"$serial_red"
+# One dune call per stanza, so each has its own verdict; sorted, after the unit and its RTC context.
+[ "$(tail -7 "$calls" | sed -n '1p')" = 'exec -- dune runtest serial-probe' ]
+[ "$(tail -7 "$calls" | sed -n '2p')" = 'exec -- dune build @arrayjit/test/runtest-test_metal_compile_options --force' ]
+[ "$(tail -7 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 @test/runtest-pre-diff-probe' ]
+[ "$(tail -7 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 @test/runtest-serial-probe' ]
+[ "$(tail -7 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 @test/runtest-serial-alpha' ]
+[ "$(tail -7 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 @test/runtest-serial-beta' ]
+[ "$(tail -7 "$calls" | sed -n '7p')" = 'exec -- dune build -j 1 @test/runtest' ]
 # The verdict reaches all three channels: the summary, the log, the fingerprint.
-grep -q 'm4-max/cc: environment-red, 4 stanzas and 1 directory fallback rerun at -j 1' \
+grep -q 'm4-max/metal: environment-red, 4 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_red"
-grep -q 'm4-max/cc: serial rerun: still red: @test/runtest-serial-probe$' <<<"$serial_red"
-serial_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q 'm4-max/metal: serial rerun: still red: @test/runtest-serial-probe$' <<<"$serial_red"
+serial_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q '^serial rerun: still red: @test/runtest-serial-probe$' "$serial_log"
 grep -q '^serial rerun: directory fallback (1 inline site): @test/runtest$' "$serial_log"
 absent '^serial rerun: unmapped:' "$serial_log"
@@ -1886,15 +1943,15 @@ grep -q '^serial rerun: still red: @test/runtest-serial-probe$' "${serial_log%.l
 grep -q '^serial rerun: directory fallback (1 inline site): @test/runtest$' \
   "${serial_log%.log}.fingerprint"
 # The rerun's verdict must not replace the unit's: the row still says fail.
-[ "$(awk -F '\t' '$3 == "cc" { print $5 }' "$state/history.tsv" | tail -1)" = fail ]
+[ "$(awk -F '\t' '$3 == "metal" { print $5 }' "$state/history.tsv" | tail -1)" = fail ]
 
 # The same red with every stanza clean on its own: the digest carries the
 # difference, so the unit-state cursor reports the fingerprint as moved.
 serial_clean=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
-  run_sweep_backend cc --target serial-probe)
-grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$serial_clean"
-grep -q 'm4-max/cc: fingerprint moved since the previous failure at ' <<<"$serial_clean"
-serial_clean_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+  run_sweep_backend metal --target serial-probe)
+grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$serial_clean"
+grep -q 'm4-max/metal: fingerprint moved since the previous failure at ' <<<"$serial_clean"
+serial_clean_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q '^serial rerun: all clean$' "${serial_clean_log%.log}.fingerprint"
 absent 'still red' "${serial_clean_log%.log}.fingerprint"
 
@@ -1910,12 +1967,12 @@ File "test/inline_two.ml", line 1, characters 0-0:
 Error: second inline expectation differs
 diff --git a/test/inline_two.ml b/_build/default/test/inline_two.ml.corrected'
 serial_two_inline=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$two_inline_failure \
-  run_sweep_backend cc --target two-inline-probe)
-[ "$(tail -2 "$calls" | sed -n '1p')" = 'exec -- dune runtest two-inline-probe' ]
-[ "$(tail -2 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest' ]
-grep -q 'm4-max/cc: environment-red, 0 stanzas and 1 directory fallback rerun at -j 1' \
+  run_sweep_backend metal --target two-inline-probe)
+[ "$(tail -3 "$calls" | sed -n '1p')" = 'exec -- dune runtest two-inline-probe' ]
+[ "$(tail -3 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 @test/runtest' ]
+grep -q 'm4-max/metal: environment-red, 0 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_two_inline"
-two_inline_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+two_inline_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q '^serial rerun: directory fallback (2 inline sites): @test/runtest$' \
   "$two_inline_log"
 absent '^serial rerun: unmapped:' "$two_inline_log"
@@ -1931,11 +1988,12 @@ diff --git a/test/inline_three.ml b/_build/default/test/inline_three.ml.correcte
 File \"test/compile_error.ml\", line 1, characters 0-0:
 Error: this source site has no expectation correction"
 serial_many_inline=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$three_inline_failure \
-  run_sweep_backend cc --target three-inline-probe)
-[ "$(tail -1 "$calls")" = 'exec -- dune runtest three-inline-probe' ]
-grep -q 'm4-max/cc: environment-red, 0 stanzas and 0 directory fallbacks rerun at -j 1' \
+  run_sweep_backend metal --target three-inline-probe)
+[ "$(tail -2 "$calls" | sed -n '1p')" = 'exec -- dune runtest three-inline-probe' ]
+[ "$(tail -1 "$calls")" = 'exec -- dune build @arrayjit/test/runtest-test_metal_compile_options --force' ]
+grep -q 'm4-max/metal: environment-red, 0 stanzas and 0 directory fallbacks rerun at -j 1' \
   <<<"$serial_many_inline"
-many_inline_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+many_inline_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q '^serial rerun: nothing to rerun -- no site names a stanza$' "$many_inline_log"
 grep -q '^serial rerun: unmapped: \[File "test/compile_error.ml", line 1\] \[File "test/inline_one.ml", line 1\] \[File "test/inline_three.ml", line 1\] \[File "test/inline_two.ml", line 1\]$' \
   "$many_inline_log"
@@ -1945,24 +2003,25 @@ absent '^serial rerun: directory fallback' "$many_inline_log"
 # a pass: its failing stanzas ran again into the same log. The 2026-09-27 sweep
 # dropped minix/hip that way -- red only from a ROCr scratch assertion at
 # parallel width, `all clean` at -j 1 -- and reported its hip-only claims as
-# skipped on every declared box. Both units here fail with a runtime-refusal
-# signature and clear serially (one through the inline site's directory
-# fallback), so the intersection is the two-unit one of the clean coverage run.
-rerun_cleared=$(SWEEP_TEST_OPAM_RC=1 \
+# skipped on every declared box. The GPU unit here fails with a runtime-refusal
+# signature and clears serially (one stanza through the inline site's directory
+# fallback) beside a cc unit that passes with the same text in its log, so the
+# intersection is the two-unit one of the clean coverage run.
+: >"$calls"
+rerun_cleared=$(SWEEP_TEST_OPAM_RC=0 SWEEP_TEST_OPAM_RC_METAL=1 \
   SWEEP_TEST_OPAM_OUT_CC=$environment_failure$'\n'$cc_unit_log \
   SWEEP_TEST_OPAM_OUT_METAL=$environment_failure$'\n'$metal_unit_log \
   run_sweep_args --force --only cc --only metal)
-grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$rerun_cleared"
+grep -q 'm4-max/cc: pass ' <<<"$rerun_cleared"
 grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$rerun_cleared"
 # A clean rerun of the red stanzas does not reach the actions a red
-# prerequisite held back, so each unit then completes its whole suite
+# prerequisite held back, so the unit then completes its whole suite
 # incrementally (no --force: only what never completed runs) before counting.
-grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$rerun_cleared"
 grep -q 'm4-max/metal: serial rerun: suite completed$' <<<"$rerun_cleared"
-[ "$(grep -cx 'exec -- dune build -j 1 @runtest @train' "$calls")" -ge 2 ]
+[ "$(grep -cx 'exec -- dune build -j 1 @runtest @train' "$calls")" -eq 1 ]
 rerun_cleared_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_cleared" | tail -1)
 [ -f "$rerun_cleared_report" ]
-grep -q '^red units counted after a clean serial rerun: m4-max/cc m4-max/metal$' \
+grep -q '^red units counted after a clean serial rerun: m4-max/metal$' \
   "$rerun_cleared_report"
 grep -q '^status: partial (2 of 5 known backends completed)$' "$rerun_cleared_report"
 [ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$rerun_cleared")" = "$coverage_findings" ]
@@ -1976,26 +2035,27 @@ own_stanza_failure='File "test/dune", line 2, characters 7-28:
 2 |  (alias runtest-fixture)
 Fatal error: exception hip_init:
 HIP_ERROR_INVALID_DEVICE'
-retry_agrees=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT_RETRY=$cc_unit_log \
-  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$own_stanza_failure \
-  run_sweep_args --force --only cc)
-grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$retry_agrees"
+retry_agrees=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT_RETRY=$metal_unit_log \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log$'\n'$own_stanza_failure \
+  run_sweep_args --force --only metal)
+grep -q 'm4-max/metal: serial rerun: suite completed$' <<<"$retry_agrees"
 retry_agrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$retry_agrees" | tail -1)
-grep -q '^completed backends: cc$' "$retry_agrees_report"
+grep -q '^completed backends: metal$' "$retry_agrees_report"
 
-# The three cases below hold cc red-then-cleared beside a metal unit that passes
-# and skips the cc-only claim too, so cc's FINAL attempt alone decides whether
+# The three cases below hold metal red-then-cleared beside a cc unit that passes
+# and skips the cc-only claim, so metal's FINAL attempt alone decides whether
 # that claim is skipped on every completed backend. Before the per-action
 # records, the merged log could not attribute a first-attempt record the retry
 # no longer announced, and dropped the whole unit instead
-# (`first attempt disagrees`): the first and third cases fail there.
+# (`first attempt disagrees`): the first and third cases fail there. The red
+# unit is the GPU one because only a GPU unit's log buys a rerun (gh-ocannl-1039).
 metal_with_cc_only=$metal_unit_log$'\n'$cc_only
 # Sets final_report rather than printing it: called inside `$(...)`, these
 # assertions would run without errexit and could not fail the harness.
 final_attempt_report() { # sweep-output
   final_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$1" | tail -1)
   [ -f "$final_report" ]
-  grep -q '^red units counted after a clean serial rerun: m4-max/cc$' "$final_report"
+  grep -q '^red units counted after a clean serial rerun: m4-max/metal$' "$final_report"
   grep -q '^completed backends: cc, metal$' "$final_report"
   grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: common unevaluated claim$' \
     "$final_report"
@@ -2003,25 +2063,25 @@ final_attempt_report() { # sweep-output
 # A first attempt that skipped the claim, whose retry EXECUTED it: the retry
 # rewrote the action's records, so the claim is not skipped on every backend --
 # although the first attempt's record of it is still in the unit's log.
-retry_executes=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_RC_METAL=0 \
+retry_executes=$(SWEEP_TEST_OPAM_RC=0 SWEEP_TEST_OPAM_RC_METAL=1 \
   SWEEP_TEST_OPAM_OUT_RETRY=$common \
-  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$own_stanza_failure \
-  SWEEP_TEST_OPAM_OUT_METAL=$metal_with_cc_only \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_with_cc_only$'\n'$own_stanza_failure \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log \
   run_sweep_args --force --only cc --only metal)
-grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$retry_executes"
-grep -q 'm4-max/metal: pass ' <<<"$retry_executes"
+grep -q 'm4-max/metal: serial rerun: suite completed$' <<<"$retry_executes"
+grep -q 'm4-max/cc: pass ' <<<"$retry_executes"
 final_attempt_report "$retry_executes"
 retry_executes_report=$final_report
 absent 'cc-only unevaluated claim' "$retry_executes_report"
-retry_executes_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+retry_executes_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q "^OCANNL_TOOL_VERDICT_SKIP$(printf '\t')backend$(printf '\t')fixture.exe$(printf '\t')cc-only unevaluated claim$" \
   "$retry_executes_log"
 absent 'cc-only unevaluated claim' "${retry_executes_log%.log}.verdict-records"
 # The reverse: a first attempt that executed the claim, whose retry SKIPPED it.
-retry_skips=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_RC_METAL=0 \
+retry_skips=$(SWEEP_TEST_OPAM_RC=0 SWEEP_TEST_OPAM_RC_METAL=1 \
   SWEEP_TEST_OPAM_OUT_RETRY=$common$'\n'$cc_only \
-  SWEEP_TEST_OPAM_OUT_CC=$common$'\n'$own_stanza_failure \
-  SWEEP_TEST_OPAM_OUT_METAL=$metal_with_cc_only \
+  SWEEP_TEST_OPAM_OUT_METAL=$common$'\n'$own_stanza_failure \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log \
   run_sweep_args --force --only cc --only metal)
 final_attempt_report "$retry_skips"
 retry_skips_report=$final_report
@@ -2032,17 +2092,17 @@ grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: cc-only un
 # claim in the first attempt and was not re-run, while `fixture.exe replay`,
 # re-run, executed it. One executable under two stanzas (test_cse.exe under
 # runtest-test_cse and runtest-test_cse-cse_d_fwd) is two actions.
-bystander=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_RC_METAL=0 \
+bystander=$(SWEEP_TEST_OPAM_RC=0 SWEEP_TEST_OPAM_RC_METAL=1 \
   SWEEP_TEST_OPAM_OUT_RETRY=$common \
-  SWEEP_TEST_OPAM_OUT_CC=$common$'\n'$own_stanza_failure \
+  SWEEP_TEST_OPAM_OUT_METAL=$common$'\n'$own_stanza_failure \
   SWEEP_TEST_OPAM_OUT_BYSTANDER=$cc_only \
-  SWEEP_TEST_OPAM_OUT_METAL=$metal_with_cc_only \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log \
   run_sweep_args --force --only cc --only metal)
 final_attempt_report "$bystander"
 bystander_report=$final_report
 grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: cc-only unevaluated claim$' \
   "$bystander_report"
-bystander_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+bystander_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 [ "$(grep -c '^OCANNL_TOOL_VERDICT_ACTION' "${bystander_log%.log}.verdict-records")" -eq 2 ]
 
 # A forced pass whose run left no per-action records -- a swept commit from
@@ -2057,15 +2117,18 @@ no_records_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$no_records" | tail
 grep -q '^completed backends: <none>$' "$no_records_report"
 grep -q '^result: NOT AGGREGATED$' "$no_records_report"
 
-# The opposing controls, in one run: a red whose serial rerun stays red, and a
-# red with no refusal signature (never rerun), both remain excluded.
+# The opposing controls, in one run: a GPU red whose serial rerun stays red, and a
+# CPU red never rerun although its log carries the same refusal names
+# (gh-ocannl-1039: a CPU unit's log is its tests' output, not device evidence),
+# both remain excluded.
 rerun_red=$(SWEEP_TEST_OPAM_RC=1 \
   SWEEP_TEST_OPAM_SERIAL_RED='@test/runtest-serial-probe' \
+  SWEEP_TEST_OPAM_OUT_METAL=$environment_failure$'\n'$metal_unit_log \
   SWEEP_TEST_OPAM_OUT_CC=$environment_failure$'\n'$cc_unit_log \
-  SWEEP_TEST_OPAM_OUT_METAL=$'Error: a test-logic failure\n'$metal_unit_log \
   run_sweep_args --force --only cc --only metal)
-grep -q 'm4-max/cc: serial rerun: still red: @test/runtest-serial-probe$' <<<"$rerun_red"
-absent 'm4-max/metal: environment-red' <<<"$rerun_red"
+grep -q 'm4-max/metal: serial rerun: still red: @test/runtest-serial-probe$' <<<"$rerun_red"
+absent 'm4-max/cc: environment-red' <<<"$rerun_red"
+absent 'm4-max/cc: serial rerun' <<<"$rerun_red"
 rerun_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_red" | tail -1)
 [ -f "$rerun_red_report" ]
 grep -q '^completed backends: <none>$' "$rerun_red_report"
@@ -2075,10 +2138,10 @@ absent 'suite completion' <<<"$rerun_red"
 # A clean rerun whose completion pass is red stays excluded: an action the red
 # had held back failed, so the suite is not known to have completed.
 completion_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_SERIAL_RED='@train' \
-  SWEEP_TEST_OPAM_OUT_CC=$two_inline_failure$'\n'$cc_unit_log \
-  run_sweep_args --force --only cc)
-grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$completion_red"
-grep -q 'm4-max/cc: serial rerun: suite completion red (exit 1)$' <<<"$completion_red"
+  SWEEP_TEST_OPAM_OUT_METAL=$two_inline_failure$'\n'$metal_unit_log \
+  run_sweep_args --force --only metal)
+grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$completion_red"
+grep -q 'm4-max/metal: serial rerun: suite completion red (exit 1)$' <<<"$completion_red"
 completion_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$completion_red" | tail -1)
 [ -f "$completion_red_report" ]
 grep -q '^completed backends: <none>$' "$completion_red_report"
@@ -2108,7 +2171,7 @@ fi
 # The per-test cap on the serial rerun and the completion pass (gh-ocannl-1252): a GPU unit's
 # rerun stanza that hangs is killed at the cap, which ends the rerun -- the stanzas it did not
 # reach unjudged, the hung test named in the summary -- long before the unit's CAP. The completion
-# pass is capped the same way. A CPU unit's rerun waits its stanza out (no default cap there).
+# pass is capped the same way. (A CPU unit is never rerun from its log: the control below.)
 case $hang_probe in
   *dune*)
     rm -f "$hang_pid"
@@ -2131,14 +2194,22 @@ case $hang_probe in
     grep -q "^  m4-max/metal: serial rerun: hung test, past the per-test cap: pid $(cat "$hang_pid") has run [0-9]*s" \
       <<<"$completion_hung"
     if hung_test_survives "$hang_pid" 'completion pass'; then exit 1; fi
-    rm -f "$hang_pid"
-    cpu_rerun=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
-      SWEEP_TEST_OPAM_HANG_SERIAL='@test/runtest-serial-probe' SWEEP_TEST_OPAM_HANG_SERIAL_SECS=4 \
-      SWEEP_TEST_OPAM_HANG_PID=$hang_pid SWEEP_TEST_TEST_CAP=2 run_sweep_backend cc --target serial-probe 2>&1)
-    grep -q '^  m4-max/cc: serial rerun: all clean$' <<<"$cpu_rerun"
-    absent 'per-test cap' <<<"$cpu_rerun"
     ;;
 esac
+
+# A CPU unit's log buys no rerun, whatever refusal names it carries (gh-ocannl-1039): the names are
+# device evidence, a cc unit meets no device, and its log is whatever its tests printed -- this
+# harness prints exactly these fixtures when it fails inside a sweep's cc unit. Red, reported, and
+# never rerun; the metal unit above, with the same log, is the opposing case.
+: >"$calls"
+cpu_rerun=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$environment_failure
+$native_abort_fixture
+Fatal error: exception cu_launch_kernel:
+CUDA_ERROR_OUT_OF_MEMORY" run_sweep_backend cc --target serial-probe 2>&1)
+grep -q '^  m4-max/cc: fail ' <<<"$cpu_rerun"
+absent 'environment-red' <<<"$cpu_rerun"
+absent 'serial rerun' <<<"$cpu_rerun"
+[ "$(cat "$calls")" = 'exec -- dune runtest serial-probe' ]
 
 # The dxg window filter (gh-ocannl-979), driven directly: tools/kernel-window.sh is
 # sourced by the sweep and by this harness for exactly that reason (after
@@ -2286,13 +2357,15 @@ absent 'REPLACED' <<<"$dxg_legacy"
 window_cmd dxg 1757980800 | grep -q 'window-boot'
 window_cmd dxg 1757980800 | grep -q '/proc/sys/kernel/random/boot_id'
 
-# Negative control: a red whose failures are the tests' own gets no second run.
+# Negative control: a GPU red whose failures are the tests' own gets no second run.
+: >"$calls"
 serial_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
-  run_sweep_backend cc --target serial-probe)
-grep -q 'm4-max/cc: fail ' <<<"$serial_control"
-[ "$(tail -1 "$calls")" = 'exec -- dune runtest serial-probe' ]
+  run_sweep_backend metal --target serial-probe)
+grep -q 'm4-max/metal: fail ' <<<"$serial_control"
+[ "$(sed -n 1p "$calls")" = 'exec -- dune runtest serial-probe' ]
+absent -- '-j 1' "$calls"
 absent 'serial rerun' <<<"$serial_control"
-serial_control_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+serial_control_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 absent 'serial rerun' "${serial_control_log%.log}.fingerprint"
 
 # Lanes (gh-ocannl-976): one per machine, concurrent across machines and
@@ -2644,7 +2717,7 @@ grep -qF "reservations: NOT CONSULTED -- no fleet-worker.sh answered 'execution 
 # a consumer can age a backend's staleness against the box that owns it now.
 lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
 [ -f "$lanes_record" ]
-[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t5')" ]
+[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t6')" ]
 [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lanes_record")" = complete ]
 [ "$(awk -F '\t' '$1 == "run" { print $5 "\t" $6 }' "$lanes_record")" = \
   "$(printf 'lane-probe\t0')" ]
@@ -2658,6 +2731,9 @@ lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $11 }' "$lanes_record" | sort)" = \
   "$(printf '%s\n' m4-max/cc:- m4-max/metal:unified/apple minix/hip:unified/gfx1151 \
     minix/multidev_cc:- rog-nv/cuda:discrete/sm_120 tuf/hip:discrete/gfx1102 | sort)" ]
+# ...and its GPU-token readings (gh-ocannl-1177): none here, so `-` -- the local units are on a
+# host whose flocks cannot be read, and the remote ones never answered their probe.
+[ "$(awk -F '\t' '$1 == "unit" { print $12 }' "$lanes_record" | sort -u)" = - ]
 # The log column points at the unit's own log, so a consumer needs no second
 # rule for reconstructing the path a row's diagnostics live in.
 [ -f "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $6 }' "$lanes_record")" ]
@@ -3164,17 +3240,18 @@ absent 'window-bounds' "$ssh_calls"
 
 # The ROCr abort a refused SDMA queue ends in lands in the unit's LOG, and makes the unit
 # environment-red there too -- the half that survives a window that could not be read. Driven
-# through a local unit's log with a failing fake, since this arm reads the log; the
-# `Fatal error: exception` arm is covered by the serial-rerun cases above.
-native_abort='schedule_conv_gemm.exe: ./runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp:2003: virtual void rocr::AMD::GpuAgent::ReleaseQueueMainScratch(rocr::AMD::ScratchInfo&): Assertion `scratch.main_queue_base'"'"' failed.'
+# through the local GPU unit's log with a failing fake, since this arm reads the log (a CPU
+# unit's log is not read for it: the cpu_rerun control above); the `Fatal error: exception` arm
+# is covered by the serial-rerun cases above.
+native_abort=$native_abort_fixture
 native_abort_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
-$native_abort" run_sweep_backend cc --target state-probe)
-grep -q 'm4-max/cc: fail ' <<<"$native_abort_run"
+$native_abort" run_sweep_backend metal --target state-probe)
+grep -q 'm4-max/metal: fail ' <<<"$native_abort_run"
 grep -q 'serial rerun' <<<"$native_abort_run"
 # ...but an unrelated assertion in the same runtime is a test's own failure, not the environment's.
 native_other_abort=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
-${native_abort/ReleaseQueueMainScratch/AcquireQueueScratch}" run_sweep_backend cc --target state-probe)
-grep -q 'm4-max/cc: fail ' <<<"$native_other_abort"
+${native_abort/ReleaseQueueMainScratch/AcquireQueueScratch}" run_sweep_backend metal --target state-probe)
+grep -q 'm4-max/metal: fail ' <<<"$native_other_abort"
 absent 'serial rerun' <<<"$native_other_abort"
 
 # A status-qualified refusal: a kernel launch refused for device memory is the concurrent suite's
@@ -3184,17 +3261,17 @@ launch_oom='Fatal error: exception cu_launch_kernel:
 CUDA_ERROR_OUT_OF_MEMORY
 Raised at Cuda.check in file "src/cuda.ml", line 119, characters 34-73'
 launch_oom_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
-$launch_oom" run_sweep_backend cc --target state-probe)
-grep -q 'm4-max/cc: fail ' <<<"$launch_oom_run"
+$launch_oom" run_sweep_backend metal --target state-probe)
+grep -q 'm4-max/metal: fail ' <<<"$launch_oom_run"
 grep -q 'serial rerun' <<<"$launch_oom_run"
 launch_resources_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
-${launch_oom/OUT_OF_MEMORY/LAUNCH_OUT_OF_RESOURCES}" run_sweep_backend cc --target state-probe)
-grep -q 'm4-max/cc: fail ' <<<"$launch_resources_run"
+${launch_oom/OUT_OF_MEMORY/LAUNCH_OUT_OF_RESOURCES}" run_sweep_backend metal --target state-probe)
+grep -q 'm4-max/metal: fail ' <<<"$launch_resources_run"
 absent 'serial rerun' <<<"$launch_resources_run"
 # HIP's launch takes the same qualification.
 hip_launch_oom_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
 Fatal error: exception hip_module_launch_kernel:
-HIP_ERROR_OUT_OF_MEMORY" run_sweep_backend cc --target state-probe)
+HIP_ERROR_OUT_OF_MEMORY" run_sweep_backend metal --target state-probe)
 grep -q 'serial rerun' <<<"$hip_launch_oom_run"
 
 
@@ -3339,6 +3416,14 @@ set -e
 holder_pid=
 wait_prefix=
 [ "$tuf_cancel_rc" -eq 143 ]
+# The top level outlived its lanes (gh-ocannl-1039): nothing of the sweep's process group -- its
+# lanes, their supervisors -- is left once it has exited. The early sleep request is detached into
+# a session of its own, so it is not counted here.
+if group_alive "$tuf_cancel_pid"; then
+  printf 'sweep_harness: the cancelled sweep exited before its process group did\n' >&2
+  ps -A -o pid=,pgid=,stat=,command= | awk -v g="$tuf_cancel_pid" '$2 == g' >&2 || true
+  exit 1
+fi
 waited=0
 until grep -q '^sleep tuf$' "$wake_lab_calls"; do
   [ "$waited" -lt "$wait_ticks" ] || break
@@ -3347,11 +3432,17 @@ until grep -q '^sleep tuf$' "$wake_lab_calls"; do
 done
 tuf_cancelled=$(cat "$tuf_cancel_prefix.out" "$tuf_cancel_prefix.err")
 [ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
-# The request's durable record is its own log beside the run's, named for the run's stamp; the
-# lane's summary line saying so is best-effort on this path (a cancelled top level does not wait to
-# publish it), so the log is what is asserted.
+# The request's durable record is its own log beside the run's, named for the run's stamp, and the
+# lane's line saying so reaches the sweep's OUTPUT, printed by the top level after the lane exited
+# (publish_lane_buffers) -- never the unit's log, the stdout the lane's EXIT trap ran with while
+# its preparation leg was redirected there, which is where it went before (gh-ocannl-1039).
 tuf_cancel_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tuf_cancel_prefix.out")
 tuf_cancel_sleep_log=$state/logs/$tuf_cancel_stamp-tuf-sleep.log
+grep -qxF "  tuf: the lane stopped early, so its sleep was requested in the background (wake-lab.sh sleep tuf; output in $tuf_cancel_sleep_log)" \
+  "$tuf_cancel_prefix.out"
+absent 'the lane stopped early' "$state/logs/$tuf_cancel_stamp-tuf-hip.log"
+# ...ahead of the record's locator, which is the cancelled run's last line.
+[ "$(tail -1 "$tuf_cancel_prefix.out" | cut -c1-5)" = 'run: ' ]
 waited=0
 until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
   [ "$waited" -lt "$wait_ticks" ] || break
@@ -3589,6 +3680,13 @@ cancel_sweep() { # pid|group
   if [ "$rc" -ne 143 ]; then
     printf 'sweep_harness: sweep cancelled by %s TERM exited %s\n' "$how" "$rc" >&2
     cat "$prefix.out" "$prefix.err" >&2
+    return 1
+  fi
+  # Nothing of its process group outlives the cancelled sweep (gh-ocannl-1039): it waited for every
+  # lane, and each lane for its supervisor.
+  if group_alive "$pid"; then
+    printf 'sweep_harness: the sweep cancelled by %s TERM exited before its process group did\n' "$how" >&2
+    ps -A -o pid=,pgid=,stat=,command= | awk -v g="$pid" '$2 == g' >&2 || true
     return 1
   fi
   while IFS= read -r pid; do

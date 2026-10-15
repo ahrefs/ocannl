@@ -7705,6 +7705,8 @@
   ../../tools/kernel-window.sh
   ; the fleet-worker.sh candidates sweep.sh reads the execution registry through (gh-ocannl-1097)
   ../../tools/fleet-worker-candidates.sh
+  ; the GPU tokens a sweep GPU unit reads and, where they bind, takes (gh-ocannl-1177)
+  ../../tools/gpu-tokens.sh
   ; the credential deny-list sweep.sh scrubs from every dune leg (gh-ocannl-1280)
   ../../tools/credential-env.sh
   sweep_harness.sh
@@ -7741,6 +7743,7 @@
   ../../tools/sweep-unit-state.sh
   ../../tools/box-jobs.sh
   ../../tools/kernel-window.sh
+  ../../tools/gpu-tokens.sh
   (env_var ProgramFiles)
   (env_var ProgramW6432)
   (env_var "ProgramFiles(x86)")

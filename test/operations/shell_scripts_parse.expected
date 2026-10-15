@@ -544,6 +544,7 @@ tools/dune-quiet.sh parses: true
 tools/fleet-registry.sh parses: true
 tools/fleet-worker-candidates.sh parses: true
 tools/fmt-check.sh parses: true
+tools/gpu-tokens.sh parses: true
 tools/kernel-window.sh parses: true
 tools/lab-map.sh parses: true
 tools/machine-verify-far.sh parses: true

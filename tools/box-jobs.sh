@@ -100,8 +100,10 @@ box_jobs_dest_transport() { # <ssh-destination>; prints dxg, native, or nothing
 #
 # On a native boot, minix's hip unit takes the SDMA cap above instead of the
 # bridge's. tuf's hip unit and rog-nv's cuda unit take their boxes' per-slot
-# widths (the local view below), because a sweep unit does not take a fleet
-# correctness slot, so it shares the box with whatever batches hold one: their
+# widths (the local view below), because a sweep unit shares the box with
+# whatever batches hold its correctness slots -- rog-nv's cuda unit now as one
+# of them, inside one of the box's two GPU tokens (gh-ocannl-1177,
+# tools/gpu-tokens.sh), the other units beside them, holding none: their
 # ladders ran one forced full unit green at dune's default width alone (tuf 16,
 # rog 24, 8, 4 and 2, with no NVRM/Xid line; gh-ocannl-1029), but nothing ran
 # a default-width unit beside three `-j 8` hip batches on tuf (40 GPU-holding

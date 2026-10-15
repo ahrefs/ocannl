@@ -129,6 +129,15 @@ perl -e 'use Fcntl ":flock"; open(my \$h, ">>", \$ARGV[0]) or exit 96; exit(floc
 # Keep this unquoted heredoc body within the shell scanner's supported contract.
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "\$SWEEP_TEST_REMOTE_HOST" "\${OCANNL_BACKEND:--}" "\$(pwd)" "\$(git rev-parse HEAD)" "\$PATH" "\$*" >>"\$SWEEP_TEST_REMOTE_ROOT/commands"
 [ -z "\$(git status --porcelain)" ] || exit 95
+# Which of the box's slot files are flocked while this dune runs (gh-ocannl-1177): a GPU leg that
+# took its token runs with that token's slot held, by its own leg's open file, not by a marker.
+slot_dir=\$HOME/.local/state/fleet-execution-slots/\$SWEEP_TEST_REMOTE_HOST
+if [ -d "\$slot_dir" ]; then
+  printf '%s\t%s\n' "\$*" "\$(perl -e 'use Fcntl ":flock"; my @held;
+    for my \$i (1 .. 4) { open(my \$h, ">>", "\$ARGV[0]/slot.\$i") or next;
+      push @held, \$i unless flock(\$h, LOCK_EX | LOCK_NB) }
+    print join(" ", @held)' "\$slot_dir")" >>"\$SWEEP_TEST_REMOTE_ROOT/token-states"
+fi
 exec "$fake_bin/opam" "\$@"
 EOF_OPAM
 # RTC diagnostics also stay within the fixture even on a host with GPU tools.
@@ -345,6 +354,144 @@ grep -q '^  minix/hip: DEVICE UNHEALTHY, dune not started: a fresh device query 
 grep -qx "$remote_root/minix-amd-linux/ocannl-staging-worktrees/sweep/test/config --ocannl_backend=hip" "$tmp/probe.calls"
 absent '@runtest' "$remote_root/commands"
 
+# The fleet's GPU tokens (gh-ocannl-1177). rog-nv-linux's fake fleet-worker.sh answers four slots
+# and two tokens, so its cuda unit takes one around every GPU leg -- a REAL flock on the box's slot
+# file, which the remote opam above sees held while each dune runs -- while minix's four and four
+# bind nothing and its hip unit takes none. Each unit also records the box's token holders at its
+# start and after its suite, read from a flock table: a fixture one here (OCANNL_TOOL_PROC_LOCKS),
+# written in the kernel's format for the slot files' device and inode, since macOS has no
+# /proc/locks; sweep_components.sh holds the reader to the real one where there is one.
+fixture_locks() { # table (slot-file pid)...
+  local table=$1 n=0
+  shift
+  : >"$table"
+  while [ $# -ge 2 ]; do
+    n=$((n + 1))
+    perl -e 'my ($f, $pid, $n) = @ARGV; my @st = stat $f or die "$f: $!"; my $d = $st[0];
+      printf "%d: FLOCK  ADVISORY  WRITE %d %02x:%02x:%d 0 EOF\n", $n, $pid,
+        (($d >> 8) & 0xfff) | (($d >> 32) & ~0xfff), ($d & 0xff) | (($d >> 12) & ~0xff), $st[1]' \
+      "$1" "$2" "$n" >>"$table"
+    shift 2
+  done
+}
+token_holder() { # slot-file -- a batch holding that slot until killed; its pid in token_holder_pid
+  perl -e 'use Fcntl ":flock"; open(my $h, ">>", $ARGV[0]) or die; flock($h, LOCK_EX) or die;
+    open(my $r, ">", "$ARGV[0].ready") or die; close $r; sleep 120' "$1" &
+  token_holder_pid=$!
+  local waited=0
+  until [ -e "$1.ready" ]; do
+    [ "$waited" -lt "$wait_ticks" ] || break
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  rm -f "$1.ready"
+}
+remote_reset
+rog_slots=$remote_root/rog-nv-linux/.local/state/fleet-execution-slots/rog-nv-linux
+mkdir -p "$rog_slots"
+token_holder "$rog_slots/slot.1"
+holder_one=$token_holder_pid
+fixture_locks "$tmp/locks-one" "$rog_slots/slot.1" "$holder_one"
+: >"$fleet_calls"
+# One worker batch holds the first token: the unit takes the second around its suite, its serial
+# rerun (the native window's refusal makes it environment-red) and its completion pass, and its
+# summary, record and fingerprint attribute the contention to that batch.
+local_tokens=$(SWEEP_TEST_PROC_LOCKS=$tmp/locks-one SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT="$remote_failure" remote_sweep --only cuda --force)
+local_record=$(sed -n 's/^run:  *//p' <<<"$local_tokens")
+local_log=$(awk -F '\t' '$1 == "unit" && $3 == "cuda" {print $6}' "$local_record")
+grep -q '^  rog-nv/cuda: fail ' <<<"$local_tokens"
+grep -q '^  rog-nv/cuda: serial rerun: all clean$' <<<"$local_tokens"
+grep -q '^  rog-nv/cuda: serial rerun: suite completed$' <<<"$local_tokens"
+grep -q "^  rog-nv/cuda: gpu tokens: 1 of 2 held by other batches at opened on rog-nv-linux -- slot 1 pid $holder_one " \
+  <<<"$local_tokens"
+grep -q "^  rog-nv/cuda: gpu tokens: 1 of 2 held by other batches at closed on rog-nv-linux -- slot 1 pid $holder_one " \
+  <<<"$local_tokens"
+[ "$(head -1 "$local_record")" = "$(printf 'schema\t6')" ]
+[ "$(awk -F '\t' '$1 == "unit" {print $12}' "$local_record")" = 'opened=1/2,closed=1/2' ]
+grep -qx 'gpu tokens: other batches held the GPU' "${local_log%.log}.fingerprint"
+[ "$(grep -c '^execution slot --gpu --wait 1800 -- sh -c ' "$fleet_calls")" -eq 3 ]
+[ "$(grep -cx 'sweep: gpu token: EXECUTION SLOT rog-nv-linux: slot 2 of 4, GPU token 2 of 2 held' "$local_log")" -eq 3 ]
+# ...and nothing of the command it held it for, whose text carries the rerun's own verdict echoes.
+absent '^sweep: gpu token: .*serial rerun' "$local_log"
+# Each GPU leg's dune ran with the unit's token held beside the worker's; the RTC context, which
+# runs no GPU test, took none.
+awk -F '\t' -v holds='1 2' '
+  $1 ~ / --force @runtest @train$/ || $1 ~ / -j 1 @test\/runtest-state-probe$/ || $1 ~ / -j 1 @runtest @train$/ {
+    if ($2 != holds) exit 1; legs++ }
+  $1 ~ /test_cuda_compile_options/ { if ($2 != "1") exit 1; rtc++ }
+  END { if (legs != 3 || rtc != 1) exit 1 }' "$remote_root/token-states"
+# ...and released it: the slot is free again once the unit is done.
+perl -e 'use Fcntl ":flock"; open(my $h, ">>", $ARGV[0]) or exit 1; exit(flock($h, LOCK_EX | LOCK_NB) ? 0 : 1)' \
+  "$rog_slots/slot.2"
+# The sidecar is the fleet's co-tenant vocabulary: box, event, at; pid, user, command per holder.
+perl -MJSON::PP -e 'my $pid = shift; while (my $l = <>) { my $r = JSON::PP->new->decode($l);
+    next unless $r->{event} eq "opened"; my ($h) = @{ $r->{token_holders} };
+    exit !($r->{box} eq "rog-nv-linux" && $r->{at} =~ /\+00:00$/ && $h->{pid} == $pid
+      && $h->{kind} eq "gpu" && $h->{slot} == 1 && length $h->{command}) } exit 1' \
+  "$holder_one" "${local_log%.log}.gpu-tokens"
+
+# Both tokens held past the unit's wait: a `skip` naming the holders, and no suite started.
+token_holder "$rog_slots/slot.2"
+holder_two=$token_holder_pid
+fixture_locks "$tmp/locks-two" "$rog_slots/slot.1" "$holder_one" "$rog_slots/slot.2" "$holder_two"
+: >"$remote_root/commands"
+local_tokens=$(SWEEP_TEST_PROC_LOCKS=$tmp/locks-two SWEEP_TEST_TOKEN_WAIT=1 \
+  remote_sweep --only cuda --target token-busy)
+local_record=$(sed -n 's/^run:  *//p' <<<"$local_tokens")
+grep -q '^  rog-nv/cuda: skip (no GPU token on rog-nv-linux: no GPU token came free within 1s; [0-9]*s)$' \
+  <<<"$local_tokens"
+grep -q "^  rog-nv/cuda: gpu tokens: 2 of 2 held by other batches at refused on rog-nv-linux -- slot 1 pid $holder_one .*; slot 2 pid $holder_two " \
+  <<<"$local_tokens"
+[ "$(awk -F '\t' '$1 == "unit" {print $4 ":" $12}' "$local_record")" = 'skip:opened=2/2,refused=2/2' ]
+absent 'token-busy' "$remote_root/commands"
+kill "$holder_one" "$holder_two" 2>/dev/null || true
+wait "$holder_one" "$holder_two" 2>/dev/null || true
+
+# A take the fleet's machinery cannot answer (an anchor whose registry did not) fails OPEN, as the
+# sweep's registry read does: the leg runs without a token, and the summary says so.
+: >"$tmp/locks-none"
+local_tokens=$(SWEEP_TEST_PROC_LOCKS=$tmp/locks-none SWEEP_TEST_SLOT_UNREACHABLE=1 \
+  remote_sweep --only cuda --target token-unreachable)
+grep -q '^  rog-nv/cuda: incremental-pass ' <<<"$local_tokens"
+grep -qF '  rog-nv/cuda: gpu token: WARNING: not taken (execution slot exited 4), so this leg runs WITHOUT one' \
+  <<<"$local_tokens"
+grep -q 'token-unreachable$' "$remote_root/commands"
+
+# Where the tokens do not bind (minix: four and four), the unit records its readings and takes none.
+: >"$fleet_calls"
+local_tokens=$(SWEEP_TEST_PROC_LOCKS=$tmp/locks-none remote_sweep --only hip --target token-free)
+local_record=$(sed -n 's/^run:  *//p' <<<"$local_tokens")
+[ "$(awk -F '\t' '$1 == "unit" && $2 == "minix" {print $12}' "$local_record")" = 'opened=0/4,closed=0/4' ]
+absent -- '--gpu' "$fleet_calls"
+absent 'gpu tokens:' <<<"$local_tokens"
+
+# A system sleep inside a native unit's window (gh-ocannl-1039): the boot id survives it, the
+# power-management core's lines in the window do not. A red unit is environment-red for it and gets
+# its serial rerun; a unit the sleep ended unjudged is said to be about the box.
+remote_reset
+printf '%s\t%s\n' 1 'kernel: PM: suspend entry (s2idle)' 1 'kernel: PM: suspend exit' \
+  1 'kernel: amdgpu 0000:c5:00.0: ring sdma0 uses VM inv eng 12 on hub 0' \
+  >"$remote_root/minix-amd-linux/journal-template"
+local_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$remote_failure" \
+  remote_sweep --only hip --target test/operations)
+local_record=$(sed -n 's/^run:  *//p' <<<"$local_control")
+[ "$(remote_row "$local_record")" = fail:suspended:native ]
+grep -q '^  minix/hip: serial rerun: all clean$' <<<"$local_control"
+git -C "$remote_root/minix-amd-linux/ocannl-staging" remote set-url origin "$tmp/absent-origin"
+local_control=$(remote_sweep --only hip --target remote-slept)
+grep -q '^  minix/hip: error (cannot pin ' <<<"$local_control"
+grep -q '^  minix/hip: the box SUSPENDED mid-unit' <<<"$local_control"
+# ...but the dGPU's own runtime resume, which re-prints the same ring table all day, is no sleep.
+remote_reset
+printf '%s\t%s\n' 1 'kernel: amdgpu 0000:c5:00.0: ring sdma0 uses VM inv eng 12 on hub 0' \
+  >"$remote_root/minix-amd-linux/journal-template"
+local_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$remote_failure" \
+  remote_sweep --only hip --target test/operations)
+local_record=$(sed -n 's/^run:  *//p' <<<"$local_control")
+[ "$(remote_row "$local_record")" = fail:0:native ]
+absent 'serial rerun' <<<"$local_control"
+
 # The former SSH fake and broken shipping commands must lose these oracles.
 # Children isolate the remote cases and never recurse into the controls.
 if [ "$remote_only" = 0 ]; then
@@ -369,6 +516,9 @@ controls = [
     ('no-lock', 'sweep', '''  printf 'mkdir -p "$(dirname "%s")" && exec 9>"%s.lock" && flock -n 9 || exit 126; ' "$1" "$1"''', "  printf ':; '", 'remote_row'),
     ('no-retry', 'sweep', '    [ -n "$GUEST_ID" ] && return 0', '    return 0 # lost identity retry', 'error:vm-replaced:dxg'),
     ('no-credential-scrub', 'sweep', '''  printf 'opam exec -- sh -c %s sweep-dune dune' \\''', "  printf 'opam exec -- dune'; : \\", 'credentials reached dune'),
+    # A suite leg that skips its GPU token (gh-ocannl-1177): the rerun's legs still take one, so
+    # only the count of held legs can tell.
+    ('suite-without-token', 'sweep', '''    [ -z "$TOKEN_TAKE" ] || remote=$(gpu_token_take_cmd "$TOKEN_FW" "$TOKEN_WAIT" "$wt.gpu-token" "$remote")''', '    :', 'execution slot --gpu --wait 1800'),
 ]
 # A shell between the far-side supervisor and test_cmd's `sh -c`: its watcher's "$PPID" is then
 # that shell, so the hung test outlives the unit. Only the remote per-test cap leg sees it, and

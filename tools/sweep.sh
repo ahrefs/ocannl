@@ -56,7 +56,12 @@
 #                                      # device_probe_cmd)
 #   OCANNL_TOOL_FLEET_WORKER=none tools/sweep.sh  # do not consult the fleet's execution registry,
 #                                      # which otherwise skips a unit whose box is under an
-#                                      # exclusive measurement (sweep_fleet_under_measurement)
+#                                      # exclusive measurement (sweep_fleet_under_measurement), nor
+#                                      # a GPU box's own fleet-worker.sh, through which a GPU unit
+#                                      # reads the box's GPU-token holders and, where the tokens
+#                                      # bind, takes one (tools/gpu-tokens.sh)
+#   OCANNL_TOOL_SWEEP_TOKEN_WAIT=600 tools/sweep.sh  # how long a GPU leg waits for a token before
+#                                      # its unit records `skip` (default 1800s)
 
 set -uo pipefail
 
@@ -144,6 +149,12 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=sweep-unit-state.sh
 . "$SWEEP_TOOLS/sweep-unit-state.sh"
+[ -r "$SWEEP_TOOLS/gpu-tokens.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/gpu-tokens.sh" >&2
+  exit 2
+}
+# shellcheck source=gpu-tokens.sh
+. "$SWEEP_TOOLS/gpu-tokens.sh"
 
 # ---------------------------------------------------------------- the lab lock
 # The WSL boxes are shared, and `wsl.exe --shutdown` on one of them is HOST-GLOBAL: it destroys the
@@ -342,6 +353,13 @@ case $PROBE in
     exit 2 ;;
 esac
 PROBE_CAP=${OCANNL_TOOL_SWEEP_DEVICE_PROBE_CAP:-$DEVICE_PROBE_CAP_DEFAULT}
+# How long a GPU leg waits for one of its box's GPU tokens where the tokens bind (gpu_token_take_cmd).
+TOKEN_WAIT=${OCANNL_TOOL_SWEEP_TOKEN_WAIT:-$GPU_TOKEN_WAIT_DEFAULT}
+case $TOKEN_WAIT in
+  '' | *[!0-9]*)
+    echo "sweep: OCANNL_TOOL_SWEEP_TOKEN_WAIT must be a whole number of seconds, not '$TOKEN_WAIT'" >&2
+    exit 2 ;;
+esac
 case $PROBE_CAP in
   '' | 0 | *[!0-9]*)
     echo "sweep: OCANNL_TOOL_SWEEP_DEVICE_PROBE_CAP must be a positive number of seconds, not '$PROBE_CAP'" >&2
@@ -527,20 +545,28 @@ refusal_with_status() { # log name status
 # boot's GPU drivers alike (gh-ocannl-1034). The rerun's `still red` /
 # `all clean` verdict remains the judge either way: this decides that the unit is
 # rerun, never that its failures were the environment's.
-environment_red() { # log
+#
+# The two name lists read the unit's LOG, and only a GPU unit's (gh-ocannl-1039): they name
+# device refusals, which a CPU unit cannot meet, while a CPU unit's log holds whatever its tests
+# printed -- and this repository's own sweep harness prints refusal fixtures when it fails, so a
+# local cc unit whose harness went red read as environment-red and was rerun instead of reported.
+# The collected window needs no such gate: only a remote GPU unit has one (window_sidecar).
+environment_red() { # log backend
   local name status
-  while read -r name status; do
-    [ -n "$name" ] || continue
-    if [ -z "$status" ]; then
-      grep -q "^Fatal error: exception $name:" "$1" && return 0
-    else
-      refusal_with_status "$1" "$name" "$status" && return 0
-    fi
-  done <<<"$ENVIRONMENT_REFUSALS"
-  while IFS= read -r name; do
-    [ -n "$name" ] &&
-      grep -qE "^[^ ]+: [^ ]+:[0-9]+: .*${name}.*: Assertion .* failed\.$" "$1" && return 0
-  done <<<"$ENVIRONMENT_ASSERTIONS"
+  if ! box_jobs_cpu_backend "$2"; then
+    while read -r name status; do
+      [ -n "$name" ] || continue
+      if [ -z "$status" ]; then
+        grep -q "^Fatal error: exception $name:" "$1" && return 0
+      else
+        refusal_with_status "$1" "$name" "$status" && return 0
+      fi
+    done <<<"$ENVIRONMENT_REFUSALS"
+    while IFS= read -r name; do
+      [ -n "$name" ] &&
+        grep -qE "^[^ ]+: [^ ]+:[0-9]+: .*${name}.*: Assertion .* failed\.$" "$1" && return 0
+    done <<<"$ENVIRONMENT_ASSERTIONS"
+  fi
   window_red "$1" && return 0
   return 1
 }
@@ -722,8 +748,19 @@ printf '' >>"$HISTORY" || die "cannot append to $HISTORY"
 # bare pid could TERM an unrelated process. The job table is the parent's own
 # record of child completion, so it holds however the child ended, SIGKILL
 # included, where a marker the child removes on its way out would not.
+#
+# The WAIT is not gated that way: every registered child is waited for, live or
+# not. `wait` on a pid this shell has already reaped returns at once, and waits
+# for nothing that is not its own child, so it cannot reach a recycled pid; and
+# it is the one way to know a lane's EXIT trap has FINISHED, which is what the
+# top level's own exit -- the coordination directory's removal, the record, the
+# lanes' last lines (publish_lane_buffers) -- must come after (gh-ocannl-1039).
 UNIT_PID=
 LANE_PIDS=
+# The lanes' coordination directory and the lanes themselves, declared here for
+# the relay, which reads both before they are given (see LANE_DIR below).
+LANE_DIR=
+LANES=()
 # Which level of the run this shell is: the top level (0) or a lane subshell
 # (1). Only the top level owns run-wide artifacts -- the run record, in
 # particular -- and a lane installs the same traps, so the two cannot be told
@@ -753,7 +790,7 @@ relay() {
     case $running in *" $pid "*) live="$live $pid" ;; esac
   done
   for pid in $live; do kill -TERM "$pid" 2>/dev/null; done
-  for pid in $live; do wait "$pid" 2>/dev/null; done
+  for pid in $UNIT_PID $LANE_PIDS; do wait "$pid" 2>/dev/null; done
   # A lane stops taking signals once its unit is reaped: the top level relays its own TERM to every
   # lane as well, and a second relay arriving while the lane's EXIT trap runs ends the lane there --
   # before lane_exit has asked for its gated box's sleep and published the line saying so (the
@@ -765,6 +802,9 @@ relay() {
   # once there is a coordination directory to read the lanes' evidence from. A
   # failure to write it must not replace the cancellation's exit status, so it
   # is reported rather than fatal.
+  # Every lane has exited by now, so what a stopped one buffered is printed here, ahead of the
+  # record's locator.
+  [ "$IN_LANE" = 1 ] || publish_lane_buffers
   if [ -n "$RUN_RECORD" ] && [ "$IN_LANE" = 0 ]; then
     if write_run_record cancelled; then
       announce_run_record
@@ -1349,6 +1389,11 @@ finish_remote_window() { # machine backend host log outcome remote-start-epoch s
     error | timeout)
       { [ "$REMOTE_GUEST_REPLACED" = 1 ] || window_guest_replaced "$log"; } &&
         say "  $machine/$backend: the guest was REPLACED mid-unit -- this unit tested nothing, and its result is about the box, not the code; rerun it (reruns are incremental)"
+      # The same for a box that SLEPT mid-unit (gh-ocannl-1039): its boot id survives, so only the
+      # window's power-management lines say it, and a sleep mostly ends a unit as `timeout` -- the
+      # per-test cap reads the frozen hours as a hung test.
+      window_box_slept "$log" &&
+        say "  $machine/$backend: the box SUSPENDED mid-unit -- its result is about the box, not the code; rerun it (reruns are incremental)"
       ;;
   esac
   return 0
@@ -1775,7 +1820,7 @@ run_rows() { # -> machine, backend, outcome, log for each row of this run
 # owed at all: before that nothing has been swept and the absence is the signal.
 write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-run-failed
   local kind=$1 unit machine backend host outcome log stopped stage rows
-  local window window_start window_end bursts window_kind_field
+  local window window_start window_end bursts window_kind_field tokens_field
   stage=$RUN_RECORD.stage.$$
   rows=$(run_rows) || return 1
   {
@@ -1796,7 +1841,12 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
     # (unit_memory: `discrete/gfx1102`, `unified/gfx1151`, ... or `-`), and its outcome a value, `gate`,
     # when hip came to run on two boxes of different memory models (gh-ocannl-1035): a consumer
     # keyed on backend alone would merge them, and a schema-4 reader's outcome set has no `gate`.
-    printf 'schema\t5\n'
+    # Schema 6: the `unit` row gained a twelfth field, the box's GPU-TOKEN readings
+    # (gpu_tokens_summary field: `opened=1/2,closed=0/2`, `?` for an unread one, `-` for none), and
+    # the window's count a fifth value, `suspended` (the box slept inside the window), both for
+    # gh-ocannl-1039/1177: a schema-5 reader's count set has no `suspended`. A `skip` row can now
+    # also come from a unit that waited out its GPU token, and carries a log.
+    printf 'schema\t6\n'
     printf 'run\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$stamp" "$run_sha" "$REF" "${TARGET:-<all>}" "$SLOW" "$execution" "$kind"
     for unit in "${UNITS[@]}"; do
@@ -1849,9 +1899,13 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
           [ -n "$window_kind_field" ] || window_kind_field=-
         fi
       fi
-      printf 'unit\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" \
+      # The GPU-token readings, from the unit's own sidecar beside the log the row names
+      # (gpu_tokens_sidecar), as the window's fields come from theirs.
+      tokens_field=-
+      [ "$log" = - ] || tokens_field=$(gpu_tokens_summary field "$(gpu_tokens_sidecar "$log")")
+      printf 'unit\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" \
         "$outcome" "$stopped" "$log" "$window_start" "$window_end" "$bursts" "$window_kind_field" \
-        "$(unit_memory "$machine" "$backend")"
+        "$(unit_memory "$machine" "$backend")" "${tokens_field:--}"
     done
     for unit in "${UNITS[@]}"; do
       IFS=: read -r machine backend host <<<"$unit"
@@ -1972,14 +2026,21 @@ suite_completion_cmd() { # backend wt
 
 # Run a post-unit shell command where the unit's worktree lives, under its lock
 # and the unit's CAP, appending to the log (the serial rerun's legs, the box check).
+# The serial rerun's legs -- its stanzas and the completion pass -- hold the GPU, so
+# where the unit takes a token they each take one too (gh-ocannl-1177); the box check
+# runs no GPU test and takes none.
 run_on_unit_host() { # host wt cmd log path_prefix [leg]
-  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5 leg=${6:-serial-rerun}
+  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5 leg=${6:-serial-rerun} remote budget=$(( CAP + 300 ))
   if [ -n "$host" ]; then
-    run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+    remote=$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
+      "$(sleep_guard_why "$host" "$leg")")
+    if [ -n "$TOKEN_TAKE" ] && [ "$leg" = serial-rerun ]; then
+      remote=$(gpu_token_take_cmd "$TOKEN_FW" "$TOKEN_WAIT" "$wt.gpu-token" "$remote")
+      budget=$(( budget + TOKEN_WAIT ))
+    fi
+    run_capped "$budget" ssh -o BatchMode=yes -o ConnectTimeout=8 \
       -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-      "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
-        "$(sleep_guard_why "$host" "$leg")")" \
-      >>"$log" 2>&1
+      "$host" "$remote" >>"$log" 2>&1
   else
     run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
   fi
@@ -2001,7 +2062,7 @@ serial_rerun() { # backend host wt log label [path_prefix]
   local log_lines bound
   local aliases=() fallback_aliases=() inline_entries=() inline_sites=()
   local unmapped=() red=() unjudged=()
-  environment_red "$log" || return 0
+  environment_red "$log" "$backend" || return 0
   while IFS= read -r line; do
     case $line in
       "alias "*) aliases+=("${line#alias }") ;;
@@ -2095,6 +2156,11 @@ serial_rerun() { # backend host wt log label [path_prefix]
   [ -z "$bound" ] || say "  $label: serial rerun: DEVICE UNHEALTHY, no stanza ran: a fresh device query for $bound"
   bound=$(tail -n "+$((log_lines + 1))" "$log" | sed -n 's/^sweep: per-test cap: //p' | head -n 1)
   [ -z "$bound" ] || say "  $label: serial rerun: hung test, past the per-test cap: $bound"
+  # A leg of the rerun its GPU token never came to (gh-ocannl-1177): what it would have run is
+  # unjudged above, and this says why.
+  bound=$(gpu_token_refusal "$log" "$((log_lines + 1))")
+  [ -z "$bound" ] || say "  $label: serial rerun: a leg ran nothing, refused its GPU token: $bound"
+  say_token_warning "$log" "$label"
   return 0
 }
 
@@ -2187,6 +2253,42 @@ say_unguarded() { # log label
 }
 UNGUARDED_SAID=0
 
+# The fleet's GPU tokens around a remote GPU unit (gh-ocannl-1177; tools/gpu-tokens.sh says what each
+# reading holds and where the tokens bind). TOKEN_TAKE is set for a unit whose box's tokens bind,
+# with the box's own fleet-worker.sh and fleet name beside it; every GPU leg of that unit then runs
+# inside a token (gpu_token_take_cmd). Lane-local, reset per unit.
+TOKEN_TAKE=
+TOKEN_FW=
+TOKEN_BOX=
+TOKEN_WARNED=0
+
+# One reading of a remote GPU unit's box, appended to the unit's sidecar. Through run_capped and a
+# file, for the reason remote_guest_id gives. Asked of the box's own fleet-worker.sh, found under
+# the box's home by the same candidate list this host's is found by; `OCANNL_TOOL_FLEET_WORKER=none`
+# asks nothing, as it consults no registry.
+read_gpu_tokens() { # event host log remote-home
+  local event=$1 host=$2 log=$3 answer rc c cands=()
+  [ "${OCANNL_TOOL_FLEET_WORKER-}" != none ] || return 0
+  while IFS= read -r c; do [ -n "$c" ] && cands+=("$c"); done < <(fleet_worker_candidates "$4")
+  answer=$log.tokens.$$
+  run_capped 90 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=2 "$host" \
+    "$(remote_capped 60 "$(gpu_tokens_cmd "$event" "${cands[@]:-}")")" >"$answer" 2>/dev/null </dev/null
+  rc=$?
+  gpu_tokens_append "$(gpu_tokens_sidecar "$log")" "$event" "$answer" "$rc" ||
+    say "  $CURRENT_UNIT: WARNING -- could not record its $event GPU-token reading"
+  rm -f "$answer"
+}
+
+# A leg that ran without the token it should have had says so once per unit, where the routine reads.
+say_token_warning() { # log label
+  local line
+  [ "$TOKEN_WARNED" = 0 ] || return 0
+  line=$(grep -m 1 '^sweep: gpu token: WARNING: ' "$1" 2>/dev/null) || return 0
+  TOKEN_WARNED=1
+  say "  $2: ${line#sweep: }"
+}
+
 # One unit, start to finish: preparation, the capped suite, the recorded row, and
 # the post-unit phases (RTC context, serial rerun, fingerprint, unit state), all
 # on the machine that owns the unit and inside its lane. The post-unit phases
@@ -2196,15 +2298,21 @@ run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
   local log started remote_home remote_probe remote_started remote_boot wt path_prefix= remote_repo
   local remote_prep remote rc elapsed outcome unreachable=skip unguarded hung unhealthy
+  local refused take_slots= take_tokens= line
   WRITTEN_FINGERPRINT=
   CURRENT_UNIT=$machine/$backend
   UNGUARDED_SAID=0
+  TOKEN_TAKE=
+  TOKEN_FW=
+  TOKEN_BOX=
+  TOKEN_WARNED=0
   # A gated box that answered its status check and then not the unit (its Wi-Fi dropped, it went
   # back to sleep) is still outside this run's control: `gate`, as it would have been a minute
   # earlier, not the `skip` that asks why the caller's wake did not take.
   [ -n "$host" ] && lab_box_gated "$(lab_box_of "$host")" && unreachable=gate
 
   log=$LOGS/$stamp-$machine-$backend.log
+  rm -f "$(gpu_tokens_sidecar "$log")"
   started=$(date +%s)
 
   if [ -n "$host" ]; then
@@ -2284,6 +2392,23 @@ run_unit() { # machine backend host
       *-wsl) path_prefix="export PATH=/usr/local/cuda/bin:/usr/lib/wsl/lib:\$PATH;" ;;
       *) path_prefix="export PATH=/usr/local/cuda/bin:\$PATH;" ;;
     esac
+    # A GPU unit's box: who holds its GPU tokens now (the `opened` reading), what the registry has
+    # reserved there, and -- where the tokens bind -- the fleet-worker.sh this unit takes one
+    # through (gh-ocannl-1177). Before the preparation, so a contended box is on record however the
+    # unit then ends.
+    if ! box_jobs_cpu_backend "$backend"; then
+      [ -z "${BOX_RESERVATIONS:-}" ] ||
+        gpu_tokens_append_reservations "$(gpu_tokens_sidecar "$log")" "$(lab_box_of "$host")" \
+          "$BOX_RESERVATIONS" || :
+      read_gpu_tokens opened "$host" "$log" "$remote_home"
+      # `<fleet-worker.sh> <box> <slots> <tokens>`; the tokens bind where there are fewer of them.
+      read -r TOKEN_FW TOKEN_BOX take_slots take_tokens _ \
+        <<<"$(gpu_tokens_summary take "$(gpu_tokens_sidecar "$log")")"
+      case ${take_slots:-x}${take_tokens:-x} in
+        *[!0-9]*) ;;
+        *) [ "$take_tokens" -ge "$take_slots" ] || TOKEN_TAKE=1 ;;
+      esac
+    fi
     # Preparation is its own ssh round trip so that its failure -- a connection
     # dropped after the probe, a full disk, a wedged worktree -- is recorded as
     # `error`, matching the local path. Folded into the test command it would
@@ -2326,6 +2451,8 @@ run_unit() { # machine backend host
     # script advertises.
     remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(box_jobs_sweep_jobs "$machine" "$backend" "$host")" "$host")" \
       "$(sleep_guard_why "$host" suite)")"
+    # Inside one of the box's GPU tokens where they bind, waited for up to TOKEN_WAIT on the far side.
+    [ -z "$TOKEN_TAKE" ] || remote=$(gpu_token_take_cmd "$TOKEN_FW" "$TOKEN_WAIT" "$wt.gpu-token" "$remote")
     # The far-side cap does not bound the LOCAL ssh: if the connection blackholes
     # after the command starts -- the box suspends, the WiFi drops -- the remote
     # cap may kill dune while this ssh sits waiting for a status that will
@@ -2339,7 +2466,7 @@ run_unit() { # machine backend host
     # budget deliberately exceeds $CAP, so it can only fire after the remote cap
     # has had its chance plus room for cleanup and teardown; otherwise it
     # would cut legitimate long runs short and call them timeouts.
-    run_capped "$(( CAP + 300 ))" \
+    run_capped "$(( CAP + 300 + ${TOKEN_TAKE:+TOKEN_WAIT+}0 ))" \
       ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
       "$host" "$remote" >"$log" 2>&1
     rc=$?
@@ -2370,6 +2497,22 @@ run_unit() { # machine backend host
   fi
 
   elapsed=$(( $(date +%s) - started ))
+  # A unit whose box's GPU tokens stayed taken past its wait never started its suite: a `skip`,
+  # like a box another lane holds -- nothing was tested and nothing failed -- naming the batches that
+  # held the tokens, read the moment the wait ended (gh-ocannl-1177). Never run anyway: that is the
+  # third concurrent cuda batch the box's two tokens exist to exclude. 75 with the take's own
+  # refusal line only; any other 75 is whatever the suite exited with.
+  refused=
+  [ "$rc" != 75 ] || [ -z "$TOKEN_TAKE" ] || refused=$(gpu_token_refusal "$log")
+  if [ -n "$refused" ]; then
+    read_gpu_tokens refused "$host" "$log" "$remote_home"
+    say "  $machine/$backend: skip (no GPU token on $TOKEN_BOX: $refused; ${elapsed}s)"
+    while IFS= read -r line; do say "  $machine/$backend: $line"; done \
+      < <(gpu_tokens_summary report "$(gpu_tokens_sidecar "$log")")
+    record "$machine" "$backend" skip "$elapsed" "$log"
+    sweep_state_update "$machine" "$backend" skip
+    return 0
+  fi
   # A hang, a lost connection and a red test call for different responses, so
   # keep them apart. 142 is the supervisor's expiry (128+SIGALRM), on either
   # side of the ssh now that the remote unit runs under it too. 124 and 137 are
@@ -2415,6 +2558,15 @@ run_unit() { # machine backend host
   [ -z "$unhealthy" ] ||
     say "  $machine/$backend: DEVICE UNHEALTHY, dune not started: a fresh device query for $unhealthy"
   record "$machine" "$backend" "$outcome" "$elapsed" "$log" "$execution"
+  # Who held the box's GPU tokens as the suite ended (the `closed` reading), and every reading that
+  # saw another batch on the GPU, named on the summary: a launch OOM beside them is contention until
+  # the serial rerun says otherwise. A remote GPU unit only, as its `opened` reading was.
+  if [ -n "$host" ] && ! box_jobs_cpu_backend "$backend"; then
+    read_gpu_tokens closed "$host" "$log" "$remote_home"
+    while IFS= read -r line; do say "  $machine/$backend: $line"; done \
+      < <(gpu_tokens_summary report "$(gpu_tokens_sidecar "$log")")
+    say_token_warning "$log" "$machine/$backend"
+  fi
   # The kernel's own evidence for THIS unit's window, before the rerun
   # decision that reads it -- and before the RTC diagnostics below, which is not
   # mere ordering: `nvidia-smi` and `rocminfo` cross /dev/dxg themselves, so a
@@ -2505,7 +2657,8 @@ else echo 'check-box: not at this revision'; exit 3; fi" "$log" "$path_prefix" b
 # Publish the lane's buffered unit lines as one block, under a run-wide lock so
 # two lanes finishing together cannot interleave their blocks. The buffer is
 # emptied only after a publication that succeeded: a failed one returns non-zero
-# with the lines still in it, for the caller to die over and lane_exit to rescue.
+# with the lines still in it, for the caller to die over and the top level to
+# rescue (publish_lane_buffers).
 flush_lane_output() {
   [ -s "$LANE_OUT" ] || return 0
   perl -e 'use Fcntl ":flock";
@@ -2518,14 +2671,35 @@ flush_lane_output() {
   : >"$LANE_OUT"
 }
 
-# The lane's EXIT trap. A lane that dies or is cancelled mid-unit still publishes
-# what its unit had said -- the serial loop's lines were already on stdout by
-# then -- or, if stdout itself is what failed, puts them on stderr rather than
-# losing them. bash 3.2 runs a subshell's EXIT trap only on an explicit `exit`,
-# which is why run_lane ends with one.
+# The lane's EXIT trap. bash 3.2 runs a subshell's EXIT trap only on an explicit
+# `exit`, which is why run_lane ends with one.
+#
+# It prints NOTHING. A lane that dies or is cancelled mid-unit leaves what its unit
+# had said in its buffer, and the top level prints that once the lane has exited
+# (publish_lane_buffers): a trap runs with the stdout of whatever it interrupted,
+# and mid-unit that is the unit's LOG -- `run_capped ... >"$log"` holds that
+# redirection while it waits, and the relay's `exit` runs the trap inside it. So
+# a cancelled lane's last lines, the gated box's early-sleep line among them, went
+# into the unit's log and never reached the sweep's output (gh-ocannl-1039; read
+# at first as the top level not waiting for its lanes under bash 3.2, which it
+# does).
 lane_exit() {
   sleep_gated_box_after_early_exit
-  flush_lane_output || cat "$LANE_OUT" >&2
+}
+
+# What the lanes buffered and did not publish themselves, printed by the top level
+# in table order once every lane has exited: on the normal path that is a lane that
+# stopped on its own `die`, and on a cancellation every lane that was mid-unit. Onto
+# stderr where stdout is what fails, rather than lost.
+publish_lane_buffers() {
+  local lane buffer
+  [ -n "$LANE_DIR" ] && [ -d "$LANE_DIR" ] || return 0
+  for lane in "${LANES[@]:-}"; do
+    buffer=$LANE_DIR/output.$lane
+    [ -n "$lane" ] && [ -s "$buffer" ] || continue
+    cat "$buffer" 2>/dev/null || cat "$buffer" >&2
+    : >"$buffer"
+  done
 }
 
 # The early-exit half of the gated box's sleep (run_lane has the normal one). A lane that reached
@@ -2552,10 +2726,11 @@ sleep_gated_box_after_early_exit() {
   early_say "  $box: the lane stopped early, so its sleep was requested in the background (wake-lab.sh sleep $box; output in $out)"
 }
 
-# `say` for a lane on its way out, which must not `die` over a buffer that is gone: a cancelled
-# top level does not order its exit after its lanes', and its EXIT trap removes the coordination
-# directory the buffer lives in. Best-effort, onto stderr when the buffer is gone; the durable
-# record of the early sleep is its own log beside the run's.
+# `say` for a lane on its way out, which must not `die` over a buffer that is gone. The top level
+# waits for its lanes before it removes the coordination directory the buffer lives in, and prints
+# the buffer after the lane exits (publish_lane_buffers), so the line normally reaches the sweep's
+# output; should the buffer be gone after all, it goes onto stderr, and the durable record of the
+# early sleep is its own log beside the run's either way.
 early_say() {
   printf '%s\n' "$*" 2>/dev/null >>"$LANE_OUT" || printf '%s\n' "$*" >&2
 }
@@ -2687,6 +2862,9 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
     IFS=: read -r machine backend host <<<"$unit"
     [ "$machine" = "$lane" ] || continue
     wanted "$backend" || continue
+    # The registry's reservations on the box, which a GPU unit records beside its token readings;
+    # only from THIS unit's read, never a previous unit's.
+    BOX_RESERVATIONS=
     if [ -n "$lane_names" ]; then
       # Unquoted on purpose: the names are ssh aliases and a fleet box name, which never hold a space
       # or a glob character, and each must reach the reader as its own argument.
@@ -2844,6 +3022,8 @@ for ((i = 0; i < ${#LANES[@]}; i++)); do
   fi
 done
 LANE_PIDS=
+# A lane that stopped on its own `die` may have left lines it never published.
+publish_lane_buffers
 
 # The record is written before anything that summarises the run, and on BOTH
 # paths out of it: a lane-stopped exit 2 is exactly the case where the consumer
