@@ -98,7 +98,9 @@
 #      same verdict, while a merely red iteration is still repeated in full.
 #  39. read-only paths and lock-status: absent state, invalid input, physical
 #      paths, recorded and legacy paths, held/released and uninspectable locks.
-#  40-47. run/start lifecycle: completion, signals, stop, competing launches,
+#  40-47. run/start lifecycle: completion, signals (a group TERM landing inside
+#      the attached launcher's own liveness probe included, with its
+#      unsettled-probe control; gh-ocannl-1362), stop, competing launches,
 #      orphan/background groups, publication window, last and legacy locks,
 #      and byte-identical source-tree preservation.
 #  48-52 sit beside the dxg legs, after leg 34: the native caps
@@ -4742,6 +4744,73 @@ if [ "$life_posix" = 1 ] && [ "$have_state" = 1 ] && [ "$have_pgid" = 1 ]; then
     else report 1 "lifecycle: $life_signal publishes the matching verdict and sentinel"; fi
     life_no_survivors "$life_signal"
   done
+
+  # gh-ocannl-1362: the group TERM landing INSIDE the attached launcher's own
+  # liveness probe, which it kills along with the launcher and the supervisor.
+  # Load put it there by chance in CI; this cat shim puts it there every time.
+  # The launcher's `cat <run>/resolved`, just before its attached wait, arms
+  # it; the next `cat <run>/pid` -- that wait's first probe, in the launcher's
+  # process group -- sends TERM to its own group and dies of it. The control
+  # runs the launcher with plain sup_alive in that loop: it must report the
+  # run dead while the supervisor goes on to publish the cancellation.
+  life_real_cat=$(command -v cat)
+  for probe_case in settled control; do
+    cp "$SRC" "$life_root/tools/test-run.sh"
+    if [ "$probe_case" = control ]; then
+      probe_n=$(grep -c 'while sup_alive_settled "\$run_dir"; do wait "\$sup"' "$SRC")
+      sed 's/while sup_alive_settled "\$run_dir"; do wait "\$sup"/while sup_alive "$run_dir"; do wait "$sup"/' \
+        "$SRC" >"$life_root/tools/test-run.sh"
+      if [ "$probe_n" != 1 ] ||
+         grep -q 'while sup_alive_settled "\$run_dir"; do wait' "$life_root/tools/test-run.sh"; then
+        report 1 'lifecycle: probe control extraction' "matches=$probe_n"; exit 1
+      fi
+    fi
+    rm -f "$life_prefix.ready" "$life_prefix.release" "$life_prefix.probe-armed" "$life_prefix.probe-fired"
+    cat >"$life_bin/cat" <<EOF
+#!/usr/bin/env bash
+case \${1:-} in
+  */resolved) printf '%s\n' "\${1%/resolved}" >"$life_prefix.probe-armed" ;;
+  */pid)
+    if [ "\$("$life_real_cat" "$life_prefix.probe-armed" 2>/dev/null)/pid" = "\$1" ] &&
+       mv "$life_prefix.probe-armed" "$life_prefix.probe-fired" 2>/dev/null; then
+      kill -TERM 0
+      exit 143
+    fi ;;
+esac
+exec "$life_real_cat" "\$@"
+EOF
+    chmod +x "$life_bin/cat"
+    OCANNL_TOOL_TEST_RUNS=$life_runs LIFECYCLE_PREFIX=$life_prefix \
+    LIFECYCLE_TOKEN_HELPER=$TMP/ps_token.sh PATH=$life_bin:$PATH \
+      perl -MPOSIX -e '$SIG{INT}="DEFAULT"; POSIX::setpgid(0,0); exec @ARGV' \
+      "$life_root/tools/test-run.sh" run --cap 30 hold >"$TMP/lifecycle.out" 2>"$TMP/lifecycle.err" &
+    life_pid=$!
+    life_wait_child
+    rm "$life_bin/cat"
+    life_run=$(life paths run last)
+    if [ ! -e "$life_prefix.probe-fired" ]; then
+      report 1 "lifecycle: $probe_case: the group TERM landed inside the launcher's probe" \
+        "exit $life_rc; $(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"
+    elif [ "$probe_case" = settled ]; then
+      life_check 143 'verdict: CANCELLED' 'a group TERM inside the attached probe still returns cancellation'
+      if [ "$(cat "$life_run/exit")" = 143 ] && [ "$(tail -n 1 "$life_run/log")" = 'exit: 143' ]; then
+        report 0 'lifecycle: probe-killing group TERM publishes the matching verdict and sentinel'
+      else report 1 'lifecycle: probe-killing group TERM publishes the matching verdict and sentinel'; fi
+      life_no_survivors 'probe-killing group TERM'
+    else
+      # The supervisor was alive all along: it publishes after the launcher
+      # gave up on it, which is the CI signature, verdict file and all.
+      if [ "$life_rc" = 1 ] && grep -q 'died without recording a verdict' "$TMP/lifecycle.out" &&
+         await_fixture_ready "$life_run/exit" && [ "$(cat "$life_run/exit")" = 143 ] &&
+         life_await_dead "$(cat "$life_run/pid")"; then
+        report 0 'negative control: an unsettled probe reports a live supervisor dead'
+      else report 1 'negative control: an unsettled probe reports a live supervisor dead' \
+        "exit $life_rc; $(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"; fi
+      life_no_survivors 'unsettled-probe control'
+    fi
+    lifecycle_cleanup
+  done
+  cp "$SRC" "$life_root/tools/test-run.sh"
   life_start
   life_supervisor=$(cat "$life_run/pid")
   kill -KILL "$life_supervisor"

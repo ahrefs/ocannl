@@ -935,6 +935,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   mask after assignment; the child restores it after resetting all four handlers to DEFAULT.
   `tools/test-test-run.sh` leg 74 injects TERM into both branches, with unmasked orphan-lock and
   inherited-handler duplicate-verdict controls. Reader cancellation legs wait for `FAKE_REACH_CALLS`.
+- **A group signal reaches the probe as well as the prober** (gh-ocannl-1362). A shell that traps
+  INT/TERM/HUP survives a signal sent to its process group, but the `cat`/`ps` children of a
+  liveness probe it is running at that moment do not, and a probe whose child died answers "gone".
+  The attached `run` launcher read that as a supervisor that died without a verdict, while the
+  supervisor, TERMed by the same group signal, was reaping and about to publish (the CI flake: exit
+  1, lock held, verdict file appearing moments later). Bash runs a trap before the interrupted
+  command's caller sees its status, so `sup_alive_settled` counts trapped signals and re-asks any
+  probe one landed in. The lifecycle leg reproduces it deterministically with a `cat` shim that
+  sends the group TERM from inside the wait's first probe, against a plain-`sup_alive` control;
+  the unshimmed GROUP_TERM leg hit it only under load (one run in 25 at background QoS on a busy
+  mac-studio, none in 35 at normal priority).
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`

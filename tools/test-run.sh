@@ -2962,7 +2962,25 @@ case $sub in
         *) kill -TERM "$sup" 2>/dev/null ;;
       esac
     }
-    fwd_sig() { cancelled=$1; forward_cancel; }
+    fwd_sig() { cancelled=$1; sigs_seen=$(( sigs_seen + 1 )); forward_cancel; }
+    # A signal sent to the launcher's process group -- Ctrl-C or a closed
+    # terminal, `kill -TERM -<pgid>` -- reaches this shell's own probe
+    # children as well as this shell and the supervisor. A cat or ps it kills
+    # makes sup_alive answer "gone" for a supervisor that is alive, reaping
+    # its group on that same signal and about to publish the verdict; the
+    # attached wait then reported "died without recording a verdict" with
+    # the lock still held (gh-ocannl-1362). So a "gone" counts only from a
+    # probe no trapped signal landed in: bash runs the trap before the
+    # interrupted probe returns, so the count moving means ask again.
+    sigs_seen=0
+    sup_alive_settled() {
+      local seen
+      while :; do
+        seen=$sigs_seen
+        sup_alive "$1" && return 0
+        [ "$seen" != "$sigs_seen" ] || return 1
+      done
+    }
     trap 'fwd_sig INT' INT
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
@@ -3052,7 +3070,7 @@ case $sub in
       # (`resolved`): its announcements then reach this terminal before dune
       # starts, and `start` prints the command dune is given. A run that ended
       # in that phase -- cancelled, or its cap spent -- has its verdict instead.
-      while [ ! -f "$run_dir/resolved" ] && [ ! -f "$run_dir/exit" ] && sup_alive "$run_dir"; do
+      while [ ! -f "$run_dir/resolved" ] && [ ! -f "$run_dir/exit" ] && sup_alive_settled "$run_dir"; do
         sleep 0.1
       done
       [ ! -f "$run_dir/resolved" ] || cat "$run_dir/resolved" >&2
@@ -3062,8 +3080,9 @@ case $sub in
       # is on disk. A trapped signal returns from `wait` early, hence the
       # retry loop; sup_alive rather than a bare kill -0, since after the
       # supervisor is reaped its pid can be recycled and probing the number
-      # alone would spin this loop on an unrelated process.
-      while sup_alive "$run_dir"; do wait "$sup" 2>/dev/null; done
+      # alone would spin this loop on an unrelated process; settled, since a group
+      # signal landing mid-probe kills the probe too (sup_alive_settled).
+      while sup_alive_settled "$run_dir"; do wait "$sup" 2>/dev/null; done
       sup=
       trap - INT TERM HUP
       [ "$sub" != plan ] || plan_finish "$@"
