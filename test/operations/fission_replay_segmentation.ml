@@ -172,13 +172,7 @@ let tune ?search ~name ~cache_dir comp ~read =
 
 (* Timed-cache reuse needs a concrete device identity; without one every cache claim is vacuous. *)
 let cache_available = Option.is_some (Context.timing_identity (Context.auto ()))
-
-let () =
-  if not cache_available then
-    Stdio.eprintf "timed-cache reuse unavailable: concrete device identity missing\n"
-
-let cache_claim label value =
-  gated ~aggregation:`Environment ~when_:cache_available ~on:"no-device-identity" label value
+let cache_claim = Cache_plant.unless_unkeyed ~identity:cache_available
 
 let () =
   clean_cache cache_dir;

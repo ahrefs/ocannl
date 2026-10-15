@@ -101,18 +101,9 @@ let key = Cache_plant.key ~backend ~timing_identity ~limits ~capabilities canon
 (* Timed-cache reuse needs a concrete device identity; without one nothing is looked up. *)
 let cache_available = Option.is_some key
 
-let () =
-  if not cache_available then
-    Stdio.eprintf "timed-cache reuse unavailable: concrete device identity missing\n"
-
-let cache_claim label value =
-  gated ~aggregation:`Environment ~when_:cache_available ~on:"no-device-identity" label value
-
 (* Each leg records its I/O, and a claim resting on the replay is waived where the plant's store or
-   the call's lookup was refused ([Cache_plant.unless_refused]). *)
-let replay_claim ios label value =
-  if not cache_available then cache_claim label value
-  else Cache_plant.unless_refused ios label value
+   the call's lookup was refused ([Cache_plant.unless_unkeyed_or_refused]). *)
+let replay_claim = Cache_plant.unless_unkeyed_or_refused ~identity:cache_available
 
 (* Every planted store, for the one claim no refusal waives: a deterministic refusal (a rejected
    filename, a commit that always fails) would otherwise turn every claim above into a permanent
@@ -194,5 +185,6 @@ let () =
   replay_claim ios "the refused prelude re-searches" (outcome_is "searched" r);
   p_all2 "the routine re-searched past the refused prelude computes the right values" values
     expected ~f:approx;
-  cache_claim "not every planted entry's store was refused"
-    (List.exists !planted ~f:(fun (io : SC.cache_io) -> Option.is_none io.SC.refusal))
+  (* A keyed plant always attempts its store. *)
+  Cache_plant.not_every_store_refused ~expected:cache_available
+    "not every planted entry's store was refused" !planted

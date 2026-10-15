@@ -1542,9 +1542,10 @@ files.
   cache directory, not all were refused. A deterministic refusal (a rejected filename, a commit that always fails) refuses
   every store, and without that claim it turns the test into a permanent skip that hosted CI
   aggregates nowhere. Gate on the timing identity of the run's OWN context, the one the store keys
-  on, never a reference context's. The waiver is shared: `Test_utils.Cache_plant.unless_refused`
-  (`refused_in` for a hand-written branch); `placement_store`'s `persistence` record and its
-  process-wide claim are the exemplar. A test planting an entry by hand builds it through
+  on, never a reference context's. All three are shared in `Test_utils.Cache_plant`: the waiver
+  `unless_refused` (`refused_in` for a hand-written branch), the identity gate `unless_unkeyed`
+  (`unless_unkeyed_or_refused` for both at once), and the unwaived claim
+  `not_every_store_refused`; `placement_store`'s `persistence` record is the exemplar. A test planting an entry by hand builds it through
   `Cache_plant.entry` (synthetic) or `Cache_plant.plant` (keyed and self-described as
   `Autotune.tune` stores one, returning the store's I/O for the waiver), never as a record literal,
   so a new entry field reaches every planted entry through one default. `schedule_cache_regime`

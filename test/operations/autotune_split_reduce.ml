@@ -260,11 +260,8 @@ let () =
   in
   let hctx = Context.run hctx hroutine in
   let got = Context.get_values hctx y1.Tensor.value in
-  let cache_claim label value =
-    if Option.is_some (Context.timing_identity sctx) then p label value
-    else (
-      Stdio.eprintf "timed-cache reuse unavailable: concrete device identity missing\n";
-      skipped ~aggregation:`Environment ~backend:(Context.backend_name sctx) label)
+  let cache_claim =
+    Cache_plant.unless_unkeyed ~identity:(Option.is_some (Context.timing_identity sctx))
   in
   (match !hit_report with
   | Some r ->

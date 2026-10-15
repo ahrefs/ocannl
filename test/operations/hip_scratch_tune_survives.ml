@@ -161,11 +161,8 @@ let () =
            | _ -> false))
       ~f:(fun d -> d.Autotune.count)
   in
-  let cache_claim label value =
-    if Option.is_some (Context.timing_identity ctx) then p label value
-    else (
-      Stdio.eprintf "concrete device identity unavailable: persistent replay disabled\n";
-      skipped ~aggregation:`Environment ~backend label)
+  let cache_claim =
+    Test_utils.Cache_plant.unless_unkeyed ~identity:(Option.is_some (Context.timing_identity ctx))
   in
   cache_claim "scratch/tune: the second run replays exactly after contention-free timing"
     (Bool.equal (replayed hit) (populate.Autotune.timings_contended = 0));
