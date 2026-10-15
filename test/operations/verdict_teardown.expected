@@ -14,4 +14,6 @@ the case after a raising case still runs: true
 an exit inside a case ends the run rather than failing the case: true
 an exit inside a case after a failed check says which case stopped the run: true
 every line of a multi-line failure carries the FAIL prefix: true
+a run with three failed checks names all three on its last stderr line: true
+a run with more failed checks than the line shows names the first ones, cut and on one line, and counts the rest: true
 a case that returns prints only what its claims print: true

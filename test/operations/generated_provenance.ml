@@ -13,12 +13,13 @@
    and it claims on what it captured.
 
    Capturing is not incidental (gh-ocannl-692). A refusal reports itself through [Verdict], which
-   prints [FAIL: ...] on stdout and stderr and [FAILED: n checks did not hold.] at teardown. Those
-   words are this repository's failure marker by convention -- the one [verdict_ratchet] enforces at
-   the source level, and the one [grep FAIL] over a suite log rests on -- so a child that inherited
-   the suite's streams put four of them into the log of a GREEN run, and the only way to tell them
-   from a real failure was to read the line after each. A designed refusal and a blessed regression
-   must not be spelled the same way; that is the same argument as gh-ocannl-601, one level up.
+   prints [FAIL: ...] on stdout and stderr and [FAILED: n checks did not hold: ...] at teardown.
+   Those words are this repository's failure marker by convention -- the one [verdict_ratchet]
+   enforces at the source level, and the one [grep FAIL] over a suite log rests on -- so a child
+   that inherited the suite's streams put four of them into the log of a GREEN run, and the only way
+   to tell them from a real failure was to read the line after each. A designed refusal and a
+   blessed regression must not be spelled the same way; that is the same argument as gh-ocannl-601,
+   one level up.
 
    The capture also buys the stronger check, which is why it beat the alternative of a marker
    reserved for expected-failure children. An exit status alone says only that the child failed:
