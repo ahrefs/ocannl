@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Exercise shared harness lifecycle, counted skips, the --only leg filter and
+# Exercise shared harness lifecycle, counted skips (and a strict run's list of
+# expected ones), the --only leg filter with its coverage account, and
 # reason-specific rejection.
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
@@ -17,6 +18,7 @@ harness_scratch contract
 printf '%s\n' "$TMP" >"$RECORD"
 case $MODE in
   skip) harness_require definitely_missing_harness_tool ;;
+  skips) skip 'first platform check' 'no first platform'; skip 'second platform check' 'no second platform' ;;
   fail) report 1 'injected failure' ;;
   signal) kill -TERM "$$" ;;
   abort) exit 50 ;;
@@ -24,15 +26,20 @@ case $MODE in
   unfinished) exit 0 ;;
   legs)
     # Each body leaves a trace, so a filtered leg is seen not to have run.
-    if harness_leg 'alpha leg'; then echo alpha >>"$RECORD.ran"; report 0 'alpha body'; fi
-    if harness_leg 'beta leg'; then echo beta >>"$RECORD.ran"; report 0 'beta body'; fi
-    if harness_leg 'gamma leg'; then echo gamma >>"$RECORD.ran"; report "${GAMMA_RC:-0}" 'gamma body'; fi ;;
+    if harness_leg 'alpha leg #odd'; then echo alpha >>"$RECORD.ran"; report 0 'alpha body'; fi
+    if harness_leg 'beta leg #even'; then
+      echo beta >>"$RECORD.ran"; report 0 'beta body'
+      [ -z "${BETA_SKIP:-}" ] || skip 'beta check' 'no beta host'
+    fi
+    if harness_leg 'gamma leg #odd'; then echo gamma >>"$RECORD.ran"; report "${GAMMA_RC:-0}" 'gamma body'; fi ;;
 esac
 finish
 PROBE
 export SUPPORT=$HERE/harness-support.sh RECORD=$TMP/record MODE=pass
-# The probes' skip verdict is the subject; an ambient strict mode is not.
-unset OCANNL_TOOL_HARNESS_STRICT
+# The probes' skip verdict is the subject; an ambient strict mode, or an
+# ambient list of expected skips, is not.
+unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_EXPECTED_SKIPS \
+  OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD
 probe() {
   local rc=0
   bash "$TMP/probe.sh" "$@" >"$TMP/out" 2>&1 || rc=$?
@@ -52,6 +59,34 @@ if [ "$rc" = 1 ] && grep -q '^FAIL  every leg requiring definitely_missing_harne
    && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out"; then
   report 0 'strict mode turns an undecided leg into a failure'
 else report 1 'strict mode turns an undecided leg into a failure'; fi
+# A strict run's list of expected platform skips (gh-ocannl-1236): the one
+# exact HARNESS<TAB>LABEL line it names is a counted, recorded skip; the
+# other skip of the same member stays red, and so does the listed one when
+# the harness name, or the record the aggregator reads back, is missing.
+printf '# comment\nprobe\tfirst platform check\nprobe first platform check\n' >"$TMP/expected"
+expected_probe() { # NAME RECORD
+  : >"$TMP/skip-record"
+  OCANNL_TOOL_HARNESS_STRICT=1 OCANNL_TOOL_HARNESS_EXPECTED_SKIPS=$TMP/expected \
+    OCANNL_TOOL_HARNESS_NAME=$1 OCANNL_TOOL_HARNESS_SKIP_RECORD=$2 MODE=skips probe
+}
+expected_probe probe "$TMP/skip-record"; rc=$?
+if [ "$rc" = 1 ] && grep -q '^SKIP  first platform check$' "$TMP/out" \
+   && grep -q '^      no first platform (expected: listed in expected)$' "$TMP/out" \
+   && grep -q '^FAIL  second platform check$' "$TMP/out" \
+   && grep -q '1 leg(s) failed (1 skipped)' "$TMP/out" \
+   && [ "$(cat "$TMP/skip-record")" = "probe	first platform check" ]; then
+  report 0 'strict mode counts and records only the skip its list names'
+else report 1 'strict mode counts and records only the skip its list names' "exit $rc; $(cat "$TMP/out")"; fi
+for control in name record; do
+  case $control in
+    name) expected_probe other "$TMP/skip-record"; rc=$? ;;
+    record) expected_probe probe ''; rc=$? ;;
+  esac
+  if [ "$rc" = 1 ] && grep -q '^FAIL  first platform check$' "$TMP/out" \
+     && grep -q '2 leg(s) failed (0 skipped)' "$TMP/out" && [ ! -s "$TMP/skip-record" ]; then
+    report 0 "strict mode lists nothing without the matching $control"
+  else report 1 "strict mode lists nothing without the matching $control" "exit $rc; $(cat "$TMP/out")"; fi
+done
 MODE=fail probe; rc=$?
 if [ "$rc" = 1 ] && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish' "$TMP/out"; then
   report 0 'failure controls exit and footer'
@@ -108,13 +143,13 @@ if [ "$rc" = 0 ] && grep -q 'all legs passed (0 skipped)' "$TMP/out" && ! grep -
 else report 1 'unfiltered: every leg runs and earns the full-pass line' "exit $rc; $(cat "$TMP/out")"; fi
 legs_probe 'alpha' --only alpha; rc=$?
 if [ "$rc" = 0 ] && grep -q '^PASS  alpha body$' "$TMP/out" \
-   && grep -q '^FILTERED  beta leg$' "$TMP/out" && grep -q '^FILTERED  gamma leg$' "$TMP/out" \
+   && grep -q '^FILTERED  beta leg #even$' "$TMP/out" && grep -q '^FILTERED  gamma leg #odd$' "$TMP/out" \
    && ! grep -q 'all legs passed' "$TMP/out" \
    && grep -q "^FILTERED RUN, not a full pass: 1 leg(s) selected, 2 filtered out by --only 'alpha'; no failure (0 skipped)$" "$TMP/out"; then
   report 0 '--only runs the matching leg alone and never prints the full-pass line'
 else report 1 '--only runs the matching leg alone and never prints the full-pass line' "exit $rc; $(cat "$TMP/out")"; fi
-legs_probe 'alpha gamma' '--only=^(alpha|gamma) leg$'; rc=$?
-if [ "$rc" = 0 ] && grep -q '^FILTERED  beta leg$' "$TMP/out" && ! grep -q 'all legs passed' "$TMP/out" \
+legs_probe 'alpha gamma' '--only=^(alpha|gamma) leg'; rc=$?
+if [ "$rc" = 0 ] && grep -q '^FILTERED  beta leg #even$' "$TMP/out" && ! grep -q 'all legs passed' "$TMP/out" \
    && grep -q 'FILTERED RUN, not a full pass: 2 leg(s) selected, 1 filtered out' "$TMP/out"; then
   report 0 '--only=REGEX is an extended regular expression over leg names'
 else report 1 '--only=REGEX is an extended regular expression over leg names' "exit $rc; $(cat "$TMP/out")"; fi
@@ -123,6 +158,32 @@ if [ "$rc" = 1 ] && grep -q '^FAIL  gamma body$' "$TMP/out" \
    && grep -q "^1 leg(s) failed (0 skipped); FILTERED RUN: 1 leg(s) selected, 2 filtered out by --only 'gamma'$" "$TMP/out"; then
   report 0 'a failing selected leg exits 1 and its footer says the run was filtered'
 else report 1 'a failing selected leg exits 1 and its footer says the run was filtered' "exit $rc; $(cat "$TMP/out")"; fi
+# A `#group` tag closing a leg's name selects the group through the same
+# filter, and a filtered run accounts for its coverage before the footer:
+# each leg that ran, then each skipped check with its reason.
+BETA_SKIP=1 legs_probe 'alpha beta gamma' --only '#odd|#even'; rc=$?
+account=$(sed -n '/^ran 3 leg(s):$/,$p' "$TMP/out")
+want_account="ran 3 leg(s):
+  RAN   alpha leg #odd
+  RAN   beta leg #even
+  RAN   gamma leg #odd
+skipped 1 check(s):
+  SKIP  beta check -- no beta host
+FILTERED RUN, not a full pass: 3 leg(s) selected, 0 filtered out by --only '#odd|#even'; no failure (1 skipped)"
+if [ "$rc" = 0 ] && [ "$account" = "$want_account" ]; then
+  report 0 'a filtered run accounts for each leg it ran and each check it skipped'
+else report 1 'a filtered run accounts for each leg it ran and each check it skipped' "exit $rc; $(cat "$TMP/out")"; fi
+legs_probe 'alpha gamma' --only '#odd'; rc=$?
+if [ "$rc" = 0 ] && grep -q '^FILTERED  beta leg #even$' "$TMP/out" \
+   && grep -q '^  RAN   alpha leg #odd$' "$TMP/out" && grep -q '^  RAN   gamma leg #odd$' "$TMP/out" \
+   && ! grep -q '^skipped ' "$TMP/out"; then
+  report 0 'a #group tag selects its legs whole'
+else report 1 'a #group tag selects its legs whole' "exit $rc; $(cat "$TMP/out")"; fi
+BETA_SKIP=1 legs_probe 'alpha beta gamma'; rc=$?
+if [ "$rc" = 0 ] && grep -q 'all legs passed (1 skipped)' "$TMP/out" \
+   && ! grep -q '^ran \|^  RAN \|^skipped ' "$TMP/out"; then
+  report 0 'an unfiltered run keeps its output: no coverage account'
+else report 1 'an unfiltered run keeps its output: no coverage account' "exit $rc; $(cat "$TMP/out")"; fi
 OCANNL_TOOL_HARNESS_STRICT=1 legs_probe 'beta' --only beta; rc=$?
 if [ "$rc" = 0 ] && grep -q 'FILTERED RUN, not a full pass: 1 leg(s) selected, 2 filtered out' "$TMP/out" \
    && ! grep -q '^FAIL' "$TMP/out"; then

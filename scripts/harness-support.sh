@@ -5,6 +5,7 @@
 harness_args() {
   KEEP=0 failures=0 skipped=0 harness_finished=0
   harness_only= harness_only_set=0 legs_selected=0 legs_filtered=0
+  harness_ran=() harness_skips=()
   while [ $# -gt 0 ]; do
     case $1 in
       --keep) KEEP=1 ;;
@@ -30,9 +31,11 @@ harness_args() {
 # every leg runs; with it, a leg whose NAME does not match the extended
 # regular expression is reported FILTERED and its body is not run. Keep a
 # leg's shared setup (helpers, fixtures later legs read) outside the gate.
+# A NAME may end in a `#group` tag, which `--only '#group'` selects whole.
 harness_leg() { # NAME
   if [ "${harness_only_set:-0}" != 1 ] || [[ $1 =~ $harness_only ]]; then
     legs_selected=$((legs_selected + 1))
+    harness_ran+=("$1")
     return 0
   fi
   legs_filtered=$((legs_filtered + 1))
@@ -51,13 +54,29 @@ report() { # RC LABEL [DETAIL]
 }
 skip() { # LABEL REASON
   # A host expected to decide every leg (a CI step that installed the
-  # toolchain) sets OCANNL_TOOL_HARNESS_STRICT=1: an undecided leg is red.
+  # toolchain) sets OCANNL_TOOL_HARNESS_STRICT=1: an undecided leg is red,
+  # unless the run's list of expected platform skips names it (below).
+  local expected=
   if [ "${OCANNL_TOOL_HARNESS_STRICT:-0}" = 1 ]; then
-    report 1 "$1" "skipped under OCANNL_TOOL_HARNESS_STRICT=1: $2"
-    return 0
+    if ! harness_skip_expected "$1"; then
+      report 1 "$1" "skipped under OCANNL_TOOL_HARNESS_STRICT=1: $2"
+      return 0
+    fi
+    expected=" (expected: listed in ${OCANNL_TOOL_HARNESS_EXPECTED_SKIPS##*/})"
+    printf '%s\t%s\n' "$OCANNL_TOOL_HARNESS_NAME" "$1" >>"$OCANNL_TOOL_HARNESS_SKIP_RECORD"
   fi
   skipped=$((skipped + 1))
-  printf 'SKIP  %s\n      %s\n' "$1" "$2"
+  harness_skips+=("$1 -- $2")
+  printf 'SKIP  %s\n      %s%s\n' "$1" "$2" "$expected"
+}
+# Whether a strict run's list of expected platform skips names this skip.
+# tools/test-harnesses.sh --expected-skips FILE sets all three variables and
+# validates FILE before any member runs; here only an exact
+# `HARNESS<TAB>LABEL` line matches, so anything else in FILE allows nothing.
+harness_skip_expected() { # LABEL
+  [ -n "${OCANNL_TOOL_HARNESS_EXPECTED_SKIPS:-}" ] && [ -n "${OCANNL_TOOL_HARNESS_NAME:-}" ] &&
+    [ -n "${OCANNL_TOOL_HARNESS_SKIP_RECORD:-}" ] &&
+    grep -qxF -- "$OCANNL_TOOL_HARNESS_NAME"$'\t'"$1" "$OCANNL_TOOL_HARNESS_EXPECTED_SKIPS"
 }
 finish() {
   harness_finished=1
@@ -71,6 +90,15 @@ finish() {
     elif [ "$legs_selected" -eq 0 ]; then
       echo "--only '$harness_only' selected no leg ($legs_filtered filtered out): nothing was tested" >&2
       exit 2
+    fi
+    # The coverage account: which legs ran, and every check a ran leg
+    # skipped, with its reason. The FILTERED lines above name the rest.
+    local leg note
+    echo "ran $legs_selected leg(s):"
+    for leg in "${harness_ran[@]}"; do printf '  RAN   %s\n' "$leg"; done
+    if [ "$skipped" -gt 0 ]; then
+      echo "skipped $skipped check(s):"
+      for note in "${harness_skips[@]}"; do printf '  SKIP  %s\n' "$note"; done
     fi
     if [ "$failures" -eq 0 ]; then
       echo "FILTERED RUN, not a full pass: $legs_selected leg(s) selected, $legs_filtered filtered out by --only '$harness_only'; no failure ($skipped skipped)"

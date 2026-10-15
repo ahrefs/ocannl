@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Opposing controls for the aggregate: run all selected members, preserve
-# failures, select the CI groups, and refuse arguments before executing work.
+# failures, select the CI groups, hold a strict run to its list of expected
+# skips, and refuse arguments (or a malformed list) before executing work.
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -40,6 +41,12 @@ if [ "$name" = "${FAIL_MEMBER:-}" ]; then
     exec perl -e '$SIG{$ARGV[0]} = "DEFAULT"; kill $ARGV[0], $$;' "$FAIL_SIGNAL"
   fi
   exit 7
+fi
+if [ "$name" = "${SKIP_MEMBER:-}" ]; then
+  . "$SUPPORT"
+  harness_args
+  skip "$SKIP_LABEL" 'not on the fixture platform'
+  finish
 fi
 exit 0
 STUB
@@ -111,6 +118,66 @@ for signal in HUP INT TERM; do
   else report 1 "$signal continuation twin launches the later members and loses the interrupt oracle"; fi
 done
 unset FAIL_MEMBER FAIL_SIGNAL
+# --expected-skips (gh-ocannl-1236): one shell member skips through the real
+# harness-support.sh. Listed, the run is green and the skip counted; unlisted,
+# the member is red; listed but not skipped, the tier is red; a list the
+# aggregator inherited rather than was given relaxes nothing.
+export SUPPORT="$here/../scripts/harness-support.sh" SKIP_MEMBER SKIP_LABEL
+SKIP_MEMBER=$(head -n 1 "$TMP/shell")
+SKIP_LABEL='queries: a fixture platform check'
+printf '# expected\n\n%s\t%s\n' "$SKIP_MEMBER" "$SKIP_LABEL" >"$TMP/expected-listed"
+printf '# nothing expected\n' >"$TMP/expected-none"
+run --shell --expected-skips expected-listed
+if [ "$got" = 0 ] && cmp -s "$TMP/shell" "$RECORD" \
+   && grep -qxF "SKIP  $SKIP_LABEL" "$TMP/out" \
+   && grep -qxF '      not on the fixture platform (expected: listed in expected-listed)' "$TMP/out" \
+   && grep -q '^harnesses: [0-9]* run, 0 failed; 0 expected skip(s) did not occur$' "$TMP/out"; then
+  report 0 'a listed skip is counted, from a list named relative to the caller'
+else report 1 'a listed skip is counted, from a list named relative to the caller' "exit $got; $(cat "$TMP/out")"; fi
+run --shell --expected-skips "$TMP/expected-none"
+if [ "$got" = 1 ] && cmp -s "$TMP/shell" "$RECORD" && grep -qxF "FAIL  $SKIP_LABEL" "$TMP/out" \
+   && grep -qxF "HARNESS $SKIP_MEMBER exit: 1" "$TMP/out"; then
+  report 0 'an unlisted skip fails its member and the tier, every member still run'
+else report 1 'an unlisted skip fails its member and the tier, every member still run' "exit $got; $(cat "$TMP/out")"; fi
+(OCANNL_TOOL_HARNESS_STRICT=1 OCANNL_TOOL_HARNESS_EXPECTED_SKIPS=$TMP/expected-listed \
+  OCANNL_TOOL_HARNESS_SKIP_RECORD=$TMP/ambient-record; export OCANNL_TOOL_HARNESS_STRICT \
+  OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD; run --shell; exit "$got") || got=$?
+if [ "$got" = 1 ] && grep -qxF "FAIL  $SKIP_LABEL" "$TMP/out"; then
+  report 0 'an inherited list relaxes no strict run'
+else report 1 'an inherited list relaxes no strict run' "exit $got; $(cat "$TMP/out")"; fi
+SKIP_MEMBER=
+run --shell --expected-skips "$TMP/expected-listed"
+if [ "$got" = 1 ] && cmp -s "$TMP/shell" "$RECORD" \
+   && grep -qxF "harnesses: expected skip did not occur: $(head -n 1 "$TMP/shell"): $SKIP_LABEL" "$TMP/out" \
+   && grep -q '^harnesses: [0-9]* run, 0 failed; 1 expected skip(s) did not occur$' "$TMP/out"; then
+  report 0 'a listed skip that no longer occurs fails the tier'
+else report 1 'a listed skip that no longer occurs fails the tier' "exit $got; $(cat "$TMP/out")"; fi
+# The list's three line forms are an allowlist: each other shape refuses the
+# run before a member starts, naming the line.
+first=$(head -n 1 "$TMP/shell")
+for bad in space cr tabs empty unknown group twice; do
+  case $bad in
+    space) printf '%s %s\n' "$first" "$SKIP_LABEL" ;;
+    cr) printf '%s\t%s\r\n' "$first" "$SKIP_LABEL" ;;
+    tabs) printf '%s\t%s\tmore\n' "$first" "$SKIP_LABEL" ;;
+    empty) printf '%s\t\n' "$first" ;;
+    unknown) printf 'tools/no-such-harness.sh\t%s\n' "$SKIP_LABEL" ;;
+    group) printf '%s\t%s\n' "$(head -n 1 "$TMP/toolchain")" "$SKIP_LABEL" ;;
+    twice) printf '%s\t%s\n%s\t%s\n' "$first" "$SKIP_LABEL" "$first" "$SKIP_LABEL" ;;
+  esac >"$TMP/expected-bad"
+  case $bad in twice) want_line=2 ;; *) want_line=1 ;; esac
+  run --shell --expected-skips "$TMP/expected-bad"
+  if [ "$got" = 2 ] && [ ! -s "$RECORD" ] && grep -q "expected-bad:$want_line: " "$TMP/out"; then
+    report 0 "a list line with $bad is refused before any harness executes"
+  else report 1 "a list line with $bad is refused before any harness executes" "exit $got; $(cat "$TMP/out")"; fi
+done
+for missing in '' "$TMP/no-such-list"; do
+  run --shell --expected-skips "$missing"
+  if [ "$got" = 2 ] && [ ! -s "$RECORD" ]; then
+    report 0 "--expected-skips '${missing##*/}' is refused before any harness executes"
+  else report 1 "--expected-skips '${missing##*/}' is refused before any harness executes" "exit $got; $(cat "$TMP/out")"; fi
+done
+unset SKIP_MEMBER SKIP_LABEL
 # Empty membership is an invocation error, never a vacuous green tier.
 python3 - "$subject" "$fixture/tools/empty.sh" <<'PY_EMPTY'
 from pathlib import Path
