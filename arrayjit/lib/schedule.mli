@@ -1141,12 +1141,12 @@ val workgroup_memory_bytes :
 val thread_private_bytes : Low_level.optimized -> int
 (** The per-work-item scratch bytes the kernel will declare (gh-ocannl-1313): one function-scope
     array per node of its traced store that settles [Local] ({!Tnode.Placements.is_local_peek}),
-    sized at its storage precision, workgroup-shared tiles excepted. Settles no placement. An upper
-    estimate of what codegen declares — the CPU backends' per-chunk privatization and Metal's
-    simdgroup fragments are rendering decisions that can drop arrays from the function scope — and
-    of the device compiler's frame, which may drop an array it proves dead; checked by
-    {!check_hardware_limits_classified} against {!Backend_intf.hardware_limits}'
-    [max_thread_private_bytes]. *)
+    sized at its storage precision, workgroup-shared tiles excepted. Settles no placement and forces
+    no node's [size_in_bytes] ({!Tnode.size_in_bytes_peek}). An upper estimate of what codegen
+    declares — the CPU backends' per-chunk privatization and Metal's simdgroup fragments are
+    rendering decisions that can drop arrays from the function scope — and of the device compiler's
+    frame, which may drop an array it proves dead; checked by {!check_hardware_limits_classified}
+    against {!Backend_intf.hardware_limits}' [max_thread_private_bytes]. *)
 
 val check_hardware_limits :
   name:string ->
