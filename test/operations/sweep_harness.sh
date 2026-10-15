@@ -60,7 +60,7 @@ on_error() {
     lane_lock_linux lane_lock_wsl res_measured res_windows res_renamed res_tuf_wsl res_local res_local_other res_between \
     res_unreadable res_garbled res_off res_absent \
     tuf_asleep tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
-    tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
+    tuf_unguarded tuf_unguarded_prep tuf_unguarded_box tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
     guard_absent \
     after_cancel local_remote local_replaced local_busy local_prep_error local_control \
@@ -414,7 +414,7 @@ case ${SWEEP_TEST_SSH_MODE:-} in
     case $* in
       *"-- --hold '"*)
         case ${SWEEP_TEST_HOLD_DENIED:-}:$* in
-          1:* | prep:*" prep' "*)
+          1:* | prep:*" prep' "* | box-check:*" box-check' "*)
             echo 'sweep-hold: WARNING: running WITHOUT a sleep guard, so nothing at the OS level stops a suspend under this run -- fixture-inhibit refused: Access denied' >&2
             ;;
         esac
@@ -3170,6 +3170,12 @@ grep -qF '  tuf/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Acces
 tuf_unguarded_prep_log=$(awk -F '\t' '$1 == "unit" && $2 == "tuf" { print $6 }' \
   "$(sed -n 's/^run:  *//p' <<<"$tuf_unguarded_prep")")
 absent '^sweep-hold: WARNING' "$tuf_unguarded_prep_log"
+# A refusal to the box check alone (gh-ocannl-1062) lands in its own log, and is said for the box.
+tuf_unguarded_box=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_HOLD_DENIED=box-check SWEEP_TEST_PREP_OK=1 \
+  SWEEP_TEST_SSH_MODE=window run_sweep_args --only hip --target tuf-up-probe)
+grep -qF '  tuf: box check: ran WITHOUT a sleep guard -- fixture-inhibit refused: Access denied' \
+  <<<"$tuf_unguarded_box"
+absent '^  tuf/hip: ran WITHOUT a sleep guard' <<<"$tuf_unguarded_box"
 tuf_unguarded_wsl=$(SWEEP_TEST_HOLD_DENIED=1 SWEEP_TEST_SSH_MODE=window \
   SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh run_sweep_args --only hip --target tuf-up-probe)
 absent 'sleep guard' <<<"$tuf_unguarded_wsl"

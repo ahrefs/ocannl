@@ -2372,6 +2372,8 @@ box_check() { # machine host wt repo path_prefix
 bash benchmarks/check-box.sh --box \"$machine\" --box-only --fixture-dir \"$repo/benchmarks/fixtures\"; \
 else echo 'check-box: not at this revision'; exit 3; fi" "$log" "$path_prefix" box-check
   rc=$?
+  # Its own guarded leg, logged apart from the unit's: a refusal to it alone is read here or never.
+  say_unguarded "$log" "$machine: box check"
   case $rc in
     0) say "  $machine: box check: ready -- $log" ;;
     1)
