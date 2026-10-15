@@ -3682,6 +3682,49 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   cadence affordable. `--force` is the explicit from-scratch unit; a fresh CI run is the other
   path to a clean compilation check.
 
+### Bisecting a regression
+
+When a sweep unit (or any run) goes red and an earlier run of the same targets on the same box was
+green, the two commits bound a bisect: `tools/test-run.sh bisect GOOD BAD <targets…>`
+(gh-ocannl-1225). Finding #1222's cause took a hand-rolled `git bisect run` on tuf, and its step
+script had three easy ways to lie; the verb encodes each once (tools/test-run-bisect.sh says how):
+
+```bash
+OCANNL_BACKEND=cuda tools/test-run.sh bisect --test-cap 600 \
+  --build ./test/operations/test_vec_simple.exe <good-sha> <bad-sha> @test/operations/runtest-test_vec_simple
+```
+
+- **Exit mapping.** `run` exits 1 for a red test and for a red build alike. Each step first runs
+  `build @check` plus every `--build TARGET` (name the tests' executables, so a link failure counts
+  too) and only then `build <targets…>`: a red build is git's skip (125), never bad. A verdict that
+  is not the suite's — `SLOT REFUSED` (75), `DEVICE UNHEALTHY` (69), a cap's TIMEOUT (142), an
+  `INVOCATION REFUSED`, a cancellation, a run that died without a verdict or whose recorded verdict
+  or commit disagrees with its launcher — makes the step exit 128, which stops `git bisect run`;
+  read as bad, any of them would silently steer it. A TIMEOUT aborts too: the step cannot tell a
+  hang from a wedged device.
+- **Backend.** `OCANNL_BACKEND` is required (`cc` for a CPU bisect) and passed to every run of every
+  step, so a configuration a commit changes cannot move the bisect to another backend half-way.
+- **Isolation.** The bisect gets a detached worktree of its own under
+  `~/.ocannl-test-runs/bisect-<stamp>-<pid>/tree`, never the caller's checkout, the sweep's or
+  another session's, and its runs take that tree's lock. Every step is judged by the runner frozen
+  beside it at the start (`runner/`, pointed at the tree through `OCANNL_TOOL_TESTRUN_TREE`, which
+  only `run` and `plan` accept), not by the tested commit's own copy, which may predate the slot or
+  the caps, nor by the caller's, which may be edited meanwhile. Each step is two plain `run`s, so
+  the fleet slot, the width cap, the per-test cap and the device probe apply exactly as to a
+  hand-launched run; `--cap`/`--test-cap` go to every one of them.
+
+It is first-parent by default (each step a merged state CI saw; `--no-first-parent` walks into the
+merged branches) and runs both ends before bisecting: BAD must fail and GOOD must pass on this box,
+or there is nothing to find. Exit 0 names the first bad commit; 1 means the range does not bisect
+(an end does not hold here, or only skipped commits are left, listed); 2 a refusal before any step;
+an abort exits with the aborting run's status (126 when it gave none); 129/130/143 cancelled. The
+records outlive the tree, which is removed at the end: `steps.tsv` (each step's commit, verdict and
+two run directories), each run's digest and log under `steps/`, git's `bisect-log` and `result`.
+A bisect lasts as many steps as the range has halvings, each a build and a test run, so launch it
+like a long suite: through the harness's background mode (`bg-run.sh` on the fleet). It runs where
+it is invoked, with no remote dispatch of its own: for a box-specific regression, invoke it on that
+box.
+
 ## Floats and measurements in goldens
 
 - A golden line printed at a FIXED decimal precision is not made portable by lowering the
