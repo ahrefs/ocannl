@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.1 released October 4, 2026: fused attention and better transformer scheduling. Next: consolidation as a bounded release (v1.1.1, October 20), performance beyond transformers (v1.1.2, October 27), the training experience (v1.1.3, October 31) and reusable tensor programs (v1.2, November 15, 2026).**
+**v1.1.1 released October 15, 2026: consolidation after the transformer work, released as a bounded set against its release gate. Next: performance beyond transformers (v1.1.2, October 27), the training experience (v1.1.3, October 31) and reusable tensor programs (v1.2, November 15, 2026).**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -26,7 +26,7 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 >
 > **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. **v1.1 released October 4** with fused attention and better transformer scheduling, ahead of its October 5 GitHub due date. Later GitHub targets remain October 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
 >
-> **Rebalance (October 13, 2026):** the ladder was re-fit to keep **November 15** for v1.2 by cutting scope rather than moving the date. **v1.1.1** (October 20) is released as a bounded set against a release gate — CI green, three soundness finds, a full-step training comparison — since its queue grows about as fast as waves close it; leftovers move to v1.2.1. **v1.1.2** moves to October 27. **v1.1.3** (October 31) is cut to the training experience a newcomer meets, with models and explorations moved to v1.2.2. **v1.2** is cut to reusable tensor programs: shape schemes (#404) with checkpoint rollback (#903) as their first work package, beside an end-to-end newcomer path; the package split (#852) is optional and the other feature-grade work moved to a new, undated **v1.3**. #903 was rescoped from session-owned persistent shapes to a rollback over open inference state, and its coarse level split out as #1301 in v1.1.3. These dates supersede the October 4 targets above.
+> **Rebalance (October 13, 2026):** the ladder was re-fit to keep **November 15** for v1.2 by cutting scope rather than moving the date. **v1.1.1** (October 20; it shipped October 15) is released as a bounded set against a release gate — CI green, three soundness finds, a full-step training comparison — since its queue grows about as fast as waves close it; leftovers move to v1.2.1. **v1.1.2** moves to October 27. **v1.1.3** (October 31) is cut to the training experience a newcomer meets, with models and explorations moved to v1.2.2. **v1.2** is cut to reusable tensor programs: shape schemes (#404) with checkpoint rollback (#903) as their first work package, beside an end-to-end newcomer path; the package split (#852) is optional and the other feature-grade work moved to a new, undated **v1.3**. #903 was rescoped from session-owned persistent shapes to a rollback over open inference state, and its coarse level split out as #1301 in v1.1.3. These dates supersede the October 4 targets above.
 >
 > The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2 → 1.3`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth for issue assignments. Release outcomes distinguish delivered work from unfinished goals; they do not imply that every issue in a released milestone is closed.
 
@@ -419,31 +419,37 @@ and the pending compiler split are not presented as complete.
 
 ---
 
-## v1.1.1 — October 20, 2026
+## v1.1.1 — October 15, 2026 (released)
 **Theme: Consolidation after the transformer work**
 
-GitHub scope remains testing-side refactorings, scanner maintenance, diagnostics, stable goldens,
-test tooling and remaining IR/API work. The milestone does not converge by count: the waves that
-close its issues file follow-ups about as fast (46 open at the v1.0.2 tag, 127 on October 13 after
-178 closures). The October 13 rebalance therefore releases it as a **bounded set**, against a
-release gate rather than an empty queue:
+GitHub scope was testing-side refactorings, scanner maintenance, diagnostics, stable goldens,
+test tooling and remaining IR/API work. The milestone did not converge by count: the waves that
+closed its issues filed follow-ups about as fast (46 open at the v1.0.2 tag, 127 on October 13 after
+178 closures). The October 13 rebalance therefore released it as a **bounded set**, against a
+release gate rather than an empty queue; 131 issues closed between the v1.1 tag and this one.
+The gate was met:
 
 - **CI green on master**: the scheduled-run reds (#1271; the Windows cluster #1228, #1195, #1223)
-  and a PR-time OCaml 5.3 leg (#1267).
-- **The soundness finds**: aligned-chain dependence checks across nests (#1282), `Sub_axis` in
-  `Schedule.terms_of_index` (#1293), and executed tensorized seeds that decline to scalar code
-  (#1283).
-- **The full-step training comparison** for #1183: the backward-contraction sketches (staging
-  PR [#1041](https://github.com/lukstafi/ocannl-staging/pull/1041)) took a single layer's weight
-  gradient from 65.0 to 6.56 ms at batch 256 on discrete HIP; the gate re-runs the issue's original
-  `gpt2_mini_train` comparison against torch at batch 8 and 256.
+  are fixed, and an OCaml 5.3 leg runs at PR time (#1267).
+- **The soundness finds** are fixed: aligned-chain dependence checks across nests (#1282),
+  `Sub_axis` in `Schedule.terms_of_index` (#1293), and executed tensorized seeds that decline to
+  scalar code (#1283).
+- **The full-step training comparison** for #1183 was re-run. The backward-contraction sketches
+  (staging PR [#1041](https://github.com/lukstafi/ocannl-staging/pull/1041)) take the tuned
+  `gpt2_mini_train` batch-8 step on CUDA from 23.48 to 15.51 ms, narrowing torch CUDA eager's lead
+  from 4.35× to 2.88×. Untuned, torch remains about 9× faster on CUDA at batch 8 and 256, and
+  5.1–6.4× faster on HIP at batch 256. A tuned batch-256 step cannot be searched on a 12 GiB card,
+  because the search keeps the incumbent's buffers resident beside each challenger.
 
-Waves keep working the D1/D2 queue until the tag; at release prep every leftover moves to v1.2.1.
-The D3 items moved there on October 13: the rounding-changing algebra split (#998), earlier
-composite formation (#1138), codegen-chosen privatize width (#1151), the out-projection coalesce
-(#1279), half pack loads on the GPU packed path (#1295), and cross-statement conflicts on a pinned
-device cell (#963, from v1.2). The PPX migration (#695) remains upstream-release-gated;
-legacy-lock retirement (#966) remains tied to its documented trigger.
+Every leftover moved to v1.2.1 at release prep, beside the D3 items moved there on October 13:
+the rounding-changing algebra split (#998), earlier composite formation (#1138), codegen-chosen
+privatize width (#1151), the out-projection coalesce (#1279), half pack loads on the GPU packed
+path (#1295), and cross-statement conflicts on a pinned device cell (#963, from v1.2). The
+training-gap follow-ups from #1183 are there too: a reuse-tiled untuned default for contractions
+(#1324, with the cost-model route #1253), the remaining non-matmul gradient reductions (#1325), the
+search's device-memory wall (#1326) and whole-step HIP compile cost (#1314). The PPX migration
+(#695) remains upstream-release-gated; legacy-lock retirement (#966) remains tied to its
+documented trigger.
 
 ---
 
@@ -540,7 +546,7 @@ consolidation and consumer work deferred from v1.1.1 and v1.1.3.
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
 | **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
 | **1.1** | Oct 4, 2026 | **released** | **Fused attention and better transformer scheduling**; tuned f32 inference improves over the same-night August anchor, while approximate performance remains workload-dependent |
-| 1.1.1  | Oct 20, 2026 | planned; bounded release | Consolidation against a release gate: CI green, the soundness finds, the full-step training comparison |
+| **1.1.1** | Oct 15, 2026 | **released** (bounded set) | **Consolidation after the transformer work**: the release gate met (CI green, three soundness fixes, the full-step training comparison), backward-contraction sketches for training, and broad search and diagnostics follow-through |
 | 1.1.2  | Oct 27, 2026 | planned | Performance beyond transformers: reduced ResNet-style convs and CPU kernel/sketch economy |
 | 1.1.3  | Oct 31, 2026 | planned | The training experience: checkpoints, tracking, plots, `lib/` interfaces, REPL/notebook recovery |
 | 1.2    | Nov 15, 2026 | planned | Reusable tensor programs: shape schemes with checkpoint rollback, beside an end-to-end newcomer path; standalone ArrayJIT optional |

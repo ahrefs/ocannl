@@ -67,7 +67,10 @@ guarantee. The [October 3–4 tuned inference comparison](benchmarks/report-tagl
 measured `gpt2_mini` f32 at **3.504 ms exact versus 4.493 ms approximate on CUDA** (28% slower),
 **8.334 versus 7.457 ms on Metal** (11% lower latency), and **4.757 versus 4.692 ms on
 unified-memory HIP** (essentially neutral). Discrete-HIP master timings failed the clean-replay
-requirement, and the campaign did not produce controlled training measurements.
+requirement, and the campaign did not produce controlled training measurements. Since then,
+v1.1.1's CUDA attention fallback has made tuned approximate inference on the same CUDA box
+**2.48 ms against 3.50 ms exact**, at about 3× the allocator high-water mark
+([PR #952](https://github.com/lukstafi/ocannl-staging/pull/952)).
 
 The separate [October 3 default-schedule sweep](benchmarks/report-gh720-transformer.md)
 measured approximate f32 slower at all eight HIP endpoints, with Metal inference improvements
@@ -82,11 +85,18 @@ NOTE: debug logging from CUDA or HIP in complex settings is a bit tricky, as it 
 
 ## Milestones
 
-See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.1 was released on October 4, 2026: fused attention and better transformer scheduling**. It is followed by **v1.1.1**, consolidation released as a bounded set (October 20), **v1.1.2** non-transformer performance work (October 27), **v1.1.3** the training experience (October 31), and **v1.2** reusable tensor programs — shape schemes for tensor functions — (November 15); the overflow milestones **v1.2.1** and **v1.2.2** and the design-space milestone **v1.3** are undated. Release dates are project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2 → 1.3`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.1.1 was released on October 15, 2026: consolidation after the transformer work**, released as a bounded set against a release gate. It is followed by **v1.1.2** non-transformer performance work (October 27), **v1.1.3** the training experience (October 31), and **v1.2** reusable tensor programs — shape schemes for tensor functions — (November 15); the overflow milestones **v1.2.1** and **v1.2.2** and the design-space milestone **v1.3** are undated. Release dates are project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2 → 1.3`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
 
 ### Releases
 
 For more details, see [CHANGES](CHANGES.md).
+
+* **1.1.1 (released October 15, 2026): Consolidation after the transformer work.**
+  * Released against a gate rather than an empty queue: CI green on master, Windows and a PR-time OCaml 5.3 leg included; soundness fixes for cross-nest dependence, flattened-index scheduling and tensorized test claims; and a re-run of the full-step training comparison ([gh-ocannl-1183](https://github.com/ahrefs/ocannl/issues/1183)).
+  * Backward-contraction sketches let tuned training search its weight and data gradients: the tuned CUDA `gpt2_mini_train` batch-8 step goes from 23.48 to 15.51 ms. Torch CUDA eager remains 2.88× faster tuned and about 9× faster untuned, and a tuned batch-256 step does not fit the search on a 12 GiB card ([PR #1041](https://github.com/lukstafi/ocannl-staging/pull/1041)).
+  * Multi-simdgroup lane reductions make default fused-attention training steps at head widths 64 and 128 16–63% faster on CUDA and up to 31% faster on Metal. On CUDA, the approximate profile's attention fallback turns 1.1's 28% inference slowdown into a 29% speedup, at about 3× the allocator high-water mark ([PR #1126](https://github.com/lukstafi/ocannl-staging/pull/1126), [PR #1028](https://github.com/lukstafi/ocannl-staging/pull/1028), [PR #952](https://github.com/lukstafi/ocannl-staging/pull/952)).
+  * Search follow-through: zero initialization folded into tuned reductions, warm placement chains that replay instead of re-searching, schedule-cache entries that work on Windows and refuse stale entries with a type, and per-call timing records.
+  * Resource limits become typed refusals rather than fatal errors (Metal threadgroup memory, HIP thread-private frames, routine-name collisions), and batch-norm keeps running statistics.
 
 * **1.1 (released October 4, 2026): Fused attention and better transformer scheduling.**
   * Same-machine reruns of the August commit show tuned exact `gpt2_mini` f32 inference **2.02× faster on CUDA, 1.31× on Metal and 1.66× on unified-memory HIP**. These measure progress since August, not solely since v1.0.2. CUDA remains 3.41× slower than exact-pinned `torch.compile` and 2.18× slower than tinygrad BEAM=2; Metal remains 4.40× and 4.04× slower respectively ([completed comparison](benchmarks/report-tagline-gpt2.md), [PR #944](https://github.com/lukstafi/ocannl-staging/pull/944)).
