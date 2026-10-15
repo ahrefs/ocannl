@@ -58,7 +58,6 @@ test/operations/model_default_fallback.ml -- records<=2 traversals<=2: existing 
 test/operations/op_legality.ml -- records<=4 traversals<=1: links ll_test for operand helpers only; still hand-builds Low_level
 test/operations/schedule_ops.ml -- records<=4 traversals<=1: links ll_test for operand helpers only; still hand-builds Low_level
 test/operations/schedule_split_reduce.ml -- records<=0 traversals<=7: links ll_test for operand helpers only; still hand-builds Low_level
-test/operations/scratch_value_variance.ml -- records<=5 traversals<=0: existing migration debt; adopt ll_test when touched
 test/operations/test_bounds_folded_gather.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched
 test/operations/test_one_hot_embedding_backward.ml -- records<=0 traversals<=4: existing migration debt; adopt ll_test when touched
 test/operations/test_one_hot_embedding_lookup.ml -- records<=0 traversals<=6: existing migration debt; adopt ll_test when touched
