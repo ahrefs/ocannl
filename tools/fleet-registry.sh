@@ -21,6 +21,8 @@
 # the channel for a backend that went untested. A correctness reservation defers nothing: the
 # fleet's policy lets correctness runs share a box (its run-time slots bound them), and a standing
 # one lasts a worker's whole life, so a sweep that stood aside for those would rarely run at all.
+# What bounds a GPU unit's company on its box is the fleet's GPU tokens instead, which the unit reads
+# and, where they bind, takes (tools/gpu-tokens.sh, gh-ocannl-1177).
 #
 # The other direction is the registry's. The sweep owns no registry record, so a measurement
 # reserved WHILE a unit runs is refused by the fleet's side: a `measurement` reserve, run or
@@ -90,9 +92,16 @@ sweep_fleet_lane_names() { # ssh-destination (empty for the local lane)
 # 0 with MEASUREMENT_HOLDERS set when an outstanding measurement names one of the names; 1 when none
 # does; 2 with REGISTRY_REASON set when the registry could not be read. Through run_capped and a
 # file, not a command substitution, so a cancellation reaches the reader (see remote_guest_id).
+#
+# The same read leaves BOX_RESERVATIONS: every active reservation naming one of the names, of
+# either kind, as a JSON array of {request_id, kind, state, standing, worker, execution_host} -- the
+# registry's half of a GPU unit's token record (tools/gpu-tokens.sh). A reservation holds no slot
+# and no token (a standing one lasts a worker's life), so it names who MIGHT be running there; the
+# box's flocks say who is. Empty when the registry could not be read.
 sweep_fleet_under_measurement() { # names...
   local out rc
   MEASUREMENT_HOLDERS=
+  BOX_RESERVATIONS=
   REGISTRY_REASON=
   out=$(mktemp "$LANE_DIR/registry.XXXXXX") || {
     REGISTRY_REASON="cannot create a scratch file under $LANE_DIR"
@@ -105,23 +114,31 @@ sweep_fleet_under_measurement() { # names...
     rm -f "$out" "$out.err"
     return 2
   fi
-  MEASUREMENT_HOLDERS=$(perl -MJSON::PP -e '
+  perl -MJSON::PP -e '
     my %names = map { $_ => 1 } @ARGV;
     local $/;
     my $list = eval { JSON::PP->new->decode(<STDIN>) };
     exit 3 unless ref $list eq "ARRAY";
-    my @held;
+    my (@held, @reserved);
     for my $r (@$list) {
       exit 3 unless ref $r eq "HASH" && ref $r->{request} eq "HASH";
       my $q = $r->{request};
-      next unless ($q->{kind} // "") eq "measurement" && $names{$q->{execution_host} // ""};
+      next unless $names{$q->{execution_host} // ""};
+      push @reserved, { map { $_ => $q->{$_} } grep { defined $q->{$_} }
+        qw(kind standing worker execution_host) };
+      @{ $reserved[-1] }{qw(request_id state)} = ($r->{request_id}, $r->{state});
+      next unless ($q->{kind} // "") eq "measurement";
       push @held, sprintf("%s (%s on %s)", $r->{request_id} // "?", $r->{state} // "?",
         $q->{execution_host});
     }
-    print join("; ", @held);' "$@" <"$out")
+    print join("; ", @held), "\n", JSON::PP->new->canonical->encode(\@reserved), "\n";' "$@" \
+    <"$out" >"$out.read"
   rc=$?
-  rm -f "$out" "$out.err"
+  { read -r MEASUREMENT_HOLDERS && read -r BOX_RESERVATIONS; } <"$out.read" 2>/dev/null
+  rm -f "$out" "$out.err" "$out.read"
   if [ "$rc" -ne 0 ]; then
+    MEASUREMENT_HOLDERS=
+    BOX_RESERVATIONS=
     REGISTRY_REASON="execution list printed no registry this could read"
     return 2
   fi

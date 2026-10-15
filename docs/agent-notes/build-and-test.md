@@ -2999,11 +2999,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 ## The cross-machine sweep
 
 - Sweep endpoint and lock-contract helpers live in `tools/lab-map.sh`, registry reads in
-  `tools/fleet-registry.sh`, diagnostic normalization in `tools/sweep-fingerprint.sh`, and the
-  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990). Their caller-owned variables
-  and callback dependencies are listed at each file's head. `runtest-sweep_components` exercises
-  the sourced functions without running a sweep; `bash test/operations/sweep_components.sh state`
-  (also `lab`, `fleet`, `fingerprint`) isolates one fixture. The default runs all four plus broken
+  `tools/fleet-registry.sh`, diagnostic normalization in `tools/sweep-fingerprint.sh`, the
+  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990), and the fleet's GPU tokens
+  (a GPU unit's readings and its take) in `tools/gpu-tokens.sh` (gh-ocannl-1177). Their caller-owned
+  variables and callback dependencies are listed at each file's head. `runtest-sweep_components`
+  exercises the sourced functions without running a sweep; `bash test/operations/sweep_components.sh
+  state` (also `lab`, `fleet`, `fingerprint`, `tokens`) isolates one fixture. The default runs all four plus broken
   component controls; `runtest-sweep_harness` remains the integration check.
   Its `sweep_remote_fixture.sh` local SSH mode executes the emitted commands with isolated
   homes and cloned repos: prep and real locks, boot-specific PATH and widths, collected kernel
@@ -3056,8 +3057,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   (cancelled, or its own `die`) asks from its EXIT trap instead, detached (`setsid`, so the group
   TERM that cancelled the run does not take it) into `logs/<stamp>-tuf-sleep.log`; the relay stops
   taking signals once the unit is reaped, since the top level's own relayed TERM would otherwise
-  end the lane inside that trap. A cancelled top level does not order its exit after its lanes',
-  so the lane's line saying so is best-effort and the log is the record. Its unit is uncapped:
+  end the lane inside that trap. The lane's line saying so reaches the sweep's output: a lane's EXIT
+  trap prints nothing (it runs with the stdout of the leg it interrupted, the unit's log, where such
+  lines used to land), and the top level, which waits for every lane before it removes their
+  coordination directory, prints what each one buffered (gh-ocannl-1039). Its unit is uncapped:
   lukstafi/ludics-lite#344's ladder ran it green at dune's default (16) and at `-j 8`, 1046 s
   against 1105 s, with no GPU kernel line (it had run at a placeholder `-j 2` until then). Its boot kind comes from
   the site table's `kind_of tuf` like every box's (wake-lab.sh requires one too): the lab's map lists
@@ -3111,6 +3114,31 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   closes the race both ways. The local lane takes no lab lock, so on this host nothing refuses a
   measurement reserved mid-unit; the per-unit read is its only check. The harness pins its
   registry reader to a fake, since the default candidates reach the real registry on a fleet box.
+- **A remote GPU unit records its box's GPU-token holders, and where the tokens bind it takes one**
+  (gh-ocannl-1177; `tools/gpu-tokens.sh`). The fleet bounds a box's GPU with GPU tokens, the first
+  T of its S correctness-slot files (lukstafi/ludics-lite#391; rog-nv-linux 4 and 2, because three
+  concurrent cuda batches ran out of device memory). The sweep took none, so a sweep unit could be
+  the third batch. Now every remote GPU unit asks the box's own `fleet-worker.sh execution slot
+  --probe` (the same candidate list as this host's, under the box's home) and reads which slot files
+  are flocked, by whom, from the kernel's flock table: at its start (`opened`), after its suite
+  (`closed`), and when a take is refused (`refused`), one JSON line each in
+  `<log stem>.gpu-tokens` (`box`, `event`, `at`; `slot`, `kind`, `pid`, `user`, `command`, `cwd`
+  per holder -- the vocabulary of the fleet's co-tenant records, lukstafi/ludics-lite#566), beside a
+  `reservations` line with the registry's active reservations on the box (from the per-unit
+  `execution list --active` read; a reservation holds no token, so the counts come from the flocks).
+  A reading that saw another batch holding the GPU is named on the summary, the record's twelfth
+  field counts them (`opened=1/2,closed=0/2`), and the fingerprint says only whether there was
+  contention. Where T < S -- rog-nv's cuda unit today -- the suite, the serial rerun and the
+  completion pass each run inside one token, through `execution slot --gpu --wait
+  ${OCANNL_TOOL_SWEEP_TOKEN_WAIT:-1800}` on the box; a token that does not come free in time is a
+  `skip (no GPU token on <box>: ...)` naming the holders (never a third batch), a measurement
+  refusing the take is a `skip` too, and a take the fleet's machinery cannot answer runs the leg
+  without a token under a `gpu token: WARNING` line, failing open as the registry read does. The
+  RTC context and the box check hold no GPU test and take none; workers' batches and the GPU
+  integration loop (lukstafi/ludics-lite#615) wait for the same tokens, with no precedence either
+  way. `OCANNL_TOOL_FLEET_WORKER=none` reads and takes nothing. A box without `/proc/locks` (the
+  macOS host) cannot be read, so the local metal unit records `-`; a token taken and released
+  between two readings is not seen.
 - **Each lane runs `benchmarks/check-box.sh --box-only` once** (gh-ocannl-1062), after its first
   unit whose suite ran (`pass`, `incremental-pass` or `fail`; a `timeout` leaves it to the next
   unit, its device possibly wedged), in that unit's worktree and under its lock, against the box's
@@ -3121,8 +3149,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
-  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **5** since the `unit`
-  row gained the memory model and its outcome the value `gate` (gh-ocannl-1035); **4** gave the
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **6** since the `unit`
+  row gained its GPU-token readings and its window count the value `suspended` (gh-ocannl-1177,
+  gh-ocannl-1039); **5** gave the `unit` row the memory model and its outcome the value `gate`
+  (gh-ocannl-1035); **4** gave the
   `unit` row the window's kind (gh-ocannl-1034); **3** gave the count its fourth value
   (`vm-replaced`); **2** added the dxg fields to the `unit` row, and a
   consumer picks its parser from that number (the per-unit *state*
@@ -3152,8 +3182,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
     count has **four** permitted values, and a consumer must not validate it as numeric: `-` for a
     unit with no window (a local one, a CPU one, one whose transport has no window kind, or one that
     never ran), a number for a window that was read,
-    `unavailable` where the collection itself failed, and `vm-replaced` where the guest was
-    destroyed and recreated mid-window. They mean different things — "nobody read the box" is not
+    `unavailable` where the collection itself failed, `vm-replaced` where the guest was
+    destroyed and recreated mid-window, and `suspended` where a native box slept inside the window
+    (the kernel's `PM: suspend entry`/`exit` lines; same boot id, so only these see it). They mean
+    different things — "nobody read the box" is not
     "the bridge was fine", and only the number is a positive finding about the bridge. `vm-replaced`
     is the strongest of the four and is why the schema is 3: the window spans two boots, so its
     lines describe no single machine, and a fresh guest that came up clean would otherwise report
@@ -3171,7 +3203,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
     `unified/gfx1151` (minix/hip), `discrete/sm_120` (rog-nv/cuda), `unified/apple` (metal), `-` for
     a CPU unit — declared, not probed, since KFD reports `local_mem_size 0` for both AMD GPUs on
     these kernels. It is how a consumer tells the two hip rows' coverage apart without knowing the
-    fleet's hardware.
+    fleet's hardware. The twelfth field is the unit's GPU-TOKEN readings (`gpu_tokens_summary
+    field`): `<event>=<GPU holders>/<tokens>` per reading, comma-separated, `?` for one that could
+    not be read, `-` for a unit with none (local, CPU, or never dialled) -- `opened=1/2,closed=0/2`,
+    or `opened=2/2,refused=2/2` on a `skip` that waited out its token, the one `skip` row that
+    carries a log.
   - `backend`: backend, machine. One per unit of the execution table whether or not this run
     selected it (so hip has two, minix and tuf) — staleness must be aged against the box that runs a backend TODAY, or a pre-move
     box's passes certify a path that has never run there.
@@ -3254,8 +3290,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - **On a native boot the limit is minix's copy-engine queues, not a bridge: the hip unit runs
   at `-j 8`; tuf's hip and rog-nv's cuda units run at their boxes' per-slot widths** (gh-ocannl-1029;
   the slot widths are the next bullet's). Each of those two ran one unit green at dune's default
-  width with the box to itself, but a sweep unit takes no correctness slot, so it shares the box
-  with the batches that do, and a default-width unit beside them was never measured (on 2026-10-14
+  width with the box to itself, but a sweep unit shares the box with the batches holding its
+  correctness slots -- rog-nv's cuda unit now as one of them, inside one of its two GPU tokens
+  (gh-ocannl-1177, the sweep bullet above), the others holding none -- and a default-width unit
+  beside them was never measured (on 2026-10-14
   tuf's 16-wide unit also had sixteen tests hung at once on a wedged device). The sweep reads the
   local view's constants (`box_jobs_hazard_cap`), so the two widths cannot drift, and leg 48 of
   `tools/test-test-run.sh` compares them on a faked box. The amdgpu driver's **SDMA
@@ -3271,7 +3309,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   wider than its cap — and the sweep looks for it itself: a `-linux` unit's kernel window is the
   native kind, and a refusal in it (or the ROCr assertion in its log) buys the unit its serial rerun
   (gh-ocannl-1034, below). `dmesg` is restricted on both native boxes (`kernel.dmesg_restrict=1`);
-  the user reads the kernel journal through the `adm` group. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line, alone.
+  the user reads the kernel journal through the `adm` group. rog-nv's native cuda unit ran green at
+  24, 8, 4 and 2 with no NVRM/Xid line, alone: those ladder runs had the box to themselves, no other
+  batch holding its GPU, which is the budget the box's two GPU tokens keep the unit inside now.
   The sweep's cap is `BOX_JOBS_SDMA_CAP` in `tools/box-jobs.sh`, one unit's width with the box to
   itself; lukstafi/ludics-lite#344 ran the unit green at `-j 16` too (1223 s, no faster). On
   tuf-amd-linux (discrete gfx1102) a benign kernel line looks like trouble to a loose grep: the
@@ -3373,10 +3413,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on
   the next line, and the sweep keys on the name — or, for a name whose row below gives one
-  qualifying status, on the name AND that status. A `fail` unit whose log carries any of them is
-  *environment-red* and gets a **serial rerun** (gh-ocannl-945): every failing stanza again as
+  qualifying status, on the name AND that status. A GPU unit's `fail` whose log carries any of them
+  is *environment-red* and gets a **serial rerun** (gh-ocannl-945): every failing stanza again as
   `dune build -j 1 @<dir>/runtest-<name>` (or `@<dir>/<alias>` for an explicit rule), one dune
-  call each, under the same worktree lock and the unit's own cap, appended to the unit's log.
+  call each, under the same worktree lock and the unit's own cap, appended to the unit's log. A CPU
+  unit's log is not read for them (gh-ocannl-1039): a CPU unit meets no device to be refused, and
+  its tests print exactly these names as fixtures -- the sweep harness does, when it fails inside
+  the cc unit, which was then rerun instead of reported.
   rog-nv's CUDA shows the class is not minix-only, and that a status is not a diagnosis: the
   2026-09-13 forced unit lost exactly one stanza, `tensor_puzzles`, at its first `Context.auto`
   with `CUDA_ERROR_OUT_OF_MEMORY`, while the journal recorded a
@@ -3410,7 +3453,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 | `cu_device_primary_ctx_retain` | `Cu.Context.get_primary`, backend `get_device` | rog-nv, 2026-09-13: `CUDA_ERROR_OUT_OF_MEMORY` (1) — the only one of the box's three bursts to reach a stanza |
 | `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
 | `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
-| `cu_launch_kernel`, only with `CUDA_ERROR_OUT_OF_MEMORY` | `Cu.Stream.launch_kernel`, backend `link_proc` | rog-nv native, 2026-10-02: `CUDA_ERROR_OUT_OF_MEMORY` (1, `schedule_strided_1x1`, empty kernel window, green alone at the same commit); the status three concurrent cuda batches produced in `fused_classifier` (lukstafi/ludics-lite#316, lukstafi/ludics-lite#344) |
+| `cu_launch_kernel`, only with `CUDA_ERROR_OUT_OF_MEMORY` | `Cu.Stream.launch_kernel`, backend `link_proc` | rog-nv native, 2026-10-02: `CUDA_ERROR_OUT_OF_MEMORY` (1, `schedule_strided_1x1`, empty kernel window, green alone at the same commit) with NO other batch on the box -- rog had resumed from an 11.5 h suspend 40 s before the unit, its journal shows no ssh session but the sweep's own during it, and the registry held no reservation there -- at dune's default width (24; the unit was uncapped at that commit, gh-ocannl-1177); the status three concurrent cuda batches produced in `fused_classifier` (lukstafi/ludics-lite#316, lukstafi/ludics-lite#344) |
 | `hip_module_launch_kernel`, only with `HIP_ERROR_OUT_OF_MEMORY` | `Hip.Stream.launch_kernel`, backend `link_proc` | analogue of the CUDA launch, not yet observed |
 - **A name is no longer the only trigger: the kernel's own evidence in the unit's window is the
   other** (gh-ocannl-979). A remote `cuda` or `hip` unit records its UTC window and, at the end,

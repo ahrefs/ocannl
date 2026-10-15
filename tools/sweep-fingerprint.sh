@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Sweep diagnostic normalization, sourced by tools/sweep.sh and direct fixtures.
-# The caller provides window_fingerprint_lines (kernel-window.sh), say and die.
+# The caller provides window_fingerprint_lines (kernel-window.sh), gpu_tokens_summary and
+# gpu_tokens_sidecar (gpu-tokens.sh), say and die.
 # sweep_fingerprint_write sets WRITTEN_FINGERPRINT to the published path.
 
 # The error SITES in a log, one per line, in BOTH of dune's spellings: a
@@ -136,6 +137,11 @@ sweep_fingerprint() {
   # no one's idea of the least interesting. The verdict follows them for the reason
   # the serial rerun's line does: it is the one line that must survive.
   window_fingerprint_lines "$1"
+  # The GPU tokens' stable half (gh-ocannl-1177): whether another batch held the box's GPU at a
+  # reading, never the counts or the pids, for the window's reason above -- the same contention
+  # twice does not move a fingerprint, and contention appearing or going away does. Nothing for a
+  # unit with no readings (a local or CPU unit).
+  gpu_tokens_summary fingerprint "$(gpu_tokens_sidecar "$1")"
   # The serial rerun's verdict (serial_rerun), after the sorted block and
   # outside its bound: which of the red stanzas stayed red on their own is the
   # first line a reader of an environment-red unit needs, and the one a

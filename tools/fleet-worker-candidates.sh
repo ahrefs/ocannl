@@ -11,13 +11,16 @@
 # other has. A caller takes the first candidate that answers `execution slot --probe` (one line,
 # `EXECUTION SLOT PROBE <box> <slots> <gpu tokens>`, no lock and no registry read), which is
 # the capability check and, on a fleet box, names the box as the fleet's registry does.
-
-fleet_worker_candidates() { # prints the fleet-worker.sh candidates, one per line
+#
+# A home directory as the argument lists the candidates under it instead of this host's: the sweep
+# asks a GPU box's own fleet-worker.sh about its tokens (tools/gpu-tokens.sh), so it hands the box's
+# home here, and the one list serves both sides of the ssh.
+fleet_worker_candidates() { # [home]; prints the fleet-worker.sh candidates, one per line
   case ${OCANNL_TOOL_FLEET_WORKER-} in
     none) ;;
     '')
-      printf '%s\n' "$HOME/.claude/skills/issue-wave/scripts/fleet-worker.sh" \
-        "$HOME/.codex/skills/issue-wave/scripts/fleet-worker.sh"
+      printf '%s\n' "${1:-$HOME}/.claude/skills/issue-wave/scripts/fleet-worker.sh" \
+        "${1:-$HOME}/.codex/skills/issue-wave/scripts/fleet-worker.sh"
       ;;
     *) printf '%s\n' "$OCANNL_TOOL_FLEET_WORKER" ;;
   esac
