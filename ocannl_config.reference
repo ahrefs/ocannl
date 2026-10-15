@@ -617,6 +617,17 @@
 # searches, and `reproducible` does not search.
 #autotune_composite_playoff_width=2
 
+# How near its segment's best single a single must be timed to enter `Autotune.tune`'s composite
+# playoff (gh-ocannl-1166), as a fraction of that best: 0.005 admits singles within 0.5%. The
+# fraction is how far the backdrop's noise can invert two singles' order, so a box whose replicate
+# spread is wider than the default needs a wider margin for the playoff to reach the inversions it
+# exists to undo; at most `autotune_composite_playoff_width` of the admitted singles play, nearest
+# first, so a wider margin can change which singles play but not how many windows a segment costs
+# at most. A negative value is read as 0 (exact ties only); the playoff is turned off by width 0. It
+# shapes what a search times, not what a crowned schedule means, so a warm schedule cache replays
+# its winner whatever the margin. No profile sets it.
+#autotune_composite_playoff_margin=0.005
+
 # Which units of each beam entry a beam-expansion round of `Autotune.tune` expands
 # (gh-ocannl-1229): `differing`, `full` or `head`. A fissioned routine's time is the sum of its
 # segments' times, and after the composite playoff the beam's runners-up are the head with a few
