@@ -8,15 +8,22 @@
    are such a test's whole cost (about 25 s of CPU per search on mac-studio). [small_menu] keeps a
    fifth of each segment's sketches by the roofline model -- [autotune_keep_fraction=0.2] with a
    synthetic envelope ([model_peak_flops], [model_peak_memory_bandwidth]), since cc advertises none
-   and without an envelope the pre-filter keeps everything -- which leaves about five singles per
-   segment. The envelope only ranks a segment's sketches against each other, so it need not describe
-   the machine.
+   and without an envelope the pre-filter keeps everything -- which leaves eight and seven singles
+   per segment. The envelope only ranks a segment's sketches against each other, so it need not
+   describe the machine.
 
    Which singles survive is the model's choice, and no claim may depend on it. How many survive is
    what the claims depend on: a width-2 playoff claim, or a beam whose second entry is a playoff
    alternate, cannot fail over a segment offering one or two. So a test that prunes states
    [menu_claim] over what its search timed, and a cost-model change that ever kept fewer fails that
    claim loudly instead of the others passing vacuously.
+
+   Which singles survive also follows the cc vector width, which auto-probes from the host: at 32
+   bytes (AVX2) the pre-filter keeps eight and seven singles, at 64 (AVX-512) four and three -- the
+   latter on the [menu_claim] floor -- and CI's x86 runners draw either CPU at random. So
+   [small_menu] pins the width ([vector_bytes]) for every search of the process, and [menu_claim]
+   prints the width the backend resolved beside the menu it reports, so a log names which menu it
+   saw.
 
    The envelope overrides are read once per process, at the first pre-filter, so [small_menu] (or
    [small_menu_envelope]) runs at a test's top level before its first search, at the config-file
@@ -64,10 +71,18 @@ let state settings =
 let small_menu_envelope () =
   state [ ("model_peak_flops", "1e12"); ("model_peak_memory_bandwidth", "1e11") ]
 
-(* The envelope and the keep fraction, for every search of the process. *)
+(* The cc vector width the small menu is pinned to (see the header): the AVX2 width, where each
+   segment keeps more than the claims' floor. *)
+let vector_bytes = 32
+
+(* The envelope, the keep fraction and the cc vector width, for every search of the process. *)
 let small_menu () =
   small_menu_envelope ();
-  state [ ("autotune_keep_fraction", Float.to_string keep_fraction) ]
+  state
+    [
+      ("autotune_keep_fraction", Float.to_string keep_fraction);
+      ("cc_vector_bytes", Int.to_string vector_bytes);
+    ]
 
 let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')
 let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem label ','
@@ -85,12 +100,16 @@ let singles_per_segment measured =
 (* The claims a pruned search's menu owes the claims built on it: the search keyed two segments
    ([chain]'s two products; [autotune_sketch_placements]' structural twins and closing layer), and
    each still offers three or more singles. A test that prunes on some backends only passes [~when_]
-   (whether this run pruned) and [~on] (the backend), and the claims are skipped where it did
-   not. *)
+   (whether this run pruned) and [~on] (the backend), and the claims are skipped where it did not.
+   Where it pruned, the report names the cc vector width the backend resolved, which the menu
+   follows. *)
 let menu_claim ?(when_ = true) ?(on = "") measured =
   let per_segment = singles_per_segment measured in
-  Stdio.eprintf "menu (not part of the golden): singles per segment %s\n%!"
-    (String.concat ~sep:" " (List.map per_segment ~f:Int.to_string));
+  Stdio.eprintf "menu (not part of the golden): singles per segment %s%s\n%!"
+    (String.concat ~sep:" " (List.map per_segment ~f:Int.to_string))
+    (if when_ then
+       Printf.sprintf " at cc_vector_bytes=%d" (Context.Cc_backend.vector_bytes_setting ())
+     else "");
   gated ~when_ ~on "menu: the pre-filtered seeding keys two segments" (List.length per_segment = 2);
   gated_all ~when_ ~on "menu: each segment offers three or more singles" per_segment ~f:(fun n ->
       n >= 3)

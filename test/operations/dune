@@ -8131,7 +8131,8 @@
 
 ; gh-ocannl-1166: the composite playoff re-ranks near-tie per-segment singles inside the
 ; recombined composite. Scripted timings, pinned to cc; the model pre-filter keeps its searches
-; small, so its three keys are declared alongside the playoff's own.
+; small, so its three keys are declared alongside the playoff's own, and at the cc vector width
+; the small menu pins (which reshapes that menu), so its key is declared too.
 
 (test
  (name autotune_composite_playoff)
@@ -8145,7 +8146,8 @@
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
   (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
   (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules autotune_composite_playoff)
  (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain)
  (preprocess
@@ -8153,8 +8155,8 @@
 
 ; gh-ocannl-1229: which units of each beam entry a round expands (autotune_round_expansion).
 ; Scripted timings, pinned to cc; its searches run on Fissioned_chain's small menu, so the model
-; pre-filter's three keys are declared beside the rule's own, and at a pinned cc vector width
-; (which reshapes that menu), so its key is declared too.
+; pre-filter's three keys are declared beside the rule's own, and at the cc vector width the small
+; menu pins (which reshapes that menu), so its key is declared too.
 
 (test
  (name autotune_round_expansion)
@@ -8748,7 +8750,8 @@
   ; The small menu's keys, which the test states on CPU backends (Fissioned_chain.small_menu).
   (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
   (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules autotune_sketch_placements)
  (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
  (preprocess
