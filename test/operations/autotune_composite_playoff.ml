@@ -11,11 +11,11 @@
 
    Each search compiles every single it times, and those compiles are the test's cost: unpruned, the
    chain offers 21 singles per segment, and the test took about 430 s on mac-studio. So every search
-   keeps a fifth of each segment's sketches by the roofline model ([autotune_keep_fraction=0.2],
-   with the envelope constants the model needs, since cc has none of its own, all stated below):
-   five singles per segment, which is all the playoff's claims need. Which five is the model's
-   choice and no claim depends on it; that each segment still offers three or more, without which
-   the width claims could not fail, is claimed ([menu]).
+   runs on [Fissioned_chain]'s small menu (the roofline pre-filter keeping a fifth of each segment's
+   sketches, [Train.tune_placements]' arms included): five singles per segment, which is all the
+   playoff's claims need. Which five is the model's choice and no claim depends on it; that each
+   segment still offers three or more, without which the width claims could not fail, is claimed
+   ([menu]).
 
    In [ties] every single measures the same, so each segment has near-tie contenders, and each later
    composite is scripted faster than the one before: every admitted playoff window swaps, so each
@@ -59,33 +59,8 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')
-let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem label ','
-let q = 32
-
-let matrix ~label ~modulus ~offset ~stride =
-  TDSL.ndarray
-    (Array.init (q * q) ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus ~offset ~stride))
-    ~label:[ label ] ~input_dims:[ q ] ~output_dims:[ q ] ()
-
-(* Two matmul segments of different shapes (the multi-site chain of [autotune_fission_sketch]): the
-   materialized sums cut the chain so each product is a keyed segment of its own. *)
-let chain () =
-  let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
-  let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
-  let qc = matrix ~label:"qc" ~modulus:5 ~offset:(-2.) ~stride:0.5 in
-  let qc16 =
-    TDSL.ndarray
-      (Array.init (16 * q)
-         ~f:(Ll_test.cycle_flat ~dims:[| 16; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
-      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ 16 ] ()
-  in
-  let%op qd = qa + qb in
-  Train.set_materialized qd.Tensor.value;
-  let%op qe = qd * qc in
-  Train.set_materialized qe.Tensor.value;
-  let%op qg = qc16 * qe in
-  Train.forward qg
+let is_single = Fissioned_chain.is_single
+let is_composite = Fissioned_chain.is_composite
 
 type observed = {
   report : Autotune.report;
@@ -99,18 +74,8 @@ type observed = {
 let playoff_width_key = "autotune_composite_playoff_width"
 let playoff_margin_key = "autotune_composite_playoff_margin"
 
-(* The model pre-filter (see the header), for every search here, [Train.tune_placements]' arms
-   included: stated at the config-file level before the first search, as the envelope overrides are
-   read once per process (the stanza declares the three keys' environment variables). The envelope
-   only ranks the sketches against each other, so it need not describe the machine. *)
-let () =
-  List.iter
-    [
-      ("autotune_keep_fraction", "0.2");
-      ("model_peak_flops", "1e12");
-      ("model_peak_memory_bandwidth", "1e11");
-    ]
-    ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)
+(* The small menu (see the header), for every search here: stated before the first search. *)
+let () = Fissioned_chain.small_menu ()
 
 (* A list of records as a report counts them: per (settle, admission), in constructor order. *)
 let tally (calls : Autotune.timing_call list) =
@@ -162,7 +127,7 @@ let search ?(trace = true) ?(log = false) ?progress ?width ?margin ~tag ~single 
         Autotune.with_uncontended_test_windows (fun () ->
             Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log ?progress
               ~report:(fun r -> report := Some r)
-              (Context.cpu ()) (chain ()) Ir.Indexing.Empty)
+              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
       in
       Context.release ctx);
   match !report with
@@ -258,15 +223,6 @@ let width_claim name ~width positions =
   p_all name (List.dedup_and_sort all ~compare:Int.compare) ~f:(fun pos ->
       List.count all ~f:(Int.equal pos) <= width)
 
-(* A single's keyed segment: the tag its label ends with ([@<digests>:u<n>]). *)
-let segment_of label = List.last_exn (String.split label ~on:'@')
-
-(* The singles a search timed, per segment, in attempt order of the segments. *)
-let singles_per_segment (o : observed) =
-  List.filter o.measured ~f:is_single
-  |> List.sort_and_group ~compare:(fun a b -> String.compare (segment_of a) (segment_of b))
-  |> List.map ~f:List.length
-
 let faster n = 10. -. (0.1 *. Float.of_int n)
 
 (* Bound at the top level: the trace claims at the end compare it with an unobserved rerun. *)
@@ -274,11 +230,7 @@ let ties = search ~tag:"ties" ~single:(fun _ -> 100.) ~composite:faster ()
 
 let () =
   (* The width claims below can fail only where a segment offers more singles than the width. *)
-  let per_segment = singles_per_segment ties in
-  Stdio.eprintf "menu (not part of the golden): singles per segment %s\n%!"
-    (String.concat ~sep:" " (List.map per_segment ~f:Int.to_string));
-  p "menu: the pre-filtered seeding keys two segments" (List.length per_segment = 2);
-  p_all "menu: each segment offers three or more singles" per_segment ~f:(fun n -> n >= 3);
+  Fissioned_chain.menu_claim ties.measured;
   let r = ties.report in
   p "ties: the coarse composite was timed" (Poly.equal r.Autotune.fiss_sketch_composite `Timed);
   p "ties: the playoff timed alternates" (r.Autotune.fiss_sketch_playoff_timed >= 1);
@@ -362,7 +314,8 @@ let () =
   (* The recombined composite holds each segment's best single, so its runner-up is the one
      contender a segment has. *)
   p "wide: a 1.5% margin lets each segment's runner-up 1% behind reach the playoff"
-    (r.Autotune.fiss_sketch_playoff_timed = List.length (singles_per_segment wide));
+    (r.Autotune.fiss_sketch_playoff_timed
+    = List.length (Fissioned_chain.singles_per_segment wide.measured));
   let labels = List.map wide.composite_ms ~f:fst in
   let challenges =
     match labels with
@@ -475,8 +428,8 @@ let () =
    longer a config read of their own) and, by inheritance, both arms' searches. Every window is
    scripted alike: nothing here is about the ranking. *)
 let () =
-  let pa = matrix ~label:"pa" ~modulus:11 ~offset:0. ~stride:0.125 in
-  let pb = matrix ~label:"pb" ~modulus:7 ~offset:(-3.) ~stride:1. in
+  let pa = Fissioned_chain.matrix ~label:"pa" ~modulus:11 ~offset:0. ~stride:0.125 in
+  let pb = Fissioned_chain.matrix ~label:"pb" ~modulus:7 ~offset:(-3.) ~stride:1. in
   let%op pc = pa * pb in
   let comp = Train.forward pc in
   let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
