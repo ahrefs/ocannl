@@ -500,7 +500,8 @@ resolves a claim name a local open of Verdict.Claims brings in: true
 does not read a module that took over the name Verdict as Verdict: true
 does not read a path that only passes through a module named Verdict: true
 does not read an unqualified claim name no open of Verdict brings in: true
-does not read a claim name a later open of another module may rebind: true
+refuses a claim name past a later open as ambiguous, naming the qualified remedy: true
+reads a claim name a later let binds as the source's own, past an open of Verdict: true
 refuses a literal label under a type constraint: true
 resolves a label binding written with a type annotation: true
 refuses a planted label literal carrying a line break, naming the one-line remedy: true
@@ -659,7 +660,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:52b0c212a9f1ba97a1400cd478d7cfda] shadowing definitions separate
   [scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal
   [scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim
-  [scanner-refusal:044fdb558baa9d634fba0163209c9f3d] reports the claim
+  [scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim
   [scanner-refusal:b743906541a11550a0513ec369b96184] which reads
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application

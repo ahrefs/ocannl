@@ -334,9 +334,17 @@ type dialect_census = {
 let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
 let skipped_callees = [ "skipped" ]
 
-(* What an [open] of a module denoting [Verdict] binds each claim name to: an identity no [let] and
-   no local can carry ([let]s count up from 1, locals down from -1). *)
+(* What an [open] binds each claim name to: an identity no [let] and no local can carry ([let]s
+   count up from 1, locals down from -1) -- one for a module denoting [Verdict], one for any
+   other. *)
 let opened_from_verdict = Int.min_value
+let opened_elsewhere = Int.min_value + 1
+
+(** Whose a claim callee is: [Verdict]'s, not [Verdict]'s, or [Ambiguous] -- an unqualified name
+    that reaches an [open Verdict.Claims] only past a later [open] of another module, which may or
+    may not export a function of that name: this scan cannot read what an unmodelled module exports.
+*)
+type ownership = Verdicts | Ambiguous | Not_verdicts
 
 (* One application whose callee is a path ending in a name of [callees], with a positional argument:
    its last path component, whether that callee is [Verdict]'s (below), and the site its first
@@ -348,9 +356,9 @@ let opened_from_verdict = Int.min_value
    Verdict = ...] took the name over, an alias of it ([module V = Verdict]), or a submodule of
    either ([Verdict.Claims]); [Other.Verdict] is not. An unqualified one is when the name it reaches
    was brought in by an [open] (or [include]) of such a module, as [open Verdict.Claims] brings the
-   claim names in, and no later [open] of another module may have rebound it; a name the source
-   binds itself ([let p = Stdio.printf], [let skipped = Verdict.skipped ~backend]), or one no
-   modelled open brings in, is not. *)
+   claim names in; a name the source binds itself ([let p = Stdio.printf], [let skipped =
+   Verdict.skipped ~backend]), or one no modelled open brings in, is not; and one that reaches such
+   an open only past a later [open] of another module is {!Ambiguous}. *)
 let claim_calls ~callees content =
   let ast = Read.structure_of content in
   (* A type constraint or coercion does not change which string a label is: [("…" : string)] is the
@@ -421,20 +429,34 @@ let claim_calls ~callees content =
 
       method! shadowed = Some false
 
-      (* An open of a module denoting [Verdict] binds every claim name to Verdict's. An open of any
-         other module may export a same-named function, and this scan cannot read what it exports,
-         so it binds the claim names to a local: a later [open Local_printer] shadows an earlier
-         [open Verdict.Claims] the way OCaml would if it exports a [p], and a claim name reached
-         past it is not read as Verdict's. *)
+      (* Every open pushes a frame for the claim names: Verdict's for a module denoting [Verdict],
+         and for any other module a marker that the name MAY have been rebound there, since this
+         scan cannot read what an unmodelled module exports. {!ownership_of} reads past the
+         markers. *)
       method! opened ~top:_ ~include_:_ env denotes =
+        let identity =
+          if Option.value denotes ~default:false then opened_from_verdict else opened_elsewhere
+        in
         Lexical_scope.push_frame env
           (Map.of_alist_reduce
              (module String)
-             (List.map callees ~f:(fun name ->
-                  ( name,
-                    if Option.value denotes ~default:false then (None, opened_from_verdict)
-                    else self#local )))
+             (List.map callees ~f:(fun name -> (name, (None, identity))))
              ~f:(fun first _ -> first))
+
+      (* An unqualified claim name's owner, innermost frame first: past any number of opens of other
+         modules, the first binding decides -- an open of [Verdict] makes it [Verdict]'s, or
+         [Ambiguous] when such an open was passed on the way; anything the source binds, or no
+         binding at all, makes it not [Verdict]'s. *)
+      method ownership_of env name =
+        let rec decide passed_open = function
+          | [] -> Not_verdicts
+          | (None, identity) :: outer when identity = opened_elsewhere -> decide true outer
+          | (None, identity) :: _ when identity = opened_from_verdict ->
+              if passed_open then Ambiguous else Verdicts
+          | _ :: _ -> Not_verdicts
+        in
+        decide false
+          (List.filter_map env.Lexical_scope.frames ~f:(fun frame -> Map.find frame name))
 
       method! let_denotes binding =
         match Read.pattern_name binding.pvb_pat with
@@ -468,11 +490,9 @@ let claim_calls ~callees content =
                   let verdicts =
                     match ident with
                     | Ppxlib.Longident.Ldot (prefix, _) ->
-                        Option.value (self#module_path env prefix) ~default:false
-                    | _ -> (
-                        match Lexical_scope.lookup env name with
-                        | Some (None, identity) -> identity = opened_from_verdict
-                        | Some (Some _, _) | None -> false)
+                        if Option.value (self#module_path env prefix) ~default:false then Verdicts
+                        else Not_verdicts
+                    | _ -> self#ownership_of env name
                   in
                   let site =
                     {
@@ -535,7 +555,13 @@ let dialect_census content =
     What it cannot see: a label computed from an expression (the sanitizer's case, by design), a
     claim reached through a wrapper the source binds ([let skipped = Verdict.skipped ~backend]), and
     an unqualified claim name brought in by an [open] this scan does not model (a module that
-    re-exports [Verdict.Claims] under another name). *)
+    re-exports [Verdict.Claims] under another name).
+
+    An unqualified claim name that reaches [open Verdict.Claims] only past a later [open] of another
+    module is {!Ambiguous}: that module may export a function of the name, and this scan cannot read
+    its exports. Such a site is READ, and a line break in its literal label is refused with the
+    remedy of qualifying the call -- loudly, since the alternative, leaving it unread, is how a
+    later [open Ll_test] would silently exempt every claim after it. *)
 
 (** The [Verdict.Claims] members whose first positional argument is a claim label (or the format
     rendering one): every member but [fail], whose argument is a multi-line message. *)
@@ -563,9 +589,13 @@ let labelled_claims =
     "case";
   ]
 
+type line_break_site = { site : dialect_site; ambiguous : bool }
+(** A claim whose literal label carries a line break; [ambiguous] when its callee reaches
+    [Verdict]'s only past an [open] of another module (see {!ownership}). *)
+
 type line_break_census = {
-  broken : dialect_site list;  (** Each claim whose literal label carries a line break. *)
-  label_sites : int;  (** Every [Verdict] claim whose label was read. *)
+  broken : line_break_site list;
+  label_sites : int;  (** Every [Verdict] (or ambiguous) claim whose label was read. *)
 }
 
 let has_line_break text = String.exists text ~f:(fun c -> Char.equal c '\n' || Char.equal c '\r')
@@ -573,10 +603,14 @@ let has_line_break text = String.exists text ~f:(fun c -> Char.equal c '\n' || C
 let line_break_census content =
   let sites =
     claim_calls ~callees:labelled_claims content
-    |> List.filter_map ~f:(fun (_, verdicts, site) -> Option.some_if verdicts site)
+    |> List.filter_map ~f:(fun (_, ownership, site) ->
+        match ownership with
+        | Verdicts -> Some { site; ambiguous = false }
+        | Ambiguous -> Some { site; ambiguous = true }
+        | Not_verdicts -> None)
   in
   let broken =
-    List.filter sites ~f:(fun site ->
+    List.filter sites ~f:(fun { site; _ } ->
         match site.key with Literal text -> has_line_break text | Named _ | Computed _ -> false)
   in
   { broken; label_sites = List.length sites }

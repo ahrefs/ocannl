@@ -3392,9 +3392,14 @@ let () = Verdict.p "rows: %d\n" n|ocaml},
       {ocaml|open Printer
 let () = p "rows: %d\n" n|ocaml},
       [] );
-    ( "does not read a claim name a later open of another module may rebind",
+    ( "refuses a claim name past a later open as ambiguous, naming the qualified remedy",
       {ocaml|open Verdict.Claims
 open Local_printer
+let () = p "rows: %d\n" n|ocaml},
+      [ "rows: %d\n [ambiguous]" ] );
+    ( "reads a claim name a later let binds as the source's own, past an open of Verdict",
+      {ocaml|open Verdict.Claims
+let p = Stdio.printf
 let () = p "rows: %d\n" n|ocaml},
       [] );
     ( "refuses a literal label under a type constraint",
@@ -3410,7 +3415,8 @@ let run_line_break_controls () =
   List.map line_break_controls ~f:(fun (label, source, expected) ->
       let found =
         (Scan.line_break_census source).Scan.broken
-        |> List.map ~f:(fun (site : Scan.dialect_site) -> Scan.label_key_text site.key)
+        |> List.map ~f:(fun ({ site; ambiguous } : Scan.line_break_site) ->
+            Scan.label_key_text site.key ^ if ambiguous then " [ambiguous]" else "")
       in
       let ok = List.equal String.equal found expected in
       if not ok then
@@ -3419,15 +3425,23 @@ let run_line_break_controls () =
           (String.concat ~sep:"; " (List.map found ~f:String.escaped));
       (label, ok))
 
-let refuse_line_break ~fail ~source (site : Scan.dialect_site) =
+let refuse_line_break ~fail ~source ({ site; ambiguous } : Scan.line_break_site) =
+  (* The remedy an ambiguous site adds: the call may be another module's. *)
+  let qualify =
+    if ambiguous then
+      ". `" ^ site.callee
+      ^ "` reaches Verdict's only past a later open of another module, which may export its own: \
+         if the call is that module's, qualify it"
+    else ""
+  in
   fail
     (Printf.sprintf
        "%s:%d reports the claim \"%s\" through `%s`, with a line break in its label -- a claim \
         prints as one row on each stream, and Verdict renders the break as a space. Put a blank \
-        line before the claim in a printf of its own, and write the label on one line"
+        line before the claim in a printf of its own, and write the label on one line%s"
        source site.line
        (String.escaped (Scan.label_key_text site.key))
-       site.callee)
+       site.callee qualify)
 
 (* The wiring from a finding to the failure, exercised on the first control's fixture. *)
 let run_line_break_refusal_control () =
@@ -3435,7 +3449,7 @@ let run_line_break_refusal_control () =
   let format =
     "%s:%d reports the claim \"%s\" through `%s`, with a line break in its label -- a claim prints \
      as one row on each stream, and Verdict renders the break as a space. Put a blank line before \
-     the claim in a printf of its own, and write the label on one line"
+     the claim in a printf of its own, and write the label on one line%s"
   in
   let refused = ref false in
   let fail _message =

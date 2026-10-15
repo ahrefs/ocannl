@@ -474,7 +474,7 @@ verdict_ratchet.ml: [scanner-refusal:977473ba169d481e2b57377845e9a8b8] exempted 
 verdict_ratchet.ml: [scanner-refusal:52b0c212a9f1ba97a1400cd478d7cfda] shadowing definitions separate (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
-verdict_ratchet.ml: [scanner-refusal:044fdb558baa9d634fba0163209c9f3d] reports the claim (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
+verdict_ratchet.ml: [scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:b743906541a11550a0513ec369b96184] which reads (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
