@@ -4,13 +4,40 @@
 
 harness_args() {
   KEEP=0 failures=0 skipped=0 harness_finished=0
-  for arg in "$@"; do
-    case $arg in
+  harness_only= harness_only_set=0 legs_selected=0 legs_filtered=0
+  while [ $# -gt 0 ]; do
+    case $1 in
       --keep) KEEP=1 ;;
+      --only=*) harness_only=${1#--only=} harness_only_set=1 ;;
+      --only)
+        [ $# -ge 2 ] || { echo "${0##*/}: --only needs a regular expression" >&2; exit 2; }
+        harness_only=$2 harness_only_set=1
+        shift ;;
       -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) echo "${0##*/}: unknown argument '$arg'" >&2; exit 2 ;;
+      *) echo "${0##*/}: unknown argument '$1'" >&2; exit 2 ;;
     esac
+    shift
   done
+  if [ "$harness_only_set" = 1 ]; then
+    # An empty pattern matches every leg: a "filter" that filters nothing.
+    [ -n "$harness_only" ] || { echo "${0##*/}: --only needs a non-empty regular expression" >&2; exit 2; }
+    local rc=0
+    [[ '' =~ $harness_only ]] || rc=$?
+    [ "$rc" != 2 ] || { echo "${0##*/}: --only '$harness_only' is not a valid extended regular expression" >&2; exit 2; }
+  fi
+}
+# Gate one leg's body: `if harness_leg 'NAME'; then ... fi`. Without --only
+# every leg runs; with it, a leg whose NAME does not match the extended
+# regular expression is reported FILTERED and its body is not run. Keep a
+# leg's shared setup (helpers, fixtures later legs read) outside the gate.
+harness_leg() { # NAME
+  if [ "${harness_only_set:-0}" != 1 ] || [[ $1 =~ $harness_only ]]; then
+    legs_selected=$((legs_selected + 1))
+    return 0
+  fi
+  legs_filtered=$((legs_filtered + 1))
+  printf 'FILTERED  %s\n' "$1"
+  return 1
 }
 report() { # RC LABEL [DETAIL]
   if [ "$1" -eq 0 ]; then
@@ -35,7 +62,22 @@ skip() { # LABEL REASON
 finish() {
   harness_finished=1
   echo
-  if [ "$failures" -eq 0 ]; then
+  if [ "${harness_only_set:-0}" = 1 ]; then
+    # A filtered run never prints the full-pass line, and one that selected
+    # nothing tested nothing: that is a usage error, not a green run.
+    if [ "$legs_selected" -eq 0 ] && [ "$legs_filtered" -eq 0 ]; then
+      echo "--only '$harness_only': this run reached no leg gate (the harness declares none, or stopped before its first): nothing was tested" >&2
+      exit 2
+    elif [ "$legs_selected" -eq 0 ]; then
+      echo "--only '$harness_only' selected no leg ($legs_filtered filtered out): nothing was tested" >&2
+      exit 2
+    fi
+    if [ "$failures" -eq 0 ]; then
+      echo "FILTERED RUN, not a full pass: $legs_selected leg(s) selected, $legs_filtered filtered out by --only '$harness_only'; no failure ($skipped skipped)"
+    else
+      echo "$failures leg(s) failed ($skipped skipped); FILTERED RUN: $legs_selected leg(s) selected, $legs_filtered filtered out by --only '$harness_only'"
+    fi
+  elif [ "$failures" -eq 0 ]; then
     echo "all legs passed ($skipped skipped)"
   else
     echo "$failures leg(s) failed ($skipped skipped)"

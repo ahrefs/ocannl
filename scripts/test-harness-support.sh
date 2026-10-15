@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Exercise shared harness lifecycle, counted skips and reason-specific rejection.
+# Exercise shared harness lifecycle, counted skips, the --only leg filter and
+# reason-specific rejection.
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -21,6 +22,11 @@ case $MODE in
   abort) exit 50 ;;
   errexit) set -e; (exit 7) ;;
   unfinished) exit 0 ;;
+  legs)
+    # Each body leaves a trace, so a filtered leg is seen not to have run.
+    if harness_leg 'alpha leg'; then echo alpha >>"$RECORD.ran"; report 0 'alpha body'; fi
+    if harness_leg 'beta leg'; then echo beta >>"$RECORD.ran"; report 0 'beta body'; fi
+    if harness_leg 'gamma leg'; then echo gamma >>"$RECORD.ran"; report "${GAMMA_RC:-0}" 'gamma body'; fi ;;
 esac
 finish
 PROBE
@@ -82,6 +88,63 @@ if [ "$rc" = 50 ] && [ -d "$path" ] && grep -q '^aborted before finish (rc=50)$'
   report 0 'aborted --keep retains scratch and reports the original status'
 else report 1 'aborted --keep retains scratch and reports the original status'; fi
 rm -rf "$path"
+# The leg filter: unfiltered, every leg runs and the full-pass line is earned;
+# filtered, only matching bodies run, the rest say FILTERED, and the footer is
+# never the full-pass line; a filter that selects nothing exits 2.
+legs_probe() { # expected bodies run (space-separated), then probe arguments
+  local want=$1 rc=0
+  shift
+  rm -f "$RECORD.ran"
+  MODE=legs probe "$@" || rc=$?
+  ran=
+  [ ! -f "$RECORD.ran" ] || ran=$(tr '\n' ' ' <"$RECORD.ran" | sed 's/ $//')
+  [ "$ran" = "$want" ] || { printf 'bodies run: "%s", wanted "%s"\n' "$ran" "$want" >>"$TMP/out"; rc=99; }
+  return "$rc"
+}
+legs_probe 'alpha beta gamma'; rc=$?
+if [ "$rc" = 0 ] && grep -q 'all legs passed (0 skipped)' "$TMP/out" && ! grep -q '^FILTERED' "$TMP/out" \
+   && [ "$(grep -c '^PASS  .* body$' "$TMP/out")" = 3 ]; then
+  report 0 'unfiltered: every leg runs and earns the full-pass line'
+else report 1 'unfiltered: every leg runs and earns the full-pass line' "exit $rc; $(cat "$TMP/out")"; fi
+legs_probe 'alpha' --only alpha; rc=$?
+if [ "$rc" = 0 ] && grep -q '^PASS  alpha body$' "$TMP/out" \
+   && grep -q '^FILTERED  beta leg$' "$TMP/out" && grep -q '^FILTERED  gamma leg$' "$TMP/out" \
+   && ! grep -q 'all legs passed' "$TMP/out" \
+   && grep -q "^FILTERED RUN, not a full pass: 1 leg(s) selected, 2 filtered out by --only 'alpha'; no failure (0 skipped)$" "$TMP/out"; then
+  report 0 '--only runs the matching leg alone and never prints the full-pass line'
+else report 1 '--only runs the matching leg alone and never prints the full-pass line' "exit $rc; $(cat "$TMP/out")"; fi
+legs_probe 'alpha gamma' '--only=^(alpha|gamma) leg$'; rc=$?
+if [ "$rc" = 0 ] && grep -q '^FILTERED  beta leg$' "$TMP/out" && ! grep -q 'all legs passed' "$TMP/out" \
+   && grep -q 'FILTERED RUN, not a full pass: 2 leg(s) selected, 1 filtered out' "$TMP/out"; then
+  report 0 '--only=REGEX is an extended regular expression over leg names'
+else report 1 '--only=REGEX is an extended regular expression over leg names' "exit $rc; $(cat "$TMP/out")"; fi
+GAMMA_RC=1 legs_probe 'gamma' --only gamma; rc=$?
+if [ "$rc" = 1 ] && grep -q '^FAIL  gamma body$' "$TMP/out" \
+   && grep -q "^1 leg(s) failed (0 skipped); FILTERED RUN: 1 leg(s) selected, 2 filtered out by --only 'gamma'$" "$TMP/out"; then
+  report 0 'a failing selected leg exits 1 and its footer says the run was filtered'
+else report 1 'a failing selected leg exits 1 and its footer says the run was filtered' "exit $rc; $(cat "$TMP/out")"; fi
+OCANNL_TOOL_HARNESS_STRICT=1 legs_probe 'beta' --only beta; rc=$?
+if [ "$rc" = 0 ] && grep -q 'FILTERED RUN, not a full pass: 1 leg(s) selected, 2 filtered out' "$TMP/out" \
+   && ! grep -q '^FAIL' "$TMP/out"; then
+  report 0 'a filtered leg is not a capability skip, so strict mode leaves it alone'
+else report 1 'a filtered leg is not a capability skip, so strict mode leaves it alone' "exit $rc; $(cat "$TMP/out")"; fi
+legs_probe '' --only 'no such leg'; rc=$?
+if [ "$rc" = 2 ] && [ "$(grep -c '^FILTERED  ' "$TMP/out")" = 3 ] \
+   && grep -q "^--only 'no such leg' selected no leg (3 filtered out): nothing was tested$" "$TMP/out" \
+   && ! grep -q 'legs passed\|leg(s) failed\|FILTERED RUN\|aborted before finish' "$TMP/out"; then
+  report 0 'a filter matching no leg fails loudly with exit 2'
+else report 1 'a filter matching no leg fails loudly with exit 2' "exit $rc; $(cat "$TMP/out")"; fi
+probe --only pass; rc=$?
+if [ "$rc" = 2 ] && grep -q "^--only 'pass': this run reached no leg gate" "$TMP/out" \
+   && ! grep -q 'legs passed\|FILTERED RUN' "$TMP/out"; then
+  report 0 'a filter over a harness that declares no legs fails loudly'
+else report 1 'a filter over a harness that declares no legs fails loudly' "exit $rc; $(cat "$TMP/out")"; fi
+for bad in "--only" "--only=" "--only=("; do
+  legs_probe '' $bad; rc=$?
+  if [ "$rc" = 2 ] && grep -q -- '--only' "$TMP/out" && ! grep -q '^PASS\|^FILTERED' "$TMP/out"; then
+    report 0 "'$bad' is refused before any leg runs"
+  else report 1 "'$bad' is refused before any leg runs" "exit $rc; $(cat "$TMP/out")"; fi
+done
 reason() { echo 'claimed defect'; return 1; }
 wrong_reason() { echo 'unrelated defect'; return 1; }
 wrong_status() { echo 'claimed defect'; return 127; }
