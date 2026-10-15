@@ -38,6 +38,7 @@ shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
 shell benchmarks/test-gh1133-cells.sh
 shell benchmarks/test-gh834-cells.sh
+shell benchmarks/test-check-box.sh
 toolchain tools/test-fmt-check.sh
 promotion tools/test-promote.sh
 promotion tools/test-promotion-record.sh
