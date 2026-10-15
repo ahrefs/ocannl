@@ -373,7 +373,20 @@ grep -q '^rows: 5 printed of 6 in replay.expected$' "$fixture/result"
 grep -q '^success trailer omitted: 3 rows ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'trailer_omitted: no omitted-trailer line'; exit 1; }
 reached
-printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught\n'
+# Failed pass_fail claims, bare and detailed, beside a Verdict.fail message: a claim's stderr line
+# is its stdout row behind `FAIL: `, so the runner lists every such line, and the message, a `FAIL: `
+# row on both streams, is none of them.
+replay pass_fail_forms 'held: PASS\nfailed: PASS\ndetailed: PASS\n' 1
+sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
+sed 's/^/FAIL: /' "$fixture/replay.stdout" > "$fixture/echoes"
+grep -Fx -f "$fixture/echoes" "$fixture/replay.stderr" > "$fixture/expected" || true
+[ "$(wc -l < "$fixture/expected")" -ge 2 ] ||
+  { echo 'pass_fail_forms: fewer than two failed claims echo their row on stderr'; exit 1; }
+cmp "$fixture/claims" "$fixture/expected" ||
+  { cat "$fixture/result"; echo 'pass_fail_forms: the false claims are not the echoed rows'; exit 1; }
+grep -q '^rows: 4 printed of 3 in replay.expected$' "$fixture/result"
+reached
+printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac

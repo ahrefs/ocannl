@@ -269,7 +269,10 @@ my $reported = eval {
         open my $claims, '<:raw', $log or refuse("read $log: $!");
         my ($found, $stopped, $teardown) = (0, '', 0);
         while (my $line = <$claims>) {
-            if ($line =~ /^(FAIL: .*: false)\r?\n?$/) {
+            # A claim's stderr line is its stdout row behind `FAIL: `: `<label>: false`, or a
+            # failed pass_fail's `<label>: FAIL` or `<label>: FAIL (<detail>)` (verdict_teardown
+            # pins both streams' bytes).
+            if ($line =~ /^(FAIL: .*: (?:false|FAIL(?: \(.*\))?))\r?\n?$/) {
                 print "$1\n";
                 $found = 1;
             }
