@@ -977,12 +977,17 @@ files.
   and crowns `full`'s round best. Its searches, like the playoff test's, run on
   `test/support/fissioned_chain.ml`'s small menu (the roofline pre-filter at 0.2 with a synthetic
   envelope, about five singles per segment), and unlike the playoff's its claims depend on WHICH
-  alternate seats as the beam's near-copy: its differing segment must offer round moves. The
-  tensorized `mma-cpu 16x0x0`/`0x0x0` alternates offer none (their rounds move only the shared
-  segments), so the test seats the last alternate, a register-tiled `cpu` single; a menu change
-  that seats a moveless one fails `full: the round extends the near-copy on its differing segment`.
-  To see each alternate's moves at once, probe with a beam wide enough to hold them all and read
-  the round line below. `autotune_sketch_placements` runs on the same small menu on CPU backends
+  alternate seats as the beam's near-copy: its differing segment must offer round moves.
+  Tensorized and fully register-tiled alternates offer none (their rounds move only the shared
+  segments), and WHICH alternates those are is the cc vector width's: 16 (NEON), 32 (AVX2) and 64
+  (AVX-512) bytes keep different singles through the pre-filter, so a seat picked by attempt
+  position passed on ARM and on AVX-512 runners and failed six claims on the AVX2 ones
+  (ahrefs/ocannl#1363; the scripted crown at 10.00 ms was the round falling short, not a timing
+  tie). The test now pins `cc_vector_bytes=32` and seats by the property: latest alternate first,
+  one `full` search each, until one's differing segment offers moves; a setup control claims the
+  positional seat fails at that width. Reproduce a CPU-menu difference between boxes with
+  `--ocannl_cc_vector_bytes=<16|32|64>` on the built exe. To see each alternate's moves at once,
+  probe with a beam wide enough to hold them all and read the round line below. `autotune_sketch_placements` runs on the same small menu on CPU backends
   (its claims ask which segments a single sketched, so they need one single per key, not particular
   ones). Before reaching for it elsewhere, count the search's `F_sketch`/`W_sketch` labels in its
   autotune log or progress lines: `autotune_split_reduce`, `autotune_labels` and `flip_abandonment`
