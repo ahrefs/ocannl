@@ -27,11 +27,11 @@
 #                 two passes forward/reversed): composed, two-pass-bwd (online forward, fused
 #                 backward: treatment D) and fold-B-bwd (the fold forward under the fused backward:
 #                 treatment F). Needs the gh-ocannl-1002 measurement's runner fix and workloads.
-#     summary     OUT/summary.md from the numbered passes' result lines (not the dry cells): median
-#                 p50 per cell, the p50 of each repeat, the widest p90/p10 of the cell's repeats, the
-#                 ratio to the same fixture's composed cell and to its two-pass cell, the shipped mma
-#                 census from `shipped_mma` for tuned and untuned compiled steps (falling back to
-#                 `tune.shipped_mma` for older tuned records), and the
+#     summary     OUT/summary.md from the numbered passes' result lines (not the dry cells), rendered
+#                 by gh1003_summary.py: median p50 per cell, the p50 of each repeat, the widest
+#                 p90/p10 of the cell's repeats, the ratio to the same fixture's composed cell and to
+#                 its two-pass cell, the shipped mma census from `shipped_mma` for tuned and untuned
+#                 compiled steps (falling back to `tune.shipped_mma` for older tuned records), and the
 #                 losses' agreement with the composed cell.
 #   A measurement step needs `build` and `provenance` earlier in the same invocation: _build/ is
 #   ignored by git, so the clean-tree check cannot vouch for binaries an earlier checkout left
@@ -246,69 +246,8 @@ for step in "$@"; do
         echo "gh1003: training fixtures missing or not the m4-max records"; failed=1
       fi ;;
     summary)
-      STRICT_JSON_DIR="$root/benchmarks" \
-        python3 - "$out" "$treatments $train_treatments" >"$out/summary.md" <<'PY' || failed=1
-import json, os, re, statistics, sys
-sys.path.insert(0, os.environ["STRICT_JSON_DIR"])
-import strict_json  # a result line spelling NaN, Infinity or 1e999 is no measurement
-out, treatments = sys.argv[1], sys.argv[2].split()
-cells = {}
-missing = []
-unreadable = []
-for name in sorted(os.listdir(out)):
-    # The dry cells are a smoke of the matrix, never a repeat: only the numbered passes enter.
-    m = re.fullmatch(r"(cc|metal)-(gpt2_mini\w*)-(composed|two-pass(?:-bwd)?|fold-\d+(?:-bwd)?)-(r\d+)\.out", name)
-    if not m:
-        continue
-    rec, error = None, None
-    for line in open(os.path.join(out, name)):
-        line = line.strip()
-        if line.startswith("{") and '"step_ms"' in line:
-            try:
-                rec, error = strict_json.loads(line), None
-            except ValueError as e:
-                rec, error = None, e
-    if error is not None:
-        unreadable.append((name, error))
-        continue
-    if rec is None:
-        missing.append(name)
-        continue
-    cells.setdefault(m.group(1, 2, 3), []).append((m.group(4), rec))
-# A summary is only as complete as its cells: a numbered cell without a result line, or no
-# numbered cell at all, fails the step (the table is still printed for what exists).
-incomplete = bool(missing) or bool(unreadable) or not cells
-for name in missing:
-    print("MISSING RESULT: %s has no result line" % name)
-for name, error in unreadable:
-    print("UNREADABLE RESULT: %s: its result line is not strict JSON (%s)" % (name, error))
-if not cells:
-    print("NO MEASUREMENT: no numbered cell produced a result line")
-print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs composed | vs two-pass | p10..p90 spread | shipped mma | loss vs composed |")
-print("|---|---|---|---|---|---|---|---|---|---|")
-def med(key):
-    reps = cells.get(key, [])
-    return statistics.median(r["step_ms"]["p50"] for _, r in reps) if reps else None
-for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1], treatments.index(kv[0][2]))):
-    p50s = [r["step_ms"]["p50"] for _, r in reps]
-    m = statistics.median(p50s)
-    spread = max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
-    comp = med((backend, fixture, "composed"))
-    two = med((backend, fixture, "two-pass")) or med((backend, fixture, "two-pass-bwd"))
-    record = reps[0][1]
-    mma = record["shipped_mma"] if "shipped_mma" in record else (record.get("tune") or {}).get("shipped_mma")
-    loss = ""
-    cref = cells.get((backend, fixture, "composed"))
-    if cref:
-        a, b = reps[0][1].get("losses") or [], cref[0][1].get("losses") or []
-        if a and b and len(a) == len(b):
-            loss = "%.2g" % max(abs(x - y) / max(1.0, abs(y)) for x, y in zip(a, b))
-    print("| %s | %s | %s | %s | %.1f | %s | %s | %.3fx | %s | %s |" % (
-        backend, fixture, treatment, ", ".join("%.1f" % p for p in p50s), m,
-        "%.3fx" % (m / comp) if comp else "", "%.3fx" % (m / two) if two else "",
-        spread, json.dumps(mma) if mma is not None else "", loss))
-sys.exit(1 if incomplete else 0)
-PY
+      python3 "$root/benchmarks/gh1003_summary.py" "$out" "$treatments $train_treatments" \
+        >"$out/summary.md" || failed=1
       cat "$out/summary.md" ;;
     *) echo "gh1003: unknown step $step"; failed=1 ;;
   esac

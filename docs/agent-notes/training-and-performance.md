@@ -227,6 +227,10 @@ files.
   before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it.
   `benchmarks/gh834_session.py` is the shape; its harness `benchmarks/test-gh834-cells.sh` renders
   `Bench_json`'s own templates, so a renamed field fails there rather than in a box's session.
+  A driver's summary matrix lives in a module the driver runs by path, not in an inline heredoc
+  that a test can reach only by extracting it from the script's text: `gh1133_summary.py` owns
+  reading the numbered cells (`read_cells`), which `gh1003_summary.py` shares, so a change to how a
+  result line is read or refused lands once.
 - `orchestrate.py`'s report writes every Markdown table row through `table_row`/`table_lines`,
   which refuse (`UnsafeTableRow`) a cell holding a raw `|` or line break when the row is rendered.
   A string the operator, the environment or a runner supplies -- a fixture's file name, a cache

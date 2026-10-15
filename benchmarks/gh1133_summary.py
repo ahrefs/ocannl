@@ -1,4 +1,8 @@
-"""Step matrix and validated training tables for gh1133_cells.sh (stdlib only)."""
+"""Step matrix and validated training tables for gh1133_cells.sh (stdlib only).
+
+Its cell reader (`read_cells`) and the statistics both drivers' matrices quote (`median_p50`,
+`p90_p10_spread`, `loss_vs`) are also gh1003_summary.py's: one owner for how a cell's result line is
+read and refused."""
 import os
 from pathlib import Path
 import re
@@ -20,11 +24,13 @@ def training_output(out, name):
     return content, None
 
 
-def step_matrix(out, treatments, ref_treatment, ref_all):
-    """Print the step-time matrix; whether it is incomplete (a missing result or reference)."""
-    treatments = treatments.split()
-    # The cells of exactly the treatments the driver ran: its TREATMENTS list, not a second copy of
-    # the names its flags_of knows.
+def read_cells(out, treatments):
+    """The result lines of OUT's numbered cells of `treatments` (a list of names), as
+    {(backend, fixture, treatment): [(repeat, record), ...]}, and whether they are incomplete (a
+    cell without a result line, one that is not strict JSON, or no cell at all); each such defect
+    is printed by name ahead of the matrix."""
+    # The cells of exactly the treatments the driver ran: its own treatment list, not a second copy
+    # of the names its flags know. Only the numbered passes enter (a dry or seg cell is no repeat).
     cell_name = re.compile(r"(\w+)-(gpt2_mini\w*)-(%s)-(r\d+)\.out" % "|".join(map(re.escape, treatments)))
     cells, missing, unreadable = {}, [], []
     for name in sorted(os.listdir(out)):
@@ -47,6 +53,7 @@ def step_matrix(out, treatments, ref_treatment, ref_all):
             missing.append(name)
             continue
         cells.setdefault(m.group(1, 2, 3), []).append((m.group(4), rec))
+    # A summary is only as complete as its cells (the table is still printed for what exists).
     incomplete = bool(missing) or bool(unreadable) or not cells
     for name in missing:
         print("MISSING RESULT: %s has no result line" % name)
@@ -54,29 +61,50 @@ def step_matrix(out, treatments, ref_treatment, ref_all):
         print("UNREADABLE RESULT: %s: its result line is not strict JSON (%s)" % (name, error))
     if not cells:
         print("NO MEASUREMENT: no numbered cell produced a result line")
+    return cells, incomplete
+
+
+def median_p50(cells, key):
+    """The median p50 over the repeats of the cell `key`, or None when it has none."""
+    reps = cells.get(key, [])
+    return statistics.median(r["step_ms"]["p50"] for _, r in reps) if reps else None
+
+
+def p90_p10_spread(reps):
+    """The widest p90/p10 ratio among a cell's repeats."""
+    return max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
+
+
+def loss_vs(reps, ref_reps):
+    """The largest relative loss difference of a cell's first repeat from its reference's first
+    repeat, formatted; empty when either has no losses or their lengths differ."""
+    if not ref_reps:
+        return ""
+    a, b = reps[0][1].get("losses") or [], ref_reps[0][1].get("losses") or []
+    if a and b and len(a) == len(b):
+        return "%.2g" % max(abs(x - y) / max(1.0, abs(y)) for x, y in zip(a, b))
+    return ""
+
+
+def step_matrix(out, treatments, ref_treatment, ref_all):
+    """Print the step-time matrix; whether it is incomplete (a missing result or reference)."""
+    treatments = treatments.split()
+    cells, incomplete = read_cells(out, treatments)
     print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs %s | p10..p90 spread | queued (median) | loss vs %s |" % (ref_treatment, ref_treatment))
     print("|---|---|---|---|---|---|---|---|---|")
     missing_refs = []
-    def med(key):
-        reps = cells.get(key, [])
-        return statistics.median(r["step_ms"]["p50"] for _, r in reps) if reps else None
     for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1], treatments.index(kv[0][2]) if kv[0][2] in treatments else 99)):
         p50s = [r["step_ms"]["p50"] for _, r in reps]
         m = statistics.median(p50s)
-        spread = max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
+        spread = p90_p10_spread(reps)
         queued = statistics.median(r.get("queued_step_ms") or 0.0 for _, r in reps)
         # A d1 treatment is compared with the d1 form of the reference (the same attention form).
         rt = ref_all or (("d1" + ref_treatment) if treatment.startswith("d1") else ref_treatment)
-        ref = med((backend, fixture, rt))
+        ref = median_p50(cells, (backend, fixture, rt))
         if ref is None:
             # The comparison the summary advertises did not happen: an incomplete matrix.
             missing_refs.append("%s %s %s (reference %s)" % (backend, fixture, treatment, rt))
-        loss = ""
-        bref = cells.get((backend, fixture, rt))
-        if bref:
-            a, b = reps[0][1].get("losses") or [], bref[0][1].get("losses") or []
-            if a and b and len(a) == len(b):
-                loss = "%.2g" % max(abs(x - y) / max(1.0, abs(y)) for x, y in zip(a, b))
+        loss = loss_vs(reps, cells.get((backend, fixture, rt)))
         print("| %s | %s | %s | %s | %.2f | %s | %.3fx | %.2f | %s |" % (
             backend, fixture, treatment, ", ".join("%.2f" % p for p in p50s), m,
             "%.3fx" % (m / ref) if ref else "", spread, queued, loss))

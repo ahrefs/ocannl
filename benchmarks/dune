@@ -15,10 +15,11 @@
  ; The Python modules are globbed rather than named: the test grows imports faster than anyone
  ; remembers to pin them. Today it imports orchestrate, strict_json, gh675_cells, gh998_cells,
  ; gh1002_cells, gen_fixtures, bench_venv, cell_group, fixture_digest, runners.bench_common and
- ; test.test_cell_group, and its venv-interpreter scan reads every `*.py` here and under runners/ at
- ; any depth -- hence the recursive glob, the same population as the scan's `runners/**/*.py`. The
- ; shell scripts are listed for the same reason: the test runs the drivers' inline result-line
- ; readers from their text, and its json.loads inventory scans every `*.py` and `*.sh` here and
+ ; test.test_cell_group, runs gh1003_summary.py by path, and its venv-interpreter scan reads every
+ ; `*.py` here and under runners/ at any depth -- hence the recursive glob, the same population as
+ ; the scan's `runners/**/*.py`. The shell scripts are listed for the same reason: the test runs the
+ ; drivers' inline result-line readers from their text and gh1003_fold_cells.sh's summary step
+ ; itself, and its json.loads inventory scans every `*.py` and `*.sh` here and
  ; under runners/ (an unlisted script is one the inventory silently cannot see).
  ; fixtures/DIGESTS.txt and the workload specs are data it reads (gh-ocannl-645), pinned so a
  ; change to them fails the suite rather than drifting -- and so is the golden of

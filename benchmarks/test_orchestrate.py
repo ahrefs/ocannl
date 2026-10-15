@@ -364,22 +364,6 @@ class ShellResultLineReadersTest(unittest.TestCase):
             timeout=60,
         )
 
-    def test_gh1003_summary_names_each_unreadable_cell(self):
-        out = self.dir / "out"
-        out.mkdir()
-        for i, spelled in enumerate(self.SPELLINGS, 1):
-            (out / f"metal-gpt2_mini_train-composed-r{i}.out").write_text(
-                '{"step_ms":{"p10":1,"p50":%s,"p90":3},"losses":[7]}\n' % spelled)
-        (out / "metal-gpt2_mini_train-composed-r9.out").write_text(
-            '{"step_ms":{"p10":1,"p50":2,"p90":3},"losses":[7]}\n')
-        proc = self.run_heredoc("gh1003_fold_cells.sh", "PY", out, "composed")
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        for i in range(1, len(self.SPELLINGS) + 1):
-            self.assertIn(f"UNREADABLE RESULT: metal-gpt2_mini_train-composed-r{i}.out:", proc.stdout)
-        rows = [line for line in proc.stdout.splitlines() if line.startswith("| metal |")]
-        self.assertEqual(len(rows), 1, proc.stdout)
-        self.assertIn("| composed | 2.0 | 2.0 |", rows[0])
-
     def test_gh612_parity_fails_on_the_line_not_with_a_traceback(self):
         for spelled in self.SPELLINGS:
             with self.subTest(spelled=spelled):
@@ -408,6 +392,95 @@ class ShellResultLineReadersTest(unittest.TestCase):
         proc = self.run_heredoc("gh728_cells.sh", "VERIFY", path, "search")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("protocol: search pass", proc.stdout)
+
+
+class Gh1003SummaryTest(unittest.TestCase):
+    """gh1003_fold_cells.sh's `summary` step, rendered by gh1003_summary.py: run as the driver runs
+    it (by path, from a scratch cwd holding no copy of its imports), and the step's wiring."""
+
+    TREATMENTS = "composed two-pass fold-8 fold-16 composed two-pass-bwd fold-8-bwd fold-16-bwd"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.out = self.dir / "out"
+        self.out.mkdir()
+
+    def summary(self, treatments=TREATMENTS):
+        return subprocess.run(
+            [sys.executable, str(HERE / "gh1003_summary.py"), str(self.out), treatments],
+            text=True, capture_output=True, cwd=self.dir, timeout=60)
+
+    def cell(self, name, p50, p10=None, p90=None, losses=(2.5, 2.25), **fields):
+        rec = {"step_ms": {"p10": p10 or p50, "p50": p50, "p90": p90 or p50}, "losses": list(losses)}
+        rec.update(fields)
+        (self.out / name).write_text("noise\n" + json.dumps(rec) + "\n")
+
+    def test_the_matrix_as_the_driver_rendered_it(self):
+        # The expected rows are what the driver's inline heredoc printed for this directory before
+        # the summary moved into gh1003_summary.py: the move changed no byte. They cover the
+        # two-pass-bwd fallback of the training fixtures, both mma census fields (and a null one),
+        # a loss disagreement, a missing composed reference, and a dry cell that never enters.
+        self.cell("metal-gpt2_mini-composed-r1.out", 10.0, 9.5, 10.5)
+        self.cell("metal-gpt2_mini-composed-r2.out", 12.0)
+        self.cell("metal-gpt2_mini-two-pass-r1.out", 8.0, losses=(2.5, 2.0), shipped_mma={"mma": 2})
+        self.cell("metal-gpt2_mini-fold-16-r1.out", 5.0, 4.0, 6.0, tune={"shipped_mma": 3})
+        self.cell("metal-gpt2_mini-fold-16-dry.out", 1.0)
+        self.cell("metal-gpt2_mini_train_s512-two-pass-bwd-r1.out", 20.0, losses=(1.0,))
+        self.cell("metal-gpt2_mini_train_s512-fold-8-bwd-r1.out", 10.0, shipped_mma=None)
+        self.cell("cc-gpt2_mini-fold-8-r1.out", 100.0)
+        proc = self.summary()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stdout.splitlines(), [
+            "| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs composed | vs two-pass | p10..p90 spread | shipped mma | loss vs composed |",
+            "|---|---|---|---|---|---|---|---|---|---|",
+            "| cc | gpt2_mini | fold-8 | 100.0 | 100.0 |  |  | 1.000x |  |  |",
+            "| metal | gpt2_mini | composed | 10.0, 12.0 | 11.0 | 1.000x | 1.375x | 1.105x |  | 0 |",
+            '| metal | gpt2_mini | two-pass | 8.0 | 8.0 | 0.727x | 1.000x | 1.000x | {"mma": 2} | 0.11 |',
+            "| metal | gpt2_mini | fold-16 | 5.0 | 5.0 | 0.455x | 0.625x | 1.500x | 3 | 0 |",
+            "| metal | gpt2_mini_train_s512 | two-pass-bwd | 20.0 | 20.0 |  | 1.000x | 1.000x |  |  |",
+            "| metal | gpt2_mini_train_s512 | fold-8-bwd | 10.0 | 10.0 |  | 0.500x | 1.000x |  |  |",
+        ])
+
+    def test_names_each_unreadable_cell(self):
+        spellings = ("NaN", "Infinity", "1e999")
+        for i, spelled in enumerate(spellings, 1):
+            (self.out / f"metal-gpt2_mini_train-composed-r{i}.out").write_text(
+                '{"step_ms":{"p10":1,"p50":%s,"p90":3},"losses":[7]}\n' % spelled)
+        self.cell("metal-gpt2_mini_train-composed-r9.out", 2, 1, 3, losses=(7,))
+        proc = self.summary("composed")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        for i in range(1, len(spellings) + 1):
+            self.assertIn(f"UNREADABLE RESULT: metal-gpt2_mini_train-composed-r{i}.out:", proc.stdout)
+        rows = [line for line in proc.stdout.splitlines() if line.startswith("| metal |")]
+        self.assertEqual(len(rows), 1, proc.stdout)
+        self.assertIn("| composed | 2.0 | 2.0 |", rows[0])
+
+    def test_a_cell_without_a_result_line_fails_the_matrix(self):
+        self.cell("metal-gpt2_mini-composed-r1.out", 2)
+        (self.out / "metal-gpt2_mini-composed-r2.out").write_text("noise\n")
+        proc = self.summary()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("MISSING RESULT: metal-gpt2_mini-composed-r2.out has no result line", proc.stdout)
+        # Negative control: the same matrix without the empty cell passes.
+        (self.out / "metal-gpt2_mini-composed-r2.out").unlink()
+        proc = self.summary()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("MISSING RESULT", proc.stdout)
+
+    def test_the_driver_summary_step_writes_the_module_matrix(self):
+        # OUT must start empty, so the driver's own step can only be driven to its empty matrix: it
+        # proves the step reaches the module (summary.md holds its header and verdict) and fails.
+        out = self.dir / "driven"
+        proc = subprocess.run(
+            ["bash", str(HERE / "gh1003_fold_cells.sh"), str(out), "60", "summary"],
+            text=True, capture_output=True, cwd=self.dir, timeout=120)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        summary = (out / "summary.md").read_text()
+        self.assertIn("NO MEASUREMENT: no numbered cell produced a result line", summary)
+        self.assertIn("| vs composed | vs two-pass |", summary)
+        self.assertNotIn("Traceback", proc.stdout + proc.stderr)
 
 
 # Every `json.load`/`json.loads` call in the benchmark drivers, runners and their inline shell
