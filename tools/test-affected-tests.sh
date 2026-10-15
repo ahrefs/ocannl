@@ -106,6 +106,9 @@ cat >"$repo/t4/dune" <<'DUNE'
 (test (name t_gate) (modules t_gate) (deps gate.cfg))
 (rule (target gated.actual) (deps (alias runtest-t_gate)) (action (with-stdout-to %{target} (echo gated))))
 (rule (alias runtest-gated) (action (diff gated.expected gated.actual)))
+(executable (name pre) (modules pre))
+(rule (target t_gate_actual.ml) (action (with-stdout-to %{target} (run %{exe:pre.exe}))))
+(rule (alias runtest-t_gate-pre) (action (diff t_gate_expected.ml t_gate_actual.ml)))
 DUNE
 printf '(test (name t_sub) (modules t_sub))\n' >"$repo/t4/sub/dune"
 cat >"$repo/t5/dune" <<'DUNE'
@@ -119,7 +122,7 @@ cat >"$repo/t5/dune" <<'DUNE'
 DUNE
 for f in t5/genh.ml t5/usesh.ml; do printf 'let () = ()\n' >"$repo/$f"; done
 : >"$repo/t5/usesh_c.c"
-for f in t4/inert.ml t4/t_gate.ml t4/sub/t_sub.ml; do printf 'let () = ()\n' >"$repo/$f"; done
+for f in t4/inert.ml t4/t_gate.ml t4/sub/t_sub.ml t4/pre.ml t4/t_gate_expected.ml; do printf 'let () = ()\n' >"$repo/$f"; done
 for f in t4/objs.expected t4/gated.expected t4/gate.cfg; do : >"$repo/$f"; done
 for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/stubbed.ml \
   t3/t_plain.ml t3/t_stub.ml t3/cexe.ml t3/lister.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
@@ -155,7 +158,7 @@ reached_by_core='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/ru
 # and t4's gated, which needs one of them): listed for any changed data file.
 opaque_all='@t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
   @t2/runtest-orphan @t2/slow-gen @t3/runtest-t_plain @t3/runtest-t_stub
-  @t4/runtest-gated @t4/runtest-t_gate @t4/sub/runtest-t_sub @t5/slow-usesh'
+  @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub @t5/slow-usesh'
 
 if harness_leg 'library chain'; then
   affected --files lib/helper.ml
@@ -214,7 +217,8 @@ if harness_leg 'dune-project'; then
     @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
     @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
     @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub \
-    @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/sub/runtest-t_sub @t5/slow-usesh
+    @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
+    @t4/sub/runtest-t_sub @t5/slow-usesh
 fi
 
 if harness_leg 'dune file elsewhere'; then
@@ -295,7 +299,15 @@ fi
 if harness_leg 'dune subtree'; then
   affected --files t4/dune
   expect 'a dune file reaches the per-test aliases of the directories beneath it' 0 \
-    @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/sub/runtest-t_sub
+    @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub
+fi
+
+if harness_leg 'underscore target'; then
+  # runtest-t_gate-pre diffs t_gate_actual.ml, which pre.exe makes: the test/ppx shape (its
+  # name owner, t_gate, is not reached; runtest-t_gate shares the t_gate_ targets, and gated needs it).
+  affected --files t4/pre.ml
+  expect 'an alias owns the UNIT_ targets beside it, and so the executable their rules run' 0 \
+    @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre
 fi
 
 if harness_leg 'CDPATH'; then
@@ -396,6 +408,11 @@ if harness_leg 'runner entry'; then
   (cd "$TMP" && "$repo/tools/test-run.sh" affected --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
   # shellcheck disable=SC2086
   expect 'tools/test-run.sh affected runs the helper at the repository root' 0 $reached_by_core
+  mkdir -p "$TMP/decoy/tools" || exit 2
+  rc=0
+  (cd "$repo" && CDPATH="$TMP/decoy" tools/test-run.sh affected --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
+  # shellcheck disable=SC2086
+  expect 'tools/test-run.sh affected, run by a relative path, ignores CDPATH' 0 $reached_by_core
   rc=0
   (cd "$TMP" && SHIM_LOCK_PROBE=$TMP/lock-probe PATH="$TMP/shim:$PATH" "$repo/tools/test-run.sh" affected --files lib/helper.ml) \
     >"$out" 2>"$err" || rc=$?
@@ -478,6 +495,9 @@ if harness_leg 'negative controls'; then
   control 'a generator run by a stub object'"'"'s inputs is what reaches the executable linking it' \
     'for my $w (obj_owners($o)) { push @{$st[$w]{to}}, keys %{$runs{$o}} }' '' \
     --files lib/helper.ml -- $reached_by_core
+  control 'UNIT_ targets are what tie an alias to the executable making them' \
+    'my @near = grep { $_ !~ $artifact && index($_, "${unit}_") == 0 } @{$targets->{$d} // []};' 'my @near;' \
+    --files t4/pre.ml -- @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre
   control 'a compiled-object glob is what reaches the stanza it reads' \
     'if ($where eq "In_build_dir" and my @o = compiled_owners("$path/")) { $r{$_} = 1 for @o; next }' '' \
     --files t4/inert.ml -- @t4/runtest-objs

@@ -596,7 +596,7 @@ select_dune() {
 # through its real path derive the same key, lock file, and recorded wt.
 # Read-only queries interpret relative paths here, never through a caller's
 # CDPATH (which can also make cd print an extra path on stdout).
-case ${1:-} in paths | lock-status) CDPATH= ;; esac
+case ${1:-} in paths | lock-status | affected) CDPATH= ;; esac
 cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 
 [ -r scripts/process-group.sh ] || die "cannot read scripts/process-group.sh"

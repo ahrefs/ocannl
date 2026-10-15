@@ -56,11 +56,14 @@
 #   - Its owners are the stanzas of DIR with NAME as a name, as a library's
 #     local name or as a module name, plus every executable that a rule of its
 #     own targets runs. Its own targets are DIR's targets named `NAME-VARIANT.*`
-#     or `NAME.VARIANT.*` (`NAME.*` when there is no variant) other than
+#     or `NAME.VARIANT.*` (`NAME.*` when there is no variant), or `NAME_*` (a
+#     rule-made `NAME_actual.ml` beside `runtest-NAME-ppx`), other than
 #     compiled objects, executables and preprocessed copies: `fresh` attributes
-#     a test's time by the same names. An alias with neither owners nor own
-#     targets is unattributed: it is printed whenever a reached stanza or a
-#     changed path lies in its directory, since what it reads is unknown.
+#     a test's time by the same names, `NAME_*` aside. A golden alias is one
+#     whose own targets, `NAME_*` aside, include an `.expected` file. An alias
+#     with neither owners nor own targets is unattributed: it is printed
+#     whenever a reached stanza or a changed path lies in its directory, since
+#     what it reads is unknown.
 #   - A changed `.ml`/`.mli` reaches the stanza whose module it is (by
 #     directory and module name: `foo.ml`, `foo.mli`, a `(select)` choice
 #     `foo.cudajit.ml` are `Foo`); failing that, in a directory with `tests`
@@ -362,10 +365,13 @@ for my $d (sort keys %$aliases) {
     my ($rest) = $a =~ /^(?:runtest|train|slow)-(.+)$/ or next;
     my ($unit, @variant) = split /-/, $rest;
     my @prefix = @variant ? ("$rest.", join(".", $unit, @variant) . ".") : ("$rest.");
-    my @own = map { in_dir($d, $_) }
-      grep { my $t = $_; $t !~ $artifact && grep { index($t, $_) == 0 } @prefix } @{$targets->{$d} // []};
-    push @al, { name => "\@" . in_dir($d, $a), dir => $d,
-                owners => { map { $_ => 1 } grep { $st[$_]{units}{$unit} } @in }, own => \@own };
+    my @mine = grep { my $t = $_; $t !~ $artifact && grep { index($t, $_) == 0 } @prefix } @{$targets->{$d} // []};
+    # `UNIT_*` targets count too (a rule-made `X_actual.ml` beside `runtest-X-ppx`,
+    # test/ppx), though only a golden named as above makes the action a known diff.
+    my @near = grep { $_ !~ $artifact && index($_, "${unit}_") == 0 } @{$targets->{$d} // []};
+    my %own = map { in_dir($d, $_) => 1 } @mine, @near;
+    push @al, { name => "\@" . in_dir($d, $a), dir => $d, golden => scalar(grep { /\.expected$/ } @mine),
+                owners => { map { $_ => 1 } grep { $st[$_]{units}{$unit} } @in }, own => [sort keys %own] };
   }
 }
 
@@ -669,7 +675,7 @@ for my $a (@al) {
   $aliased{$_} = 1 for keys %owners;
   $total{$a->{dir}}++;
   my $unknown = !%owners && !@{$a->{own}};
-  my $opaque = !grep { /\.expected$/ } @{$a->{own}};
+  my $opaque = !$a->{golden};
   $unattributed{$a->{name}} = 1 if $unknown && $touched{$a->{dir}};
   my $opaque_listed = $opaque && ($any_data || $data_dirs{$a->{dir}});
   $opaque_hit{$a->{dir}}++ if $opaque_listed;
