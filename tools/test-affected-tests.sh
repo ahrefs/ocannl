@@ -54,6 +54,7 @@ cat >"$repo/t1/dune" <<'DUNE'
 (tests (names ta tb) (modules ta tb shared) (libraries leaf))
 (library (name tlib) (modules m_one m_two) (preprocess (pps myppx)))
 (rule (alias runtest-m_one) (action (progn)))
+(rule (target made.txt) (action (with-stdout-to %{target} (echo made))))
 DUNE
 cat >"$repo/t2/dune" <<'DUNE'
 (executable (name gen) (modules gen) (libraries core))
@@ -89,6 +90,11 @@ cat >"$repo/t3/dune" <<'DUNE'
  (deps (glob_files "%{project_root}/docs/\\{x\\}.md"))
  (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
 (rule (alias runtest-esc) (action (diff esc.expected esc.actual)))
+(rule
+ (target uses.actual)
+ (deps %{project_root}/t1/made.txt)
+ (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
+(rule (alias runtest-uses) (action (diff uses.expected uses.actual)))
 DUNE
 for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/stubbed.ml \
   t3/t_plain.ml t3/t_stub.ml t3/cexe.ml t3/lister.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
@@ -97,7 +103,7 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/st
   printf 'let () = ()\n' >"$repo/$f"
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
-  t3/cfgread.expected t3/esc.expected cfg/base.cfg docs/{x}.md \
+  t3/cfgread.expected t3/esc.expected t3/uses.expected cfg/base.cfg docs/{x}.md \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
@@ -175,7 +181,21 @@ if harness_leg 'dune-project'; then
   expect 'dune-project reaches every per-test alias beneath it' 0 \
     @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
     @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
-    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
+    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub \
+    @t3/runtest-uses
+fi
+
+if harness_leg 'dune file elsewhere'; then
+  # t1/dune makes made.txt, which a t3 rule reads.
+  affected --files t1/dune
+  expect 'a dune file reaches the rules elsewhere that read the files it makes' 0 \
+    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
+fi
+
+if harness_leg 'test with no libraries'; then
+  # t_plain names no library, so neither describe answer lists its stanza.
+  affected --files t3/t_plain.ml
+  expect 'a test stanza naming no library is still found, through its executable' 0 @t3/runtest-t_plain
 fi
 
 if harness_leg 'opaque action'; then
@@ -191,7 +211,8 @@ if harness_leg 'foreign stubs'; then
   expect 'a C stub reaches the library whose stub archive bundles its object' 0 @t3/runtest-t_stub
   affected --files t3/cexe_c.c
   expect 'a C stub no archive bundles reaches every executable and test stanza of its directory' 0 \
-    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
+    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub \
+    @t3/runtest-uses
 fi
 
 if harness_leg 'negated glob'; then
@@ -384,6 +405,12 @@ if harness_leg 'negative controls'; then
   control 'following generated inputs is what reaches a copied file' \
     '$v{$rel} = 1 if !-e $rel' '$v{$rel} = 1 if 0 && !-e $rel' \
     --files cfg/base.cfg -- @t3/runtest-cfgread @t3/runtest-t_plain @t3/runtest-t_stub
+  control 'reading the files a changed dune file makes is what reaches a consumer elsewhere' \
+    '$n_made++ unless $read_by{$p}{$a->{name}}++;' '' \
+    --files t1/dune -- @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
+  control 'an executable target is what finds a test stanza naming no library' \
+    'push @st, { kind => "tests", dir => $d, names => [$x]' 'next; push @st, { kind => "tests", dir => $d, names => [$x]' \
+    --files t3/t_plain.ml -- @t3/runtest-t_plain
 fi
 
 finish

@@ -30,7 +30,9 @@
 #     build does not compile too, such as an optional backend library; their
 #     modules stay unknown). Its edges are added to the first answer's.
 #   - `dune show aliases DIR...` and `dune show targets DIR...`: the aliases
-#     and the targets of every directory holding a `dune` file.
+#     and the targets of every directory holding a `dune` file. A `NAME.exe`
+#     target no stanza there names is a `tests` stanza naming no library,
+#     which neither describe answer lists.
 #   - `dune rules TARGET...`, for each per-test alias's own targets (below),
 #     each generated module file, and the C stub objects (`X.o`) and stub
 #     archives (`libNAME_stubs.a`) of a changed path's directory: the
@@ -69,7 +71,9 @@
 #     that object, or else every executable and `tests` stanza of its
 #     directory, since which one links it dune does not say without computing
 #     link rules. A changed `dune` file reaches every stanza and every per-test
-#     alias of its directory, a `dune-project` or `dune-workspace` those of
+#     alias of its directory, and every alias elsewhere whose own targets'
+#     rules read a file or glob of that directory (a file its rules make); a
+#     `dune-project` or `dune-workspace` reaches the stanzas and aliases of
 #     every directory beneath it. Reach then spreads to each stanza requiring a
 #     reached library, to a fixpoint.
 #   - An alias is printed when its directory's `dune` file changed, when an
@@ -329,6 +333,15 @@ sub listing {
 my $aliases = listing("aliases");
 my $targets = listing("targets");
 sub in_dir { my ($d, $f) = @_; $d eq "." ? $f : "$d/$f" }
+# A `tests` stanza naming no library is in neither describe answer, but its
+# executable is a target of its directory: one named by no stanza there is
+# taken as such a stanza, linking nothing of the project.
+for my $d (sort keys %$targets) {
+  for my $x (map { /^(.+)\.exe$/ ? $1 : () } @{$targets->{$d}}) {
+    next if grep { $st[$_]{dir} eq $d && $st[$_]{kind} ne "library" && grep { $_ eq $x } @{$st[$_]{names}} } 0 .. $#st;
+    push @st, { kind => "tests", dir => $d, names => [$x], units => { $x => 1 }, to => [] };
+  }
+}
 
 # Per-test aliases, their name owners and their own targets.
 my @al;   # { name, dir, owners => {index => 1}, own => [target...] }
@@ -535,7 +548,18 @@ for my $p (@changed) {
   } elsif ($b eq "dune") {
     $dune_dirs{$d} = 1;
     @ix = grep { $st[$_]{dir} eq $d } 0 .. $#st;
-    push @parts, "every per-test alias of $d, and its " . scalar(@ix) . " stanza(s)";
+    # Its rules make the files of its directory: a rule elsewhere reading one
+    # of them (a fixture's generated sources) reads the change.
+    my $n_made = 0;
+    for my $a (grep { $_->{dir} ne $d } @al) {
+      for my $t (@{$a->{own}}) {
+        next unless grep({ (dir_of($_))[0] eq $d } keys %{$reads{$t}}) || grep { $_->[0] eq $d } @{$globs{$t}};
+        $n_made++ unless $read_by{$p}{$a->{name}}++;
+        last;
+      }
+    }
+    push @parts, "every per-test alias of $d, and its " . scalar(@ix) . " stanza(s)"
+      . ($n_made ? "; files its rules make are read by the rules of $n_made alias(es) elsewhere" : "");
   } elsif ($b =~ /^([^.]+)(?:\.[^.]+)*\.mli?$/) {
     my $mod = ucfirst $1;
     my $how = "module $mod of";
