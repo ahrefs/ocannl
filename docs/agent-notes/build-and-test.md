@@ -2203,13 +2203,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   omits), `dune show aliases`/`targets`, and `dune rules` for each alias's own targets and each
   generated module file, whose dependencies are how a scan that READS a changed file (an `.ml`, an
   agent note, a script) is found without linking it, and how a generated module (`.mll`, `.mly`, a
-  `(select)` choice) or a C stub is traced to its stanza. An alias whose own action dune does not
-  dump (a `(test)` with no golden runs under its `(deps)`) is listed for any changed non-module path
-  in its directory. Its header states the boundary as an allowlist;
-  what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of this build owns
-  (a deleted module, a CUDA-only one on a box without cudajit) exits 3.
-  `tools/test-affected-tests.sh` pins it on a fixture project, with negative controls for the glob,
-  rule, ppx-edge, generated-module and `tests`-module paths.
+  `(select)` choice, a generator's header) or a C stub is traced to its stanza. dune does not dump
+  an alias rule itself, so an alias whose action is not a golden diff of its own targets (a `(test)`
+  with no golden, run under its `(deps)`; `runtest-sweep_harness`, which names `tools/sweep.sh`) is
+  listed for any changed path in its directory but an owned module source, and for a changed
+  non-build input anywhere: a doc, script or golden edit lists those ~49 too. Its header states the
+  boundary as an allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no
+  stanza of this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3.
+  `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380
     to 470 of the ~500 per-test aliases, including `arrayjit/test` and the `test/training` members:
@@ -2220,7 +2221,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
     `@test/training/runtest-fused_classifier`. A narrower "tests that name the module" cut is no
     substitute: `test_vectorized_codegen.ml` never names `Register_tile`.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
-    its own alias plus the 14 scans that read it; `docs/agent-notes/build-and-test.md` ten scans.
+    its own alias plus the 14 scans that read it; `docs/agent-notes/build-and-test.md` its ten scans
+    and the ~49 aliases above.
 
 ## OCaml and dune traps
 
