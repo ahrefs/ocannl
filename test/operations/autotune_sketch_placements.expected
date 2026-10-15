@@ -8,6 +8,8 @@ differ: no single sketches both twins: true
 agree: two matmul segments share a structural digest: true
 agree: every single compiles the enumerated segmentation: true
 agree: a single is seeded on another segment: true
+menu: the pre-filtered seeding keys two segments: true
+menu: each segment offers three or more singles: true
 agree: the twins agree in placements: true
 agree: a single sketches the twins: true
 agree: every single that sketches one twin sketches both: true

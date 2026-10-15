@@ -8742,8 +8742,12 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  ; The small menu's keys, which the test states on CPU backends (Fissioned_chain.small_menu).
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
  (modules autotune_sketch_placements)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
  (preprocess
   (pps ppx_here ppx_ocannl)))

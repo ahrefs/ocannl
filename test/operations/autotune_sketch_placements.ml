@@ -24,7 +24,15 @@
 
    Every timing window is scripted ([Autotune.on_candidate_measured], with
    [Autotune.with_uncontended_test_windows]): the claims are about what was compiled, never about
-   what was fast. *)
+   what was fast.
+
+   On CPU backends the searches run on [Fissioned_chain]'s small menu (the roofline pre-filter
+   keeping a fifth of each segment's sketches; ten singles per key instead of 38 on cc). The claims
+   ask which segments a single sketched, never which parameters it carries, so they hold for any
+   single the model keeps; they need a single on each key, and [Fissioned_chain.menu_claim] fails
+   loudly if the pruned [agree] search ever keys other than two segments or offers fewer than three
+   singles on one. GPU backends keep the whole menu: their sketch families are their own, and the
+   [differ] leg they run keys three segments. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -35,6 +43,10 @@ open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let is_gpu = Sched.backend_is_gpu backend_name
+let is_cpu = Sched.backend_is_cpu backend_name
+
+(* Before the first search: the pre-filter reads its envelope once per process. *)
+let () = if is_cpu then Fissioned_chain.small_menu ()
 let q = 32
 
 let matrix ~label ~modulus ~offset ~stride =
@@ -183,6 +195,7 @@ let () =
 
 let () =
   let _, placed_alike, singles, sketched = leg ~tag:"agree" ~materialized:[ 1; 2; 3 ] ~when_:true in
+  Fissioned_chain.menu_claim ~when_:is_cpu ~on:backend_name (List.map singles ~f:fst);
   p "agree: the twins agree in placements" placed_alike;
   p_exists "agree: a single sketches the twins" singles ~f:(fun s ->
       not (List.is_empty (sketched s)));
