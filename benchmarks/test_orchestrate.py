@@ -2672,6 +2672,101 @@ class FixtureDigestTest(unittest.TestCase):
                     )
             self.assertEqual(refused.exception.code, 2, f"--expect-origin with {mode[0]}")
 
+    def check_cli(self, digests, *fixtures, expect_recorded=()):
+        """`--check` over `fixtures`, each of `expect_recorded` as `--expect-recorded`:
+        (exit status, report)."""
+        argv = ["--check", *map(str, fixtures), "--digests", str(digests)]
+        for box in expect_recorded:
+            argv += ["--expect-recorded", box]
+        with contextlib.redirect_stdout(io.StringIO()) as report:
+            code = fixture_digest._main(argv)
+        return code, report.getvalue()
+
+    def test_check_names_the_declared_boxes_with_no_entry(self):
+        # The MISSING DIGEST RECORD reading used to reach only orchestrate reports, so confirming
+        # a newly recorded row (lukstafi/ocannl-staging#1136) took a hand-written
+        # `python -c "missing_origins(...)"`. `--check` prints it per fixture, from the same
+        # function the reports use; on its own it is information, not a failed verdict.
+        fx = self.fixture("gpt2_mini.safetensors", b"m4-max bytes")
+        other = self.write_fixture(self.dir / "other" / "lenet.safetensors", b"nobody's bytes")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        digests.write_text(fixture_digest.header(["m4-max", "minix", "rog-nv"]))
+        fixture_digest.record(digests, [fx], "m4-max")
+        fixture_digest.record(digests, [fx], "rog-nv")
+        entries = fixture_digest.read_digests(digests)
+        boxes = fixture_digest.measurement_boxes(digests)
+        missing = fixture_digest.missing_origins(fx.name, entries, boxes)
+        self.assertEqual(missing, ["minix"], "control: the reports' reading of this file")
+
+        code, report = self.check_cli(digests, fx)
+        self.assertEqual(code, 0, "a missing entry alone does not fail the bytes' verdict")
+        self.assertIn(
+            f"    no entry for declared measurement box(es): {', '.join(missing)}\n", report
+        )
+        code, report = self.check_cli(digests, other)
+        self.assertEqual(code, 1, "control: UNRECORDED still fails")
+        self.assertIn("box(es): m4-max, minix, rog-nv\n", report, "an unrecorded name lacks all")
+
+        fixture_digest.record(digests, [fx], "minix")
+        code, report = self.check_cli(digests, fx)
+        self.assertEqual(code, 0)
+        self.assertNotIn("no entry", report, "a complete record prints no missing line")
+
+    def test_expect_recorded_decides_on_the_named_box_having_an_entry(self):
+        # "Is the record complete for rog-nv?" as an exit status. It asks whether the box HAS an
+        # entry, not whether that entry is these bytes (--expect-origin's question): a reviewer
+        # on one box confirms another box's rows without that box's bytes.
+        mine = self.fixture("gpt2_mini.safetensors", b"m4-max bytes")
+        theirs = self.write_fixture(self.dir / "other" / "gpt2_mini.safetensors", b"minix bytes")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        digests.write_text(fixture_digest.header(["m4-max", "minix", "rog-nv"]))
+        fixture_digest.record(digests, [mine], "m4-max")
+        fixture_digest.record(digests, [theirs], "minix")
+
+        self.assertEqual(self.check_cli(digests, mine, expect_recorded=["m4-max"])[0], 0)
+        self.assertEqual(
+            self.check_cli(digests, mine, expect_recorded=["minix"])[0],
+            0,
+            "minix's entry is other bytes, and it is still an entry",
+        )
+        code, report = self.check_cli(digests, mine, expect_recorded=["rog-nv"])
+        self.assertEqual(code, 1)
+        self.assertIn("MATCH — m4-max's bytes", report, "control: the bytes themselves pass")
+        self.assertIn("not recorded for rog-nv (--expect-recorded)", report)
+        self.assertEqual(
+            self.check_cli(digests, mine, expect_recorded=["m4-max", "rog-nv"])[0],
+            1,
+            "every named box must have an entry",
+        )
+        fixture_digest.record(digests, [mine], "rog-nv")
+        self.assertEqual(self.check_cli(digests, mine, expect_recorded=["m4-max", "rog-nv"])[0], 0)
+        self.write_fixture(mine, b"perturbed bytes")
+        self.assertEqual(
+            self.check_cli(digests, mine, expect_recorded=["rog-nv"])[0], 1, "a MISMATCH fails too"
+        )
+
+    def test_expect_recorded_refuses_a_box_the_file_does_not_declare(self):
+        # The --expect-origin refusal's twin: an undeclared box can have no entry, so a
+        # misspelling would read as an incomplete record instead of as the misspelling it is.
+        fx = self.fixture("gpt2_mini.safetensors")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        fixture_digest.record(digests, [fx], "m4-max")
+
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as refused:
+                self.check_cli(digests, fx, expect_recorded=["m4max"])
+
+        self.assertEqual(refused.exception.code, 2)
+        self.assertIn("--expect-recorded 'm4max'", err.getvalue())
+        self.assertIn("m4-max", err.getvalue(), "it names the boxes the file does declare")
+        for mode in (["--record", str(fx)], ["--list-declared-measurement-boxes"]):
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit, msg=mode[0]) as refused:
+                    fixture_digest._main(
+                        [*mode, "--digests", str(digests), "--expect-recorded", "m4-max"]
+                    )
+            self.assertEqual(refused.exception.code, 2, f"--expect-recorded with {mode[0]}")
+
     def test_a_host_that_cannot_name_itself_is_refused_not_given_a_placeholder(self):
         # A literal `unknown-host` is not an origin, it is every nameless box sharing one name:
         # the second such box to record different bytes for a fixture would replace the first's

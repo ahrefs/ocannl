@@ -39,6 +39,9 @@ ones whose fixtures predate any venv you could reconstruct.
     python3 benchmarks/fixture_digest.py --check    # what is on disk, against what is recorded
     python3 benchmarks/fixture_digest.py --check --expect-origin m4-max
                                                     # ...and exit 0 only if all are m4-max's bytes
+    python3 benchmarks/fixture_digest.py --check --expect-recorded rog-nv
+                                                    # ...and exit 0 only if rog-nv has a record
+                                                    # for every fixture (whatever its bytes)
     python3 benchmarks/fixture_digest.py --list-declared-measurement-boxes
                                                     # the fleet matrix, one box per line
 """
@@ -801,12 +804,24 @@ def _main(argv=None):
         "bytes it is -- the question a driver pinned to one box's records asks, answered by the "
         "exit status rather than by parsing the report text",
     )
+    ap.add_argument(
+        "--expect-recorded",
+        metavar="BOX",
+        action="append",
+        default=[],
+        help="with --check: exit 0 only if BOX has a digest entry for every fixture -- whether or "
+        "not that entry is the bytes on disk (that is --expect-origin's question). --check always "
+        "prints each fixture's declared measurement boxes that have no entry; this turns 'the "
+        "record is complete for BOX' into an exit status. Repeatable.",
+    )
     ap.add_argument("--digests", type=Path, default=None, help=f"path to {DIGEST_FILE}")
     ap.add_argument("--fixture-dir", type=Path, default=here / "fixtures")
     args = ap.parse_args(argv)
     if args.expect_origin is not None and not args.check:
         # Before every mode's branch: a mode that returned first would accept the flag and exit 0.
         ap.error("--expect-origin is a condition on --check's verdict; no other mode reads it")
+    if args.expect_recorded and not args.check:
+        ap.error("--expect-recorded is a condition on --check's verdict; no other mode reads it")
     if args.list_declared_measurement_boxes:
         if args.fixtures:
             ap.error("--list-declared-measurement-boxes reads only --digests; give no fixtures")
@@ -842,26 +857,41 @@ def _main(argv=None):
 
     if args.check:
         entries = read_digests(digests)
+        boxes = measurement_boxes(digests)
         expected = args.expect_origin
-        if expected is not None and expected not in measurement_boxes(digests):
-            # No entry can name an undeclared box (reading refuses one), so the check would fail
-            # every fixture; a misspelled box should read as the misspelling it is.
-            ap.error(
-                f"--expect-origin {expected!r} is not a measurement box of {digests} "
-                f"(those are: {', '.join(measurement_boxes(digests)) or 'none'})"
-            )
+        for flag, box in [("--expect-origin", expected)] + [
+            ("--expect-recorded", box) for box in args.expect_recorded
+        ]:
+            if box is not None and box not in boxes:
+                # No entry can name an undeclared box (reading refuses one), so the check would
+                # fail every fixture; a misspelled box should read as the misspelling it is.
+                ap.error(
+                    f"{flag} {box!r} is not a measurement box of {digests} "
+                    f"(those are: {', '.join(boxes) or 'none'})"
+                )
         bad = 0
         for fx in fixtures:
             verdict, sha, size, origins = matching_origins(fx, entries)
             where = f" — {','.join(origins)}'s bytes" if verdict == "MATCH" else ""
             print(f"{fx.name}: sha256 {sha} ({size} bytes) — {verdict}{where}")
-            if verdict != "MATCH":
-                print(f"    recorded: {describe(fx.name, entries)}")
-                bad += 1
-            elif expected is not None and expected not in origins:
+            failed = verdict != "MATCH"
+            if not failed and expected is not None and expected not in origins:
                 print(f"    not {expected}'s bytes (--expect-origin)")
+                failed = True
+            if failed:
                 print(f"    recorded: {describe(fx.name, entries)}")
-                bad += 1
+            # The line orchestrate.py's reports carry as MISSING DIGEST RECORD: a declared box
+            # with no entry is a box whose numbers on this workload nothing pins. Informational
+            # on its own -- the verdict above is about the bytes on disk -- unless the caller
+            # named the box in --expect-recorded.
+            missing = missing_origins(fx.name, entries, boxes)
+            if missing:
+                print(f"    no entry for declared measurement box(es): {', '.join(missing)}")
+            unrecorded = sorted(set(args.expect_recorded) & set(missing))
+            if unrecorded:
+                print(f"    not recorded for {', '.join(unrecorded)} (--expect-recorded)")
+                failed = True
+            bad += failed
         return 1 if bad else 0
 
     origin = resolve_origin(args.origin, adopting=args.adopt_legacy)
