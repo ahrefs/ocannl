@@ -45,6 +45,20 @@ let passed_labels () = List.rev !passed_label_history
 
 let record_pass label = passed_label_history := label :: !passed_label_history
 
+(* [text] on one physical line: every control character a space. A claim is one row on each channel
+   it prints to: [tools/mutation-run.sh] reads a run's [FAIL: …: false] lines off its log and counts
+   its stdout rows against the golden's, and a label carrying a line break split its claim into a
+   [FAIL: ] head that is not a false claim and an unprefixed tail that is a row the golden lacks. So
+   every claim line renders its label (and a failure's detail) through this, and a computed label
+   with a newline in it still reports as one row; [verdict_ratchet] refuses a LITERAL label with a
+   line break, where the newline can only be a mistake. What is recorded -- {!passed_labels}, the
+   names the teardown line quotes -- is the label as given. *)
+let one_line text =
+  let is_control c = Char.to_int c < 0x20 || Char.equal c '\x7f' in
+  if String.exists text ~f:is_control then
+    String.map text ~f:(fun c -> if is_control c then ' ' else c)
+  else text
+
 (* [msg] with every line of it prefixed by ["FAIL: "]. A [FAIL: ] row is a run's own, never a
    golden's, and [tools/mutation-run.sh] matches a mutated run's other rows against the golden row
    by row: an unprefixed continuation line -- an "expected/got" pair, a child's captured output --
@@ -73,7 +87,7 @@ let claim name b =
   if b then record_pass name
   else (
     record_failure name;
-    Stdio.eprintf "FAIL: %s: false\n" name)
+    Stdio.eprintf "FAIL: %s: false\n" (one_line name))
 
 (** [p name b] prints the named boolean fact [name: b] and fails the run when [b] is false. Booleans
     keep [.expected] files backend-stable, which is why so many tests report this way; a fact whose
@@ -84,7 +98,7 @@ let p name b =
      tests that spelled this helper themselves were split on whether to add [%!], and the flush is
      free at test scale. It cannot reorder anything: flushing empties a buffer, it does not move
      writes past one another. *)
-  Stdio.printf "%s: %b\n%!" name b;
+  Stdio.printf "%s: %b\n%!" (one_line name) b;
   claim name b
 
 (** [pf fmt … b] is {!p} with a COMPUTED label: the format and its arguments render the label, and
@@ -142,8 +156,9 @@ let claimf fmt = Printf.ksprintf (fun label b -> claim label b) fmt
    [false] a satisfied-looking claim shares. *)
 let short_fail name detail =
   record_failure name;
-  Stdio.printf "%s (%s): false\n%!" name detail;
-  Stdio.eprintf "FAIL: %s (%s): false\n" name detail
+  let line = Printf.sprintf "%s (%s): false" (one_line name) (one_line detail) in
+  Stdio.printf "%s\n%!" line;
+  Stdio.eprintf "FAIL: %s\n" line
 
 (* The one place the POPULATION floor is checked, so that every combinator resting on it reports a
    short collection the same way. [holds] is not evaluated when the floor fails: on an empty
@@ -403,7 +418,7 @@ type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
     machinery. *)
 
 let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
-  Stdio.eprintf "SKIPPED on %s (vacuous): %s\n%!" backend name;
+  Stdio.eprintf "SKIPPED on %s (vacuous): %s\n%!" (one_line backend) (one_line name);
   (* A second, machine-oriented record gives cross-run consumers a stable test-leg identity without
      changing the human line above (the documented [grep SKIPPED] convention). The executable
      basename is stable across worktrees and machines; pairing it with the claim prevents equal
@@ -492,12 +507,12 @@ let gated_exists ?aggregation ?min ~when_ ~on label xs ~f =
 let pass_fail ?detail label b =
   if b then (
     record_pass label;
-    Stdio.printf "%s: PASS\n" label)
+    Stdio.printf "%s: PASS\n" (one_line label))
   else
-    let detail = match detail with None -> "" | Some f -> " (" ^ f () ^ ")" in
+    let detail = match detail with None -> "" | Some f -> " (" ^ one_line (f ()) ^ ")" in
     record_failure label;
-    Stdio.printf "%s: FAIL%s\n" label detail;
-    Stdio.eprintf "FAIL: %s%s\n" label detail
+    Stdio.printf "%s: FAIL%s\n" (one_line label) detail;
+    Stdio.eprintf "FAIL: %s%s\n" (one_line label) detail
 
 (** [pass_fail_all2 label got want ~f] is {!p_all2} in {!pass_fail}'s output dialect. It refuses
     empty, short, and mismatched pairs before evaluating [f]. On those structural refusals the
@@ -544,7 +559,9 @@ let case label f =
       raise e
   | exception e ->
       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-      let text = String.map (Stdlib.Printexc.to_string e) ~f:(function '\n' -> ' ' | c -> c) in
+      (* [short_fail] puts the exception's text on the claim's one line. tools/test-mutation-run.sh
+         pins the call below by its text. *)
+      let text = Stdlib.Printexc.to_string e in
       short_fail (label ^ ": the case ran to completion") ("raised " ^ text);
       if Stdlib.Printexc.raw_backtrace_length backtrace > 0 then (
         Stdlib.Printexc.print_raw_backtrace Stdlib.stderr backtrace;
@@ -628,14 +645,12 @@ let rec teardown () =
 let teardown_names_shown = 3
 let teardown_name_bytes = 60
 
-(* [name] on one physical line -- every control character a space, since a label can carry a newline
-   ([test_random_histograms] passes one) and the teardown must stay the LAST line, the one
-   [tools/mutation-run.sh] and a truncated log read -- cut to {!teardown_name_bytes}, at a character
-   boundary of its UTF-8 so a cut never splits one, and marked as cut. *)
+(* [name] on one physical line ({!one_line}: a computed label can carry a newline, and the teardown
+   must stay the LAST line, the one [tools/mutation-run.sh] and a truncated log read), cut to
+   {!teardown_name_bytes}, at a character boundary of its UTF-8 so a cut never splits one, and
+   marked as cut. *)
 let shorten name =
-  let name =
-    String.map name ~f:(fun c -> if Char.to_int c < 0x20 || Char.equal c '\x7f' then ' ' else c)
-  in
+  let name = one_line name in
   if String.length name <= teardown_name_bytes then name
   else
     let rec boundary i =

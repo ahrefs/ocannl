@@ -554,3 +554,34 @@ a gate on its own `results` being non-empty (staging#1049's shape, run `20261013
 and by a gate asking whether the `real` seeds `results` is mapped from hold a tensorized one
 (staging#1063's shape, run `20261013T183213Z-38190`). Each failed the corpus claim, naming
 qkv_zero_init.ml:121 and the bindings the gate reads, and nothing else.
+
+## Line-break label mutation runs (post-wave task of staging#1134)
+
+The line-break reader (`Verdict_scan.line_break_census`) refuses a Verdict claim whose LITERAL
+label, or the format a computed one is rendered from, carries a line break; Verdict prints every
+claim line through `Verdict.one_line`, so a computed label stays one row. Every run used
+tools/mutation-run.sh on `test/support/verdict_scan.ml` and the focused verdict_ratchet alias,
+exited 1 on exactly the listed false claims, and restored the source byte-for-byte with cmp. The
+baseline run `20261015T033208Z-65805` exited 0. The printing side is pinned by verdict_teardown
+rather than here: with `one_line` mutated to the identity its line-break child and its teardown
+child fail (run `20261015T021554Z-66471`), and a mutation of test_random_histograms to a false
+claim with a computed two-line label lists one false claim over the golden's 59 rows (run
+`20261015T021536Z-60525`), where with the sanitizer disabled it listed none over 60 rows (run
+`20261015T021611Z-75132`).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A literal label with a line break refuses the run | `has_line_break` answers false | Failed: `refuses a claim label literal that starts with a line break`, `refuses a line break in the format an opened pf renders its label from`, `resolves a label binding to the literal whose line break it carries`, `refuses a planted label literal carrying a line break, naming the one-line remedy`, and the seven found-label controls of the rows below, which then find nothing | `20261015T033222Z-70528` |
+| A claim name the source binds is not Verdict's, whatever opens it lies inside | a source binding read as Verdict's | Failed: `does not read a claim name the source binds itself as Verdict's`, `reads a claim name a later let binds as the source's own, past an open of Verdict`, and the corpus claim that no literal label carries a line break (bench_checksum_discrimination binds its own printing helper under that name) | `20261015T033234Z-75474` |
+| A failure message is not a label | `"fail"` added to `labelled_claims` | Failed: `accepts a multi-line failure message, which fail prefixes line by line`, the corpus claim, and the claim that the reader reads every claim form Verdict.Claims exports | `20261015T033245Z-80415` |
+| A computed label is the sanitizer's, not this reader's | every computed key read as carrying a line break | Failed: `accepts a computed label, which Verdict prints on one line`, and the corpus claim, through every computed label in the tree | `20261015T033257Z-85387` |
+| A qualifier is resolved through the module bindings in scope, not by its spelling (staging#1150 round 1) | a bound module name read as Verdict by its spelling | Failed: `resolves a claim qualified through a module alias of Verdict`, `does not read a module that took over the name Verdict as Verdict` | `20261015T033309Z-90333` |
+| Only the head of a qualifier decides | any path component spelled Verdict reads as Verdict | Failed: `does not read a path that only passes through a module named Verdict` | `20261015T033320Z-95357` |
+| Only an open of a module denoting Verdict brings claim names in | every modelled open binds the claim names | Failed: `does not read an unqualified claim name no open of Verdict brings in`, and the ambiguous control of the rows below | `20261015T033332Z-502` |
+| An open of Verdict brings claim names in, structure or local | no open binds the claim names | Failed: `resolves a claim name a local open of Verdict.Claims brings in`, the first row's opened-pf control, and the ambiguous control below | `20261015T033344Z-5945` |
+| A claim name reaching an open of Verdict past an open of another module is ambiguous: read, and refused with the qualified remedy (staging#1150 rounds 2-3) | ambiguity read as not Verdict's (round 2's reading, which left every claim after an open Ll_test unread) | Failed: `refuses a claim name past a later open as ambiguous, naming the qualified remedy` | `20261015T033356Z-10979` |
+| An ambiguous site is told apart from a plain one, so its refusal names the remedy | ambiguity read as Verdict's | Failed: the ambiguous control of the row above, which then finds its label unmarked | `20261015T033431Z-25860` |
+| A type constraint around a literal label is transparent (staging#1150 round 2) | `Pexp_constraint` not peeled | Failed: `refuses a literal label under a type constraint`, and the constrained-callee control below | `20261015T033407Z-15927` |
+| A coercion around a bound literal is transparent | `Pexp_coerce` not peeled | Failed: `resolves a label binding written with a type annotation` | `20261015T033419Z-20885` |
+| A name bound to a name denotes what that name does (staging#1150 round 4) | a renaming resolves to no literal | Failed: `resolves a label through a chain of let renamings` | `20261015T033442Z-30823` |
+| A constrained callee is the path it wraps (staging#1150 round 5) | the callee not peeled | Failed: `reads a claim whose callee is under a type constraint` | `20261015T033454Z-35798` |

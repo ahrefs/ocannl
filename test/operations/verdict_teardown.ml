@@ -38,6 +38,25 @@ let one_failed = Verdict.teardown_line [ "the claim" ] ^ "\n"
 let long_label = String.make 58 'x' ^ "\u{2014}and the rest of a very long label"
 let last_line text = List.last (String.split_lines text)
 
+(* A COMPUTED label carrying line breaks, as a label built from a message or a rendered value can:
+   [verdict_ratchet] refuses a literal one, so only a computed one reaches Verdict's printing. *)
+let broken_label = String.concat ~sep:"\n" [ "a computed"; "label\r" ]
+
+(* What the [label_line_breaks] child prints: each claim on ONE line of each stream it reports on,
+   its label's line breaks rendered as spaces -- the rows [tools/mutation-run.sh] counts. *)
+let one_line_out =
+  "a computed label : false\n\
+   a computed label : FAIL (got 1 want 2)\n\
+   a computed label  (empty): false\n"
+
+let one_line_err =
+  "FAIL: a computed label : false\n\
+   FAIL: a computed label : false\n\
+   FAIL: a computed label  (got 1 want 2)\n\
+   FAIL: a computed label  (empty): false\n"
+  ^ Verdict.teardown_line [ broken_label; broken_label; broken_label; broken_label ]
+  ^ "\n"
+
 (* Byte-for-byte comparisons below, so both streams are binary (Windows would rewrite "\n"): the
    children's stderr is matched line-exactly too. *)
 let () =
@@ -126,6 +145,13 @@ let () =
                   (Printf.sprintf
                      {|FAILED: 5 checks did not hold: "%s...", "second claim", "third claim " and 2 more.|}
                      (String.make 58 'x'))));
+      (* tools/mutation-run.sh lists a run's false claims as the [FAIL: …: false] lines of its log
+         and counts its stdout rows against the golden's: a claim split over two lines was neither
+         listed nor one row. *)
+      about "label_line_breaks"
+        "a claim whose computed label carries line breaks reports on one line of each stream"
+        (run_child "label_line_breaks") ~holds:(fun status out err ->
+          exited 1 status && String.equal out one_line_out && String.equal err one_line_err);
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
@@ -167,9 +193,14 @@ let () =
           p long_label false;
           p "second claim" false;
           (* A label carrying line breaks: the teardown names it on its own one line. *)
-          claim "third\nclaim\r" false;
+          claim (String.concat ~sep:"\n" [ "third"; "claim\r" ]) false;
           p "fourth claim" false;
           p "fifth claim" false
+      | "label_line_breaks" ->
+          p broken_label false;
+          claim broken_label false;
+          pass_fail ~detail:(fun () -> "got 1\nwant 2") broken_label false;
+          p_all broken_label [] ~f:Fn.id
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))

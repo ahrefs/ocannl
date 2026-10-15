@@ -334,9 +334,42 @@ type dialect_census = {
 let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
 let skipped_callees = [ "skipped" ]
 
-let dialect_census content =
+(* What an [open] binds each claim name to: an identity no [let] and no local can carry ([let]s
+   count up from 1, locals down from -1) -- one for a module denoting [Verdict], one for any
+   other. *)
+let opened_from_verdict = Int.min_value
+let opened_elsewhere = Int.min_value + 1
+
+(** Whose a claim callee is: [Verdict]'s, not [Verdict]'s, or [Ambiguous] -- an unqualified name
+    that reaches an [open Verdict.Claims] only past a later [open] of another module, which may or
+    may not export a function of that name: this scan cannot read what an unmodelled module exports.
+*)
+type ownership = Verdicts | Ambiguous | Not_verdicts
+
+(* One application whose callee is a path ending in a name of [callees], with a positional argument:
+   its last path component, whether that callee is [Verdict]'s (below), and the site its first
+   positional argument -- the label -- keys. Shared by {!dialect_census} and {!line_break_census},
+   so both key a label one way.
+
+   Whether the callee is [Verdict]'s is resolved through {!Lexical_scope}, never by spelling. A
+   qualified callee is when its module path denotes [Verdict] in scope: [Verdict] unless a [module
+   Verdict = ...] took the name over, an alias of it ([module V = Verdict]), or a submodule of
+   either ([Verdict.Claims]); [Other.Verdict] is not. An unqualified one is when the name it reaches
+   was brought in by an [open] (or [include]) of such a module, as [open Verdict.Claims] brings the
+   claim names in; a name the source binds itself ([let p = Stdio.printf], [let skipped =
+   Verdict.skipped ~backend]), or one no modelled open brings in, is not; and one that reaches such
+   an open only past a later [open] of another module is {!Ambiguous}. *)
+let claim_calls ~callees content =
   let ast = Read.structure_of content in
+  (* A type constraint or coercion does not change which string a label is: [("…" : string)] is the
+     literal it wraps. *)
+  let rec peel expr =
+    match expr.pexp_desc with
+    | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
+    | _ -> expr
+  in
   let key_of env argument =
+    let argument = peel argument in
     match Read.string_literal argument with
     | Some literal -> Literal literal
     | None -> (
@@ -350,7 +383,7 @@ let dialect_census content =
             let references = ref [] in
             let reader =
               object
-                inherit [string option * int, unit] Lexical_scope.scoped
+                inherit [string option * int, bool] Lexical_scope.scoped
                 method local = (None, 0)
                 method module_path _ _ = None
                 method! attribute _ attr = attr
@@ -374,21 +407,73 @@ let dialect_census content =
             ignore (reader#expression env argument : expression);
             Computed (Ppxlib.Pprintast.string_of_expression argument, List.rev !references))
   in
-  let pass_fails = ref [] and skips = ref [] and item = ref 0 in
+  let calls = ref [] and item = ref 0 in
   let iterator =
     object (self)
-      inherit [string option * int, unit] Lexical_scope.scoped as super
+      inherit [string option * int, bool] Lexical_scope.scoped as super
       val mutable next_binding = 0
 
       method local =
         next_binding <- next_binding - 1;
         (None, next_binding)
 
-      method module_path _ _ = None
+      (* A module path denotes [true] when its head is [Verdict] with no binding of that name in
+         scope, or a module name bound to something denoting [Verdict]; a name a binding the scan
+         cannot see into took over ({!shadowed}) denotes [false]. *)
+      method module_path env path =
+        let head = Lexical_scope.head path in
+        match Map.find env.Lexical_scope.modules head with
+        | Some denotes -> Some denotes
+        | None -> Some (String.equal head "Verdict")
 
-      method! let_denotes binding =
+      method! shadowed = Some false
+
+      (* Every open pushes a frame for the claim names: Verdict's for a module denoting [Verdict],
+         and for any other module a marker that the name MAY have been rebound there, since this
+         scan cannot read what an unmodelled module exports. {!ownership_of} reads past the
+         markers. *)
+      method! opened ~top:_ ~include_:_ env denotes =
+        let identity =
+          if Option.value denotes ~default:false then opened_from_verdict else opened_elsewhere
+        in
+        Lexical_scope.push_frame env
+          (Map.of_alist_reduce
+             (module String)
+             (List.map callees ~f:(fun name -> (name, (None, identity))))
+             ~f:(fun first _ -> first))
+
+      (* An unqualified claim name's owner, innermost frame first: past any number of opens of other
+         modules, the first binding decides -- an open of [Verdict] makes it [Verdict]'s, or
+         [Ambiguous] when such an open was passed on the way; anything the source binds, or no
+         binding at all, makes it not [Verdict]'s. *)
+      method ownership_of env name =
+        let rec decide passed_open = function
+          | [] -> Not_verdicts
+          | (None, identity) :: outer when identity = opened_elsewhere -> decide true outer
+          | (None, identity) :: _ when identity = opened_from_verdict ->
+              if passed_open then Ambiguous else Verdicts
+          | _ :: _ -> Not_verdicts
+        in
+        decide false
+          (List.filter_map env.Lexical_scope.frames ~f:(fun frame -> Map.find frame name))
+
+      (* A name bound to a literal denotes that literal, and so does a name bound to another name
+         that does -- [let label = raw] -- through any chain of such renamings, each resolved in the
+         scope of its own right-hand side. *)
+      method! binding_denotes env binding =
         match Read.pattern_name binding.pvb_pat with
-        | Some _ -> (Read.string_literal binding.pvb_expr, binding.pvb_loc.loc_start.pos_cnum + 1)
+        | Some _ ->
+            let rhs = peel binding.pvb_expr in
+            let literal =
+              match (Read.string_literal rhs, rhs.pexp_desc) with
+              | (Some _ as literal), _ -> literal
+              | None, Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                  match Lexical_scope.lookup env name with
+                  | Some (literal, _) -> literal
+                  | None -> None)
+              | None, _ -> None
+            in
+            (literal, binding.pvb_loc.loc_start.pos_cnum + 1)
         | None -> self#local
 
       method! define ~top env rec_flag bindings ~walk =
@@ -411,21 +496,29 @@ let dialect_census content =
                 | Ppxlib.Asttypes.Nolabel, argument -> Some argument
                 | _ -> None)
             in
-            match (Read.longident_of callee, label) with
-            | Some path, Some label ->
+            (* A constrained callee, [(Verdict.p : string -> bool -> unit) label ok], is the path it
+               wraps. *)
+            let callee = peel callee in
+            match (callee.pexp_desc, Read.longident_of callee, label) with
+            | Pexp_ident { txt = ident; _ }, Some path, Some label ->
                 let name = List.last_exn path in
-                let site () =
-                  {
-                    callee = String.concat ~sep:"." path;
-                    key = key_of env label;
-                    item = !item;
-                    line = expr.pexp_loc.loc_start.pos_lnum;
-                  }
-                in
-                if List.mem pass_fail_callees name ~equal:String.equal then
-                  pass_fails := site () :: !pass_fails
-                else if List.mem skipped_callees name ~equal:String.equal then
-                  skips := site () :: !skips
+                if List.mem callees name ~equal:String.equal then
+                  let verdicts =
+                    match ident with
+                    | Ppxlib.Longident.Ldot (prefix, _) ->
+                        if Option.value (self#module_path env prefix) ~default:false then Verdicts
+                        else Not_verdicts
+                    | _ -> self#ownership_of env name
+                  in
+                  let site =
+                    {
+                      callee = String.concat ~sep:"." path;
+                      key = key_of env label;
+                      item = !item;
+                      line = expr.pexp_loc.loc_start.pos_lnum;
+                    }
+                  in
+                  calls := (name, verdicts, site) :: !calls
             | _ -> ())
         | _ -> ());
         super#expression env expr
@@ -434,7 +527,15 @@ let dialect_census content =
   ignore
     (iterator#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
-  let pass_fails = List.rev !pass_fails and skips = List.rev !skips in
+  List.rev !calls
+
+let dialect_census content =
+  let calls = claim_calls ~callees:(pass_fail_callees @ skipped_callees) content in
+  let sites_of callees =
+    List.filter_map calls ~f:(fun (name, _, site) ->
+        Option.some_if (List.mem callees name ~equal:String.equal) site)
+  in
+  let pass_fails = sites_of pass_fail_callees and skips = sites_of skipped_callees in
   (* A literal is the same label anywhere in the source. A name, or an expression over names, is
      only the same label within one top-level item: [label] is the parameter name of half the claim
      helpers in [Verdict] itself, and two functions sharing it share nothing else. *)
@@ -448,6 +549,98 @@ let dialect_census content =
             if same_label pass_fail skipped then Some { pass_fail; skipped } else None))
   in
   { pairings; skipped_sites = List.length skips; pass_fail_sites = List.length pass_fails }
+
+(** {1 A claim label written with a line break (post-wave task of staging#1134)}
+
+    A claim is one row on each channel it prints to: [tools/mutation-run.sh] reads a run's
+    [FAIL: …: false] lines off its log and counts its stdout rows against the golden's. A label with
+    a newline in it used to split its claim into a [FAIL: ] head that is no false claim and an
+    unprefixed tail that is a row the golden lacks. [Verdict] now renders every claim line through
+    [Verdict.one_line] (a control character becomes a space), which keeps a COMPUTED label on one
+    row; a LITERAL one with a line break can only be a mistake -- a cosmetic blank line before the
+    claim, as [test_random_histograms] had, belongs in a [printf] of its own -- so this reader
+    refuses it where it is written rather than leaving the sanitizer to turn it into a stray space.
+
+    What it reads is the label argument of every claim form in {!labelled_claims} that is
+    [Verdict]'s (see {!claim_calls}): the first positional argument, keyed as {!dialect_census} keys
+    it, so a name bound to a literal is that literal. A [pf]/[claimf]/[pf_all2] format is its label
+    too, and a line break in the format is one in every rendered label. [Verdict.fail] is not read:
+    its argument is a message, multi-line by design, and every line of it is printed with the
+    prefix.
+
+    Where a label counts as LITERAL is a deliberate, closed list: a string constant, under any type
+    constraints or coercions, or a name bound to one -- directly or through a chain of [let]
+    renamings. Every other expression is a computed label, however statically it could be evaluated
+    ([if c then "a\nb" else "c"], [String.concat]): that is the sanitizer's case, and [Verdict]
+    prints it on one row whatever it holds. This reader is the lint for the label a person writes
+    out; the sanitizer is what makes the run correct.
+
+    The CALL is read the same way: a claim applied by its path, under any constraints or coercions.
+    A claim applied any other way -- through [@@] or [|>], or passed as a value -- is not read; its
+    label, too, is the sanitizer's.
+
+    What it cannot see: a label computed from an expression (the sanitizer's case, by design), a
+    claim reached through a wrapper the source binds ([let skipped = Verdict.skipped ~backend]), and
+    an unqualified claim name brought in by an [open] this scan does not model (a module that
+    re-exports [Verdict.Claims] under another name).
+
+    An unqualified claim name that reaches [open Verdict.Claims] only past a later [open] of another
+    module is {!Ambiguous}: that module may export a function of the name, and this scan cannot read
+    its exports. Such a site is READ, and a line break in its literal label is refused with the
+    remedy of qualifying the call -- loudly, since the alternative, leaving it unread, is how a
+    later [open Ll_test] would silently exempt every claim after it. *)
+
+(** The [Verdict.Claims] members whose first positional argument is a claim label (or the format
+    rendering one): every member but [fail], whose argument is a multi-line message. *)
+let labelled_claims =
+  [
+    "claim";
+    "p";
+    "pf";
+    "claimf";
+    "p_all";
+    "p_all2";
+    "pf_all2";
+    "p_none";
+    "p_alli";
+    "p_empty";
+    "p_exists";
+    "p_pairwise_distinct";
+    "skipped";
+    "gated";
+    "gated_all";
+    "gated_alli";
+    "gated_exists";
+    "pass_fail";
+    "pass_fail_all2";
+    "case";
+  ]
+
+type line_break_site = { site : dialect_site; ambiguous : bool }
+(** A claim whose literal label carries a line break; [ambiguous] when its callee reaches
+    [Verdict]'s only past an [open] of another module (see {!ownership}). *)
+
+type line_break_census = {
+  broken : line_break_site list;
+  label_sites : int;  (** Every [Verdict] (or ambiguous) claim whose label was read. *)
+}
+
+let has_line_break text = String.exists text ~f:(fun c -> Char.equal c '\n' || Char.equal c '\r')
+
+let line_break_census content =
+  let sites =
+    claim_calls ~callees:labelled_claims content
+    |> List.filter_map ~f:(fun (_, ownership, site) ->
+        match ownership with
+        | Verdicts -> Some { site; ambiguous = false }
+        | Ambiguous -> Some { site; ambiguous = true }
+        | Not_verdicts -> None)
+  in
+  let broken =
+    List.filter sites ~f:(fun { site; _ } ->
+        match site.key with Literal text -> has_line_break text | Named _ | Computed _ -> false)
+  in
+  { broken; label_sites = List.length sites }
 
 (** {1 A gate that reads the population it quantifies (gh-ocannl-1289)}
 

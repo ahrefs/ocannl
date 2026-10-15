@@ -1463,6 +1463,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   row helper owns the boundary, so future rows inherit it without repeating the label; a new
   multi-case test does the same. No scan holds it: the `case_` prefix is a local habit, and the
   wider population of `test_*` drivers often catches its own exceptions to print them.
+- A claim is one row on each stream it prints to. `tools/mutation-run.sh` lists a run's
+  `FAIL: …: false` lines and counts its stdout rows against the golden's, and a label carrying a
+  newline split its claim into a `FAIL: ` head that is no false claim and a tail that is a row the
+  golden lacks. So Verdict renders every claim line, label and detail, through `Verdict.one_line`
+  (a control character becomes a space), which keeps a computed label on one row; a literal label,
+  or a `pf` format, written with a line break is refused by `verdict_ratchet`
+  (`Verdict_scan.line_break_census`) -- a blank line before a claim goes in a `printf` of its own.
+  `Verdict.fail` takes a message, not a label, and stays multi-line with every line prefixed.
 - One claim surface, opened rather than copied. Every test that decides a verdict reaches the claim
   names through `open Verdict.Claims`; nothing in the tree rebinds them per file any more
   (gh-ocannl-815). The aliases the population used to carry were a maintenance defect with a
