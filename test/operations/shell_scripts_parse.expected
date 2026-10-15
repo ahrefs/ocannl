@@ -495,6 +495,7 @@ duplicate harness expect_rejected() is refused: true
 duplicate harness expect_rejected() is refused: true
 a comment mentioning support cannot satisfy sourcing: true
 .github/actions/pin-revisions/resolve.sh parses: true
+benchmarks/check-box.sh parses: true
 benchmarks/gh1003_fold_cells.sh parses: true
 benchmarks/gh1051_bf16_ab.sh parses: true
 benchmarks/gh1051_boundary_split.sh parses: true
@@ -506,6 +507,8 @@ benchmarks/gh612v_session.sh parses: true
 benchmarks/gh728_cells.sh parses: true
 benchmarks/gh834_cells.sh parses: true
 benchmarks/runners/ocannl/mma_register_scope_probe_build.sh parses: true
+benchmarks/test-check-box.sh uses the shared harness contract: true
+benchmarks/test-check-box.sh parses: true
 benchmarks/test-gh1133-cells.sh parses: true
 benchmarks/test-gh834-cells.sh uses the shared harness contract: true
 benchmarks/test-gh834-cells.sh parses: true
@@ -528,6 +531,7 @@ tools/affected-tests.sh parses: true
 tools/aggregate-skips.sh parses: true
 tools/api-drift.sh parses: true
 tools/batch-backends.sh parses: true
+tools/bisect-steps.sh parses: true
 tools/box-jobs.sh parses: true
 tools/ci-aarch64-cross.sh parses: true
 tools/ci-compiler-test.sh parses: true

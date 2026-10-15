@@ -742,16 +742,32 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   passes through this derivation and fails against the former fixed-list fixture.
 - On a fleet box a harness run is a test batch like any other, though unlike `tools/test-run.sh`
   it takes no slot itself, so wrap it:
-  `fleet-worker.sh execution slot --cpu -- tools/test-harnesses.sh --shell`. Until gh-ocannl-1236
-  lands it must also start with SIGHUP at its default. Under `bg-run.sh spawn`,
-  `execution slot --bg` or `nohup` it inherits SIGHUP ignored, which a non-interactive bash
-  cannot trap, so `tools/test-test-run.sh`'s HUP lifecycle legs fail, on master too, and the
-  harness aborts before its later legs (it cost three workers of the 2026-10-05 wave and two of
-  its post-waves a base comparison or a rerun). Run it in the foreground, where a run of four to
-  five minutes (the 2026-10-06 reruns) fits the 600 s tool cap, or reset the signal for the
-  command, `perl -e '$SIG{HUP}="DEFAULT"; exec @ARGV' tools/test-harnesses.sh --shell` after the
-  slot's `--`. Checked on mac-studio under `bg-run.sh spawn`: a bash `trap` on HUP fires behind
-  that reset and not without it, and the run outlives the call that spawned it.
+  `fleet-worker.sh execution slot --cpu -- tools/test-harnesses.sh --shell`, in the foreground or
+  detached. Under `bg-run.sh spawn`, `execution slot --bg` or `nohup` it inherits SIGHUP ignored
+  (and a background `&` SIGINT), which a non-interactive bash cannot trap: before gh-ocannl-1236
+  `tools/test-test-run.sh`'s HUP lifecycle legs failed there, on master too, and the harness
+  aborted before its later legs (three workers of the 2026-10-05 wave and two of its post-waves
+  paid a base comparison or a rerun). Now the signal legs launch their fixture through a perl
+  that ignores INT, HUP and TERM, standing for such a caller in EVERY run, and a second that
+  resets them, so the reset is what each run exercises and the legs pass whatever the harness
+  inherited (its header line `inherited ignored signals:` says what that was); a lifecycle
+  fixture that never becomes ready fails and ends its leg, never the harness. A launcher that
+  keeps HUP ignored on purpose (`nohup`) is right to: the fix belongs in the fixture, not in
+  the callers.
+- Selecting legs (gh-ocannl-1202): a harness built on `harness_leg` takes `--only REGEX` over its
+  leg names, and `tools/test-test-run.sh` closes each name with its one group, so
+  `--only '#lifecycle'` runs the run/start lifecycle legs with the signal legs and both fork
+  negative controls (leg 74's unmasked parent-ownership and inherited-handler twins); the groups
+  are listed in its header. Setup and cleanup outside the gates run as in a full run; a selector
+  matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
+  with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
+  over the selected run and count its `FAIL  ` lines.
+- Strict skips: the toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1` (every skip is a
+  FAIL); the toolchain-free `harnesses` job runs `tools/test-harnesses.sh --shell --expected-skips
+  tools/harness-skips-ci-shell.txt`, strict except for the `HARNESS<TAB>LABEL` lines listed
+  there, and red on a listed skip that no longer occurs (gh-ocannl-1236). A leg that newly skips
+  on Ubuntu is a defect to fix or a line to add, with its reason in a comment above it; the
+  list's line forms are a fail-closed allowlist (`tools/test-harnesses.sh`'s header).
 
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
@@ -935,6 +951,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   mask after assignment; the child restores it after resetting all four handlers to DEFAULT.
   `tools/test-test-run.sh` leg 74 injects TERM into both branches, with unmasked orphan-lock and
   inherited-handler duplicate-verdict controls. Reader cancellation legs wait for `FAKE_REACH_CALLS`.
+- **A group signal reaches the probe as well as the prober** (gh-ocannl-1362). A shell that traps
+  INT/TERM/HUP survives a signal sent to its process group, but the `cat`/`ps` children of a
+  liveness probe it is running at that moment do not, and a probe whose child died answers "gone".
+  The attached `run` launcher read that as a supervisor that died without a verdict, while the
+  supervisor, TERMed by the same group signal, was reaping and about to publish (the CI flake: exit
+  1, lock held, verdict file appearing moments later). Bash runs a trap before the interrupted
+  command's caller sees its status, so `sup_alive_settled` counts trapped signals and re-asks any
+  probe one landed in. The lifecycle leg reproduces it deterministically with a `cat` shim that
+  sends the group TERM from inside the wait's first probe, against a plain-`sup_alive` control;
+  the unshimmed GROUP_TERM leg hit it only under load (one run in 25 at background QoS on a busy
+  mac-studio, none in 35 at normal priority).
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
@@ -3073,6 +3100,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   closes the race both ways. The local lane takes no lab lock, so on this host nothing refuses a
   measurement reserved mid-unit; the per-unit read is its only check. The harness pins its
   registry reader to a fake, since the default candidates reach the real registry on a fleet box.
+- **Each lane runs `benchmarks/check-box.sh --box-only` once** (gh-ocannl-1062), after its first
+  unit whose suite ran (`pass`, `incremental-pass` or `fail`; a `timeout` leaves it to the next
+  unit, its device possibly wedged), in that unit's worktree and under its lock, against the box's
+  main-checkout fixture store. The verdict is the box's measurement readiness, not coverage: it is
+  said as `<box>: box check: ready`, `ENVIRONMENT GAP (not a test failure)` with the GAP lines,
+  `not at <sha>` for a ref without the script, or `could not run`, and logged to
+  `logs/<stamp>-<box>-box-check.log`; no history row, unit state or run-record field reads it.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
@@ -3711,6 +3745,48 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   existing `_build` — seconds rather than minutes when little changed. That is what makes a daily
   cadence affordable. `--force` is the explicit from-scratch unit; a fresh CI run is the other
   path to a clean compilation check.
+
+### Bisecting a regression
+
+When a sweep unit (or any run) goes red and an earlier run of the same targets on the same box was
+green, the two commits bound a bisect: `tools/test-run.sh bisect GOOD BAD <targets…>`
+(gh-ocannl-1225), for example `OCANNL_BACKEND=cuda tools/test-run.sh bisect --build
+./test/operations/test_vec_simple.exe <good-sha> <bad-sha> @test/operations/runtest-test_vec_simple`.
+Finding gh-ocannl-1222's cause took a hand-rolled `git bisect run` on tuf, and its step script had
+three easy ways to lie; the verb encodes each once (tools/bisect-steps.sh says how):
+
+- **Exit mapping.** `run` exits 1 for a red test and for a red build alike. Each step first runs
+  `build @check` plus every `--build TARGET` (name the tests' executables, so a link failure counts
+  too) and only then `build <targets…>`: a red build is git's skip (125), never bad. A verdict that
+  is not the suite's — `SLOT REFUSED` (75), `DEVICE UNHEALTHY` (69), a cap's TIMEOUT (142), an
+  `INVOCATION REFUSED`, a cancellation, a run that died without a verdict or whose recorded verdict
+  or commit disagrees with its launcher — makes the step exit 128, which stops `git bisect run`;
+  read as bad, any of them would silently steer it. A TIMEOUT aborts too: the step cannot tell a
+  hang from a wedged device.
+- **Backend.** `OCANNL_BACKEND` is required (`cc` for a CPU bisect) and passed to every run of every
+  step, so a configuration a commit changes cannot move the bisect to another backend half-way.
+- **Isolation.** The bisect gets a detached worktree of its own under
+  `~/.ocannl-test-runs/bisect-<stamp>-<pid>/tree`, never the caller's checkout, the sweep's or
+  another session's, and its runs take that tree's lock; a step hands git its verdict, and git
+  moves the tree, only once nothing those runs started holds it. Every step is judged by the runner frozen
+  beside it at the start (`runner/`, pointed at the tree through `OCANNL_TOOL_TESTRUN_TREE`, which
+  only `run` and `plan` accept), not by the tested commit's own copy, which may predate the slot or
+  the caps, nor by the caller's, which may be edited meanwhile. Each step is two plain `run`s, so
+  the fleet slot, the width cap, the per-test cap and the device probe apply exactly as to a
+  hand-launched run; `--cap`/`--test-cap` go to every one of them.
+
+It is first-parent by default (each step a merged state CI saw; `--no-first-parent` walks into the
+merged branches), so GOOD must then lie on BAD's first-parent chain (a GOOD merged in through a
+second parent is refused), and it runs both ends before bisecting: BAD must fail and GOOD must pass on this box,
+or there is nothing to find. Exit 0 names the first bad commit; 1 means the range does not bisect
+(an end does not hold here, or only skipped commits are left, listed); 2 a refusal before any step;
+an abort exits with the aborting run's status (126 when it gave none); 129/130/143 cancelled. The
+records outlive the tree, which is removed at the end: `steps.tsv` (each step's commit, verdict and
+two run directories), each run's digest and log under `steps/`, git's `bisect-log` and `result`.
+A bisect lasts as many steps as the range has halvings, each a build and a test run, so launch it
+like a long suite: through the harness's background mode (`bg-run.sh` on the fleet). It runs where
+it is invoked, with no remote dispatch of its own: for a box-specific regression, invoke it on that
+box.
 
 ## Floats and measurements in goldens
 

@@ -198,6 +198,13 @@ files.
   comparisons stand. A fixture MATCHes if it is *some* recorded box's bytes, and every row
   (`fixture_origin`) and report section names whose. Before quoting one box's number against
   another's, check that the two sections name the same origin.
+- **A measurement session starts with `benchmarks/check-box.sh --box <id> --fixture <name>...`**
+  from the checkout it measures in, and measures only on exit 0 (gh-ocannl-1062). Five waves found
+  the gap only once a session had begun: a native boot with no venv, fresh worktrees with no
+  fixtures, a ROCm torch that passed `is_available()` and segfaulted on its first copy, drivers in
+  a new worktree finding no `benchmarks/.venv` beside a perfectly good shared venv. It checks and
+  never provisions; its items, repairs and the per-box state table are in `benchmarks/README.md`
+  (Measurement boxes), and the sweep runs it per box without letting a gap touch a unit's row.
 - Because of that, no *comparable* cell runs without a Python ML venv -- but the MEASUREMENT path
   does: `bench_mlp --self-test` / `Bench_harness.run_self_test` fabricates a tiny model in memory
   and drives the whole protocol and emitter (gh-ocannl-702), and `test/operations/bench_self_test`

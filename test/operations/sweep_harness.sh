@@ -60,10 +60,11 @@ on_error() {
     lane_lock_linux lane_lock_wsl res_measured res_windows res_renamed res_tuf_wsl res_local res_local_other res_between \
     res_unreadable res_garbled res_off res_absent \
     tuf_asleep tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
-    tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
+    tuf_unguarded tuf_unguarded_prep tuf_unguarded_box tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
     guard_absent \
-    after_cancel local_remote local_replaced local_busy local_prep_error local_control; do
+    after_cancel local_remote local_replaced local_busy local_prep_error local_control \
+    box_gap box_ready box_broken; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -413,7 +414,7 @@ case ${SWEEP_TEST_SSH_MODE:-} in
     case $* in
       *"-- --hold '"*)
         case ${SWEEP_TEST_HOLD_DENIED:-}:$* in
-          1:* | prep:*" prep' "*)
+          1:* | prep:*" prep' "* | box-check:*" box-check' "*)
             echo 'sweep-hold: WARNING: running WITHOUT a sleep guard, so nothing at the OS level stops a suspend under this run -- fixture-inhibit refused: Access denied' >&2
             ;;
         esac
@@ -3169,6 +3170,12 @@ grep -qF '  tuf/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Acces
 tuf_unguarded_prep_log=$(awk -F '\t' '$1 == "unit" && $2 == "tuf" { print $6 }' \
   "$(sed -n 's/^run:  *//p' <<<"$tuf_unguarded_prep")")
 absent '^sweep-hold: WARNING' "$tuf_unguarded_prep_log"
+# A refusal to the box check alone (gh-ocannl-1062) lands in its own log, and is said for the box.
+tuf_unguarded_box=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_HOLD_DENIED=box-check SWEEP_TEST_PREP_OK=1 \
+  SWEEP_TEST_SSH_MODE=window run_sweep_args --only hip --target tuf-up-probe)
+grep -qF '  tuf: box check: ran WITHOUT a sleep guard -- fixture-inhibit refused: Access denied' \
+  <<<"$tuf_unguarded_box"
+absent '^  tuf/hip: ran WITHOUT a sleep guard' <<<"$tuf_unguarded_box"
 tuf_unguarded_wsl=$(SWEEP_TEST_HOLD_DENIED=1 SWEEP_TEST_SSH_MODE=window \
   SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh run_sweep_args --only hip --target tuf-up-probe)
 absent 'sleep guard' <<<"$tuf_unguarded_wsl"
@@ -3489,6 +3496,41 @@ local_credentials=$(GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key \
 grep -q '^  m4-max/cc: pass ' <<<"$local_credentials"
 credential_free "$tmp/local-credentials" 2
 grep -q '^exec -- dune clean	' "$tmp/local-credentials"
+
+# The per-lane box check (gh-ocannl-1062). Every case above swept a ref without
+# benchmarks/check-box.sh, and its lane said so. Here the fixture repository gains a stand-in that
+# records its arguments and answers SWEEP_TEST_BOX_CHECK_RC: on a two-unit lane it runs ONCE, its
+# GAP is the box's line, relayed with the GAP item, and both units keep the rows the suite gave.
+grep -q '^  m4-max: box check: not at ' <<<"$incremental"
+cat >"$main/benchmarks/check-box.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$SWEEP_TEST_BOX_CHECK_CALLS"
+echo 'check-box: venv: ok -- the venv'
+echo 'check-box: fixture lenet: GAP -- absent from the store'
+echo '  repair: copy it in'
+echo 'check-box: m4-max: GAP (1 of 2 items)'
+exit "${SWEEP_TEST_BOX_CHECK_RC:-1}"
+EOF
+git -C "$main" add benchmarks/check-box.sh
+git -C "$main" commit -qm 'stand-in box check'
+git -C "$main" push -q origin master
+box_gap=$(SWEEP_TEST_BOX_CHECK_CALLS=$tmp/box-check.calls run_sweep_args --only cc --only metal)
+[ "$(grep -c 'box check' <<<"$box_gap")" -eq 1 ]
+grep -q "^  m4-max: box check: ENVIRONMENT GAP (not a test failure) -- $state/logs/[^ ]*-m4-max-box-check.log\$" \
+  <<<"$box_gap"
+grep -qx '    check-box: fixture lenet: GAP -- absent from the store' <<<"$box_gap"
+[ "$(grep -c '^    check-box: ' <<<"$box_gap")" -eq 1 ]
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$box_gap"
+grep -q '^  m4-max/metal: incremental-pass ' <<<"$box_gap"
+[ "$(wc -l <"$tmp/box-check.calls")" -eq 1 ]
+[ "$(cat "$tmp/box-check.calls")" = "--box m4-max --box-only --fixture-dir $main/benchmarks/fixtures" ]
+box_ready=$(SWEEP_TEST_BOX_CHECK_CALLS=$tmp/box-check.calls SWEEP_TEST_BOX_CHECK_RC=0 run_sweep)
+grep -q '^  m4-max: box check: ready -- ' <<<"$box_ready"
+box_broken=$(SWEEP_TEST_BOX_CHECK_CALLS=$tmp/box-check.calls SWEEP_TEST_BOX_CHECK_RC=2 run_sweep)
+grep -q '^  m4-max: box check: could not run (exit 2) -- ' <<<"$box_broken"
+git -C "$main" rm -q benchmarks/check-box.sh
+git -C "$main" commit -qm 'drop the stand-in box check'
+git -C "$main" push -q origin master
 
 . "$(dirname "$0")/sweep_remote_fixture.sh"
 

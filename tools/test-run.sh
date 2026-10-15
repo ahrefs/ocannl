@@ -35,6 +35,9 @@
 #                                                      # compare N isolated runs
 #   tools/test-run.sh fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]
 #                                                      # one fresh, timed run of named tests
+#   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]... [--no-first-parent]
+#                            GOOD BAD TARGET...      # the first commit that turns TARGETs red
+#                                                    # (tools/bisect-steps.sh says how)
 #   tools/test-run.sh status [RUN|last]                # one-shot, never blocks
 #   tools/test-run.sh wait   [RUN|last] [--timeout N]  # bounded; exits with the run's status
 #   tools/test-run.sh stop   [RUN|last]                # TERM the run's process group
@@ -231,6 +234,7 @@ reject_misplaced_options() {
         case $sub in
           repeat) form='repeat [--cap N] [--alone] N [DUNE ARGS...]' ;;
           fresh) form='fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]' ;;
+          bisect) form=$bisect_usage ;;
           *) form="$sub [--cap N] [--test-cap N] [DUNE ARGS...]" ;;
         esac
         die "$arg belongs before the dune arguments, not after them:
@@ -576,14 +580,14 @@ select_dune() {
   # PATH: opam's native output otherwise leaves an MSYS shell half-configured.
   case ${OSTYPE:-} in
     msys* | cygwin*)
-      . tools/opam-env.sh ||
+      . "$runner_root/tools/opam-env.sh" ||
         die "tools/opam-env.sh failed; refusing an unrewritten Windows toolchain"
       ;;
   esac
-  command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
+  command -v dune >/dev/null 2>&1 || . "$runner_root/tools/opam-env.sh"
   command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set up?)"
   # Preserve dune's status while filtering only the known Windows linker noise.
-  case ${OSTYPE:-} in msys* | cygwin*) DUNE=tools/dune-quiet.sh ;; *) DUNE=dune ;; esac
+  case ${OSTYPE:-} in msys* | cygwin*) DUNE=$runner_root/tools/dune-quiet.sh ;; *) DUNE=dune ;; esac
   # Again, now that the switch's environment may have been sourced: its updates can set a
   # deny-listed variable the startup scrub never saw (gh-ocannl-1280).
   scrub_credentials
@@ -598,6 +602,11 @@ select_dune() {
 # CDPATH (which can also make cd print an extra path on stdout).
 case ${1:-} in paths | lock-status | affected) CDPATH= ;; esac
 cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
+# Where this script and everything it runs of its own live: the helpers below
+# are sourced from here, and the run's own phases (`_resolve`, `_probe`) are
+# this copy of the script. Normally also the tree under test; `bisect` points a
+# run at a tree of its own instead (see TESTRUN_TREE below).
+runner_root=$PWD
 
 [ -r scripts/process-group.sh ] || die "cannot read scripts/process-group.sh"
 # shellcheck source=../scripts/process-group.sh
@@ -621,6 +630,10 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 [ -r tools/fleet-worker-candidates.sh ] || die "cannot read tools/fleet-worker-candidates.sh"
 # shellcheck source=fleet-worker-candidates.sh
 . tools/fleet-worker-candidates.sh
+# The `bisect` verb and its steps (gh-ocannl-1225).
+[ -r tools/bisect-steps.sh ] || die "cannot read tools/bisect-steps.sh"
+# shellcheck source=bisect-steps.sh
+. tools/bisect-steps.sh
 # Credentials never reach dune, which records every spawned process's environment in the
 # worktree's `_build/trace.csexp` (gh-ocannl-1280). Removed from this script's own environment,
 # before any subcommand, so dune -- launched by the supervisor, by `_resolve`, `_probe`, `repeat`
@@ -655,6 +668,34 @@ scrub_credentials
 perl -e 'use Fcntl ":flock"; exit 0' 2>/dev/null || die "perl with Fcntl not found; it carries the lock, the cap and the \`last\` pointer.
   On Windows run this from Git Bash, whose MSYS perl has both; a Cygwin bash
   ships neither unless its perl package is installed."
+
+# The tree under test, when it is not this script's own (gh-ocannl-1225).
+# `bisect` keeps a frozen copy of this script and its helpers beside the
+# worktree it bisects, so every step is judged by one runner -- the one the
+# bisect was started with, not the tested commit's, which may predate the slot,
+# the caps or a fix to either -- and points each step's `run` at that worktree
+# through OCANNL_TOOL_TESTRUN_TREE. Only `run` and `plan` take it; any other
+# subcommand refuses it rather than answer about the wrong tree. It is consumed
+# here: dune and the tests never see it, so a test that drives this script
+# (tools/test-test-run.sh) is not redirected. A run's own phases work in the
+# tree their run recorded (`wt`, written before the supervisor exists).
+case ${1:-} in
+  _resolve | _probe)
+    # Without a run to own, the phase's own check below refuses it.
+    if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ]; then
+      testrun_tree=$(cat "$OCANNL_TOOL_TESTRUN_OWN/wt" 2>/dev/null) && [ -n "$testrun_tree" ] ||
+        die "cannot read the tree under test from $OCANNL_TOOL_TESTRUN_OWN/wt"
+      cd -P "$testrun_tree" || die "cannot cd to the tree under test: $testrun_tree"
+    fi ;;
+  run | plan)
+    if [ -n "${OCANNL_TOOL_TESTRUN_TREE:-}" ]; then
+      cd -P "$OCANNL_TOOL_TESTRUN_TREE" || die "OCANNL_TOOL_TESTRUN_TREE: cannot cd to $OCANNL_TOOL_TESTRUN_TREE"
+    fi ;;
+  *)
+    [ -z "${OCANNL_TOOL_TESTRUN_TREE:-}" ] ||
+      die "OCANNL_TOOL_TESTRUN_TREE points run and plan at another tree; ${1:-this subcommand} does not take it (unset it)" ;;
+esac
+unset OCANNL_TOOL_TESTRUN_TREE
 
 # OCANNL_TOOL_ is the namespace the library reserves for names that address OCANNL
 # without being configuration: an OCANNL executable warns at startup about any other
@@ -817,6 +858,10 @@ LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
 supervisor_perl='
   use POSIX ();
   my $cap = shift;
+  # The root of the runner, where the slowest-actions reader lives -- not
+  # necessarily the tree under test (a bisect step tests another) -- taken out
+  # of the environment before anything is forked: nothing the run starts sees it.
+  my $runner = delete $ENV{OCANNL_TOOL_TESTRUN_RUNNER};
   my $rd = $ENV{OCANNL_TOOL_TESTRUN_RD};
   my $own = $ENV{OCANNL_TOOL_TESTRUN_OWN};
   my ($pid, $finishing);
@@ -871,7 +916,8 @@ supervisor_perl='
     my $bound = $ENV{OCANNL_TOOL_SLOWEST_CAP};
     $bound = 30 unless defined $bound && $bound =~ /^[1-9][0-9]?$/ && $bound <= 30;
     my $reader = $ENV{OCANNL_TOOL_SLOWEST_READER};
-    $reader = "tools/action-durations.sh" unless defined $reader && length $reader;
+    $reader = (defined $runner && length $runner ? "$runner/" : "") . "tools/action-durations.sh"
+      unless defined $reader && length $reader;
     my $c = fork();
     unless (defined $c) { unlink $trace; return }
     if (!$c) {
@@ -1522,7 +1568,7 @@ fresh_timings() { # <trace file>
     echo "the run's cap was nearly spent when dune exited" >"$run_dir/timings-skipped"
     return 0
   fi
-  if ! promotion_bounded bash tools/action-durations.sh --tsv -n 0 "$1" >"$tsv" 2>"$err" 9>&-; then
+  if ! promotion_bounded bash "$runner_root/tools/action-durations.sh" --tsv -n 0 "$1" >"$tsv" 2>"$err" 9>&-; then
     if grep -q '^action-durations.sh: no process in ' "$err" 2>/dev/null; then
       : >"$tsv"
     else
@@ -2300,7 +2346,7 @@ finish_run() { # rc -> append sentinel, record verdict
 }
 
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|status|wait|stop|list|idle|paths|lock-status|affected ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected ... (see header)"
 shift
 
 case $sub in
@@ -2831,7 +2877,7 @@ case $sub in
     set -- "$DUNE" "$@"
     if [ -n "$probe_backends" ]; then
       # shellcheck disable=SC2086  # the backend list is word-split on purpose
-      set -- "${BASH:-bash}" "$PWD/tools/test-run.sh" _probe "$DUNE" "$probe_prog" "$probe_cap" \
+      set -- "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe "$DUNE" "$probe_prog" "$probe_cap" \
         $probe_backends -- "$@"
     fi
     if [ -n "$slot_fw" ]; then
@@ -2985,7 +3031,25 @@ case $sub in
         *) kill -TERM "$sup" 2>/dev/null ;;
       esac
     }
-    fwd_sig() { cancelled=$1; forward_cancel; }
+    fwd_sig() { cancelled=$1; sigs_seen=$(( sigs_seen + 1 )); forward_cancel; }
+    # A signal sent to the launcher's process group -- Ctrl-C or a closed
+    # terminal, `kill -TERM -<pgid>` -- reaches this shell's own probe
+    # children as well as this shell and the supervisor. A cat or ps it kills
+    # makes sup_alive answer "gone" for a supervisor that is alive, reaping
+    # its group on that same signal and about to publish the verdict; the
+    # attached wait then reported "died without recording a verdict" with
+    # the lock still held (gh-ocannl-1362). So a "gone" counts only from a
+    # probe no trapped signal landed in: bash runs the trap before the
+    # interrupted probe returns, so the count moving means ask again.
+    sigs_seen=0
+    sup_alive_settled() {
+      local seen
+      while :; do
+        seen=$sigs_seen
+        sup_alive "$1" && return 0
+        [ "$seen" != "$sigs_seen" ] || return 1
+      done
+    }
     trap 'fwd_sig INT' INT
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
@@ -3027,8 +3091,8 @@ case $sub in
     # lose the verdict; `run` differs from `start` only in staying attached to
     # wait and digest.
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
-      perl -e "$supervisor_perl" -- "$cap" \
-        "${BASH:-bash}" "$PWD/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
+      OCANNL_TOOL_TESTRUN_RUNNER=$runner_root perl -e "$supervisor_perl" -- "$cap" \
+        "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
         </dev/null >>"$run_dir/log" 2>&1 &
     sup=$!
     # The launcher's own fd 9 copy served its purpose the moment the
@@ -3075,7 +3139,7 @@ case $sub in
       # (`resolved`): its announcements then reach this terminal before dune
       # starts, and `start` prints the command dune is given. A run that ended
       # in that phase -- cancelled, or its cap spent -- has its verdict instead.
-      while [ ! -f "$run_dir/resolved" ] && [ ! -f "$run_dir/exit" ] && sup_alive "$run_dir"; do
+      while [ ! -f "$run_dir/resolved" ] && [ ! -f "$run_dir/exit" ] && sup_alive_settled "$run_dir"; do
         sleep 0.1
       done
       [ ! -f "$run_dir/resolved" ] || cat "$run_dir/resolved" >&2
@@ -3085,8 +3149,9 @@ case $sub in
       # is on disk. A trapped signal returns from `wait` early, hence the
       # retry loop; sup_alive rather than a bare kill -0, since after the
       # supervisor is reaped its pid can be recycled and probing the number
-      # alone would spin this loop on an unrelated process.
-      while sup_alive "$run_dir"; do wait "$sup" 2>/dev/null; done
+      # alone would spin this loop on an unrelated process; settled, since a group
+      # signal landing mid-probe kills the probe too (sup_alive_settled).
+      while sup_alive_settled "$run_dir"; do wait "$sup" 2>/dev/null; done
       sup=
       trap - INT TERM HUP
       [ "$sub" != plan ] || plan_finish "$@"
@@ -3114,6 +3179,8 @@ case $sub in
     echo "  check:   tools/test-run.sh status last    # from this worktree; never blocks"
     echo "  gate:    tools/test-run.sh wait last      # bounded; exits with dune's status"
     ;;
+  bisect) bisect_main "$@" ;;
+  _bisect_step) bisect_step "$@" ;;
   idle)
     [ $# -eq 0 ] || die "idle takes no arguments"
     # Use the same flock as run/start/repeat, including inherited holders after
@@ -3474,5 +3541,5 @@ case $sub in
     done
     [ "$found" = 1 ] || echo "no recorded runs in $RUNS"
     ;;
-  *) die "unknown subcommand: $sub (run|start|plan|repeat|status|wait|stop|list|idle)" ;;
+  *) die "unknown subcommand: $sub (run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status)" ;;
 esac
