@@ -749,6 +749,9 @@ A fresh worktree's `fixtures/` holds only `DIGESTS.txt`, so copy or link the ses
 in from the box's store and re-run the check, or pass `--fixture-dir` to check the store a driver
 reads (`gh1133_cells.sh`'s `FIXTURE_DIR`) -- never regenerate one to get past a GAP (see above).
 
+The device item puts one tensor on the GPU, so on a fleet box run it under a GPU slot
+(`fleet-worker.sh execution slot` without `--cpu`); a `--cpu` slot is a promise it breaks.
+
 `tools/sweep.sh` runs it once per box (`--box-only`, which skips the checkout-relative
 interpreter, against `<main checkout>/benchmarks/fixtures`) and reports
 `<box>: box check: ready` or `ENVIRONMENT GAP (not a test failure)` with the GAP lines, logging
@@ -756,11 +759,19 @@ the full output to `logs/<stamp>-<box>-box-check.log`; no unit's row changes, si
 measures.
 
 Per-box state, from `check-box.sh --box-only` against each box's store
-(`~/ocannl-staging/benchmarks/fixtures`) at the revision named:
+(`~/ocannl-staging/benchmarks/fixtures`) at 47fb8940 on 2026-10-15. Every box passed venv,
+packages, recorded freeze, device round trip, `Python.h` and toolchain; the gaps are all fixtures:
 
-| Box | Checked | torch (device) | Toolchain | Gaps |
+| Box | torch (device) | Toolchain | Fixture gaps (recorded for the box, absent from its store) | Rows the bytes on disk no longer match |
 | --- | --- | --- | --- | --- |
-| m4-max (mac-studio) | 2026-10-15 | 2.13.0 (mps) | macOS SDK (CommandLineTools) | fixtures `gpt2_mini_b1`, `gpt2_mini_train_b256` absent from the store (recorded as m4-max's bytes) |
+| m4-max (mac-studio) | 2.13.0 (mps) | macOS SDK (CommandLineTools) | `gpt2_mini_b1`, `gpt2_mini_train_b256` | none |
+| rog-nv | 2.14.0+cu130 (RTX 5070 Ti Laptop) | nvcc 13.4 | `cifar_conv`, `cifar_stride`, `mlp_small`, `mlp_wide` | `gpt2_mini`, `lenet` (m4-max's bytes on disk) |
+| minix | 2.14.1+rocm7.2 (Radeon 8060S, gfx1151) | hipcc (HIP 7.1) | `cifar_conv`, `cifar_stride`, `mlp_small`, `mlp_wide`, `gpt2_mini_train_b256` | `gpt2_mini`, `lenet` (m4-max's bytes on disk) |
+| tuf | 2.13.0+rocm7.1 (RX 7700S, gfx1102) | hipcc (HIP 7.1) | `gpt2_mini_b1`, `gpt2_mini_train_b256` | none |
+
+The anchor's store (m4-max's, which provisioning copies from) lacks `gpt2_mini_b1` and
+`gpt2_mini_train_b256`; rog alone holds the latter. The cifar and mlp fixtures exist only as
+rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare different torch builds.
 
 ## Methodology notes / fairness pitfalls
 

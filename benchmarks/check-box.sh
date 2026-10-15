@@ -10,6 +10,9 @@
 # (ludics-lite's `scripts/install-linux.sh --bench-venv`, a fixture copy or the generator), and the
 # last line is the verdict: `check-box: <box>: READY` or `check-box: <box>: GAP (<n> of <m> items)`.
 # Exit 0 READY, 1 any gap, 2 a usage or harness error (nothing was judged).
+# The device item runs one tensor through the GPU: on a fleet box take a GPU slot for it
+# (`fleet-worker.sh execution slot` without --cpu); there is deliberately no flag to skip it,
+# since the round trip is the item that caught minix's segfaulting torch.
 #
 # What it accepts -- a fail-closed allowlist; anything else exits 2 rather than being guessed at:
 #   - BOX: a measurement box declared in the DIGESTS file's `# measurement-boxes:` header AND
