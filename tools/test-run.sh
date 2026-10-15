@@ -2502,7 +2502,19 @@ case $sub in
       proc_alive "$resolve_dir/pid" "$resolve_dir/ptoken" || break
     done
     repeat_sup=
-    reap_repeat_group "$resolve_dir"
+    # The resolution touches nothing repeat_build holds, so a group of only zombies it leaves behind
+    # is inert: a process substitution's child its shell never reaped, handed at its exit to a PID
+    # 1 that reaps no orphans -- a leaderless group the iterations' reap must refuse (Codex review
+    # round 3 on PR #1172). Anything live, or a group still led by its own leader, goes through
+    # that fail-closed reap as before.
+    resolve_pg=$(cat "$resolve_dir/pgid" 2>/dev/null) || resolve_pg=
+    if [ -n "$resolve_pg" ] && kill -0 -- "-$resolve_pg" 2>/dev/null &&
+       ! group_identity_matches "$resolve_dir" && ! group_alive "$resolve_pg"; then
+      printf 'repeat: the resolution left only zombies in group %s: inert, not reaped\n' "$resolve_pg" \
+        >>"$run_dir/log"
+    else
+      reap_repeat_group "$resolve_dir"
+    fi
     repeat_test_cap=0 repeat_watch_kind=cpu repeat_probe_cap= repeat_probe_prog= repeat_probe_backends=
     if [ -z "$repeat_cancelled" ]; then
       # A resolution its supervisor ended -- its cap (142), a kill -- ran no iteration, and the set
