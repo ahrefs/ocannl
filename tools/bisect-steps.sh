@@ -8,7 +8,7 @@
 #   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]...
 #                            [--no-first-parent] GOOD BAD TARGET...
 #
-# Finding #1222's cause took a hand-rolled first-parent bisect on tuf, and
+# Finding gh-ocannl-1222's cause took a hand-rolled first-parent bisect on tuf, and
 # three parts of its step script were easy to get wrong. Each is encoded here
 # once:
 #

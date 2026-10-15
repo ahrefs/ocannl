@@ -3686,13 +3686,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 When a sweep unit (or any run) goes red and an earlier run of the same targets on the same box was
 green, the two commits bound a bisect: `tools/test-run.sh bisect GOOD BAD <targets…>`
-(gh-ocannl-1225). Finding #1222's cause took a hand-rolled `git bisect run` on tuf, and its step
-script had three easy ways to lie; the verb encodes each once (tools/test-run-bisect.sh says how):
-
-```bash
-OCANNL_BACKEND=cuda tools/test-run.sh bisect --test-cap 600 \
-  --build ./test/operations/test_vec_simple.exe <good-sha> <bad-sha> @test/operations/runtest-test_vec_simple
-```
+(gh-ocannl-1225), for example `OCANNL_BACKEND=cuda tools/test-run.sh bisect --build
+./test/operations/test_vec_simple.exe <good-sha> <bad-sha> @test/operations/runtest-test_vec_simple`.
+Finding gh-ocannl-1222's cause took a hand-rolled `git bisect run` on tuf, and its step script had
+three easy ways to lie; the verb encodes each once (tools/bisect-steps.sh says how):
 
 - **Exit mapping.** `run` exits 1 for a red test and for a red build alike. Each step first runs
   `build @check` plus every `--build TARGET` (name the tests' executables, so a link failure counts

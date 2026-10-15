@@ -527,6 +527,7 @@ tools/action-durations.sh parses: true
 tools/aggregate-skips.sh parses: true
 tools/api-drift.sh parses: true
 tools/batch-backends.sh parses: true
+tools/bisect-steps.sh parses: true
 tools/box-jobs.sh parses: true
 tools/ci-aarch64-cross.sh parses: true
 tools/ci-compiler-test.sh parses: true

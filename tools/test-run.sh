@@ -37,7 +37,7 @@
 #                                                      # one fresh, timed run of named tests
 #   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]... [--no-first-parent]
 #                            GOOD BAD TARGET...      # the first commit that turns TARGETs red
-#                                                    # (tools/test-run-bisect.sh says how)
+#                                                    # (tools/bisect-steps.sh says how)
 #   tools/test-run.sh status [RUN|last]                # one-shot, never blocks
 #   tools/test-run.sh wait   [RUN|last] [--timeout N]  # bounded; exits with the run's status
 #   tools/test-run.sh stop   [RUN|last]                # TERM the run's process group
@@ -628,9 +628,9 @@ runner_root=$PWD
 # shellcheck source=fleet-worker-candidates.sh
 . tools/fleet-worker-candidates.sh
 # The `bisect` verb and its steps (gh-ocannl-1225).
-[ -r tools/test-run-bisect.sh ] || die "cannot read tools/test-run-bisect.sh"
-# shellcheck source=test-run-bisect.sh
-. tools/test-run-bisect.sh
+[ -r tools/bisect-steps.sh ] || die "cannot read tools/bisect-steps.sh"
+# shellcheck source=bisect-steps.sh
+. tools/bisect-steps.sh
 # Credentials never reach dune, which records every spawned process's environment in the
 # worktree's `_build/trace.csexp` (gh-ocannl-1280). Removed from this script's own environment,
 # before any subcommand, so dune -- launched by the supervisor, by `_resolve`, `_probe`, `repeat`
