@@ -235,7 +235,12 @@ fi
 case $toolchain in
   nvcc | hipcc)
     if found=$(command -v "$toolchain"); then
-      item toolchain ok "$found ($("$toolchain" --version 2>&1 | grep -i -m1 -E 'release|version'))"
+      if version=$(bounded 60 "$toolchain" --version 2>&1); then
+        item toolchain ok "$found ($(printf '%s\n' "$version" | grep -i -m1 -E 'release|version'))"
+      else
+        item toolchain GAP "$found --version failed: $(printf '%s\n' "$version" | tail -n 1)" \
+          "repair the $([ "$toolchain" = nvcc ] && echo CUDA toolkit || echo ROCm HIP SDK) install"
+      fi
     else
       item toolchain GAP "no $toolchain on PATH" \
         "install the $([ "$toolchain" = nvcc ] && echo CUDA toolkit || echo ROCm HIP SDK) or put its bin/ on PATH"

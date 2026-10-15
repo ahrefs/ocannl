@@ -176,12 +176,12 @@ for mode in cpu-build unavailable crash hang; do
   if harness_leg "gap: device $mode"; then
     FAKE_TORCH=$mode check "device-$mode" --box rog-nv
     gap_leg "a $mode torch is a torch-device GAP" "device-$mode" torch-device
+    if [ "$mode" = hang ]; then
+      grep -q 'no answer within 5s' "$TMP/runs/device-hang"
+      report $? 'a hung device smoke is cut at the cap and says so'
+    fi
   fi
 done
-if harness_leg 'gap: device hang is bounded'; then
-  grep -q 'no answer within 5s' "$TMP/runs/device-hang" 2>/dev/null
-  report $? 'a hung device smoke is cut at the cap and says so'
-fi
 if harness_leg 'device: hip and mps profiles'; then
   FAKE_TORCH=hip check hip --box minix --fixture mlp_small
   if [ "$rc" = 0 ] && grep -q 'round-tripped through hip 7.2' "$TMP/runs/hip"; then
@@ -211,6 +211,11 @@ if harness_leg 'gap: toolchain'; then
     PATH="$TMP/bin2:/usr/bin:/bin" check toolchain --box rog-nv
     gap_leg 'no nvcc is a toolchain GAP' toolchain toolchain
   fi
+  mkdir -p "$TMP/bin3"
+  printf '#!/bin/sh\necho "nvcc: error while loading shared libraries" >&2\nexit 127\n' >"$TMP/bin3/nvcc"
+  chmod +x "$TMP/bin3/nvcc"
+  PATH="$TMP/bin3:$PATH" check broken-toolchain --box rog-nv
+  gap_leg 'an nvcc that cannot run is a toolchain GAP' broken-toolchain toolchain
 fi
 if harness_leg 'gap: fixtures'; then
   check absent --box rog-nv --fixture mlp_small --fixture lenet
