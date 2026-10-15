@@ -82,11 +82,25 @@ bisect_lines() { # <file> -> the array bisect_read_out, one element per line
 # A child in a process group of its own, waited for through signals: a
 # trapped signal returns `wait` early, and the cancellation it set is acted on
 # (bisect_cancel) before waiting again. Sets bisect_rc; the group is
-# bisect_pgid until it is gone (bisect_drain).
+# bisect_pgid until it is gone (bisect_drain). A cancellation already flagged
+# starts nothing; one that landed while the child was being launched, before
+# its pgid was known here (so bisect_cancel had nothing to signal), is
+# delivered as soon as it is -- to the group, or to the child itself if it
+# has not made the group yet (it is still this shell's unreaped child, so
+# its pid names nothing else).
 bisect_pgid= bisect_rc= bisect_cancelled= bisect_pending=
+bisect_cancel_rc() { case $bisect_cancelled in INT) echo 130 ;; HUP) echo 129 ;; *) echo 143 ;; esac; }
 bisect_spawn() { # command...
+  bisect_pgid=
+  if [ -n "$bisect_cancelled" ]; then
+    bisect_rc=$(bisect_cancel_rc)
+    return 0
+  fi
   perl -e 'setpgrp(0, 0); exec @ARGV or exit 127' "$@" &
   bisect_pgid=$!
+  if [ -n "$bisect_cancelled" ]; then
+    kill -TERM -- "-$bisect_pgid" 2>/dev/null || kill -TERM "$bisect_pgid" 2>/dev/null
+  fi
   wait "$bisect_pgid"
   bisect_rc=$?
   while [ -n "$bisect_pending" ]; do
@@ -191,15 +205,29 @@ bisect_main() {
     git worktree remove --force "$tree" >/dev/null 2>&1
     git worktree prune >/dev/null 2>&1
     rm -rf "${dir:?}"
+    if [ -n "$bisect_cancelled" ]; then
+      echo "test-run: bisect: cancelled ($bisect_cancelled) during setup; nothing was left behind" >&2
+      exit "$(bisect_cancel_rc)"
+    fi
     die "$1"
   }
+  # Cancellation is armed before the first thing the bisect creates, and read
+  # after each step of the setup (a signal to this shell waits for the
+  # foreground command it interrupts, `git worktree add` included), so an
+  # interrupted setup is unwound like a refused one.
+  trap 'bisect_cancel INT' INT
+  trap 'bisect_cancel TERM' TERM
+  trap 'bisect_cancel HUP' HUP
+  bisect_setup_check() { [ -z "$bisect_cancelled" ] || bisect_setup_fail cancelled; }
   mkdir "$dir" || die "cannot create $dir"
+  bisect_setup_check
   mkdir "$dir/steps" "$dir/runner" "$dir/runner/tools" "$dir/runner/scripts" ||
     bisect_setup_fail "cannot create $dir"
   # The runner: this script and its helpers as they are now (uncommitted
   # edits included, recorded in `runner-source`).
   cp "$runner_root"/tools/*.sh "$dir/runner/tools/" && cp "$runner_root"/scripts/*.sh "$dir/runner/scripts/" ||
     bisect_setup_fail "cannot copy the runner into $dir/runner"
+  bisect_setup_check
   {
     printf '%s\n' "$backend" >"$dir/backend" &&
       printf '%s\n' "$cap" >"$dir/cap" &&
@@ -213,6 +241,7 @@ bisect_main() {
         >"$dir/runner-source" &&
       : >"$dir/steps.tsv"
   } || bisect_setup_fail "cannot write the bisect's records in $dir"
+  bisect_setup_check
   if ! git worktree add --detach "$tree" "$bad_sha" >"$dir/worktree.log" 2>&1; then
     sed 's/^/  /' "$dir/worktree.log" >&2
     bisect_setup_fail "cannot add the bisect's worktree $tree"
@@ -221,10 +250,7 @@ bisect_main() {
   lang=$(grep -m1 '^(lang dune ' "$tree/dune-project" 2>/dev/null)
   printf '%s\n' "${lang:-(lang dune 3.18)}" >"$tree/dune-workspace" ||
     bisect_setup_fail "cannot write $tree/dune-workspace"
-
-  trap 'bisect_cancel INT' INT
-  trap 'bisect_cancel TERM' TERM
-  trap 'bisect_cancel HUP' HUP
+  bisect_setup_check
   echo "bisect: $dir"
   echo "  range: $good_sha..$bad_sha ($([ -n "$first_parent" ] && echo first-parent || echo all parents))"
   echo "  every step: OCANNL_BACKEND=$backend; build @check${builds[*]:+ ${builds[*]}}, then build $*"
@@ -265,8 +291,7 @@ bisect_main() {
     fi
   fi
   if [ -n "$bisect_cancelled" ]; then
-    outcome=cancelled
-    case $bisect_cancelled in INT) rc=130 ;; HUP) rc=129 ;; *) rc=143 ;; esac
+    outcome=cancelled rc=$(bisect_cancel_rc)
     result="CANCELLED ($bisect_cancelled); the step it stopped left no verdict"
   elif [ -s "$dir/abort" ] || [ "$outcome" = abort ]; then
     outcome=abort

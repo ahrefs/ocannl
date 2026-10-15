@@ -274,7 +274,9 @@
 #      exits 143; a descendant a step's run leaves holding the tree is
 #      waited for before git moves the tree; a relative runs directory keeps
 #      every step's runs under it; a dune-workspace above the runs directory
-#      is refused leaving no worktree behind. Every dune call sees the pinned backend and neither of the
+#      is refused leaving no worktree behind; a TERM during setup, or before a
+#      step has a group to signal, unwinds with 143 starting nothing. Every
+#      dune call sees the pinned backend and neither of the
 #      runner's own variables, and the invoking checkout and its worktree
 #      list end as they began.
 #  70 sits at the very end, after every leg that fakes a device: a leg that
@@ -6331,6 +6333,61 @@ EOF
   fi
   rm -f "$TMP/bisect-wsanc/dune-workspace"
   if [ -z "$bi_detail" ]; then report 0 "$l_setup"; else report 1 "$l_setup" "$bi_detail"; fi
+
+  # (l) a TERM that lands before a step has a process group to signal: during
+  # setup (`git worktree add` slowed by a git wrapper), the bisect unwinds
+  # leaving nothing; during an end's checkout, no step is started at all.
+  # Either way the exit is 143.
+  l_early="bisect: a TERM during setup or before a step starts unwinds with 143, starting nothing"
+  bi_detail=
+  bi_gitbin=$TMP/bisect-gitbin
+  mkdir -p "$bi_gitbin"
+  bi_realgit=$(command -v git)
+  cat >"$bi_gitbin/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" worktree add "*) [ "$BISECT_GIT_SLOW" != add ] || { : >"$BISECT_GIT_READY"; sleep 3; } ;;
+  *" checkout --quiet --detach "*) [ "$BISECT_GIT_SLOW" != checkout ] || { : >"$BISECT_GIT_READY"; sleep 3; } ;;
+esac
+exec "$BISECT_REAL_GIT" "$@"
+EOF
+  chmod +x "$bi_gitbin/git"
+  for slow in add checkout; do
+    [ -z "$bi_detail" ] || break
+    bi_repo pass fail || { bi_detail="fixture"; break; }
+    rm -f "$TMP/bisect-git.ready"
+    : >"$TMP/bisect.calls"
+    bi_early_runs=$TMP/bisect-early-$slow
+    env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$bi_early_runs \
+      BISECT_CALLS=$TMP/bisect.calls BISECT_GIT_SLOW=$slow BISECT_GIT_READY=$TMP/bisect-git.ready \
+      BISECT_REAL_GIT=$bi_realgit PATH=$bi_gitbin:$bi_bin:$PATH OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none \
+      "$bi_root/tools/test-run.sh" bisect "$bi_base" range @t >"$TMP/bisect.out" 2>"$TMP/bisect.err" &
+    bi_pid=$!
+    for _ in $(seq 1 300); do [ -e "$TMP/bisect-git.ready" ] && break; sleep 0.1; done
+    kill -TERM "$bi_pid" 2>/dev/null
+    for _ in $(seq 1 300); do kill -0 "$bi_pid" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$bi_pid" 2>/dev/null; then
+      kill -KILL "$bi_pid" 2>/dev/null
+      bi_detail="$slow: the bisect outlived its TERM by 30s"
+    fi
+    wait "$bi_pid" 2>/dev/null
+    bi_rc=$?
+    [ -z "$bi_detail" ] || break
+    if [ ! -e "$TMP/bisect-git.ready" ]; then
+      bi_detail="$slow: the slowed git call never came: $(cat "$TMP/bisect.out" "$TMP/bisect.err")"
+    elif [ "$bi_rc" != 143 ]; then
+      bi_detail="$slow: exit $bi_rc: $(cat "$TMP/bisect.out" "$TMP/bisect.err")"
+    elif [ -s "$TMP/bisect.calls" ]; then
+      bi_detail="$slow: a step started after the TERM: $(cat "$TMP/bisect.calls")"
+    elif [ "$(bi_git -C "$bi_root" worktree list | grep -c '')" != 1 ]; then
+      bi_detail="$slow: a worktree was left registered: $(bi_git -C "$bi_root" worktree list)"
+    elif [ "$slow" = add ] && ls "$bi_early_runs" 2>/dev/null | grep -q '^bisect-'; then
+      bi_detail="add: the cancelled setup left its bisect directory: $(ls "$bi_early_runs")"
+    elif [ "$slow" = checkout ] && ! grep -q '^result: CANCELLED (TERM)' "$TMP/bisect.out"; then
+      bi_detail="checkout: $(cat "$TMP/bisect.out" "$TMP/bisect.err")"
+    fi
+  done
+  if [ -z "$bi_detail" ]; then report 0 "$l_early"; else report 1 "$l_early" "$bi_detail"; fi
 
   # (h) a TERM to the bisect stops the step's run (its dune reaped), exits
   # 143 and removes the tree.
