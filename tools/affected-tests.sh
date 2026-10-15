@@ -31,9 +31,10 @@
 #     modules stay unknown). Its edges are added to the first answer's.
 #   - `dune show aliases DIR...` and `dune show targets DIR...`: the aliases
 #     and the targets of every directory holding a `dune` file.
-#   - `dune rules TARGET...`, for each per-test alias's own targets (below)
-#     and each generated module file: the executables those rules run and the
-#     files, or globs of files, they read.
+#   - `dune rules TARGET...`, for each per-test alias's own targets (below),
+#     each generated module file, and the C stub objects (`X.o`) and stub
+#     archives (`libNAME_stubs.a`) of a changed path's directory: the
+#     executables those rules run and the files, or globs of files, they read.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped:
@@ -57,19 +58,27 @@
 #     this build does not compile, and the path is UNMAPPED. A module file
 #     with no source of its name is generated: any changed path its rule
 #     reads (a `.mll`, a `.mly`, a `(select)` choice) reaches its stanza, and
-#     so does the executable the rule runs. A changed `dune` file reaches every
-#     stanza and every per-test alias of its directory, a `dune-project` or
-#     `dune-workspace` those of every directory beneath it. Reach then spreads
-#     to each stanza requiring a reached library, to a fixpoint.
+#     so does the executable the rule runs. A changed path a stub object's rule
+#     reads (a `.c`, a header) reaches the library whose stub archive bundles
+#     that object, or else every executable and `tests` stanza of its
+#     directory, since which one links it dune does not say without computing
+#     link rules. A changed `dune` file reaches every stanza and every per-test
+#     alias of its directory, a `dune-project` or `dune-workspace` those of
+#     every directory beneath it. Reach then spreads to each stanza requiring a
+#     reached library, to a fixpoint.
 #   - An alias is printed when its directory's `dune` file changed, when an
 #     owner is reached, or when a rule of its own targets reads a changed path
 #     (a file, or a glob over source files): the repository scans are found
 #     this way, and so is a golden, whose copy into the build is one of the
 #     own targets of the alias that diffs it. A changed path reaching nothing
 #     else is listed as unread.
-#   - Not seen: an alias's action itself (dune does not dump it), so a golden
-#     not named after its alias is found only through the fallbacks above; and
-#     anything its own targets' rules reach only through another generated file.
+#   - An alias's own action is not in `dune rules` output. A golden alias's
+#     action diffs two of its own targets, whose rules are read; any other
+#     alias's action is opaque (a `tests` stanza with no golden runs its
+#     executable under the stanza's `(deps)`), so such an alias is also
+#     printed whenever a changed path other than an owned module source lies
+#     in its directory. Not seen: what an opaque action reads outside its
+#     directory, and what any rule reaches only through another generated file.
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -332,7 +341,13 @@ for my $d (sort keys %$aliases) {
 }
 
 # The rules of those targets: what they run and what they read.
-my @own_targets = sort { $a cmp $b } keys %{{ map { $_ => 1 } (map { @{$_->{own}} } @al), keys %generated }};
+my @changed = grep { $_ ne "" } map { s{^\./}{}r } split /\n/, slurp("$tmp/changed");
+# C-family stubs: in a changed path's directory, the objects dune compiles
+# (`X.o`) and the libraries' stub archives (`libNAME_stubs.a`) that bundle them.
+my %stub_dirs = map { (dir_of($_))[0] => 1 } @changed;
+my @stub_targets = map { my $d = $_; map { in_dir($d, $_) } grep { /\.o$/ || /^lib.+_stubs\.a$/ } @{$targets->{$d} // []} }
+  sort keys %stub_dirs;
+my @own_targets = sort { $a cmp $b } keys %{{ map { $_ => 1 } (map { @{$_->{own}} } @al), keys %generated, @stub_targets }};
 my (%runs, %reads, %globs);   # target -> {stanza index}, {path}, [[dir, regex]]
 if (@own_targets) {
   my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
@@ -343,14 +358,19 @@ if (@own_targets) {
   for my $i (grep { $st[$_]{kind} ne "library" } 0 .. $#st) {
     push @{$exe{"$st[$i]{dir}\0$_"}}, $i for @{$st[$i]{names}};
   }
-  sub glob_regex {   # dune's glob syntax: * ? [...] {a,b}; anything else is literal
+  sub glob_regex {   # dune's glob syntax: * ? [set] [!set] {a,b}; anything else is literal
     my ($g) = @_;
-    $g =~ s/\[!/[^/g;   # a negated class
     my ($re, $depth) = ("", 0);
-    for my $c (split //, $g) {
+    while (length $g) {
+      if ($g =~ s/^\[(!?)([^\]]+)\]//) {   # a class; [!set] is its complement
+        my ($neg, $set) = ($1, $2);
+        $re .= "[" . ($neg ? "^" : "") . ($set =~ s/([\\\[\]^])/\\$1/gr) . "]";
+        next;
+      }
+      my $c = substr($g, 0, 1, "");
       if ($c eq "*") { $re .= "[^/]*" } elsif ($c eq "?") { $re .= "[^/]" }
       elsif ($c eq "{") { $re .= "(?:"; $depth++ } elsif ($c eq "}" && $depth) { $re .= ")"; $depth-- }
-      elsif ($c eq "," && $depth) { $re .= "|" } elsif ($c eq "[" || $c eq "]") { $re .= $c }
+      elsif ($c eq "," && $depth) { $re .= "|" }
       else { $re .= quotemeta $c }
     }
     return $depth ? qr/./ : qr/^$re$/;   # unbalanced: matches anything
@@ -402,6 +422,17 @@ if (@own_targets) {
   exists $runs{$_} or fail("dune rules printed no rule for $_") for @own_targets;
 }
 
+# A stub object belongs to the library whose stub archive (`libNAME_stubs.a`,
+# NAME its local name) reads it. One no archive reads is linked into an
+# executable, and which one dune does not say without computing link rules.
+my %obj_libs;   # object path -> {library stanza index}
+for my $t (grep { /(?:^|\/)lib.+_stubs\.a$/ } @stub_targets) {
+  my ($d, $b) = dir_of($t);
+  my ($name) = $b =~ /^lib(.+)_stubs\.a$/;
+  my @libs = grep { $st[$_]{kind} eq "library" && $st[$_]{dir} eq $d && $st[$_]{units}{$name} } 0 .. $#st;
+  for my $o (grep { /\.o$/ } keys %{$reads{$t} // {}}) { $obj_libs{$o}{$_} = 1 for @libs }
+}
+
 # A generated module's stanza is reached through what its rule reads (a
 # `.mll`, a `.mly`, a (select) choice) and through the executable it runs.
 for my $g (keys %generated) {
@@ -409,8 +440,7 @@ for my $g (keys %generated) {
 }
 
 # Changed paths -> stanzas, and the aliases whose own targets read them.
-my (%hit, %dune_dirs, %read_by, @unmapped, @unread);
-my @changed = grep { $_ ne "" } map { s{^\./}{}r } split /\n/, slurp("$tmp/changed");
+my (%hit, %dune_dirs, %data_dirs, %read_by, @unmapped, @unread);
 sub label { my $s = $st[$_[0]]; "$s->{kind} @{$s->{names}} ($s->{dir})" }
 sub reads { my ($t, $p, $d, $b) = @_; $reads{$t}{$p} || grep { $_->[0] eq $d && $_->[1]->($b) } @{$globs{$t}} }
 sub under { my ($x, $root) = @_; $root eq "." || $x eq $root || index($x, "$root/") == 0 }
@@ -427,6 +457,13 @@ for my $p (@changed) {
     my @g = grep { !$seen_g{$_}++ } map { @{$generated{$_}} } @gen;
     $hit{$_} = 1 for @g;
     push @parts, "the rule generating " . join(", ", @gen) . " reads it: " . join(", ", map { label($_) } @g);
+  }
+  for my $o (grep { /\.o$/ && (dir_of($_))[0] eq $d && reads($_, $p, $d, $b) } @stub_targets) {
+    my @libs = sort keys %{$obj_libs{$o} // {}};
+    my @o = @libs ? @libs : grep { $st[$_]{kind} ne "library" && $st[$_]{dir} eq $d } 0 .. $#st;
+    $hit{$_} = 1 for @o;
+    push @parts, "compiled into $o, " . (@libs ? "bundled by " . join(", ", map { label($_) } @libs)
+      : "which no stub archive of $d bundles, so every executable and test stanza there (" . scalar(@o) . ")");
   }
   if ($b eq "dune-project" || $b eq "dune-workspace") {
     # The project's language and extensions: every directory beneath it.
@@ -460,6 +497,9 @@ for my $p (@changed) {
   $hit{$_} = 1 for @ix;
   push @parts, "read by the rules of $n_read alias(es)" if $n_read;
   print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
+  # Any path but a module source a stanza owns may be an input of an alias
+  # action dune does not dump (see `opaque` below).
+  $data_dirs{$d} = 1 unless $b =~ /\.mli?$/ && @ix && !$unmapped;
   if ($unmapped) { push @unmapped, $p } elsif (!@parts) { push @unread, $p }
 }
 
@@ -473,21 +513,29 @@ for (my $grew = 1; $grew;) {
   }
 }
 
-# A directory is touched when a reached stanza lives there or a changed path
-# does. An alias dune gives no owner and no targets of its own is printed
-# whenever its directory is touched: what it reads is unknown, so it is kept.
+# What an alias's own action reads, dune does not dump. A golden alias's
+# action is a diff of two of its own targets (`NAME.expected` and the output
+# beside it), whose rules are read above; any other alias's action is opaque
+# -- a `(test)` stanza with no golden runs its executable under the stanza's
+# `(deps)`, a hand-written rule runs whatever it names -- and is printed
+# whenever a changed path other than an owned module source lies in its
+# directory. One with no owner and no targets of its own is unattributed and
+# printed whenever its directory is touched at all, a reached stanza
+# included, since not even its executable is known.
 my %touched = map { $st[$_]{dir} => 1 } keys %reached;
 $touched{(dir_of($_))[0]} = 1 for @changed;
-my (%out, %unattributed, %total, %listed, %aliased);
+my (%out, %unattributed, %opaque_hit, %total, %listed, %aliased);
 my %read_any = map { %{$read_by{$_}} } keys %read_by;
 for my $a (@al) {
   my %owners = (%{$a->{owners}}, map { %{$runs{$_} // {}} } @{$a->{own}});
   $aliased{$_} = 1 for keys %owners;
   $total{$a->{dir}}++;
   my $unknown = !%owners && !@{$a->{own}};
+  my $opaque = !grep { /\.expected$/ } @{$a->{own}};
   $unattributed{$a->{name}} = 1 if $unknown && $touched{$a->{dir}};
+  $opaque_hit{$a->{dir}}++ if $opaque && $data_dirs{$a->{dir}};
   if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}} || grep({ $reached{$_} } keys %owners)
-      || $unattributed{$a->{name}}) {
+      || $unattributed{$a->{name}} || ($opaque && $data_dirs{$a->{dir}})) {
     $out{$a->{name}} = 1;
     $listed{$a->{dir}}++;
   }
@@ -503,7 +551,8 @@ if (@unmapped) {
   print STDERR "affected: optional library $_ is not in this build; edges to it skipped\n" for sort keys %skipped_optional;
 }
 print STDERR "affected: listed as unattributed: $_ (no stanza of its directory has that name, no targets of its own; its directory is touched)\n" for sort keys %unattributed;
-print STDERR "affected: unread: $_ (no stanza owns it, no per-test alias's rules read it)\n" for @unread;
+printf STDERR "affected: %s: %d per-test alias(es) whose actions dune does not dump, listed for the changed paths there\n", $_, $opaque_hit{$_} for sort keys %opaque_hit;
+print STDERR "affected: unread: $_ (no stanza owns it, no per-test alias's rules read it)\n" for grep { !$opaque_hit{(dir_of($_))[0]} } @unread;
 print STDERR "affected: UNMAPPED: $_ (no stanza of this build owns this module)\n" for @unmapped;
 printf STDERR "affected: %d alias(es) from %d changed path(s)%s\n", scalar(keys %out), scalar(@changed),
   @unmapped ? "; INCOMPLETE, see UNMAPPED above" : "";

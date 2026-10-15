@@ -24,7 +24,7 @@ unset DUNE_BUILD_DIR DUNE_ROOT
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=$TMP/runs
 
 repo=$TMP/proj
-mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/docs" || exit 2
+mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/docs" || exit 2
 cp "$HERE/affected-tests.sh" "$HERE/test-run.sh" "$repo/tools/" || exit 2
 # Whatever test-run.sh sources, derived from it rather than listed here.
 staged=0
@@ -40,6 +40,7 @@ cat >"$repo/lib/dune" <<'DUNE'
 (library (name leaf) (modules leaf))
 (library (name myppx) (kind ppx_rewriter) (modules myppx))
 (library (name optlib) (modules optlib) (optional) (libraries not_installed_anywhere))
+(library (name stubbed) (modules stubbed) (foreign_stubs (language c) (names stubbed_c)))
 DUNE
 cat >"$repo/mid/dune" <<'DUNE'
 (library
@@ -70,12 +71,25 @@ cat >"$repo/t2/dune" <<'DUNE'
 (rule (alias runtest-orphan) (action (progn)))
 (rule (alias scans) (deps (alias runtest-scan)) (action (progn)))
 DUNE
-for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
+cat >"$repo/t3/dune" <<'DUNE'
+(test (name t_plain) (modules t_plain) (deps plain.cfg))
+(test (name t_stub) (modules t_stub) (libraries stubbed))
+(executable (name cexe) (modules cexe) (foreign_stubs (language c) (names cexe_c)))
+(executable (name lister) (modules lister))
+(rule
+ (target neg.actual)
+ (deps (glob_files %{project_root}/mid/[!c]*.ml))
+ (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
+(rule (alias runtest-neg) (action (diff neg.expected neg.actual)))
+DUNE
+for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/stubbed.ml \
+  t3/t_plain.ml t3/t_stub.ml t3/cexe.ml t3/lister.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
   t1/t_core.ml t1/t_leaf.ml t1/ta.ml t1/tb.ml t1/shared.ml t1/m_one.ml t1/m_two.ml \
   t2/gen.ml t2/scan.ml; do
   printf 'let () = ()\n' >"$repo/$f"
 done
-for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected docs/notes.md; do : >"$repo/$f"; done
+for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
+  lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
@@ -143,15 +157,38 @@ if harness_leg 'golden'; then
   # The diff reading a golden is the alias's own action, which dune does not
   # dump; the golden's copy into the build is one of the alias's own targets.
   affected --files t2/gen-v1.expected
-  expect 'a golden lists the alias diffing it (and its directory'"'"'s unattributed one)' 0 \
-    @t2/runtest-gen-v1 @t2/runtest-orphan
+  expect 'a golden lists the alias diffing it (and its directory'"'"'s aliases with undumped actions)' 0 \
+    @t2/runtest-gen-v1 @t2/runtest-orphan @t2/slow-gen
 fi
 
 if harness_leg 'dune-project'; then
   affected --files dune-project
   expect 'dune-project reaches every per-test alias beneath it' 0 \
     @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
-    @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+    @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
+    @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
+fi
+
+if harness_leg 'opaque action'; then
+  # t_plain has no golden: dune runs it as the alias's own action under the
+  # stanza's (deps), which `dune rules` does not show.
+  affected --files t3/plain.cfg
+  expect 'a non-module path lists the aliases of its directory whose actions dune does not dump' 0 \
+    @t3/runtest-t_plain @t3/runtest-t_stub
+fi
+
+if harness_leg 'foreign stubs'; then
+  affected --files lib/stubbed_c.c
+  expect 'a C stub reaches the library whose stub archive bundles its object' 0 @t3/runtest-t_stub
+  affected --files t3/cexe_c.c
+  expect 'a C stub no archive bundles reaches every executable and test stanza of its directory' 0 \
+    @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
+fi
+
+if harness_leg 'negated glob'; then
+  affected --files mid/mid.ml
+  expect 'a [!set] glob matches outside its set (the select-choice leg pins the inside)' 0 \
+    @t1/runtest-t_core @t3/runtest-neg
 fi
 
 if harness_leg 'undescribed stanza'; then
@@ -304,6 +341,12 @@ if harness_leg 'negative controls'; then
   control 'a generated module file is what carries an .mll to its stanza' \
     'push @{$generated{$rel}}, $i unless -e $rel;' '' \
     --files lib/lx.mll -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scenario_x @t2/slow-gen
+  control 'an opaque action is what lists the aliases beside a changed config' \
+    ' || ($opaque && $data_dirs{$a->{dir}})' '' \
+    --files t3/plain.cfg -- @t3/runtest-t_plain @t3/runtest-t_stub
+  control 'a stub archive is what carries a C stub to its library' \
+    '$obj_libs{$o}{$_} = 1 for @libs' '1' \
+    --files lib/stubbed_c.c -- @t3/runtest-t_stub
 fi
 
 finish

@@ -2203,7 +2203,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   omits), `dune show aliases`/`targets`, and `dune rules` for each alias's own targets and each
   generated module file, whose dependencies are how a scan that READS a changed file (an `.ml`, an
   agent note, a script) is found without linking it, and how a generated module (`.mll`, `.mly`, a
-  `(select)` choice) is traced to its source. Its header states the boundary as an allowlist;
+  `(select)` choice) or a C stub is traced to its stanza. An alias whose own action dune does not
+  dump (a `(test)` with no golden runs under its `(deps)`) is listed for any changed non-module path
+  in its directory. Its header states the boundary as an allowlist;
   what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of this build owns
   (a deleted module, a CUDA-only one on a box without cudajit) exits 3.
   `tools/test-affected-tests.sh` pins it on a fixture project, with negative controls for the glob,
