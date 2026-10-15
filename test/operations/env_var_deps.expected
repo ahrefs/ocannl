@@ -289,6 +289,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-config_usage_scan
   test/operations/dune                     @runtest-config_usage_scan_control
   test/operations/dune                     @runtest-config_usage_scan_refusal_control
+  test/operations/dune                     @runtest-config_usage_scan_script_hint
   test/operations/dune                     @runtest-config_var_fatal_spelling
   test/operations/dune                     @runtest-config_var_spellings
   test/operations/dune                     @runtest-config_var_warnings
