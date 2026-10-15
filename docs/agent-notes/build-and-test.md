@@ -2224,22 +2224,23 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `tools/test-run.sh affected REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`) prints them,
   one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh run build`
   or `fresh`; stderr says what each changed path reached and gives per-directory counts. Run it
-  before the pre-push batch with the merge-base as REV, `$(git merge-base HEAD origin/master)`:
-  the base branch itself would also count every commit it gained since (gh-ocannl-1235, where
-  `affected origin/master` eight commits behind listed 446 aliases for a 69-alias change). It
-  reads dune's own description, never a hand-kept map: `dune describe workspace` (modules and
-  library edges), `dune describe external-lib-deps` (the ppx-rewriter edges and the `tests`
-  stanzas the first omits), `dune show aliases`/`targets`, and `dune rules` for each alias's
-  own targets and each generated module file. Those dependencies are how a scan that READS a
-  changed file (an `.ml`, an agent note, a script) is found without linking it, and how a
-  generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a C stub is
-  traced to its stanza. dune does not dump an alias rule itself, so an alias whose action is not a
-  golden diff of its own targets (a `(test)` with no golden, run under its `(deps)`;
-  `runtest-sweep_harness`, which names `tools/sweep.sh`) is listed for any changed path in its
-  directory but an owned module source, and for a changed non-build input anywhere: a doc, script
-  or golden edit lists those ~49 too. Its header states the boundary as an allowlist; what falls
-  outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of this build owns (a
-  deleted module, a CUDA-only one on a box without cudajit) exits 3.
+  before the pre-push batch with the merge-base as REV, `$(git merge-base HEAD <base>)`, where
+  `<base>` is the remote-tracking `master` of `lukstafi/ocannl-staging` (`git remote -v` names
+  it: remote names are not the contract). The base branch itself would also count every commit
+  it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases for a
+  69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
+  workspace` (modules and library edges), `dune describe external-lib-deps` (the ppx-rewriter
+  edges and the `tests` stanzas the first omits), `dune show aliases`/`targets`, and `dune
+  rules` for each alias's own targets and each generated module file. Those dependencies are how
+  a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
+  it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
+  C stub is traced to its stanza. dune does not dump an alias rule itself, so an alias whose
+  action is not a golden diff of its own targets (a `(test)` with no golden, run under its
+  `(deps)`; `runtest-sweep_harness`, which names `tools/sweep.sh`) is listed for any changed path
+  in its directory but an owned module source, and for a changed non-build input anywhere: a
+  doc, script or golden edit lists those ~49 too. Its header states the boundary as an
+  allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
+  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3.
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380
