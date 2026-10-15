@@ -7,6 +7,152 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [Unreleased]
 
+## [1.1.1] -- 2026-10-15
+
+> Consolidation after the transformer work, released as a bounded set against a release gate:
+> CI green on master, including Windows and a PR-time OCaml 5.3 leg; three soundness fixes in
+> cross-nest dependence, flattened-index scheduling and tensorized test claims; and a re-run of
+> the full-step training comparison. Backward-contraction sketches make the tuned CUDA
+> `gpt2_mini_train` batch-8 step 1.51× faster, but torch eager remains 2.88× faster tuned and about
+> 9× faster untuned. Most of the remaining work is search follow-through, typed resource refusals
+> and diagnostics.
+
+### Added
+
+- Backprop's weight and data gradients are recognized as matrix-multiplication sites, so tuned
+  searches seed tiled, register-tiled and tensorized sketches for training's backward
+  contractions; untuned defaults are unchanged (gh-ocannl-1183).
+- `Schedule.Coalesce` merges two nested loops into one; a coalesced tuner branch lets attention
+  projections use a column tile wider than one head (gh-ocannl-1165).
+- `batch_norm1d` and `batch_norm2d` keep channel-wise running statistics under `?momentum`:
+  training normalizes with batch moments and updates them, inference reads them (gh-ocannl-879).
+- `gpu_lane_all_reduce_simdgroups=auto|<n>` lets fused attention backward's cooperative lane
+  reduction span several simdgroups, so heads of width 64 and 128 take lanes; `auto` selects four
+  on Metal and CUDA (gh-ocannl-1168, gh-ocannl-1256).
+- `gpu_serial_lanes=auto|cut|admitted|off` decides whether lane geometry is worth a kernel
+  boundary; `auto` keeps `cut` on Metal and CUDA and selects `admitted` on HIP (gh-ocannl-1167).
+- `gpu_elide_covered_zeros` (default `true`) skips a GPU zeroing kernel when the next access is an
+  accumulation covering every cell; results are unchanged (gh-ocannl-1257).
+- `autotune_round_expansion` chooses how a search round expands the beam; the default `differing`
+  expands non-head entries only where they differ from the head (gh-ocannl-1229).
+- `autotune_composite_playoff_width` and `autotune_composite_playoff_margin` configure the
+  composite playoff; width `0` turns it off (gh-ocannl-1259, `lukstafi/ocannl-staging` PR #1143).
+- `Autotune.tune` and `Train.tune_placements` take per-call `?log` and `?progress` overrides of
+  `autotune_log` and `autotune_progress` (`lukstafi/ocannl-staging` PR #1053, PR #1072).
+- Autotune reports one `Autotune.timing_call` record per timing call, per call or through
+  `with_timing_call_observer`; reports tally settle and admission decisions and count retried
+  timing windows (gh-ocannl-1263, gh-ocannl-1199, gh-ocannl-1191).
+- An einsum parse error from the `...name..` misspelling of a row variable suggests `..name..`, at
+  PPX time and at run time; `tools/einsum_check.exe` checks specs from the command line
+  (`lukstafi/ocannl-staging` PR #1068).
+- Benchmark rows record per-cell settings, ambient `OCANNL_*` knobs, tuned search extent and
+  PyTorch's effective precision, and late-killed cells keep completed losses as unaccepted
+  checkpoints (gh-ocannl-1273, gh-ocannl-1297, gh-ocannl-1137, gh-ocannl-1208, gh-ocannl-1209).
+
+### Changed
+
+- Tuned sketch candidates fold a reduction's zero initialization into the reduction's kernel,
+  cutting tuned `gpt2_mini` forward latency by 4–8% on CUDA and HIP; untuned pipelines keep the
+  separate zero kernel (gh-ocannl-1175).
+- Fission splits large gradient-zeroing segments into per-shape kernels that keep each node's lane
+  plan, making zeroing 4–5× faster on CUDA (gh-ocannl-1169).
+- On CUDA, `online_softmax_block=auto` selects the two-pass online rewrite, so the `approximate`
+  profile keeps its tf32 gain instead of slowing tuned `gpt2_mini` down (gh-ocannl-1194).
+- Step-level tuning re-times near-tie per-segment candidates inside the composite they ship in, and
+  fissioned winners store their segmentation and replay it as saved (gh-ocannl-1166,
+  gh-ocannl-1164).
+- Warm placement-flip chains replay abandoned flips across placement-level and default-valued
+  settings, and skip structural twins of a flip that already lost without spending a
+  `tune_inline_flips` slot (gh-ocannl-1192, gh-ocannl-1241, gh-ocannl-1272, gh-ocannl-1274).
+- Schedule-cache identity includes the tensor-unit arm a numerics mode selects, such as CUDA's
+  tf32 gate; CUDA, HIP and Metal caches re-key once (gh-ocannl-1153).
+- Placement and cost analyses read dynamic gathers and scatters per coordinate and price provably
+  total range guards exactly, instead of refusing or approximating them (gh-ocannl-1174,
+  gh-ocannl-1094).
+- `Schedule.op_legality` refuses moves that break a pipelined tile's staging scope, so autotune
+  prunes candidates the renderer would decline, and both report the same reason (gh-ocannl-1231).
+- Each autotune candidate label names exactly one candidate, and a rebuilt winner keeps the label
+  it was timed under (gh-ocannl-1230, `lukstafi/ocannl-staging` PR #1139).
+- `Context.set_values`, multi-value host initialization and broadcast scalar fills write in place
+  with constant allocation; one-element literals honor `limit_constant_fill_size` (gh-ocannl-1258,
+  gh-ocannl-1218, gh-ocannl-641).
+- Autotune's test and fault-injection seams are per-domain `Autotune.Seam.t` values rather than
+  process-wide refs (`lukstafi/ocannl-staging` PR #1142, PR #1152).
+- Public surface retired or reshaped: `Autotune`'s `on_batch_depth`, `on_timed_window`,
+  `on_timing_retry`, `on_calibration_probe` and `on_batch_decision` give way to `timing_call`
+  (gh-ocannl-1263); `Sketch_families.idcs_mention` to `Indexing.axis_index_mentions_symbol`
+  (gh-ocannl-1187); `Utils.parse_config_token` returns a structured result (gh-ocannl-916).
+- `Numerics` and `Ir.Cuda_mma` have documented interfaces, with their exports unchanged
+  (gh-ocannl-915, `lukstafi/ocannl-staging` PR #1057).
+- Selected documentation examples compile against the library and its PPX, and the einops and
+  slide layer-norm examples match `Nn_blocks.layer_norm` (gh-ocannl-660, gh-ocannl-1219).
+
+### Fixed
+
+- Aligned cross-nest parallelism ranges each side of a dependence by its own loop bounds, so nests
+  that rebind one symbol with different bounds can no longer race (gh-ocannl-1282).
+- Schedule transforms read a flattened `Sub_axis` index explicitly instead of as coordinate 0
+  (gh-ocannl-1293).
+- The parallel validator sees barriers the renderer inserts, refusing a multi-warp shuffle
+  reduction under lane-divergent control instead of emitting a barrier some lanes skip
+  (gh-ocannl-1238).
+- Vector-store disjointness proofs range a symbol bound on both sides over the hull of its bounds,
+  closing an unsound proof (`lukstafi/ocannl-staging` PR #1051).
+- Known and run-time integer powers keep a negative base's sign under fast math on every backend,
+  fixing NaNs in GELU backward on CUDA (gh-ocannl-1185, gh-ocannl-1240).
+- Fractional and run-time half-precision powers compile on CUDA and HIP and round once from f32, as
+  Metal now does too (gh-ocannl-1198).
+- HIP f16 attention on gfx1102 produces correct losses and finite gradients, with `__constant__`
+  reads intact (gh-ocannl-1182, gh-ocannl-1222).
+- HIP refuses kernels whose thread-private arrays exceed the frame limit before codegen, so the
+  default-placements arm of `tune_placements` compiles and is searched (gh-ocannl-1313).
+- Metal threadgroup-memory overruns are typed hardware-limit declines in autotune and a
+  `User_error` from `Context.compile`, rather than fatal pipeline failures (gh-ocannl-1205,
+  gh-ocannl-1226).
+- Metal wide half/bfloat matrix destinations read coordinates from the float accumulator's layout
+  (gh-ocannl-1075).
+- Device copies share arenas with host uploads, keeping routines within Metal's binding budget;
+  failed copies release their allocation (gh-ocannl-1172).
+- Upload arenas size to the arenas a value holds, sibling contexts release independently, and
+  releasing an upload chain retires its merge-buffer readers (gh-ocannl-1173, gh-ocannl-1203,
+  gh-ocannl-1204).
+- Schedule-cache entries are named by a fixed-length key digest, so stores work on Windows without
+  long paths; stale or corrupt entries are a typed refusal and a re-search (gh-ocannl-1228,
+  gh-ocannl-1242).
+- Per-segment sketch candidates find their segments by position, scheduling exactly the segments
+  their seeds were enumerated on (gh-ocannl-1243).
+- Queued calibration on CUDA and HIP times very short and very slow kernels over valid windows, so
+  slow gfx1102 candidates no longer veto the cache (gh-ocannl-1144, gh-ocannl-1184).
+- Autotune no longer offers inline flips the virtualizer would reject (gh-ocannl-1152).
+- `Train.init_params ~reinit_all:true` restores host-backed parameter defaults before dependent
+  initializers run, and fresh contexts keep independent parameter buffers (gh-ocannl-641).
+- `resnet_block` compiles without downstream shape constraints, with an optional `out_channels`
+  (gh-ocannl-1146).
+- The cc backend removes temporary sources and libraries after every compile unless debug output
+  asks to keep them, including leftovers of exited processes on Windows (gh-ocannl-1189,
+  gh-ocannl-1197, gh-ocannl-1247, gh-ocannl-1268).
+- Routine names that collide with GPU header identifiers or C's reserved namespace compile under a
+  mangled symbol; a remaining collision is a `User_error` naming the routine (gh-ocannl-707).
+- Half- and bf16-storage Max/Min reductions stay vectorized under clang 18 at x86-64-v3/v4
+  (gh-ocannl-1157).
+
+### Measured performance and limitations
+
+The release gate's [full-step training comparison](https://github.com/ahrefs/ocannl/issues/1183)
+measured tuned `gpt2_mini_train` at batch 8 on CUDA: the backward-contraction sketches take the
+step from 23.48 to **15.51 ms** (1.51×), narrowing torch CUDA eager's lead from 4.35× to **2.88×**.
+Untuned, torch is about 9× faster on CUDA at batch 8 and 256, and 5.1–6.4× faster on HIP at batch
+256. A tuned batch-256 step cannot be searched on a 12 GiB card, because the search keeps the
+incumbent's buffers resident beside each challenger. The untuned contraction default, the
+remaining gradient reductions and the search's memory wall are follow-up work (gh-ocannl-1324,
+gh-ocannl-1325, gh-ocannl-1326).
+
+With CUDA's attention-block fallback, tuned f32 `gpt2_mini` inference under `approximate` replays
+at **2.48 ms against 3.50 ms exact** on an RTX 5070 Ti, reversing 1.1's 28% slowdown, with a
+roughly 3× higher allocator high-water mark. Multi-simdgroup lane reductions cut default
+fused-attention training step times at head widths 64 and 128 by **16–63% on CUDA** and up to 31%
+on Metal; `admitted` serial lanes cut HIP training step times by up to 10% at longer sequences.
+
 ## [1.1] -- 2026-10-04
 
 > Fused attention and better transformer scheduling. This release delivers attention rewrites,
