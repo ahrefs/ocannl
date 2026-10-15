@@ -3405,6 +3405,9 @@ let () = p "rows: %d\n" n|ocaml},
     ( "refuses a literal label under a type constraint",
       {ocaml|let () = Verdict.p ("first\nsecond" : string) ok|ocaml},
       [ "first\nsecond" ] );
+    ( "reads a claim whose callee is under a type constraint",
+      {ocaml|let () = (Verdict.p : string -> bool -> unit) "first\nsecond" ok|ocaml},
+      [ "first\nsecond" ] );
     ( "resolves a label through a chain of let renamings",
       {ocaml|let raw = "first\nsecond"
 let () =

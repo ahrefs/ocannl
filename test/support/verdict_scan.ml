@@ -496,6 +496,9 @@ let claim_calls ~callees content =
                 | Ppxlib.Asttypes.Nolabel, argument -> Some argument
                 | _ -> None)
             in
+            (* A constrained callee, [(Verdict.p : string -> bool -> unit) label ok], is the path it
+               wraps. *)
+            let callee = peel callee in
             match (callee.pexp_desc, Read.longident_of callee, label) with
             | Pexp_ident { txt = ident; _ }, Some path, Some label ->
                 let name = List.last_exn path in
@@ -571,6 +574,10 @@ let dialect_census content =
     ([if c then "a\nb" else "c"], [String.concat]): that is the sanitizer's case, and [Verdict]
     prints it on one row whatever it holds. This reader is the lint for the label a person writes
     out; the sanitizer is what makes the run correct.
+
+    The CALL is read the same way: a claim applied by its path, under any constraints or coercions.
+    A claim applied any other way -- through [@@] or [|>], or passed as a value -- is not read; its
+    label, too, is the sanitizer's.
 
     What it cannot see: a label computed from an expression (the sanitizer's case, by design), a
     claim reached through a wrapper the source binds ([let skipped = Verdict.skipped ~backend]), and
