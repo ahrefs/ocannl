@@ -356,17 +356,14 @@ let with_stderr_captured f =
    to name exactly the crowned label. *)
 let () =
   let report = ref None in
-  let old_measured = !Autotune.on_candidate_measured in
+  let measured ~label ~digest:_ _ms =
+    if String.is_prefix label ~prefix:"F_preset[" then 1.
+    else if is_saved label && String.is_substring label ~substring:" from " then 0.5
+    else 1000.
+  in
   let (), lines =
     with_stderr_captured (fun () ->
-        Exn.protect
-          ~finally:(fun () -> Autotune.on_candidate_measured := old_measured)
-          ~f:(fun () ->
-            (Autotune.on_candidate_measured :=
-               fun ~label ~digest:_ _ms ->
-                 if String.is_prefix label ~prefix:"F_preset[" then 1.
-                 else if is_saved label && String.is_substring label ~substring:" from " then 0.5
-                 else 1000.);
+        Autotune.Seam.with_value Autotune.on_candidate_measured measured (fun () ->
             let ctx = Context.cpu () in
             let ctx, _routine =
               Autotune.with_uncontended_test_windows (fun () ->
