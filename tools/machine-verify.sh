@@ -54,6 +54,14 @@
 #   --trip-cap SECONDS       Whole-trip cap, including setup and cleanup;
 #                            0 disables it (default: 21600). --ssh-cap is the
 #                            same option under its former name.
+#   --test-cap SECONDS       Per-test cap: each process a dune of an operation
+#                            starts (each test) is bounded, and the first one
+#                            past it ENDS the trip with 142 (see below); 0
+#                            lifts it. Default: none on a CPU backend; on a
+#                            GPU one 1500s (tools/per-test-cap.sh) for each
+#                            --test and --record-golden alias not reaching
+#                            @slow, and none for a --run probe.
+#   --probe-cap SECONDS      Bound on the device probe's query (default: 60).
 #   -j, --jobs N             Dune concurrency, a positive integer (default:
 #                            the width tools/box-jobs.sh gives BOX for the
 #                            backend, else 4 -- see below).
@@ -92,6 +100,18 @@
 #     --expect-lib metal --test @test/operations/runtest-hello_world_op
 #   tools/machine-verify.sh minix-amd-linux codex/my-branch \
 #     --backend cc --test @test/operations/runtest-hello_world_op
+#
+# A wedged GPU does not fail the tests after it, it hangs them (gh-ocannl-1211),
+# so a trip on a GPU backend has the two bounds tools/test-run.sh gives a GPU
+# batch (gh-ocannl-1252), from the same sources, passed to the far side like the
+# width table: the per-test cap (tools/per-test-cap.sh's watcher, beside each
+# operation's dune, names the hung test and ends the trip with 142), and the
+# device probe (tools/device-probe.sh): before its first operation -- or its
+# --expect-lib device readback -- the trip asks the pinned backend for one fresh
+# device query through bin/device_props, and one that does not answer within
+# --probe-cap ends the trip as DEVICE UNHEALTHY, exit 69, with nothing run. Not
+# on macOS, where a freshly linked device_props can sit in dlopen for minutes
+# under XProtect, which would read as a hung device.
 #
 # The output is deliberately unpiped. A failed dune diff must be dune's status,
 # not tail's or tee's. The verification procedure prints an exit sentinel only
@@ -146,6 +166,10 @@ credential_env=$here/credential-env.sh
 [ -r "$credential_env" ] || die "cannot read the credential deny-list $credential_env"
 credential_scrub=$(. "$credential_env" && credential_env_scrub_text) && [ -n "$credential_scrub" ] ||
   die "cannot read the credential scrub from $credential_env"
+# And the two bounds (gh-ocannl-1252): the per-test cap's default and watcher, and the device probe,
+# shared with tools/test-run.sh and tools/sweep.sh. Both are POSIX sh; the far side evaluates them.
+per_test_cap_source=$(cat "$here/per-test-cap.sh") || die "cannot read the per-test cap $here/per-test-cap.sh"
+device_probe_source=$(cat "$here/device-probe.sh") || die "cannot read the device probe $here/device-probe.sh"
 
 [ $# -ge 2 ] || usage
 box=$1
@@ -159,6 +183,8 @@ staging_remote=
 worktree_root=
 cap=5400
 trip_cap=21600
+test_cap=
+probe_cap=60
 jobs=
 placement=auto
 operations=()
@@ -211,6 +237,18 @@ while [ $# -gt 0 ]; do
     --trip-cap | --ssh-cap)
       [ $# -ge 2 ] || die "$1 needs a value"
       trip_cap=$2
+      shift 2
+      ;;
+    --test-cap)
+      [ $# -ge 2 ] || die "--test-cap needs a value"
+      case $2 in '' | *[!0-9]*) die "test cap must be a non-negative integer" ;; esac
+      test_cap=$2
+      shift 2
+      ;;
+    --probe-cap)
+      [ $# -ge 2 ] || die "--probe-cap needs a value"
+      case $2 in '' | *[!0-9]* | 0) die "probe cap must be a positive integer" ;; esac
+      probe_cap=$2
       shift 2
       ;;
     -j | --jobs)
@@ -444,7 +482,8 @@ echo "machine-verify: transport: $transport_story"
 remote_command="/bin/sh -c 'exec 3<&0; exec </dev/null; exec /bin/sh /dev/fd/3 \"\$@\"' machine-verify"
 for arg in "$box" "$branch" "$backend" "$expect_lib" "$remote_repo" "$staging_remote" \
   "$worktree_root" "$cap" "$trip_cap" "$jobs" "$transport_story" "$capped_perl" \
-  "$box_jobs_source" "$batch_backends_source" "$credential_scrub"; do
+  "$box_jobs_source" "$batch_backends_source" "$credential_scrub" "$per_test_cap_source" \
+  "$device_probe_source" "$test_cap" "$probe_cap"; do
   remote_command="$remote_command $(sq "$arg")"
 done
 if [ "$operation_count" -gt 0 ]; then

@@ -12,7 +12,7 @@
 # caller passes in, never timeout(1), which macOS does not ship.
 set -u
 
-[ $# -ge 15 ] || {
+[ $# -ge 19 ] || {
   echo "machine-verify-far.sh: run tools/machine-verify.sh, which supplies this procedure's arguments" >&2
   exit 2
 }
@@ -31,7 +31,26 @@ capped_perl=${12}
 box_jobs_source=${13}
 batch_backends_source=${14}
 credential_scrub=${15}
-shift 15
+per_test_cap_source=${16}
+device_probe_source=${17}
+test_cap_arg=${18}
+probe_cap=${19}
+shift 19
+# The two bounds of a GPU trip (gh-ocannl-1252), the caller's tools/per-test-cap.sh and
+# tools/device-probe.sh, like the width table: TEST_CAP_DEFAULT, test_cap_reaches_slow and the
+# watcher test_cap_watch; probe_perl and device_probe_sh.
+eval "$per_test_cap_source" && [ -n "${test_cap_watch:-}" ] && [ -n "${TEST_CAP_DEFAULT:-}" ] || {
+  echo "machine-verify: cannot evaluate the per-test cap from tools/per-test-cap.sh" >&2
+  exit 2
+}
+eval "$device_probe_source" && [ -n "${device_probe_sh:-}" ] && [ -n "${probe_perl:-}" ] || {
+  echo "machine-verify: cannot evaluate the device probe from tools/device-probe.sh" >&2
+  exit 2
+}
+# Whether the pinned backend holds a GPU: the bounds' defaults follow it (with_test_cap,
+# probe_device), as tools/test-run.sh's follow a batch's resolved backends.
+gpu_backend='' leg_kind=cpu
+case $backend in cuda | hip | metal) gpu_backend=1 leg_kind=gpu ;; esac
 
 # Non-login SSH shells on rog need both locations; harmless when the
 # directories do not exist (tools/sweep.sh uses the same prefix), as on macOS.
@@ -105,6 +124,22 @@ trap 'exit 143' TERM HUP
 # This is the exact supervisor source the local side passed in; keeping one
 # copy prevents the outer whole-trip and inner command caps from drifting apart.
 capped() { perl -e "$capped_perl" -- "$cap" "$@"; }
+
+# The per-test cap of the operation running now (with_test_cap), 0 for none, and the shell that
+# runs the watcher beside its command: the `sh -c` is the watcher's resolver, its parent the capped
+# supervisor the watcher signals, and the first process of the operation's dune past the cap gets
+# that supervisor's 142 (tools/per-test-cap.sh says how tests are found and why the whole trip
+# ends). The watcher closes nothing it does not need: this procedure holds no lock.
+leg_cap=0
+leg_watch='w=$1 c=$2 rd=$3 k=$4
+shift 4
+perl -e "$w" "$c" "$$" "$PPID" "$rd" "$k" machine-verify "Rerun with --test-cap 0, or a larger --test-cap" </dev/null &
+watch=$!
+"$@"
+rc=$?
+kill "$watch" 2>/dev/null
+wait "$watch" 2>/dev/null
+exit "$rc"'
 
 # Configuration from the SSH service, the caller's session or the selected switch must not outrank
 # the pushed tree's ocannl_config. Print names for provenance, never values;
@@ -218,7 +253,32 @@ opam_exec() {
     set -- -u "$name" "$@"
   done
   IFS=$old_ifs
-  capped opam exec --switch="$opam_switch" -- sh -c "$switch_scrub" machine-verify-switch "$@"
+  if [ "$leg_cap" -gt 0 ]; then
+    rm -rf "$wt/_build/.machine-verify-test-cap" && mkdir -p "$wt/_build/.machine-verify-test-cap" ||
+      fail "cannot prepare the per-test cap's records"
+    capped sh -c "$leg_watch" machine-verify-leg "$test_cap_watch" "$leg_cap" \
+      "$wt/_build/.machine-verify-test-cap" "$leg_kind" \
+      opam exec --switch="$opam_switch" -- sh -c "$switch_scrub" machine-verify-switch "$@"
+  else
+    capped opam exec --switch="$opam_switch" -- sh -c "$switch_scrub" machine-verify-switch "$@"
+  fi
+}
+
+# Run one operation's command under its per-test cap: an explicit --test-cap, else the default for
+# a --test or --record-golden alias of a GPU backend that does not reach @slow, else none.
+with_test_cap() { # kind value command...
+  if [ -n "$test_cap_arg" ]; then
+    leg_cap=$test_cap_arg
+  elif [ -n "$gpu_backend" ] && [ "$1" != run ] && ! test_cap_reaches_slow "$2" >/dev/null; then
+    leg_cap=$TEST_CAP_DEFAULT
+  else
+    leg_cap=0
+  fi
+  shift 2
+  "$@"
+  leg_rc=$?
+  leg_cap=0
+  return "$leg_rc"
 }
 
 sanitized_switch_environment=$(opam_exec env) ||
@@ -247,6 +307,30 @@ echo "requested backend: ${backend:-none (@check compiles only)}"
 echo "expected optional library: ${expect_lib:-none}"
 echo "per-command cap: ${cap}s"
 echo "whole-trip cap: ${trip_cap}s"
+# The per-test cap and the device probe (gh-ocannl-1252): a GPU backend's bounds, as
+# tools/test-run.sh gives a GPU batch -- an explicit --test-cap bounds every operation's dune.
+if [ -n "$test_cap_arg" ] && [ "$test_cap_arg" -gt 0 ]; then
+  echo "per-test cap:  ${test_cap_arg}s for each process an operation's dune starts (--test-cap); one past it ends the trip"
+elif [ -n "$test_cap_arg" ]; then
+  echo "per-test cap:  none (--test-cap 0)"
+elif [ -n "$gpu_backend" ]; then
+  echo "per-test cap:  ${TEST_CAP_DEFAULT}s for each process dune starts in a --test or --record-golden alias not reaching @slow (the default for a GPU backend); none for --run; one past it ends the trip"
+else
+  echo "per-test cap:  none (no default for a CPU backend; --test-cap N sets one)"
+fi
+probe_story=
+if [ -z "$gpu_backend" ]; then
+  probe_story="none (no GPU backend)"
+elif [ $# -eq 0 ] && [ -z "$expect_lib" ]; then
+  probe_story="none (no operation, and no --expect-lib readback, touches the device)"
+elif [ "$(uname -s)" = Darwin ]; then
+  probe_story="none on macOS (a freshly linked bin/device_props can sit in dlopen for minutes under XProtect, which would read as a hung device)"
+fi
+if [ -n "$probe_story" ]; then
+  echo "device probe:  $probe_story"
+else
+  echo "device probe:  $backend, through bin/device_props before the first device use, bounded at ${probe_cap}s"
+fi
 echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
 echo "credential variables: removed inside every opam exec (tools/credential-env.sh)"
 
@@ -583,11 +667,32 @@ report_tile_mma() {
   fi
 }
 
+# The device probe (gh-ocannl-1252; tools/device-probe.sh asks): one fresh query of the pinned GPU
+# backend through bin/device_props, from test/config, before the first thing that touches the
+# device. A wedged device never answers one, and every test after it would spin rather than fail
+# (gh-ocannl-1211): a query that does not answer within --probe-cap ends the trip as DEVICE
+# UNHEALTHY, exit 69, nothing run. One that fails fast is recorded and passed over, as is a
+# device_props that does not build (the operations then fail to build the same way).
+probe_device() {
+  [ -z "$probe_story" ] || return 0
+  probe_dir=$wt/_build/.machine-verify-device-probe
+  rm -rf "$probe_dir" && mkdir -p "$probe_dir" || fail "cannot prepare the device probe's records"
+  if ! dune_build bin/device_props.exe || [ ! -x "$wt/_build/default/bin/device_props.exe" ]; then
+    echo "machine-verify: device probe: not probed, bin/device_props did not build"
+    return 0
+  fi
+  opam_exec env "OCANNL_BACKEND=$backend" sh -c "$device_probe_sh" device-probe machine-verify \
+    "$probe_perl" "$probe_cap" "$probe_dir" "$wt/_build/default/bin/device_props.exe" "$backend"
+  [ $? -ne 69 ] || exit 69
+  sed 's/^/machine-verify: device probe: /' "$probe_dir/device-probe"
+}
+
 echo "machine-verify: build: opam exec --switch=$opam_switch -- dune build -j $jobs @check"
 dune_build @check || exit $?
 echo "machine-verify: @check: PASS (compilation only; no backend execution claimed)"
 assert_backend
 assert_optional_library
+probe_device
 report_tile_mma
 assert_source_state "after @check and provenance checks"
 
@@ -599,7 +704,7 @@ while [ $# -gt 0 ]; do
   case $kind in
     test)
       echo "machine-verify: test alias ($backend): $value"
-      dune_build "$value" || exit $?
+      with_test_cap test "$value" dune_build "$value" || exit $?
       assert_backend
       echo "machine-verify: test alias: PASS $value with resolved backend configuration $backend"
       echo "machine-verify: test alias backend execution: not claimed (the alias may be backend-independent)"
@@ -618,7 +723,8 @@ while [ $# -gt 0 ]; do
         *) probe_width="DUNE_JOBS=$jobs, which dune $probe_dune ignores (it reads DUNE_JOBS from 3.22): a bare dune in the probe runs at dune's default width" ;;
       esac
       echo "machine-verify: probe ($backend, $probe_width): $value"
-      opam_exec env "OCANNL_BACKEND=$backend" "DUNE_JOBS=$jobs" sh -c "$value" </dev/null || exit $?
+      with_test_cap run "$value" \
+        opam_exec env "OCANNL_BACKEND=$backend" "DUNE_JOBS=$jobs" sh -c "$value" </dev/null || exit $?
       assert_backend
       echo "machine-verify: probe: PASS with resolved backend configuration $backend"
       echo "machine-verify: probe backend execution: see the probe's own output above"
@@ -628,8 +734,10 @@ while [ $# -gt 0 ]; do
       # Establish the configuration BEFORE the alias. Any later Dune invocation
       # clears the pending-promotion registry that this mode must consume.
       assert_backend
-      dune_build "$value"
+      with_test_cap record-golden "$value" dune_build "$value"
       build_rc=$?
+      # A per-test cap's (or the per-command cap's) kill judged nothing: no correction to record.
+      [ "$build_rc" -ne 142 ] || exit 142
       promotions=$(opam_exec dune promotion list --root .) ||
         fail "cannot list golden corrections after $value"
       if [ -z "$promotions" ]; then
@@ -668,7 +776,7 @@ while [ $# -gt 0 ]; do
         git diff --no-ext-diff --binary -- '*.expected' 'test/ppx/*_expected.ml'
         echo "=== end apply-ready golden patch ==="
         echo "machine-verify: golden: correction recorded; re-running $value to retain all failures"
-        dune_build "$value" || exit $?
+        with_test_cap record-golden "$value" dune_build "$value" || exit $?
         remaining=$(opam_exec dune promotion list --root .) ||
           fail "cannot check for corrections after re-running $value"
         [ -z "$remaining" ] || fail "$value still has promotable corrections after its re-run"
