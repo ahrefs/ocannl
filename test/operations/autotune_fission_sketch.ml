@@ -88,7 +88,18 @@ let clean_cache dir =
     Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
         Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
 
+(* The multi-site searches below tune [Fissioned_chain]'s two-matmul chain and its single-site
+   halves, whose 21 per-segment singles each search compiles. On the CPU backends they run on the
+   small menu ([Fissioned_chain.keep_fraction] passed to those searches alone, and the envelope cc
+   lacks, stated before the first search because the envelope is read once per process): about five
+   singles per segment, which is all the multi-site claims need -- that both sites still seed more
+   than one is the claim that guards them. Every other search keeps its whole menu, and a GPU
+   backend keeps every menu: its families and advisory envelope are its own, and this test is
+   [@slow], where the GPU runs are the daily sweep's. *)
+let multi_site_keep_fraction = if is_cpu then Some Fissioned_chain.keep_fraction else None
+
 let () =
+  if is_cpu then Fissioned_chain.small_menu_envelope ();
   List.iter
     [ "autotune_cache_fission"; "autotune_cache_fission2"; "autotune_cache_sketch" ]
     ~f:clean_cache;
@@ -572,6 +583,7 @@ let () =
     let ctx = Context.auto () in
     let ctx, routine =
       Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+        ?keep_fraction:multi_site_keep_fraction
         ~report:(fun r -> report := Some r)
         ctx (named tag comp) Ir.Indexing.Empty
     in
@@ -668,6 +680,7 @@ let () =
     ~f:(fun () ->
       match
         Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+          ?keep_fraction:multi_site_keep_fraction
           ~report:(fun r -> partial := Some r)
           (Context.cpu ()) (named "af_ms_partial" ms_comp) Ir.Indexing.Empty
       with
