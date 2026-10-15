@@ -1228,6 +1228,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   from a clean state (`dune clean && dune build @alias`): stale `_build/` intermediates can satisfy
   an undeclared dep, so an incomplete build passes while the artifact is wrong. Assert content
   (size, object counts), not mere existence.
+- **A rule that hand-lists the files a script reads runs sandboxed, and a symlink sandbox is not
+  one.** Unsandboxed, an unlisted file is present whenever another rule happened to copy it into
+  `_build/default/<dir>`, so the omission passes everywhere but a fresh build (`benchmarks/dune`'s
+  `test_orchestrate` missed its own `ocannl_config` that way, twice). `(sandbox always)` alone picks
+  the symlink sandbox, which isolates nothing from Python: a symlinked script's RESOLVED directory
+  goes on `sys.path`, and `Path(__file__).resolve()` leads back to `_build/default` — dropping a dep
+  still passed under it, verified. `(sandbox always preserve_file_kind)` (copy or hardlink) is the
+  setting; there dropping any one dep fails the run. Dune also plants an empty `.git` above every
+  sandbox, so nothing inside one can read the enclosing checkout's repository: a test of a
+  revision-stamping helper builds a repository of its own.
 - **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
   run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
   `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one

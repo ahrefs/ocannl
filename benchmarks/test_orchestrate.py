@@ -587,11 +587,42 @@ class FailureRecordTest(unittest.TestCase):
         self.assertIn("regime", record)
         self.assertIsNone(record["regime"])
 
-    def test_the_source_identity_names_this_checkout(self):
-        got = orchestrate.source_identity(HERE)
+    def test_the_source_identity_names_the_checkout_it_is_handed(self):
+        # A checkout of its own rather than this one: the dune rule runs sandboxed, and dune plants
+        # an empty `.git` above every sandbox so that nothing inside one can find the enclosing
+        # repository -- an identity read off HERE would say nothing there. The repository is built
+        # here, so its HEAD and its dirtiness are known to the test, not merely well-formed.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "checkout"
+            repo.mkdir()
+            env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                       GIT_CEILING_DIRECTORIES=tmp)
 
-        self.assertRegex(got["source_revision"], r"^[0-9a-f]{40}$")
-        self.assertIsInstance(got["source_tracked_changes"], bool)
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=repo, env=env, check=True,
+                                      capture_output=True, text=True).stdout.strip()
+
+            with unittest.mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": tmp}):
+                # Not yet a repository: no revision to name, stated as null rather than a crash.
+                self.assertEqual(orchestrate.source_identity(repo),
+                                 {"source_revision": None, "source_tracked_changes": False})
+
+                git("init", "-q")
+                (repo / "tracked.txt").write_text("one\n")
+                git("add", "tracked.txt")
+                git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q",
+                    "-m", "c")
+                head = git("rev-parse", "HEAD")
+                self.assertRegex(head, r"^[0-9a-f]{40}$")
+                self.assertEqual(orchestrate.source_identity(repo),
+                                 {"source_revision": head, "source_tracked_changes": False})
+
+                # An untracked file is not a tracked change; an edit to a tracked one is.
+                (repo / "untracked.txt").write_text("x\n")
+                self.assertFalse(orchestrate.source_identity(repo)["source_tracked_changes"])
+                (repo / "tracked.txt").write_text("two\n")
+                self.assertEqual(orchestrate.source_identity(repo),
+                                 {"source_revision": head, "source_tracked_changes": True})
 
     def test_the_sweep_records_failures_through_it_with_its_stamp_and_source(self):
         # main's closure is not callable from here; pin that it composes the two, read before
