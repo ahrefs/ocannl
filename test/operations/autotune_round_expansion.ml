@@ -27,24 +27,25 @@
    is refused before the search compiles anything.
 
    Every search runs on [Fissioned_chain]'s small menu: the roofline pre-filter keeps a fifth of
-   each segment's sketches, about five singles per segment instead of 21, and those compiles were
-   most of the test's cost. That each segment still offers three or more is claimed ([menu]), as the
-   playoff test claims it: the beam's second entry is a playoff alternate, and a segment offers one
-   only beside its best single. Unlike the playoff's, these claims also depend on WHICH alternate
-   seats: its differing segment must offer round moves, or the rule has nothing to tell apart. Some
-   alternates' do not (tensorized or fully register-tiled geometries leave the round nothing to
-   move), and which ones offer moves is the menu's, which the cc vector width reshapes: at 16 bytes
-   (NEON), 32 (AVX2) and 64 (AVX-512) the pre-filter keeps different singles, and the alternate the
-   scripting once seated by position -- the last one timed -- offered moves at 16 and 64 bytes but
-   not at 32, so the test failed on exactly the CI runners without AVX-512. So the seat is chosen by
-   that property instead: a [full] search seats the last alternate, and if its differing segment
-   offered no round move, the alternates are tried latest first, one [full] search each, until one
-   does; the other rules then seat the same one. The width is pinned to 32 bytes, so the menu is the
-   same on every machine and the positional choice fails there: claimed as a setup control, so the
-   selection is exercised on every run. A menu change under which the last alternate offers moves at
-   32 bytes fails that control, and the remedy is to pin a width where it does not; one under which
-   no alternate offers any fails [full: the round extends the near-copy on its differing segment].
-   Neither is to be weakened.
+   each segment's sketches, eight and seven singles per segment instead of 21, and those compiles
+   were most of the test's cost. That each segment still offers three or more is claimed ([menu]),
+   as the playoff test claims it: the beam's second entry is a playoff alternate, and a segment
+   offers one only beside its best single. Unlike the playoff's, these claims also depend on WHICH
+   alternate seats: its differing segment must offer round moves, or the rule has nothing to tell
+   apart. Some alternates' do not (tensorized or fully register-tiled geometries leave the round
+   nothing to move), and which ones offer moves is the menu's, which the cc vector width reshapes:
+   at 16 bytes (NEON), 32 (AVX2) and 64 (AVX-512) the pre-filter keeps different singles, and the
+   alternate the scripting once seated by position -- the last one timed -- offered moves at 16 and
+   64 bytes but not at 32, so the test failed on exactly the CI runners without AVX-512. So the seat
+   is chosen by that property instead: a [full] search seats the last alternate, and if its
+   differing segment offered no round move, the alternates are tried latest first, one [full] search
+   each, until one does; the other rules then seat the same one. The small menu pins the width to 32
+   bytes, so the menu is the same on every machine and the positional choice fails there: claimed as
+   a setup control, so the selection is exercised on every run. A menu change under which the last
+   alternate offers moves at 32 bytes fails that control, and the remedy is to pin a width where it
+   does not (the small menu's, which the other small-menu tests share); one under which no alternate
+   offers any fails [full: the round extends the near-copy on its differing segment]. Neither is to
+   be weakened.
 
    Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
    available. *)
@@ -55,11 +56,9 @@ open Verdict.Claims
 let is_single = Fissioned_chain.is_single
 let is_composite = Fissioned_chain.is_composite
 
-(* The small menu (see the header), for every search here: stated before the first search. *)
+(* The small menu (see the header), for every search here: stated before the first search. It pins
+   the cc vector width too ([Fissioned_chain.vector_bytes]). *)
 let () = Fissioned_chain.small_menu ()
-
-(* The cc vector width every search runs at (see the header), stated like the small menu. *)
-let () = Hashtbl.set Utils.config_file_args ~key:"cc_vector_bytes" ~data:"32"
 let expansion_key = "autotune_round_expansion"
 
 (* A beam-round candidate's parent tag and the segment its move extends: [F_saved[<n> segs from
