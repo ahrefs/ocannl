@@ -175,13 +175,21 @@ processes=4  open=1
     40.00  open  hung_probe.exe               test/operations/hung_probe.exe.output
     21.50     0  fsm_transformer.exe          test/training/fsm_transformer.actual
 EOF
-printf '%s\t%s\t%s\t%s\n' \
-  40.00 open hung_probe.exe test/operations/hung_probe.exe.output \
-  21.50 0 fsm_transformer.exe test/training/fsm_transformer.actual \
-  6.72 0 env_var_deps.exe 'test/operations/env_var_deps.actual +1' \
-  5.43 1 sh @test/operations/runtest-slot_kind_cases \
-  3.25 0 ocamlopt.opt '(in arrayjit/lib)' \
-  1.96 0 env_var_deps.exe test/operations/env_var_deps_control.actual >"$TMP/tsv.expected"
+{
+  printf '%s\t' 40.00 open hung_probe.exe test/operations/hung_probe.exe.output
+  printf '%s\n' test/operations/hung_probe.exe.output
+  printf '%s\t' 21.50 0 fsm_transformer.exe test/training/fsm_transformer.actual
+  printf '%s\n' test/training/fsm_transformer.actual
+  printf '%s\t' 6.72 0 env_var_deps.exe 'test/operations/env_var_deps.actual +1' \
+    test/operations/env_var_deps.actual
+  printf '%s\n' test/operations/env_var_deps.filelist
+  printf '%s\t' 5.43 1 sh @test/operations/runtest-slot_kind_cases
+  printf '%s\n' @test/operations/runtest-slot_kind_cases
+  printf '%s\t' 3.25 0 ocamlopt.opt
+  printf '%s\n' '(in arrayjit/lib)'
+  printf '%s\t' 1.96 0 env_var_deps.exe test/operations/env_var_deps_control.actual
+  printf '%s\n' test/operations/env_var_deps_control.actual
+} >"$TMP/tsv.expected"
 cat >"$TMP/truncated.expected" <<'EOF'
 processes=1  open=1
   seconds  exit  prog                         action
@@ -234,7 +242,7 @@ leg "--group dir groups by the action's directory" \
   exact "$SUBJECT" dir "$TMP/dir.expected" --group dir "$TMP/trace"
 leg "--prog filters by program basename and -n limits rows" \
   exact "$SUBJECT" filtered "$TMP/filtered.expected" --prog '\.exe$' -n 2 "$TMP/trace"
-leg "--tsv prints the table's rows, tab-separated, without the header" \
+leg "--tsv prints the table's rows, tab-separated, without the header, every target after" \
   exact "$SUBJECT" tsv "$TMP/tsv.expected" --tsv "$TMP/trace"
 
 mkdir -p "$TMP/repo/tools" "$TMP/repo/_build"

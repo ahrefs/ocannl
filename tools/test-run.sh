@@ -96,9 +96,10 @@
 # wall time from the run's dune trace (`timings` in the run directory): the
 # seconds of the processes that are its action -- the alias's own action
 # (`@DIR/KIND-NAME`, or one in a subdirectory for a recursive `@`) or the
-# producer of an output in DIR named after the test, `NAME.actual`,
-# `NAME.output` or `NAME.<EXT>.actual|output` (a `(test)` stanza's is
-# `NAME.exe.output`), a final `-VARIANT` of NAME read as `.VARIANT` too
+# producer of an output in DIR named after the test, `NAME.<EXT>` with any
+# extension but a compile artifact's (`NAME.exe.output` for a `(test)`
+# stanza, `NAME.actual`, `NAME.ll.actual`, `NAME.coverage`; any target of the
+# process counts), a final `-VARIANT` of NAME read as `.VARIANT` too
 # (`runtest-x-extension` writes `x.extension.actual`); failing both, the runs
 # of `NAME.exe` in DIR that no other named test claimed -- summed,
 # with their count, exits and which rule matched (`action` or `program`). A
@@ -1502,8 +1503,10 @@ fresh_argv() { # operands
 
 # A `fresh` run's per-test times (see the header), in `_resolve` once dune has
 # exited, from the run's own trace: the shipping reader's `--tsv` rows -- the
-# same whitelisted fields its table prints (gh-ocannl-1280) -- bounded like
-# the slowest-actions reader, then attributed to the named aliases. `timings`
+# same whitelisted fields its table prints (gh-ocannl-1280), every target of a
+# process included -- bounded like the promotion list, within what is left of
+# the run's cap (a test that ends near the cap is UNTIMED, never a TIMEOUT
+# after dune passed), then attributed to the named aliases. `timings`
 # holds one line per alias, `ALIAS<TAB>ran|not-run<TAB>SECONDS<TAB>PROCS<TAB>EXITS<TAB>HOW`,
 # HOW naming the rule that found its processes (`action`, `program`, `-`);
 # a reader that fails leaves `timings-skipped` with its last diagnostic
@@ -1512,13 +1515,16 @@ fresh_argv() { # operands
 fresh_timings() { # <trace file>
   local tsv=$run_dir/fresh-processes.tsv err=$run_dir/fresh-processes.err why
   rm -f "$run_dir/timings" "$run_dir/timings.tmp" "$run_dir/timings-skipped"
-  if ! perl -e 'alarm shift; exec @ARGV or exit 127' 30 \
-       bash tools/action-durations.sh --tsv -n 0 "$1" </dev/null >"$tsv" 2>"$err" 9>&-; then
+  if [ "$cap" -gt 0 ] && [ $((cap - SECONDS - 5)) -lt 1 ]; then
+    echo "the run's cap was nearly spent when dune exited" >"$run_dir/timings-skipped"
+    return 0
+  fi
+  if ! promotion_bounded bash tools/action-durations.sh --tsv -n 0 "$1" >"$tsv" 2>"$err" 9>&-; then
     if grep -q '^action-durations.sh: no process in ' "$err" 2>/dev/null; then
       : >"$tsv"
     else
       why=$(grep . "$err" 2>/dev/null | tail -n 1 | cut -c1-300)
-      [ -n "$why" ] || why="the trace reader failed, or did not finish within 30s"
+      [ -n "$why" ] || why="the trace reader failed, or did not finish within its bound"
       printf '%s\n' "$why" >"$run_dir/timings-skipped"
       rm -f "$tsv" "$err"
       return 0
@@ -1537,21 +1543,31 @@ fresh_timings() { # <trace file>
       x = s; sub(/^@/, "", x); sub(/\/[^\/]*$/, "", x)
       return x
     }
-    function produces(s, pre, b) { # row s writes a file in DIR named after pre
+    # A target is an output named after the test when its file name is
+    # PRE.<anything> and it is not one of the compile artifacts the tests
+    # executable leaves under the same name (NAME.exe, NAME.pp.ml, ...).
+    function produces(s, pre, b) {
       b = s; sub(/^.*\//, "", b)
-      if (!in_dir(dir_of(s)) || substr(s, 1, 1) == "@" || substr(s, 1, 1) == "(") return 0
-      if (b == pre ".actual" || b == pre ".output") return 1
-      return index(b, pre ".") == 1 && (ends(b, ".actual") || ends(b, ".output"))
+      if (substr(s, 1, 1) == "@" || substr(s, 1, 1) == "(" || !in_dir(dir_of(s))) return 0
+      if (b ~ /\.(exe|bc|bc-for-jsoo|js|cm[a-z]*|o|a|so|dll|d|pp\.ml|pp\.mli)$/) return 0
+      return index(b, pre ".") == 1
     }
-    function action_of(j, s) { # row j is the alias action, or a producer of its output
-      s = act[j]
-      if (s == "@" p || (rec && index(s, "@" d "/") == 1 && ends(s, "/" base))) return 1
-      if (produces(s, name)) return 1
-      # BASE-VARIANT names BASE.VARIANT.actual (runtest-top_down_prec-extension)
-      return match(name, /-[^-]*$/) && produces(s, substr(name, 1, RSTART - 1) "." substr(name, RSTART + 1))
+    function action_of(j, k, s) { # a target of row j is the alias action, or the test output
+      for (k = 1; k <= ntg[j]; k++) {
+        s = tg[j, k]
+        if (s == "@" p || (rec && index(s, "@" d "/") == 1 && ends(s, "/" base))) return 1
+        if (produces(s, name)) return 1
+        # BASE-VARIANT names BASE.VARIANT.* (runtest-top_down_prec-extension)
+        if (match(name, /-[^-]*$/) && produces(s, substr(name, 1, RSTART - 1) "." substr(name, RSTART + 1))) return 1
+      }
+      return 0
     }
     NR == FNR { alias[++n] = $0; next }
-    { secs[++m] = $1; ex[m] = $2; prog[m] = $3; act[m] = $4; sub(/ \+[0-9]+$/, "", act[m]) }
+    {
+      secs[++m] = $1; ex[m] = $2; prog[m] = $3; act[m] = $4; sub(/ \+[0-9]+$/, "", act[m])
+      if (NF < 5) { ntg[m] = 1; tg[m, 1] = act[m] }
+      else { ntg[m] = NF - 4; for (k = 5; k <= NF; k++) tg[m, k - 4] = $k }
+    }
     END {
       for (i = 1; i <= n; i++) {
         named(i)
@@ -2162,8 +2178,8 @@ digest() {
         fi
         if [ "$fresh_missing" -gt 0 ]; then
           echo "a test NOT RUN had no process here that is its action: not the alias's own action, not" \
-               "the producer of an output in DIR named after it (NAME.actual, NAME.output," \
-               "NAME.<ext>.actual|output), and no unclaimed NAME.exe in DIR. Name the per-test alias" \
+               "the producer of an output in DIR named after it (NAME.<ext>, not a compile artifact)," \
+               "and no unclaimed NAME.exe in DIR. Name the per-test alias" \
                "whose action runs it; this tool cannot time a test it cannot see run."
         fi
         [ ! -e "$dir/build" ] ||

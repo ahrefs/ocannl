@@ -19,9 +19,12 @@
 #                      executable is one unit) or per directory of the
 #                      action, as max/total seconds and count, by max
 #   --tsv              the table's rows for a program to read: no header,
-#                      `SECONDS<TAB>EXIT<TAB>PROG<TAB>ACTION` per process,
-#                      the same fields and order (tools/test-run.sh `fresh`
-#                      reads its per-test times from them); not with --group
+#                      `SECONDS<TAB>EXIT<TAB>PROG<TAB>ACTION[<TAB>TARGET]...`
+#                      per process, in the table's order, then each of its
+#                      targets named as ACTION names the first (`@dir/alias`
+#                      or a path relative to the build context), so none is
+#                      lost to `+k` (tools/test-run.sh `fresh` reads its
+#                      per-test times from them); not with --group
 #   -h, --help         this header
 #
 # The trace records no alias membership, so a row names its action by what it
@@ -347,10 +350,20 @@ if not procs:
     sys.exit('action-durations.sh: no process in %s%s (a cached build starts none)'
              % (path, ' matches --prog' if prog_pat else ''))
 
+def target_texts(f):
+    targets = f.get('target_files')
+    out = []
+    for t in targets if isinstance(targets, list) else []:
+        if isinstance(t, str):
+            alias, rel = in_context(t)
+            out.append(rel if alias is None else '@%s%s' % ('' if rel == '.' else rel + '/', alias))
+    return out
+
+
 if tsv:
     procs.sort(key=lambda p: (-p[0], p[2], action(p[3])[1]))
     for s, ex, prog, f in procs[:rows or None]:
-        print('\t'.join(('%.2f' % s, ex, prog, action(f)[1])))
+        print('\t'.join(['%.2f' % s, ex, prog, action(f)[1]] + target_texts(f)))
     sys.exit(0)
 print('processes=%d  open=%d' % (len(procs), sum(1 for p in procs if p[1] == 'open')))
 if group:

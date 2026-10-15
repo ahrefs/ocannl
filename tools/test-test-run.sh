@@ -245,9 +245,11 @@
 #      makes it, a control shows); its digest gives each named test the
 #      seconds of the processes that are its action -- the alias action, also
 #      in a subdirectory under a recursive `@` and not under `@@`, a producer
-#      of NAME.exe.output, NAME.actual, NAME.ll.actual or (for NAME
-#      BASE-VARIANT) BASE.VARIANT.actual, or else an unclaimed NAME.exe in its
-#      directory -- from a synthetic trace. A named test with no such process
+#      of NAME.exe.output, NAME.actual, NAME.ll.actual, NAME.coverage or (for
+#      NAME BASE-VARIANT) BASE.VARIANT.actual, as any target of its process,
+#      never a compile artifact (NAME.exe, NAME.pp.ml), or else an unclaimed
+#      NAME.exe in its directory -- from a synthetic trace; a dune that exits
+#      with the cap nearly spent is UNTIMED, not a TIMEOUT. A named test with no such process
 #      is NOT RUN (exit 2), the others still timed, also when the trace holds
 #      no process at all; a red run is FAIL with its times and not promotable;
 #      an unreadable trace is UNTIMED (exit 1); operands other than per-test
@@ -4145,8 +4147,12 @@ fi
 # gamma's producer is `NAME.actual` under a program of another name, which
 # therefore no other test may claim by that program; epsilon-c_fwd writes
 # `NAME.ll.actual` and zeta-extension `zeta.extension.actual`, both from a
-# program of another name; delta writes an output of another name, so only
-# its program finds it; the compile and a bystander test count for nobody.
+# program of another name; theta-extension's output is the SECOND target of
+# its process; iota's producer writes `iota.ml` and `iota.coverage`, while
+# its link (`iota.exe`) and preprocessing (`iota.pp.ml`) are compile
+# artifacts and count for nobody; delta writes an output of another name, so
+# only its program finds it; the compile and a bystander test count for
+# nobody either.
 fresh_label="fresh: forced, uncached, own build directory; per-test times; NOT RUN refused"
 if ! command -v python3 >/dev/null 2>&1; then
   skip "$fresh_label" "no python3 on PATH (tools/action-durations.sh needs it)"
@@ -4173,12 +4179,18 @@ for pid, start, dur, prog, target, owner in [
         (17, 7, 2.0, 'ocamlopt.opt', build + '/default/tensor/x.cmx', 'other'),
         (18, 8, 2.25, 'delta.exe', build + '/default/test/operations/backend-0-0.log.actual', 'delta'),
         (19, 9, 1.75, 'epsilon.exe', build + '/default/test/operations/epsilon-c_fwd.ll.actual', 'epsilon'),
-        (20, 10, 0.5, 'zeta.exe', build + '/default/test/operations/zeta.extension.actual', 'zeta')]:
+        (20, 10, 0.5, 'zeta.exe', build + '/default/test/operations/zeta.extension.actual', 'zeta'),
+        (21, 11, 1.25, 'theta.exe', [build + '/default/test/operations/theta-unoptimized.ll.actual',
+                                     build + '/default/test/operations/theta.extension.actual'], 'theta'),
+        (22, 12, 0.75, 'iota_extract.exe', [build + '/default/test/operations/iota.ml',
+                                            build + '/default/test/operations/iota.coverage'], 'iota'),
+        (23, 13, 5.0, 'ocamlopt.opt', build + '/default/test/operations/iota.exe', 'other'),
+        (24, 14, 5.0, 'ppx.exe', build + '/default/test/operations/iota.pp.ml', 'other')]:
     if skip in (owner, 'all'):
         continue
     t = T0 + start * S
     f = [['pid', str(pid)], ['prog', '/opt/bin/' + prog], ['dir', build + '/default'],
-         ['target_files', [target]]]
+         ['target_files', target if isinstance(target, list) else [target]]]
     out.append(sexp(['process', 'start', str(t)] + f))
     out.append(sexp(['process', 'finish', [str(t), str(int(round(dur * S)))]] + f + [['exit', '0']]))
 open(path, 'wb').write(b''.join(out))
@@ -4198,7 +4210,7 @@ PY
       f { exit }' | sed 's/^ *//; s/  */ /g'
   }
   fresh_detail=
-  fresh_aliases='@test/operations/runtest-alpha @@test/einsum/slow-beta @test/operations/runtest-gamma @test/operations/runtest-delta @test/operations/runtest-epsilon-c_fwd @test/operations/runtest-zeta-extension'
+  fresh_aliases='@test/operations/runtest-alpha @@test/einsum/slow-beta @test/operations/runtest-gamma @test/operations/runtest-delta @test/operations/runtest-epsilon-c_fwd @test/operations/runtest-zeta-extension @test/operations/runtest-theta-extension @test/operations/runtest-iota'
   # 1. Every named test ran: exit 0, the times attributed, the command forced,
   # uncached and in the run's own build directory -- recorded as such -- and
   # that directory gone with the run.
@@ -4213,7 +4225,9 @@ PY
 4.50 1 0 action @test/operations/runtest-gamma
 2.25 1 0 program @test/operations/runtest-delta
 1.75 1 0 action @test/operations/runtest-epsilon-c_fwd
-0.50 1 0 action @test/operations/runtest-zeta-extension'
+0.50 1 0 action @test/operations/runtest-zeta-extension
+1.25 1 0 action @test/operations/runtest-theta-extension
+0.75 1 0 action @test/operations/runtest-iota'
   [ -n "$fresh_detail" ] || [ "$(fresh_rows "$argv_out")" = "$fresh_want" ] ||
     fresh_detail="all ran: rows $(fresh_rows "$argv_out" | tr '\n' ';') (want $(printf '%s' "$fresh_want" | tr '\n' ';'))"
   [ -n "$fresh_detail" ] ||
@@ -4244,7 +4258,7 @@ PY
       *) fresh_detail="one skipped: exit $argv_rc (want 2, NOT RUN): $argv_out" ;;
     esac
     [ -n "$fresh_detail" ] || [ "$(fresh_rows "$argv_out" | tr '\n' ';')" = \
-      "13.84 2 0 action @test/operations/runtest-alpha;NOT RUN 0 - - @@test/einsum/slow-beta;4.50 1 0 action @test/operations/runtest-gamma;2.25 1 0 program @test/operations/runtest-delta;1.75 1 0 action @test/operations/runtest-epsilon-c_fwd;0.50 1 0 action @test/operations/runtest-zeta-extension;" ] ||
+      "13.84 2 0 action @test/operations/runtest-alpha;NOT RUN 0 - - @@test/einsum/slow-beta;4.50 1 0 action @test/operations/runtest-gamma;2.25 1 0 program @test/operations/runtest-delta;1.75 1 0 action @test/operations/runtest-epsilon-c_fwd;0.50 1 0 action @test/operations/runtest-zeta-extension;1.25 1 0 action @test/operations/runtest-theta-extension;0.75 1 0 action @test/operations/runtest-iota;" ] ||
       fresh_detail="one skipped: rows $(fresh_rows "$argv_out" | tr '\n' ';')"
   fi
   # A program another named test's action already claimed is not a second
@@ -4282,6 +4296,16 @@ PY
     case $argv_rc:$argv_out in
       1:*"verdict: UNTIMED"*"no per-test times: action-durations.sh: "*"is not a canonical-S-expression dune trace"*) ;;
       *) fresh_detail="an unreadable trace: exit $argv_rc (want 1, UNTIMED): $argv_out" ;;
+    esac
+  fi
+  # A dune that exits with the run's cap nearly spent leaves no time to read
+  # the trace in: UNTIMED, never a TIMEOUT over a dune that passed.
+  if [ -z "$fresh_detail" ]; then
+    REPEAT_TEST_ACTION_SECS=5 argv_mode=slow_dune fresh_probe fresh-nearcap --cap 10 @test/operations/runtest-alpha
+    argv_mode=
+    case $argv_rc:$argv_out in
+      1:*"verdict: UNTIMED"*"no per-test times: the run's cap was nearly spent when dune exited"*) ;;
+      *) fresh_detail="near the cap: exit $argv_rc (want 1, UNTIMED): $argv_out" ;;
     esac
   fi
   # 5. Operands that are not per-test aliases are refused before dune runs,
