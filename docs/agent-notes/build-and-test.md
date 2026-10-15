@@ -2227,6 +2227,40 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   consumers, grep the sexp shape: `rg -F "(field_name " --glob '*.expected'` (the trailing space
   disambiguates longer identifiers). Budget the resulting promote as expected work, in its own
   commit, after diff-confirming the delta is rename-only.
+- **Which per-test aliases a change reaches is dune's answer, not a guess**:
+  `tools/test-run.sh affected REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`) prints them,
+  one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh run build`
+  or `fresh`; stderr says what each changed path reached and gives per-directory counts. Run it
+  before the pre-push batch with the merge-base as REV, `$(git merge-base HEAD <base>)`, where
+  `<base>` is the remote-tracking `master` of `lukstafi/ocannl-staging` (`git remote -v` names
+  it: remote names are not the contract). The base branch itself would also count every commit
+  it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases for a
+  69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
+  workspace` (modules and library edges), `dune describe external-lib-deps` (the ppx-rewriter
+  edges and the `tests` stanzas the first omits), `dune show aliases`/`targets`, and `dune
+  rules` for each alias's own targets and each generated module file. Those dependencies are how
+  a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
+  it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
+  C stub is traced to its stanza. dune does not dump an alias rule itself, so an alias whose
+  action is not a golden diff of its own targets (a `(test)` with no golden, run under its
+  `(deps)`; `runtest-sweep_harness`, which names `tools/sweep.sh`) is listed for any changed path
+  in its directory but an owned module source, and for a changed non-build input anywhere: a
+  doc, script or golden edit lists those ~49 too. Its header states the boundary as an
+  allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
+  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3.
+  `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
+  - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
+    So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380
+    to 470 of the ~500 per-test aliases, including `arrayjit/test` and the `test/training` members:
+    a cross-cutting change in AGENTS.md's sense, and the list is the reach CI will exercise. The
+    three misses that filed the issue are all inside it: `Cost_model` (staging#1011) lists
+    `@test/operations/runtest-cost_model_template`, `Register_tile` (staging#1035)
+    `@arrayjit/test/runtest-test_vectorized_codegen`, `Schedule` (staging#1040)
+    `@test/training/runtest-fused_classifier`. A narrower "tests that name the module" cut is no
+    substitute: `test_vectorized_codegen.ml` never names `Register_tile`.
+  - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
+    its own alias plus the 14 scans that read it; `docs/agent-notes/build-and-test.md` its ten scans
+    and the ~49 aliases above.
 
 ## OCaml and dune traps
 

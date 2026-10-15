@@ -46,6 +46,9 @@
 #   tools/test-run.sh lock-status [RUN|last]          # idle/held; exits 0/3 (2 error)
 #   tools/test-run.sh idle                             # 0 idle, 3 locked, 2 unreadable
 #                                                     # snapshot, not a reservation
+#   tools/test-run.sh affected REV|REV..REV|--files PATH...
+#                                                      # the per-test aliases a change reaches;
+#                                                      # runs none (tools/affected-tests.sh)
 #
 # Read-only queries: `paths run [RUN|last]` resolves a recorded run (default last).
 # `paths worktree|runs|lock|owner|last [RUN|last]` without a run names THIS
@@ -614,7 +617,7 @@ select_dune() {
 # through its real path derive the same key, lock file, and recorded wt.
 # Read-only queries interpret relative paths here, never through a caller's
 # CDPATH (which can also make cd print an extra path on stdout).
-case ${1:-} in paths | lock-status) CDPATH= ;; esac
+case ${1:-} in paths | lock-status | affected) CDPATH= ;; esac
 cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 # Where this script and everything it runs of its own live: the helpers below
 # are sourced from here, and the run's own phases (`_resolve`, `_probe`) are
@@ -789,7 +792,7 @@ query_state_for() {
 case ${1:-} in
   # Initialize lazily, only if the query needs this root; `_resolve` and
   # `_probe` work in the run directory their supervisor names.
-  paths | lock-status | _resolve | _probe) ;;
+  paths | lock-status | _resolve | _probe | affected) ;;
   *) RUNS=${RUNS:-$HOME/.ocannl-test-runs}
      mkdir -p "$RUNS" || die "cannot create $RUNS"
      RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS" ;;
@@ -2326,10 +2329,32 @@ finish_run() { # rc -> append sentinel, record verdict
 }
 
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected ... (see header)"
 shift
 
 case $sub in
+  affected)
+    # Read-only, but it asks dune about this worktree, and a dune started
+    # beside a run's dune contends for `_build`. So it takes the worktree's run
+    # lock, as a run does, and holds it on fd 9 through the helper and every
+    # dune it starts: a run refuses meanwhile, and this refuses during a run.
+    # (No owner pointer is published: this is not a run to point at.) Where the
+    # previous version's in-tree lock exists it is held too, on fd 5, as
+    # take_lock holds it, so a launcher of that version is refused meanwhile;
+    # it is never created, nor removed, here.
+    query_state_for ""
+    if [ -e "$PWD/.test-run.lock" ]; then
+      exec 5>>"$PWD/.test-run.lock" || die "cannot open the previous version's lock file"
+      perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 3)' <&5 ||
+        die "a run of the previous version is active in this worktree; affected asks dune too, so wait for it"
+    fi
+    mkdir -p "$RUNS" || die "cannot create $RUNS"
+    exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
+    perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 3)' <&9 ||
+      die "a run is active in this worktree; affected asks dune too, so wait for it (status last)"
+    select_dune
+    exec bash tools/affected-tests.sh "$@"
+    ;;
   paths)
     [ $# -ge 1 ] && [ $# -le 2 ] || die "usage: paths FIELD [RUN|last]"
     field=$1

@@ -698,7 +698,9 @@ jobs:
   # is where they drifted before: Dune 3.20/3.21 print `promotion list` on
   # stderr and recompute diffs under `DUNE_DIFF_COMMAND=-`, which the shims in
   # the fixtures simulate on current Dune but only a real floor binary pins.
-  # Only those fixtures: nothing else here depends on Dune's version, and a full
+  # The group also holds tools/test-affected-tests.sh, whose subject parses the
+  # output of `dune describe`, `dune show` and `dune rules` (gh-ocannl-1235).
+  # Only that group: nothing else here depends on Dune's version, and a full
   # matrix at the floor is not what drifted. The floor is read from
   # `dune-project`'s `(lang dune X.Y)` -- the declaration the opam files'
   # `"dune" {>= ...}` is generated from -- and the newest X.Y.z is installed
