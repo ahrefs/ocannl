@@ -1102,10 +1102,14 @@ files.
   the padded arithmetic plus ~2% and no new class of overhead, replacing a 1615 ms untiled kernel.
   Two pieces of residue. Nothing prunes a wasteful pad: a 20-row site now seeds a 64-row block
   tile whose padded work is 3x the real work, and only the tuner's timing rejects it (the
-  tensorized family has always behaved this way). And the CPU blocktile and packed-scalar
-  pipelines stage into stack scratch, so the same argument would let them pad, but they keep the
-  gate — which is what still renders the gh-ocannl-683 k-extent label, and where
-  `schedule_contraction_nest` reads it off.
+  tensorized family has always behaved this way). And the CPU blocktile pipeline (in-kernel and
+  hoisted packing) keeps the gate on purpose. Its stack-scratch tiles are zero-fringe too, so the
+  pad is sound, and it is free: padded candidates were bitwise-exact and no slower than the
+  dividing control. But the family loses to the CPU tensorized family even where it divides
+  (gh-ocannl-741, out projection b8 s512 j768 h4 at head_dim 12: 16.1 vs 13.1 ms on mac-studio,
+  20.8 vs 16.9 ms on AVX2 rog). Padded leaves would only lengthen the cc search, so the gate stays,
+  and it still renders the gh-ocannl-683 k-extent label that `schedule_contraction_nest` reads.
+  Revisit only if the family starts winning where it divides.
 - **The coalesced layout is a search BRANCH over another lowering, not a level of the family tree**
   (gh-ocannl-1165). The q/k/v site `d[b,s,h,e] += w[h,e,k] * x[b,s,k]` caps its column tile at one
   head; `Sched.Coalesce` merges the adjacent `(h, e)` pair into one loop whose accesses read
