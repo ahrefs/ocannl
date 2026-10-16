@@ -136,6 +136,30 @@ are reported, along with ten passing cc cells. Ten cc cells exceeded their proto
 28 reduced-format cc cells were skipped and remain outstanding. Metal exact f16 passes every
 endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are retained.
 
+### cifar_resnet cell names
+
+The v1.1.2 conv issues each close against a named cell of the `cifar_resnet` leg, before and
+after, on one box. A **step cell** is `<workload>/<backend>/<variant>/<regime>` (the regime
+`exact` or `approximate`), e.g. `cifar_resnet_b1/cuda/tuned/exact`: the step p50 of that
+`orchestrate.py` row. A **site cell** is a step cell plus a site family, e.g.
+`cifar_resnet_b1/cuda/tuned/exact · sc1x1s2`: the summed min-of-20 kernel times of the kernels the
+step shipped that write the family's names, as `gh1161_sites.py <cell-log-dir>` prints them from
+a sweep run with `BENCH_KERNEL_TABLE=1 BENCH_CELL_LOG_DIR=<cell-log-dir>`. The families:
+`pad3x3` (the padded 3×3 stride-1 convs: `stem`, `s<i>c1`, `s<i>c2`), `resadd` (the residual
+adds, `s<i>res`) and `sc1x1s2` (the stride-2 1×1 shortcuts, `s<i>sc`); `--per-site` adds one
+column per site. A kernel counts toward every family it writes names of, so a fused kernel is in
+several columns and the columns do not sum to the step; a kernel writing only unnamed nodes (a
+conv's raw output) is `unattributed`. On `cc` the whole step is one kernel, so there every site
+cell is the step: cite the step cell. Each issue's cell:
+
+| issue | cell |
+|---|---|
+| gh-ocannl-505 (Winograd F(2×2, 3×3)) | `cifar_resnet/<gpu>/default/approximate · pad3x3`, beside the same cell in `exact` |
+| gh-ocannl-1148 (strided 1×1 at batch 1) | `cifar_resnet_b1/<gpu>/tuned/exact · sc1x1s2`, and its step cell |
+| gh-ocannl-1147 (staged operand with a second reader) | `cifar_resnet/cc/tuned/exact` (step) |
+| gh-ocannl-697 (the conv family tree) | `cifar_resnet/<backend>/tuned/exact` and `cifar_resnet_b1/<backend>/tuned/exact`, with `· pad3x3` on a GPU |
+| gh-ocannl-503 (whole-routine zeroed GPU conv sites) | `cifar_resnet/<gpu>/tuned/exact` under `--cell-flag '*/<gpu>/tuned:schedule_fission=false'` |
+
 ## Layout
 
 - `workloads/*.json` — workload specs; `gen_fixtures.py` generates
@@ -219,7 +243,8 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   intermediates without tuning), `BENCH_PRECISION=bf16|f16` (mlp and gpt, gh-ocannl-492);
   backend via the usual `--ocannl_backend=cc|metal|cuda|hip`. `bench_gpt` dispatches its step
   shape on the fixture's `mode`, like the Python runners: forward-only for `gpt2_mini`,
-  backprop plus SGD for `gpt2_mini_train`.
+  backprop plus SGD for `gpt2_mini_train`; `bench_conv` dispatches its model on the fixture's
+  `arch` (`Bench_conv_model.build`: the two-conv classifiers, or `resnet`).
 
   `bench_mlp --self-test` (gh-ocannl-702) runs the measurement path with **no fixture and no
   Python**: `Bench_harness.run_self_test` fabricates a tiny model in memory, drives the whole
@@ -556,7 +581,8 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   attribution, the split-reduce `op_legality` verdicts, and the nine variant cells) — kept because
   that session's logs were lost to GPU-driver crashes and reboots, so it is the only surviving
   primary source for a state the current report no longer describes.
-- `runners/ocannl/bench_{gpt,conv}_diag.ml` — schedule diagnostics for gpt2_mini / lenet:
+- `runners/ocannl/bench_{gpt,conv}_diag.ml` — schedule diagnostics for gpt2_mini / the conv
+  workloads (the measured runners' own models, `Bench_gpt_model` / `Bench_conv_model`):
   GPT prints the compiled segment census (launch geometry, statement counts and written nodes).
   Conv prints the reconstructed fission census, including per-nest loop extents and materialization
   markers. `BENCH_STEPS=1` adds full-step controls; conv also offers value dumps (`BENCH_PROBE=1`,

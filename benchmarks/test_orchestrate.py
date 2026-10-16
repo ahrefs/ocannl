@@ -2584,17 +2584,21 @@ class FixtureDigestTest(unittest.TestCase):
 
     def test_checked_in_divergence_accounts_for_copies_of_m4_max(self):
         # gh-ocannl-720 copies the transformer fixtures to other boxes instead of regenerating
-        # them. Pin that recorded policy and keep missing/different origins visible for every entry.
+        # them, and gh-ocannl-1161 the cifar_resnet ones to rog-nv and minix. Pin that recorded
+        # policy and keep missing/different origins visible for every entry.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
         entries, declared = fixture_digest._read_document(digests)
-        expected = {
-            f"{spec.stem}.safetensors"
-            for spec in (HERE / "workloads").glob("*.json")
-            if json.loads(spec.read_text()).get("model") == "gpt"
-        }
+        specs = [json.loads(spec.read_text()) for spec in (HERE / "workloads").glob("*.json")]
+        expected = {f"{spec['name']}.safetensors" for spec in specs if spec.get("model") == "gpt"}
+        resnet = {f"{spec['name']}.safetensors" for spec in specs if spec.get("arch") == "resnet"}
         self.assertTrue(expected, "no GPT workload specs found")
-        copied = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
-        self.assertEqual(copied, expected, "TUF must record every GPT fixture copy")
+        self.assertTrue(resnet, "no cifar_resnet workload specs found")
+        on_tuf = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
+        self.assertEqual(on_tuf, expected, "TUF must record every GPT fixture copy")
+        copied = expected | resnet
+        # Which boxes hold each family's copies: TUF's GPT copies, the resnet leg's three boxes.
+        copy_boxes = {name: {"m4-max", "tuf"} for name in expected}
+        copy_boxes.update({name: {"m4-max", "minix", "rog-nv"} for name in resnet})
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
@@ -2606,7 +2610,7 @@ class FixtureDigestTest(unittest.TestCase):
             copies = {e.origin for e in recorded if e.kind == "content-v1"} if name in copied else set()
             if name in copied:
                 self.assertIn("m4-max", by_origin, name)
-                self.assertLessEqual({"m4-max", "tuf"}, copies, name)
+                self.assertLessEqual(copy_boxes[name], copies, name)
                 for origin in copies:
                     self.assertEqual(
                         by_origin[origin].sha256, by_origin["m4-max"].sha256, f"{name} on {origin}"
