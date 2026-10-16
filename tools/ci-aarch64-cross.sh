@@ -3,8 +3,11 @@
 # compile with, without root, and print its path on stdout (gh-ocannl-1120).
 #
 # Usage:
-#   tools/ci-aarch64-cross.sh PREFIX
+#   tools/ci-aarch64-cross.sh PREFIX [MAJOR]
 #
+# MAJOR is 15 (the default, what CI stages), or 13 or 14: the crosses Ubuntu
+# 24.04 (noble) ships, staged the same way, for reproducing the census's known
+# gcc 13/14 aarch64 defect classes (gh-ocannl-1158) on any Ubuntu/Debian host.
 # CI's ubuntu leg exports the printed path as AARCH64_CROSS_GCC. Everything
 # else this prints goes to stderr, so `$(tools/ci-aarch64-cross.sh ...)` is the
 # path and nothing but the path.
@@ -30,15 +33,19 @@ set -u
 
 die() { echo "ci-aarch64-cross: $*" >&2; exit 2; }
 
-[ "$#" -eq 1 ] || die "usage: tools/ci-aarch64-cross.sh PREFIX"
+[ "$#" -eq 1 ] || [ "$#" -eq 2 ] || die "usage: tools/ci-aarch64-cross.sh PREFIX [MAJOR]"
 prefix=$1
 case $prefix in
   /*) ;;
   *) die "PREFIX must be absolute: $prefix" ;;
 esac
 
-suite=resolute
-major=15
+major=${2:-15}
+case $major in
+  15) suite=resolute ;;
+  13 | 14) suite=noble ;;
+  *) die "MAJOR must be 13, 14 or 15: $major" ;;
+esac
 keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 packages=(
   "gcc-$major-aarch64-linux-gnu"
