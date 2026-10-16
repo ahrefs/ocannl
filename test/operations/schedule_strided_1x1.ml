@@ -459,8 +459,8 @@ let stride_on_batch_loops o =
            m.Autotune.m_i ~equal:Idx.equal_symbol
 
 (* gh-ocannl-1148, where no output axis is read at unit stride: the GEMM row is the minor stride-2
-   output axis, with the site's stride recorded, and no interior batch loop is left between the
-   roles. *)
+   output axis (so no interior batch loop sits between the roles), with the site's stride
+   recorded. *)
 let stride_on_row o =
   match (o.site, strided_syms o.in_map) with
   | None, _ | _, [] -> false
@@ -468,7 +468,6 @@ let stride_on_row o =
       m.Autotune.m_row_stride = 2
       && List.mem strided m.Autotune.m_i ~equal:Idx.equal_symbol
       && m.Autotune.m_row_axis = Array.length o.out_map - 2
-      && List.is_empty m.Autotune.m_bi
 
 (* The seeder's own judgment of a tensorized pipeline for the site's operands on this backend
    ([Ll_test.tensorized_capability], gh-ocannl-1115): the register tiling on the C backends, an
@@ -496,9 +495,7 @@ let rendered name q census =
 let structure_claim = function
   | `Batch ->
       "a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride"
-  | `Strided ->
-      "a matmul site whose row is the minor output axis, read at stride 2, with no interior batch \
-       loop"
+  | `Strided -> "a matmul site whose row is the minor output axis, read at stride 2"
 
 let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
   let o = probe ~tag s in
