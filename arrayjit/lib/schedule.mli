@@ -122,15 +122,17 @@ type optop =
     }
       (** Stage reads of [source] through a tile: a fresh [Local]-mode node registered in the traced
           store, its dims derived per source axis from the range of the index terms over
-          [tile_loops] (schedule-ir-optops §5). All reads of [source] must use one index vector (v1)
-          whose per-axis terms split cleanly into tile-loop terms (positive coefficients) and outer
-          terms. With [shared = true] the tile is added to [workgroup_shared] and a cooperative-load
-          nest plus barriers are inserted at the deepest loop carrying an outer-part symbol or a
-          reused [Workgroup] tile axis: [Workgroup]-typed tile loops are reused as the cooperating
-          thread indices, [Serial] tile loops are iterated under fresh symbols, per-axis edge guards
-          are constructed then folded — in [Where] form storing 0 (the add-reduce accumulation
-          identity) to out-of-range slots, so edge tiles of a non-dividing or padded staging are
-          safe to read over their whole index space; every minted tile is recorded in
+          [tile_loops] (schedule-ir-optops §5). The reads of [source] whose index vector mentions a
+          tile loop are staged, and must use one index vector (v1) whose per-axis terms split
+          cleanly into tile-loop terms (positive coefficients) and outer terms; every other read of
+          [source] (a second consumer, gh-ocannl-1147) keeps reading the unwritten source. With
+          [shared = true] the tile is added to [workgroup_shared] and a cooperative-load nest plus
+          barriers are inserted at the deepest loop carrying an outer-part symbol or a reused
+          [Workgroup] tile axis: [Workgroup]-typed tile loops are reused as the cooperating thread
+          indices, [Serial] tile loops are iterated under fresh symbols, per-axis edge guards are
+          constructed then folded — in [Where] form storing 0 (the add-reduce accumulation identity)
+          to out-of-range slots, so edge tiles of a non-dividing or padded staging are safe to read
+          over their whole index space; every minted tile is recorded in
           {!Low_level.optimized.zero_fringe} accordingly (gh-ocannl-485) — and redundant loading
           along non-participating workgroup axes is restricted to one representative thread. Shared
           stages sharing an anchor compose into ONE phase per iteration of it: a later stage's load

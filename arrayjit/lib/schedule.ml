@@ -1196,31 +1196,33 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
 
 (** {2 [Stage]: tile staging (schedule-ir-optops §5)}
 
-    The one transform that synthesizes code. [Stage { source; tile_loops; shared }] requires all
-    reads of [source] to use one index vector (v1). Each source axis's index is decomposed into a
-    tile part (terms over [tile_loops], positive coefficients) and an outer part; source axes with a
-    nonempty tile part become tile axes, sized by the tile part's range over the tile loops' extents
-    — except that a tile part whose coefficients share a factor [g > 1] (a strided window: a
-    stride-2 conv's implicit-GEMM row, or a stride-2 1x1 conv's row, split or not) is {e compacted}
-    (gh-ocannl-502, gh-ocannl-1148; {!stage_compaction_factor}): the tile axis is indexed by the
-    tile part divided by [g] and sized by that quotient's range, while the load nest's source index
-    (and edge guard) keeps the stride, so the packed tile is dense — a single strided term is stored
-    and read at coefficient 1, which satisfies [Tensorize]'s unit-coefficient index discipline.
-    Hoisted staging rejects compaction (v1). The tile's axes follow the {e tile_loops} order (the
-    position of each axis's first tile-part symbol in the list; ties keep source order), not the
-    source's: a packing Stage over a transposed operand normalizes its layout —
-    [tile_loops = [k; j]] on a [j, k]-stored source packs a [k]-major tile — which is what lets
-    packed tiles feed [Tensorize]'s register-tiled micro-kernel with [ta = tb = false]
-    (gh-ocannl-469). Every in-tree pipeline before this passed [tile_loops] in source order, where
-    the two orders coincide. The load nest is inserted at the deepest loop that must stay outside
-    the tile — the innermost loop carrying an outer-part symbol or a reused [Workgroup] tile axis —
-    by replacing that loop's body with [loads; barrier; body-with-reads-remapped; barrier]
-    ([shared]) or [loads; remapped body] (packing). Cooperative loads reuse [Workgroup]-typed tile
-    loops as the cooperating thread indices, iterate [Serial] tile loops under fresh symbols, guard
-    each tile axis with an [If (index < dim)] edge guard (construct-then-fold), and — for [shared] —
-    restrict redundant loading along non-participating workgroup axes with [If (w == 0)] guards. The
-    tile is a fresh [Local]-mode node registered in the traced store (and in [workgroup_shared] when
-    [shared]). *)
+    The one transform that synthesizes code. [Stage { source; tile_loops; shared }] stages the reads
+    of [source] whose index vector mentions a tile loop, and requires those to use one index vector
+    (v1); any other read of [source] — a second consumer in another nest, gh-ocannl-1147 — keeps
+    reading the source, which the routine never writes, so staging is a copy and the unstaged reads
+    stay correct. Each source axis's index is decomposed into a tile part (terms over [tile_loops],
+    positive coefficients) and an outer part; source axes with a nonempty tile part become tile
+    axes, sized by the tile part's range over the tile loops' extents — except that a tile part
+    whose coefficients share a factor [g > 1] (a strided window: a stride-2 conv's implicit-GEMM
+    row, or a stride-2 1x1 conv's row, split or not) is {e compacted} (gh-ocannl-502,
+    gh-ocannl-1148; {!stage_compaction_factor}): the tile axis is indexed by the tile part divided
+    by [g] and sized by that quotient's range, while the load nest's source index (and edge guard)
+    keeps the stride, so the packed tile is dense — a single strided term is stored and read at
+    coefficient 1, which satisfies [Tensorize]'s unit-coefficient index discipline. Hoisted staging
+    rejects compaction (v1). The tile's axes follow the {e tile_loops} order (the position of each
+    axis's first tile-part symbol in the list; ties keep source order), not the source's: a packing
+    Stage over a transposed operand normalizes its layout — [tile_loops = [k; j]] on a [j, k]-stored
+    source packs a [k]-major tile — which is what lets packed tiles feed [Tensorize]'s
+    register-tiled micro-kernel with [ta = tb = false] (gh-ocannl-469). Every in-tree pipeline
+    before this passed [tile_loops] in source order, where the two orders coincide. The load nest is
+    inserted at the deepest loop that must stay outside the tile — the innermost loop carrying an
+    outer-part symbol or a reused [Workgroup] tile axis — by replacing that loop's body with
+    [loads; barrier; body-with-reads-remapped; barrier] ([shared]) or [loads; remapped body]
+    (packing). Cooperative loads reuse [Workgroup]-typed tile loops as the cooperating thread
+    indices, iterate [Serial] tile loops under fresh symbols, guard each tile axis with an
+    [If (index < dim)] edge guard (construct-then-fold), and — for [shared] — restrict redundant
+    loading along non-participating workgroup axes with [If (w == 0)] guards. The tile is a fresh
+    [Local]-mode node registered in the traced store (and in [workgroup_shared] when [shared]). *)
 
 (* Schedule-minted tile/accumulator nodes live in their own reserved namespace, so their session ids
    are independent of tensor-land ids (allocated from 0 by the [Tensor] session counter). *)
@@ -1573,16 +1575,29 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     refuse
       "Schedule.Stage: swizzle is a shared-memory bank-conflict layout, it requires shared = true";
   let accesses = collect_source_accesses ~source opt.llc in
-  let idcs0, stack0 =
-    match accesses with
-    | [] -> refuse ("Schedule.Stage: no reads of " ^ Tn.debug_name source ^ " in the routine")
-    | hd :: _ -> hd
+  (* The staged reads are the ones whose index vector mentions a tile loop (gh-ocannl-1147). Every
+     other read of [source] keeps reading the source: a second consumer in another nest (the max
+     pool or 3x3 conv beside a strided 1x1 shortcut, the K and V projections beside Q), or a read
+     under the tile loops that does not vary with them. [source] is never written in the routine
+     ([collect_source_accesses] refuses a write), so staging is a copy, not a move, and an unstaged
+     read stays correct untouched; the remaps below match the staged index vector, which names a
+     tile loop no unstaged read mentions. Only the staged reads must agree on one index vector (v1).
+     With no staged read at all, the first read stands in, so the tile-loop occurrence check below
+     names the missing loop. *)
+  let staged =
+    List.filter accesses ~f:(fun (idcs, _) ->
+        Array.exists idcs ~f:(Indexing.axis_index_mentions_any tile_loops))
   in
-  List.iter accesses ~f:(fun (idcs, _) ->
+  let idcs0, stack0 =
+    match (staged, accesses) with
+    | [], [] -> refuse ("Schedule.Stage: no reads of " ^ Tn.debug_name source ^ " in the routine")
+    | hd :: _, _ | [], hd :: _ -> hd
+  in
+  List.iter staged ~f:(fun (idcs, _) ->
       if not (Array.equal Indexing.equal_axis_index idcs idcs0) then
         refuse
           ("Schedule.Stage: v1 requires all reads of " ^ Tn.debug_name source
-         ^ " to use identical index vectors"));
+         ^ " under the tile loops to use identical index vectors"));
   let stack0 =
     Array.of_list stack0
     (* outermost-first *)
@@ -5148,8 +5163,8 @@ let loops_independent (opt : Low_level.optimized) ~(syms : Indexing.symbol list)
   | loops -> List.fold loops ~init:Op_legal ~f:(fun v loop -> combine_verdicts v (verdict_of loop))
 
 (* [Stage] legality: apply the op on a hermetic copy — [apply_stage]'s precondition surface (source
-   unwritten and statically read through one index vector, tile loops enclosing/occurring with
-   positive coefficients, the shared-mode workgroup-slot coverage rule, the
+   unwritten and its staged reads statically through one index vector, tile loops
+   enclosing/occurring with positive coefficients, the shared-mode workgroup-slot coverage rule, the
    hoisted/cooperative/swizzle contracts) is deterministic on the code, so a raising probe proves
    the candidate compile's apply raises too: [Op_illegal] with no transcription drift. The minted
    tile and its (key-weak) [Host_inits] entry become unreachable with the discarded copy.

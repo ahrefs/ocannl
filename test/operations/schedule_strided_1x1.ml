@@ -46,11 +46,12 @@
    from the tuner (see {!segment_seeds}). The bare einsum sites must seed both flavors, and every
    seed must run and match. The production construction — [resnet_block]'s body, main branch
    included (see {!make}) — is stated differently, because there the tuner's view is
-   backend-dependent: on cc the block does not fission and every whole-routine seed DECLINES (its
-   operand [Stage] meets the main branch's second read of [x]), so the tuner times no sketch for the
-   shortcut; on GPU it fissions and the shortcut's segment seeds and runs. Its claim is that every
-   proposed seed either declines with a typed cause or runs and matches. Seed counts and declines
-   vary with the device, so they go to stderr.
+   backend-dependent: on cc the block does not fission, and the shortcut's whole-routine seeds stage
+   [x] while the main branch reads it too, at another index vector, which [Stage] leaves reading the
+   source (gh-ocannl-1147). On GPU the block fissions and the shortcut's segment seeds run. Its
+   claims are that every proposed seed either declines with a typed cause or runs and matches, and
+   that on the C backends every whole-routine seed runs and matches. Seed counts and declines vary
+   with the device, so they go to stderr.
 
    The block's values are not exact: inference-mode batch norm divides by the square root of its
    stored variance, and the main branch's two 3x3 convolutions then sum 576 such terms per cell into
@@ -568,6 +569,11 @@ let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
    else
      p_all (what ^ ": the device's own limits seed both flavors") [ whole_n; seg_n ] ~f:(fun n ->
          n > 0));
+  (* A whole-routine seed reorders the site's reduction against the unscheduled form, which on the
+     bare sites' exact integers changes nothing, and in the block may round its inexact sums by a
+     few ulps (a misread operand is off by far more). *)
+  let whole_tol = if declines then rounding else exact in
+  let whole_matches got = close ~tol:whole_tol ~want:unscheduled got in
   (* Declined candidates (see {!candidate}) yield [None]; a run keeps its name and seed for the
      census claims below. *)
   let whole_runs =
@@ -575,7 +581,7 @@ let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
         let name = Printf.sprintf "%s_w%d" tag i in
         let r = run_whole_candidate name s q in
         Option.iter r ~f:(fun (got, _) ->
-            report ~against:"unscheduled" ~want:unscheduled name (show q) got);
+            report ~tol:whole_tol ~against:"unscheduled" ~want:unscheduled name (show q) got);
         (name, q, r))
   in
   (* The form a per-segment seed is compared against: on the bare sites the unscheduled one, whose
@@ -685,21 +691,31 @@ let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
   else (
     (* The block: which flavor seeds is backend-dependent (whole-routine on the C backends, which do
        not fission it; per-segment on GPU, which gates the zeroed whole-routine site), and inside it
-       a seed may decline — on cc every whole-routine seed does, its operand [Stage] meeting the
-       main branch's second read of [x]. What holds is that no proposed seed, applied alone,
-       computes a wrong value — over a population that is not empty. The tuner's recombined
-       per-segment candidates (several keyed segments' best seeds at once, the block's conv segments
-       included) are not exercised: they are the fission machinery's composition, not this site's
-       seeds. *)
+       a seed may decline with a typed cause. What holds everywhere is that no proposed seed,
+       applied alone, computes a wrong value — over a population that is not empty. The tuner's
+       recombined per-segment candidates (several keyed segments' best seeds at once, the block's
+       conv segments included) are not exercised: they are the fission machinery's composition, not
+       this site's seeds. *)
     p_all
       (what
      ^ ": every seed either tuner flavor proposes, applied alone, declines with a typed cause or \
-        runs and matches the form it replaces one schedule of: the unscheduled form for a \
-        whole-routine seed, its segmentation on the default preset for a per-segment one")
+        runs and matches the form it replaces one schedule of: the unscheduled form up to f32 \
+        rounding for a whole-routine seed, its segmentation on the default preset for a \
+        per-segment one")
       (List.map (values whole_runs)
-         ~f:(Option.value_map ~default:true ~f:(fun (got, _) -> matches got))
+         ~f:(Option.value_map ~default:true ~f:(fun (got, _) -> whole_matches got))
       @ List.map (values seg_runs) ~f:(Option.value_map ~default:true ~f:seg_ok))
       ~f:Fn.id;
+    (* gh-ocannl-1147: the main branch reads [x] too, at its own index vector, and [Stage] leaves
+       that read on the source. A whole-routine seed that declined here would leave the C backends,
+       where the block does not fission, with no sketch for the tuner to time for the shortcut. *)
+    gated_all ~when_:on_cpu ~on:backend_name
+      (what
+     ^ ": on the C backends, which do not fission the block, every whole-routine seed runs (its \
+        operand Stage leaves the main branch's read of the input on the source) and matches the \
+        unscheduled form up to f32 rounding")
+      (values whole_runs)
+      ~f:(Option.value_map ~default:false ~f:(fun (got, _) -> whole_matches got));
     census_claim ~on_decline:true
       (what
      ^ ": every tensorized seed either tuner flavor proposes declines with a typed cause or \

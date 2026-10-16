@@ -149,6 +149,32 @@ let () =
   check "stage shared stays unknown" (stage ~shared:true ());
   check "stage hoisted without host-init data" (stage ~hoisted:true ());
   check "stage cooperative requires shared" (stage ~cooperative:(Some 32) ());
+  (* gh-ocannl-1147: only the reads that vary with the tile loops are staged; a second consumer of
+     the unwritten source at another index vector (here a transposing copy in its own nest) keeps
+     reading the source. Two index vectors under the tile loops are still refused (v1). *)
+  let e = fresh_tn "e" [| 8; 8 |] and i3 = Idx.get_symbol () and j3 = Idx.get_symbol () in
+  let module B = Ll_test in
+  let transposed_reader =
+    for_over i3
+      (for_over j3 (B.set e [| B.iter i3; B.iter j3 |] (B.get a [| B.iter j3; B.iter i3 |])))
+  in
+  let two_readers =
+    hand_built ~stmts:[ acc_nest; transposed_reader ] ~tns_on_device:[ a; b; c; e ] ~tns_local:[]
+  in
+  p "stage with a second reader in another nest" (Sched.op_legality two_readers (stage ()));
+  let cell = [| B.iter i2; B.iter j2 |] in
+  let two_vectors_under_k =
+    for_over i2
+      (for_over j2
+         (for_over k
+            (B.set c cell
+               (B.add (B.get c cell)
+                  (B.mul (B.get a [| B.iter i2; B.iter k |]) (B.get a [| B.iter k; B.iter j2 |]))))))
+  in
+  p "stage two index vectors under the tile loop"
+    (Sched.op_legality
+       (hand_built ~stmts:[ two_vectors_under_k ] ~tns_on_device:[ a; c ] ~tns_local:[])
+       (stage ()));
 
   (* Tensorize: role-assignment validity is decided by probing apply's micro-kernel recognition —
      the k role must be the (only) rmw-carrying loop and i/j the output dims, so of the 6 role

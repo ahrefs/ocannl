@@ -418,14 +418,23 @@ files.
   hoisted-grid) or pack it at link time (`site_hoistable`: hoisted staging refuses compaction).
   At batch 2+ the row stays `b` rows tall even though `ow` would be a taller one; that preference
   is what kept every pre-existing site's seeds unchanged. Inside the full block (at 64 channels;
-  at 16 the shortcut's conv is virtualized into its norm and is no site) cc does not fission it
-  and every whole-routine seed declines — the operand `Stage` meets the 3x3 conv's second read of
-  `x` (gh-ocannl-1147) — so the tuner times no sketch for the shortcut there; GPU fissions it and
-  the segment's seeds run. `test/operations/schedule_strided_1x1` uses the public `resnet_block`
+  at 16 the shortcut's conv is virtualized into its norm and is no site) cc does not fission it,
+  so its whole-routine seeds are the shortcut's only sketches there; GPU fissions it and the
+  segment's seeds run. `test/operations/schedule_strided_1x1` uses the public `resnet_block`
   with explicit `out_channels` (gh-ocannl-1146) and PINS the role structure at both batch sizes
-  and every seed's parity (or typed decline, in the block); which seeds decline where it only
-  reports on stderr, and the 16-channel virtualization is a manual observation (conv2d into
-  batch_norm2d, 16 channels) that no test exercises.
+  and every seed's parity (or typed decline, in the block, except cc's whole-routine seeds, which
+  must run); which seeds decline where it only reports on stderr, and the 16-channel
+  virtualization is a manual observation (conv2d into batch_norm2d, 16 channels) that no test
+  exercises.
+- **`Stage` stages only the reads that vary with its tile loops** (gh-ocannl-1147). A whole-routine
+  matmul seed stages its A operand while another nest reads the same node at another index vector
+  (the 3x3 conv or max pool beside a strided 1x1 shortcut, the K and V projections beside Q).
+  `apply_stage` remaps only the reads whose index vector mentions a tile loop, which must still
+  agree on one vector (v1), and leaves every other read on the source: the source is never written
+  in the routine, so staging is a copy, not a move. On cc, which does not fission such a routine,
+  a refused second reader declines every whole-routine seed and the tuner times no sketch for the
+  site. Per-reader staging (a tile per distinct vector) is the unbuilt alternative, for when a
+  second reader is itself hot.
 - **A per-segment candidate's executed-parity reference is its own segmentation on the default
   preset, not the unscheduled form, wherever the values are inexact** (gh-ocannl-1217). The
   candidate schedules every OTHER segment by the default preset too, so against the unscheduled
