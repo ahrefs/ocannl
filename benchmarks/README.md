@@ -160,6 +160,14 @@ cell is the step: cite the step cell. Each issue's cell:
 | gh-ocannl-697 (the conv family tree) | `cifar_resnet/<backend>/tuned/exact` and `cifar_resnet_b1/<backend>/tuned/exact`, with `· pad3x3` on a GPU |
 | gh-ocannl-503 (whole-routine zeroed GPU conv sites) | `cifar_resnet/<gpu>/tuned/exact` under `--cell-flag '*/<gpu>/tuned:schedule_fission=false'` |
 
+**Tuned cells: not cacheable yet.** A `tuned` cifar_resnet row cannot pass the provenance gate
+today: every padded conv operand (the stem's input, each block's input, the pools feeding a padded
+conv, and their gradients) lowers into loop nests that re-bind a loop symbol, the schedule cache
+refuses a canonical form with a re-bound binder (`SC.complete` false), and so nothing is stored and
+pass 2 searches again (`bench_conv_diag` with `BENCH_CANON=1` lists the binders; `lenet` with
+padded convs reproduces it, the valid-conv workloads do not). Until that is fixed, a tuned row is
+search-pass timing, and the baseline cells are the untuned ones.
+
 ## Layout
 
 - `workloads/*.json` — workload specs; `gen_fixtures.py` generates
@@ -632,6 +640,11 @@ cell is the step: cite the step cell. Each issue's cell:
   gpt2_mini_train_b256 the in-step medians sum to the traced step p50 within 0.2%, while 34
   kernels (16% of the step) sit 15-130% off their isolated minimum in every repeat. Tracing costs
   about 2-3% of step time, so a kprof cell's step time enters no matrix.
+  `BENCH_CANON=1` (`bench_conv_diag`) prints whether the schedule cache can key the step's
+  lowering (`Schedule_cache.complete` of its canonical form) and, when it cannot, why: the free
+  symbols, the loop symbols bound twice (each with the first node its loop body reads) and the
+  opaque constructs. A lowering that is not complete is never stored, with no log line, so a tuned
+  cell's pass 2 searches again and fails the provenance gate (gh-ocannl-1161).
   `BENCH_SR_SITES=1` (`bench_conv_diag`) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

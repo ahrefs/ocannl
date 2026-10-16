@@ -73,6 +73,36 @@ let () =
      routine is discarded); the timed routine is compiled with the regular default pipeline
      below. *)
   let opt = H.capture_lowering ctx step_comp bindings in
+  if H.env_flag "BENCH_CANON" then (
+    let module LL = Ir.Low_level in
+    let canon = Ir.Schedule_cache.canonicalize ~static_indices:[ batch_n ] opt in
+    Stdio.printf "schedule-cache canonical form complete: %b\n" (Ir.Schedule_cache.complete canon);
+    let free = Hash_set.create (module String) and shadowed = Hash_set.create (module String) in
+    let opaque = ref 0 in
+    (* The first node each re-bound loop's body references, to say whose loop nest it is. *)
+    let pending = ref None in
+    LL.Canonical_render.emit ~buf:(Buffer.create 4096)
+      {
+        LL.Canonical_render.emit_tn =
+          (fun tn ->
+            Option.iter !pending ~f:(fun s ->
+                Hash_set.add shadowed (s ^ "@" ^ Ir.Tnode.debug_name tn);
+                pending := None));
+        emit_free_sym = (fun s -> Hash_set.add free (Ir.Indexing.symbol_ident s));
+        on_bind_loop =
+          (fun s ~id:_ ~shadowed:sh -> if sh then pending := Some (Ir.Indexing.symbol_ident s));
+        mark_incomplete = (fun () -> Int.incr opaque);
+        mma = LL.Canonical_render.Structural_mma;
+        initial_tokens = [ (batch_n.Ir.Indexing.static_symbol, "s0") ];
+      }
+      opt.LL.llc;
+    let show name set =
+      Stdio.printf "  %s: %d [%s]\n" name (Hash_set.length set)
+        (String.concat ~sep:" " (List.sort ~compare:String.compare (Hash_set.to_list set)))
+    in
+    show "free symbols" free;
+    show "shadowed loop binders" shadowed;
+    Stdio.printf "  opaque constructs: %d\n%!" !opaque);
   let promote_locals =
     match Stdlib.Sys.getenv_opt "BENCH_PROMOTE" with Some "0" -> Some false | _ -> None
   in
