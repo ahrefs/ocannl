@@ -4211,16 +4211,19 @@ let no_seeded_choice = { sd_seeded = []; sd_refined = 0; sd_fell_back = false }
 
 let seeded_transform ?min_reduction ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
   let backend = Context.backend_name ctx in
-  let min_reduction =
+  (* The backend first: the threshold is a CUDA/HIP setting, so a malformed value must not break a
+     compile on a backend that ignores it. *)
+  let min_reduction () =
     match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
   in
   if
-    min_reduction <= 0
-    || (not (seeded_default_backend backend))
+    (not (seeded_default_backend backend))
+    || min_reduction () <= 0
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
   else
+    let min_reduction = min_reduction () in
     let limits = Context.hardware_limits ctx in
     let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
     let static_indices = Idx.bound_symbols bindings in
