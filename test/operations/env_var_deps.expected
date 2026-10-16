@@ -48,6 +48,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   cc_parallel_chunks
   cc_parallel_grid
   cc_vector_bytes
+  cc_vector_registers
   check_half_prec_constants_cutoff
   cpu_schedule_min_parallel
   debug_log_from_routines
