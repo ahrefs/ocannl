@@ -714,15 +714,30 @@ uint16_t single_to_bfloat16(float f)
        are macro parameters; [LANES] is only used by the fallback arms. Each fallback goes through
        the very scalar conversion the serial path uses, which is what makes the vectorized rendering
        bitwise identical to its serial remainder loop on any compiler. *)
+    (* A test-only preprocessor switch (gh-ocannl-1145), 0 unless the compile defines it. gcc and
+       clang both have [__builtin_convertvector], so without it every fallback arm is preprocessed
+       away on every compiler the tests run on. Set -- a [-DOCANNL_FORCE_PORTABLE_BRIDGES] in
+       [cc_backend_compiler_command] -- it selects every fallback arm: [OCANNL_HAS_CONVERTVECTOR]
+       answers 0, and the x86 width-specific bridges further down become renames of the portable
+       ones. [test/operations/bridge_arm_coverage] compiles and runs kernels that way. *)
+    ( "OCANNL_FORCE_PORTABLE_BRIDGES",
+      {|
+#ifndef OCANNL_FORCE_PORTABLE_BRIDGES
+  #define OCANNL_FORCE_PORTABLE_BRIDGES 0
+#endif
+|},
+      [] );
     ( "OCANNL_HAS_CONVERTVECTOR",
       {|
-#if __has_builtin(__builtin_convertvector)
+#if OCANNL_FORCE_PORTABLE_BRIDGES
+  #define OCANNL_HAS_CONVERTVECTOR 0
+#elif __has_builtin(__builtin_convertvector)
   #define OCANNL_HAS_CONVERTVECTOR 1
 #else
   #define OCANNL_HAS_CONVERTVECTOR 0
 #endif
 |},
-      [] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES" ] );
     ( "OCANNL_VEC_WIDEN_BFLOAT16",
       {|
 /* bfloat16 is the top 16 bits of a float: zero-extend and shift. LANES is the number of VALID
@@ -895,7 +910,7 @@ uint16_t single_to_bfloat16(float f)
        LANES elements are read, as in the portable arms. *)
     ( "OCANNL_VEC_WIDEN_BFLOAT16_X4",
       {|
-#if defined(__SSE4_1__) && __has_builtin(__builtin_ia32_pmovzxwd128)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && defined(__SSE4_1__) && __has_builtin(__builtin_ia32_pmovzxwd128)
   #define OCANNL_VEC_WIDEN_BFLOAT16_X4(U16V, U32V, LANES, dst, src) do { \
     typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
     typedef long long ocannl_w2di__ __attribute__((vector_size(16))); \
@@ -907,10 +922,10 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDEN_BFLOAT16_X4 OCANNL_VEC_WIDEN_BFLOAT16
 #endif
 |},
-      [ "OCANNL_VEC_WIDEN_BFLOAT16" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "OCANNL_VEC_WIDEN_BFLOAT16" ] );
     ( "OCANNL_VEC_WIDEN_BFLOAT16_X8",
       {|
-#if defined(__AVX2__) && __has_builtin(__builtin_ia32_pmovzxwd256)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && defined(__AVX2__) && __has_builtin(__builtin_ia32_pmovzxwd256)
   #define OCANNL_VEC_WIDEN_BFLOAT16_X8(U16V, U32V, LANES, dst, src) do { \
     typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
     ocannl_w8hi__ ocannl_nb__ = {0}; __builtin_memcpy(&ocannl_nb__, (src), (LANES) * 2); \
@@ -920,10 +935,10 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDEN_BFLOAT16_X8 OCANNL_VEC_WIDEN_BFLOAT16
 #endif
 |},
-      [ "OCANNL_VEC_WIDEN_BFLOAT16" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "OCANNL_VEC_WIDEN_BFLOAT16" ] );
     ( "OCANNL_VEC_WIDEN_BFLOAT16_X16",
       {|
-#if defined(__AVX512F__) && __has_builtin(__builtin_ia32_pmovzxwd512_mask)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && defined(__AVX512F__) && __has_builtin(__builtin_ia32_pmovzxwd512_mask)
   #define OCANNL_VEC_WIDEN_BFLOAT16_X16(U16V, U32V, LANES, dst, src) do { \
     typedef short ocannl_w16hi__ __attribute__((vector_size(32))); \
     typedef int ocannl_w16si__ __attribute__((vector_size(64))); \
@@ -935,10 +950,10 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDEN_BFLOAT16_X16 OCANNL_VEC_WIDEN_BFLOAT16
 #endif
 |},
-      [ "OCANNL_VEC_WIDEN_BFLOAT16" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "OCANNL_VEC_WIDEN_BFLOAT16" ] );
     ( "OCANNL_VEC_WIDEN_HALF_X4",
       {|
-#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtph2ps)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtph2ps)
   #define OCANNL_VEC_WIDEN_HALF_X4(FV, HV, LANES, dst, src) do { \
     typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
     typedef long long ocannl_w2di__ __attribute__((vector_size(16))); \
@@ -949,10 +964,10 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDEN_HALF_X4 OCANNL_VEC_WIDEN_HALF
 #endif
 |},
-      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
     ( "OCANNL_VEC_WIDEN_HALF_X8",
       {|
-#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtph2ps256)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtph2ps256)
   #define OCANNL_VEC_WIDEN_HALF_X8(FV, HV, LANES, dst, src) do { \
     typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
     ocannl_w8hi__ ocannl_nh__ = {0}; __builtin_memcpy(&ocannl_nh__, (src), (LANES) * 2); \
@@ -962,10 +977,10 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDEN_HALF_X8 OCANNL_VEC_WIDEN_HALF
 #endif
 |},
-      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
     ( "OCANNL_VEC_WIDEN_HALF_X16",
       {|
-#if HAS_NATIVE_FLOAT16 && defined(__AVX512F__) && __has_builtin(__builtin_ia32_vcvtph2ps512_mask)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__AVX512F__) && __has_builtin(__builtin_ia32_vcvtph2ps512_mask)
   #define OCANNL_VEC_WIDEN_HALF_X16(FV, HV, LANES, dst, src) do { \
     typedef short ocannl_w16hi__ __attribute__((vector_size(32))); \
     typedef float ocannl_w16sf__ __attribute__((vector_size(64))); \
@@ -977,7 +992,7 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDEN_HALF_X16 OCANNL_VEC_WIDEN_HALF
 #endif
 |},
-      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
     (* The fp16 narrowing bridges at the same three widths (gh-ocannl-1101), the store-side twins of
        the widenings above, named by [C_syntax.vec_narrow_macro]; same arguments as the portable
        [OCANNL_VEC_NARROW_HALF], so the fallback is a rename.
@@ -1004,7 +1019,7 @@ uint16_t single_to_bfloat16(float f)
        written, as in the portable arm. *)
     ( "OCANNL_VEC_NARROW_HALF_X4",
       {|
-#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtps2ph)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtps2ph)
   #define OCANNL_VEC_NARROW_HALF_X4(HV, LANES, dst, src) do { \
     typedef float ocannl_n4sf__ __attribute__((vector_size(16))); \
     typedef short ocannl_n8hi__ __attribute__((vector_size(16))); \
@@ -1015,10 +1030,10 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_NARROW_HALF_X4 OCANNL_VEC_NARROW_HALF
 #endif
 |},
-      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
     ( "OCANNL_VEC_NARROW_HALF_X8",
       {|
-#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtps2ph256)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtps2ph256)
   #define OCANNL_VEC_NARROW_HALF_X8(HV, LANES, dst, src) do { \
     typedef float ocannl_n8sf__ __attribute__((vector_size(32))); \
     typedef short ocannl_n8hi__ __attribute__((vector_size(16))); \
@@ -1029,10 +1044,10 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_NARROW_HALF_X8 OCANNL_VEC_NARROW_HALF
 #endif
 |},
-      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
     ( "OCANNL_VEC_NARROW_HALF_X16",
       {|
-#if HAS_NATIVE_FLOAT16 && defined(__AVX512F__) && __has_builtin(__builtin_ia32_vcvtps2ph512_mask)
+#if !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__AVX512F__) && __has_builtin(__builtin_ia32_vcvtps2ph512_mask)
   #define OCANNL_VEC_NARROW_HALF_X16(HV, LANES, dst, src) do { \
     typedef float ocannl_n16sf__ __attribute__((vector_size(64))); \
     typedef short ocannl_n16hi__ __attribute__((vector_size(32))); \
@@ -1044,7 +1059,7 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_NARROW_HALF_X16 OCANNL_VEC_NARROW_HALF
 #endif
 |},
-      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
+      [ "OCANNL_FORCE_PORTABLE_BRIDGES"; "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
     (* A register tile's bf16 A column, widened a group of four rows at a time (named by
        [C_syntax.vec_widen_rows_macros], which says why only there). [..._ROWS_X4] declares [dst]
        and widens the four rows' storage elements [a0]..[a3] into it; [OCANNL_VEC_WIDENED_ROW_X4] is

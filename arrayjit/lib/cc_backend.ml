@@ -888,6 +888,36 @@ let compile_failure_detail ~exit_code ~source_note ~command ~compiler_output =
     (C_syntax.codegen_bug_claim ~artifact:source_note)
     command compiler_output
 
+(* The flags every kernel compile passes after the compiler command (output, link and log
+   redirections aside). One definition, because [test/operations/bridge_arm_coverage] preprocesses
+   the retained kernel sources under them to read which bridge arm each kernel compiled into
+   (gh-ocannl-1145): a reading under any other flags would describe a target no kernel was built
+   for. *)
+let kernel_compiler_flags () =
+  let optimization_flag = "-O" ^ Int.to_string (optimization_level ()) in
+  let arch_flag = String.strip (arch_flags ()) in
+  let simd_flag = String.strip (simd_flags ()) in
+  let fast_math_flag = fast_math_flag () in
+  (* [-fopenmp] must also reach the link step (this command compiles and links); harmless for
+     kernels without parallel Grid loops. *)
+  let parallel_flag =
+    match parallel_grid_syntax_setting () with
+    | `Openmp -> Some "-fopenmp"
+    | `Dispatch | `None -> None
+  in
+  [
+    Some optimization_flag;
+    Option.some_if (not (String.is_empty arch_flag)) arch_flag;
+    Option.some_if (not (String.is_empty simd_flag)) simd_flag;
+    fast_math_flag;
+    (* AFTER [-ffast-math], which itself sets contraction to fast: clang documents that the last of
+       the two wins, so the explicit knob has to come last or [cc_backend_fp_contract=off] would
+       silently do nothing in the one combination where it is load-bearing (Codex P2 on PR #291). *)
+    fp_contract_flag ();
+    parallel_flag;
+  ]
+  |> List.filter_opt |> String.concat ~sep:" "
+
 let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
   (* The pool restriction (gh-ocannl-530) must be in force before the first [-fopenmp] kernel is
      dlopened, not merely before its first parallel region: libgomp computes its default team size
@@ -948,39 +978,13 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags = Lazy.force kernel_link_flags in
   let temp_log = Stdlib.Filename.temp_file "ocannl_cc_" ".log" in
-  let compiler_flags =
-    let optimization_flag = "-O" ^ Int.to_string (optimization_level ()) in
-    let arch_flag = String.strip (arch_flags ()) in
-    let simd_flag = String.strip (simd_flags ()) in
-    let fast_math_flag = fast_math_flag () in
-    (* [-fopenmp] must also reach the link step (this command compiles and links); harmless for
-       kernels without parallel Grid loops. *)
-    let parallel_flag =
-      match parallel_grid_syntax_setting () with
-      | `Openmp -> Some "-fopenmp"
-      | `Dispatch | `None -> None
-    in
-    [
-      Some optimization_flag;
-      Option.some_if (not (String.is_empty arch_flag)) arch_flag;
-      Option.some_if (not (String.is_empty simd_flag)) simd_flag;
-      fast_math_flag;
-      (* AFTER [-ffast-math], which itself sets contraction to fast: clang documents that the last
-         of the two wins, so the explicit knob has to come last or [cc_backend_fp_contract=off]
-         would silently do nothing in the one combination where it is load-bearing (Codex P2 on PR
-         #291). *)
-      fp_contract_flag ();
-      parallel_flag;
-    ]
-    |> List.filter_opt |> String.concat ~sep:" "
-  in
   let _cmdline : string =
     (* Quoted for the same reason as the probes': these paths sit under the build or the system temp
        directory, either of which can contain whitespace, and an unquoted one splits into arguments
        and fails every compile with a "this is a bug in OCANNL" report against a command the shell
        never saw whole. *)
     Printf.sprintf "%s %s %s -o %s %s > %s 2>&1" (compiler_command ())
-      (Stdlib.Filename.quote f_path) compiler_flags (Stdlib.Filename.quote libname)
+      (Stdlib.Filename.quote f_path) (kernel_compiler_flags ()) (Stdlib.Filename.quote libname)
       kernel_link_flags (Stdlib.Filename.quote temp_log)
   in
   (* Debug: log the command if debugging is enabled *)

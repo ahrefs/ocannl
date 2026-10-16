@@ -7,6 +7,12 @@ val compiler_command : unit -> string
     toolchain that will build them for real -- a census run against a different compiler would
     describe guarded arms nothing here selects. *)
 
+val kernel_compiler_flags : unit -> string
+(** The flags a kernel compile passes after {!compiler_command}: optimization level, arch and SIMD
+    flags, fast math, contraction and the parallel-grid runtime, all resolved. Exposed for
+    [test/operations/bridge_arm_coverage] (gh-ocannl-1145), which preprocesses retained kernel
+    sources under exactly these flags to read which storage-bridge arm each one compiled into. *)
+
 val compiler_executable_identity : string -> string
 (** Resolves every executable token in a compiler command and fingerprints its path, size and
     modification time. Exposed for the generated-kernel census's persistent listing identity: an
