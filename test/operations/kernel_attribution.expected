@@ -1,0 +1,9 @@
+in-step durations come from the timed window only: true
+a later routine's segments map to the table's indices after its predecessors': true
+the isolated warmup run is not an isolated timing: true
+ISO flags an isolated time off its in-step one, SPREAD a wide in-step spread: true
+one cell renders its table and owes no repeatability section: true
+cells of one kernel list are compared kernel by kernel, the moved one listed: true
+a cell that shipped other kernels is attributed but compared with none: true
+an incomplete table, a missing trace or result, a short window, an unmapped segment: refused
+a report with a refused cell, or with no cell, fails: true

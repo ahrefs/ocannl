@@ -7,7 +7,7 @@
 # Usage (from anywhere; the "fix" checkout is the one this script lives in):
 #   benchmarks/gh1133_cells.sh [--box BOX] [--skip-box-check] OUT BASE CAP STEP...
 #
-#   --box BOX  required when a STEP measures (step, seg, trainseg): before OUT is made,
+#   --box BOX  required when a STEP measures (step, seg, trainseg, kprof): before OUT is made,
 #         benchmarks/check-box.sh checks BOX and FIXTURES in FIXTURE_DIR, and a GAP refuses the
 #         run (benchmarks/box-gate.sh; --skip-box-check is for a deliberate partial run).
 #   OUT   results directory, created, and refused unless empty. OUT/driver.log records everything
@@ -16,7 +16,7 @@
 #   BASE  a checkout of the base revision (the two-loop presets), built by the `build` step too.
 #   CAP   wall cap in seconds per build and per cell; a capped cell's process group is terminated
 #         and the cell counts as failed.
-#   STEP  build | provenance | step | seg | trainseg | summary
+#   STEP  build | provenance | step | seg | trainseg | kprof | summary
 #     build       dune build of bench_gpt and bench_gpt_diag in both checkouts.
 #     provenance  both revisions, clean-tree checks, the fixtures' digests against the m4-max
 #                 content-v1 rows of fixtures/DIGESTS.txt, and the host state.
@@ -29,10 +29,20 @@
 #     trainseg    training-fixture counterpart of seg: the shipped backprop + SGD segments, with
 #                 full-step controls BEFORE isolated timing mutates weights/gradients. Requires a
 #                 runner with gh-ocannl-1170 (an old forward-only diagnostic is refused).
+#     kprof       per-kernel attribution of the step itself (gh-ocannl-1347; BACKEND=cuda, nsys on
+#                 PATH): FIXTURES x TREATMENTS, REPEATS passes ordered as `step`'s, each a step
+#                 cell (bench_gpt, the per-kernel table on) under `nsys profile --trace=cuda
+#                 --cuda-graph-trace=node` with an nvidia-smi clock sampler beside it. Every
+#                 shipped segment's device duration over the timed steps is joined with the same
+#                 compile's isolated minimum (benchmarks/kernel_attribution.py, which refuses a
+#                 cell it cannot map), and rows where the two disagree, or the in-step spread is
+#                 wide, are flagged: only the in-step column attributes step time. The step time
+#                 of a kprof cell carries the tracer's overhead; it enters no matrix.
 #     summary     OUT/summary.md from the numbered passes' result lines: median p50 per cell, the
 #                 p50 of each repeat, the widest p90/p10 of the cell's repeats, the ratio to the
 #                 same fixture's base cell, and the losses' largest relative difference from base.
-#                 Appends the trainseg census/timing tables beside the step-time matrix, if run.
+#                 Appends the trainseg census/timing tables beside the step-time matrix, if run,
+#                 and kprof's attribution and cross-cell repeatability tables.
 #                 An invocation without a `step` step (a prep or dry run: build, provenance,
 #                 trainseg, summary) has no matrix to report: summary says so and passes on the
 #                 tables alone, while a `step` step whose cells produced no result line fails.
@@ -117,7 +127,7 @@ gate_names=""
 for gate_step in "$@"; do
   for f in $fixtures; do
     case $gate_step in
-      step) gate_names="$gate_names $f" ;;
+      step | kprof) gate_names="$gate_names $f" ;;
       seg) case $f in *train*) ;; *) gate_names="$gate_names $f" ;; esac ;;
       trainseg) case $f in *train*) gate_names="$gate_names $f" ;; esac ;;
     esac
@@ -202,20 +212,36 @@ capped() {
   return "$st"
 }
 
+# [cell FIXTURE TREATMENT TAG [EXE [profile]]]: with `profile`, the runner runs under nsys (the
+# CUDA graph traced node by node, so each segment of the replayed step is its own record), writing
+# OUT/CELL.nsys-rep, and an nvidia-smi sampler records OUT/CELL.smi.csv for the cell's duration.
 cell() {
-  local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} flags r
+  local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} profile=${5:-} flags r st smi
   flags=$(flags_of "$treatment") || { failed=1; return 1; }
   r=$(runner_root "$treatment")
-  local name="$backend-$fixture-$treatment-$tag"
+  local name="$backend-$fixture-$treatment-$tag" wrap=()
   echo "backend=$backend fixture=$fixture treatment=$treatment runner=$r flags=[$flags]" >"$out/$name.err"
+  if [ -n "$profile" ]; then
+    wrap=(nsys profile --trace=cuda --cuda-graph-trace=node --sample=none --cpuctxsw=none
+      --force-overwrite=true -o "$out/$name")
+    nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,pstate,power.draw,temperature.gpu,clocks_event_reasons.active \
+      --format=csv -lms 250 >"$out/$name.smi.csv" 2>&1 &
+    smi=$!
+  fi
   # shellcheck disable=SC2086 # the treatment's flags are separate words by construction
   BENCH_FIXTURE="$fixture_dir/$fixture.safetensors" BENCH_TUNE=0 BENCH_MATERIALIZE=0 \
     BENCH_DEBUG=0 BENCH_SEG_TIMES="${SEG:-0}" BENCH_KERNEL_TABLE="$kernel_table" \
-    capped "$name" "$r/_build/default/benchmarks/runners/ocannl/$exe.exe" \
+    capped "$name" ${wrap[@]+"${wrap[@]}"} "$r/_build/default/benchmarks/runners/ocannl/$exe.exe" \
     --ocannl_backend="$backend" --ocannl_default_prec=single \
     --ocannl_schedule_fission=true --ocannl_automatic_gpu_schedule=true \
     --ocannl_autotune_search=false --ocannl_debug_log_from_routines=false \
     --ocannl_output_debug_files_in_build_directory=false $flags
+  st=$?
+  if [ -n "$profile" ]; then
+    kill "$smi" 2>/dev/null
+    wait "$smi" 2>/dev/null
+  fi
+  return "$st"
 }
 
 # The cell list in pass order: forward on odd passes, reversed on even ones.
@@ -305,11 +331,32 @@ for step in "$@"; do
           python3 "$root/benchmarks/gh1133_summary.py" --check-training "$out" "$name.out" || failed=1
         done
       done ;;
+    kprof)
+      need_identity kprof || continue
+      if [ "$backend" != cuda ] || ! command -v nsys >/dev/null || ! command -v nvidia-smi >/dev/null; then
+        echo "gh1133: kprof needs BACKEND=cuda with nsys and nvidia-smi on PATH (backend: $backend)"
+        failed=1
+        continue
+      fi
+      for pass in $(seq 1 "$repeats"); do
+        for c in $(pass_cells "$pass" "$fixtures"); do
+          name="$backend-${c%%:*}-${c#*:}-kprof$pass"
+          cell "${c%%:*}" "${c#*:}" "kprof$pass" bench_gpt profile || continue
+          # The per-launch table of the trace; the SQLite export it goes through is not kept.
+          nsys stats --report cuda_gpu_trace --format csv --force-export=true \
+            --output "$out/$name" "$out/$name.nsys-rep" >>"$out/$name.err" 2>&1 || failed=1
+          rm -f "${out:?}/$name.sqlite"
+          python3 "$root/benchmarks/kernel_attribution.py" check "$out" "$name.out" || failed=1
+        done
+      done ;;
     summary)
       matrix=()
       [ "$step_stage" = 1 ] || matrix=(--no-step-stage)
       python3 "$root/benchmarks/gh1133_summary.py" ${matrix[@]+"${matrix[@]}"} \
         "$out" "$treatments" "$ref" "${REF_ALL:-}" >"$out/summary.md" || failed=1
+      if ls "$out"/*-kprof[0-9]*.out >/dev/null 2>&1; then
+        python3 "$root/benchmarks/kernel_attribution.py" report "$out" >>"$out/summary.md" || failed=1
+      fi
       cat "$out/summary.md" ;;
     *) echo "gh1133: unknown step $step"; failed=1 ;;
   esac

@@ -73,6 +73,10 @@ let exempt_sites =
        %{dep:../../benchmarks/gh1002_cells.py}",
       "the kernel-table controls import only Python modules and parse synthetic stderr; they \
        launch no OCANNL executable and read no OCANNL configuration" );
+    ( "test/operations:python3, handed %{dep:kernel_attribution.py}, \
+       %{dep:../../benchmarks/kernel_attribution.py}",
+      "the kprof attribution controls (gh-ocannl-1347) import only Python modules and join \
+       synthetic traces; they launch no OCANNL executable and read no OCANNL configuration" );
     ( "arrayjit/lib:gen_builtins/generate.exe",
       "the builtin header generator links only the OCaml stdlib and a pure C definition table; it \
        reads no OCANNL configuration" );

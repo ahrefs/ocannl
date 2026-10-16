@@ -218,6 +218,7 @@
  (name runtest)
  (deps
   (alias runtest-gh1133_summary)
+  (alias runtest-kernel_attribution)
   (alias runtest-gh1002_kernels)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_block_fast_math)
@@ -8330,6 +8331,31 @@
       %{dep:gh1133_summary.py}
       %{dep:../../benchmarks/gh1133_summary.py}))
     (diff gh1133_summary.expected gh1133_summary.actual)))))
+
+; The kprof cell's in-step/isolated join, flags, refusals and repeatability table (gh-ocannl-1347).
+
+(rule
+ ; ocannl-backend: none -- joins synthetic traces in Python and launches no OCANNL executable.
+ (alias runtest-kernel_attribution)
+ (deps
+  (alias runtest-env_spelling_gate)
+  kernel_attribution.py
+  kernel_attribution.expected
+  ../../benchmarks/kernel_attribution.py
+  ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/box_gate.py
+  ../../benchmarks/cell_group.py
+  ../../benchmarks/strict_json.py)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     kernel_attribution.actual
+     (run
+      python3
+      %{dep:kernel_attribution.py}
+      %{dep:../../benchmarks/kernel_attribution.py}))
+    (diff kernel_attribution.expected kernel_attribution.actual)))))
 
 ; Exercise the shipping per-kernel table reader with and without Python assertions.
 

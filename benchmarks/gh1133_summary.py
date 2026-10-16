@@ -129,7 +129,9 @@ def summary(out, treatments, ref_treatment, ref_all="", step_stage=True):
                 incomplete = True
                 continue
             print("\n### Training segments: %s\n" % name[:-4])
-            print("Isolated min-of-20 launch + sync times; their sum is not a step latency.\n")
+            print("Isolated min-of-20 launch + sync times; their sum is not a step latency, and a row"
+                  " is not that kernel's share of the step: the kprof step's in-step column is"
+                  " (benchmarks/kernel_attribution.py).\n")
             print("```text")
             print(content.rstrip())
             print("```")
