@@ -1379,9 +1379,10 @@ let builtin_definitions builtins ~keys =
 
 (** The cc builtin a whole-vector widening bridge from 16-bit storage [store_prec] (bf16 or fp16) to
     [lanes] lanes of [prec] calls, [None] for any other storage precision. An f32 bridge at 4, 8 or
-    16 lanes -- the widths an x86 register holds -- names its width's macro, whose arm is one packed
-    instruction where the target has it (gh-ocannl-1072); any other bridge names the portable macro,
-    which the width-specific ones fall back to. [C_syntax.vec_bridge] renders the call and
+    16 lanes -- the widths an x86 register holds, the first also NEON's -- names its width's macro,
+    whose arm is one packed instruction where the target has it (gh-ocannl-1072; the 4-lane macro's
+    aarch64 arm, gh-ocannl-1158); any other bridge names the portable macro, which the
+    width-specific ones fall back to. [C_syntax.vec_bridge] renders the call and
     [test/operations/cc_march_census] compiles the macro this names, so the two cannot disagree. *)
 let vec_widen_macro ~store_prec ~prec ~lanes =
   let widen format =
@@ -1397,10 +1398,11 @@ let vec_widen_macro ~store_prec ~prec ~lanes =
 (** The cc builtin a whole-vector narrowing bridge from [lanes] lanes of [prec] back to 16-bit
     storage [store_prec] calls, as {!vec_widen_macro} for the other direction. fp16 at an x86
     register's f32 width names its width's macro, one [vcvtps2ph] where the target has F16C
-    (gh-ocannl-1101): gcc lowers the portable [__builtin_convertvector] to [_Float16] one lane at a
-    time. bf16 keeps the portable macro at every width: its narrowing is integer arithmetic and a
-    truncating [__builtin_convertvector] between unsigned vectors, which gcc 13.4 and 15.2 both
-    lower whole-vector at each x86 register's width. *)
+    (gh-ocannl-1101), and at 4 lanes one [fcvtn] on aarch64 gcc (gh-ocannl-1158): gcc lowers the
+    portable [__builtin_convertvector] to [_Float16] one lane at a time. bf16 keeps the portable
+    macro at every width: its narrowing is integer arithmetic and a truncating
+    [__builtin_convertvector] between unsigned vectors, which gcc 13.4 and 15.2 both lower
+    whole-vector at each x86 register's width, as aarch64 gcc 13 to 15 do at NEON's. *)
 let vec_narrow_macro ~store_prec ~prec ~lanes =
   let narrow format =
     match (prec, lanes) with
@@ -1431,7 +1433,9 @@ let partial_staging_idents = ("ocannl_pv__", "ocannl_pc__")
     two accumulators spilled on every k step. x86 has no by-element FMA, so packing there adds a
     shuffle per row (and a stack spill at some widths). The x86 arms of these builtins therefore
     reduce to exactly the per-row rendering. fp16 storage widens with one [fcvt], which gcc
-    schedules without the spill, so it keeps the per-row form. *)
+    schedules without the spill, so it keeps the per-row form. aarch64 gcc 13's scheduler hoists the
+    rows' A loads even with nothing to widen, which the tile's [OCANNL_TILE_FENCE] between rows
+    answers instead (gh-ocannl-1158). *)
 let vec_widen_rows_macros ~store_prec ~prec ~lanes =
   match (store_prec, prec, lanes) with
   | Ops.Bfloat16_prec _, Ops.Single_prec _, 4 ->
@@ -5495,7 +5499,11 @@ module C_syntax (B : C_syntax_config) = struct
                          | Some (pack_call, binding) -> (pack_call ~i ~rows r, binding ~i r)
                          | None -> ([], a_elt ~row:(row_expr ~i r) ~l:"tmma_l__")
                        in
-                       pack
+                       (* Each row after the first starts behind a scheduling fence, so that aarch64
+                          gcc 13 loads its A element where its FMAs use it ([OCANNL_TILE_FENCE] in
+                          {!Builtins_cc}, gh-ocannl-1158). *)
+                       (if r > 0 then [ string "OCANNL_TILE_FENCE();" ] else [])
+                       @ pack
                        @ (string (Printf.sprintf "%s tmma_as_%d__ = %s;" ctyp r a_scalar)
                          ^^ hardline
                          ^^ string (Printf.sprintf "%s tmma_a_%d__ = " vtyp r)
@@ -5515,7 +5523,17 @@ module C_syntax (B : C_syntax_config) = struct
             ^^ hardline ^^ string "}" ^^ hardline
             ^^ stmts
                  (per_cell (fun r c (off, width) ->
-                      d_store ~width ~src:grid.(r).(c) ~mem:(d_mem r off)))
+                      (* A narrowing store holds temporaries of its own (bf16's rounding is integer
+                         arithmetic), and aarch64 gcc 13 interleaves the grid's narrowings until
+                         accumulators spill: fence each after the first (gh-ocannl-1158). An
+                         identity store is one memcpy and stays unfenced, so gcc still pairs those
+                         into [stp]. *)
+                      let fence =
+                        if (r > 0 || c > 0) && not (Ops.equal_prec d_store_prec prec) then
+                          string "OCANNL_TILE_FENCE();" ^^ hardline
+                        else empty
+                      in
+                      fence ^^ d_store ~width ~src:grid.(r).(c) ~mem:(d_mem r off)))
           in
           let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
           (* A band of [rows] rows: the full-width passes, then the column tail from [n_full]. *)
