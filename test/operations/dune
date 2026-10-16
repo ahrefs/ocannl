@@ -5051,7 +5051,9 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  ; Its seed menus follow the pad-waste economy (gh-ocannl-740).
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_batched_mma)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5524,7 +5526,9 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  ; Its seed menus follow the pad-waste economy (gh-ocannl-740).
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules tile_mma_declines)
  (libraries
   base
@@ -6147,7 +6151,8 @@
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_BF16_ARITHMETIC)
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules sketch_family_tree)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess

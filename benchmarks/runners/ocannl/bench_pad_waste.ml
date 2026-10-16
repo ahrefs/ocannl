@@ -31,8 +31,11 @@ let parse_site s =
       | _ -> failwith ("site dims must be b,m,n,k (positive): " ^ s))
   | None -> failwith ("site must be name=b,m,n,k: " ^ s)
 
-let a_val bi i kk = Float.of_int (((bi * 5) + (i * 3) + (kk * 7)) % 7) -. 3.
-let w_val kk j = Float.of_int (((kk * 2) + (j * 5)) % 5) -. 2.
+(* Every coefficient is a unit modulo its modulus, so each operand varies along every axis it has (a
+   coefficient the modulus divides would make the axis cancel, and a 20-deep contraction of such
+   cells sums to zero everywhere -- an oracle a routine that only zeroes its output would pass). *)
+let a_val bi i kk = Float.of_int (((bi * 5) + (i * 3) + (kk * 2)) % 7) -. 3.
+let w_val kk j = Float.of_int (((kk * 3) + (j * 2)) % 5) -. 2.
 
 let bench_site ~failed (name, b, m, n, k) =
   let batch = if b > 1 then [ b ] else [] in
@@ -100,7 +103,8 @@ let bench_site ~failed (name, b, m, n, k) =
         done
       done
     done;
-    !ok
+    (* An all-zero oracle discriminates nothing: refuse it rather than pass it. *)
+    !ok && Array.exists got ~f:(fun x -> Float.(x <> 0.))
   in
   if not exact then failed := true;
   let r = Option.value_exn ~here:[%here] !report in
