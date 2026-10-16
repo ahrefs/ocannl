@@ -20,6 +20,7 @@ type resource =
   | Workgroup_z_extent
   | Grid_y_extent
   | Grid_z_extent
+  | Device_memory
 [@@deriving sexp_of, compare, equal]
 
 type severity = Expected | Compiler_bug [@@deriving sexp_of, compare, equal]
@@ -89,6 +90,25 @@ type 'a outcome = ('a, failure) Result.t
 exception Cause_at of phase * cause
 exception Raised_at of phase * exn * Stdlib.Printexc.raw_backtrace
 
+exception
+  Device_memory_exhausted of {
+    backend : string;
+    requested : int;
+    free : int option;
+    detail : string;
+  }
+
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Device_memory_exhausted { backend; requested; free; detail } ->
+        Some
+          (Printf.sprintf
+             "%s: device memory exhausted: an allocation of %d bytes was refused%s (%s)" backend
+             requested
+             (Option.value_map free ~default:"" ~f:(Printf.sprintf ", %d bytes free"))
+             detail)
+    | _ -> None)
+
 type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
 
@@ -122,27 +142,44 @@ let unclassified phase exn =
 
 let classify_raw ~strict ~classify_backend ~provenance ~phase ~candidate exn backtrace =
   let fatal () = Fatal { exn; backtrace; phase; candidate; cause = None } in
-  if is_oom_or_interrupt exn then fatal ()
-  else if is_assert_or_stack exn && not (equal_provenance provenance Cache_replay) then fatal ()
-  else if is_pre_dispatch phase then
-    (* Not routed through the backend (gh-ocannl-564): this validation is host-side and precedes
-       every backend call, so a classifier answering [Writes_may_have_occurred] for an error it does
-       not recognize would escalate a failure that provably wrote nothing. The [Fatal] default the
-       other phases take is what condemned the lineage for a fixable mistake wherever
-       [classify_failure] answers [None] — every C backend. *)
-    Classified (unclassified phase exn)
-  else
-    match classify_backend phase exn with
-    (* The backend is handed the phase, so the phase it reports back is not independent evidence:
-       pin it to where the failure was actually raised. *)
-    | Some classified -> Classified { classified with phase }
-    | None ->
-        if equal_provenance provenance Cache_replay && is_assert_or_stack exn then
-          Classified (unclassified phase exn)
-        else if
-          (not strict) && is_compile_side phase && not (equal_provenance provenance User_schedule)
-        then Classified (unclassified phase exn)
-        else fatal ()
+  match exn with
+  | _ when is_oom_or_interrupt exn -> fatal ()
+  (* gh-ocannl-1326: typed at the allocator, so no backend classifier is consulted (HIP has none),
+     and an allocation the device refused precedes any dispatch whatever the phase. *)
+  | Device_memory_exhausted { requested; free; _ } ->
+      Classified
+        {
+          phase;
+          cause =
+            Resource_exceeded
+              {
+                resource = Device_memory;
+                requested;
+                limit = free;
+                detail = Stdlib.Printexc.to_string exn;
+              };
+          execution_effect = No_device_writes;
+        }
+  | _ when is_assert_or_stack exn && not (equal_provenance provenance Cache_replay) -> fatal ()
+  | _ when is_pre_dispatch phase ->
+      (* Not routed through the backend (gh-ocannl-564): this validation is host-side and precedes
+         every backend call, so a classifier answering [Writes_may_have_occurred] for an error it
+         does not recognize would escalate a failure that provably wrote nothing. The [Fatal]
+         default the other phases take is what condemned the lineage for a fixable mistake wherever
+         [classify_failure] answers [None] — every C backend. *)
+      Classified (unclassified phase exn)
+  | _ -> (
+      match classify_backend phase exn with
+      (* The backend is handed the phase, so the phase it reports back is not independent evidence:
+         pin it to where the failure was actually raised. *)
+      | Some classified -> Classified { classified with phase }
+      | None ->
+          if equal_provenance provenance Cache_replay && is_assert_or_stack exn then
+            Classified (unclassified phase exn)
+          else if
+            (not strict) && is_compile_side phase && not (equal_provenance provenance User_schedule)
+          then Classified (unclassified phase exn)
+          else fatal ())
 
 let detail_of_cause = function
   | Illegal_schedule { detail; _ }
