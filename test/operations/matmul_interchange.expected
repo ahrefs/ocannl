@@ -1,5 +1,7 @@
 reference: every weight-gradient cell is nonzero: true
 reference: every data-gradient cell is nonzero: true
+reference: every lm_head-gradient cell is nonzero: true
+reference: every value-gradient cell is nonzero: true
 wgrad: the plain matcher does not see the backward contraction: true
 wgrad: the interchanged contraction is a matmul site: true
 wgrad: the enabling prefix is a chain of Swaps: true
@@ -40,4 +42,44 @@ dgrad: every tensorized candidate compiles, runs and matches the reference bitwi
 dgrad: every tensorized candidate renders tensorized per its mma census: true
 dgrad: every gpu candidate compiles, runs and matches the reference bitwise: true
 dgrad: every cpu candidate compiles, runs and matches the reference bitwise: true
+lmhead: the plain matcher does not see the backward contraction: true
+lmhead: the interchanged contraction is a matmul site: true
+lmhead: the enabling prefix is a chain of Swaps: true
+lmhead: the enabling prefix has the expected length: true
+lmhead: the site accumulates into the gradient node: true
+lmhead: the outer contraction loops carry the expected extents: true
+lmhead: m_k is the innermost contraction loop: true
+lmhead: the prefix replayed on the original code is the code the site was detected on: true
+lmhead: the interchanged code matches the reference bitwise: true
+lmhead: GPU sketch seeds are proposed: true
+lmhead: tensorized GPU seeds are proposed under an mma capability: true
+lmhead: CPU sketch seeds are proposed: true
+lmhead: every seed's schedule starts with the enabling prefix: true
+lmhead: a fresh lowering has the same structural identity: true
+lmhead: every seed's schedule replays from a fresh lowering of the original code: true
+lmhead: the device's own tensorized seeds are proposed: true
+lmhead: every tensorized candidate compiles, runs and matches the reference bitwise: true
+lmhead: every tensorized candidate renders tensorized per its mma census: true
+lmhead: every gpu candidate compiles, runs and matches the reference bitwise: true
+lmhead: every cpu candidate compiles, runs and matches the reference bitwise: true
+vgrad: the plain matcher does not see the backward contraction: true
+vgrad: the interchanged contraction is a matmul site: true
+vgrad: the enabling prefix is a chain of Swaps: true
+vgrad: the enabling prefix has the expected length: true
+vgrad: the site accumulates into the gradient node: true
+vgrad: the outer contraction loops carry the expected extents: true
+vgrad: m_k is the innermost contraction loop: true
+vgrad: the prefix replayed on the original code is the code the site was detected on: true
+vgrad: the interchanged code matches the reference bitwise: true
+vgrad: GPU sketch seeds are proposed: true
+vgrad: tensorized GPU seeds are proposed under an mma capability: true
+vgrad: CPU sketch seeds are proposed: true
+vgrad: every seed's schedule starts with the enabling prefix: true
+vgrad: a fresh lowering has the same structural identity: true
+vgrad: every seed's schedule replays from a fresh lowering of the original code: true
+vgrad: the device's own tensorized seeds are proposed: true
+vgrad: every tensorized candidate compiles, runs and matches the reference bitwise: true
+vgrad: every tensorized candidate renders tensorized per its mma census: true
+vgrad: every gpu candidate compiles, runs and matches the reference bitwise: true
+vgrad: every cpu candidate compiles, runs and matches the reference bitwise: true
 fwd: a forward product is a plain site, with no prefix: true

@@ -445,7 +445,11 @@ files.
   are 76% of the batch-256 step. The canonical form sinks the contraction loops below the write
   loops by `Op_legal` adjacent `Swap`s (the gh-537 split-reduce precedent), re-detects, and every
   schedule built from the site carries the chain as its PREFIX, so it applies to the original code
-  and replays from a fresh lowering. A plain site keeps an empty prefix, and a segment `detect_conv`
+  and replays from a fresh lowering. The chain also sinks the write loop owning the output's minor
+  axis below the other write loops where backprop left it above them (gh-ocannl-1325): the tied
+  lm_head's `wte.grad[e,v]` and attention's `v.grad[b,t,h,d]` keep the forward product's write
+  order, so the sink alone left them unclassified (in gpt2_mini's GPU segmentation, 78 of the 116
+  product accumulations were their segment's site before, 83 after). A plain site keeps an empty prefix, and a segment `detect_conv`
   claims is never interchanged, so every seed that existed before is byte-identical. Every entry point that
   reads a site off `opt` must go through the canonical form (seeding, the family tree, the traffic
   floor, `mma_eligible_sites`, `sketch_schedule`); one that calls `detect_matmul` directly silently
