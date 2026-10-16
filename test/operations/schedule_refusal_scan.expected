@@ -1,0 +1,14 @@
+control: a bare invalid_arg before the bound leaves 1 unmarked site(s): true
+control: a qualified Stdlib.invalid_arg leaves 1 unmarked site(s): true
+control: a failwith leaves 1 unmarked site(s): true
+control: a Printf.ksprintf failwith leaves 1 unmarked site(s): true
+control: a raised Invalid_argument leaves 1 unmarked site(s): true
+control: a raised Failure leaves 1 unmarked site(s): true
+control: a marked site leaves 0 unmarked site(s): true
+control: two sites under one marker leaves 1 unmarked site(s): true
+control: a marker beyond the window leaves 1 unmarked site(s): true
+control: a site after the bound leaves 0 unmarked site(s): true
+control: a comment naming invalid_arg leaves 0 unmarked site(s): true
+control: a source without the bound is refused: true
+every untyped raise schedule application can reach carries its own invariant marker: true
+schedule.ml binds refuse, the typed alternative, before apply_typed: true

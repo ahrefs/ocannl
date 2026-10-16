@@ -1976,6 +1976,38 @@
  (modules virtual_decision_coverage)
  (libraries base ocannl arrayjit.verdict ll_test))
 
+; gh-ocannl-1323: only an op's typed precondition refusal is a declined candidate; any other
+; exception escaping schedule application is fatal under strict failure classification.
+
+(test
+ ; ocannl-backend: none -- hand-built IR is optimized and scheduled, never linked or executed.
+ (name schedule_refusal_classification)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ (modules schedule_refusal_classification)
+ (libraries base ll_test arrayjit.verdict))
+
+; gh-ocannl-1323: every untyped raise schedule application can reach in schedule.ml carries its own
+; `(* invariant: ... *)` marker; a precondition refusal is raised typed through `refuse`.
+
+(test
+ ; ocannl-backend: none -- parses schedule.ml and opens no backend.
+ (name schedule_refusal_scan)
+ (package neural_nets_lib)
+ (deps ocannl_config ../../arrayjit/lib/schedule.ml)
+ (action
+  (run %{test} ../../arrayjit/lib/schedule.ml))
+ (modules schedule_refusal_scan)
+ (libraries base stdio ppxlib test_utils arrayjit.verdict))
+
 ; gh-ocannl-817: real-graph reachability probe plus the explicit Set_vec_unop lowering boundary.
 
 (test

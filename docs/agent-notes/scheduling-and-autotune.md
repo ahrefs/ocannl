@@ -800,6 +800,17 @@ files.
   Windows cannot run the shell fixtures or defer undefined symbols to dlopen. The
   `test_schedule_outcome` unit test pins all three stages across provenance and strictness on
   every platform.
+- **A schedule op refuses typed; any other raise inside `apply` is a transform bug** (gh-ocannl-1323).
+  `Schedule.apply_classified` used to turn every `Invalid_argument` escaping application into an
+  `Illegal_schedule` decline, so an array bound or a `List.zip_exn` in a transform read as one more
+  declined candidate. Now an op precondition raises `Schedule.refuse` (the typed cause) at its own
+  site, the classified path passes only those through, and the public `Schedule.apply` re-renders
+  them as `Invalid_argument`. Internal probes (`op_legality`, `schedule_legality`,
+  `fuse_epilogue_witness`, the hermetic swap/coalesce probes) catch the typed cause, not
+  `Invalid_argument`. A new precondition written as a bare `invalid_arg` ends a strict search, on
+  GPU-only paths only on a GPU sweep: `schedule_refusal_scan` requires every untyped raise bound
+  before `apply_typed` to carry its own `(* invariant: ... *)` comment.
+  `Schedule.with_transform_fault` injects one for tests (`schedule_refusal_classification`).
 ## Placement and dispatchable baselines
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.

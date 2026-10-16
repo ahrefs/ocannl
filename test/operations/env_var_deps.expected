@@ -209,6 +209,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test schedule_pad: Ir.Schedule.apply
   test/operations/dune, test schedule_partition: Ir.Schedule.apply
   test/operations/dune, test schedule_pipelined_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_refusal_classification: Ir.Schedule.apply, Ir.Schedule.apply_classified
   test/operations/dune, test schedule_register_matmul: Ir.Schedule.apply
   test/operations/dune, test schedule_smem_matmul: Ir.Schedule.apply
   test/operations/dune, test schedule_split_reduce: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
