@@ -299,6 +299,17 @@ let exempt_quantified_helpers =
       "conditioned on the baseline having been declined, and on a device that backs the frame the \
        decline census is legitimately empty (announced vacuous on stderr); where the baseline is \
        declined the claim just above witnesses the census" );
+    ( "test/operations/seeded_default.ml:off CUDA/HIP the seeded default seeds nothing",
+      "the seeded default is CUDA/HIP-only by design, so off those backends an empty seed list is \
+       the claim; it is gated to them, and on CUDA/HIP the claim beside it requires a non-empty \
+       list from the same fixture" );
+    ( "test/operations/seeded_default.ml:a threshold above every reduction extent seeds nothing",
+      "the threshold exceeds every contraction of the fixture, so no segment qualifies and an \
+       empty seed list is the claim; the bitwise-gradient claim beside it witnesses the routine's \
+       non-empty output" );
+    ( "test/operations/seeded_default.ml:a threshold of 0 disables the seeding",
+      "a threshold of 0 is the documented off switch, so an empty seed list is the claim; the \
+       claims above pin a non-empty one at a positive threshold on the backends that seed" );
     ( "test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds",
       "the variance-style self-product is deliberately not recognized as a matmul or conv site, so \
        the sketch seeder yields no seeds of any kind and there is no seed population to quantify \

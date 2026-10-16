@@ -141,6 +141,7 @@ let known_config_keys =
       "schedule_fission";
       "gpu_fission_keep_mapping";
       "gpu_elide_covered_zeros";
+      "gpu_default_sketch_min_reduction";
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
@@ -231,12 +232,14 @@ type config_key_class =
           trajectory's identity ({!config_class_fingerprint} of [Search_shaping]): a search's timed
           record is the same record whatever the level above it was told (gh-ocannl-1192). *)
   | Untimed_model
-      (** Steers [Autotune.model_default], the untuned regime's pick by the analytic cost model:
-          whether a recipe's untuned compile routes through it, and how widely it searches. It times
-          nothing and neither replays nor stores a schedule-cache entry, and no [Autotune.tune] call
-          reads it, so it is neither in the cache key nor in the search trajectory's identity
-          ({!config_class_fingerprint} of [Search_shaping]): a search's timed record is the same
-          record whatever the untuned regime beside it was told (gh-ocannl-1241). *)
+      (** Steers the untuned regime's untimed picks: [Autotune.model_default], the pick by the
+          analytic cost model -- whether a recipe's untuned compile routes through it, and how
+          widely it searches -- and [Autotune.seeded_default]'s seeding of large GPU contractions
+          (gh-ocannl-1324). They time nothing and neither replay nor store a schedule-cache entry,
+          and no [Autotune.tune] call reads them, so they are neither in the cache key nor in the
+          search trajectory's identity ({!config_class_fingerprint} of [Search_shaping]): a search's
+          timed record is the same record whatever the untuned regime beside it was told
+          (gh-ocannl-1241). *)
   | Execution_neutral
       (** Host-side behavior only: logging, debug artifacts, directories, validation and error
           reporting, allocation layout, launch mechanics. Nothing a kernel does depends on it. *)
@@ -414,6 +417,13 @@ let config_key_classification : (config_key_class * string * string list) list =
        (model_peak_flops, model_peak_memory_bandwidth) stay search-shaping: tune's keep-fraction \
        ranking and bound pruning read them too",
       [ "model_default_schedule"; "model_default_placements"; "model_default_geometry_lattice" ] );
+    ( Untimed_model,
+      "it decides which large CUDA/HIP contractions the recipes' untuned compile seeds with the \
+       matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324), which times and scores \
+       nothing and never reads or writes the schedule cache; Autotune.tune reads none of it, and \
+       the default pipeline a search seeds from and reports against \
+       (Schedule.maybe_default_schedules) does not consult it",
+      [ "gpu_default_sketch_min_reduction" ] );
     ( Execution_neutral,
       "startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter \
        follows",

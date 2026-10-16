@@ -148,9 +148,7 @@ type train_routines =
 
 type step_shape = [ `Train of train_parts | `Forward of Asgns.comp ]
 
-let compile_default ctx comp bindings =
-  if Lazy.force Autotune.model_default_enabled then Autotune.model_default ctx comp bindings
-  else Context.compile ctx comp bindings
+let compile_default ctx comp bindings = Autotune.untuned_compile ctx comp bindings
 
 (** Compiles a step shape. [tuned] is the runner's autotuning compile (it needs the loss tensor, so
     the runner supplies it). Each leg tunes the routine that carries the work: the

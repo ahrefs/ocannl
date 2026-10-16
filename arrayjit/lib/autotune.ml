@@ -4100,6 +4100,285 @@ let model_default ?name ?report ctx comp bindings =
     emit !choice;
     result
 
+(** {2 The seeded untuned default (gh-ocannl-1324)} *)
+
+type seeded_choice = {
+  sd_seeded : (int * sketch_params) list;
+  sd_refined : int;
+  sd_fell_back : bool;
+}
+
+let site_reduction_extent (site : matmul_site) =
+  List.fold site.m_ko ~init:site.m_nk ~f:(fun acc (_, n) -> acc * n)
+
+(* CUDA and HIP only: the backends the untiled-contraction gap was measured on (gh-ocannl-1183) and
+   the seeded plan's before/after was measured on. Metal keeps the plain default until a Metal
+   measurement says otherwise. *)
+let seeded_default_backend backend =
+  String.is_substring backend ~substring:"cuda" || String.is_substring backend ~substring:"hip"
+
+let seeded_default_min_reduction () =
+  let raw =
+    String.strip (Utils.get_global_arg ~arg_name:"gpu_default_sketch_min_reduction" ~default:"32")
+  in
+  match Int.of_string_opt raw with
+  | Some n when n >= 0 -> n
+  | _ ->
+      raise
+      @@ Utils.User_error
+           ("Autotune: ocannl_gpu_default_sketch_min_reduction should be a non-negative integer (0 \
+             disables the seeded default); found: " ^ raw)
+
+(* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
+   then the 4x4 register tile at a smaller block, then the 2x2 register tiles, which put four times
+   as many threads on the same outputs. A geometry is taken once its launch has [seeded_min_blocks]
+   blocks — about two per multiprocessor on the RTX 5070 Ti (70 SMs), more per compute unit on the
+   HIP parts — so a small output does not leave most of the device idle behind a few large tiles. *)
+let seeded_geometries =
+  [ (64, 64, 8, 4, 4); (32, 32, 8, 4, 4); (32, 32, 16, 2, 2); (16, 16, 8, 2, 2); (16, 16, 8, 4, 4) ]
+
+let seeded_min_blocks = 128
+
+let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sketch_params option =
+  match detect_matmul_canonical seg with
+  | None -> None
+  | Some (site, _, _) when site_reduction_extent site < min_reduction -> None
+  | Some (site, _, _)
+    when let d_prec = Lazy.force site.m_d.Ir.Tnode.storage_prec in
+         not (Ir.Ops.equal_prec (accum_prec d_prec) d_prec) ->
+      (* The sketch keeps its accumulator at [accum_prec] across the whole reduction, where the
+         default pipeline stores a wider accumulator back at the output's precision after every
+         contraction step whose loop encloses the write loops (a backprop weight gradient): the
+         seeded plan would round less often than the default. Left to the default, so that seeding
+         never changes a result. *)
+      None
+  | Some (site, _, _) -> (
+      match matmul_sketch_tree ~is_gpu:true ~is_cpu:false ~limits seg with
+      | None -> None
+      | Some tree -> (
+          (* The tree's own leaves, so every refutation the search applies (launch caps,
+             workgroup-memory and thread floors, companion coverage) applies here too; of those, the
+             unfused scalar blocktile pipeline with no twin flavor: tensorized forms change
+             numerics, and the twins are the search's to time. *)
+          let leaves =
+            List.filter (Sspace.leaves tree) ~f:(fun p ->
+                p.sk_gpu && (not p.sk_mma) && (not p.sk_conv) && (not p.sk_epilogue)
+                && (not p.sk_coalesce) && (not p.sk_batch_inner) && Option.is_none p.sk_swizzle
+                && p.sk_depth = 1)
+          in
+          let batch = List.map (site.m_bo @ site.m_bi) ~f:snd in
+          (* A batched site's batch loops launch as grid blocks where the device's [.z] cap admits
+             them (the tree refutes the flavor otherwise); serial inside each block otherwise. *)
+          let leaves =
+            match List.filter leaves ~f:(fun p -> p.sk_batch_grid) with
+            | [] -> leaves
+            | grid when not (List.is_empty batch) -> grid
+            | _ -> leaves
+          in
+          let blocks p =
+            (site.m_ni + p.sk_bm - 1)
+            / p.sk_bm
+            * ((site.m_nj + p.sk_bn - 1) / p.sk_bn)
+            * if p.sk_batch_grid then List.fold batch ~init:1 ~f:( * ) else 1
+          in
+          let threads p = blocks p * (p.sk_bm / p.sk_tm) * (p.sk_bn / p.sk_tn) in
+          let ranked =
+            List.filter_map seeded_geometries ~f:(fun (bm, bn, bk, tm, tn) ->
+                List.find leaves ~f:(fun p ->
+                    p.sk_bm = bm && p.sk_bn = bn && p.sk_bk = bk && p.sk_tm = tm && p.sk_tn = tn))
+          in
+          (* A block tile wider than the output pads it with cells every thread computes and
+             discards — attention's value product (a 32-column output) under a 64-column tile wastes
+             half its threads. Geometries padding the output by at most an eighth go first. *)
+          let padded p =
+            8
+            * ((site.m_ni + p.sk_bm - 1) / p.sk_bm * p.sk_bm)
+            * ((site.m_nj + p.sk_bn - 1) / p.sk_bn * p.sk_bn)
+            > 9 * site.m_ni * site.m_nj
+          in
+          let ranked =
+            match List.filter ranked ~f:(fun p -> not (padded p)) with [] -> ranked | snug -> snug
+          in
+          match List.find ranked ~f:(fun p -> blocks p >= seeded_min_blocks) with
+          | Some p -> Some p
+          | None ->
+              (* Nothing reaches the block count: the geometry putting the most threads on the
+                 output, the earlier one on a tie. *)
+              List.fold ranked ~init:None ~f:(fun best p ->
+                  match best with Some b when threads b >= threads p -> best | _ -> Some p)))
+
+let seeded_default ?name ?min_reduction ?report ctx comp bindings =
+  let backend = Context.backend_name ctx in
+  let min_reduction =
+    match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
+  in
+  let none = { sd_seeded = []; sd_refined = 0; sd_fell_back = false } in
+  let emit r = Option.iter report ~f:(fun f -> f r) in
+  if
+    min_reduction <= 0
+    || (not (seeded_default_backend backend))
+    || (not (Sched.automatic_schedule_active ~backend_name:backend))
+    || not (Sched.default_pipeline_fissions ())
+  then (
+    emit none;
+    Context.compile ?name ctx comp bindings)
+  else
+    let limits = Context.hardware_limits ctx in
+    let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
+    let static_indices = Idx.bound_symbols bindings in
+    let preset seg = Sched.default_gpu ~limits seg in
+    let zero_sched tns = Sched.zero_expansion ~limits tns in
+    let keep_mapping = Sched.fission_keep_mapping ~is_gpu:true ~limits in
+    let choice = ref none in
+    let transform (opt : LL.optimized) : LL.optimized list =
+      let default_segs () =
+        Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices opt
+      in
+      choice := none;
+      let digest ~with_placements seg =
+        SC.digest (SC.canonicalize ~static_indices ~with_placements seg)
+      in
+      (* One decision per distinct segment code — a model's repeated layers decide once. Probed on
+         the segment alone: a sketch that does not apply or validate there leaves the segment to the
+         default preset rather than costing the routine its other seeds. *)
+      let decided = Hashtbl.create (module String) in
+      let seed_of kind pre =
+        match kind with
+        | `Zeros | `Solo -> None
+        | `Normal ->
+            Hashtbl.find_or_add decided
+              (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
+              ~default:(fun () ->
+                match seeded_params ~limits ~accum_prec ~min_reduction pre with
+                | None -> None
+                | Some p -> (
+                    match
+                      validate_segments_for_model ~limits
+                        [
+                          Sched.apply_classified ~static_indices
+                            (sketch_schedule ~accum_prec ~p pre)
+                            (scratch_of pre);
+                        ]
+                    with
+                    | _ -> Some p
+                    | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+                        logf "seeded_default: %s declined on a segment; keeping the preset"
+                          (sketch_params_label p);
+                        None))
+      in
+      (* A segmentation derived on a hermetic copy, as [(first unit, kind, units, pre-schedule
+         slice)] per segment. *)
+      let derive ~arity_cuts =
+        match
+          Sched.fission_segmented ~promote_locals:true ?keep_mapping ~arity_cuts ~preset ~zero_sched
+            ~static_indices (scratch_of opt)
+        with
+        | exception Outcome.Cause_at _ -> None
+        | plan, tuples ->
+            Some
+              (List.map2_exn
+                 (Array.to_list (segment_starts plan))
+                 (List.zip_exn plan tuples)
+                 ~f:(fun at ((kind, n), (_, pre, _, _)) -> (at, kind, n, pre)))
+      in
+      (* The default pipeline's own segmentation — derived exactly as [maybe_default_schedules]
+         derives it, no zero fold — so every segment the seeding leaves alone is the default's
+         segment under the default's schedule. *)
+      match derive ~arity_cuts:false with
+      | None -> default_segs ()
+      | Some coarse -> (
+          (* A default segment with no seed of its own can still hold a site: fission keeps aligned
+             nests together, so a weight gradient shares its kernel with the bias gradient reducing
+             the same rows, and two weight gradients of one input share theirs, and a second
+             reduction is a companion no sketch covers. The finer [arity_cuts] segmentation
+             (gh-ocannl-574) cuts those apart. Where it partitions exactly that segment's units and
+             one of the pieces seeds, the pieces replace the segment; elsewhere the default
+             segmentation stands, so no launch is added that buys no seed. *)
+          let fine = lazy (derive ~arity_cuts:true) in
+          let refined = ref 0 in
+          let hybrid =
+            List.concat_map coarse ~f:(fun (at, kind, n, pre) ->
+                let decide (s, k, m, pre) =
+                  ( s,
+                    k,
+                    m,
+                    Option.map (seed_of k pre) ~f:(fun p -> (p, digest ~with_placements:false pre))
+                  )
+                in
+                match decide (at, kind, n, pre) with
+                | (_, _, _, Some _) as seeded -> [ seeded ]
+                | unseeded -> (
+                    match (kind, Lazy.force fine) with
+                    | `Normal, Some fine ->
+                        let pieces =
+                          List.filter fine ~f:(fun (s, _, m, _) -> s >= at && s + m <= at + n)
+                        in
+                        if
+                          List.length pieces < 2
+                          || List.sum (module Int) pieces ~f:(fun (_, _, m, _) -> m) <> n
+                        then [ unseeded ]
+                        else
+                          let pieces = List.map pieces ~f:decide in
+                          if List.exists pieces ~f:(fun (_, _, _, s) -> Option.is_some s) then (
+                            Int.incr refined;
+                            pieces)
+                          else [ unseeded ]
+                    | _ -> [ unseeded ]))
+          in
+          let seeds = Array.of_list (List.map hybrid ~f:(fun (_, _, _, s) -> s)) in
+          if Array.for_all seeds ~f:Option.is_none then default_segs ()
+          else
+            let plan = List.map hybrid ~f:(fun (_, k, n, _) -> (k, n)) in
+            (* By position, as a replayed segmentation is matched; a slice whose code is not the
+               decided one's keeps its preset. *)
+            let schedule i seg =
+              match seeds.(i) with
+              | Some (p, d) when String.equal d (digest ~with_placements:false seg) ->
+                  Some (sketch_schedule ~accum_prec ~p seg)
+              | _ -> None
+            in
+            match
+              Sched.fission_segmented ~promote_locals:true ~replay:(plan, schedule) ~preset
+                ~zero_sched ~static_indices opt
+            with
+            | _, tuples ->
+                let segs =
+                  validate_segments_for_model ~limits
+                    (List.map tuples ~f:(fun (_, _, _, post) -> post))
+                in
+                let seeded =
+                  List.filter_map hybrid ~f:(fun (at, _, _, s) ->
+                      Option.map s ~f:(fun (p, _) -> (at, p)))
+                in
+                logf "seeded_default: %d of %d segments seeded (%d default segments refined): %s"
+                  (List.length seeded) (List.length plan) !refined
+                  (String.concat ~sep:", "
+                     (List.map seeded ~f:(fun (at, p) ->
+                          Printf.sprintf "u%d %s" at (sketch_params_label p))));
+                choice := { sd_seeded = seeded; sd_refined = !refined; sd_fell_back = false };
+                segs
+            | exception Outcome.Cause_at (_, cause) ->
+                logf "seeded_default: the seeded pipeline FAILED to apply (%s); using the default"
+                  (Outcome.detail_of_cause cause);
+                default_segs ())
+    in
+    let on_fallback exn =
+      logf "seeded_default: compiling the seeded pipeline FAILED (%s); recompiling the default"
+        (Exn.to_string exn);
+      choice := { none with sd_fell_back = true }
+    in
+    let result =
+      compile_advisory ?name ~on_fallback
+        ~fallback_if:(fun () -> not (List.is_empty !choice.sd_seeded))
+        transform ctx comp bindings
+    in
+    emit !choice;
+    result
+
+let untuned_compile ?name ctx comp bindings =
+  if Lazy.force model_default_enabled then model_default ?name ctx comp bindings
+  else seeded_default ?name ctx comp bindings
+
 (** {2 The search} *)
 
 (* gh-ocannl-550: the containment properties of the search — a failed candidate costs that

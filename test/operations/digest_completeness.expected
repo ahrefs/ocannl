@@ -121,6 +121,9 @@ untimed-model -- it steers Autotune.model_default -- whether the recipes' untune
   model_default_placements
   model_default_schedule
 
+untimed-model -- it decides which large CUDA/HIP contractions the recipes' untuned compile seeds with the matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324), which times and scores nothing and never reads or writes the schedule cache; Autotune.tune reads none of it, and the default pipeline a search seeds from and reports against (Schedule.maybe_default_schedules) does not consult it
+  gpu_default_sketch_min_reduction
+
 execution-neutral -- startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter follows
   detach_c_stderr
   log_config_sourcing

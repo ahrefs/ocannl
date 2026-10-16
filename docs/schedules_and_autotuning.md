@@ -293,6 +293,13 @@ the retained procedural analyses alongside the affine engine and raises on diver
   which always use the ordinary presets) pick the default-schedule flavor by model, with zero
   timing runs. Counts are deliberately conservative upper bounds; exactness is tracked per
   kernel.
+- **Seeded default** (gh-ocannl-1324): with `model_default_schedule` off, those same recipe-level
+  untuned compiles go through `Autotune.seeded_default` on CUDA and HIP. It schedules every
+  default fission segment that is a matmul site (backprop's gradients included) with a reduction
+  extent of at least `gpu_default_sketch_min_reduction` (32) using the matmul family's
+  register-blocktiled sketch. The geometry is a fixed rule over the family tree's own leaves, and
+  nothing is timed. Each output's summation order is kept, so results are bitwise those of the
+  plain default. The search still reports against, and seeds from, the plain default pipeline.
 - **Caching**: winners persist in `autotune_cache_dir`, keyed by `Schedule_cache.canonicalize` —
   an alpha-renamed structural digest of the optimized code including dims, precisions, operand
   hoistability, and placement classes — plus the backend name and a digest of the numerics
