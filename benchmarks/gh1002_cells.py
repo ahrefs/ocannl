@@ -3,7 +3,8 @@
 
 Reproduces every table of benchmarks/report-gh1002-fused-backward.md. Two subcommands:
 
-  run        --out DIR [--backends metal,cc] [--phases ...]   run the cells (resumable)
+  run        --out DIR --box BOX [--backends metal,cc] [--phases ...]   run the cells (resumable;
+             benchmarks/check-box.sh checks BOX and every fixture first, box_gate.py)
   summarize  --out DIR                                        print the report's tables
 
 Treatments (docs/proposals/gh-ocannl-1002-1003.md, "Measurement plan and completion gates"), as
@@ -60,6 +61,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import box_gate
 import cell_group
 import strict_json
 
@@ -350,6 +352,9 @@ def torch_losses(out, fx):
 
 def run(args):
     _cancellation.install()
+    # Every fixture, whatever the phases: preflight digests them all, and a run without it checks
+    # that same identity before its first cell.
+    box_gate.require("gh1002_cells.py", args, HERE / "fixtures", MAIN + SWEEP, run=run_in_own_group)
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     backends = args.backends.split(",")
@@ -681,6 +686,7 @@ def main(argv=None):
     r.add_argument("--backends", default="metal,cc")
     r.add_argument("--phases", default=None, help=f"comma-separated subset of {','.join(PHASES)}")
     r.add_argument("--limit", type=int, default=None, help="run at most N cells (dry runs only)")
+    box_gate.add_arguments(r)
     s = sub.add_parser("summarize")
     s.add_argument("--out", required=True)
     s.add_argument("--partial", action="store_true",

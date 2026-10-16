@@ -3,8 +3,12 @@
 # issue comments quote invocations rather than restating commands.
 #
 # Usage (from anywhere; the checkout is the one this script lives in):
-#   benchmarks/gh834_cells.sh BACKEND OUT FIXTURE CAP STEP...
+#   benchmarks/gh834_cells.sh [--box BOX] [--skip-box-check] BACKEND OUT FIXTURE CAP STEP...
 #
+#   --box BOX  required when a session step runs (the steps that read FIXTURE): before OUT is
+#            made, benchmarks/check-box.sh checks BOX and FIXTURE (by its directory and workload
+#            stem), and a GAP refuses the run (benchmarks/box-gate.sh; --skip-box-check is for a
+#            deliberate partial run).
 #   BACKEND  cc | hip | cuda | metal, pinned on every command line (out-ranks every other source).
 #   OUT      results directory, created, and refused unless empty. OUT/driver.log records
 #            everything this script prints (provenance, the device state around each step, each
@@ -47,6 +51,8 @@
 #   session-queued in one invocation, the reverse in a second on a fresh OUT) and compare each
 #   mode's pair, so order effects cancel.
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 # Hermetic against ambient configuration, as gh612_cells.sh is: every treatment is pinned on the
 # command line, so an exported OCANNL_* or BENCH_* could only contaminate every cell consistently.
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
@@ -66,6 +72,14 @@ if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   echo "gh834: OUT $out is not empty; give each invocation a fresh directory" >&2
   exit 2
 fi
+# The session steps read FIXTURE from benchmarks/ (the cd below), so a relative one is checked there.
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+case $fixture in /*) gate_fixture=$fixture ;; *) gate_fixture=$root/benchmarks/$fixture ;; esac
+for gate_step in "$@"; do
+  case $gate_step in
+    session-*) box_gate gh834 "$(dirname "$gate_fixture")" "$(basename "$gate_fixture" .safetensors)"; break ;;
+  esac
+done
 mkdir -p "$out" || exit 2
 out=$(cd "$out" && pwd -P) && case $out in /?*) ;; *) false ;; esac ||
   { echo "gh834: OUT did not resolve to an absolute directory" >&2; exit 2; }
@@ -77,7 +91,6 @@ exec >>"$out/driver.log" 2>&1 || exit 2
 # A session's CUDA driver cache (below) is scratch: whatever path ends the run -- an interrupt, a
 # survivor of the cap, a usage error mid-list -- leaves none of it in OUT.
 trap 'rm -rf "$out"/nvcache-*; cat "$out/driver.log" >&3' EXIT
-root=$(cd "$(dirname "$0")/.." && pwd -P)
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
 # Every artifact is labelled by the commit, so the tracked tree must BE that commit: a locally edited

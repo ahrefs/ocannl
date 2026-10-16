@@ -5,8 +5,11 @@
 # restating commands (the tables on lukstafi/ocannl-staging#909 and ahrefs/ocannl#1133).
 #
 # Usage (from anywhere; the "fix" checkout is the one this script lives in):
-#   benchmarks/gh1133_cells.sh OUT BASE CAP STEP...
+#   benchmarks/gh1133_cells.sh [--box BOX] [--skip-box-check] OUT BASE CAP STEP...
 #
+#   --box BOX  required when a STEP measures (step, seg, trainseg): before OUT is made,
+#         benchmarks/check-box.sh checks BOX and FIXTURES in FIXTURE_DIR, and a GAP refuses the
+#         run (benchmarks/box-gate.sh; --skip-box-check is for a deliberate partial run).
 #   OUT   results directory, created, and refused unless empty. OUT/driver.log records everything
 #         this script prints; each cell writes OUT/<cell>.out and OUT/<cell>.err, and `summary`
 #         writes OUT/summary.md.
@@ -82,6 +85,8 @@
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls: every treatment is
 # pinned on the command line.
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(\(OMP\|GOMP\|KMP\)_[A-Z0-9_]*\)=.*/\1/p')
@@ -103,6 +108,24 @@ if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   echo "gh1133: OUT $out is not empty; give each invocation a fresh directory" >&2
   exit 2
 fi
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+fixture_dir=${FIXTURE_DIR:-$root/benchmarks/fixtures}
+# The fixtures the requested measuring steps load (the step loop below; box_gate checks a repeat
+# once), checked before OUT is made. The cells read FIXTURE_DIR from benchmarks/ (the cd below),
+# so a relative one is checked there.
+gate_names=""
+for gate_step in "$@"; do
+  for f in $fixtures; do
+    case $gate_step in
+      step) gate_names="$gate_names $f" ;;
+      seg) case $f in *train*) ;; *) gate_names="$gate_names $f" ;; esac ;;
+      trainseg) case $f in *train*) gate_names="$gate_names $f" ;; esac ;;
+    esac
+  done
+done
+case $fixture_dir in /*) gate_dir=$fixture_dir ;; *) gate_dir=$root/benchmarks/$fixture_dir ;; esac
+# shellcheck disable=SC2086 # a list of names, one word each
+[ -z "$gate_names" ] || box_gate gh1133 "$gate_dir" $gate_names
 mkdir -p "$out" || exit 2
 out=$(cd "$out" && pwd -P) || exit 2
 base=$(cd "$base" && pwd -P) || exit 2
@@ -110,8 +133,6 @@ exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
 trap 'cat "$out/driver.log" >&3' EXIT
 trap 'echo "gh1133: interrupted"; exit 130' INT TERM
-root=$(cd "$(dirname "$0")/.." && pwd -P)
-fixture_dir=${FIXTURE_DIR:-$root/benchmarks/fixtures}
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
 echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend=$backend repeats=$repeats"

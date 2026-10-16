@@ -16,7 +16,9 @@
 # session exists to remove. So the treatment is declared once, per cell, and every subcommand
 # derives from it.
 #
-# Usage:  gh612v_session.sh <block>...
+# Usage:  gh612v_session.sh [--box BOX] [--skip-box-check] <block>...
+#   --box / --skip-box-check are handed to every gh612_cells.sh cell, whose fixture check runs
+#   benchmarks/check-box.sh before the cell measures (benchmarks/box-gate.sh).
 #   trees      resolve and print the three trees with their commits (measures nothing)
 #   gh574      the gh-574 pair, 3 reps, arm order alternated: base574A vs feat574A
 #   gh573      the gh-573 pair, 3 reps, alternated:           cap8A vs capoffA
@@ -33,6 +35,12 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 D=$HERE/gh612_cells.sh
+. "$HERE/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
+# What every cell is handed: the box its gate checks, or the decision to skip that check.
+box_gate_fwd=()
+[ -z "$box_gate_box" ] || box_gate_fwd+=(--box "$box_gate_box")
+[ "$box_gate_skip" = 0 ] || box_gate_fwd+=(--skip-box-check)
 export OUT_ROOT=${OUT_ROOT:-/tmp/gh612v}
 
 # WHAT certification means is pinned here; only WHERE to run it is inherited. OUT_ROOT and the three
@@ -308,7 +316,7 @@ run_cell() {  # <subcommand> <label> <rep> [extra driver args before the flags]
     *) ;;
   esac
   echo "--- $sub $label r$rep [$flags]"
-  "$D" "$sub" "$tree" "$label" "$rep" "$@" $flags
+  "$D" ${box_gate_fwd[@]+"${box_gate_fwd[@]}"} "$sub" "$tree" "$label" "$rep" "$@" $flags
   rc=$?
   # Only a SEARCH creates the cell, and only after it publishes (the driver stages and moves on
   # success), so the manifest is written here rather than by the driver -- and only on success, so a

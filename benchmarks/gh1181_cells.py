@@ -41,6 +41,8 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import box_gate
+
 # Each arm: (framework, tree, regime, variant). The order is the base the rotation starts from;
 # it interleaves frameworks so that even an unrotated repeat never runs one framework's arms back
 # to back.
@@ -63,7 +65,8 @@ COMPLETION_PASSES = 2
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--backend", choices=["cuda", "hip", "metal"])
-    ap.add_argument("--box", help="box label stamped on every row, e.g. rog-nv-linux")
+    # --box is also the box label stamped on every row (a measurement-box ID since the box gate).
+    box_gate.add_arguments(ap)
     ap.add_argument("--aug", type=Path, help="checkout of 7014dc44 with its bench_gpt.exe built")
     ap.add_argument("--no-anchor", metavar="REASON",
                     help="run without the August arm, recording why (it did not build, say)")
@@ -192,13 +195,17 @@ def environment(a, fixtures):
 
 def measure(a):
     out = a.out.resolve()
-    out.mkdir(parents=True, exist_ok=False)
     # Read by orchestrate at import: every cell's combined output lands in cells/ as it runs.
     os.environ["BENCH_CELL_LOG_DIR"] = str(out / "cells")
     import orchestrate as o
     import gh675_cells as g
 
     o.install_termination_handler()
+    # The box gate in the sweep's own process-group discipline, and before --out is made, so a
+    # refused run leaves nothing to clear before the next attempt.
+    box_gate.require("gh1181_cells.py", a, HERE / "fixtures", a.workloads,
+                     run=lambda cmd: o.run_supporting(cmd).returncode)
+    out.mkdir(parents=True, exist_ok=False)
     master = HERE.parent
     trees = {"master": master}
     shas = {"master": git_sha(master)}

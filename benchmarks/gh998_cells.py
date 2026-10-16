@@ -9,6 +9,8 @@ run --out DIR --backends metal,cc: four reverse-paired rounds of all, none and e
 summarize --out DIR: print the per-workload envelopes against arms-on and the Torch oracle.
 --workloads selects a comma-separated subset (use the same selection for prepare/dry/run).
 --rounds selects the repeat count for run (default 4, even); summarize reads the recorded matrix.
+prepare and run take --box BOX: benchmarks/check-box.sh checks BOX and the selected workloads'
+fixtures before anything starts (box_gate.py; --skip-box-check for a deliberate partial run).
 Each pair contributes the geometric mean of its two off/on p50 ratios; the table
 reports the median and range of these pair means. An independent all-control treatment
 must emit byte-identical sources; its raw ratio spread is reported beside each workload.
@@ -32,6 +34,7 @@ import statistics
 import subprocess
 import time
 
+import box_gate
 import fixture_digest
 import cell_group
 import bench_venv
@@ -284,6 +287,7 @@ def main():
     ap.add_argument('--workloads', default=','.join(WORKLOADS))
     ap.add_argument('--rounds', type=int, default=4)
     ap.add_argument('--deadline-seconds', type=int, default=7200)
+    box_gate.add_arguments(ap)
     args = ap.parse_args()
     if args.rounds < 2 or args.rounds % 2:
         ap.error('rounds must be even and at least 2')
@@ -299,6 +303,8 @@ def main():
     backends = args.backends.split(',')
     if len(set(backends)) != len(backends) or any(b not in ['metal', 'cc', 'cuda'] for b in backends):
         ap.error('backends must be metal,cc,cuda')
+    if args.phase in ('prepare', 'run'):  # the phases that load the fixtures (dry runs --self-test)
+        box_gate.require('gh998_cells.py', args, HERE / 'fixtures', workloads, run=run_child)
     out.mkdir(parents=True, exist_ok=True)
     if args.phase == 'summarize':
         summarize(out)

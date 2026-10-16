@@ -4,8 +4,12 @@
 # commands (benchmarks/report-gh1003-block-fold.md).
 #
 # Usage (from anywhere; the checkout is the one this script lives in):
-#   benchmarks/gh1003_fold_cells.sh OUT CAP STEP...
+#   benchmarks/gh1003_fold_cells.sh [--box BOX] [--skip-box-check] OUT CAP STEP...
 #
+#   --box BOX  required when a STEP measures (dry, metal, seg, cc, train): before OUT is made,
+#         benchmarks/check-box.sh checks BOX and the fixtures those steps load in FIXTURE_DIR, and
+#         a GAP refuses the run (benchmarks/box-gate.sh; --skip-box-check is for a deliberate
+#         partial run).
 #   OUT   results directory, created, and refused unless empty. OUT/driver.log records everything
 #         this script prints (provenance, each cell's command, exit and wall); each cell also writes
 #         OUT/<cell>.out and OUT/<cell>.err, and `summary` writes OUT/summary.md.
@@ -54,6 +58,8 @@
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls, as in gh834_cells.sh:
 # every treatment is pinned on the command line.
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(\(OMP\|GOMP\|KMP\)_[A-Z0-9_]*\)=.*/\1/p')
@@ -76,19 +82,34 @@ if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   echo "gh1003: OUT $out is not empty; give each invocation a fresh directory" >&2
   exit 2
 fi
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+fixture_dir=${FIXTURE_DIR:-$root/benchmarks/fixtures}
+fixtures="gpt2_mini gpt2_mini_s512 gpt2_mini_s1024"
+# The fixtures the requested measuring steps load (the step loop below; box_gate checks a repeat
+# once), checked before OUT is made. The cells read FIXTURE_DIR from benchmarks/ (the cd below),
+# so a relative one is checked there.
+gate_names=""
+for gate_step in "$@"; do
+  case $gate_step in
+    dry) gate_names="$gate_names gpt2_mini" ;;
+    metal | seg) gate_names="$gate_names $fixtures" ;;
+    cc) gate_names="$gate_names gpt2_mini gpt2_mini_s512" ;;
+    train) gate_names="$gate_names $train_fixtures" ;;
+  esac
+done
+case $fixture_dir in /*) gate_dir=$fixture_dir ;; *) gate_dir=$root/benchmarks/$fixture_dir ;; esac
+# shellcheck disable=SC2086 # a list of names, one word each
+[ -z "$gate_names" ] || box_gate gh1003 "$gate_dir" $gate_names
 mkdir -p "$out" || exit 2
 out=$(cd "$out" && pwd -P) || exit 2
 exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
 trap 'cat "$out/driver.log" >&3' EXIT
 trap 'echo "gh1003: interrupted"; exit 130' INT TERM
-root=$(cd "$(dirname "$0")/.." && pwd -P)
-fixture_dir=${FIXTURE_DIR:-$root/benchmarks/fixtures}
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
 gpt=$root/_build/default/benchmarks/runners/ocannl/bench_gpt.exe
 diag=$root/_build/default/benchmarks/runners/ocannl/bench_gpt_diag.exe
-fixtures="gpt2_mini gpt2_mini_s512 gpt2_mini_s1024"
 treatments="composed two-pass"
 for b in $fold_blocks; do treatments="$treatments fold-$b"; done
 # The training step's treatments (the record's A, D and F): composed, the two-pass forward under

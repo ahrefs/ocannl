@@ -3,7 +3,11 @@
 # today? One driver, one box, every leg of the measurement the GO/NO-GO comment quotes -- so the
 # comment names this invocation rather than transcribing commands.
 #
-# Usage: gh728_cells.sh <backend> <out-dir> <gpt2_mini.safetensors> [repeats batches]
+# Usage: gh728_cells.sh (--box BOX | --skip-box-check) <backend> <out-dir> <gpt2_mini.safetensors>
+#          [repeats batches]
+# --box BOX: before anything is built, benchmarks/check-box.sh checks BOX and the fixture (by its
+# directory and its workload stem, so the file keeps its workload's name), and a GAP refuses the
+# run (benchmarks/box-gate.sh; --skip-box-check is for a deliberate partial run).
 # [repeats batches] (default 200 8, both even) size the bench's timing; anything smaller is a smoke
 # run of the driver itself, not a measurement.
 #
@@ -24,8 +28,10 @@
 # Hermetic: OCANNL_* and BENCH_* are unset, every treatment is on argv, the runners start from
 # benchmarks/ (the nearest ocannl_config; bin/ has the cwd trap). Exits nonzero when any leg did.
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 [ $# -eq 3 ] || [ $# -eq 5 ] ||
-  { echo "usage: $0 <backend> <out-dir> <gpt2_mini.safetensors> [repeats batches]" >&2; exit 2; }
+  { echo "usage: $0 (--box BOX | --skip-box-check) <backend> <out-dir> <gpt2_mini.safetensors> [repeats batches]" >&2; exit 2; }
 BACKEND=$1
 REPEATS=${4:-200}
 BATCHES=${5:-8}
@@ -36,14 +42,17 @@ for n in "$REPEATS" "$BATCHES"; do
   ((10#$n > 0 && 10#$n % 2 == 0)) || { echo "gh728_cells: repeats and batches must be positive and even, got $n" >&2; exit 2; }
 done
 case $BACKEND in cuda | hip | metal | cc) ;; *) echo "gh728_cells: unknown backend '$BACKEND'" >&2; exit 2 ;; esac
+# The gate first: an absent fixture is the check's GAP, with its repair, not a usage error here.
+fixture_dir=$(cd "$(dirname "$3")" 2>/dev/null && pwd -P) || fixture_dir=$(dirname "$3")
+FIXTURE=$fixture_dir/$(basename "$3")
+box_gate gh728_cells "$fixture_dir" "$(basename "$FIXTURE" .safetensors)"
+[ -f "$FIXTURE" ] || { echo "gh728_cells: no fixture at $3" >&2; exit 2; }
 mkdir -p "$2" || { echo "gh728_cells: cannot create $2" >&2; exit 2; }
 OUT=$(cd "$2" && pwd -P) || OUT=""
 [ -n "$OUT" ] && [ -d "$OUT" ] || { echo "gh728_cells: not a usable directory: $2" >&2; exit 2; }
 # A fresh directory only: a leftover cache would make a "search" a replay, and a leftover log would
 # be read as this run's.
 [ -z "$(ls -A "$OUT")" ] || { echo "gh728_cells: $OUT is not empty" >&2; exit 2; }
-FIXTURE=$(cd "$(dirname "$3")" 2>/dev/null && pwd -P)/$(basename "$3")
-[ -f "$FIXTURE" ] || { echo "gh728_cells: no fixture at $3" >&2; exit 2; }
 TREE=$(cd "$(dirname "$0")/.." && pwd -P) || exit 2
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
