@@ -436,6 +436,7 @@ module Impl = struct
                   }
               else None);
            simd_vector_bytes = 0;
+           simd_vector_registers = 0;
            native_fp16_arithmetic = false;
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the M4 Max; see the field. *)

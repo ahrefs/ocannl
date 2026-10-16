@@ -34,6 +34,14 @@ val auto_vector_bytes : unit -> int
     configured target holds (64 with AVX-512 F/BW/VL, 32 with AVX2, else 16). Exposed for
     [test/operations/bridge_arm_coverage], which forces every width up to this one. *)
 
+val vector_registers_setting : unit -> int
+(** How many vector registers of the {!vector_bytes_setting} width the kernels' target has (config
+    [cc_vector_registers]; auto-probed when unset): the native file's count -- 32 on AArch64 and
+    AVX-512, 16 on other x86 targets, probed under the kernel flags -- divided where the width is
+    wider than a native register; [0] when explicit SIMD is off. Exposed for
+    [Schedulers.cpu_mma_limits]'s [simd_vector_registers], which the register tile's
+    [Register_tile.rn_cap] reads in the seeding, as the renderer does here (gh-ocannl-1285). *)
+
 val effective_pool_width : unit -> int
 (** The worker-pool width after the pool policy: the restricted class's logical CPU count when the
     restriction fired, the process's affinity-respecting CPU count otherwise. Sizes the auto

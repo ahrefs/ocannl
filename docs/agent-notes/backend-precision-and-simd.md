@@ -1216,9 +1216,10 @@ files.
   `Asm_census.counts.vector_fma_bytes` (the summed register widths) is what separates them. gcc
   keeps the tile in `zmm`. (2) The vector-majority inequality is unsound on a one-column tail pass:
   its `rm` A broadcasts are scalar-classified on x86 (`vbroadcastss`), against as few as `rm` FMAs.
-  (3) `Register_tile.budget` is keyed on the vector WIDTH, so at 16 bytes it assumes NEON's 32
-  registers: on x86 (16 registers) the default 4x6 tile needs 29 and spills (gcc: 32 stack
-  references per k step). Two gcc emission defects were pinned as classes rather than fixed, with a
+  (3) The register demand a geometry can meet is a property of the target's register COUNT, not
+  its width: a 16-byte file is 32 registers on NEON and 16 on SSE, where NEON's 4x6 (29 resident)
+  spills (gcc: 32 stack references per k step). Each width child therefore pins the register file
+  it fits geometries to (`census_registers`), and its 16-byte rows still crowd the x86 columns. Two gcc emission defects were pinned as classes rather than fixed, with a
   claim that fails when one stops reproducing; both are fixed and the list is gone, so the resident
   claim is strict again. The partial-vector tail (`vtyp x = {0}; __builtin_memcpy(&x, p,
   width*elt)`) went through a stack slot every k step; its fix (gh-ocannl-1071) is the lane-by-lane
@@ -1636,13 +1637,24 @@ files.
   renderings minimize trips (`extent / lanes` vector steps plus `extent mod lanes` scalar
   iterations — one instruction per body op either way, so no fitted constant is needed), and the
   register tiling folds the ladder into the reuse ranking it runs over `rn`. The
-  register-pressure cap stays keyed on the MACHINE's width: stepping down does not shrink the
-  register file, which is why n = 40 still comes out ahead on the wider machine (118.0 GFLOP/s at
+  register-pressure cap stays keyed on the MACHINE's register file: stepping down does not
+  shrink it, which is why n = 40 still comes out ahead on the wider machine (118.0 GFLOP/s at
   a 4x5 tile of 8-lane vectors against the 32-byte machine's 103.3 at 4x1). The floor is not
   cosmetic — degrading below the machine's pre-widening width would newly vectorize loops that
   render serially today, and a vector accumulation reassociates, so that is a numerics change
   rather than a scheduling one. Autotune's seeding pre-filter calls the same function, or it would
   withhold candidates the renderer would in fact tile.
+- **The register tile's column cap is fitted to the register COUNT, by the resident floor**
+  (gh-ocannl-1285). `Register_tile.live_registers` (`rm*rn + rm + rn`) is the model's pressure
+  proxy and over-counts: no allocation holds every A splat and every B row of a k step at once.
+  `resident_floor` (`rm*rn + min rm rn + 1`) is the physical count, the one the census's resident
+  claim holds, and `rn_cap` takes the widest 4-row tile it fits into
+  `hardware_limits.simd_vector_registers` (cc: `Cc_backend.vector_registers_setting`, probed under
+  the kernel flags and divided where `cc_vector_bytes` is wider than a native register; the
+  renderer reads the same count through `C_syntax_config.vector_registers`). So 4x6's "34" on a
+  32-register file is not a spill: at tail-free AVX-512 sites (f32 n = 96/192/384) 4x6 beat 4x5
+  and 4x4 in 75/100 serial pairs on Zen 5, 67/100 on NEON. A synthetic limits record that sets
+  `simd_vector_bytes` must set the register count too, or the register tile seeds nothing.
 - **The register tile's edges are register tiles, never scalar code** (gh-ocannl-620). Until then
   `try_register_tile` peeled the columns `rn * lanes` did not cover, and the rows `rm` did not, to
   scalar `fmaf` loops: a scalar column cost about a vector slot per k step, so a 48-wide fp16 tile

@@ -279,7 +279,9 @@ let () =
           };
     }
   in
-  let cpu_limits = { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32 } in
+  let cpu_limits =
+    { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = 16 }
+  in
   let seeded = ref None in
   let transform opt =
     let gpu_seeds = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:gpu_limits opt in

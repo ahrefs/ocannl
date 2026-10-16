@@ -149,6 +149,7 @@ let known_config_keys =
       "cc_pool_core_class";
       "cc_grid_private_bytes_cap";
       "cc_vector_bytes";
+      "cc_vector_registers";
       "cc_fp16_arithmetic";
       (* Autotuning (Autotune.tune) *)
       "autotune_search";
@@ -299,6 +300,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "cc_backend_fp_contract";
         "cc_backend_fast_math";
         "cc_vector_bytes";
+        "cc_vector_registers";
         "cc_fp16_arithmetic";
         "cc_parallel_grid";
         "cc_parallel_chunks";

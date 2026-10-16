@@ -118,7 +118,9 @@ let overflowing_unit () =
 
 let () =
   let registry, o = overflowing_unit () in
-  let limits = { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32 } in
+  let limits =
+    { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = 16 }
+  in
   let build ?admits () = Autotune.menu ?admits ~is_cpu:true ~is_gpu:false ~limits ~registry o in
   let is_unroll = function SC.Unroll _ -> true | _ -> false in
   let full = build () in

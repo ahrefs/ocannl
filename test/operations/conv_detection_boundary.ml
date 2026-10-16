@@ -61,7 +61,7 @@ let mma_limits =
   }
 
 (* The C-backend leg's limits: a pinned 16-byte vector width, no mma. *)
-let cpu_limits = { BI.no_hardware_limits with simd_vector_bytes = 16 }
+let cpu_limits = { BI.no_hardware_limits with simd_vector_bytes = 16; simd_vector_registers = 32 }
 
 type observed = {
   conv : Autotune.conv_site option;  (** On the whole lowered routine. *)

@@ -1,14 +1,16 @@
-model: vector_bytes elt_bytes m n -> default | alternatives
-  16 4  64  512 -> rm4 rn6 lanes4 | rm4 rn4 lanes4
-  32 4  64  512 -> rm4 rn3 lanes8 | rm4 rn2 lanes8
-  64 4  64  512 -> rm4 rn6 lanes16 | rm4 rn4 lanes16
-  32 4  64   64 -> rm4 rn3 lanes8 | rm4 rn2 lanes8
-  64 4  64   40 -> rm4 rn2 lanes16 | none
-  32 2  64  512 -> rm4 rn3 lanes16 | rm4 rn2 lanes16
-  32 4   2   48 -> rm2 rn3 lanes8 | rm2 rn5 lanes8
-  16 4   3   53 -> rm3 rn5 lanes4 | rm3 rn6 lanes4
-  32 4  64   28 -> rm4 rn2 lanes8 | rm4 rn3 lanes8
-  16 4  64   56 -> rm4 rn5 lanes4 | rm4 rn2 lanes4, rm4 rn6 lanes4
+model: vector_bytes vector_registers elt_bytes m n -> default | alternatives
+  16 32 4  64  512 -> rm4 rn6 lanes4 | rm4 rn4 lanes4
+  32 16 4  64  512 -> rm4 rn3 lanes8 | rm4 rn2 lanes8
+  64 32 4  64  512 -> rm4 rn6 lanes16 | rm4 rn4 lanes16
+  32 16 4  64   64 -> rm4 rn3 lanes8 | rm4 rn2 lanes8
+  64 32 4  64   40 -> rm4 rn2 lanes16 | none
+  32 16 2  64  512 -> rm4 rn3 lanes16 | rm4 rn2 lanes16
+  32 16 4   2   48 -> rm2 rn3 lanes8 | rm2 rn5 lanes8
+  16 32 4   3   53 -> rm3 rn5 lanes4 | rm3 rn6 lanes4
+  32 16 4  64   28 -> rm4 rn2 lanes8 | rm4 rn3 lanes8
+  16 32 4  64   56 -> rm4 rn5 lanes4 | rm4 rn2 lanes4, rm4 rn6 lanes4
+  16 16 4  64  512 -> rm4 rn3 lanes4 | rm4 rn2 lanes4
+  64 32 4  64   96 -> rm4 rn6 lanes16 | none
 the default geometry passes the fit rules on every shape: true
 no alternative repeats the default: true
 every alternative passes the fit rules: true
@@ -16,7 +18,7 @@ every alternative is the largest tail-free width, the register-budget cap with a
 a tail-bearing default takes the fewest vector columns its pass count admits: true
 the largest tile tying a tail-bearing default is seeded: true
 at a single-width file the row count never changes the chosen columns: true
-rm twins: rm2 rn10 lanes4, rm2 rn5 lanes8, rm2 rn10 lanes16, rm2 rn5 lanes8, rm2 rn2 lanes16, rm2 rn5 lanes16, none, none, rm2 rn3 lanes8, rm2 rn10 lanes4
+rm twins: rm2 rn10 lanes4, rm2 rn5 lanes8, rm2 rn10 lanes16, rm2 rn5 lanes8, rm2 rn2 lanes16, rm2 rn5 lanes16, none, none, rm2 rn3 lanes8, rm2 rn10 lanes4, rm2 rn5 lanes4, rm2 rn6 lanes16
 the rm twin takes two rows at the default's width exactly where the default takes four: true
 the rm twin passes the fit rules, and one more vector column would not: true
 the coverage of a dividing geometry is all full blocks: true
@@ -24,7 +26,9 @@ the coverage of a dividing geometry has no column tail: true
 the coverage of a non-dividing geometry ends in a partial vector and a row band: true
 a column tail of whole vectors is whole: true
 a column extent below one vector has no default and no alternatives: true
-the budget is the widest default tile's live-register count: true
+the column cap is the widest four-row tile resident on the register file: true
+the budget is the widest default tile's live-register count: tinyBLAS's 4 x 3 on 16 registers, 4 x 6 on 32: true
+a file that holds no four-row tile has no default: true
 a requested geometry renders register-tiled: true
 the emitted header names the requested geometry and its provenance: true
 the requested-geometry rendering matches the serial twin bitwise: true

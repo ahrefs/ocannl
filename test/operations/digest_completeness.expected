@@ -55,6 +55,7 @@ keyed: codegen -- a cc-backend codegen knob: rendering or compiling a kernel rea
   cc_parallel_chunks [read at codegen]
   cc_parallel_grid [read at codegen]
   cc_vector_bytes [read at codegen]
+  cc_vector_registers [read at codegen]
 
 keyed: codegen -- a codegen knob whose effect is not a property of the lowered code. The two debug gates bite only at log_level > 1, so what the tag hashes is the effective predicates -- [Utils.debug_log_from_routines], which rewrites the kernel and disables the parallel-grid, vectorized and mma renderings, for every backend; [Utils.with_runtime_debug], which switches the CUDA and HIP compilers to debug compilation, in those two backends' own tags, since no other compiler reads it. That is also why log_level belongs here, without an ordinary verbosity bump churning cache keys. prefer_backend_uniformity does not pick a backend: it picks how the C-family backends spell their logging expressions, so it is hashed here only once logging actually reaches the kernel -- that is its only effect on emitted code, since gh-ocannl-647 made HIP's guarded float-to-fp8 conversion unconditional rather than a thing this flag chooses
   big_models

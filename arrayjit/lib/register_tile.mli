@@ -29,7 +29,18 @@ val width : t -> int
 (** [rn * lanes], the columns one tile pass covers. *)
 
 val live_registers : t -> int
-(** [rm * rn + rm + rn]: the accumulator grid plus the per-k-step A splats and B rows. *)
+(** [rm * rn + rm + rn]: the accumulator grid plus the per-k-step A splats and B rows, all at once.
+    The register-pressure term of the model's {!budget} and of the [default] tie-break -- a
+    deliberate over-count, since no allocation needs every A splat and every B row of a k step live
+    together; {!resident_floor} is what one does need. *)
+
+val resident_floor : t -> int
+(** [rm * rn + min rm rn + 1]: the fewest vector registers a pass needs to keep every operand
+    resident -- the accumulator grid, the smaller of its two operand sets (the [rn] B rows reused
+    down the rows, or the [rm] A splats reused across the columns), and one register streaming the
+    other. The physical count: what {!rn_cap} fits to the hardware's register file, and what
+    [test/operations/cc_march_census]'s resident C-tile claim holds against each target's registers.
+*)
 
 val simd_lane_ladder : vector_bytes:int -> elt_bytes:int -> int list
 (** The vector widths (in lanes) a [vector_bytes]-wide register file renders for [elt_bytes]-wide
@@ -38,15 +49,26 @@ val simd_lane_ladder : vector_bytes:int -> elt_bytes:int -> int list
     lanes are dropped. Re-exported by [Backend_intf.simd_lane_ladder], where the [Vectorized]
     renderings' width choices ([simd_lanes_for] and its accumulating variants) build on it. *)
 
-val budget : vector_bytes:int -> int
+val budget : vector_registers:int -> int
 (** The live-register budget a requested geometry must fit: the {!live_registers} of the widest
-    default tile, i.e. tinyBLAS's [4 x 3] on 16-register (32-byte) files and [4 x 6] on 32-register
-    files — 19 and 34. A geometry over it is not wrong, only likely to spill; it is declined rather
-    than rendered so a candidate never times a spilling kernel under a label that promised a tile.
-*)
+    default tile, [rm_cap x rn_cap] -- tinyBLAS's [4 x 3] on 16-register files (AVX2, SSE) and
+    [4 x 6] on 32-register files (NEON, AVX-512), i.e. 19 and 34. Those exceed 16 and 32 because
+    {!live_registers} over-counts: both tiles are resident by {!resident_floor} (16 and 29), which
+    is where the hardware enters, through {!rn_cap}. The budget then caps every other row count at
+    the widest default's model pressure. A geometry over it is not wrong, only likely to spill; it
+    is declined rather than rendered so a candidate never times a spilling kernel under a label that
+    promised a tile. *)
 
-val rn_cap : vector_bytes:int -> int
-(** The default model's [rn] ceiling: 3 on 32-byte vector files, 6 otherwise. *)
+val rn_cap : vector_registers:int -> int
+(** The default model's [rn] ceiling: the largest [rn] whose {!rm_cap}-row pass fits
+    [vector_registers] by {!resident_floor} -- 6 on 32-register files, 3 on 16, [0] when not even
+    one column fits. Keyed on the register COUNT, which the hardware limits carry
+    ([Backend_intf.hardware_limits.simd_vector_registers]), not on the vector width: a 16-byte file
+    is 32 registers on NEON and 16 on SSE, and keying on the width gave SSE NEON's 4 x 6, which
+    spills there (gh-ocannl-1285). The A/B behind keeping 6 on 32 registers, where the model's
+    {!live_registers} reads 34 (gh-ocannl-1285, AVX-512 Zen 5 and NEON M-series): at tail-free sites
+    (f32 n = 96, 192, 384, where 4 x 6 is the default with no tie involved) 4 x 6 won 75 of 100
+    serial pairs against 4 x 5 and 4 x 4 on AVX-512, 67 of 100 on NEON. *)
 
 val rm_cap : int
 (** The [rm] ceiling — tinyBLAS's four accumulator rows, which {!default} takes wherever the row
@@ -65,7 +87,8 @@ type coverage = { m_full : int; n_full : int; tail_widths : int list }
 
 val coverage : m:int -> n:int -> t -> coverage
 
-val default : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
+val default :
+  vector_bytes:int -> vector_registers:int -> elt_bytes:int -> m:int -> n:int -> t option
 (** The renderer's own choice for an [m x n] site when the schedule carries no geometry:
     [rm = min 4 m], and [(lanes, rn)] ranked over the widths the file renders (the ladder, narrowed
     to those [n] can fill) and [rn <= rn_cap] by a ranking model in vector-issue slots per unit of
@@ -84,12 +107,21 @@ val default : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
     smaller one holds fewer {!live_registers} (gh-ocannl-1180). [None] when even the narrowest width
     exceeds [n] (or [m], [n] < 1). *)
 
-val check : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t -> (unit, string) Result.t
+val check :
+  vector_bytes:int ->
+  vector_registers:int ->
+  elt_bytes:int ->
+  m:int ->
+  n:int ->
+  t ->
+  (unit, string) Result.t
 (** Whether the renderer can honour [t] on an [m x n] site: [lanes] is a width the file renders and
-    [n] fills, [rm <= m], [rn * lanes <= n], and {!live_registers} within {!budget}. The [Error]
-    names the violated rule — it becomes the decline diagnostic. *)
+    [n] fills, the register file holds some {!rm_cap}-row tile at all, [rm <= m], [rn * lanes <= n],
+    and {!live_registers} within {!budget}. The [Error] names the violated rule — it becomes the
+    decline diagnostic. *)
 
-val alternatives : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t list
+val alternatives :
+  vector_bytes:int -> vector_registers:int -> elt_bytes:int -> m:int -> n:int -> t list
 (** The geometries the sketch seeding proposes beside the renderer's {!default}, for the tuner to
     time: at the widest width [n] fills and the default's [rm], the largest tail-free [rn >= 2] (the
     width divides [n] exactly, so the site is one tile body: what a tail-bearing default's second,
@@ -104,7 +136,8 @@ val alternatives : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t list
     (where the tied tile is the budget cap), three below, one on the common shapes, none where the
     width divides the extent. *)
 
-val rm_twin : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
+val rm_twin :
+  vector_bytes:int -> vector_registers:int -> elt_bytes:int -> m:int -> n:int -> t option
 (** The two-row twin of {!default} (gh-ocannl-947), which the sketch seeding proposes beside
     {!alternatives} only under the [autotune_register_tile_rm_twin] config key (off by default): on
     a site whose default takes {!rm_cap} rows, [rm = 2] at the default's [lanes] with the largest

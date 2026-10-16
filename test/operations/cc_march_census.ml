@@ -21,7 +21,7 @@
    [Cc_backend]'s vector width binds at module initialization and the numerics policy is a global,
    so one process emits under one setting. The driver therefore re-executes ITSELF once per (vector
    width, fp16 policy) pair, and each child writes the kernel it emitted into a directory the driver
-   hands it. Four settings are forced on every child besides those two:
+   hands it. Five settings are forced on every child besides those two:
 
    - [OCANNL_BACKEND=cc], because this is a check about the cc backend's C emission and nothing
    else. The stanza therefore pins its backend rather than declaring [OCANNL_BACKEND], and the
@@ -35,7 +35,10 @@
    decides whether fp16 computes in fp16 (the builtin rows) or in f32 (the bridge pair) -- see the
    fixture header below. - [OCANNL_NARROW_COMPUTE_F32=true], because the narrow-storage rows are
    that path and nothing else; the reason it is pinned rather than declared is argued at the forcing
-   site.
+   site. - [OCANNL_CC_VECTOR_REGISTERS], the register file each width's geometries are fitted to
+   ({!census_registers}), so that they are the width's and not the host's: auto would count the
+   register file the HOST's flags target (gh-ocannl-1285), while every kernel is compiled for the
+   matrix's named targets.
 
    {1 What the claims are, and what they are not}
 
@@ -350,6 +353,7 @@ let build (emit_dir : string) =
   (* The width this child's renderer reads, which is what its register-tile geometries are ranked
      and fit against: the seeds below are computed from the same number, never restated. *)
   let vector_bytes = Cc_backend.vector_bytes_setting () in
+  let vector_registers = Cc_backend.vector_registers_setting () in
   let nodes = ref [] in
   let mk =
     let next = ref 8100 in
@@ -525,8 +529,8 @@ let build (emit_dir : string) =
     let comp = comp_prec Ir.Ops.bfloat16 in
     let lanes =
       Option.map
-        (Ir.Register_tile.default ~vector_bytes ~elt_bytes:(Ir.Ops.prec_in_bytes comp) ~m:mma_m
-           ~n:mma_n)
+        (Ir.Register_tile.default ~vector_bytes ~vector_registers
+           ~elt_bytes:(Ir.Ops.prec_in_bytes comp) ~m:mma_m ~n:mma_n)
         ~f:(fun t -> t.Ir.Register_tile.lanes)
     in
     match
@@ -567,7 +571,8 @@ let build (emit_dir : string) =
   let default_rows ~prec ~what ~anchors =
     let elt_bytes = Ir.Ops.prec_in_bytes (comp_prec prec) in
     let geometry =
-      Option.map (Ir.Register_tile.default ~vector_bytes ~elt_bytes ~m:mma_m ~n:mma_n)
+      Option.map
+        (Ir.Register_tile.default ~vector_bytes ~vector_registers ~elt_bytes ~m:mma_m ~n:mma_n)
         ~f:(fun tile ->
           {
             site = "n192";
@@ -634,11 +639,14 @@ let build (emit_dir : string) =
         let elt_bytes = Ir.Ops.prec_in_bytes (comp_prec prec) in
         List.concat_map sites ~f:(fun (site, n) ->
             let requests =
-              (match Ir.Register_tile.default ~vector_bytes ~elt_bytes ~m:mma_m ~n with
+              (match
+                 Ir.Register_tile.default ~vector_bytes ~vector_registers ~elt_bytes ~m:mma_m ~n
+               with
                 | Some t -> [ (None, t) ]
                 | None -> [])
-              @ List.map (Ir.Register_tile.alternatives ~vector_bytes ~elt_bytes ~m:mma_m ~n)
-                  ~f:(fun t -> (Some t, t))
+              @ List.map
+                  (Ir.Register_tile.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m:mma_m
+                     ~n) ~f:(fun t -> (Some t, t))
             in
             List.map requests ~f:(fun (tile, (g : Ir.Register_tile.t)) ->
                 let seeded = Option.is_some tile in
@@ -762,6 +770,13 @@ let toolchains () =
    read this tag: it asks its own resolved compute precision which side it is on. *)
 let fp16_settings = [ ("native", "true"); ("wide", "false") ]
 
+(* The register file a [width]-byte child fits its register-tile geometries to: the ISA whose
+   columns that width's kernels are for -- 32 registers at 16 bytes (NEON, the aarch64 columns) and
+   at 64 (AVX-512, [x86-64-v4] and [sapphirerapids]), 16 at 32 (AVX2, [x86-64-v3]). The x86 columns
+   also compile the 16-byte kernels, on 16 registers; the resident claim lists the rows that crowds
+   on stderr rather than asserting them, as it does any geometry a target cannot hold. *)
+let census_registers ~width = if width = 32 then 16 else 32
+
 (* The environment a child emits under: this process's, with every setting the child must not
    inherit replaced. Removing them first matters -- [Unix.create_process_env] passes the array
    verbatim, and a duplicate key resolves to whichever copy the child's getenv finds first. *)
@@ -770,6 +785,7 @@ let child_env ~width ~fp16 ~dir =
     [
       ("OCANNL_BACKEND", "cc");
       ("OCANNL_CC_VECTOR_BYTES", Int.to_string width);
+      ("OCANNL_CC_VECTOR_REGISTERS", Int.to_string (census_registers ~width));
       ("OCANNL_CC_FP16_ARITHMETIC", "native");
       ("OCANNL_FP16_ARITHMETIC", fp16);
       (* The narrow-storage rows ARE the [narrow_compute_f32] path (gh-ocannl-517): with it off,
@@ -2237,15 +2253,18 @@ let () =
          read to rediscover. Claimed where the pass CAN be resident: its accumulator grid, the
          smaller of its two operand sets (the [cols] B rows reused down the rows, or the [rows] A
          splats reused across the columns) and one register for the other operand fit the target's
-         vector registers. That is the least any allocation keeping every operand in a register
-         needs, so a stack reference there is the allocator's (or the emission's) doing, not the
-         geometry's. Held against the TARGET's register count rather than the budget
-         {!Ir.Register_tile.budget} fits a geometry to, because the two are different facts: the
-         budget is keyed on the vector width, and a 16-byte file is 32 registers on NEON but 16 on
-         SSE -- the rows that fall outside are listed on stderr, where a geometry the seeding thinks
-         fits and the target cannot hold is visible without failing a golden that is about the
-         emission. *)
-      let resident_floor (g : tile_geometry) = (g.rows * g.cols) + Int.min g.rows g.cols + 1 in
+         vector registers -- {!Ir.Register_tile.resident_floor}, the count
+         {!Ir.Register_tile.rn_cap} fits the default tile to (gh-ocannl-1285). That is the least any
+         allocation keeping every operand in a register needs, so a stack reference there is the
+         allocator's (or the emission's) doing, not the geometry's. Held against each COLUMN's
+         register count rather than the one the emitting child fitted its geometries to
+         ({!census_registers}), because one kernel is compiled for several targets: the 16-byte
+         kernels are fitted to NEON's 32 registers and also compiled for the x86 columns' 16 -- the
+         rows that fall outside are listed on stderr, where a geometry the target cannot hold is
+         visible without failing a golden that is about the emission. *)
+      let resident_floor (g : tile_geometry) =
+        Ir.Register_tile.resident_floor { rm = g.rows; rn = g.cols; lanes = 1 }
+      in
       let fits (r, g) = resident_floor g <= r.caps.vector_registers in
       let resident_rows = List.filter geometry_rows ~f:fits in
       let crowded = List.filter geometry_rows ~f:(fun rg -> not (fits rg)) in

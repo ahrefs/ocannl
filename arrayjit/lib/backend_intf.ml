@@ -266,6 +266,14 @@ type hardware_limits = {
           schedule construction (autotune's seeding pre-filter, gh-ocannl-479) can statically rule
           out candidates the renderer must decline, e.g. a micro-kernel column extent below one
           vector's lane count. *)
+  simd_vector_registers : int;
+      (** How many vector registers that file has: 32 on AArch64 and on AVX-512 targets (at every
+          [simd_vector_bytes], since AVX-512VL gives the narrower forms the same 32), 16 on other
+          x86 targets (SSE, AVX2) -- the target the kernels are compiled for, probed under their
+          flags. [0] wherever [simd_vector_bytes] is [0]. Keyed separately from the width because a
+          16-byte file is 32 registers on NEON and 16 on SSE: {!Register_tile.rn_cap} fits the
+          register tile's columns to this count (gh-ocannl-1285), and the seeding and the renderer
+          must read the same one. *)
   peak_flops : float option;
       (** Advisory peak arithmetic throughput in FLOP/s (single-precision, FMA counted as two), the
           hardware envelope of the analytic cost model (gh-ocannl-491): rough documented constants
@@ -552,6 +560,7 @@ let no_hardware_limits =
     max_grid_yz = None;
     mma = None;
     simd_vector_bytes = 0;
+    simd_vector_registers = 0;
     peak_flops = None;
     peak_memory_bandwidth = None;
     native_fp16_arithmetic = false;

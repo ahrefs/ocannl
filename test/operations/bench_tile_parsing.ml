@@ -16,15 +16,15 @@ open Stdio
 open Verdict.Claims
 module RT = Ir.Register_tile
 
-(* A 16-byte vector file at 4-byte elements -- the NEON f32 case, ladder [4]. The thunk counts its
-   own forcings, because "only [--rn=] needs the machine" is a claim: a bench that acquired a
-   backend context to answer a question nobody asked would still produce the right geometry, and the
-   cost would be invisible. *)
+(* A 16-byte, 32-register vector file at 4-byte elements -- the NEON f32 case, ladder [4]. The thunk
+   counts its own forcings, because "only [--rn=] needs the machine" is a claim: a bench that
+   acquired a backend context to answer a question nobody asked would still produce the right
+   geometry, and the cost would be invisible. *)
 let forcings = ref 0
 
 let machine () =
   Int.incr forcings;
-  (16, 4)
+  (16, 32, 4)
 
 let args argv =
   Bench_args.create ~argv:(Array.of_list ("narrow_gebp_bench" :: argv)) "narrow_gebp_bench"
@@ -56,7 +56,7 @@ let () =
   let before = !forcings in
   let t = Bench_tile.of_args (args [ "--rn=6" ]) ~machine in
   p "--rn= consults the machine exactly once" (!forcings = before + 1);
-  let vector_bytes, elt_bytes = (16, 4) in
+  let vector_bytes, vector_registers, elt_bytes = (16, 32, 4) in
   let widest = List.hd (RT.simd_lane_ladder ~vector_bytes ~elt_bytes) in
   p "--rn= keeps the column count it was given, and derives the rest"
     (Option.equal RT.equal t
@@ -72,7 +72,7 @@ let () =
      label, which is the failure the census bracket exists to make visible. *)
   p "on a site with the rows and columns to spare, the derived geometry is one check accepts"
     (Option.value_map t ~default:false ~f:(fun t ->
-         Result.is_ok (RT.check ~vector_bytes ~elt_bytes ~m:64 ~n:512 t)))
+         Result.is_ok (RT.check ~vector_bytes ~vector_registers ~elt_bytes ~m:64 ~n:512 t)))
 
 let () =
   (* A request the renderer declines is still PASSED to it: the rules live in [Register_tile.check],
@@ -83,13 +83,14 @@ let () =
   p "a geometry no 512-column site can honour is still handed to the renderer, not pre-rejected"
     (Option.equal RT.equal t (Some { RT.rm = 4; rn = 12; lanes = 4 })
     && Result.is_error
-         (RT.check ~vector_bytes:16 ~elt_bytes:4 ~m:64 ~n:512 { RT.rm = 4; rn = 12; lanes = 4 }))
+         (RT.check ~vector_bytes:16 ~vector_registers:32 ~elt_bytes:4 ~m:64 ~n:512
+            { RT.rm = 4; rn = 12; lanes = 4 }))
 
 (* A backend reporting no SIMD vector file -- every GPU backend does, [simd_vector_bytes = 0]. Its
    [Tile_mma] renders through the hardware's own intrinsics, which the census reports as a SUCCESS,
    so a geometry taken here would print under "(requested)" with nothing having honoured it: the
    "timed is not tensorized" hazard one level above the bracket. *)
-let no_vector_file () = (0, 4)
+let no_vector_file () = (0, 0, 4)
 
 let () =
   p_all "neither spelling is taken on a backend with no register-tiled rendering to describe"
@@ -143,7 +144,7 @@ let () =
   (* Bounds that keep the geometry arithmetic in range. Each is IMPLIED by a rule
      [Register_tile.check] enforces, so the claim is that nothing check would accept is refused here
      — stated against [check] itself, over the values the bound admits. *)
-  let budget = RT.budget ~vector_bytes:16 in
+  let budget = RT.budget ~vector_registers:32 in
   let widest = List.hd_exn (RT.simd_lane_ladder ~vector_bytes:16 ~elt_bytes:4) in
   p_all
     "a count that would wrap the width or the live-register arithmetic is refused, naming the rule"
@@ -167,7 +168,8 @@ let () =
     ~f:(fun v ->
       let by_check =
         Result.is_error
-          (RT.check ~vector_bytes:16 ~elt_bytes:4 ~m:64 ~n:512 { RT.rm = v; rn = 2; lanes = 4 })
+          (RT.check ~vector_bytes:16 ~vector_registers:32 ~elt_bytes:4 ~m:64 ~n:512
+             { RT.rm = v; rn = 2; lanes = 4 })
       in
       let by_parser =
         Option.is_some

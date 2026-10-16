@@ -145,7 +145,9 @@ let () =
             ~native_fp16_arithmetic:limits.Ir.Backend_intf.native_fp16_arithmetic
             !Tensor.default_value_prec
         in
-        (limits.Ir.Backend_intf.simd_vector_bytes, Ir.Ops.prec_in_bytes prec))
+        ( limits.Ir.Backend_intf.simd_vector_bytes,
+          limits.Ir.Backend_intf.simd_vector_registers,
+          Ir.Ops.prec_in_bytes prec ))
   in
   (* Every scheduled variant addresses the i/j/k nest, so an extent of 1 makes ALL of them
      unschedulable — [tensorize] and the unblocked ones included: the extent-1 loop is simplified
