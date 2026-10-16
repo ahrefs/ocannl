@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """tinygrad runner for the cross-framework benchmark suite (see benchmarks/README.md).
 
-Model-dispatched on the fixture metadata: mlp / conv (LeNet-5, valid convs) / gpt
+Model-dispatched on the fixture metadata: mlp / conv (the two-conv classifiers, or the reduced
+ResNet under `arch: resnet`) / gpt
 (pre-LN GPT-2-style decoder, trained or inference-only per the fixture's `mode`). Math
 mirrors the OCANNL and PyTorch runners exactly; see the PyTorch runner's docstring for the
 conventions.
@@ -110,6 +111,8 @@ def build_mlp(meta, data):
 
 
 def build_conv(meta, data):
+    if meta.get("arch", "two_conv") == "resnet":
+        return build_conv_resnet(meta, data)
     w1 = param(np.ascontiguousarray(data["conv1_kernel"].transpose(0, 3, 1, 2)))
     b1 = param(data["conv1_bias"])  # per-channel bias [oc]
     w2 = param(np.ascontiguousarray(data["conv2_kernel"].transpose(0, 3, 1, 2)))
@@ -133,6 +136,53 @@ def build_conv(meta, data):
         z = z.relu().max_pool2d(kernel_size=(2, 2))
         z = z.conv2d(w2, b2, stride=s2, padding=pad)
         z = z.relu().max_pool2d(kernel_size=(2, 2))
+        h = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1)
+        h = h.linear(wf1.T, bf1).relu()
+        h = h.linear(wf2.T, bf2).relu()
+        return h.linear(wl.T, bl)
+
+    def loss_fn(xb, yb):
+        return ce_onehot(forward(xb), yb)
+
+    x = np.ascontiguousarray(data["x"].transpose(0, 3, 1, 2))  # NCHW
+    return loss_fn, flat, (x, data["y"]), None
+
+
+def build_conv_resnet(meta, data):
+    """The reduced ResNet-style classifier (gh-ocannl-1161); see the PyTorch runner's
+    build_conv_resnet and gen_fixtures.py for the structure."""
+
+    def conv_params(name):
+        kernel = np.ascontiguousarray(data[f"{name}_kernel"].transpose(0, 3, 1, 2))
+        return (param(kernel), param(data[f"{name}_bias"]))
+
+    n_stages = len(meta["stage_channels"].split(","))
+    pad = (int(meta["kernel_size"]) - 1) // 2
+    stem = conv_params("stem")
+    stages = [
+        (conv_params(f"s{i}c1"), conv_params(f"s{i}c2"), conv_params(f"s{i}sc") if i > 1 else None)
+        for i in range(1, n_stages + 1)
+    ]
+    wf1 = param(data["fc1_w"].reshape(data["fc1_w"].shape[0], -1))
+    bf1 = param(data["fc1_b"])
+    wf2 = param(data["fc2_w"])
+    bf2 = param(data["fc2_b"])
+    wl = param(data["w_logits"])
+    bl = param(data["b_logits"])
+    flat = [*stem]
+    for c1, c2, sc in stages:
+        flat += [*c1, *c2, *(sc or ())]
+    flat += [wf1, bf1, wf2, bf2, wl, bl]
+
+    def forward(xb):
+        z = xb.conv2d(*stem, padding=pad).relu()
+        for c1, c2, sc in stages:
+            main = z if sc is None else z.max_pool2d(kernel_size=(2, 2))
+            main = main.conv2d(*c1, padding=pad).relu()
+            main = main.conv2d(*c2, padding=pad)
+            shortcut = z if sc is None else z.conv2d(*sc, stride=2)
+            z = (main + shortcut).relu()
+        z = z.max_pool2d(kernel_size=(2, 2))
         h = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1)
         h = h.linear(wf1.T, bf1).relu()
         h = h.linear(wf2.T, bf2).relu()

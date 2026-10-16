@@ -35,6 +35,12 @@
 # <sha256>  <bytes>  <name>  <origin>  <digest-kind>
 c27e59b4163397290685aa1736bf7176f56de5ec5019da89db5ad29f80d855c2  26190952  cifar_conv.safetensors  minix  raw-v1
 d008d1cff9885ffaa01eca91b95b9a0cadc2175f9b79a9e4ed8c06dc1dd7b74a  26190952  cifar_conv.safetensors  rog-nv  raw-v1
+065d246d181aeadd2417c23d0e0fa9fb604b77d3b95a089e412d350ba0f9f9c4  13505936  cifar_resnet.safetensors  m4-max  content-v1
+065d246d181aeadd2417c23d0e0fa9fb604b77d3b95a089e412d350ba0f9f9c4  13505936  cifar_resnet.safetensors  minix  content-v1
+065d246d181aeadd2417c23d0e0fa9fb604b77d3b95a089e412d350ba0f9f9c4  13505936  cifar_resnet.safetensors  rog-nv  content-v1
+2bda4d0d75b8e7b58932de0f1ccbe17f7984fa837b08e6c27a9094adc74bc68a  1079312  cifar_resnet_b1.safetensors  m4-max  content-v1
+2bda4d0d75b8e7b58932de0f1ccbe17f7984fa837b08e6c27a9094adc74bc68a  1079312  cifar_resnet_b1.safetensors  minix  content-v1
+2bda4d0d75b8e7b58932de0f1ccbe17f7984fa837b08e6c27a9094adc74bc68a  1079312  cifar_resnet_b1.safetensors  rog-nv  content-v1
 023d0f51049e6eccd65ec92d0f05ab03aeeb024aad50e6f7f15044ad0029153b  32789600  cifar_stride.safetensors  minix  raw-v1
 b9540f5a6a084a81b764b84108e6c319837448f6064f0f9359e15f7a7e4ea734  32789600  cifar_stride.safetensors  rog-nv  raw-v1
 c322a00b72df143612eafafedf7c468e9c05f3e4bc1e7eb6d77ada651ef98de8  13871384  gpt2_mini.safetensors  m4-max  content-v1

@@ -1,0 +1,20 @@
+{
+  "name": "cifar_resnet",
+  "model": "conv",
+  "arch": "resnet",
+  "image_size": 32,
+  "in_channels": 3,
+  "use_padding": true,
+  "classes": 10,
+  "stage_channels": [16, 32, 64],
+  "kernel_size": 3,
+  "fc1": 128,
+  "fc2": 84,
+  "batch_size": 64,
+  "n_batches": 16,
+  "lr": 0.02,
+  "seed": 42,
+  "parity_steps": 24,
+  "warmup_steps": 20,
+  "timed_steps": 100
+}

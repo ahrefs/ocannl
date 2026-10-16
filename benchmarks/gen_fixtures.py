@@ -85,7 +85,15 @@ def build_conv(spec, rng, tensors, meta):
     compacting Stage targets — with rows 24 and 8 still multiples of 8). [in_channels]
     defaults to 1, [use_padding] to false, and [stride1]/[stride2] to 1, keeping the LeNet
     fixture bit-identical. Strides are only supported with valid convs: same-padding
-    output-size conventions differ across frameworks once stride > 1."""
+    output-size conventions differ across frameworks once stride > 1.
+
+    `arch: resnet` selects the reduced ResNet-style builder instead (`build_conv_resnet`); a spec
+    without `arch` is the two-conv builder and records no `arch` metadata, so the existing
+    fixtures stay bit-identical."""
+    arch = spec.get("arch", "two_conv")
+    if arch == "resnet":
+        return build_conv_resnet(spec, rng, tensors, meta)
+    assert arch == "two_conv", f"unknown conv arch {arch!r}"
     total = spec["batch_size"] * spec["n_batches"]
     img, classes = spec["image_size"], spec["classes"]
     c1, c2, k = spec["channels1"], spec["channels2"], spec["kernel_size"]
@@ -126,6 +134,67 @@ def build_conv(spec, rng, tensors, meta):
     meta["use_padding"] = "true" if use_padding else "false"
     meta["stride1"] = str(s1)
     meta["stride2"] = str(s2)
+
+
+def build_conv_resnet(spec, rng, tensors, meta):
+    """A reduced ResNet-style classifier (gh-ocannl-1161), without batch norm. Layouts as in
+    `build_conv`: conv kernels [oc, kh, kw, ic], images [total, h, w, c], fc1 weight
+    [hid, oh, ow, oc].
+
+    The stem is a padded k x k conv (stride 1) into stage_channels[0], then relu. Then one
+    residual block per entry of stage_channels; block i (named s<i>, from 1) computes
+        main     = s<i>c2(relu(s<i>c1(pool(x))))   padded k x k convs at stride 1
+        shortcut = x                               for s1 (identity: the stem's channels)
+                 = s<i>sc(x)                       for s2.. (1x1 at stride 2, no padding)
+        out      = relu(main + shortcut)
+    where pool is a 2x2 max pool at stride 2 for s2.. and absent for s1, so every later stage
+    halves the extent on both paths. A final 2x2 max pool feeds the head of the two-conv
+    workloads (fc1, fc2, logits). Every conv has a per-channel bias.
+
+    The strided 1x1 shortcut reads x at (2*oh, 2*ow) with no padding, which every framework
+    agrees on (n/2 outputs for an even extent n). OCANNL spells it `use_padding:true`, whose
+    margin for a 1x1 window is zero: its valid mode requires (n - 1) mod 2 = 0, an odd extent,
+    which a stage fed by 2x2 pools never has. That is also how `Nn_blocks.resnet_block` spells
+    its downsample conv."""
+    total = spec["batch_size"] * spec["n_batches"]
+    img, classes, k = spec["image_size"], spec["classes"], spec["kernel_size"]
+    ic = spec.get("in_channels", 1)
+    chans = spec["stage_channels"]
+    assert spec.get("use_padding", False), "resnet: the k x k convs are padded (use_padding: true)"
+    assert k % 2 == 1, "resnet: same-padding needs an odd kernel_size"
+    assert len(chans) >= 1, "resnet: at least one stage"
+    # Every stage after the first halves the extent, and the final pool halves it again; OCANNL's
+    # pools and strided convs need exact divisibility.
+    assert img % (2 ** len(chans)) == 0, "resnet: image_size must be divisible by 2^stages"
+    fm = img // (2 ** len(chans))
+
+    def conv(name, c_out, c_in, kk):
+        tensors[f"{name}_kernel"] = uniform(rng, kk * kk * c_in, (c_out, kk, kk, c_in))
+        tensors[f"{name}_bias"] = np.zeros(c_out, np.float32)
+
+    conv("stem", chans[0], ic, k)
+    c_prev = chans[0]
+    for i, c in enumerate(chans, start=1):
+        conv(f"s{i}c1", c, c_prev, k)
+        conv(f"s{i}c2", c, c, k)
+        if i > 1:
+            conv(f"s{i}sc", c, c_prev, 1)
+        c_prev = c
+    fc1, fc2 = spec["fc1"], spec["fc2"]
+    tensors["fc1_w"] = uniform(rng, fm * fm * c_prev, (fc1, fm, fm, c_prev))
+    tensors["fc1_b"] = np.zeros(fc1, np.float32)
+    tensors["fc2_w"] = uniform(rng, fc1, (fc2, fc1))
+    tensors["fc2_b"] = np.zeros(fc2, np.float32)
+    tensors["w_logits"] = uniform(rng, fc2, (classes, fc2))
+    tensors["b_logits"] = np.zeros(classes, np.float32)
+    tensors["x"] = rng.normal(0.0, 1.0, (total, img, img, ic)).astype(np.float32)
+    tensors["y"] = one_hot(rng.integers(0, classes, total), classes)
+    for key in ("image_size", "classes", "kernel_size", "fc1", "fc2"):
+        meta[key] = str(spec[key])
+    meta["arch"] = "resnet"
+    meta["in_channels"] = str(ic)
+    meta["use_padding"] = "true"
+    meta["stage_channels"] = ",".join(str(c) for c in chans)
 
 
 def build_gpt(spec, rng, tensors, meta):

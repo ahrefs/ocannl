@@ -50,6 +50,27 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   exercises only the reorder-serial and default-fissioned paths — recorded as the baseline
   the compacting-Stage seeding is measured against. Strides are spec-driven
   (`stride1`/`stride2`, default 1, valid-only) through the same builder as `lenet`.
+- **cifar_resnet** / **cifar_resnet_b1** (`model: conv`, `arch: resnet`, training): a reduced
+  ResNet-style classifier (gh-ocannl-1161) at batch 64 and batch 1, the conv workload the v1.1.2
+  conv issues close against. 3-channel 32×32 images; a padded 3×3 stem into 16 channels, then
+  one residual block per stage at 16, 32 and 64 channels: two **padded 3×3 stride-1 convs**
+  (`s<i>c1`, `s<i>c2`), the **residual add** (`s<i>res`, then its relu `s<i>out`), and from
+  stage 2 on, downsampling by a 2×2 max pool on the main path with a **stride-2 1×1 conv** on
+  the shortcut (`s<i>sc`); a final 2×2 pool feeds the `cifar_conv` head (fc 128, fc 84, 10
+  classes). Every conv has a per-channel bias. These are the shapes the earlier conv workloads
+  lack: a 3×3 stride-1 site (gh-ocannl-505's Winograd), an operand with a second reader (each
+  block input feeds both the 3×3 conv and the add, or both the pool and the shortcut;
+  gh-ocannl-1147), a 1×1 conv, and batch 1 (gh-ocannl-1148: the strided 1×1 conv's GEMM row is
+  the batch axis). Deliberately left out: batch norm (running statistics are unimplemented,
+  gh-ocannl-879, and its epsilon and variance conventions would test the parity gate rather than
+  the convs), padded stride-2 3×3 convs (frameworks disagree on their output size) and
+  `Nn_blocks.resnet_block` (which needs batch norm). The shortcut is spelled `conv2d
+  ~kernel_size:1 ~stride:2 ~use_padding:true`, like `resnet_block`'s downsample conv: a 1×1
+  window has a zero margin, while OCANNL's valid mode at stride 2 would need an odd input
+  extent. It reads `x` at `(2*oh, 2*ow)`, exactly as the Python runners' unpadded stride-2 1×1
+  conv does. The model is `Bench_conv_model.resnet` (`runners/ocannl/bench_conv_model.ml`),
+  shared with `bench_conv_diag`; the site names above are debug names its kernels write, which
+  is how the [cell names](#cifar_resnet-cell-names) attribute a kernel to a site.
 - **gpt2_mini** (`model: gpt`, `mode: infer`): pre-LN GPT-2-style decoder (4 layers, d=256,
   8 heads, seq 128, vocab 1024, tanh-gelu, learned positional embeddings, tied lm_head,
   causal mask filled with `-inf` since gh-ocannl-548; the Python runners keep `-1e9`, which

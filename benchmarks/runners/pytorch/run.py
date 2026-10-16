@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """PyTorch runner for the cross-framework benchmark suite (see benchmarks/README.md).
 
-Model-dispatched on the fixture metadata: mlp / conv (LeNet-5, valid convs) / gpt
+Model-dispatched on the fixture metadata: mlp / conv (the two-conv classifiers, or the reduced
+ResNet under `arch: resnet`) / gpt
 (pre-LN GPT-2-style decoder, trained or inference-only per the fixture's `mode`).
 Math mirrors the OCANNL runners exactly:
 same CE formulation (softmax -> one-hot dot -> log), same LayerNorm (biased variance,
@@ -64,6 +65,9 @@ def build_mlp(meta, data, dev, approximate=False):
 
 
 def build_conv(meta, data, dev, approximate=False):
+    if meta.get("arch", "two_conv") == "resnet":
+        return build_conv_resnet(meta, data, dev)
+
     def leaf(t):
         return t.contiguous().to(dev).requires_grad_()
 
@@ -90,6 +94,57 @@ def build_conv(meta, data, dev, approximate=False):
         z = F.max_pool2d(torch.relu(z), 2)
         z = F.conv2d(z, w2, b2, stride=s2, padding=pad)
         z = F.max_pool2d(torch.relu(z), 2)
+        h = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1)  # match OCANNL [oh,ow,oc] order
+        h = torch.relu(h @ wf1.T + bf1)
+        h = torch.relu(h @ wf2.T + bf2)
+        return h @ wl.T + bl
+
+    def loss_fn(xb, yb):
+        return ce_onehot(forward(xb), yb)
+
+    x = data["x"].permute(0, 3, 1, 2).contiguous().to(dev)  # NCHW
+    y = data["y"].to(dev)
+    return loss_fn, flat, flat, (x, y), None
+
+
+def build_conv_resnet(meta, data, dev):
+    """The reduced ResNet-style classifier (gh-ocannl-1161); structure in gen_fixtures.py's
+    build_conv_resnet. Padded k x k convs (padding (k-1)/2), stride-2 1x1 shortcuts with no
+    padding, 2x2 max pools, the two-conv workloads' head."""
+
+    def leaf(t):
+        return t.contiguous().to(dev).requires_grad_()
+
+    def conv_params(name):
+        return (leaf(data[f"{name}_kernel"].permute(0, 3, 1, 2)), leaf(data[f"{name}_bias"]))
+
+    n_stages = len(meta["stage_channels"].split(","))
+    pad = (int(meta["kernel_size"]) - 1) // 2
+    stem = conv_params("stem")
+    stages = [
+        (conv_params(f"s{i}c1"), conv_params(f"s{i}c2"), conv_params(f"s{i}sc") if i > 1 else None)
+        for i in range(1, n_stages + 1)
+    ]
+    wf1 = leaf(data["fc1_w"].reshape(data["fc1_w"].shape[0], -1))  # [hid, oh*ow*oc]
+    bf1 = leaf(data["fc1_b"])
+    wf2 = leaf(data["fc2_w"])
+    bf2 = leaf(data["fc2_b"])
+    wl = leaf(data["w_logits"])
+    bl = leaf(data["b_logits"])
+    flat = [*stem]
+    for c1, c2, sc in stages:
+        flat += [*c1, *c2, *(sc or ())]
+    flat += [wf1, bf1, wf2, bf2, wl, bl]
+
+    def forward(xb):
+        z = torch.relu(F.conv2d(xb, *stem, padding=pad))
+        for c1, c2, sc in stages:
+            main = z if sc is None else F.max_pool2d(z, 2)
+            main = torch.relu(F.conv2d(main, *c1, padding=pad))
+            main = F.conv2d(main, *c2, padding=pad)
+            shortcut = z if sc is None else F.conv2d(z, *sc, stride=2)
+            z = torch.relu(main + shortcut)
+        z = F.max_pool2d(z, 2)
         h = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1)  # match OCANNL [oh,ow,oc] order
         h = torch.relu(h @ wf1.T + bf1)
         h = torch.relu(h @ wf2.T + bf2)

@@ -1,7 +1,7 @@
-(* Diagnostic for the lenet training step's default schedule: prints the fission segment census
-   (kinds, launch geometry, per-nest loop extents and written nodes) on the configured backend, then
-   times a few individual steps. Clone of bench_conv.ml's model; not part of the benchmark
-   protocol. *)
+(* Diagnostic for the conv workloads' training step's default schedule: prints the fission segment
+   census (kinds, launch geometry, per-nest loop extents and written nodes) on the configured
+   backend, then times a few individual steps. Builds bench_conv.ml's model (Bench_conv_model); not
+   part of the benchmark protocol. *)
 
 open Base
 open Ocannl
@@ -19,11 +19,6 @@ let () =
   let st = St.read fixture in
   let batch_size = H.meta_int st "batch_size" in
   let lr = Float.of_string (H.get_meta st "lr") in
-  let c1 = H.meta_int st "channels1" in
-  let c2 = H.meta_int st "channels2" in
-  let k = H.meta_int st "kernel_size" in
-  let fc1_dim = H.meta_int st "fc1" in
-  let fc2_dim = H.meta_int st "fc2" in
   let x_nd = St.to_ndarray st "x" in
   let y_nd = St.to_ndarray st "y" in
   let total = (Ir.Ndarray.dims x_nd).(0) in
@@ -33,23 +28,7 @@ let () =
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let%op batch_x = xs @| batch_n in
   let%op batch_y = ys @| batch_n in
-  let s1 = H.meta_int_default st "stride1" ~default:1 in
-  let s2 = H.meta_int_default st "stride2" ~default:1 in
-  let conv1 =
-    Nn_blocks.conv2d ~label:[ "conv1" ] ~kernel_size:k ~stride:s1 ~use_padding:false
-      ~out_channels:c1 ()
-  in
-  let conv2 =
-    Nn_blocks.conv2d ~label:[ "conv2" ] ~kernel_size:k ~stride:s2 ~use_padding:false
-      ~out_channels:c2 ()
-  in
-  let pool1 = Nn_blocks.max_pool2d ~stride:2 ~window_size:2 () in
-  let pool2 = Nn_blocks.max_pool2d ~stride:2 ~window_size:2 () in
-  let fc1 = Nn_blocks.mlp_layer ~label:[ "fc1" ] ~hid_dim:fc1_dim () in
-  let fc2 = Nn_blocks.mlp_layer ~label:[ "fc2" ] ~hid_dim:fc2_dim () in
-  let%op model x =
-    ({ w_logits } * fc2 (fc1 (pool2 (relu (conv2 (pool1 (relu (conv1 x)))))))) + { b_logits = 0. }
-  in
+  let { Bench_conv_model.model; mapping } = Bench_conv_model.build st in
   let logits = model batch_x in
   let%op batch_loss =
     cross_entropy_loss ~spec:"...|v" ~normalize_by:!..batch_size () ~logits ~targets:batch_y
@@ -67,24 +46,13 @@ let () =
   let backend = Context.backend_name ctx in
   let limits = Context.hardware_limits ctx in
   let ctx = Train.init_params ctx bindings batch_loss in
-  let mapping =
-    [
-      ("conv1_kernel", [ "conv1"; "kernel" ]);
-      ("conv1_bias", [ "conv1"; "bias" ]);
-      ("conv2_kernel", [ "conv2"; "kernel" ]);
-      ("conv2_bias", [ "conv2"; "bias" ]);
-      ("fc1_w", [ "fc1"; "w" ]);
-      ("fc1_b", [ "fc1"; "b" ]);
-      ("fc2_w", [ "fc2"; "w" ]);
-      ("fc2_b", [ "fc2"; "b" ]);
-      ("w_logits", [ "w"; "logits" ]);
-      ("b_logits", [ "b"; "logits" ]);
-    ]
-  in
+  (* The first conv's kernel: [conv1] in the two-conv models, [stem] in the ResNet. *)
   let kc1 () =
     match
       Base.Set.find batch_loss.Tensor.params ~f:(fun p ->
-          String.is_substring (Ir.Tnode.debug_name p.Tensor.value) ~substring:"kernel_conv1")
+          let dn = Ir.Tnode.debug_name p.Tensor.value in
+          String.is_substring dn ~substring:"kernel_conv1"
+          || String.is_substring dn ~substring:"kernel_stem")
     with
     | Some p -> p.Tensor.value
     | None -> assert false

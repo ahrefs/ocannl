@@ -1,7 +1,7 @@
-(* OCANNL conv runner: LeNet-5 with valid convolutions, built from the idiomatic nn_blocks pieces
-   (conv2d ~use_padding:false, max_pool2d, mlp_layer). Fixture weights are injected into the
-   block-created inline params via Context.set_values, matched by debug-name tokens (see
-   Bench_harness.inject). Layouts documented in gen_fixtures.py build_conv. *)
+(* OCANNL conv runner: the conv workloads (LeNet-5, the cifar-scale two-conv classifiers, the
+   reduced ResNet), built from the idiomatic nn_blocks pieces by Bench_conv_model. Fixture weights
+   are injected into the block-created inline params via Context.set_values, matched by debug-name
+   tokens (see Bench_harness.inject). Layouts documented in gen_fixtures.py build_conv. *)
 
 open Base
 open Ocannl
@@ -22,23 +22,6 @@ let () =
   let st = St.read fixture in
   let batch_size = H.meta_int st "batch_size" in
   let lr = Float.of_string (H.get_meta st "lr") in
-  let c1 = H.meta_int st "channels1" in
-  let c2 = H.meta_int st "channels2" in
-  let k = H.meta_int st "kernel_size" in
-  let fc1_dim = H.meta_int st "fc1" in
-  let fc2_dim = H.meta_int st "fc2" in
-  (* Same-padding keeps the spatial extent divisible; valid convs (LeNet) shrink it. The flag
-     applies to BOTH convs — gen_fixtures sizes fc1_w as if both preserve extent, and the Python
-     runners pad both. Defaults to valid so pre-existing fixtures are unchanged. *)
-  let use_padding =
-    match List.Assoc.find (St.metadata st) ~equal:String.equal "use_padding" with
-    | Some "true" -> true
-    | _ -> false
-  in
-  (* Per-conv strides (cifar_stride's stride-2 stem, gh-ocannl-502); valid-only, see gen_fixtures.
-     Absent on pre-existing fixtures. *)
-  let s1 = H.meta_int_default st "stride1" ~default:1 in
-  let s2 = H.meta_int_default st "stride2" ~default:1 in
   let x_nd = St.to_ndarray st "x" in
   let y_nd = St.to_ndarray st "y" in
   let total = (Ir.Ndarray.dims x_nd).(0) in
@@ -48,19 +31,7 @@ let () =
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let%op batch_x = xs @| batch_n in
   let%op batch_y = ys @| batch_n in
-  let conv1 =
-    Nn_blocks.conv2d ~label:[ "conv1" ] ~kernel_size:k ~stride:s1 ~use_padding ~out_channels:c1 ()
-  in
-  let conv2 =
-    Nn_blocks.conv2d ~label:[ "conv2" ] ~kernel_size:k ~stride:s2 ~use_padding ~out_channels:c2 ()
-  in
-  let pool1 = Nn_blocks.max_pool2d ~stride:2 ~window_size:2 () in
-  let pool2 = Nn_blocks.max_pool2d ~stride:2 ~window_size:2 () in
-  let fc1 = Nn_blocks.mlp_layer ~label:[ "fc1" ] ~hid_dim:fc1_dim () in
-  let fc2 = Nn_blocks.mlp_layer ~label:[ "fc2" ] ~hid_dim:fc2_dim () in
-  let%op model x =
-    ({ w_logits } * fc2 (fc1 (pool2 (relu (conv2 (pool1 (relu (conv1 x)))))))) + { b_logits = 0. }
-  in
+  let { Bench_conv_model.model; mapping } = Bench_conv_model.build st in
   let logits = model batch_x in
   let%op batch_loss =
     cross_entropy_loss ~spec:"...|v" ~normalize_by:!..batch_size () ~logits ~targets:batch_y
@@ -76,20 +47,6 @@ let () =
   if debug then (
     H.dump_params batch_loss;
     Stdlib.exit 0);
-  let mapping =
-    [
-      ("conv1_kernel", [ "conv1"; "kernel" ]);
-      ("conv1_bias", [ "conv1"; "bias" ]);
-      ("conv2_kernel", [ "conv2"; "kernel" ]);
-      ("conv2_bias", [ "conv2"; "bias" ]);
-      ("fc1_w", [ "fc1"; "w" ]);
-      ("fc1_b", [ "fc1"; "b" ]);
-      ("fc2_w", [ "fc2"; "w" ]);
-      ("fc2_b", [ "fc2"; "b" ]);
-      ("w_logits", [ "w"; "logits" ]);
-      ("b_logits", [ "b"; "logits" ]);
-    ]
-  in
   let ctx = H.inject ctx st batch_loss mapping in
   let t0 = Unix.gettimeofday () in
   (* Both placement arms' crowned candidates go into the emitted result (gh-ocannl-546). *)
