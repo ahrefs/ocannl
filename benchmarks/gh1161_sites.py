@@ -17,7 +17,9 @@ the cell names the dependent issues cite:
   resadd    the residual adds (s<i>res)
   sc1x1s2   the stride-2 1x1 shortcut convs (s<i>sc)
 Each kernel minimum includes a launch and device sync, and a kernel that could not be compiled on
-its own (DECLINED) has no time: the `timed` column says how many were.
+its own (DECLINED) has no time: the `timed` column says how many were. A table missing any of its
+declared kernels is INCOMPLETE and attributes nothing. A tuned cell's search-pass log is skipped:
+only its measured replay is a cell.
 
 Usage: gh1161_sites.py <cell-log-dir> [--per-site]
 """
@@ -59,14 +61,16 @@ def family_of(site):
 
 
 def read_cell(path):
-    """(result line, kernel rows) of one cell log, or None if it is not an OCANNL resnet cell."""
-    result, kernels = None, []
+    """(result line, kernel rows, declared kernel count) of one cell log, or None if it is not an
+    OCANNL resnet cell."""
+    result, kernels, declared = None, [], None
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         m = KERNEL.match(line)
         if m:
             # A DECLINED row's detail runs over several lines before its `w:`: no time, no names.
             ms = float(m.group(3)) if m.group(3) else None
             kernels.append((int(m.group(1)), ms, (m.group(4) or "").split()))
+            declared = int(m.group(2))
         elif line.startswith('{"framework":"ocannl"'):
             try:
                 result = loads(line)
@@ -74,7 +78,14 @@ def read_cell(path):
                 pass
     if result is None or not str(result.get("workload", "")).startswith("cifar_resnet"):
         return None
-    return result, kernels
+    return result, kernels, declared
+
+
+def complete(kernels, declared):
+    """Whether the table lists each of its declared kernels exactly once. The instrument catches
+    its own failure after the result line is paid for, so a log can hold a truncated table: its
+    sums would read as a whole step's sites while missing the kernels never printed."""
+    return declared is not None and sorted(i for i, _, _ in kernels) == list(range(declared))
 
 
 def attribute(kernels):
@@ -105,31 +116,47 @@ def main(argv=None):
     ap.add_argument("logs", type=Path, help="the sweep's BENCH_CELL_LOG_DIR")
     ap.add_argument("--per-site", action="store_true", help="add one column per site")
     args = ap.parse_args(argv)
-    cells = [c for c in map(read_cell, sorted(args.logs.glob("*.log"))) if c]
+    # A tuned cell's search pass logs beside its measured replay under the same cell label (orchestrate
+    # names it `<label> (search pass)`): its kernel table describes no measured step.
+    logs = [p for p in sorted(args.logs.glob("*.log")) if "_search_pass_" not in p.name]
+    cells = [c for c in map(read_cell, logs) if c]
     if not cells:
         print(f"gh1161_sites: no OCANNL cifar_resnet cell log in {args.logs}", file=sys.stderr)
         return 1
     rows, all_sites = [], set()
-    for result, kernels in cells:
+    for result, kernels, declared in cells:
+        if any(label(result) == row[0] for row in rows):
+            print(f"gh1161_sites: two logs in {args.logs} report cell {label(result)}",
+                  file=sys.stderr)
+            return 1
+        whole = complete(kernels, declared)
         sites, families, unattributed = attribute(kernels)
         all_sites |= set(sites)
-        rows.append((label(result), result, kernels, sites, families, unattributed))
+        rows.append((label(result), result, kernels, declared, whole, sites, families, unattributed))
     per_site = sorted(all_sites, key=lambda s: (s != "stem", s)) if args.per_site else []
     head = ["cell", "step p50 ms", "kernels timed", "sum of minima ms",
             *(name for name, _ in FAMILIES), "unattributed", *per_site]
     print("| " + " | ".join(head) + " |")
     print("|" + "---|" * len(head))
-    for name, result, kernels, sites, families, unattributed in sorted(rows):
+    for name, result, kernels, declared, whole, sites, families, unattributed in sorted(
+        rows, key=lambda row: row[0]
+    ):
         timed = [ms for _, ms, _ in kernels if ms is not None]
         p50 = (result.get("step_ms") or {}).get("p50")
+
+        def ms(value):
+            # An incomplete table attributes nothing: a partial sum is not the site's time.
+            return f"{value:.3f}" if whole else "n/a"
+
         cols = [
             name,
             f"{p50:.3f}" if isinstance(p50, (int, float)) else "n/a",
-            f"{len(timed)}/{len(kernels)}" if kernels else "no table",
-            f"{sum(timed):.3f}" if timed else "n/a",
-            *(f"{families.get(f, 0.0):.3f}" for f, _ in FAMILIES),
-            f"{unattributed:.3f}",
-            *(f"{sites.get(s, 0.0):.3f}" for s in per_site),
+            (f"{len(timed)}/{declared}" + ("" if whole else f" INCOMPLETE ({len(kernels)} listed)"))
+            if kernels else "no table",
+            ms(sum(timed)) if timed else "n/a",
+            *(ms(families.get(f, 0.0)) for f, _ in FAMILIES),
+            ms(unattributed),
+            *(ms(sites.get(s, 0.0)) for s in per_site),
         ]
         print("| " + " | ".join(cols) + " |")
     return 0
