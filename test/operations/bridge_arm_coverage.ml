@@ -56,12 +56,15 @@ let rec mkdir_p dir =
     if not (String.equal parent dir) then mkdir_p parent;
     try Stdlib.Sys.mkdir dir 0o755 with Sys_error _ -> ())
 
+(* Never through a symbolic link: [Sys.is_directory] follows one, so a link planted anywhere in the
+   tree would have its TARGET emptied. A link is removed as the entry it is. *)
 let rec rm_rf path =
-  if Stdlib.Sys.file_exists path then
-    if Stdlib.Sys.is_directory path then (
+  match Unix.lstat path with
+  | exception Unix.Unix_error _ -> ()
+  | { st_kind = S_DIR; _ } -> (
       Array.iter (Stdlib.Sys.readdir path) ~f:(fun e -> rm_rf (Stdlib.Filename.concat path e));
-      try Stdlib.Sys.rmdir path with Sys_error _ -> ())
-    else try Stdlib.Sys.remove path with Sys_error _ -> ()
+      try Unix.rmdir path with Unix.Unix_error _ -> ())
+  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
 
 let read_file path = try Some (Stdio.In_channel.read_all path) with Sys_error _ -> None
 

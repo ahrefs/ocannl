@@ -4285,7 +4285,18 @@
   narrow_storage_compute.expected
   tile_mma_geometry.exe
   tile_mma_geometry.expected
+  ; The settings this test's own reading consults: the compiler command, the kernel flags it
+  ; preprocesses under (Cc_backend.kernel_compiler_flags) and the target width
+  ; (Cc_backend.auto_vector_bytes); and the fp16 arithmetic probe, which decides the children's
+  ; compute precision and so which bridges they call.
   (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND)
+  (env_var OCANNL_CC_BACKEND_OPTIMIZATION_LEVEL)
+  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
+  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
+  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_PARALLEL_GRID)
+  (env_var OCANNL_CC_FP16_ARITHMETIC)
   ; What the two children declare, less the backend and the vector width (forced) and the build-files
   ; prefix (removed).
   (env_var OCANNL_PROFILE)
