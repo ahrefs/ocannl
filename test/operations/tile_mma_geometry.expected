@@ -64,6 +64,7 @@ half_ns: the tails match the serial twin bitwise: true
 seeds: whole-triple bm0 tiles on 16-byte vectors at 64x512x64: auto, rm4 rn4 lanes4
 the whole-triple seeds carry one auto geometry then exactly the model's alternatives: true
 the site offers at least one alternative to time: true
+a register file holding no four-row tile withholds the tensorized family: true
 seeds with the rm twin gate on: auto, rm4 rn4 lanes4, rm2 rn10 lanes4
 the gate adds exactly the model's two-row twin after the alternatives: true
 a seeded alternative instantiates through the sketch and renders its geometry: true

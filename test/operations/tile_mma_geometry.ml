@@ -551,6 +551,17 @@ let () =
             (RT.alternatives ~vector_bytes:16 ~vector_registers ~elt_bytes ~m ~n:nn)
             ~f:Option.some));
   p_exists "the site offers at least one alternative to time" tiles ~f:Option.is_some;
+  (* A register file too small for any four-row tile is refused at the seeding, through the
+     capability judgment the family tree refutes its tensorized branch with, rather than seeded and
+     declined at the renderer (gh-ocannl-1285). *)
+  let refutation registers =
+    Autotune.tensorized_capability_refutation ~is_gpu:false ~is_cpu:true
+      ~limits:{ synthetic with simd_vector_registers = registers }
+      ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single
+  in
+  p "a register file holding no four-row tile withholds the tensorized family"
+    (Option.is_some (refutation (RT.resident_floor { rm = RT.rm_cap; rn = 1; lanes = 1 } - 1))
+    && Option.is_none (refutation (RT.resident_floor { rm = RT.rm_cap; rn = 1; lanes = 1 })));
   rm_twin_gate true;
   let gated = whole_tiles ~limits:synthetic in
   rm_twin_gate false;
