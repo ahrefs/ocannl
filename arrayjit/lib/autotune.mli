@@ -2192,9 +2192,10 @@ val tune :
      scratch/zero data can even poison them with inf/NaN). It must contain the nodes the computation
      requires from a prior context, e.g. by repeating parameter initialization on a fresh root
      context, and must live on the same backend and device as the target context (raises
-     [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). Only the
-     winning schedule is then compiled from [ctx], exactly like a cache hit. Without it, the search
-     shares [ctx]'s buffers and the caller should re-initialize mutated state afterwards. *)
+     [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). The
+     winning schedule is compiled from [ctx], exactly like a cache hit, with or without it. Without
+     it, the search shares [ctx]'s buffers and the caller should re-initialize mutated state
+     afterwards. *)
   ?abandon:abandon_rule ->
   (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
      report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
@@ -2232,12 +2233,20 @@ val tune :
     different names therefore share one tuned entry, which is what the cache is for; naming a
     routine neither invalidates a crown nor mints a private one.
 
-    Memory (gh-ocannl-550): every candidate this searches is {!Context.release}d as soon as it stops
-    being a beam survivor, so the search's live {e working} pools and contexts are bounded by
-    [beam_width] rather than by candidates attempted. The bound holds across contained failures and
-    across dedups — a deduplicated candidate has still paid for a compile and a link — and the
-    returned routine is the only artifact left when [tune] returns. Nothing about the returned value
-    changes: it is the same live context and routine as before, from the same lineage.
+    Memory (gh-ocannl-550, gh-ocannl-1326): every candidate this searches is {!Context.release}d as
+    soon as its timing window is over — the incumbents the beam ranks included, which are kept as
+    descriptions (saved schedules), not artifacts — so at most one candidate's {e working} pools are
+    live at a time, and a step that uses over half the device can be tuned. The winner is then
+    compiled from [ctx] out of its saved schedule, the one compile this costs over keeping it, and
+    the returned routine is the only artifact left when [tune] returns. The bound holds across
+    contained failures and across dedups — a deduplicated candidate has still paid for a compile and
+    a link. A cache replay is not co-resident with the base compile either: the baseline is released
+    before the replay compile.
+
+    A device that refuses the base compile's allocation ({!Ir.Schedule_outcome.Device_memory}) has
+    refused one candidate's working set, which every candidate, a replay and the untuned fallback
+    need about as much of: the call reports {!Pre_search_failure} at [Backend_link] with that
+    decline in its census, and raises, instead of declining every candidate in turn.
 
     The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
     free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per

@@ -4,6 +4,7 @@ with search off, the call compiles the untuned default: true
 with search off, the untuned default computes the right values: true
 the corrupt winner's replay is refused with a typed cause: true
 the refused replay re-searches: true
+the re-search times the baseline the replay released: true
 the re-searched routine computes the right values: true
 the routine numbers fewer than 100 tensor nodes: true
 the corrupt split-reduce prelude's replay is refused with a typed cause: true

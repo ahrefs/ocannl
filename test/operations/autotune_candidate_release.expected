@@ -1,8 +1,6 @@
 the search attempted enough candidates for accumulation to show: true
-live pools between candidates stay bounded: true
-live contexts between candidates stay bounded: true
-live pools do not grow across the search: true
-live contexts do not grow across the search: true
+no timed candidate's working pools are live when the next one compiles: true
+no candidate's context is left unreleased when the next one compiles: true
 candidates were released, not merely dropped: true
 the winner still ships and computes the right values: true
 the search holds nothing beyond its winner once it has returned: true

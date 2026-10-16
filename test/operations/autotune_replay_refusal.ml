@@ -23,7 +23,9 @@
    environment skip, never a pass) where the plant's store or the call's lookup was refused, and one
    unwaived claim keeps a deterministic refusal from turning them into a permanent skip.
 
-   Pinned to cc ([Context.cpu]): the refusal is backend-independent, and cc is always available. *)
+   Pinned to cc ([Context.cpu]): the refusal is backend-independent, and cc is always available. It
+   is also a backend whose baseline is timed, which is what makes the re-search's relink of the
+   baseline a replay released (gh-ocannl-1326) observable. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -166,6 +168,11 @@ let () =
   replay_claim ios "the corrupt winner's replay is refused with a typed cause"
     (refused_by ~check:"Schedule_cache.of_saved" r);
   replay_claim ios "the refused replay re-searches" (outcome_is "searched" r);
+  (* gh-ocannl-1326: the baseline is released before a replay compile, so that the two are never
+     resident together; the re-search a refused replay leads to relinks it, and on cc, where it is
+     dispatched, times it. *)
+  replay_claim ios "the re-search times the baseline the replay released"
+    ((not r.Autotune.baseline_declined) && Float.is_finite r.Autotune.baseline_ms);
   p_all2 "the re-searched routine computes the right values" values expected ~f:approx;
 
   (* --- 2. A split-reduce winner whose prelude names a tensor node the routine lacks. --- *)
