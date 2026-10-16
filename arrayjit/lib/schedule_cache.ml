@@ -71,6 +71,7 @@ type saved_schedule = saved_optop list [@@deriving sexp, compare, equal]
 type canonical = {
   digest : string;
   complete : bool;
+  incomplete_reason : string option;
   base_syms : sym_ref Map.M(Idx.Symbol).t;
       (** Base and Static entries; binder symbols bound by more than one loop are excluded (their
           references would be ambiguous). *)
@@ -80,6 +81,7 @@ type canonical = {
 
 let digest c = c.digest
 let complete c = c.complete
+let incomplete_reason c = c.incomplete_reason
 
 (* gh-ocannl-1242: a reference that a saved schedule (or a recorded placement decision) makes and
    the canonical form it is replayed against cannot resolve is a fact about the ENTRY -- stale or
@@ -120,6 +122,8 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
   let buf = Buffer.create 4096 in
   let add = Buffer.add_string buf in
   let complete = ref true in
+  (* What made it incomplete, for {!incomplete_reason}: re-bound binders are [dup_binders]. *)
+  let free_syms = ref 0 and opaque = ref 0 in
   (* The exported resolution: the first binding of each symbol; duplicated binders are dropped. *)
   let first_bind = Hashtbl.create (module Idx.Symbol) in
   let dup_binders = Hash_set.create (module Idx.Symbol) in
@@ -157,6 +161,7 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
       emit_free_sym =
         (fun _ ->
           complete := false;
+          Int.incr free_syms;
           add "?");
       on_bind_loop =
         (fun s ~id ~shadowed ->
@@ -164,12 +169,33 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
             Hash_set.add dup_binders s;
             complete := false)
           else Hashtbl.set first_bind ~key:s ~data:(Base id));
-      mark_incomplete = (fun () -> complete := false);
+      mark_incomplete =
+        (fun () ->
+          complete := false;
+          Int.incr opaque);
       mma = LL.Canonical_render.Structural_mma;
       initial_tokens;
     }
     llc;
   companions ~add ~emit_tn;
+  let incomplete_reason =
+    if !complete then None
+    else
+      let rebound = Hash_set.to_list dup_binders |> List.map ~f:Idx.symbol_ident in
+      let rebound = List.sort rebound ~compare:String.compare in
+      let shown = List.take rebound 4 in
+      Some
+        (Printf.sprintf
+           "%d loop symbol(s) bound by more than one loop%s, %d free symbol reference(s), %d \
+            opaque construct(s)"
+           (List.length rebound)
+           (if List.is_empty shown then ""
+            else
+              " (" ^ String.concat ~sep:" " shown
+              ^ (if List.length rebound > List.length shown then " ..." else "")
+              ^ ")")
+           !free_syms !opaque)
+  in
   let base_syms =
     Hashtbl.fold first_bind
       ~init:(Map.empty (module Idx.Symbol))
@@ -179,6 +205,7 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
   {
     digest = Stdlib.Digest.to_hex (Stdlib.Digest.string (Buffer.contents buf));
     complete = !complete;
+    incomplete_reason;
     base_syms;
     tn_refs =
       Hashtbl.fold tn_refs

@@ -369,7 +369,11 @@ files.
   loop symbol per SEGMENT (gh-ocannl-765), because a shared binder is misread by every flat
   symbol-keyed scanner — `def_loop_ranges` keeps the last segment's width, `affine_accesses`
   collects two ranges for one symbol, and the canonical render calls the second binder shadowed,
-  which declines the routine for both digest caches. `test/operations/test_block_tensor.ml`'s
+  which declines the routine for both digest caches. The rule is general: every generator of
+  SIBLING loops mints a symbol per loop. `loop_over_padding_region`'s margin strips broke it
+  (gh-ocannl-1384), which kept every padded conv's step out of the schedule cache;
+  `test/operations/padded_conv_cache` pins the walk and the tuned replay, and `Autotune.tune` now
+  warns on stderr whenever an incomplete canonical form declines the cache. `test/operations/test_block_tensor.ml`'s
   gradient fixtures are the regression coverage to keep in mind when changing concat lowering or
   the virtualizer's symbol ownership, alongside the hand-built
   `test/operations/virtual_shared_loop.ml` (`ll_test`), which is still the way to reach shapes the

@@ -10110,7 +10110,12 @@ let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
             axis = Serial;
           }
       else
-        (* Has padding - generate left strip, middle (recurse), right strip *)
+        (* Has padding - generate left strip, middle (recurse), right strip. Each sibling strip loop
+           binds its OWN symbol (gh-ocannl-1384, as gh-ocannl-765 did for concat segments): a binder
+           shared by sibling loops is misread by every flat symbol-keyed scanner (extent tables keep
+           one strip's width), and the canonical render calls the second binder shadowed, which
+           keeps the schedule cache from keying any routine that resets a padded node's margins --
+           every padded conv's operand and its gradient. *)
         let left_loop =
           if pad.left > 0 then
             For_loop
@@ -10134,14 +10139,16 @@ let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
           let middle_from = pad.left in
           let middle_to = dim - pad.right - 1 in
           if middle_from <= middle_to then
+            let middle_index = Indexing.get_symbol () in
             For_loop
               {
-                index;
+                index = middle_index;
                 from_ = middle_from;
                 to_ = middle_to;
                 body =
                   (* In middle - NOT in padding for this dim, recurse to find other padded dims *)
-                  build_loops ~any_padding_so_far (dim_idx + 1) (Indexing.Iterator index :: rev_idcs);
+                  build_loops ~any_padding_so_far (dim_idx + 1)
+                    (Indexing.Iterator middle_index :: rev_idcs);
                 axis = Serial;
               }
           else Noop
