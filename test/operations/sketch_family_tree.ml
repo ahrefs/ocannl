@@ -8,8 +8,10 @@
    leg machine-independent — seeding is a pure function of the lowering, so the GPU legs enumerate
    (and twin: swizzle, pipeline depth) without any GPU present.
 
-   The site is a 64x64x64 f32 matmul: every tile geometry in the curated menus divides it, so the
-   menus enumerate in full. *)
+   The site is a 64x64x64 f32 matmul: every GPU tile geometry in the curated menus divides it, so
+   those menus enumerate in full. The CPU packed menu's 128- and 256-deep blocks exceed it and pad
+   the site 4x to 8x, against the dividing 64- and 16-blocks beside them, so the pad-waste economy
+   excludes them (gh-ocannl-740). *)
 
 open Base
 open Ocannl
@@ -274,6 +276,88 @@ let tree_verdicts name ~is_gpu ~is_cpu ~limits opt =
       Stdio.printf "== %s verdicts ==\n" name;
       verdict_reports tree
 
+(* gh-ocannl-740: the pad-waste exclusion, judged against the threshold the tree was built with
+   ([Autotune.pad_waste_max]) from each seed's own parameters and the site's extents -- never from
+   the witnesses' prose, which only the golden reads. A block of 0 is an unsplit axis; a dividing
+   block contributes 1. The judgment is relative to the least-padded geometry its own menu proposes,
+   so the seeds are grouped by the menu that minted them: the GPU blocktile menu, the GPU tensorized
+   menu, the CPU blocktile menu, the CPU whole-triple row blocks, and the CPU packed menu once per
+   packing shape. Batch and fusion twins repeat a menu's geometries, so they share its minimum. *)
+let pad_ratio ~m ~n ~k (p : Autotune.sketch_params) =
+  let axis e b = if b <= 0 then 1. else Float.of_int ((e + b - 1) / b * b) /. Float.of_int e in
+  axis m p.Autotune.sk_bm *. axis n p.Autotune.sk_bn *. axis k p.Autotune.sk_bk
+
+let menu_key (p : Autotune.sketch_params) =
+  let open Autotune in
+  if p.sk_gpu then if p.sk_mma then "gpu-mma" else "gpu-blocktile"
+  else if not p.sk_mma then "cpu-blocktile"
+  else if p.sk_bk = 0 then "cpu-whole-triple"
+  else
+    String.concat ~sep:"/"
+      [
+        "cpu-packed";
+        Bool.to_string p.sk_hoist;
+        Bool.to_string p.sk_grid;
+        Bool.to_string p.sk_pack_rest;
+      ]
+
+(* The payload of every pad-waste exclusion reachable without lifting another policy, lifted: the
+   seeds the threshold suppressed. *)
+let rec pad_waste_payloads tree =
+  match tree with
+  | Sspace.Leaf _ -> []
+  | Sspace.Choice { children; _ } ->
+      List.concat_map children ~f:(fun (_, child) ->
+          match child with
+          | Sspace.Child sub | Sspace.Unknown (_, sub) -> pad_waste_payloads (Lazy.force sub)
+          | Sspace.Excluded (w, _) when String.is_prefix w ~prefix:"pad waste:" ->
+              [ Sspace.lift_excluded child ]
+          | Sspace.Excluded _ | Sspace.Refuted _ -> [])
+
+let child_leaves = function
+  | Sspace.Child sub | Sspace.Unknown (_, sub) -> Sspace.leaves (Lazy.force sub)
+  | Sspace.Excluded _ | Sspace.Refuted _ -> []
+
+let pad_waste_pins name ~is_gpu ~is_cpu ~limits ~m ~n ~k ~pads opt =
+  match Autotune.matmul_sketch_tree ~is_gpu ~is_cpu ~limits opt with
+  | None -> Stdio.printf "== %s pad waste: no site detected ==\n" name
+  | Some tree ->
+      let threshold = Autotune.pad_waste_max () in
+      let ratio = pad_ratio ~m ~n ~k in
+      let leaves = Sspace.leaves tree in
+      let lifted = List.concat_map (pad_waste_payloads tree) ~f:child_leaves in
+      let menu_min p =
+        List.fold leaves ~init:Float.infinity ~f:(fun acc q ->
+            if String.equal (menu_key q) (menu_key p) then Float.min acc (ratio q) else acc)
+      in
+      Stdio.printf
+        "== %s pad waste (threshold %gx the menu's least): %d seeds proposed, %d excluded ==\n" name
+        threshold (List.length leaves) (List.length lifted);
+      List.iter lifted ~f:(fun p ->
+          Stdio.printf "  %6.2fx (%.2fx its menu's least)  %s\n" (ratio p)
+            (ratio p /. menu_min p)
+            (show p));
+      Verdict.p_all
+        (name ^ ": no proposed seed pads at the threshold times its menu's least-padded seed")
+        leaves ~f:(fun p ->
+          Float.(ratio p < threshold * menu_min p) || Float.(ratio p <= menu_min p));
+      (* The library's lift and this walker agree: lifting the policy re-proposes exactly the
+         suppressed seeds beside the proposed ones. *)
+      Verdict.p
+        (name ^ ": lifting the pad-waste policy proposes the proposed seeds plus the excluded ones")
+        (List.length (Sspace.leaves (Autotune.lift_pad_waste tree))
+        = List.length leaves + List.length lifted);
+      if pads then
+        Verdict.p_all
+          (name
+         ^ ": every lifted pad-waste exclusion re-proposes only seeds at the threshold times their \
+            menu's least-padded proposed seed") lifted ~f:(fun p ->
+            Float.(ratio p > menu_min p) && Float.(ratio p >= threshold * menu_min p))
+      else
+        Verdict.p_empty
+          (name ^ ": a site every geometry divides excludes nothing on pad waste")
+          ~over:leaves lifted
+
 let () =
   let nn = 64 in
   (* Operand cells come from [Ll_test.cycle] throughout this file: that a cell varies with every
@@ -303,12 +387,20 @@ let () =
   in
   tree_section "cpu simd32" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt cpu_seeds;
   tree_section "gpu staged+depth" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits opt gpu_seeds;
+  pad_waste_pins "cpu simd32" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits ~m:nn ~n:nn ~k:nn
+    ~pads:true opt;
+  pad_waste_pins "gpu staged+depth" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits ~m:nn ~n:nn
+    ~k:nn ~pads:false opt;
   (* --- Awkward sites: witnesses for what is NOT proposed --- *)
   (* 20^3: no curated geometry divides it, so the pad composition decides which pipeline survives.
      Both GPU pipelines stage both operands and pad past 20 (gh-ocannl-485, gh-ocannl-730) — the
      blocktile family whole, the tensorized one at its staged geometries; the unstaged mma form
      reads its operands in place and is still refuted, as is the CPU blocktile pipeline, which packs
-     into stack scratch outside that composition. CPU Grid shapes at bm=64 lack row blocks. *)
+     into stack scratch outside that composition. CPU Grid shapes at bm=64 lack row blocks. What a
+     pad may do is not what it should (gh-ocannl-740): a geometry doing [autotune_pad_waste_max]
+     times the padded work of its menu's least-padded geometry -- 64x64 blocks padding the 20x20
+     output, 12.3x the site's work with the k pad, 4x the 32x32 blocks' -- is excluded with both
+     ratios as witness, not seeded to lose a timing. *)
   let wa =
     NTDSL.init ~l:"wa" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
       ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:7 ~offset:0. ~stride:0.5)
@@ -327,6 +419,10 @@ let () =
   let opt_awk = with_lowering ~name:"sft_awk" awk in
   awkward_section "awkward 20^3 gpu" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits opt_awk;
   awkward_section "awkward 20^3 cpu" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt_awk;
+  pad_waste_pins "awkward 20^3 gpu" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits ~m:20 ~n:20
+    ~k:20 ~pads:true opt_awk;
+  pad_waste_pins "awkward 20^3 cpu" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits ~m:20 ~n:20 ~k:20
+    ~pads:true opt_awk;
   (* Half-precision operands (gh-ocannl-575): the seeding pre-filter resolves compute precision
      through the same [Numerics.cpu_compute_prec] the emission asks. Under the default
      [narrow_compute_f32] policy the site computes in f32, so the CPU tensorized families enumerate,
@@ -474,7 +570,17 @@ let () =
     let%op wide_outer = wide_outer_w * wide_outer_x in
     let opt_wide_outer = with_lowering ~name:"sft_wide_outer" wide_outer in
     let wide_outer_statement = seeds statement_limits opt_wide_outer in
-    let wide_outer_both = seeds both_limits opt_wide_outer in
+    (* Its innermost contraction extent is 8, so every staged k-block pads it at least 2x against
+       the unstaged whole-K geometry, and the pad-waste economy excludes them (gh-ocannl-740). The
+       claim is about the capability gate, so it reads the staged seeds with that policy lifted:
+       legality still judges them. *)
+    let wide_outer_both =
+      match
+        Autotune.matmul_sketch_tree ~is_gpu:true ~is_cpu:false ~limits:both_limits opt_wide_outer
+      with
+      | None -> []
+      | Some tree -> Sspace.leaves (Autotune.lift_pad_waste tree)
+    in
     Numerics.set_policy saved_policy;
     Verdict.p "MMA emission-scope serialization and comparison distinguish accumulator lifetimes"
       (Ir.Backend_intf.equal_mma_emission_scope round_tripped_scope per_statement

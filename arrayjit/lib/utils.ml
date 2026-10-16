@@ -159,6 +159,7 @@ let known_config_keys =
       "autotune_cache_dir";
       "autotune_split_reduce_max_sites";
       "autotune_register_tile_rm_twin";
+      "autotune_pad_waste_max";
       "autotune_composite_playoff_width";
       "autotune_composite_playoff_margin";
       "autotune_round_expansion";
@@ -367,6 +368,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_repeats";
         "autotune_split_reduce_max_sites";
         "autotune_register_tile_rm_twin";
+        "autotune_pad_waste_max";
         "autotune_composite_playoff_width";
         "autotune_composite_playoff_margin";
         "autotune_round_expansion";
@@ -565,6 +567,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_repeats", (Integer, "3"));
     ("autotune_split_reduce_max_sites", (Integer, "8"));
     ("autotune_register_tile_rm_twin", (Flag, "false"));
+    ("autotune_pad_waste_max", (Float_number, "2."));
     ("autotune_composite_playoff_width", (Integer, "2"));
     ("autotune_composite_playoff_margin", (Float_number, "0.005"));
     ("autotune_round_expansion", (Keyword, "differing"));

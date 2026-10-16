@@ -368,6 +368,15 @@ val coalesced_seed_params :
 val geometry_lattice_witness : string
 (** The exclusion witness for tile-lattice alternatives beyond the curated geometry menus. *)
 
+val pad_waste_max : unit -> float
+(** The pad-waste threshold the geometry menus judge against (config [autotune_pad_waste_max]). *)
+
+val lift_pad_waste :
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree
+(** Lift the pad-waste exclusions, preserving laziness, other exclusions and legality refutations.
+*)
+
 val lift_geometry_lattice :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree

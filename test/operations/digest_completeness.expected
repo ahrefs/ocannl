@@ -92,6 +92,7 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
   autotune_composite_playoff_margin
   autotune_composite_playoff_width
   autotune_keep_fraction
+  autotune_pad_waste_max
   autotune_register_tile_rm_twin
   autotune_repeats
   autotune_round_expansion

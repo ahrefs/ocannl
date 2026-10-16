@@ -75,13 +75,20 @@ let small_menu_envelope () =
    segment keeps more than the claims' floor. *)
 let vector_bytes = 32
 
-(* The envelope, the keep fraction and the cc vector width, for every search of the process. *)
+(* The envelope, the keep fraction, the cc vector width and the pad-waste economy, for every search
+   of the process. The chain's 32-wide products sit below the CPU packed menu's 64- to 256-deep
+   blocks, so the pad-waste economy (gh-ocannl-740) would exclude most of each segment's sketches
+   and leave a menu other than the one the claims built on it were tuned against -- the round
+   expansion's positional control among them. These tests are about the playoff, the round and the
+   placement arms over a fixed menu, not about which geometries a pad makes worth proposing, so the
+   small menu proposes every pad ([inf]) and keeps its fifth from the menu it always had. *)
 let small_menu () =
   small_menu_envelope ();
   state
     [
       ("autotune_keep_fraction", Float.to_string keep_fraction);
       ("cc_vector_bytes", Int.to_string vector_bytes);
+      ("autotune_pad_waste_max", "inf");
     ]
 
 let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')

@@ -176,9 +176,21 @@ let () =
   let opt_ib = check_leg ~tag:"batched_ib" ~serial:ib0 ~tensorized:ib1 in
   let gpu_seeds_ib = gpu_mma_seeds opt_ib in
   p "interior-batch: gpu mma seeds present" (not (List.is_empty gpu_seeds_ib));
+  (* The site's contraction extent is 8, so every staged k-block pads it 2x or more against the
+     unstaged whole-K geometry beside it, and the pad-waste economy excludes the staged seeds
+     (gh-ocannl-740). Whether one BUILDS is a question about the pipeline, so it is asked of the
+     menu with that policy lifted. *)
+  let staged_ib =
+    Option.value_map ~default:[]
+      (Autotune.matmul_sketch_tree ~is_gpu:true ~is_cpu:false ~limits:gpu_limits opt_ib)
+      ~f:(fun tree ->
+        List.filter
+          (Ir.Schedule_space.leaves (Autotune.lift_pad_waste tree))
+          ~f:(fun q -> q.Autotune.sk_mma))
+  in
   p "interior-batch: gpu staged sketch builds"
     (match
-       List.find gpu_seeds_ib ~f:(fun q -> q.Autotune.sk_bk > 0)
+       List.find staged_ib ~f:(fun q -> q.Autotune.sk_bk > 0)
        |> Option.map ~f:(fun q -> Autotune.sketch_schedule ~accum_prec ~p:q opt_ib)
      with
     | Some (_ :: _) -> true
