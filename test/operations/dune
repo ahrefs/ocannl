@@ -6661,6 +6661,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1326: the real driver refusing a 1 TiB device allocation, typed (cuda and hip only).
+
+(test
+ (name device_memory_refused)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules device_memory_refused)
+ ; 64-bit indices: the 1 TiB intermediate counts 2^38 elements, past the int32 index range the
+ ; compile otherwise refuses it at before ever reaching the allocator.
+ (action
+  (run %{test} --ocannl_large_models=true))
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-571: GPU-free fault injection for resource-owning seams. It constructs [Context.cpu]
 ; explicitly so this remains a cc lifecycle test even when a sweep selects another backend.
 

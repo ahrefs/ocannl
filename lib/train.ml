@@ -945,8 +945,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
        already turned into a classified decline inside {!Autotune.tune} under [Cache_replay]
        provenance, so it never reaches here as an exception.)
 
-     The device OOM this containment exists for is an ordinary [Invalid_argument] from the driver
-     and stays contained. *)
+     The device OOM this containment exists for stays contained: a typed device-memory refusal
+     surfaces as the [Utils.User_error] its [Resource_exceeded] cause renders to (gh-ocannl-1326),
+     and any other driver failure as an ordinary [Invalid_argument]. *)
   let must_propagate = function
     | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _ -> true
     | _ -> false
