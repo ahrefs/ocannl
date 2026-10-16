@@ -1247,10 +1247,11 @@ files.
   A golden run only executes the bridge arms its host selects: the `_X<lanes>` arm follows the
   auto-probed `cc_vector_bytes`, and the fallback arms (no `__builtin_convertvector`) are
   preprocessed away on gcc and clang alike. `test/operations/bridge_arm_coverage` (gh-ocannl-1145)
-  re-runs `narrow_storage_compute` and `tile_mma_geometry` at widths 16, 32 and 64, natively and
-  with `-DOCANNL_FORCE_PORTABLE_BRIDGES` in the compiler command (every fallback arm), and reads
-  which arm each kernel compiled into from `-dM -E` under `Cc_backend.kernel_compiler_flags`. An arm
-  the target cannot select is an `Environment` skip; X16 executes only on an AVX-512 box (minix).
+  re-runs `narrow_storage_compute` and `tile_mma_geometry` at each of the widths 16, 32 and 64 the
+  target holds (`Cc_backend.auto_vector_bytes`), natively and with `-DOCANNL_FORCE_PORTABLE_BRIDGES`
+  in the compiler command (every fallback arm), and reads which arm each kernel compiled into from
+  `-dM -E` under `Cc_backend.kernel_compiler_flags`. An arm the target cannot select, or a width
+  it does not hold, is an `Environment` skip; X16 executes only on an AVX-512 box (minix).
   The geometry rows were all f32 until gh-ocannl-1102 added bf16 and fp16 storage twins of the
   `n = 99` rows (`rt/n99/bf16/...`, `rt/n99/f16w/...`, f32 compute; fp16 from the wide child). They
   found the gh-1071 class again inside the narrow bridge MACROS: a zeroed temporary plus a

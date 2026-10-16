@@ -16,9 +16,11 @@
    [narrow_storage_compute] (every 16-bit code through the widening, every fp16 rounding boundary
    through the narrowing, each against its serial twin) and [tile_mma_geometry] (a register tile's
    partial bf16/fp16 column, the gh-ocannl-1102 site) -- once per (vector width, bridge set), with
-   [OCANNL_CC_VECTOR_BYTES] forced per child as [cc_march_census] does. The [portable] set adds
-   [-DOCANNL_FORCE_PORTABLE_BRIDGES] to the compiler command, which every fallback arm honours. Each
-   child must exit 0 and print exactly its own committed golden: the forced run says what the
+   [OCANNL_CC_VECTOR_BYTES] forced per child as [cc_march_census] does, at each of 16, 32 and 64
+   bytes up to the widest vector the target holds ({!Cc_backend.auto_vector_bytes}; a wider cell is
+   skipped whole: no user runs it, and it reaches no arm a narrower one misses). The [portable] set
+   adds [-DOCANNL_FORCE_PORTABLE_BRIDGES] to the compiler command, which every fallback arm honours.
+   Each child must exit 0 and print exactly its own committed golden: the forced run says what the
    host-width run says, so the two tests' claims are this test's claims too, and nothing about them
    is restated here.
 
@@ -128,7 +130,9 @@ let run_all cells =
         let pid = spawn cell in
         loop ((cell, pid) :: spawned) rest (pid :: running)
     | _ ->
-        let pid, st = Unix.wait () in
+        (* The oldest running child, by its pid: native Windows has no [Unix.wait] for any child. *)
+        let oldest = List.last_exn running in
+        let pid, st = Unix.waitpid [] oldest in
         Hashtbl.set status ~key:pid ~data:st;
         loop spawned pending (List.filter running ~f:(fun p -> p <> pid))
   in
@@ -298,6 +302,13 @@ let sweeps ~lanes =
       "the fp16 rounding-boundary narrowing sweep" );
   ]
 
+(* The widest vector the cc target holds, as [cc_vector_bytes] auto-selects it. A wider width is not
+   a configuration anyone runs -- the compiler splits the vector and spills -- and it takes no arm a
+   narrower one does not, so its cells are skipped rather than run. *)
+let host_width = Cc_backend.auto_vector_bytes ()
+let fits width = width <= host_width
+let too_wide = Printf.sprintf "a cc target whose widest vector is %d bytes" host_width
+
 let () =
   rm_rf root;
   let cells =
@@ -310,13 +321,20 @@ let () =
                 in
                 { bridges; width; test; dir })))
   in
-  let results = run_all cells in
+  (* Only the widths the target holds are run; the others' claims are skipped below, and their
+     kernel directories stay absent. *)
+  let results = run_all (List.filter cells ~f:(fun c -> fits c.width)) in
   let clean cell =
-    let status = List.Assoc.find_exn results cell ~equal:Poly.equal in
-    let stdout = read_file (Stdlib.Filename.concat cell.dir "stdout.txt") in
-    let golden = read_file (Stdlib.Filename.concat cwd (cell.test ^ ".expected")) in
+    let status = List.Assoc.find results cell ~equal:Poly.equal in
+    (* Line endings normalized on both sides: on native Windows a child's text-mode stdout ends its
+       lines in CRLF, and the goldens are LF. *)
+    let lf text = String.substr_replace_all text ~pattern:"\r\n" ~with_:"\n" in
+    let stdout = Option.map ~f:lf (read_file (Stdlib.Filename.concat cell.dir "stdout.txt")) in
+    let golden =
+      Option.map ~f:lf (read_file (Stdlib.Filename.concat cwd (cell.test ^ ".expected")))
+    in
     let ok =
-      (match status with Unix.WEXITED 0 -> true | _ -> false)
+      (match status with Some (Unix.WEXITED 0) -> true | _ -> false)
       && Option.is_some golden
       && Option.equal String.equal stdout golden
     in
@@ -348,13 +366,16 @@ let () =
             List.filter cells ~f:(fun c -> Poly.equal c.bridges bridges && c.width = width)
           in
           let set = bridges_name bridges in
-          let clean_here = List.map here ~f:(fun c -> (c.test, clean c)) in
-          List.iter clean_here ~f:(fun (test, ok) ->
-              Verdict.p
+          let fit = fits width in
+          let clean_of test =
+            fit && List.find here ~f:(fun c -> String.equal c.test test) |> Option.exists ~f:clean
+          in
+          List.iter children ~f:(fun test ->
+              Verdict.gated ~aggregation:`Environment ~when_:fit ~on:too_wide
                 (Printf.sprintf
                    "%s bridges at cc_vector_bytes=%d: %s exits 0 printing its own golden" set width
                    test)
-                ok);
+                (clean_of test));
           let calls =
             List.concat_map here ~f:(fun c -> List.Assoc.find_exn uses c ~equal:Poly.equal)
           in
@@ -367,44 +388,42 @@ let () =
                 String.equal u.kernel kernel && String.equal u.bridge bridge)
             |> Option.map ~f:(fun u -> u.arm)
           in
-          Verdict.p_all
+          Verdict.gated_all ~aggregation:`Environment ~when_:fit ~on:too_wide
             (Printf.sprintf "%s bridges at cc_vector_bytes=%d: the sweeps call the %d-lane bridges"
                set width lanes) (sweeps ~lanes) ~f:(fun (kernel, bridge, _) ->
               Option.is_some (arm_of kernel bridge));
-          Verdict.p_all
+          Verdict.gated_all ~aggregation:`Environment ~when_:fit ~on:too_wide
             (Printf.sprintf
                "%s bridges at cc_vector_bytes=%d: every bridge a kernel calls is defined in it" set
                width) calls ~f:(fun u -> not (equal_arm u.arm Undefined));
           match bridges with
           | Portable ->
-              Verdict.p_all
+              Verdict.gated_all ~aggregation:`Environment ~when_:fit ~on:too_wide
                 (Printf.sprintf
                    "portable bridges at cc_vector_bytes=%d: every bridge a kernel calls compiled \
                     to its fallback arm"
                    width) calls ~f:(fun u -> equal_arm u.arm Fallback)
           | Native ->
-              let nsc_clean =
-                List.Assoc.find_exn clean_here "narrow_storage_compute" ~equal:String.equal
-              in
+              let on_arm = if fit then "a cc target that does not select this arm" else too_wide in
               List.iter (sweeps ~lanes) ~f:(fun (kernel, bridge, sweep) ->
                   Verdict.gated ~aggregation:`Environment
                     ~when_:(Option.equal equal_arm (arm_of kernel bridge) (Some Packed))
-                    ~on:"a cc target that does not select this arm"
+                    ~on:on_arm
                     (Printf.sprintf
                        "native bridges at cc_vector_bytes=%d: the packed %s arm ran %s to its \
                         golden"
                        width bridge sweep)
-                    nsc_clean);
+                    (clean_of "narrow_storage_compute"));
               (* Per child, so the claim is about one run: whether that child's kernels took a
                  [convertvector] arm is a property of the target, read from what they compiled. *)
-              List.iter clean_here ~f:(fun (test, ok) ->
+              List.iter children ~f:(fun test ->
                   Verdict.gated ~aggregation:`Environment
                     ~when_:
                       (List.exists calls ~f:(fun u ->
                            String.equal u.cell.test test && equal_arm u.arm Convertvector))
-                    ~on:"a cc target that selects no convertvector arm"
+                    ~on:(if fit then "a cc target that selects no convertvector arm" else too_wide)
                     (Printf.sprintf
                        "native bridges at cc_vector_bytes=%d: the __builtin_convertvector arms ran \
                         %s to its golden"
                        width test)
-                    ok)))
+                    (clean_of test))))

@@ -29,6 +29,11 @@ val vector_bytes_setting : unit -> int
 (** The vector register width in bytes for the explicit SIMD renderings (config [cc_vector_bytes];
     auto-probed when unset). Exposed for [Schedulers.cpu_mma_limits]'s [simd_vector_bytes]. *)
 
+val auto_vector_bytes : unit -> int
+(** What {!vector_bytes_setting} answers when [cc_vector_bytes] is unset: the widest vector the
+    configured target holds (64 with AVX-512 F/BW/VL, 32 with AVX2, else 16). Exposed for
+    [test/operations/bridge_arm_coverage], which forces every width up to this one. *)
+
 val effective_pool_width : unit -> int
 (** The worker-pool width after the pool policy: the restricted class's logical CPU count when the
     restriction fired, the process's affinity-respecting CPU count otherwise. Sizes the auto

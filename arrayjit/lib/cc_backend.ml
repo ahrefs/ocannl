@@ -569,14 +569,18 @@ let avx512_target =
    Widening a *default* cannot narrow what already vectorizes: a loop too short to fill the wider
    vector degrades to the width it can fill rather than declining, see [vec_lanes_for] in
    [C_syntax]. *)
-let vector_bytes_setting () =
-  match Int.of_string @@ Utils.get_global_arg ~default:"-1" ~arg_name:"cc_vector_bytes" with
-  | n when n >= 0 -> n
+let auto_vector_bytes () =
   (* Gated on the AVX2 stage having fired, so that [cc_backend_simd_flags=none] -- pinned by a run
      that must not depend on what this machine happens to have -- keeps answering 16 rather than
      acquiring a wider vector through the arch flag's back door. *)
-  | _ when not (String.is_substring (simd_flags ()) ~substring:"avx2") -> 16
-  | _ -> if avx512_target () then 64 else 32
+  if not (String.is_substring (simd_flags ()) ~substring:"avx2") then 16
+  else if avx512_target () then 64
+  else 32
+
+let vector_bytes_setting () =
+  match Int.of_string @@ Utils.get_global_arg ~default:"-1" ~arg_name:"cc_vector_bytes" with
+  | n when n >= 0 -> n
+  | _ -> auto_vector_bytes ()
 
 (* Whether the kernel .so is a macOS bundle or an ELF/PE shared object. Distinguishing the two BSDs
    from Darwin needs [uname], and this used to shell out once per kernel compile -- on a machine
