@@ -400,7 +400,7 @@ let () =
   let names tag =
     [
       tag ^ ": a site the tile divides in neither dimension renders register-tiled";
-      tag ^ ": the header names the one-vector column tail and the two-row band";
+      tag ^ ": the header names the column tail and the two-row band";
       tag ^ ": no scalar accumulator is emitted";
       tag ^ ": the partial column is a zeroed register filled at exactly its width";
       tag ^ ": the tails match the serial twin bitwise";
@@ -413,6 +413,32 @@ let () =
     let lanes =
       List.hd_exn
         (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes ~elt_bytes)
+    in
+    (* A 16-column width at the file's widest f32 lanes -- [4x1] of 16, [4x2] of 8, [4x4] of 4 --
+       capped at the widest four-row tile the register file holds: a 16-register file at 4 lanes
+       (SSE, or x86 at a forced 16 bytes) takes [4x3] of 4, whose 12 columns leave a two-vector tail
+       rather than one (gh-ocannl-1285). Either way 19 - 16 = 3 leftover columns end in a three-lane
+       PARTIAL vector at column 16, and 6 - 4 = 2 rows form the band; the header the tile must state
+       is derived from {!RT.coverage}, not restated. *)
+    let tile =
+      {
+        RT.rm = 4;
+        rn =
+          min (16 / lanes)
+            (RT.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector_registers);
+        lanes;
+      }
+    in
+    let cov = RT.coverage ~m ~n:nt tile in
+    let tail_vectors = List.length cov.tail_widths in
+    (* The partial vector is the tail pass's last column: its accumulator and its address, which the
+       emission spells as the tail's first column plus the column's lane offset. *)
+    let partial_acc = Printf.sprintf "tmma_c_0_%d__" (tail_vectors - 1) in
+    let partial_at = Printf.sprintf "%d + %d" cov.n_full ((tail_vectors - 1) * lanes) in
+    let tails_header =
+      Printf.sprintf "; column tail %d in %d vector%s; row tail %d)" (nt - cov.n_full) tail_vectors
+        (if tail_vectors = 1 then "" else "s")
+        (m - cov.m_full)
     in
     (* Exact in bf16 and half: cells are the multiples of 1/2 in [-1.5, 1.5], so products are
        multiples of 1/4 and the five-term sums at most 11.25 — six significand bits. That both
@@ -443,21 +469,18 @@ let () =
       match names tag with
       | [ n_tiled; n_header; n_scalar; n_partial; n_parity ] ->
           p n_tiled (register_tiled census);
-          p n_header (has "; column tail 3 in 1 vector; row tail 2)");
+          p n_header (has tails_header);
           p n_scalar (not (has "tmma_acc__"));
           p n_partial (partial has);
           p_all2 n_parity got want ~f:Float.equal
       | _ -> assert false
     in
-    (* A 16-column width at the file's widest f32 lanes: [4x1] of 16, [4x2] of 8, [4x4] of 4 —
-       within every budget, and 19 - 16 = 3 leftover columns. *)
-    let lane l = Printf.sprintf "(&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" nt l in
-    leg ~tag:"f32" ~prec:Ir.Ops.single
-      ~tile:(Some { RT.rm = 4; rn = 16 / lanes; lanes })
+    let lane l = Printf.sprintf "(&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" nt partial_at l in
+    leg ~tag:"f32" ~prec:Ir.Ops.single ~tile:(Some tile)
       ~partial:(fun has ->
-        has ("tmma_c_0_0__ = {" ^ lane 0)
+        has (partial_acc ^ " = {" ^ lane 0)
         && has (lane 2 ^ "};")
-        && has (lane 2 ^ " = tmma_c_0_0__[2];")
+        && has (lane 2 ^ " = " ^ partial_acc ^ "[2];")
         && not (has (lane 3)))
       ();
     (* The narrow legs request the f32 leg's geometry at the same lanes: the lane count follows the
@@ -470,16 +493,16 @@ let () =
        per-lane fallback reads [HALF_T]s. *)
     let narrow_partial ~bridged ~via has =
       let bits ~qual l =
-        Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" qual nt
-          l
+        Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" qual nt
+          partial_at l
       in
       has ("ocannl_pv__ = {" ^ bits ~qual:"const " 0)
       && has (bits ~qual:"const " 2 ^ "};")
       && has (bits ~qual:"" 2 ^ " = ocannl_pv__[2];")
-      && has (Printf.sprintf "%d, tmma_c_0_0__, (const %s *)&%s);" lanes bridged via)
+      && has (Printf.sprintf "%d, %s, (const %s *)&%s);" lanes partial_acc bridged via)
       && not (has (bits ~qual:"const " 3) || has (bits ~qual:"" 3))
     in
-    let tile16 = Some { RT.rm = 4; rn = 16 / lanes; lanes } in
+    let tile16 = Some tile in
     leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:tile16
       ~partial:(narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__")
       ();
