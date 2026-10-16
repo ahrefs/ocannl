@@ -21,6 +21,7 @@ let cpu_mma_limits () =
   {
     no_hardware_limits with
     simd_vector_bytes = Cc_backend.vector_bytes_setting ();
+    simd_vector_registers = Cc_backend.vector_registers_setting ();
     native_fp16_arithmetic = Cc_backend.has_native_fp16_arithmetic ();
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;

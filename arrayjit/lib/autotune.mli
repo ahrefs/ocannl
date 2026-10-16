@@ -389,8 +389,9 @@ val tensorized_capability_refutation :
     tensorized branch with exactly this witness. On GPU: routine logging, an mma lane wider than the
     workgroup, no advertised format tile; on CPU, the register tiling's shape-independent rules: a
     usable vector file, two lanes at the compute precision, uniform vector-capable compute
-    precisions, routine logging. Exposed so a test claims a tensorized seed's PRESENCE exactly where
-    the seeder's own capability judgment admits it, never gating on the seed list under test. *)
+    precisions, a register file holding a four-row tile ({!Ir.Register_tile.rn_cap}), routine
+    logging. Exposed so a test claims a tensorized seed's PRESENCE exactly where the seeder's own
+    capability judgment admits it, never gating on the seed list under test. *)
 
 module Family_decision : sig
   (** {1 What a commitment on the matmul family tree is (gh-ocannl-591)}

@@ -77,65 +77,70 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 (* === The model === *)
 let () =
   let shapes =
-    (* (vector bytes, element bytes, m, n): NEON/AVX2/AVX-512 f32 at the n = 512 the gh-575 sweeps
-       measured, the 64-column site the tree test seeds, gh-575's n = 40 step-down, pure-fp16 on
-       32-byte vectors, a two-row site, a three-row site where the float-priced model broke a tie by
-       rounding (gh-ocannl-947), and the two tail-bearing ties gh-ocannl-1180 timed (AVX2 n = 28,
-       NEON n = 56). *)
+    (* (vector bytes, vector registers, element bytes, m, n): NEON/AVX2/AVX-512 f32 at the n = 512
+       the gh-575 sweeps measured, the 64-column site the tree test seeds, gh-575's n = 40
+       step-down, pure-fp16 on 32-byte vectors, a two-row site, a three-row site where the
+       float-priced model broke a tie by rounding (gh-ocannl-947), the two tail-bearing ties
+       gh-ocannl-1180 timed (AVX2 n = 28, NEON n = 56), and SSE's 16-byte file on 16 registers at n
+       = 512 and at the tail-free n = 96 AVX-512's 4 x 6 won (gh-ocannl-1285). *)
     [
-      (16, 4, 64, 512);
-      (32, 4, 64, 512);
-      (64, 4, 64, 512);
-      (32, 4, 64, 64);
-      (64, 4, 64, 40);
-      (32, 2, 64, 512);
-      (32, 4, 2, 48);
-      (16, 4, 3, 53);
-      (32, 4, 64, 28);
-      (16, 4, 64, 56);
+      (16, 32, 4, 64, 512);
+      (32, 16, 4, 64, 512);
+      (64, 32, 4, 64, 512);
+      (32, 16, 4, 64, 64);
+      (64, 32, 4, 64, 40);
+      (32, 16, 2, 64, 512);
+      (32, 16, 4, 2, 48);
+      (16, 32, 4, 3, 53);
+      (32, 16, 4, 64, 28);
+      (16, 32, 4, 64, 56);
+      (16, 16, 4, 64, 512);
+      (64, 32, 4, 64, 96);
     ]
   in
-  Stdio.printf "model: vector_bytes elt_bytes m n -> default | alternatives\n";
-  List.iter shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
-      let dflt = RT.default ~vector_bytes ~elt_bytes ~m ~n in
-      let alts = RT.alternatives ~vector_bytes ~elt_bytes ~m ~n in
-      Stdio.printf "  %2d %d %3d %4d -> %s | %s\n" vector_bytes elt_bytes m n
+  Stdio.printf "model: vector_bytes vector_registers elt_bytes m n -> default | alternatives\n";
+  List.iter shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
+      let dflt = RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n in
+      let alts = RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n in
+      Stdio.printf "  %2d %2d %d %3d %4d -> %s | %s\n" vector_bytes vector_registers elt_bytes m n
         (Option.value_map dflt ~default:"none" ~f:RT.to_string)
         (if List.is_empty alts then "none"
          else String.concat ~sep:", " (List.map alts ~f:RT.to_string)));
-  let accepted t (vector_bytes, elt_bytes, m, n) =
-    Result.is_ok (RT.check ~vector_bytes ~elt_bytes ~m ~n t)
+  let accepted t (vector_bytes, vector_registers, elt_bytes, m, n) =
+    Result.is_ok (RT.check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t)
   in
   p_all "the default geometry passes the fit rules on every shape" shapes ~f:(fun shape ->
-      let vector_bytes, elt_bytes, m, n = shape in
-      match RT.default ~vector_bytes ~elt_bytes ~m ~n with
+      let vector_bytes, vector_registers, elt_bytes, m, n = shape in
+      match RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
       | Some t -> accepted t shape
       | None -> false);
-  p_all "no alternative repeats the default" shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
-      let dflt = RT.default ~vector_bytes ~elt_bytes ~m ~n in
-      List.for_all (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) ~f:(fun t ->
+  p_all "no alternative repeats the default" shapes
+    ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
+      let dflt = RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n in
+      List.for_all (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) ~f:(fun t ->
           not (Option.equal RT.equal (Some t) dflt)));
   p_all "every alternative passes the fit rules" shapes ~f:(fun shape ->
-      let vector_bytes, elt_bytes, m, n = shape in
-      List.for_all (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) ~f:(fun t -> accepted t shape));
+      let vector_bytes, vector_registers, elt_bytes, m, n = shape in
+      List.for_all (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) ~f:(fun t ->
+          accepted t shape));
   (* Pass counts at one width: what the price ranks by, so "ties the default" is "takes as many
      passes". *)
   let passes ~n (t : RT.t) = (n + RT.width t - 1) / RT.width t in
   p_all
     "every alternative is the largest tail-free width, the register-budget cap with a tail of at \
      most one vector, or the largest tile tying a tail-bearing default"
-    shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
-      let dflt = Option.value_exn (RT.default ~vector_bytes ~elt_bytes ~m ~n) in
-      List.for_all (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) ~f:(fun t ->
+    shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
+      let dflt = Option.value_exn (RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) in
+      List.for_all (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) ~f:(fun t ->
           (* The cap: the largest [rn] the budget admits beside [rm] rows, or the column extent. *)
-          let cap = min ((RT.budget ~vector_bytes - t.rm) / (t.rm + 1)) (n / t.lanes) in
+          let cap = min ((RT.budget ~vector_registers - t.rm) / (t.rm + 1)) (n / t.lanes) in
           let tail_free rn = n % (rn * t.lanes) = 0 in
           (tail_free t.rn && not (List.exists (List.range (t.rn + 1) (cap + 1)) ~f:tail_free))
           || (t.rn = cap && n % RT.width t <= t.lanes)
           || n % RT.width dflt <> 0
              && t.lanes = dflt.lanes
              && passes ~n t = passes ~n dflt
-             && t.rn = min (RT.rn_cap ~vector_bytes) (n / t.lanes)));
+             && t.rn = min (RT.rn_cap ~vector_registers) (n / t.lanes)));
   (* The tie rule (gh-ocannl-1180), as the structure it implies rather than restated picks: on every
      site a tail-bearing default takes the FEWEST vector columns that reach its pass count (any
      fewer columns would take another pass), and wherever a larger tile within the model's ceiling
@@ -143,27 +148,29 @@ let () =
      Swept at every row count below four and at four. *)
   let tie_sites =
     List.concat_map
-      [ (16, 4); (16, 2); (32, 4); (32, 2); (64, 4); (64, 2) ]
-      ~f:(fun (vb, eb) ->
+      [ (16, 32, 4); (16, 32, 2); (16, 16, 4); (32, 16, 4); (32, 16, 2); (64, 32, 4); (64, 32, 2) ]
+      ~f:(fun (vb, vr, eb) ->
         List.concat_map [ 1; 2; 3; 64 ] ~f:(fun m ->
-            List.map (List.range 4 401) ~f:(fun n -> (vb, eb, m, n))))
+            List.map (List.range 4 401) ~f:(fun n -> (vb, vr, eb, m, n))))
   in
   p_all "a tail-bearing default takes the fewest vector columns its pass count admits" tie_sites
-    ~f:(fun (vector_bytes, elt_bytes, m, n) ->
-      match RT.default ~vector_bytes ~elt_bytes ~m ~n with
+    ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
+      match RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
       | None -> true
       | Some d -> n % RT.width d = 0 || d.rn = 1 || passes ~n { d with rn = d.rn - 1 } > passes ~n d);
   p_all "the largest tile tying a tail-bearing default is seeded" tie_sites
-    ~f:(fun (vector_bytes, elt_bytes, m, n) ->
-      match RT.default ~vector_bytes ~elt_bytes ~m ~n with
+    ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
+      match RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
       | None -> true
       | Some d ->
-          let top = { d with rn = min (RT.rn_cap ~vector_bytes) (n / d.lanes) } in
+          let top = { d with rn = min (RT.rn_cap ~vector_registers) (n / d.lanes) } in
           (* The default holds the fewest passes at its width, so the top tile always ties it. *)
           n % RT.width d = 0
           || top.rn = d.rn
           || passes ~n top = passes ~n d
-             && List.mem (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) top ~equal:RT.equal);
+             && List.mem
+                  (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n)
+                  top ~equal:RT.equal);
   (* The ranking's own structure, not a restated pick: every candidate's vector columns cost the
      same [1 + 1/rm] whatever its [rn], so at ONE width the row count scales the columns' term and
      cannot reorder the candidates -- the column choice is the same at every [m]. A 16-byte file
@@ -178,28 +185,30 @@ let () =
   p_all "at a single-width file the row count never changes the chosen columns" sites
     ~f:(fun (elt_bytes, m, n) ->
       let cols m =
-        Option.map (RT.default ~vector_bytes:16 ~elt_bytes ~m ~n) ~f:(fun t -> (t.rn, t.lanes))
+        Option.map (RT.default ~vector_bytes:16 ~vector_registers:32 ~elt_bytes ~m ~n) ~f:(fun t ->
+            (t.rn, t.lanes))
       in
       Option.equal (fun (a, b) (c, d) -> a = c && b = d) (cols m) (cols 64));
   (* The two-row twin (gh-ocannl-947), proposed only under [autotune_register_tile_rm_twin]. *)
   Stdio.printf "rm twins: %s\n"
     (String.concat ~sep:", "
-       (List.map shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
+       (List.map shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
             Option.value_map
-              (RT.rm_twin ~vector_bytes ~elt_bytes ~m ~n)
+              (RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n)
               ~default:"none" ~f:RT.to_string)));
   p_all "the rm twin takes two rows at the default's width exactly where the default takes four"
-    shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
+    shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
       match
-        (RT.default ~vector_bytes ~elt_bytes ~m ~n, RT.rm_twin ~vector_bytes ~elt_bytes ~m ~n)
+        ( RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n,
+          RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n )
       with
       | Some d, Some t -> d.rm = RT.rm_cap && t.rm = 2 && t.lanes = d.lanes
       | Some d, None -> d.rm < RT.rm_cap
       | None, twin -> Option.is_none twin);
   p_all "the rm twin passes the fit rules, and one more vector column would not" shapes
     ~f:(fun shape ->
-      let vector_bytes, elt_bytes, m, n = shape in
-      match RT.rm_twin ~vector_bytes ~elt_bytes ~m ~n with
+      let vector_bytes, vector_registers, elt_bytes, m, n = shape in
+      match RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
       | None -> true
       | Some t -> accepted t shape && not (accepted { t with rn = t.rn + 1 } shape));
   let dividing = RT.coverage ~m:64 ~n:64 { rm = 4; rn = 2; lanes = 8 } in
@@ -214,11 +223,23 @@ let () =
     (let cov = RT.coverage ~m:64 ~n:512 { rm = 4; rn = 6; lanes = 8 } in
      cov.n_full = 480 && List.equal Int.equal cov.tail_widths [ 8; 8; 8; 8 ]);
   p "a column extent below one vector has no default and no alternatives"
-    (Option.is_none (RT.default ~vector_bytes:32 ~elt_bytes:4 ~m:64 ~n:7)
-    && List.is_empty (RT.alternatives ~vector_bytes:32 ~elt_bytes:4 ~m:64 ~n:7));
-  p "the budget is the widest default tile's live-register count"
-    (RT.budget ~vector_bytes:32 = RT.live_registers { rm = 4; rn = 3; lanes = 8 }
-    && RT.budget ~vector_bytes:16 = RT.live_registers { rm = 4; rn = 6; lanes = 4 })
+    (Option.is_none (RT.default ~vector_bytes:32 ~vector_registers:16 ~elt_bytes:4 ~m:64 ~n:7)
+    && List.is_empty (RT.alternatives ~vector_bytes:32 ~vector_registers:16 ~elt_bytes:4 ~m:64 ~n:7)
+    );
+  (* The column cap is fitted to the register COUNT by the resident floor (gh-ocannl-1285): the
+     widest four-row tile keeps every operand resident and one more column would not. *)
+  p_all "the column cap is the widest four-row tile resident on the register file"
+    [ -1; 0; 5; 6; 8; 16; 20; 21; 24; 32; 64; 1_000_003 ] ~f:(fun vector_registers ->
+      let cap = RT.rn_cap ~vector_registers in
+      let floor rn = RT.resident_floor { rm = RT.rm_cap; rn; lanes = 1 } in
+      (cap = 0 || floor cap <= vector_registers) && floor (cap + 1) > vector_registers);
+  p
+    "the budget is the widest default tile's live-register count: tinyBLAS's 4 x 3 on 16 \
+     registers, 4 x 6 on 32"
+    (RT.budget ~vector_registers:16 = RT.live_registers { rm = 4; rn = 3; lanes = 8 }
+    && RT.budget ~vector_registers:32 = RT.live_registers { rm = 4; rn = 6; lanes = 4 });
+  p "a file that holds no four-row tile has no default"
+    (Option.is_none (RT.default ~vector_bytes:16 ~vector_registers:4 ~elt_bytes:4 ~m:64 ~n:512))
 
 (* === The emission === *)
 let n = 64
@@ -301,6 +322,7 @@ let () =
   else begin
     let limits = Context.hardware_limits (Context.auto ()) in
     let vector_bytes = limits.Ir.Backend_intf.simd_vector_bytes in
+    let vector_registers = limits.Ir.Backend_intf.simd_vector_registers in
     let ladder = RT.simd_lane_ladder ~vector_bytes ~elt_bytes in
     let lanes = List.hd_exn ladder in
     (* Two vector columns: within the budget on every file (4*2 + 4 + 2 = 14 <= 19) and, at 16
@@ -322,10 +344,10 @@ let () =
     (* One vector column past what the budget admits beside four rows, at the narrowest width the
        file renders, so that the budget rule — not the width rule — is the one that fires. *)
     let over_budget =
-      { RT.rm = 4; rn = ((RT.budget ~vector_bytes - 4) / 5) + 1; lanes = List.last_exn ladder }
+      { RT.rm = 4; rn = ((RT.budget ~vector_registers - 4) / 5) + 1; lanes = List.last_exn ladder }
     in
     p "an over-budget request is refused by the fit rules"
-      (match RT.check ~vector_bytes ~elt_bytes ~m:n ~n over_budget with
+      (match RT.check ~vector_bytes ~vector_registers ~elt_bytes ~m:n ~n over_budget with
       | Error why -> String.is_substring why ~substring:"budget"
       | Ok () -> false);
     let got_ob, census_ob =
@@ -342,7 +364,7 @@ let () =
     in
     p "an over-width request declines to the scalar fallback" (scalar_fallback census_ow);
     (* The relationship: the unrequested rendering IS [Register_tile.default] of the site. *)
-    let dflt = Option.value_exn (RT.default ~vector_bytes ~elt_bytes ~m:n ~n) in
+    let dflt = Option.value_exn (RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m:n ~n) in
     let _, census_d = compile_run ~name:"tmg_default" ~leg:(Tensorized None) dflt_t in
     let src_d = Generated.read "tmg_default" in
     p "the unrequested rendering carries the model's default geometry"
@@ -352,7 +374,7 @@ let () =
     (* The two-row twin of this site's default (gh-ocannl-947): the widest two-row tile the file's
        budget admits: 2x10 of 4 lanes on NEON and 2x5 of 8 on AVX2, each with a 24-column tail at n
        = 64, and 2x4 of 16 on AVX-512, where the column extent caps it tail-free. *)
-    let twin = Option.value_exn (RT.rm_twin ~vector_bytes ~elt_bytes ~m:n ~n) in
+    let twin = Option.value_exn (RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m:n ~n) in
     let%op twin_t = ma * mb in
     let got_tw, census_tw = compile_run ~name:"tmg_rm_twin" ~leg:(Tensorized (Some twin)) twin_t in
     let src_tw = Generated.read "tmg_rm_twin" in
@@ -378,7 +400,7 @@ let () =
   let names tag =
     [
       tag ^ ": a site the tile divides in neither dimension renders register-tiled";
-      tag ^ ": the header names the one-vector column tail and the two-row band";
+      tag ^ ": the header names the column tail and the two-row band";
       tag ^ ": no scalar accumulator is emitted";
       tag ^ ": the partial column is a zeroed register filled at exactly its width";
       tag ^ ": the tails match the serial twin bitwise";
@@ -391,6 +413,32 @@ let () =
     let lanes =
       List.hd_exn
         (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes ~elt_bytes)
+    in
+    (* A 16-column width at the file's widest f32 lanes -- [4x1] of 16, [4x2] of 8, [4x4] of 4 --
+       capped at the widest four-row tile the register file holds: a 16-register file at 4 lanes
+       (SSE, or x86 at a forced 16 bytes) takes [4x3] of 4, whose 12 columns leave a two-vector tail
+       rather than one (gh-ocannl-1285). Either way 19 - 16 = 3 leftover columns end in a three-lane
+       PARTIAL vector at column 16, and 6 - 4 = 2 rows form the band; the header the tile must state
+       is derived from {!RT.coverage}, not restated. *)
+    let tile =
+      {
+        RT.rm = 4;
+        rn =
+          min (16 / lanes)
+            (RT.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector_registers);
+        lanes;
+      }
+    in
+    let cov = RT.coverage ~m ~n:nt tile in
+    let tail_vectors = List.length cov.tail_widths in
+    (* The partial vector is the tail pass's last column: its accumulator and its address, which the
+       emission spells as the tail's first column plus the column's lane offset. *)
+    let partial_acc = Printf.sprintf "tmma_c_0_%d__" (tail_vectors - 1) in
+    let partial_at = Printf.sprintf "%d + %d" cov.n_full ((tail_vectors - 1) * lanes) in
+    let tails_header =
+      Printf.sprintf "; column tail %d in %d vector%s; row tail %d)" (nt - cov.n_full) tail_vectors
+        (if tail_vectors = 1 then "" else "s")
+        (m - cov.m_full)
     in
     (* Exact in bf16 and half: cells are the multiples of 1/2 in [-1.5, 1.5], so products are
        multiples of 1/4 and the five-term sums at most 11.25 — six significand bits. That both
@@ -421,21 +469,18 @@ let () =
       match names tag with
       | [ n_tiled; n_header; n_scalar; n_partial; n_parity ] ->
           p n_tiled (register_tiled census);
-          p n_header (has "; column tail 3 in 1 vector; row tail 2)");
+          p n_header (has tails_header);
           p n_scalar (not (has "tmma_acc__"));
           p n_partial (partial has);
           p_all2 n_parity got want ~f:Float.equal
       | _ -> assert false
     in
-    (* A 16-column width at the file's widest f32 lanes: [4x1] of 16, [4x2] of 8, [4x4] of 4 —
-       within every budget, and 19 - 16 = 3 leftover columns. *)
-    let lane l = Printf.sprintf "(&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" nt l in
-    leg ~tag:"f32" ~prec:Ir.Ops.single
-      ~tile:(Some { RT.rm = 4; rn = 16 / lanes; lanes })
+    let lane l = Printf.sprintf "(&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" nt partial_at l in
+    leg ~tag:"f32" ~prec:Ir.Ops.single ~tile:(Some tile)
       ~partial:(fun has ->
-        has ("tmma_c_0_0__ = {" ^ lane 0)
+        has (partial_acc ^ " = {" ^ lane 0)
         && has (lane 2 ^ "};")
-        && has (lane 2 ^ " = tmma_c_0_0__[2];")
+        && has (lane 2 ^ " = " ^ partial_acc ^ "[2];")
         && not (has (lane 3)))
       ();
     (* The narrow legs request the f32 leg's geometry at the same lanes: the lane count follows the
@@ -448,16 +493,16 @@ let () =
        per-lane fallback reads [HALF_T]s. *)
     let narrow_partial ~bridged ~via has =
       let bits ~qual l =
-        Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" qual nt
-          l
+        Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" qual nt
+          partial_at l
       in
       has ("ocannl_pv__ = {" ^ bits ~qual:"const " 0)
       && has (bits ~qual:"const " 2 ^ "};")
       && has (bits ~qual:"" 2 ^ " = ocannl_pv__[2];")
-      && has (Printf.sprintf "%d, tmma_c_0_0__, (const %s *)&%s);" lanes bridged via)
+      && has (Printf.sprintf "%d, %s, (const %s *)&%s);" lanes partial_acc bridged via)
       && not (has (bits ~qual:"const " 3) || has (bits ~qual:"" 3))
     in
-    let tile16 = Some { RT.rm = 4; rn = 16 / lanes; lanes } in
+    let tile16 = Some tile in
     leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:tile16
       ~partial:(narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__")
       ();
@@ -512,16 +557,34 @@ let () =
     |> List.filter ~f:(fun p -> p.Autotune.sk_mma && p.Autotune.sk_bk = 0 && p.Autotune.sk_bm = 0)
     |> List.map ~f:(fun p -> p.Autotune.sk_tile)
   in
-  (* Synthetic 16-byte vectors (NEON-class, four f32 lanes, the 6-column cap): the n = 512 site of
-     the gh-575 sweep. Enumerated on the pre-schedule lowering, so it holds on every backend. *)
-  let synthetic = { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 16 } in
+  (* Synthetic 16-byte vectors on 32 registers (NEON, four f32 lanes, the 6-column cap): the n = 512
+     site of the gh-575 sweep. Enumerated on the pre-schedule lowering, so it holds on every
+     backend. *)
+  let synthetic =
+    { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 16; simd_vector_registers = 32 }
+  in
+  let vector_registers = synthetic.simd_vector_registers in
   let tiles = whole_tiles ~limits:synthetic in
   Stdio.printf "seeds: whole-triple bm0 tiles on 16-byte vectors at %dx%dx%d: %s\n" m nn k
     (String.concat ~sep:", " (List.map tiles ~f:(Option.value_map ~default:"auto" ~f:RT.to_string)));
   p "the whole-triple seeds carry one auto geometry then exactly the model's alternatives"
     (List.equal (Option.equal RT.equal) tiles
-       (None :: List.map (RT.alternatives ~vector_bytes:16 ~elt_bytes ~m ~n:nn) ~f:Option.some));
+       (None
+       :: List.map
+            (RT.alternatives ~vector_bytes:16 ~vector_registers ~elt_bytes ~m ~n:nn)
+            ~f:Option.some));
   p_exists "the site offers at least one alternative to time" tiles ~f:Option.is_some;
+  (* A register file too small for any four-row tile is refused at the seeding, through the
+     capability judgment the family tree refutes its tensorized branch with, rather than seeded and
+     declined at the renderer (gh-ocannl-1285). *)
+  let refutation registers =
+    Autotune.tensorized_capability_refutation ~is_gpu:false ~is_cpu:true
+      ~limits:{ synthetic with simd_vector_registers = registers }
+      ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single
+  in
+  p "a register file holding no four-row tile withholds the tensorized family"
+    (Option.is_some (refutation (RT.resident_floor { rm = RT.rm_cap; rn = 1; lanes = 1 } - 1))
+    && Option.is_none (refutation (RT.resident_floor { rm = RT.rm_cap; rn = 1; lanes = 1 })));
   rm_twin_gate true;
   let gated = whole_tiles ~limits:synthetic in
   rm_twin_gate false;
@@ -529,8 +592,8 @@ let () =
     (String.concat ~sep:", " (List.map gated ~f:(Option.value_map ~default:"auto" ~f:RT.to_string)));
   p "the gate adds exactly the model's two-row twin after the alternatives"
     (List.equal (Option.equal RT.equal) gated
-       (tiles @ [ RT.rm_twin ~vector_bytes:16 ~elt_bytes ~m ~n:nn ])
-    && Option.is_some (RT.rm_twin ~vector_bytes:16 ~elt_bytes ~m ~n:nn));
+       (tiles @ [ RT.rm_twin ~vector_bytes:16 ~vector_registers ~elt_bytes ~m ~n:nn ])
+    && Option.is_some (RT.rm_twin ~vector_bytes:16 ~vector_registers ~elt_bytes ~m ~n:nn));
   if not on_cpu then
     skipped "a seeded alternative instantiates through the sketch and renders its geometry"
   else begin

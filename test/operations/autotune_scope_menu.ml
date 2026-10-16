@@ -63,7 +63,8 @@ let hermetic (o : LL.optimized) =
   }
 
 (* Synthetic CPU limits: a vector width so Vectorized retypes are proposed. *)
-let limits = { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32 }
+let limits =
+  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = 16 }
 
 let () =
   (* One base compile captures the lowering the way the tuner does; the run supplies the serial

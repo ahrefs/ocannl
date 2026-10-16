@@ -846,6 +846,12 @@ module type C_syntax_config = sig
       horizontal reduce at loop exit (gh-ocannl-468; [`Vec_extensions] only). [0] disables explicit
       emission ([vectorize_pragma] fallback). *)
 
+  val vector_registers : int
+  (** How many vector registers the [vector_bytes] file has (gh-ocannl-1285): what the
+      register-tiled [Tile_mma]'s column cap {!Register_tile.rn_cap} fits to, the same count the
+      backend reports as [hardware_limits.simd_vector_registers] so the seeding and this renderer
+      agree. [0] where [vector_bytes] is [0]. *)
+
   val vector_style : [ `Vec_extensions | `Packed_struct ]
   (** How eligible [Vectorized] loops emit explicit vector code when [vector_bytes > 0].
       [`Vec_extensions] (CPU): GCC/Clang [vector_size] types, unaligned [__builtin_memcpy]
@@ -2067,6 +2073,7 @@ struct
   let parallel_grid_syntax = `None
   let parallel_grid_chunks = 1
   let vector_bytes = 0
+  let vector_registers = 0
   let vector_style = `Vec_extensions
   let shared_decl_prefix = None
   let restrict_keyword = Some "restrict"
@@ -5253,9 +5260,9 @@ module C_syntax (B : C_syntax_config) = struct
            RM×RN fused-FMA updates — loaded from [d] at block entry (the statement's [+=] semantics)
            and stored back at block exit. The geometry — RM rows, RN vector columns, the lane count
            — is the schedule's to carry ([Tile_mma.tile], gh-ocannl-619) and otherwise the
-           renderer's [Register_tile.default]: RM = 4; RN up to 3 vector columns on AVX2-class
-           16-register files ([vector_bytes = 32]), 6 on NEON/AVX-512-class 32-register files —
-           RM×RN + RM + RN live registers, tinyBLAS's budget. The rows and columns the full passes
+           renderer's [Register_tile.default]: RM = 4; RN up to 3 vector columns on 16-register
+           files (AVX2, SSE), 6 on 32-register files (NEON, AVX-512) — [Register_tile.rn_cap] over
+           the backend's [vector_registers], tinyBLAS's budget. The rows and columns the full passes
            do not cover are narrower register tiles of the same form (gh-ocannl-620,
            [Register_tile.coverage]): a band of [m mod RM] rows, and a column tail of the leftover
            columns as whole vectors plus one PARTIAL vector — zeros past its width on load, only its
@@ -5378,16 +5385,16 @@ module C_syntax (B : C_syntax_config) = struct
              {!Register_tile.default}: ranked against the ACTUAL [n] over the ladder of widths the
              file renders (gh-ocannl-575, gh-ocannl-621), by operand reuse alone now that the
              columns [bw = rn * lanes] does not cover are a narrower vector tile rather than scalar
-             code (gh-ocannl-620); the register-pressure cap stays keyed on the MACHINE's width,
-             since stepping down does not shrink the register file. The model and the fit rules a
-             request must pass live in [Register_tile], where the sketch seeding consults the same
-             functions to propose the alternatives it times. *)
+             code (gh-ocannl-620); the register-pressure cap stays keyed on the MACHINE's register
+             file ([vector_registers], gh-ocannl-1285), since stepping down does not shrink it. The
+             model and the fit rules a request must pass live in [Register_tile], where the sketch
+             seeding consults the same functions to propose the alternatives it times. *)
           let elt_bytes = Ops.prec_in_bytes prec in
-          let vector_bytes = B.vector_bytes in
+          let vector_bytes = B.vector_bytes and vector_registers = B.vector_registers in
           let* { Register_tile.rm; rn; lanes } =
             match tile with
             | Some t -> (
-                match Register_tile.check ~vector_bytes ~elt_bytes ~m ~n t with
+                match Register_tile.check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t with
                 | Ok () -> Some t
                 | Error why ->
                     (declinef ctx)
@@ -5395,8 +5402,14 @@ module C_syntax (B : C_syntax_config) = struct
                       (Register_tile.to_string t) why (describe ());
                     None)
             | None -> (
-                match Register_tile.default ~vector_bytes ~elt_bytes ~m ~n with
+                match Register_tile.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
                 | Some t -> Some t
+                | None when Register_tile.rn_cap ~vector_registers < 1 ->
+                    (declinef ctx)
+                      "Tile_mma register tiling declined (a %d-register vector file holds no \
+                       register tile): %s"
+                      vector_registers (describe ());
+                    None
                 | None ->
                     (declinef ctx)
                       "Tile_mma register tiling declined (n = %d below the vector width (lanes = \

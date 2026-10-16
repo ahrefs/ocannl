@@ -5,6 +5,7 @@ type t = { rm : int; rn : int; lanes : int } [@@deriving sexp, compare, equal]
 let to_string { rm; rn; lanes } = Printf.sprintf "rm%d rn%d lanes%d" rm rn lanes
 let width { rn; lanes; _ } = rn * lanes
 let live_registers { rm; rn; _ } = (rm * rn) + rm + rn
+let resident_floor { rm; rn; _ } = (rm * rn) + min rm rn + 1
 
 let simd_lane_ladder ~vector_bytes ~elt_bytes =
   if elt_bytes <= 0 || vector_bytes < 8 then []
@@ -18,11 +19,23 @@ let simd_lane_ladder ~vector_bytes ~elt_bytes =
     ladder vector_bytes
 
 let rm_cap = 4
-let rn_cap ~vector_bytes = if vector_bytes = 32 then 3 else 6
 
-let budget ~vector_bytes =
-  let rn = rn_cap ~vector_bytes in
-  (rm_cap * rn) + rm_cap + rn
+(* The largest [rn] whose [rm_cap]-row pass keeps every operand resident on [vector_registers]
+   registers: 6 on 32 (NEON, AVX-512), 3 on 16 (AVX2, SSE). Counted by [resident_floor], not by the
+   model's [live_registers]: the 4 x 6 tile's 34 "live" registers would not fit 32, but no
+   allocation needs them -- 24 accumulators, the 4 A splats and one B row streamed at a time are 29
+   (gh-ocannl-1285). *)
+let rn_cap ~vector_registers =
+  (* Solved in closed form rather than walked up from zero, so the cost does not grow with the
+     count: up to [rn = rm] the floor is [(rm + 1) * rn + 1], past it [rm * rn + rm + 1]. *)
+  let rm = rm_cap in
+  if vector_registers < 1 then 0
+  else if resident_floor { rm; rn = rm; lanes = 1 } <= vector_registers then
+    (vector_registers - rm - 1) / rm
+  else Int.max 0 ((vector_registers - 1) / (rm + 1))
+
+let budget ~vector_registers =
+  live_registers { rm = rm_cap; rn = rn_cap ~vector_registers; lanes = 1 }
 
 (* The widths the register file renders, narrowed to those the column extent can fill. *)
 let ladder_for ~vector_bytes ~elt_bytes ~n =
@@ -31,7 +44,7 @@ let ladder_for ~vector_bytes ~elt_bytes ~n =
 let default_rm ~m = min rm_cap m
 
 (* The largest [rn] the budget admits beside [rm] rows: [rm * rn + rm + rn <= budget]. *)
-let rn_budget_cap ~vector_bytes ~rm = (budget ~vector_bytes - rm) / (rm + 1)
+let rn_budget_cap ~vector_registers ~rm = (budget ~vector_registers - rm) / (rm + 1)
 
 type coverage = { m_full : int; n_full : int; tail_widths : int list }
 
@@ -66,13 +79,13 @@ let cost ~n ~rm ~lanes ~rn =
   let ceil_div a b = (a + b - 1) / b in
   (ceil_div n lanes * (rm + 1)) + (rm * ceil_div n (rn * lanes))
 
-let default ~vector_bytes ~elt_bytes ~m ~n =
+let default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
   if m < 1 || n < 1 then None
   else
     let rm = default_rm ~m in
     let candidates =
       List.concat_map (ladder_for ~vector_bytes ~elt_bytes ~n) ~f:(fun lanes ->
-          let cap = min (rn_cap ~vector_bytes) (n / lanes) in
+          let cap = min (rn_cap ~vector_registers) (n / lanes) in
           List.range 1 (cap + 1) |> List.map ~f:(fun rn -> { rm; rn; lanes }))
     in
     let tail_free t = List.is_empty (coverage ~m ~n t).tail_widths in
@@ -101,7 +114,7 @@ let default ~vector_bytes ~elt_bytes ~m ~n =
             | c -> c)
         | c -> c)
 
-let check ~vector_bytes ~elt_bytes ~m ~n t =
+let check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t =
   let ladder = ladder_for ~vector_bytes ~elt_bytes ~n in
   let full_ladder = simd_lane_ladder ~vector_bytes ~elt_bytes in
   if t.rm < 1 || t.rn < 1 || t.lanes < 1 then
@@ -114,23 +127,30 @@ let check ~vector_bytes ~elt_bytes ~m ~n t =
          (String.concat ~sep:"/" (List.map full_ladder ~f:Int.to_string)))
   else if not (List.mem ladder t.lanes ~equal:Int.equal) then
     Error (Printf.sprintf "n = %d below the vector width (lanes = %d)" n t.lanes)
+  else if rn_cap ~vector_registers < 1 then
+    Error
+      (Printf.sprintf "a %d-register vector file holds no %d-row register tile" vector_registers
+         rm_cap)
   else if t.rm > m then Error (Printf.sprintf "rm=%d exceeds the row extent m=%d" t.rm m)
   else if width t > n then
     Error (Printf.sprintf "width rn*lanes=%d exceeds the column extent n=%d" (width t) n)
-  else if live_registers t > budget ~vector_bytes then
+  else if live_registers t > budget ~vector_registers then
     Error
       (Printf.sprintf
-         "%d live registers (rm*rn + rm + rn) exceed the %d-register budget of a %d-byte vector \
-          file"
-         (live_registers t) (budget ~vector_bytes) vector_bytes)
+         "%d live registers (rm*rn + rm + rn) exceed the %d-register budget of a %d-register \
+          vector file"
+         (live_registers t) (budget ~vector_registers) vector_registers)
   else Ok ()
 
-let alternatives ~vector_bytes ~elt_bytes ~m ~n =
-  match (default ~vector_bytes ~elt_bytes ~m ~n, ladder_for ~vector_bytes ~elt_bytes ~n) with
+let alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
+  match
+    ( default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n,
+      ladder_for ~vector_bytes ~elt_bytes ~n )
+  with
   | None, _ | _, [] -> []
   | Some dflt, lanes :: _ ->
       let rm = default_rm ~m in
-      let cap = min (rn_budget_cap ~vector_bytes ~rm) (n / lanes) in
+      let cap = min (rn_budget_cap ~vector_registers ~rm) (n / lanes) in
       (* Among tail-free widths the model's ranking is exact -- equal issue counts, strictly more
          A-reuse at the larger [rn] -- so only the largest is worth a timing; the smaller ones are
          dominated on its own terms. What it cannot see is how a tail-bearing default's second tile
@@ -158,7 +178,7 @@ let alternatives ~vector_bytes ~elt_bytes ~m ~n =
       let tied_larger =
         if dflt.lanes <> lanes || n % width dflt = 0 then None
         else
-          List.range (dflt.rn + 1) (min (rn_cap ~vector_bytes) (n / lanes) + 1)
+          List.range (dflt.rn + 1) (min (rn_cap ~vector_registers) (n / lanes) + 1)
           |> List.filter ~f:(fun rn -> cost ~n ~rm ~lanes ~rn = cost ~n ~rm ~lanes ~rn:dflt.rn)
           |> List.last
       in
@@ -170,19 +190,22 @@ let alternatives ~vector_bytes ~elt_bytes ~m ~n =
       in
       List.map rns ~f:(fun rn -> { rm; rn; lanes })
       |> List.filter ~f:(fun t -> not (equal t dflt))
-      |> List.filter ~f:(fun t -> Result.is_ok (check ~vector_bytes ~elt_bytes ~m ~n t))
+      |> List.filter ~f:(fun t ->
+          Result.is_ok (check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t))
 
 (* Two rows, at the default's width, with every vector column the budget affords beside them: the
    least register pressure and the most A-reuse a two-row tile has, which is the question a timing
    answers and the model cannot (at rm = 2 each B vector is reloaded twice as often, so the model
    ranks it below the four-row default everywhere). *)
-let rm_twin ~vector_bytes ~elt_bytes ~m ~n =
-  match default ~vector_bytes ~elt_bytes ~m ~n with
+let rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
+  match default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
   | Some dflt when dflt.rm = rm_cap ->
       let rm = 2 in
-      let rn = min (rn_budget_cap ~vector_bytes ~rm) (n / dflt.lanes) in
+      let rn = min (rn_budget_cap ~vector_registers ~rm) (n / dflt.lanes) in
       let t = { rm; rn; lanes = dflt.lanes } in
       (* Distinct from the default and from every alternative by construction: those all take the
          default's four rows. *)
-      if rn >= 1 && Result.is_ok (check ~vector_bytes ~elt_bytes ~m ~n t) then Some t else None
+      if rn >= 1 && Result.is_ok (check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t) then
+        Some t
+      else None
   | _ -> None

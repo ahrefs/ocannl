@@ -206,6 +206,14 @@ let tensorized_capability_refutation ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.
             lazy
               "register tiling requires uniform vector-capable compute precisions (f32/f64, or \
                fp16 where arithmetic is native)" );
+          (* [Register_tile.check]'s register-file rule, at the seeding (gh-ocannl-1285): a file
+             holding no four-row tile declines every geometry, the default included. *)
+          ( Ir.Register_tile.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector_registers
+            >= 1,
+            lazy
+              (Printf.sprintf
+                 "the vector register file holds no %d-row register tile (simd_vector_registers=%d)"
+                 Ir.Register_tile.rm_cap limits.Ir.Backend_intf.simd_vector_registers) );
           ( not (Utils.debug_log_from_routines ()),
             lazy
               "routine logging is active (debug_log_from_routines): [C_syntax.try_register_tile] \
@@ -3655,12 +3663,14 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
           let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
           let n = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
           let vector_bytes = limits.Ir.Backend_intf.simd_vector_bytes in
+          let vector_registers = limits.Ir.Backend_intf.simd_vector_registers in
           let elt_bytes = max 1 (Ir.Ops.prec_in_bytes prec) in
           match
-            Ir.Register_tile.alternatives ~vector_bytes ~elt_bytes ~m ~n
+            Ir.Register_tile.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n
             @
             if rm_twin_seeded then
-              Option.to_list (Ir.Register_tile.rm_twin ~vector_bytes ~elt_bytes ~m ~n)
+              Option.to_list
+                (Ir.Register_tile.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n)
             else []
           with
           | [] -> leaf p

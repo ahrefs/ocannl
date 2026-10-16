@@ -21,9 +21,11 @@
    Which singles survive also follows the cc vector width, which auto-probes from the host: at 32
    bytes (AVX2) the pre-filter keeps eight and seven singles, at 64 (AVX-512) four and three -- the
    latter on the [menu_claim] floor -- and CI's x86 runners draw either CPU at random. So
-   [small_menu] pins the width ([vector_bytes]) for every search of the process, and [menu_claim]
-   prints the width the backend resolved beside the menu it reports, so a log names which menu it
-   saw.
+   [small_menu] pins the width ([vector_bytes]) for every search of the process, and with it the
+   register count ([vector_registers]), which the register tile's column cap follows
+   (gh-ocannl-1285) and which an AVX-512 runner keeps at 32 under the pinned 32-byte width; and
+   [menu_claim] prints the width and count the backend resolved beside the menu it reports, so a log
+   names which menu it saw.
 
    The envelope overrides are read once per process, at the first pre-filter, so [small_menu] (or
    [small_menu_envelope]) runs at a test's top level before its first search, at the config-file
@@ -71,11 +73,12 @@ let state settings =
 let small_menu_envelope () =
   state [ ("model_peak_flops", "1e12"); ("model_peak_memory_bandwidth", "1e11") ]
 
-(* The cc vector width the small menu is pinned to (see the header): the AVX2 width, where each
-   segment keeps more than the claims' floor. *)
+(* The cc vector file the small menu is pinned to (see the header): AVX2's, 32 bytes on 16
+   registers, where each segment keeps more than the claims' floor. *)
 let vector_bytes = 32
+let vector_registers = 16
 
-(* The envelope, the keep fraction, the cc vector width and the pad-waste economy, for every search
+(* The envelope, the keep fraction, the cc vector file and the pad-waste economy, for every search
    of the process. The chain's 32-wide products sit below the CPU packed menu's 64- to 256-deep
    blocks, so the pad-waste economy (gh-ocannl-740) would exclude most of each segment's sketches
    and leave a menu other than the one the claims built on it were tuned against -- the round
@@ -88,6 +91,7 @@ let small_menu () =
     [
       ("autotune_keep_fraction", Float.to_string keep_fraction);
       ("cc_vector_bytes", Int.to_string vector_bytes);
+      ("cc_vector_registers", Int.to_string vector_registers);
       ("autotune_pad_waste_max", "inf");
     ]
 
@@ -115,7 +119,9 @@ let menu_claim ?(when_ = true) ?(on = "") measured =
   Stdio.eprintf "menu (not part of the golden): singles per segment %s%s\n%!"
     (String.concat ~sep:" " (List.map per_segment ~f:Int.to_string))
     (if when_ then
-       Printf.sprintf " at cc_vector_bytes=%d" (Context.Cc_backend.vector_bytes_setting ())
+       Printf.sprintf " at cc_vector_bytes=%d cc_vector_registers=%d"
+         (Context.Cc_backend.vector_bytes_setting ())
+         (Context.Cc_backend.vector_registers_setting ())
      else "");
   gated ~when_ ~on "menu: the pre-filtered seeding keys two segments" (List.length per_segment = 2);
   gated_all ~when_ ~on "menu: each segment offers three or more singles" per_segment ~f:(fun n ->

@@ -123,6 +123,7 @@ let () =
       end)
 
       let vector_bytes = 32
+      let vector_registers = 16
     end) in
     let _kparams, doc, _launch = Syntax.compile_proc ~name [] optimized in
     doc

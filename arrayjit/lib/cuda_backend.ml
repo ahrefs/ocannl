@@ -1914,6 +1914,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               below on both sides of each one (gh-ocannl-1214). *)
            mma = Cuda_mma.capability ~cc:(min_compute_capability ());
            simd_vector_bytes = 0;
+           simd_vector_registers = 0;
            native_fp16_arithmetic = false;
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)

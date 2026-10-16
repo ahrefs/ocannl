@@ -582,6 +582,68 @@ let vector_bytes_setting () =
   | n when n >= 0 -> n
   | _ -> auto_vector_bytes ()
 
+(* The register file the kernels' target allocates vectors from (gh-ocannl-1285): its register count
+   and native register width -- 32 x 64 bytes on AVX-512 (F and VL: VL is what gives the narrower
+   forms the same 32), 16 x 32 on AVX/AVX2, 32 x 16 on AArch64 (NEON), 16 x 16 on any other target
+   (SSE, and whatever the probe does not recognize, which then caps the register tile at tinyBLAS's
+   AVX2 4 x 3 rather than risking a spill). Probed like [avx512_target], under the flags a kernel
+   actually gets, so it describes the target the compiler allocates for rather than the host. *)
+let native_vector_file =
+  let probed =
+    lazy
+      (let parse s =
+         match String.split s ~on:'x' with
+         | [ regs; bytes ] -> (
+             match (Int.of_string_opt regs, Int.of_string_opt bytes) with
+             | Some r, Some b when r > 0 && b > 0 -> Some (r, b)
+             | _ -> None)
+         | _ -> None
+       in
+       let answer =
+         cached_probe ~name:"vector_file"
+           ~validate:(fun s -> Option.is_some (parse s))
+           ~compute:(fun () ->
+             let flags = String.strip (arch_flags () ^ " " ^ simd_flags ()) in
+             let has cond =
+               probe_compiles ~flags
+                 ~data:
+                   (Printf.sprintf
+                      "#if !(%s)\n#error \"no\"\n#endif\nint ocannl_vector_file_probe;\n" cond)
+                 ()
+             in
+             if has "defined(__AVX512F__) && defined(__AVX512VL__)" then "32x64"
+             else if has "defined(__AVX__)" then "16x32"
+             else if has "defined(__aarch64__) || defined(_M_ARM64)" then "32x16"
+             else "16x16")
+           ()
+       in
+       Option.value (parse answer) ~default:(16, 16))
+  in
+  fun () -> Lazy.force probed
+
+(* How many vector registers of the configured [vector_bytes_setting] width the kernels have: config
+   [cc_vector_registers], or (auto) the native count, scaled down where the configured vector is
+   wider than a native register -- the compiler splits it across [vector_bytes / native] registers,
+   so a 32-byte vector on NEON costs two of its 32 and the file holds 16 of them. 0 when explicit
+   SIMD is off. [Register_tile.rn_cap] fits the register tile's columns to it, through
+   [hardware_limits.simd_vector_registers] in the seeding and [C_syntax_config.vector_registers] in
+   the renderer. Not a function of the width alone: a 16-byte file is 32 registers on NEON and 16 on
+   SSE, and keying the cap on the width gave SSE NEON's 4 x 6 tile, which spills there. *)
+let vector_registers_setting () =
+  match Int.of_string @@ Utils.get_global_arg ~default:"-1" ~arg_name:"cc_vector_registers" with
+  | n when n > 256 ->
+      (* No vector register file has more than 64 registers; a count past that is a typo, and the
+         register-tile arithmetic over it would overflow. *)
+      invalid_arg
+        (Printf.sprintf "cc_vector_registers: expected -1 (auto) or a count from 0 to 256, got %d" n)
+  | n when n >= 0 -> n
+  | _ ->
+      let vector_bytes = vector_bytes_setting () in
+      if vector_bytes <= 0 then 0
+      else
+        let registers, native_bytes = native_vector_file () in
+        registers * native_bytes / Int.max native_bytes vector_bytes
+
 (* Whether the kernel .so is a macOS bundle or an ELF/PE shared object. Distinguishing the two BSDs
    from Darwin needs [uname], and this used to shell out once per kernel compile -- on a machine
    compiling thousands of kernels per build, an entirely redundant `sh -c` plus `uname` plus `grep`
@@ -806,6 +868,7 @@ let codegen_tag () =
       arch_flags ();
       simd_flags ();
       Int.to_string (vector_bytes_setting ());
+      Int.to_string (vector_registers_setting ());
       (match fp16_arithmetic_support () with
       | `None -> "fp16-none"
       | `Promoted -> "fp16-promoted"
@@ -1134,6 +1197,7 @@ struct
   let parallel_grid_syntax = parallel_grid_syntax_setting ()
   let parallel_grid_chunks = parallel_grid_chunks_setting ()
   let vector_bytes = vector_bytes_setting ()
+  let vector_registers = vector_registers_setting ()
 
   (* gh-ocannl-517: a CPU has no 16-bit arithmetic -- the narrow arms of the operator renderings
      below are widen/op/narrow round-trips through f32, and [_Float16] arithmetic, where the type

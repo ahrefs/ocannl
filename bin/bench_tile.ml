@@ -57,10 +57,10 @@ let parse_rn args rn =
 
     [machine] is a thunk, forced once by EITHER spelling and not at all without a flag: a bench that
     would otherwise not have created a context by this point should not acquire one to answer a
-    question nobody asked. It returns the machine's vector width in bytes
-    ([Context.hardware_limits]'s [simd_vector_bytes]) and the COMPUTE precision's element width —
-    compute, not storage, because that is what the renderer's [elt_bytes] is: a narrow-storage GEBP
-    holds its C-tile at the compute precision.
+    question nobody asked. It returns the machine's vector width in bytes and its vector register
+    count ([Context.hardware_limits]'s [simd_vector_bytes] and [simd_vector_registers]), and the
+    COMPUTE precision's element width — compute, not storage, because that is what the renderer's
+    [elt_bytes] is: a narrow-storage GEBP holds its C-tile at the compute precision.
 
     [--tile=] needs it for the same reason [--rn=] does, even though it derives nothing: a backend
     whose file renders no multi-lane vector has no register-tiled rendering for a geometry to
@@ -71,7 +71,7 @@ let parse_rn args rn =
     and are exactly this case. *)
 let of_args args ~machine =
   let honoured_here t =
-    let vector_bytes, elt_bytes = machine () in
+    let vector_bytes, vector_registers, elt_bytes = machine () in
     match RT.simd_lane_ladder ~vector_bytes ~elt_bytes with
     | [] ->
         Bench_args.bad args
@@ -80,7 +80,7 @@ let of_args args ~machine =
            rendering %s describes"
           vector_bytes elt_bytes
           (Option.value_map t ~default:"a geometry" ~f:RT.to_string)
-    | ladder -> (vector_bytes, ladder)
+    | ladder -> (vector_registers, ladder)
   in
   (* Bounds BEFORE any product is formed. [Register_tile.check] rejects these values already, but
      only after computing [rn * lanes] and [rm * rn + rm + rn] in machine ints: at [rn = 2^61] the
@@ -92,8 +92,8 @@ let of_args args ~machine =
      renders, none of which exceeds the widest. Values below these bounds are left to the renderer,
      so an ordinary mistake (a [lanes] the ladder does not contain) still reaches the decline
      diagnostic rather than being second-guessed here. *)
-  let bounded { RT.rm; rn; lanes } ~vector_bytes ~ladder =
-    let budget = RT.budget ~vector_bytes in
+  let bounded { RT.rm; rn; lanes } ~vector_registers ~ladder =
+    let budget = RT.budget ~vector_registers in
     let widest = List.hd_exn ladder in
     let over name v cap rule =
       if v > cap then
@@ -110,16 +110,16 @@ let of_args args ~machine =
         "--tile= and --rn= are two spellings of one request (--rn= derives rm and lanes); pass one"
   | Some spec, None ->
       let t = parse_triple args spec in
-      let vector_bytes, ladder = honoured_here (Some t) in
-      bounded t ~vector_bytes ~ladder;
+      let vector_registers, ladder = honoured_here (Some t) in
+      bounded t ~vector_registers ~ladder;
       Some t
   | None, Some rn ->
       let rn = parse_rn args rn in
       (* The widest width the file renders is what the renderer's own model ranks first, so a
          derived request lands where [Register_tile.default] would have started. *)
-      let vector_bytes, ladder = honoured_here None in
+      let vector_registers, ladder = honoured_here None in
       let t = { RT.rm = RT.rm_cap; rn; lanes = List.hd_exn ladder } in
-      bounded t ~vector_bytes ~ladder;
+      bounded t ~vector_registers ~ladder;
       Some t
 
 (** [refuse_unreached args tile ~why] refuses a geometry that this run will not put in front of the

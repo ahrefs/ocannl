@@ -49,7 +49,9 @@ let with_lowering ~name tensor =
   in
   Option.value_exn !captured
 
-let cpu_limits = { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32 }
+let cpu_limits =
+  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = 16 }
+
 let f32 = Ir.Backend_intf.Mma_f32
 
 let gpu_plain_limits =
