@@ -458,7 +458,8 @@
 # and one streamed B row fit (3 vector columns on 16 registers, 6 on 32). -1 (auto) probes the
 # target under the kernel flags -- 32 on AVX-512 and AArch64, 16 on other x86 -- and scales the
 # count down where cc_vector_bytes is wider than a native register (a 32-byte vector on NEON takes
-# two of its 32). Set it only to emit for a register file other than the target's.
+# two of its 32). Set it only to emit for a register file other than the target's; a count over
+# 256 is refused.
 #cc_vector_registers=-1
 
 # Whether `Autotune.tune` searches at all. With false, no candidate is ever compiled or timed,

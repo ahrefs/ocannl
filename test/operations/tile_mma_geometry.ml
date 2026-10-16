@@ -229,7 +229,7 @@ let () =
   (* The column cap is fitted to the register COUNT by the resident floor (gh-ocannl-1285): the
      widest four-row tile keeps every operand resident and one more column would not. *)
   p_all "the column cap is the widest four-row tile resident on the register file"
-    [ 8; 16; 24; 32; 64 ] ~f:(fun vector_registers ->
+    [ -1; 0; 5; 6; 8; 16; 20; 21; 24; 32; 64; 1_000_003 ] ~f:(fun vector_registers ->
       let cap = RT.rn_cap ~vector_registers in
       let floor rn = RT.resident_floor { rm = RT.rm_cap; rn; lanes = 1 } in
       (cap = 0 || floor cap <= vector_registers) && floor (cap + 1) > vector_registers);

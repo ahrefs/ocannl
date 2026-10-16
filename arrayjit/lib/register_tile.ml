@@ -26,12 +26,13 @@ let rm_cap = 4
    allocation needs them -- 24 accumulators, the 4 A splats and one B row streamed at a time are 29
    (gh-ocannl-1285). *)
 let rn_cap ~vector_registers =
-  let rec widest rn =
-    if resident_floor { rm = rm_cap; rn = rn + 1; lanes = 1 } <= vector_registers then
-      widest (rn + 1)
-    else rn
-  in
-  widest 0
+  (* Solved in closed form rather than walked up from zero, so the cost does not grow with the
+     count: up to [rn = rm] the floor is [(rm + 1) * rn + 1], past it [rm * rn + rm + 1]. *)
+  let rm = rm_cap in
+  if vector_registers < 1 then 0
+  else if resident_floor { rm; rn = rm; lanes = 1 } <= vector_registers then
+    (vector_registers - rm - 1) / rm
+  else Int.max 0 ((vector_registers - 1) / (rm + 1))
 
 let budget ~vector_registers =
   live_registers { rm = rm_cap; rn = rn_cap ~vector_registers; lanes = 1 }

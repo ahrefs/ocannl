@@ -631,6 +631,11 @@ let native_vector_file =
    SSE, and keying the cap on the width gave SSE NEON's 4 x 6 tile, which spills there. *)
 let vector_registers_setting () =
   match Int.of_string @@ Utils.get_global_arg ~default:"-1" ~arg_name:"cc_vector_registers" with
+  | n when n > 256 ->
+      (* No vector register file has more than 64 registers; a count past that is a typo, and the
+         register-tile arithmetic over it would overflow. *)
+      invalid_arg
+        (Printf.sprintf "cc_vector_registers: expected -1 (auto) or a count from 0 to 256, got %d" n)
   | n when n >= 0 -> n
   | _ ->
       let vector_bytes = vector_bytes_setting () in
