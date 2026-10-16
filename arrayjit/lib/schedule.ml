@@ -3668,7 +3668,9 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
       becomes a fourth, lane-0-guarded statement of the marked region — the region stays
       structurally recognizable by [C_syntax.try_mma_fragment_scope], which renders the extra
       statements after the backend's intrinsic block);
-    - the [Privatize] tile store-back (per-element, right after the final write);
+    - the [Privatize] tile store-back (per-element, right after the final write, inside its pad
+      masks and under any [Grid]/[Workgroup] thread loops: the GPU block-tiling pipeline's
+      register-tiled store, gh-ocannl-1325);
     - the plain accumulation nest (the tail slides inside the parallel/output loops, right after the
       serial reduction loop — the classic loop fusion).
 
@@ -4069,9 +4071,10 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
          store-back (all path loops appear in the write indices: fuse per-element after the store)
          or the direct accumulation nest (the outermost path loop absent from the write indices is
          the serial reduction loop: fuse right after it, re-binding the inner output loops). --- *)
-      let rec find_write path llc : (floop list * Indexing.axis_index array) option =
+      let rec find_write path guards llc :
+          (floop list * Low_level.scalar_t list * Indexing.axis_index array) option =
         match llc with
-        | Set { tn; idcs; _ } when Tn.equal tn target -> Some (List.rev path, idcs)
+        | Set { tn; idcs; _ } when Tn.equal tn target -> Some (List.rev path, List.rev guards, idcs)
         | (Set_dynamic { tn; _ } | Set_from_vec { tn; _ }) when Tn.equal tn target ->
             fail "dynamic or vector writes of the reduction output are unsupported"
         | Tile_mma { d = d, _; _ } when Tn.equal d target ->
@@ -4079,31 +4082,41 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
               "the accumulator is a whole-K Tile_mma target; stage the reduction (split K) so it \
                is contracted to a fragment first"
         | Seq (a, b) -> (
-            match (find_write path a, find_write path b) with
+            match (find_write path guards a, find_write path guards b) with
             | Some _, Some _ -> fail "multiple write sites of the reduction output"
             | (Some _ as res), None | None, (Some _ as res) -> res
             | None, None -> None)
         | For_loop { index; from_; to_; body; axis } ->
-            find_write ({ index; from_; to_; body = Noop; axis } :: path) body
-        | If { body; _ } ->
-            if writes_tn target body then
-              fail "guarded writes of the reduction output are unsupported"
-            else None
+            find_write ({ index; from_; to_; body = Noop; axis } :: path) guards body
+        | If { cond = cond, _; body } -> (
+            if not (writes_tn target body) then None
+            else
+              match cond with
+              (* A pad mask (gh-ocannl-485, gh-ocannl-730: the padded GPU block-tiling pipeline's
+                 [Privatize] store-back, gh-ocannl-1325) is a range guard judged per axis below, in
+                 [guard_axis]'s form. *)
+              | Binop (Ops.Cmplt, (Embed_index _, _), (Constant _, _)) ->
+                  find_write path (cond :: guards) body
+              | _ -> fail "guarded writes of the reduction output are unsupported")
         | _ -> None
       in
-      match find_write [] red_stmt with
+      match find_write [] [] red_stmt with
       | None -> fail ("no plain write site of " ^ Tn.debug_name target ^ " found")
-      | Some (path, w_idcs) -> (
+      | Some (path, guards, w_idcs) -> (
           let needed s = Array.exists w_idcs ~f:(idx_mentions s) in
           let rec split_path above = function
             | [] -> `Leaf (List.rev above)
             | (fc : floop) :: below when needed fc.index ->
+                (* A [Workgroup] loop is a thread coordinate like [Grid] a block one: the tail
+                   relocates per element after the thread's own store of that element, reading only
+                   what that store wrote (gh-ocannl-1325: the GPU block-tiling pipeline's
+                   [Privatize] store-back sits under its register split's [Workgroup] loops). *)
                 (match fc.axis with
-                | Serial | Grid -> ()
+                | Serial | Grid | Workgroup -> ()
                 | _ ->
                     fail
                       ("output loop " ^ Indexing.symbol_ident fc.index
-                     ^ " on the write path must be Serial or Grid"));
+                     ^ " on the write path must be Serial, Grid or Workgroup"));
                 if fc.from_ <> 0 then fail "write-path loops must start at 0";
                 split_path (fc :: above) below
             | (fc : floop) :: below ->
@@ -4116,7 +4129,14 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
           in
           match split_path [] path with
           | `Leaf above ->
-              if not (covers_bijectively ~env:(env_of above) w_idcs) then
+              let guarded = Array.create ~len:rank false in
+              List.iter guards ~f:(fun cond ->
+                  match guard_axis ~st_idcs:w_idcs cond with
+                  | Some ax -> guarded.(ax) <- true
+                  | None -> fail "guarded writes of the reduction output are unsupported");
+              (* The relocated tail lands inside the guards, beside the store it follows, so it
+                 writes exactly the cells the store-back writes. *)
+              if not (covers_bijectively ~guarded ~env:(env_of above) w_idcs) then
                 fail "the store-back writes do not cover the output space bijectively";
               let epilogue = subst_tail ~site_idcs:w_idcs in
               let seen = ref false in
@@ -4134,6 +4154,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
               assert !seen;
               res
           | `After (above, red_loop, below) ->
+              if not (List.is_empty guards) then
+                fail "guarded writes of the reduction output are unsupported";
               let rebuild = List.filter below ~f:(fun (fc : floop) -> needed fc.index) in
               List.iter rebuild ~f:(fun (fc : floop) ->
                   if not (equal_axis_type fc.axis Serial) then

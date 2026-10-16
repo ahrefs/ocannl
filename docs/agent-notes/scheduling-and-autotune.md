@@ -229,13 +229,16 @@ files.
   would build (or vice versa) — keep the invariant, or re-derive the witness. The fused
   (`Fuse_epilogue`) flavor is judged separately: skipping the epilogue tail can empty the
   coverage demand before the alignment analysis is consulted, so twins can survive a routine the
-  unfused family is refuted on — but on GPU only the TENSORIZED twins compile: `Fuse_epilogue`
-  refuses the scalar block-tiling pipeline's register-tiled store path (an output loop on the write
-  path that is neither Serial nor Grid, or a guarded store), on every backend. So a segment the
-  unfused family is refuted on (a `Local` product whose consumer shares its kernel) has no
-  compilable sketch on a backend without a tensorized pipeline for its triple — CUDA at the
-  default `tf32_matmuls=false`, HIP for f32. A test claiming such a segment is seeded gates on
-  `Ll_test.tensorized_matmul_capability` (`autotune_sketch_placements`' differ leg). Since gh-ocannl-613 the flavor is the family tree's ROOT level
+  unfused family is refuted on (a `Local` product whose consumer shares its kernel). Until
+  gh-ocannl-1325 only the TENSORIZED twins compiled on GPU: `Fuse_epilogue` refused the scalar
+  block-tiling pipeline's `Privatize` store-back, which sits under the register split's
+  `Workgroup` loops and, at a padded geometry, under its pad masks, so every `gpu …/TMxTN ep`
+  candidate was a wasted compile and such a segment had no sketch at all on CUDA at the default
+  `tf32_matmuls=false` or on HIP for f32. The store-back fusion now admits `Workgroup` write-path
+  loops (the tail runs per element after the thread's own store) and per-axis range guards in
+  `guard_axis`'s form (the tail lands inside them); `epilogue_fusion_mma_seeds` executes every
+  scalar twin, and `autotune_sketch_placements`' differ leg claims the first twin's single on
+  every GPU backend. Since gh-ocannl-613 the flavor is the family tree's ROOT level
   (`fusion = unfused | fused`, `matmul_family_tree`): the fused child is refuted with the
   recognizer's own reason (`Schedule.fuse_epilogue_witness`) on a site with no fusable tail —
   so a tree's `refutations` always carries one entry more than its pipelines produce, and a

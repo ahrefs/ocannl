@@ -14,7 +14,11 @@
    reach timing); and every twin that compiles end-to-end computes values matching the untuned
    reference. On cc a few cache-blocked packed twins are correctly rejected (their accumulator is
    genuinely partial per k-block — fusing after it would read partial accumulations); the booleans
-   below hold on every backend. *)
+   below hold on every backend.
+
+   The scalar block-tiling twins (gh-ocannl-1325) are pinned harder, on every backend: EVERY one
+   applies, validates, fuses (one top-level statement fewer than its unfused sibling) and matches
+   the untuned reference -- before, [Fuse_epilogue] refused every GPU one. *)
 
 open Base
 open Ocannl
@@ -149,7 +153,67 @@ let census tag ~m ~n ~k =
   mma_gated
     (tag ^ ": every running epilogue twin renders tensorized per its mma census")
     (!n_ran >= 1 && !n_rendered = !n_ran);
-  p (tag ^ ": every running twin matches the untuned reference") (!n_ran = !n_correct)
+  p (tag ^ ": every running twin matches the untuned reference") (!n_ran = !n_correct);
+  (* gh-ocannl-1325: the scalar block-tiling twins, of the backend's own family. [Fuse_epilogue]
+     used to refuse every GPU one, on every GPU backend: the [Privatize] store-back sits under the
+     register split's [Workgroup] loops ("output loop ... must be Serial or Grid"), and a padded
+     geometry's store-back under its pad masks ("guarded writes ... unsupported") -- five wasted
+     compiles per segment per search, and no compilable sketch at all for a segment whose unfused
+     family is refuted on companion coverage where no tensorized pipeline exists for its triple. *)
+  let bt_params =
+    List.filter (Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt) ~f:(fun q ->
+        (not q.Autotune.sk_mma) && q.Autotune.sk_epilogue)
+  in
+  let bt_label what = tag ^ ": every blocktile epilogue twin " ^ what in
+  let real_stmts (o : LL.optimized) =
+    List.count (LL.flat_lines [ o.LL.llc ]) ~f:(function
+      | LL.Noop | LL.Comment _ -> false
+      | _ -> true)
+  in
+  let scheduled q =
+    let scratch =
+      {
+        opt with
+        LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+        LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+      }
+    in
+    match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q scratch) scratch with
+    | post -> (
+        match LL.validate_parallel post.LL.optimize_ctx.placements post.LL.llc with
+        | () -> Ok post
+        | exception Invalid_argument msg -> Error msg)
+    | exception Invalid_argument msg -> Error msg
+  in
+  let geometry q =
+    Printf.sprintf "%dx%d/%dx%d" q.Autotune.sk_bm q.Autotune.sk_bn q.Autotune.sk_tm q.Autotune.sk_tn
+  in
+  p (tag ^ ": blocktile epilogue twins are seeded") (not (List.is_empty bt_params));
+  p_all (bt_label "applies and validates") bt_params ~f:(fun q ->
+      match scheduled q with
+      | Ok _ -> true
+      | Error msg ->
+          Stdio.eprintf "%s: blocktile twin %s refused: %s\n" tag (geometry q) msg;
+          false);
+  p_all (bt_label "drops the tail statement its unfused sibling keeps") bt_params ~f:(fun q ->
+      match (scheduled q, scheduled { q with Autotune.sk_epilogue = false }) with
+      | Ok fused, Ok unfused -> real_stmts fused + 1 = real_stmts unfused
+      | _ -> false);
+  p_all (bt_label "compiles, runs and matches the untuned reference") bt_params ~f:(fun q ->
+      match
+        let ctx = Context.auto () in
+        let ctx, routine =
+          Context.compile
+            ~lowered_transform:(fun opt ->
+              [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt ])
+            ctx fwd Ir.Indexing.Empty
+        in
+        Context.get_values (Context.run ctx routine) mc.Tensor.value
+      with
+      | got -> Array.for_all2_exn got want ~f:approx
+      | exception exn ->
+          Stdio.eprintf "%s: blocktile twin %s FAILED: %s\n" tag (geometry q) (Exn.to_string exn);
+          false)
 
 let () =
   (* Dividing extents: the whole-K [Tile_mma] site (unstaged and single-full-K-stage pipelines). *)
