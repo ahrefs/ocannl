@@ -14,8 +14,8 @@ A `kprof` cell of benchmarks/gh1133_cells.sh is one bench_gpt process run under
 
 Only the in-step durations attribute step time: their per-step sum is the step's device time.
 The isolated minimum is a statement about the kernel alone (gh-ocannl-1347: within 1% between
-processes at a fixed revision, and still 0.6x-2.3x off its in-step duration for some long serial
-reductions whose inputs the step leaves in a different cache state). Each row says which it is:
+processes at a fixed revision, yet 0.6x-2.3x off its in-step duration for a sixth of rog's b256
+step, in every repeat, with identical code and launch geometry). Each row says which it is:
 
   ISO      the isolated device minimum is more than ISO_TOLERANCE away from the in-step median (and
            by at least ABS_FLOOR_MS): an isolated-time comparison of this kernel says nothing about

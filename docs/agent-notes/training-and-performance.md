@@ -154,6 +154,22 @@ files.
   and failed/partial cells from the report. A census inventories both compiled host-gated routines
   before any execution; the benchmark-window filter is only for the dominant-kernel column.
   `BENCH_PROMOTE=0` is still a forward-only reconstructed census experiment.
+- **An isolated per-kernel time is repeatable but is no attribution of step time** (gh-ocannl-1347).
+  At a fixed revision a kernel's isolated min-of-20 repeats within about 1% across processes. What
+  moves it between rows and runs is code: per-layer kernels with identical geometry inline
+  different-length recomputations of the Virtual residual stream (`l0_ffn_b2.grad` re-derives
+  every later layer's layer-norm backward), so 4.4 ms vs 18.5 ms between layers is work, and a
+  change between two revisions is a code change. Do not read "same grid, different time" as noise,
+  and diff `build_files/` kernels before blaming the instrument. What it does NOT give is a
+  kernel's share of the step. The in-step device durations (`gh1133_cells.sh ... kprof`,
+  `--cuda-graph-trace=node`: the step replays one CUDA graph, so without it nsys sees no
+  segments) sum to the step, but on rog b256 34 kernels (16% of the step) sit 15-40% below
+  (layer-norm and softmax backward) or 1.3-2.3x above (`gamma_lnf.grad`, `gamma_ln2_l1.grad`)
+  their isolated minimum, in every A/A repeat, with identical code, geometry and registers. A
+  shared-box co-tenant can also double a whole isolated window, since 20 back-to-back runs fit in
+  under a second; GPU counters (`ncu`) need admin on rog. The laptop clock hops between 1.8 and
+  2.8 GHz under the power cap, so b8 kernels below 1 ms carry about 10% step-to-step spread, and
+  a per-kernel difference below the `SPREAD` it shows is not one.
 - That digest covers the compiled result, NOT the diagnostics. When re-measuring a search's
   decline census after changing only an error message or a log line, `rm benchmarks/autotune_cache/*.sexp`
   first — otherwise the second run reports `state=cache-replay`, `timed=0`, `declines=[]` and every

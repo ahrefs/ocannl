@@ -575,6 +575,16 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   (`benchmarks/test-gh1133-cells.sh` pins both). Its cells print the per-kernel table
   (`BENCH_KERNEL_TABLE=1`) by default -- a lane or fission A/B moves kernels, and a step-time line
   alone hid gh-ocannl-1167's wrong premise -- and `KERNEL_TABLE=0` turns it off.
+  Its `kprof` step (CUDA, `nsys` on PATH; gh-ocannl-1347) is the per-kernel attribution of step
+  time: each cell is a step cell run under `nsys profile --trace=cuda --cuda-graph-trace=node`,
+  so every segment of the replayed graph is a trace record, and
+  `benchmarks/kernel_attribution.py` joins each segment's median device time over the timed steps
+  with the same compile's isolated minimum. Rows are flagged `ISO` (isolated more than 10% off
+  in-step) or `SPREAD` (in-step p90/p10 above 1.10), and cells of one kernel list get a cross-cell
+  repeatability table. Read per-kernel step shares from the in-step column only: on rog's
+  gpt2_mini_train_b256 the in-step medians sum to the traced step p50 within 0.2%, while 34
+  kernels (16% of the step) sit 15-130% off their isolated minimum in every repeat. Tracing costs
+  about 2-3% of step time, so a kprof cell's step time enters no matrix.
   `BENCH_SR_SITES=1` (`bench_conv_diag`) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

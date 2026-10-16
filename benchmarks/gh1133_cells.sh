@@ -37,7 +37,7 @@
 #                 compile's isolated minimum (benchmarks/kernel_attribution.py, which refuses a
 #                 cell it cannot map), and rows where the two disagree, or the in-step spread is
 #                 wide, are flagged: only the in-step column attributes step time. The step time
-#                 of a kprof cell carries the tracer's overhead; it enters no matrix.
+#                 of a kprof cell carries the tracer's overhead (2-3% on rog); it enters no matrix.
 #     summary     OUT/summary.md from the numbered passes' result lines: median p50 per cell, the
 #                 p50 of each repeat, the widest p90/p10 of the cell's repeats, the ratio to the
 #                 same fixture's base cell, and the losses' largest relative difference from base.
