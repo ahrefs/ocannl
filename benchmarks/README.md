@@ -160,13 +160,13 @@ cell is the step: cite the step cell. Each issue's cell:
 | gh-ocannl-697 (the conv family tree) | `cifar_resnet/<backend>/tuned/exact` and `cifar_resnet_b1/<backend>/tuned/exact`, with `· pad3x3` on a GPU |
 | gh-ocannl-503 (whole-routine zeroed GPU conv sites) | `cifar_resnet/<gpu>/tuned/exact` under `--cell-flag '*/<gpu>/tuned:schedule_fission=false'` |
 
-**Tuned cells: not cacheable yet.** A `tuned` cifar_resnet row cannot pass the provenance gate
-today: every padded conv operand (the stem's input, each block's input, the pools feeding a padded
-conv, and their gradients) lowers into loop nests that re-bind a loop symbol, the schedule cache
-refuses a canonical form with a re-bound binder (`SC.complete` false), and so nothing is stored and
-pass 2 searches again (`bench_conv_diag` with `BENCH_CANON=1` lists the binders; `lenet` with
-padded convs reproduces it, the valid-conv workloads do not). Until that is fixed, a tuned row is
-search-pass timing, and the baseline cells are the untuned ones.
+**Tuned cells: not cacheable, see ahrefs/ocannl#1384.** A `tuned` cifar_resnet row cannot pass the
+provenance gate today: every padded conv operand (the stem's input, each block's input, the pools
+feeding a padded conv, and their gradients) lowers into loop nests that re-bind a loop symbol, the
+schedule cache refuses a canonical form with a re-bound binder (`SC.complete` false), and so nothing
+is stored and pass 2 searches again (`bench_conv_diag` with `BENCH_CANON=1` lists the binders;
+`lenet` with padded convs reproduces it, the valid-conv workloads do not). Until that is fixed, a
+tuned row is search-pass timing, and the baseline cells are the untuned ones.
 
 ## Layout
 
