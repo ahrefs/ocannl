@@ -139,7 +139,8 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
 ### cifar_resnet cell names
 
 The v1.1.2 conv issues each close against a named cell of the `cifar_resnet` leg, before and
-after, on one box. A **step cell** is `<workload>/<backend>/<variant>/<regime>` (the regime
+after, on one box; the untuned baseline cells on rog-nv (CUDA), m4-max (Metal) and minix (HIP) are
+in [report-gh1161-resnet.md](report-gh1161-resnet.md). A **step cell** is `<workload>/<backend>/<variant>/<regime>` (the regime
 `exact` or `approximate`), e.g. `cifar_resnet_b1/cuda/tuned/exact`: the step p50 of that
 `orchestrate.py` row. A **site cell** is a step cell plus a site family, e.g.
 `cifar_resnet_b1/cuda/tuned/exact · sc1x1s2`: the summed min-of-20 kernel times of the kernels the
