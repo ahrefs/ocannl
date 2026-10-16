@@ -29,6 +29,7 @@ test/operations/launch_dim_gate.ml -- records=2 traversals=0
 test/operations/narrow_storage_compute.ml -- records=0 traversals=1
 test/operations/online_softmax.ml -- records=8 traversals=4
 test/operations/online_softmax_block.ml -- records=11 traversals=8
+test/operations/op_legality.ml -- records=4 traversals=1
 test/operations/peel_census.ml -- records=8 traversals=0
 test/operations/peel_dead_level.ml -- records=10 traversals=0
 test/operations/prelowered_seam.ml -- records=7 traversals=0
@@ -55,7 +56,6 @@ test/operations/cpu_vectorized.ml -- records<=0 traversals<=1: links ll_test for
 test/operations/hardware_axes_parity.ml -- records<=4 traversals<=4: existing migration debt; adopt ll_test when touched
 test/operations/hip_scratch_budget.ml -- records<=5 traversals<=0: existing migration debt; adopt ll_test when touched
 test/operations/model_default_fallback.ml -- records<=2 traversals<=2: existing migration debt; adopt ll_test when touched
-test/operations/op_legality.ml -- records<=4 traversals<=1: links ll_test for operand helpers only; still hand-builds Low_level
 test/operations/schedule_ops.ml -- records<=4 traversals<=1: links ll_test for operand helpers only; still hand-builds Low_level
 test/operations/schedule_split_reduce.ml -- records<=0 traversals<=7: links ll_test for operand helpers only; still hand-builds Low_level
 test/operations/test_bounds_folded_gather.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched

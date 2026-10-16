@@ -20,6 +20,8 @@ stage tile loop absent from the read         Illegal
 stage shared stays unknown                   Unknown
 stage hoisted without host-init data         Illegal
 stage cooperative requires shared            Illegal
+stage with a second reader in another nest   Legal
+stage two index vectors under the tile loop  Illegal
 tensorize valid roles                        Legal
 tensorize i/j roles swapped                  Illegal
 tensorize j role on the reduction            Illegal

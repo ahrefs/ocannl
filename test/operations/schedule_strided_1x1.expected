@@ -16,7 +16,8 @@ downsample einsum f32: the whole-routine seeds include tensorized ones, and ever
 downsample einsum f32: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 resnet block: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
 resnet block: the device's own limits seed at least one flavor: true
-resnet block: every seed either tuner flavor proposes, applied alone, declines with a typed cause or runs and matches the form it replaces one schedule of: the unscheduled form for a whole-routine seed, its segmentation on the default preset for a per-segment one: true
+resnet block: every seed either tuner flavor proposes, applied alone, declines with a typed cause or runs and matches the form it replaces one schedule of: the unscheduled form up to f32 rounding for a whole-routine seed, its segmentation on the default preset for a per-segment one: true
+resnet block: on the C backends, which do not fission the block, every whole-routine seed runs (its operand Stage leaves the main branch's read of the input on the source) and matches the unscheduled form up to f32 rounding: true
 resnet block: every tensorized seed either tuner flavor proposes declines with a typed cause or renders tensorized per its routine's mma census: true
 resnet block: every segmentation a seed is keyed in, on the default preset, runs and matches the unscheduled form up to f32 rounding: true
 unit-stride control: a matmul site whose row is the minor spatial axis, read at unit stride: true
