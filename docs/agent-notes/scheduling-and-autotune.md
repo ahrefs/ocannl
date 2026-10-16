@@ -1106,9 +1106,11 @@ files.
   hoisted packing) keeps the gate on purpose. Its stack-scratch tiles are zero-fringe too, so the
   pad is sound, and it is free: padded candidates were bitwise-exact and no slower than the
   dividing control. But the family loses to the CPU tensorized family even where it divides
-  (gh-ocannl-741, out projection b8 s512 j768 h4 at head_dim 12: 16.1 vs 13.1 ms on mac-studio,
-  20.8 vs 16.9 ms on AVX2 rog). Padded leaves would only lengthen the cc search, so the gate stays,
-  and it still renders the gh-ocannl-683 k-extent label that `schedule_contraction_nest` reads.
+  (gh-ocannl-741, out projection b8 s512 j768 h4, best blocktile vs best tensorized: at the
+  dividing head_dim 16, 18.0 vs 13.5 ms on mac-studio and 21.2 vs 17.3 ms on AVX2 rog; padded at
+  head_dim 12, 16.1 vs 13.1 and 20.8 vs 16.9 ms). Padded leaves would only lengthen the cc
+  search, so the gate stays, and it still renders the gh-ocannl-683 k-extent label that
+  `schedule_contraction_nest` reads.
   Revisit only if the family starts winning where it divides.
 - **The coalesced layout is a search BRANCH over another lowering, not a level of the family tree**
   (gh-ocannl-1165). The q/k/v site `d[b,s,h,e] += w[h,e,k] * x[b,s,k]` caps its column tile at one

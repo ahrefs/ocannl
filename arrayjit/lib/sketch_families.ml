@@ -3155,9 +3155,10 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
          operands are staged through zero-fringe tiles ([shared = false] changes only where the tile
          lives), so [pad_composition_ok] holds and a [pad_to] triple would be sound: padded
          candidates match the serial reference bitwise and cost no more than their dividing control.
-         But on cc the family loses to the CPU tensorized family at the very sites padding would add
-         (attention's out projection at head_dim 12: 16.1 ms vs 13.1 ms on an M-series Mac, 20.8 ms
-         vs 16.9 ms on AVX2), so the padded leaves would only lengthen the search. Revisit if this
+         But on cc the family loses to the CPU tensorized family even where it divides (attention's
+         out projection at head_dim 16: 18.0 ms vs 13.5 ms on an M-series Mac, 21.2 ms vs 17.3 ms on
+         AVX2), and so at the sites padding would add too (head_dim 12, padded: 16.1 vs 13.1 ms and
+         20.8 vs 16.9 ms), so the padded leaves would only lengthen the search. Revisit if this
          family starts winning where it divides. *)
       let geoms hoist =
         choice
