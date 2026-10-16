@@ -520,6 +520,11 @@ type config_value_kind =
   | Positive_float_or_unset
       (** an override that only a positive float sets: empty, non-positive and unparsable text all
           mean "not overridden", as [Autotune.peak_override] reads it *)
+  | Float_at_least of { floor : float; fallback : float }
+      (** a float clamped up to [floor], with unparsable text and NaN meaning [fallback]: every
+          spelling the read site cannot tell apart from another canonicalizes alike, so
+          [Sketch_families.pad_waste_max], which reads its value THROUGH this canonicalization, and
+          the fingerprint share one owner of the clamp *)
 
 (** The value [s] has under [kind], spelled canonically, or [None] when [s] does not parse as one.
 *)
@@ -539,6 +544,10 @@ let canonical_config_value kind s =
       match Float.of_string_opt s with
       | Some f when Float.(f > 0.) -> Some (Float.to_string f)
       | _ -> Some "")
+  | Float_at_least { floor; fallback } -> (
+      match Float.of_string_opt s with
+      | Some f when not (Float.is_nan f) -> Some (Float.to_string (Float.max floor f))
+      | _ -> Some (Float.to_string fallback))
 
 (** The built-in default of every key whose RESOLVED value an identity renders -- today the
     [Search_shaping] class, which {!config_class_fingerprint} renders into [Autotune.tune]'s search
@@ -567,7 +576,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_repeats", (Integer, "3"));
     ("autotune_split_reduce_max_sites", (Integer, "8"));
     ("autotune_register_tile_rm_twin", (Flag, "false"));
-    ("autotune_pad_waste_max", (Float_number, "2."));
+    ("autotune_pad_waste_max", (Float_at_least { floor = 1.; fallback = 2. }, "2."));
     ("autotune_composite_playoff_width", (Integer, "2"));
     ("autotune_composite_playoff_margin", (Float_number, "0.005"));
     ("autotune_round_expansion", (Keyword, "differing"));

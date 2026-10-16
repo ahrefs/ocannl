@@ -4230,7 +4230,8 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules accum_width)
  (libraries base ocannl stdio pprint arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -4846,7 +4847,8 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -4890,7 +4892,8 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -5081,7 +5084,8 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules launch_predicate_parity)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5158,7 +5162,8 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_batch_grid)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5190,7 +5195,8 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS))
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_coalesce)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5245,7 +5251,8 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_mma_matmul)
  (libraries
   base
@@ -5307,7 +5314,8 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_pipelined_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5498,7 +5506,8 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules tile_mma_geometry)
  (libraries
   base
@@ -5773,7 +5782,8 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_pad)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5820,7 +5830,8 @@
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
   (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_CC_VECTOR_BYTES))
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_conv_gemm)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5879,7 +5890,8 @@
   (env_var OCANNL_VIRTUALIZE_MAX_INLINE_FANIN)
   (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
   (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_strided_1x1)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5906,7 +5918,8 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules conv_detection_boundary)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -6520,7 +6533,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CC_VECTOR_BYTES))
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules epilogue_fusion_mma_seeds)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -7173,7 +7187,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CC_VECTOR_BYTES))
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules schedule_contraction_nest)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -7197,7 +7212,8 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules matmul_interchange)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -8425,7 +8441,8 @@
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules qkv_zero_init)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -8455,7 +8472,8 @@
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (action
   (with-stdout-to
    %{target}

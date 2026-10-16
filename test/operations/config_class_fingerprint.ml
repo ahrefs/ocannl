@@ -59,7 +59,7 @@ let respelled (kind : Utils.config_value_kind) default =
   | Integer -> "0" ^ default
   (* Exponent notation at round-trip precision: a default already written with three decimals
      ([autotune_composite_playoff_margin]'s 0.005) is its own [%.3f] spelling. *)
-  | Float_number -> Printf.sprintf "%.17e" (Float.of_string default)
+  | Float_number | Float_at_least _ -> Printf.sprintf "%.17e" (Float.of_string default)
   | Keyword -> String.uppercase default ^ " "
   | Text -> " " ^ default ^ "  "
   | Positive_float_or_unset -> "0"
@@ -69,6 +69,9 @@ let off_default (kind : Utils.config_value_kind) default =
   | Flag -> if String.equal (String.lowercase default) "true" then "false" else "true"
   | Integer -> Int.to_string (Int.of_string default + 1)
   | Float_number -> Float.to_string (Float.of_string default /. 2.)
+  (* Above the floor, so the clamp does not fold it back onto another value. *)
+  | Float_at_least { floor; _ } ->
+      Float.to_string (Float.max (floor +. 1.) (Float.of_string default *. 2.))
   | Keyword -> default ^ "-other"
   | Text -> default ^ "elsewhere"
   | Positive_float_or_unset -> "1000."
@@ -107,6 +110,31 @@ let without_profile () =
       let expected = key ^ "=" ^ Option.value_exn (Utils.canonical_config_value kind value) ^ ";" in
       let took_effect, shape = with_stated [ (key, value) ] fingerprint in
       took_effect && String.equal shape expected);
+  (* A clamped kind canonicalizes as its read site reads it (gh-ocannl-740): below the floor is the
+     floor, and an unparsable or NaN value is the fallback -- for [autotune_pad_waste_max], the
+     default, so stating it leaves the identity alone. Derived from the registry, so a key given the
+     kind later is covered too. *)
+  let clamped =
+    List.filter_map defaults ~f:(fun (key, kind, default) ->
+        match kind with
+        | Utils.Float_at_least { floor; fallback } ->
+            Some (key, Utils.canonical_config_value kind default, floor, fallback)
+        | _ -> None)
+  in
+  (* What stating [value] renders: nothing when it canonicalizes onto the default. *)
+  let renders key canonical_default value =
+    if Option.equal String.equal (Some value) canonical_default then "" else key ^ "=" ^ value ^ ";"
+  in
+  p_all "each clamped key stated unparsable or NaN renders as its fallback" clamped
+    ~f:(fun (key, canonical_default, _, fallback) ->
+      List.for_all [ "junk"; "nan" ] ~f:(fun spelling ->
+          let took_effect, shape = with_stated [ (key, spelling) ] fingerprint in
+          took_effect
+          && String.equal shape (renders key canonical_default (Float.to_string fallback))));
+  p_all "each clamped key stated below its floor renders as the floor" clamped
+    ~f:(fun (key, canonical_default, floor, _) ->
+      let took_effect, shape = with_stated [ (key, Float.to_string (floor /. 2.)) ] fingerprint in
+      took_effect && String.equal shape (renders key canonical_default (Float.to_string floor)));
   (* A value no kind parses has nothing to compare: it renders as stated. *)
   let took_effect, shape = with_stated [ ("autotune_rounds", "two") ] fingerprint in
   p "an unparsable value renders as stated"

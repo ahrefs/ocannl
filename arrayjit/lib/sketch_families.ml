@@ -668,19 +668,15 @@ let pad_waste_ratio axes =
       if block <= 0 || extent <= 0 then acc
       else acc *. Float.of_int (blocks_of extent block * block) /. Float.of_int extent)
 
-let default_pad_waste_max = 2.
-
-(* Read per call, like the family's other seeding gates: a malformed or NaN value is the default,
-   and a value below 1 means 1. *)
+(* Read per call, like the family's other seeding gates, and through the registered value kind
+   ([Utils.Float_at_least]), which owns the clamp: a value below 1 means 1, a malformed or NaN one
+   the default, 2. So the search trajectory identity, which renders the key through the same
+   canonicalization, gives every spelling of one behaviour one fingerprint. *)
 let pad_waste_max () =
-  match
-    Float.of_string_opt
-      (String.strip
-         (Utils.get_global_arg ~arg_name:"autotune_pad_waste_max"
-            ~default:(Float.to_string default_pad_waste_max)))
-  with
-  | Some t when not (Float.is_nan t) -> Float.max 1. t
-  | _ -> default_pad_waste_max
+  let raw = Utils.get_global_arg ~arg_name:"autotune_pad_waste_max" ~default:"2." in
+  match Utils.registered_config_default "autotune_pad_waste_max" with
+  | Some (kind, _) -> Float.of_string (Option.value_exn (Utils.canonical_config_value kind raw))
+  | None -> invalid_arg "Sketch_families.pad_waste_max: autotune_pad_waste_max is not registered"
 
 (* Every pad-waste witness starts with this, which is how {!lift_pad_waste} recognizes the policy:
    the exclusion sits at a geometry decision, where the CPU packed menu's footprint economy excludes

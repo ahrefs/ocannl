@@ -124,7 +124,13 @@ let () =
   let sites =
     List.filter_map
       (List.tl_exn (Array.to_list (Sys.get_argv ())))
-      ~f:(fun arg -> if String.is_prefix arg ~prefix:"-" then None else Some (parse_site arg))
+      ~f:(fun arg ->
+        if not (String.is_prefix arg ~prefix:"-") then Some (parse_site arg)
+        else if Utils.cmdline_arg_is_config_key arg then None
+        else
+          (* A dash argument no configuration key claims is a typo, not a setting: dropping it would
+             run the arm under the default a mistyped treatment meant to change. *)
+          failwith ("bench_pad_waste: unknown flag " ^ arg ^ " (only ocannl configuration flags)"))
   in
   if List.is_empty sites then
     failwith "usage: bench_pad_waste.exe name=b,m,n,k ... [ocannl configuration flags]";
