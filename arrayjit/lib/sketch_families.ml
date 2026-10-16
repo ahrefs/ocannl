@@ -1123,10 +1123,10 @@ let matmul_interchange (opt : LL.optimized) : (Sched.schedule * LL.optimized * m
     ~f:(fun stmt ->
       match candidate stmt with
       | Some ops when legal ops -> (
-          match Sched.apply ops (hermetic opt) with
+          match Sched.apply_classified ops (hermetic opt) with
           | swapped ->
               Option.map (detect_matmul swapped.LL.llc) ~f:(fun site -> (ops, swapped, site))
-          | exception Invalid_argument _ -> None)
+          | exception Outcome.Cause_at _ -> None)
       | _ -> None)
 
 (* The matmul site of [opt] as every seeding and schedule-construction entry point sees it: the
@@ -2504,8 +2504,8 @@ let coalesced (opt : LL.optimized) : (Sched.schedule * LL.optimized) option =
               LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
             }
           in
-          match Sched.apply prefix hermetic with
-          | exception Invalid_argument _ -> None
+          match Sched.apply_classified prefix hermetic with
+          | exception Outcome.Cause_at _ -> None
           | prepared -> Some (prefix, prepared)))
 
 let coalesce_prefix (opt : LL.optimized) : Sched.schedule option = Option.map (coalesced opt) ~f:fst

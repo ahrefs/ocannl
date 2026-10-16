@@ -1889,9 +1889,9 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
       || not (List.for_all verdicts ~f:(fun (_, v) -> Sched.equal_op_verdict v Sched.Op_legal))
     then None
     else
-      match Sched.apply ~static_indices ops (hermetic opt) with
+      match Sched.apply_classified ~static_indices ops (hermetic opt) with
       | opt' -> Some opt'
-      | exception Invalid_argument _ -> None
+      | exception Outcome.Cause_at _ -> None
   in
   let splittable o ~axis ~tn =
     let op, _, _, _ = Sched.split_reduce ~axis ~target:tn ~num_blocks:2 in

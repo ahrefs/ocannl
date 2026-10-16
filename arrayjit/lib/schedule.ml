@@ -303,6 +303,21 @@ let find_loops ?in_scopes axis (llc : Low_level.t) : Low_level.t list =
 let find_loop ?in_scopes axis (llc : Low_level.t) : Low_level.t option =
   List.hd (find_loops ?in_scopes axis llc)
 
+(* gh-ocannl-1323: a deliberate schedule-op precondition refusal -- the op is not applicable to this
+   code, which is a statement about the candidate, not about the transform. It is raised typed at
+   its own site, so {!apply_classified} passes it through as a declined candidate while any OTHER
+   exception escaping a transform (an array bound, a [List.zip_exn], a bare [invalid_arg]) stays
+   untyped and is fatal under [strict_failure_classification]: that is what lets a search find a
+   transform bug instead of counting it as a decline. {!apply} re-renders the refusal as the
+   [Invalid_argument] its direct callers expect. Every [invalid_arg]/[failwith] that schedule
+   application can reach in this file is either this or carries an [(* invariant: ... *)] marker,
+   which [test/operations/schedule_refusal_scan] enforces. *)
+let refuse detail =
+  raise
+    (Schedule_outcome.Cause_at
+       ( Schedule_outcome.Transform,
+         Schedule_outcome.Illegal_schedule { check = "Schedule.apply"; detail } ))
+
 (* Rewrites every [For_loop] whose index is [sym] (a materializing transform duplicates a loop per
    copy, and a later op must reach all the copies). Loops inside [Local_scope] bodies are IN scope
    since gh-ocannl-639: the accumulation mints of [Unroll ~materialize:true] and [Partition] wrap
@@ -341,7 +356,7 @@ let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Lo
   in
   let result = go llc in
   if not !found then
-    invalid_arg (what ^ ": no For_loop with index " ^ Indexing.symbol_ident sym ^ " in this routine");
+    refuse (what ^ ": no For_loop with index " ^ Indexing.symbol_ident sym ^ " in this routine");
   result
 
 (* Fresh scope ids for scalar locals declared within [llc] (binders: [Declare_local],
@@ -468,7 +483,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
   let out_masks = ref [] in
   let llc =
     rewrite_loop ~what:"Schedule.Tensorize" ~sym:i llc ~f:(fun ifc ->
-        if simd_width <= 0 then invalid_arg "Schedule.Tensorize: simd_width must be positive";
+        if simd_width <= 0 then refuse "Schedule.Tensorize: simd_width must be positive";
         let strip body =
           List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
         in
@@ -501,7 +516,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
           | [ For_loop { index; from_; to_; body; axis } ] when Indexing.equal_symbol index sym ->
               { index; from_; to_; body; axis }
           | stmts ->
-              invalid_arg
+              refuse
                 ("Schedule.Tensorize: loop " ^ Indexing.symbol_ident sym
                ^ " must be exactly the body of loop " ^ Indexing.symbol_ident of_
                ^ " (a perfectly nested i x j x k micro-kernel); that body is instead: "
@@ -513,15 +528,14 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
           [ { ifc with body = Noop }; { jfc with body = Noop }; { kfc with body = Noop } ]
           ~f:(fun fc ->
             if (not (equal_axis_type fc.axis Serial)) || fc.from_ <> 0 then
-              invalid_arg
+              refuse
                 ("Schedule.Tensorize: loop " ^ Indexing.symbol_ident fc.index
                ^ " must be Serial starting at 0"));
         let d_tn, d_idcs, llsc =
           match skim kfc.body with
           | [ Set { tn; idcs; llsc; _ } ] -> (tn, idcs, llsc)
           | _ ->
-              invalid_arg
-                "Schedule.Tensorize: the micro-kernel body must be a single accumulation Set"
+              refuse "Schedule.Tensorize: the micro-kernel body must be a single accumulation Set"
         in
         let is_d_read (sc : Low_level.scalar_t) =
           match sc with
@@ -545,7 +559,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
           match operands with
           | Some ops -> ops
           | None ->
-              invalid_arg
+              refuse
                 ("Schedule.Tensorize: the micro-kernel must accumulate a product of reads into "
                ^ Tn.debug_name d_tn ^ " (d[...] += a[...] * b[...], plain-add or FMA form)")
         in
@@ -557,7 +571,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
             [ d_idcs; snd x_op; snd y_op ]
             ~f:(Array.exists ~f:(function Indexing.Sub_axis -> true | _ -> false))
         then
-          invalid_arg
+          refuse
             "Schedule.Tensorize: a flattened (Sub_axis) micro-kernel access is unsupported (v1)";
         let mentions = Indexing.axis_index_mentions_symbol in
         let coeff sym (idx : Indexing.axis_index) =
@@ -604,7 +618,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
           match role_ld (d_tn, d_idcs) ~row:i ~col:j with
           | Some ld -> ld
           | None ->
-              invalid_arg
+              refuse
                 ("Schedule.Tensorize: accumulator " ^ Tn.debug_name d_tn
                ^ " must be indexed [..., i, ..., j] with [j] on its last axis (unit coefficients)")
         in
@@ -643,7 +657,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
                         )
                     ^ "]"
                   in
-                  invalid_arg
+                  refuse
                     ("Schedule.Tensorize: operands of the product must be indexed [..., i, ..., k] \
                       (or transposed [..., k, ..., i]) and [..., k, ..., j] (or transposed [..., \
                       j, ..., k]) with the second role symbol on the last axis (unit \
@@ -666,7 +680,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
         let validate_padded_operand s (tn, idcs) =
           if Array.exists idcs ~f:(mentions s) then (
             if not (zero_fringe tn) then
-              invalid_arg
+              refuse
                 ("Schedule.Tensorize: pad guard on " ^ Indexing.symbol_ident s
                ^ " requires operand " ^ Tn.debug_name tn
                ^ " to be a zero-fringe staged tile (Stage the operand over the padded loops first)"
@@ -677,14 +691,14 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
                   match idx with
                   | Indexing.Iterator _ when dims.(p) >= extent_of s -> ()
                   | _ ->
-                      invalid_arg
+                      refuse
                         ("Schedule.Tensorize: pad guard on " ^ Indexing.symbol_ident s
                        ^ " requires operand " ^ Tn.debug_name tn
                        ^ " to read the padded axis as a plain covering iterator")))
         in
         let parse_mask (c : Low_level.scalar_t) =
           let reject () =
-            invalid_arg
+            refuse
               "Schedule.Tensorize: unrecognized guard around the micro-kernel (expected a pad or \
                remainder guard [affine(one micro symbol, unit coefficient) < constant])"
           in
@@ -772,7 +786,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
    [q] -- a padded inner axis (dim > q, or an offset iterator) is exactly the case that is not. *)
 let coalesce_body ~outer ~inner ~merged ~p ~q (body : Low_level.t) : Low_level.t =
   let open Low_level in
-  let fail why = invalid_arg ("Schedule.Coalesce: " ^ why) in
+  let fail why = refuse ("Schedule.Coalesce: " ^ why) in
   let pair = Indexing.symbol_ident outer ^ ", " ^ Indexing.symbol_ident inner in
   let mentions idx = Indexing.axis_index_mentions_any [ outer; inner ] idx in
   let mentioned idcs = Array.exists idcs ~f:mentions in
@@ -867,9 +881,9 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
       assert false (* Handled by [apply_opt_op]: they need the whole [optimized]. *)
   | Split { axis; factor; outer; inner; outer_index; inner_index } ->
       rewrite_loop ~what:"Schedule.Split" ~sym:axis llc ~f:(fun fc ->
-          if factor <= 0 then invalid_arg "Schedule.Split: factor must be positive";
+          if factor <= 0 then refuse "Schedule.Split: factor must be positive";
           if fc.from_ <> 0 then
-            invalid_arg
+            refuse
               ("Schedule.Split: loop " ^ Indexing.symbol_ident axis
              ^ " must start at 0 (lowering guarantees this)");
           let n = fc.to_ + 1 in
@@ -908,7 +922,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           | For_loop { index; from_; to_; body; axis } when Indexing.equal_symbol index inner ->
               for_loop { index; from_; to_; axis; body = for_loop { ofc with body } }
           | _ ->
-              invalid_arg
+              refuse
                 ("Schedule.Swap: loops " ^ Indexing.symbol_ident outer ^ " and "
                ^ Indexing.symbol_ident inner
                ^ " are not perfectly nested (the outer body must be exactly the inner loop)"))
@@ -917,7 +931,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           (match ty with
           | Grid | Workgroup | Workgroup_reduce ->
               if fc.from_ <> 0 then
-                invalid_arg
+                refuse
                   ("Schedule.Retype: hardware-annotated loop " ^ Indexing.symbol_ident axis
                  ^ " must start at 0")
           | Serial | Unrolled | Vectorized -> ());
@@ -1000,11 +1014,11 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
          environment proves them (e.g. after a [Partition] of a block loop at the last fully valid
          block); [Tensorize] recognizes them as pad masks (see {!optop}). *)
       rewrite_loop ~what:"Schedule.Pad" ~sym:axis llc ~f:(fun fc ->
-          if to_multiple_of <= 0 then invalid_arg "Schedule.Pad: to_multiple_of must be positive";
+          if to_multiple_of <= 0 then refuse "Schedule.Pad: to_multiple_of must be positive";
           if not (equal_axis_type fc.axis Serial) then
-            invalid_arg ("Schedule.Pad: loop " ^ Indexing.symbol_ident axis ^ " must be Serial");
+            refuse ("Schedule.Pad: loop " ^ Indexing.symbol_ident axis ^ " must be Serial");
           if fc.from_ <> 0 then
-            invalid_arg
+            refuse
               ("Schedule.Pad: loop " ^ Indexing.symbol_ident axis
              ^ " must start at 0 (lowering guarantees this)");
           let n = fc.to_ + 1 in
@@ -1035,11 +1049,11 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                      must stay so: never guard a barrier. *)
                   Workgroup_barrier
               | Staged_compilation _ ->
-                  invalid_arg
+                  refuse
                     ("Schedule.Pad: opaque Staged_compilation in the body of "
                    ^ Indexing.symbol_ident axis)
               | Tile_mma _ ->
-                  invalid_arg
+                  refuse
                     ("Schedule.Pad: apply Pad before Tensorize (Tile_mma in the body of "
                    ^ Indexing.symbol_ident axis ^ ")")
             in
@@ -1049,9 +1063,9 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           match ofc.body with
           | For_loop ({ index; _ } as ifc) when Indexing.equal_symbol index inner ->
               if not (equal_axis_type ofc.axis Serial && equal_axis_type ifc.axis Serial) then
-                invalid_arg "Schedule.Coalesce: both loops must be Serial";
+                refuse "Schedule.Coalesce: both loops must be Serial";
               if ofc.from_ <> 0 || ifc.from_ <> 0 then
-                invalid_arg "Schedule.Coalesce: both loops must start at 0";
+                refuse "Schedule.Coalesce: both loops must start at 0";
               let p = ofc.to_ + 1 and q = ifc.to_ + 1 in
               For_loop
                 {
@@ -1062,7 +1076,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                   body = coalesce_body ~outer ~inner ~merged ~p ~q ifc.body;
                 }
           | _ ->
-              invalid_arg
+              refuse
                 ("Schedule.Coalesce: loops " ^ Indexing.symbol_ident outer ^ " and "
                ^ Indexing.symbol_ident inner
                ^ " are not perfectly nested (the outer body must be exactly the inner loop)"))
@@ -1074,16 +1088,15 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
          guard-free specialized segment nests without any specialization logic here. *)
       rewrite_loop ~what:"Schedule.Partition" ~sym:axis llc ~f:(fun fc ->
           if not (equal_axis_type fc.axis Serial) then
-            invalid_arg
-              ("Schedule.Partition: loop " ^ Indexing.symbol_ident axis ^ " must be Serial");
+            refuse ("Schedule.Partition: loop " ^ Indexing.symbol_ident axis ^ " must be Serial");
           if List.is_empty breakpoints then
-            invalid_arg "Schedule.Partition: breakpoints must be non-empty";
+            refuse "Schedule.Partition: breakpoints must be non-empty";
           if List.length segment_indices <> List.length breakpoints + 1 then
-            invalid_arg "Schedule.Partition: needs one segment index per segment (see {!partition})";
+            refuse "Schedule.Partition: needs one segment index per segment (see {!partition})";
           let starts = fc.from_ :: breakpoints in
           let stops = List.map breakpoints ~f:(fun b -> b - 1) @ [ fc.to_ ] in
           if not (List.for_all2_exn starts stops ~f:(fun lo hi -> lo <= hi)) then
-            invalid_arg
+            refuse
               (Printf.sprintf
                  "Schedule.Partition: breakpoints must be strictly increasing and strictly inside \
                   the loop range [%d, %d]"
@@ -1150,7 +1163,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
          zeroing with the same geometry as the computation. *)
       let dims = Lazy.force tn.Tn.dims in
       if Array.length dims <> List.length indices then
-        invalid_arg
+        refuse
           ("Schedule.Expand_zero: "
           ^ Int.to_string (List.length indices)
           ^ " indices for a rank-"
@@ -1169,8 +1182,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
         match llc with
         | Zero_out tn' when Tn.equal tn tn' ->
             if !found then
-              invalid_arg
-                ("Schedule.Expand_zero: multiple Zero_out statements for " ^ Tn.debug_name tn);
+              refuse ("Schedule.Expand_zero: multiple Zero_out statements for " ^ Tn.debug_name tn);
             found := true;
             nest
         | Seq (a, b) -> Seq (go a, go b)
@@ -1179,7 +1191,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
         | other -> other
       in
       let result = go llc in
-      if not !found then invalid_arg ("Schedule.Expand_zero: no Zero_out of " ^ Tn.debug_name tn);
+      if not !found then refuse ("Schedule.Expand_zero: no Zero_out of " ^ Tn.debug_name tn);
       result
 
 (** {2 [Stage]: tile staging (schedule-ir-optops §5)}
@@ -1275,14 +1287,14 @@ let collect_source_accesses ~source (llc : Low_level.t) :
   let acc = ref [] in
   let reject_write tn =
     if Tn.equal tn source then
-      invalid_arg ("Schedule.Stage: source " ^ Tn.debug_name source ^ " is written in the routine")
+      refuse ("Schedule.Stage: source " ^ Tn.debug_name source ^ " is written in the routine")
   in
   let rec code stack llc =
     match llc with
     | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
     | Tile_mma _ ->
         (* Cooperative-tile operands are not remappable reads in v1. *)
-        invalid_arg "Schedule.Stage: apply Stage before Tensorize"
+        refuse "Schedule.Stage: apply Stage before Tensorize"
     | Zero_out tn -> reject_write tn
     | Seq (a, b) ->
         code stack a;
@@ -1297,7 +1309,7 @@ let collect_source_accesses ~source (llc : Low_level.t) :
           code_touches_tn source body
           || List.exists carried ~f:(fun c -> scalar_touches_tn source c.init)
         then
-          invalid_arg
+          refuse
             ("Schedule.Stage: a Scan_loop accesses the source " ^ Tn.debug_name source
            ^ ", which is unsupported")
     | Set { tn; llsc; _ } ->
@@ -1321,7 +1333,7 @@ let collect_source_accesses ~source (llc : Low_level.t) :
     | Get (tn, idcs) -> if Tn.equal tn source then acc := (idcs, List.rev stack) :: !acc
     | Get_dynamic { tn; dyn_value = v, _; _ } ->
         if Tn.equal tn source then
-          invalid_arg "Schedule.Stage: dynamically indexed source reads are unsupported";
+          refuse "Schedule.Stage: dynamically indexed source reads are unsupported";
         scalar stack v
     | Get_merge_buffer (_, _) -> ()
     | Ternop (_, (a, _), (b, _), (c, _)) ->
@@ -1402,8 +1414,12 @@ let pack_constant_tile ~debug ~(src_nd : Ndarray.t) ~(src_dims : int array) ~(sr
     ~(prec : Ops.prec) ~(packed_dims : int array) ~(sym_extents : int array)
     ~(src_prog : ((int * int) array * int) array) ~(packed_prog : ((int * int) array * int) array) :
     Ndarray.t =
+  (* invariant: forced at link time, long after [apply] returned, against the precision and dims the
+     hoisted Stage read off the very source node -- a mismatch is a broken host-init registry, not a
+     property of the schedule. *)
   if not (Ops.equal_prec (Ndarray.get_prec src_nd) src_prec) then
     invalid_arg ("Schedule.Stage: hoisted staging: host-init precision mismatch for " ^ debug);
+  (* invariant: as above. *)
   if not (Array.equal Int.equal (Ndarray.dims src_nd) src_dims) then
     invalid_arg ("Schedule.Stage: hoisted staging: host-init dims mismatch for " ^ debug);
   (* Zero-filled at creation: pad slots of edge tiles (never written below) must read as zeros. *)
@@ -1515,14 +1531,14 @@ let exact_widening ~what (tn : Tn.t) (p : Ops.prec) : Ops.prec =
   | _ when Ops.equal_prec p storage -> p
   | (Ops.Single_prec _ | Ops.Double_prec _) when Ops.is_narrow_float storage -> p
   | _ ->
-      invalid_arg
+      refuse
         (Printf.sprintf "%s %s is not an exact widening of %s storage for %s" what
            (Ops.prec_string p) (Ops.prec_string storage) (Tn.debug_name tn))
 
 let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_stride
     ~pipeline_depth ~tile_prec (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
-  if List.is_empty tile_loops then invalid_arg "Schedule.Stage: empty tile_loops";
+  if List.is_empty tile_loops then refuse "Schedule.Stage: empty tile_loops";
   let source_prec = Lazy.force source.Tn.storage_prec in
   (* [tile_prec] admits exact widenings only (gh-ocannl-575): a widening is value-preserving and its
      round-trip is the identity, so the transform stays numerics-preserving no matter which
@@ -1533,18 +1549,17 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     | Some p -> exact_widening ~what:"Schedule.Stage: tile_prec" source p
   in
   Option.iter cooperative ~f:(fun w ->
-      if not shared then invalid_arg "Schedule.Stage: cooperative staging requires shared = true";
-      if w <= 0 then invalid_arg "Schedule.Stage: cooperative simd width must be positive");
+      if not shared then refuse "Schedule.Stage: cooperative staging requires shared = true";
+      if w <= 0 then refuse "Schedule.Stage: cooperative simd width must be positive");
   if pipeline_depth < 1 then
-    invalid_arg
-      (Printf.sprintf "Schedule.Stage: pipeline_depth must be >= 1, got %d" pipeline_depth);
+    refuse (Printf.sprintf "Schedule.Stage: pipeline_depth must be >= 1, got %d" pipeline_depth);
   if pipeline_depth > 1 && Option.is_none cooperative then
-    invalid_arg
+    refuse
       "Schedule.Stage: pipeline_depth > 1 requires cooperative staging (the rotation pipelines the \
        cooperative copy against the compute; packing and reused-workgroup stagings have no \
        prefetch to overlap)";
   if pipeline_depth > 2 then
-    invalid_arg
+    refuse
       (Printf.sprintf
          "Schedule.Stage: pipeline_depth %d is not implemented in gh-ocannl-487: both the portable \
           form and the cp.async arm have single-step lookahead (one prefetch per iteration, \
@@ -1553,19 +1568,19 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
           commit-group/wait-group bookkeeping in the async arms"
          pipeline_depth);
   if hoisted && shared then
-    invalid_arg "Schedule.Stage: hoisted staging requires shared = false (it emits no load nest)";
+    refuse "Schedule.Stage: hoisted staging requires shared = false (it emits no load nest)";
   if Option.is_some swizzle && not shared then
-    invalid_arg
+    refuse
       "Schedule.Stage: swizzle is a shared-memory bank-conflict layout, it requires shared = true";
   let accesses = collect_source_accesses ~source opt.llc in
   let idcs0, stack0 =
     match accesses with
-    | [] -> invalid_arg ("Schedule.Stage: no reads of " ^ Tn.debug_name source ^ " in the routine")
+    | [] -> refuse ("Schedule.Stage: no reads of " ^ Tn.debug_name source ^ " in the routine")
     | hd :: _ -> hd
   in
   List.iter accesses ~f:(fun (idcs, _) ->
       if not (Array.equal Indexing.equal_axis_index idcs idcs0) then
-        invalid_arg
+        refuse
           ("Schedule.Stage: v1 requires all reads of " ^ Tn.debug_name source
          ^ " to use identical index vectors"));
   let stack0 =
@@ -1578,7 +1593,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     match depth_of s with
     | Some (_, fl) -> fl
     | None ->
-        invalid_arg
+        refuse
           ("Schedule.Stage: tile loop " ^ Indexing.symbol_ident s
          ^ " does not enclose the source access")
   in
@@ -1591,7 +1606,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
   let decomp =
     Array.map idcs0 ~f:(fun idx ->
         match terms_of_index idx with
-        | Concatenated -> invalid_arg "Schedule.Stage: Concat indices are unsupported"
+        | Concatenated -> refuse "Schedule.Stage: Concat indices are unsupported"
         | Flattened -> ([], [], 0)
         | Terms (terms, offset) ->
             let tile_part, outer_part = List.partition_tf terms ~f:(fun (_, s) -> is_tile s) in
@@ -1599,16 +1614,16 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
   in
   Array.iter decomp ~f:(fun (tp, _, _) ->
       List.iter tp ~f:(fun (c, s) ->
-          if c <= 0 then invalid_arg "Schedule.Stage: nonpositive coefficient on a tile loop index";
+          if c <= 0 then refuse "Schedule.Stage: nonpositive coefficient on a tile loop index";
           let fl = floop_of_exn s in
-          if fl.from_ <> 0 then invalid_arg "Schedule.Stage: tile loops must start at 0"));
+          if fl.from_ <> 0 then refuse "Schedule.Stage: tile loops must start at 0"));
   List.iter tile_loops ~f:(fun s ->
       if
         not
           (Array.exists decomp ~f:(fun (tp, _, _) ->
                List.exists tp ~f:(fun (_, s') -> Indexing.equal_symbol s s')))
       then
-        invalid_arg
+        refuse
           ("Schedule.Stage: tile loop " ^ Indexing.symbol_ident s
          ^ " does not occur in the source access"));
   let extent s =
@@ -1660,14 +1675,14 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
         match (floop_of_exn s).axis with
         | Workgroup | Workgroup_reduce -> true
         | Serial | Vectorized -> false
-        | Grid -> invalid_arg "Schedule.Stage: a Grid-typed loop cannot be a tile loop"
+        | Grid -> refuse "Schedule.Stage: a Grid-typed loop cannot be a tile loop"
         | Unrolled ->
-            invalid_arg "Schedule.Stage: apply Stage before (materializing) Unroll of a tile loop")
+            refuse "Schedule.Stage: apply Stage before (materializing) Unroll of a tile loop")
   in
   if (not shared) && not (List.is_empty reused) then
-    invalid_arg "Schedule.Stage: non-shared (packing) staging requires Serial tile loops";
+    refuse "Schedule.Stage: non-shared (packing) staging requires Serial tile loops";
   if Option.is_some cooperative && not (List.is_empty reused) then
-    invalid_arg
+    refuse
       "Schedule.Stage: cooperative staging requires Serial tile loops (the fresh lane loop is the \
        cooperating axis; reusing Workgroup tile loops is the non-cooperative mode)";
   if hoisted then (
@@ -1678,15 +1693,15 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        the constant pool. *)
     Array.iteri decomp ~f:(fun a _ ->
         if Option.is_some (compacted a) then
-          invalid_arg
+          refuse
             "Schedule.Stage: hoisted staging does not support compacting a strided tile part (v1) \
              — its blocked outer decomposition assumes the tile part addresses the source densely");
     if Array.exists idcs0 ~f:(function Indexing.Sub_axis -> true | _ -> false) then
-      invalid_arg
+      refuse
         "Schedule.Stage: hoisted staging does not support a flattened (Sub_axis) source access \
          (v1) — its link-time packing program addresses each source axis by its own dim";
     if not (Host_inits.mem source) then
-      invalid_arg
+      refuse
         ("Schedule.Stage: hoisted staging requires registered host-init data for "
        ^ Tn.debug_name source);
     if
@@ -1694,12 +1709,12 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
         (Tn.known_host_constant source
         || Tn.Placements.known_constant opt.Low_level.optimize_ctx.placements source)
     then
-      invalid_arg
+      refuse
         ("Schedule.Stage: hoisted staging requires a known-constant source, got "
        ^ Tn.debug_name source);
     (match Lazy.force source.Tn.padding with
     | Some _ ->
-        invalid_arg
+        refuse
           ("Schedule.Stage: hoisted staging does not support a padded source: "
          ^ Tn.debug_name source)
     | None -> ());
@@ -1707,14 +1722,12 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        loop with a known extent (static/dynamic indices have no binding there), and the affine maps
        below need nonnegative source coordinates. *)
     Array.iter decomp ~f:(fun (_, op_, off) ->
-        if off < 0 then
-          invalid_arg "Schedule.Stage: hoisted staging requires nonnegative index offsets";
+        if off < 0 then refuse "Schedule.Stage: hoisted staging requires nonnegative index offsets";
         List.iter op_ ~f:(fun (c, s) ->
             if c <= 0 then
-              invalid_arg
-                "Schedule.Stage: hoisted staging requires positive outer-part coefficients";
+              refuse "Schedule.Stage: hoisted staging requires positive outer-part coefficients";
             if Option.is_none (depth_of s) then
-              invalid_arg
+              refuse
                 ("Schedule.Stage: hoisted staging requires outer-part symbol "
                ^ Indexing.symbol_ident s ^ " to be bound by an enclosing loop")));
     let tile_dim a = Array.find_map tile_axes ~f:(fun (a', d) -> Option.some_if (a = a') d) in
@@ -1736,11 +1749,11 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
             | Some t_a ->
                 List.iter op_ ~f:(fun (c, _) ->
                     if c % t_a <> 0 then
-                      invalid_arg
+                      refuse
                         "Schedule.Stage: hoisted staging requires outer-part coefficients \
                          divisible by the tile dim of their axis");
                 if off % t_a <> 0 then
-                  invalid_arg
+                  refuse
                     "Schedule.Stage: hoisted staging requires the index offset divisible by the \
                      tile dim of its axis";
                 let q = List.map op_ ~f:(fun (c, s) -> (c / t_a, s)) in
@@ -1807,6 +1820,8 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
            match Host_inits.find source with
            | Some l -> Lazy.force l
            | None ->
+               (* invariant: forced at link time; [apply] refused a source without host-init data
+                  (the [Host_inits.mem] check above), so its absence here is a broken registry. *)
                invalid_arg
                  ("Schedule.Stage: host-init data for " ^ Tn.debug_name source
                 ^ " disappeared before link")
@@ -1850,10 +1865,9 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       | None -> tile_dims
       | Some p ->
           let n = Array.length tile_dims in
-          if p <= 1 then
-            invalid_arg (Printf.sprintf "Schedule.Stage: pad_stride must be > 1, got %d" p)
+          if p <= 1 then refuse (Printf.sprintf "Schedule.Stage: pad_stride must be > 1, got %d" p)
           else if n < 2 then
-            invalid_arg
+            refuse
               "Schedule.Stage: pad_stride pads the minor dim against the row stride, so it \
                requires a tile with at least two axes"
           else begin
@@ -1865,7 +1879,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     Option.iter swizzle ~f:(fun kind ->
         let n = Array.length tile_dims in
         if n < 2 then
-          invalid_arg
+          refuse
             "Schedule.Stage: swizzle requires a tile with at least two axes (the minor axis is \
              XORed against the row prefix)";
         let c = tile_dims.(n - 1) in
@@ -1880,13 +1894,13 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
         match kind with
         | Low_level.Swizzle_elem ->
             if c < 2 || c land (c - 1) <> 0 then
-              invalid_arg
+              refuse
                 (Printf.sprintf
                    "Schedule.Stage: swizzle requires a power-of-two minor tile dim > 1, got %d" c)
         | Low_level.Swizzle_b128 ->
             let row_bytes = c * Ops.prec_in_bytes prec in
             if row_bytes % 16 <> 0 then
-              invalid_arg
+              refuse
                 (Printf.sprintf
                    "Schedule.Stage: Swizzle_b128 requires the minor tile dim to span a multiple of \
                     16 bytes, got %d elements of %s (%d bytes)"
@@ -1894,7 +1908,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
             else
               let units = row_bytes / 16 in
               if units < 2 || units land (units - 1) <> 0 then
-                invalid_arg
+                refuse
                   (Printf.sprintf
                      "Schedule.Stage: Swizzle_b128 requires a power-of-two count > 1 of 16-byte \
                       units per row, got %d"
@@ -2050,7 +2064,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
          List.filter active_slots ~f:(fun s -> not (List.mem covered s ~equal:Int.equal))
        in
        if not (List.is_empty missing) then
-         invalid_arg
+         refuse
            ("Schedule.Stage: workgroup slot(s) "
            ^ String.concat ~sep:", " (List.map missing ~f:Int.to_string)
            ^ " are active in this kernel but no loop binding them encloses the staging point for "
@@ -2177,7 +2191,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
                anchor fails the single-index-vector rule first — so this is a defensive rejection,
                not a supported-case gate. *)
             if stack0.(ld).from_ <> 0 then
-              invalid_arg
+              refuse
                 ("Schedule.Stage: pipeline_depth > 1 requires the staging anchor loop "
                 ^ Indexing.symbol_ident stack0.(ld).index
                 ^ " to start at 0 (the prologue fills buffer copy 0)");
@@ -2187,19 +2201,19 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
                execute (Codex P2 on PR #303). Unreachable from real tensors (a k-block loop has at
                least one block); defensive like the bounds check above. *)
             if stack0.(ld).to_ < stack0.(ld).from_ then
-              invalid_arg
+              refuse
                 ("Schedule.Stage: pipeline_depth > 1 requires the staging anchor loop "
                 ^ Indexing.symbol_ident stack0.(ld).index
                 ^ " to have at least one iteration (a dead anchor cannot execute the prologue copy)"
                 );
             Some stack0.(ld).index
         | Some ld ->
-            invalid_arg
+            refuse
               ("Schedule.Stage: pipeline_depth > 1 requires the staging anchor loop "
               ^ Indexing.symbol_ident stack0.(ld).index
               ^ " to be Serial (the buffer rotation needs a well-defined iteration order)")
         | None ->
-            invalid_arg
+            refuse
               ("Schedule.Stage: pipeline_depth > 1 requires an anchored staging point (a serial \
                 loop carrying an outer-part symbol) for " ^ Tn.debug_name source
              ^ "; an unanchored (broadcast) staging has no loop to rotate the buffers with")
@@ -2412,7 +2426,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
   in
   rewrite_loop ~what:"Schedule.Privatize" ~sym:over llc ~f:(fun fc ->
       if not (equal_axis_type fc.axis Serial) then
-        invalid_arg "Schedule.Privatize: the accumulation loop must be Serial";
+        refuse "Schedule.Privatize: the accumulation loop must be Serial";
       (* Accesses of [target] within the loop's subtree, with their loop stacks and enclosing [If]
          guard chains relative to it. Guards matter (PR #91 review): the remap keeps a guard on the
          update itself, but a thread-identifying guard (e.g. [w == 0] lane restriction) means only
@@ -2423,17 +2437,17 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       let rec scan stack conds llc =
         match llc with
         | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
-        | Tile_mma _ -> invalid_arg "Schedule.Privatize: apply Privatize before Tensorize"
+        | Tile_mma _ -> refuse "Schedule.Privatize: apply Privatize before Tensorize"
         | Zero_out tn ->
             if Tn.equal tn target then
-              invalid_arg "Schedule.Privatize: Zero_out of the target inside the accumulation loop"
+              refuse "Schedule.Privatize: Zero_out of the target inside the accumulation loop"
         | Seq (a, b) ->
             scan stack conds a;
             scan stack conds b
         | For_loop { index; from_; to_; body; axis } ->
             scan ({ index; from_; to_; body = Noop; axis } :: stack) conds body
         | Scan_loop _ ->
-            invalid_arg "Schedule.Privatize: a Scan_loop inside the privatized loop is unsupported"
+            refuse "Schedule.Privatize: a Scan_loop inside the privatized loop is unsupported"
         | Set { tn; idcs; llsc; _ } ->
             if Tn.equal tn target then (
               (* A hardware-typed loop the cell does not mention, between [over] and the update, is
@@ -2446,7 +2460,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
                   | (Grid | Workgroup | Workgroup_reduce)
                     when not (Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol fl.index))
                     ->
-                      invalid_arg
+                      refuse
                         ("Schedule.Privatize: the hardware-typed reduction loop "
                        ^ Indexing.symbol_ident fl.index
                        ^ " inside the privatized loop would split the accumulation across threads")
@@ -2456,12 +2470,12 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
             scan_scalar stack conds llsc
         | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
             if Tn.equal tn target then
-              invalid_arg "Schedule.Privatize: dynamically indexed target writes are unsupported";
+              refuse "Schedule.Privatize: dynamically indexed target writes are unsupported";
             scan_scalar stack conds v;
             scan_scalar stack conds llsc
         | Set_from_vec { tn; arg = a, _; _ } ->
             if Tn.equal tn target then
-              invalid_arg "Schedule.Privatize: vector writes to the target are unsupported";
+              refuse "Schedule.Privatize: vector writes to the target are unsupported";
             scan_scalar stack conds a
         | Set_local (_, llsc) -> scan_scalar stack conds llsc
         | If { cond = (c, _) as cond; body } ->
@@ -2474,7 +2488,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         | Get (tn, idcs) -> if Tn.equal tn target then accesses := (idcs, stack, conds) :: !accesses
         | Get_dynamic { tn; dyn_value = v, _; _ } ->
             if Tn.equal tn target then
-              invalid_arg "Schedule.Privatize: dynamically indexed target accesses are unsupported";
+              refuse "Schedule.Privatize: dynamically indexed target accesses are unsupported";
             scan_scalar stack conds v
         | Get_merge_buffer (_, _) -> ()
         | Ternop (_, (a, _), (b, _), (c, _)) ->
@@ -2490,17 +2504,16 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       let idcs0 =
         match !accesses with
         | [] ->
-            invalid_arg
+            refuse
               ("Schedule.Privatize: no accesses of " ^ Tn.debug_name target
              ^ " under the accumulation loop")
         | (idcs, _, _) :: _ -> idcs
       in
       if not !has_write then
-        invalid_arg
-          ("Schedule.Privatize: " ^ Tn.debug_name target ^ " is not written (no accumulation)");
+        refuse ("Schedule.Privatize: " ^ Tn.debug_name target ^ " is not written (no accumulation)");
       List.iter !accesses ~f:(fun (idcs, _, _) ->
           if not (Array.equal Indexing.equal_axis_index idcs idcs0) then
-            invalid_arg
+            refuse
               ("Schedule.Privatize: v1 requires all accesses of " ^ Tn.debug_name target
              ^ " under the loop to use identical index vectors"));
       (* Per axis, the extent its component ranges over — a component flattened over a [Sub_axis]
@@ -2533,7 +2546,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       let conds0 = match !accesses with (_, _, conds) :: _ -> conds | [] -> [] in
       List.iter !accesses ~f:(fun (_, _, conds) ->
           if not (List.equal equal_scalar_arg conds conds0) then
-            invalid_arg
+            refuse
               ("Schedule.Privatize: accesses of " ^ Tn.debug_name target
              ^ " sit under differing If guards"));
       let bound_inside =
@@ -2618,7 +2631,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
             | Some syms when List.for_all syms ~f:sym_free -> true
             | Some syms when hardware_free syms || output_mask c -> false
             | _ ->
-                invalid_arg
+                refuse
                   ("Schedule.Privatize: accesses of " ^ Tn.debug_name target
                  ^ " sit under an If guard that is neither invariant across the accumulation nor a \
                     mask on one thread's own iterations (it reads memory, or restricts threads); \
@@ -2638,11 +2651,11 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       let decomp =
         Array.map idcs0 ~f:(fun idx ->
             match terms_of_index idx with
-            | Concatenated -> invalid_arg "Schedule.Privatize: Concat indices are unsupported"
+            | Concatenated -> refuse "Schedule.Privatize: Concat indices are unsupported"
             | Flattened -> ([], [], 0)
             | Terms (terms, offset) ->
                 if List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s over) then
-                  invalid_arg
+                  refuse
                     ("Schedule.Privatize: the target's indices mention the accumulation loop "
                    ^ Indexing.symbol_ident over ^ " — nothing to carry the accumulator across");
                 let tile_part, outer_part =
@@ -2650,10 +2663,10 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
                 in
                 List.iter tile_part ~f:(fun (c, s) ->
                     if c <= 0 then
-                      invalid_arg "Schedule.Privatize: nonpositive coefficient on an inner index";
+                      refuse "Schedule.Privatize: nonpositive coefficient on an inner index";
                     let fl = Option.value_exn (inner_loop s) in
                     if (not (equal_axis_type fl.axis Serial)) || fl.from_ <> 0 then
-                      invalid_arg
+                      refuse
                         ("Schedule.Privatize: inner index loop " ^ Indexing.symbol_ident s
                        ^ " must be Serial starting at 0 (a workgroup-indexed private tile would \
                           store back other threads' elements)"));
@@ -2877,17 +2890,17 @@ exception Split_reduce_inner_cell of Indexing.symbol list
     mentions symbols bound {e inside} the reduction loop — the one rejection cause a loop
     interchange can remove (gh-ocannl-537). Carries the offending symbols so seeding can build the
     enabling [Swap] chain from the recognizer's own verdict rather than from its message;
-    {!apply_opt_op} converts it to the [Invalid_argument] the [apply]/[op_legality] surface
-    documents, so this constructor never escapes to schedule application. *)
+    {!apply_opt_op} converts it to the typed {!refuse} every other refusal raises, so this
+    constructor never escapes to schedule application. *)
 
 let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~combine_indices
     (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
-  if num_blocks < 2 then invalid_arg "Schedule.Split_reduce: num_blocks must be at least 2";
+  if num_blocks < 2 then refuse "Schedule.Split_reduce: num_blocks must be at least 2";
   let tgt_dims = Lazy.force target.Tn.dims in
   let rank = Array.length tgt_dims in
   if List.length combine_indices <> rank then
-    invalid_arg
+    refuse
       (Printf.sprintf
          "Schedule.Split_reduce: %d combine indices for a rank-%d target (mint the op with \
           Schedule.split_reduce)"
@@ -2906,7 +2919,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
     match List.find stmts ~f:(fun s -> Option.is_some (find_loop ~in_scopes:false axis s)) with
     | Some s -> s
     | None ->
-        invalid_arg
+        refuse
           ("Schedule.Split_reduce: no statement-level For_loop with index "
          ^ Indexing.symbol_ident axis ^ " in this routine")
   in
@@ -2939,7 +2952,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
     | Unop (_, (a, _)) -> touches_scalar a
   in
   if touches (rewrite_loop ~what:"Schedule.Split_reduce" ~sym:axis stmt ~f:(fun _ -> Noop)) then
-    invalid_arg
+    refuse
       ("Schedule.Split_reduce: " ^ Tn.debug_name target
      ^ " is accessed in the same statement outside the reduction loop — its combined value only \
         exists after the combine statement");
@@ -2998,9 +3011,9 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
   let rewritten =
     rewrite_loop ~what:"Schedule.Split_reduce" ~sym:axis stmt ~f:(fun fc ->
         if not (equal_axis_type fc.axis Serial) then
-          invalid_arg "Schedule.Split_reduce: the reduction loop must be Serial";
+          refuse "Schedule.Split_reduce: the reduction loop must be Serial";
         if fc.from_ <> 0 then
-          invalid_arg
+          refuse
             ("Schedule.Split_reduce: loop " ^ Indexing.symbol_ident axis
            ^ " must start at 0 (lowering guarantees this)");
         let n = fc.to_ + 1 in
@@ -3011,20 +3024,17 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
           match llc with
           | Noop | Comment _ | Declare_local _ | Workgroup_barrier -> ()
           | Staged_compilation _ ->
-              invalid_arg
-                "Schedule.Split_reduce: opaque Staged_compilation under the reduction loop"
-          | Tile_mma _ -> invalid_arg "Schedule.Split_reduce: apply Split_reduce before Tensorize"
+              refuse "Schedule.Split_reduce: opaque Staged_compilation under the reduction loop"
+          | Tile_mma _ -> refuse "Schedule.Split_reduce: apply Split_reduce before Tensorize"
           | Zero_out tn ->
               if Tn.equal tn target then
-                invalid_arg
-                  "Schedule.Split_reduce: Zero_out of the target inside the reduction loop"
+                refuse "Schedule.Split_reduce: Zero_out of the target inside the reduction loop"
           | Seq (a, b) ->
               scan a;
               scan b
           | For_loop { body; _ } -> scan body
           | Scan_loop _ ->
-              invalid_arg
-                "Schedule.Split_reduce: a Scan_loop under the reduction loop is unsupported"
+              refuse "Schedule.Split_reduce: a Scan_loop under the reduction loop is unsupported"
           | Set { tn; idcs; llsc; _ } ->
               if Tn.equal tn target then writes := (idcs, llsc) :: !writes;
               scan_scalar llsc
@@ -3034,7 +3044,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               scan_scalar llsc
           | Set_from_vec { tn; arg = a, _; _ } ->
               if Tn.equal tn target then
-                invalid_arg "Schedule.Split_reduce: vector writes to the target are unsupported";
+                refuse "Schedule.Split_reduce: vector writes to the target are unsupported";
               scan_scalar a
           | Set_local (_, llsc) -> scan_scalar llsc
           | If { cond = c, _; body } ->
@@ -3097,17 +3107,17 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
         in
         match (!writes, !dyn_writes) with
         | [], [] ->
-            invalid_arg
+            refuse
               ("Schedule.Split_reduce: " ^ Tn.debug_name target
              ^ " is not written under the reduction loop")
         | [ (idcs, llsc) ], [] ->
             (* The static form: [target[idcs] := target[idcs] ⊕ e]. *)
             if not (List.is_empty !dyn_reads) then
-              invalid_arg
+              refuse
                 ("Schedule.Split_reduce: mixed static write and dynamic reads of "
                ^ Tn.debug_name target);
             if guarded_path then
-              invalid_arg
+              refuse
                 "Schedule.Split_reduce: the reduction loop sits under an If guard (v1 supports \
                  unguarded static accumulations)";
             let acc_is = function
@@ -3120,7 +3130,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               | Binop (op, _, (t, _)) when acc_is t -> op
               | Ternop (Ops.FMA, _, _, (t, _)) when acc_is t -> Ops.Add
               | _ ->
-                  invalid_arg
+                  refuse
                     ("Schedule.Split_reduce: the write of " ^ Tn.debug_name target
                    ^ " is not a read-modify-write accumulation")
             in
@@ -3131,14 +3141,14 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               | Ops.Min -> Float.infinity
               | Ops.Mul -> 1.
               | _ ->
-                  invalid_arg
+                  refuse
                     ("Schedule.Split_reduce: unsupported accumulation operator "
                     ^ Sexp.to_string (Ops.sexp_of_binop op))
             in
             (match !reads with
             | [ ridcs ] when [%equal: Indexing.axis_index array] ridcs idcs -> ()
             | _ ->
-                invalid_arg
+                refuse
                   ("Schedule.Split_reduce: v1 requires the only read of " ^ Tn.debug_name target
                  ^ " under the reduction loop to be the accumulation's own running total"));
             (* Injectivity discipline: every enclosing loop pins exactly one component of the
@@ -3154,8 +3164,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
             let comp_terms =
               Array.map idcs ~f:(fun idx ->
                   match terms_of_index idx with
-                  | Concatenated ->
-                      invalid_arg "Schedule.Split_reduce: Concat indices are unsupported"
+                  | Concatenated -> refuse "Schedule.Split_reduce: Concat indices are unsupported"
                   | Flattened -> ([], 0)
                   | Terms (terms, off) -> (terms, off))
             in
@@ -3163,14 +3172,14 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               Array.to_list comp_terms |> List.concat_map ~f:(fun (t, _) -> List.map t ~f:snd)
             in
             if List.exists all_syms ~f:(Indexing.equal_symbol axis) then
-              invalid_arg
+              refuse
                 ("Schedule.Split_reduce: the accumulation cell mentions the reduction loop "
                ^ Indexing.symbol_ident axis ^ " — not a reduction over it");
             (* The cause gh-ocannl-537 composes around: symbols bound INSIDE the reduction loop
                (OCANNL lowers conv gradients with the accumulated channel loop innermost). Raised
                structurally with the whole offending set, so seeding can ask for it by
                {!split_reduce_hoist} instead of parsing the message; [apply_opt_op] converts it to
-               the [Invalid_argument] every other caller expects. *)
+               the typed refusal every other caller expects. *)
             (match
                List.dedup_and_sort ~compare:Indexing.compare_symbol
                  (List.filter all_syms ~f:(fun s ->
@@ -3182,17 +3191,17 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
                 match List.count all_syms ~f:(Indexing.equal_symbol s) with
                 | 1 -> ()
                 | 0 ->
-                    invalid_arg
+                    refuse
                       ("Schedule.Split_reduce: enclosing loop " ^ Indexing.symbol_ident s
                      ^ " does not index the accumulation cell — Swap it inside "
                      ^ Indexing.symbol_ident axis ^ " (or split-reduce it) first")
                 | _ ->
-                    invalid_arg
+                    refuse
                       ("Schedule.Split_reduce: enclosing loop " ^ Indexing.symbol_ident s
                      ^ " indexes the accumulation cell more than once"));
             Array.iter comp_terms ~f:(fun (terms, _) ->
                 if List.length terms > 1 then
-                  invalid_arg
+                  refuse
                     "Schedule.Split_reduce: v1 requires each component of the accumulation cell to \
                      mention at most one symbol");
             let partials = mint_partials () in
@@ -3228,7 +3237,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
             (* The dynamic (scatter) form, gh-466: [target[.., e, ..] += g] with [e] data-dependent
                (possibly under guards — a guarded pad iteration merely leaves its partials at 0). *)
             if not (List.is_empty !reads) then
-              invalid_arg
+              refuse
                 ("Schedule.Split_reduce: mixed dynamic write and static reads of "
                ^ Tn.debug_name target);
             let acc_is = function
@@ -3242,7 +3251,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
             | Binop (Ops.Add, (t, _), _) when acc_is t -> ()
             | Binop (Ops.Add, _, (t, _)) when acc_is t -> ()
             | _ ->
-                invalid_arg
+                refuse
                   ("Schedule.Split_reduce: the dynamic write of " ^ Tn.debug_name target
                  ^ " is not an add-accumulation of its own row (the gh-466 scatter form)"));
             (match !dyn_reads with
@@ -3250,7 +3259,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               ->
                 ()
             | _ ->
-                invalid_arg
+                refuse
                   ("Schedule.Split_reduce: v1 requires the only read of " ^ Tn.debug_name target
                  ^ " under the reduction loop to be the scatter's own row"));
             let partials = mint_partials () in
@@ -3321,7 +3330,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
             combine_stmt := build_combine ~partials ~op:Ops.Add ~c_idcs ~loops;
             pass1 ~init:None (guard body)
         | _ ->
-            invalid_arg
+            refuse
               ("Schedule.Split_reduce: multiple writes of " ^ Tn.debug_name target
              ^ " under the reduction loop (v1 supports a single accumulation)"))
   in
@@ -3428,7 +3437,7 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
     match add_symbol idx s with
     | Some idx -> idx
     | None ->
-        invalid_arg
+        refuse
           "Schedule.Tensorize: Concat and flattened (Sub_axis) accumulator indices are unsupported"
   in
   let lane0 p body =
@@ -3486,7 +3495,7 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
         let fi = Indexing.get_symbol () and fj = Indexing.get_symbol () in
         let target_idcs = Array.copy d_base in
         let rank = Array.length target_idcs in
-        if rank < 2 then invalid_arg "Schedule.Tensorize: accumulator rank must be at least 2";
+        if rank < 2 then refuse "Schedule.Tensorize: accumulator rank must be at least 2";
         (* The row symbol's axis in the original accumulator indexing — the tnode's second-to-last
            axis in the plain case, further out when interior batch axes sit between the roles
            (gh-ocannl-528); the column is always the minor axis ([Tensorize]'s role discipline). *)
@@ -3600,7 +3609,7 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
             match matching_tiles [] body with
             | [ Tile_mma { d = target, _; a = a, _; b = b, _; _ } ]
               when Tn.equal target a || Tn.equal target b ->
-                invalid_arg
+                refuse
                   ("Schedule.Tensorize: pad-masked accumulator " ^ Tn.debug_name target
                  ^ " coincides with an operand")
             | [ Tile_mma { d = target, d_base; m; n; fallback; _ } ] -> (
@@ -3623,7 +3632,7 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
     else llc
   in
   if masked && Option.is_none !promoted then
-    invalid_arg
+    refuse
       "Schedule.Tensorize: pad masks require the accumulator contraction, but no contraction site \
        qualified (an outer term of a pad guard may be bound inside the reduction loop)";
   match !promoted with
@@ -3667,10 +3676,10 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
     equal to the two-kernel form. The store-back of [target] itself is kept (v1): [target] may be
     observable, and eliding it is a separate dead-store concern.
 
-    Preconditions (checked, [Invalid_argument] otherwise): the tail is the first real statement
-    after the last statement writing [target]; it is a perfect Serial nest over exactly [target]'s
-    dims whose leaf assigns a different node at the identity index tuple; every read of [target] in
-    the tail uses that same tuple; the tail is elementwise (no local scopes, dynamic or merge-buffer
+    Preconditions (checked, a typed {!refuse} otherwise): the tail is the first real statement after
+    the last statement writing [target]; it is a perfect Serial nest over exactly [target]'s dims
+    whose leaf assigns a different node at the identity index tuple; every read of [target] in the
+    tail uses that same tuple; the tail is elementwise (no local scopes, dynamic or merge-buffer
     reads); no later statement mentions [target] (sole consumer); the tail's other operands are not
     written by the reduction statement; and the store-back tiles cover [target]'s index space
     bijectively, with no surplus enclosing loop (extent > 1, not indexing the site) re-executing the
@@ -3679,7 +3688,7 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
     analyzed — sole-consumption is judged by node identity. *)
 let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
-  let fail msg = invalid_arg ("Schedule.Fuse_epilogue: " ^ msg) in
+  let fail msg = refuse ("Schedule.Fuse_epilogue: " ^ msg) in
   (* Earlier ops in the same schedule leave constructed-then-folded guards ([Split] remainders,
      [Stage] edge guards) that [apply]'s trailing simplify has not erased yet; fold them now so the
      recognition below sees the guard-free structure it targets (transforms fold their own guards,
@@ -4187,7 +4196,7 @@ let fuse_epilogue_witness ~target (opt : Low_level.optimized) : string option =
   try
     ignore (apply_fuse_epilogue ~target ~shared:false opt : Low_level.optimized);
     None
-  with Invalid_argument msg -> Some msg
+  with Schedule_outcome.Cause_at (_, cause) -> Some (Schedule_outcome.detail_of_cause cause)
 
 let can_fuse_epilogue ~target opt = Option.is_none (fuse_epilogue_witness ~target opt)
 
@@ -4394,11 +4403,11 @@ let rec retile ~pairs (llc : Low_level.t) : Low_level.t =
   | Set_local (id, v) -> Set_local (id, sc v)
   | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> llc
   | Zero_out _ | Set_dynamic _ | Set_from_vec _ | Tile_mma _ ->
-      invalid_arg "Schedule.Fold_mma: unexpected statement in the fold's row body"
+      refuse "Schedule.Fold_mma: unexpected statement in the fold's row body"
 
 let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
-  let fail msg = invalid_arg ("Schedule.Fold_mma: " ^ msg) in
+  let fail msg = refuse ("Schedule.Fold_mma: " ^ msg) in
   let stmts = non_trivial [ opt.llc ] in
   let site =
     match
@@ -4637,7 +4646,7 @@ let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized 
       try
         apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~combine_indices opt
       with Split_reduce_inner_cell syms ->
-        invalid_arg
+        refuse
           ("Schedule.Split_reduce: the accumulation cell mentions "
           ^ String.concat ~sep:", " (List.map syms ~f:Indexing.symbol_ident)
           ^ ", which is not bound by a loop enclosing the reduction loop in this statement — Swap \
@@ -4668,7 +4677,7 @@ let split_reduce_hoist (opt : Low_level.optimized) (op : optop) : Indexing.symbo
       with
       | (_ : Low_level.optimized) -> []
       | exception Split_reduce_inner_cell syms -> syms
-      | exception Invalid_argument _ -> [])
+      | exception Schedule_outcome.Cause_at _ -> [])
   | _ -> []
 
 (* gh-ocannl-487 (Codex P2 on PR #303), widened to depth 1 by gh-ocannl-567: "[Tile_mma] is a
@@ -4741,11 +4750,29 @@ let elide_staged_barriers (opt : Low_level.optimized) : Low_level.optimized =
     in
     { opt with llc = seq opt.llc }
 
-let apply ?(static_indices = []) (sched : schedule) (opt : Low_level.optimized) :
+(* Fault-injection seam (gh-ocannl-1323): called with each op just before {!apply_typed} applies it.
+   A genuine transform bug has no stable trigger, so the test that pins "an untyped exception inside
+   [apply] is fatal" makes one here. One value per domain, as [Autotune.Seam]; the default is a
+   no-op and no configuration selects it. *)
+let transform_fault : (optop -> unit) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () _op -> ())
+
+let with_transform_fault fault body =
+  let previous = Stdlib.Domain.DLS.get transform_fault in
+  Stdlib.Domain.DLS.set transform_fault fault;
+  Exn.protect ~f:body ~finally:(fun () -> Stdlib.Domain.DLS.set transform_fault previous)
+
+(* The candidate-facing application: an op precondition refusal arrives typed ({!refuse}), every
+   other exception as raised. *)
+let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optimized) :
     Low_level.optimized =
   if List.is_empty sched then opt
   else
-    let opt = List.fold sched ~init:opt ~f:apply_opt_op in
+    let opt =
+      List.fold sched ~init:opt ~f:(fun opt op ->
+          Stdlib.Domain.DLS.get transform_fault op;
+          apply_opt_op opt op)
+    in
     let opt = elide_staged_barriers opt in
     let llc = opt.Low_level.llc in
     (* Transforms fold their own guards (schedule-ir-optops §2): the pipeline's simplify already
@@ -4761,14 +4788,15 @@ let apply ?(static_indices = []) (sched : schedule) (opt : Low_level.optimized) 
     in
     { opt with llc }
 
-let apply_classified ?static_indices sched opt =
-  match apply ?static_indices sched opt with
+let apply ?static_indices sched opt =
+  match apply_typed ?static_indices sched opt with
   | result -> result
-  | exception Invalid_argument detail ->
-      raise
-        (Schedule_outcome.Cause_at
-           ( Schedule_outcome.Transform,
-             Schedule_outcome.Illegal_schedule { check = "Schedule.apply"; detail } ))
+  | exception Schedule_outcome.Cause_at (_, cause) -> Schedule_outcome.raise_cause cause
+
+(* gh-ocannl-1323: no longer a blanket conversion of [Invalid_argument]. Only the refusals the ops
+   raise typed are declines; anything else escaping a transform or the finalization passes
+   ([elide_staged_barriers], [simplify_llc], CSE) is a transform bug and stays untyped. *)
+let apply_classified = apply_typed
 
 (** {2 The op-legality oracle}
 
@@ -5149,7 +5177,8 @@ let stage_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
     }
   in
   match apply_opt_op hermetic op with
-  | exception Invalid_argument msg -> Op_illegal msg
+  | exception Schedule_outcome.Cause_at (_, cause) ->
+      Op_illegal (Schedule_outcome.detail_of_cause cause)
   | staged -> (
       if hoisted then
         Op_unknown "hoisted packing's link-time host-side program is not modeled by the queries"
@@ -5263,7 +5292,7 @@ let staging_scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict 
           }
     in
     match apply_opt_op probe op with
-    | exception (Invalid_argument _ | Failure _) -> None
+    | exception Schedule_outcome.Cause_at _ -> None
     | applied ->
         Option.map (pipeline_violation applied) ~f:(fun v ->
             Op_illegal (pipeline_violation_message v))
@@ -5316,7 +5345,8 @@ let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
          original addresses, so only applicability is in question -- the recognition is a pure
          function of the code, probed like [Split_reduce] below. *)
       match apply_opt_op opt op with
-      | exception Invalid_argument msg -> Op_illegal msg
+      | exception Schedule_outcome.Cause_at (_, cause) ->
+          Op_illegal (Schedule_outcome.detail_of_cause cause)
       | (_ : Low_level.optimized) -> Op_legal)
   | Swap { outer; inner } -> (
       (* Interchange reorders iterations; the optop contract licenses it for the
@@ -5351,7 +5381,8 @@ let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
           ~zero_fringe:(Set.mem opt.Low_level.zero_fringe)
           ~i ~j ~k ~lane ~simd_width ~tile opt.llc
       with
-      | exception Invalid_argument msg -> Op_illegal msg
+      | exception Schedule_outcome.Cause_at (_, cause) ->
+          Op_illegal (Schedule_outcome.detail_of_cause cause)
       | (_ : Low_level.t * pad_mask list) ->
           (* Structure proven; the legality dimension is the affine query: the [Tile_mma] block
              distributes the [i x j] tile across the fresh hardware lane loop (whatever fragment
@@ -5377,7 +5408,8 @@ let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
         }
       in
       match apply_opt_op hermetic op with
-      | exception Invalid_argument msg -> Op_illegal msg
+      | exception Schedule_outcome.Cause_at (_, cause) ->
+          Op_illegal (Schedule_outcome.detail_of_cause cause)
       | (_ : Low_level.optimized) -> Op_legal)
   | Privatize _ | Expand_zero _ | Fuse_epilogue _ | Fold_mma _ ->
       Op_unknown "not modeled by the oracle (the op's own preconditions apply)"
@@ -5389,7 +5421,8 @@ let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
 
 (** [schedule_legality opt sched]: per-op verdicts, each against the code with the preceding ops
     applied (on a hermetic copy — checking never mutates [opt]). Stops after a proven-illegal op or
-    a failing application; an op that fails to apply reports [Op_illegal] with the exception. *)
+    a failing application; an op whose application is refused reports [Op_illegal] with the refusal
+    (any other exception propagates: it is a transform bug, gh-ocannl-1323). *)
 let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * op_verdict) list =
   let opt =
     {
@@ -5407,7 +5440,10 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
         | _ -> (
             match apply_opt_op opt op with
             | opt' -> go opt' ((op, v) :: acc) tl
-            | exception exn ->
+            | exception Schedule_outcome.Cause_at (_, cause) ->
+                (* Rendered as the exception {!apply} raises for it, so the message reads as before
+                   gh-ocannl-1323; an untyped failure is a transform bug and propagates. *)
+                let exn = Schedule_outcome.exception_of_cause cause in
                 List.rev ((op, Op_illegal ("apply failed: " ^ Exn.to_string exn)) :: acc)))
   in
   go opt [] sched
@@ -6860,7 +6896,7 @@ let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.
     }
   in
   match apply_fold_mma ~query:site.fs_query ~lane ~block ~width hermetic with
-  | exception Invalid_argument _ -> None
+  | exception Schedule_outcome.Cause_at _ -> None
   | folded ->
       Option.some_if
         (Option.is_none

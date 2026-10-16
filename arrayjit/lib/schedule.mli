@@ -551,7 +551,7 @@ val split_reduce_hoist : Low_level.optimized -> optop -> Indexing.symbol list
 
 val fuse_epilogue_witness : target:Tn.t -> Low_level.optimized -> string option
 (** Why {!constructor-Fuse_epilogue} on [target] would fail on this code — the recognizer's own
-    rejection message, probed hermetically like {!split_reduce_hoist} — or [None] when an eligible
+    refusal message, probed hermetically like {!split_reduce_hoist} — or [None] when an eligible
     elementwise tail immediately follows the reduction over [target] and the fusion applies. The
     autotune family tree judges its fused-flavor branch with it (the check runs on the pre-schedule
     code, where the plain accumulation-nest site applies), so a site without a fusable tail carries
@@ -578,7 +578,8 @@ val apply :
     cross-statement hoisting. [Stage] registers its tile in the traced store (and [workgroup_shared]
     when shared); the optimization context and merge node are never changed. Raises
     [Invalid_argument] when an op references a loop that does not exist at its point in the
-    schedule, or violates an op precondition (see {!optop}). An empty schedule is the identity.
+    schedule, or violates an op precondition (see {!optop}) -- the rendering of the typed refusal
+    {!apply_classified} passes through. An empty schedule is the identity.
 
     The barrier elision (gh-ocannl-487, widened to every staged anchor by gh-ocannl-567) is a
     synchronization-only rewrite — bitwise identical output, on every backend path. It rests on the
@@ -595,8 +596,20 @@ val apply_classified :
   schedule ->
   Low_level.optimized ->
   Low_level.optimized
-(** Internal candidate-facing variant of {!apply}. An [Invalid_argument] raised inside schedule
-    application is transported as a typed {!Schedule_outcome.Illegal_schedule}. *)
+(** Internal candidate-facing variant of {!apply}. An op precondition refusal (an op referencing a
+    loop absent at its point in the schedule, or violating a precondition of {!optop}) raises
+    {!Schedule_outcome.Cause_at} [(Transform, Illegal_schedule { check = "Schedule.apply"; _ })],
+    which a search counts as a declined candidate. Every other exception escaping the transforms or
+    the finalization passes -- a bare [Invalid_argument], an array bound, a [List.zip_exn] -- is a
+    transform bug and propagates untyped, hence fatal under [strict_failure_classification]
+    (gh-ocannl-1323). *)
+
+val with_transform_fault : (optop -> unit) -> (unit -> 'a) -> 'a
+(** Test seam (gh-ocannl-1323): [with_transform_fault fault body] runs [body] with [fault] called on
+    each op just before {!apply} / {!apply_classified} applies it, so a test can make a transform
+    raise what a transform bug raises — a genuine bug has no stable trigger. The calling domain's
+    previous fault is restored on return or exception; the default is a no-op and no configuration
+    selects it. *)
 
 type op_verdict = Op_legal | Op_illegal of string | Op_unknown of string
 [@@deriving sexp_of, equal]
@@ -671,8 +684,9 @@ val op_legality : Low_level.optimized -> optop -> op_verdict
 
 val schedule_legality : Low_level.optimized -> schedule -> (optop * op_verdict) list
 (** Per-op verdicts, each against the code with the preceding ops applied (on a hermetic copy —
-    checking never mutates the argument). Stops after a proven-illegal op or a failing application;
-    an op that fails to apply reports [Op_illegal] with the exception. *)
+    checking never mutates the argument). Stops after a proven-illegal op or a refused application;
+    an op whose application is refused reports [Op_illegal] with the refusal. Any other exception
+    propagates: it is a transform bug, not a verdict (gh-ocannl-1323). *)
 
 val aligned_chains :
   ?max_chain:int ->

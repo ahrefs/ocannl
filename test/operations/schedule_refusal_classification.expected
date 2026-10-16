@@ -1,0 +1,10 @@
+the Fuse_epilogue precondition refusal is raised typed, as Illegal_schedule at Transform: true
+strict=true: the refusal reads as a classified decline carrying the refusal: true
+strict=false: the refusal reads as a classified decline carrying the refusal: true
+the public Schedule.apply renders the same refusal as Invalid_argument: true
+the benign schedule applies without the injection: true
+an injected Invalid_argument escapes apply_classified untyped: true
+strict: an untyped transform exception is fatal, its own exception and no cause: true
+permissive: the same exception is contained as Unclassified, never as Illegal_schedule: true
+the public Schedule.apply still raises the injected Invalid_argument itself: true
+the fault seam is scoped: it is gone once with_transform_fault returns: true
