@@ -1656,6 +1656,19 @@ val seeded_params :
     launch has 128 blocks, else the one putting the most threads on the output — among the
     geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
 
+val seeded_transform :
+  ?min_reduction:int ->
+  ?on_choice:(seeded_choice -> unit) ->
+  Context.t ->
+  Ir.Indexing.unit_bindings ->
+  (Ir.Low_level.optimized -> Ir.Low_level.optimized list) option
+(** The [lowered_transform] {!seeded_default} compiles through, for a caller that drives
+    {!Context.compile_outcome} itself (a benchmark keeping its own failure classification): [None]
+    where {!seeded_default} would compile the plain default (another backend, automatic scheduling
+    inactive, fission off, a threshold of 0). The transform calls [on_choice] with what it seeded,
+    and falls back to the default segments itself when the seeded pipeline does not apply; a failure
+    in backend compilation is the caller's, as {!seeded_default}'s fallback is not part of it. *)
+
 val seeded_default :
   ?name:string ->
   ?min_reduction:int ->
