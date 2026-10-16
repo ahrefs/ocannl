@@ -110,9 +110,10 @@
    linux-libc-dev-arm64-cross libgcc-<n>-dev-arm64-cross] then [dpkg-deb -x] each into one prefix.
    Point [AARCH64_CROSS_GCC] at the resulting [aarch64-linux-gnu-gcc-<n>], or leave it unset and the
    check looks for [aarch64-linux-gnu-gcc] on [PATH]; only the unset form skips an absent compiler,
-   a named one that does not compile fails. CI stages gcc 15 this way with
-   [tools/ci-aarch64-cross.sh], because the gcc 13 and 14 crosses ubuntu-24.04 installs fail four
-   claims gcc 15 passes (gh-ocannl-1120). *)
+   a named one that does not compile fails. CI stages gcc 13 this way with
+   [tools/ci-aarch64-cross.sh] (gh-ocannl-1120), the oldest of the three majors the claims hold on:
+   gcc 13 and 14 failed five that gcc 15 passed until gh-ocannl-1158 fixed the emission (the last
+   item of the "no known defects" note below). *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -2311,6 +2312,20 @@ let () =
          in the kernel said that the width was meant. A kernel with a vector wider than 32 bytes now
          carries [OCANNL_WIDE_VECTOR_KERNEL] ([min_vector_width(512)] where the compiler has it),
          and every clang row reads 0.
+
+         The aarch64 columns under gcc 13 and 14 (gh-ocannl-1158) arrived red on five claims gcc 15
+         passes, from two constructs gcc 15 lowers well and its predecessors do not. The bridges:
+         [__builtin_convertvector] at NEON's 4-lane width -- the bf16 zero-extension and the fp16
+         widening and narrowing -- went lane by lane through general-purpose registers or a scalar
+         [fcvt] each, so the bf16 reductions scalarized, the (fp16, f32) tile did more scalar than
+         vector work, and the bf16 and fp16 tiles and their column tails spilled. The X4 bridges now
+         call [<arm_neon.h>]'s builtins as gcc spells them there, one [shll], [fcvtl] or [fcvtn]
+         each. And the schedule: gcc 13's pre-RA scheduler hoisted all four rows' A elements to the
+         top of the f32 4x6 tile's k step, 34 of 32 registers, and interleaved the bf16 C-tile's
+         narrowing stores until accumulators spilled. A scheduling fence ([OCANNL_TILE_FENCE], gcc
+         on aarch64 only) now separates the k step's rows and the narrowing stores. gcc 15's 16-byte
+         rows read exactly as before, and over the 72 16-byte tile rows the three majors now read
+         the same totals: 80 scalar FP instructions, no stack reference.
 
          A defect found here again is a failure of this claim, which is the point: fix it, or
          reinstate the class list and its reproduction claim with the defect named -- asked of the

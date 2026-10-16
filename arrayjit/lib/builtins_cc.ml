@@ -907,7 +907,19 @@ uint16_t single_to_bfloat16(float f)
        path's [(float)] cast of a [_Float16] on an F16C target, [vcvtph2ps] (quieting a signalling
        NaN exactly as the scalar path does). Without [_Float16], the scalar path is the software
        codec, and so is the fallback. A partial vector (LANES below the width) is zeroed and only
-       LANES elements are read, as in the portable arms. *)
+       LANES elements are read, as in the portable arms.
+
+       The X4 macros have aarch64 arms too (gh-ocannl-1158), because aarch64 gcc 13 and 14 lower
+       both portable spellings at NEON's 4-lane width one lane at a time, through general-purpose
+       registers ([fmov], [ins], [ubfx]) or a scalar [fcvt] per lane: the bf16 and fp16 register
+       tiles' k-loops took 109 to 139 instructions with 3 to 9 stack references where gcc 15 takes
+       40 to 45 and none, and the bf16 reductions over 4 times as many as gcc 15's 13. The builtins
+       are [<arm_neon.h>]'s [vshll_n_u16(x, 16)] and [vcvt_f32_f16] as gcc spells them (the same
+       names in gcc 13, 14 and 15), on gcc's built-in NEON vector types, and each is one [shll] or
+       [fcvtl]. clang spells its NEON intrinsics differently, fails [__has_builtin], and keeps the
+       portable arm, which it lowers packed. Parity: [shll] is the zero-extend and shift; [fcvtl] is
+       the scalar path's [fcvt] per lane, an exact widening that quiets a signalling NaN the same
+       way. *)
     ( "OCANNL_VEC_WIDEN_BFLOAT16_X4",
       {|
 #if !OCANNL_FORCE_PORTABLE_BRIDGES && defined(__SSE4_1__) && __has_builtin(__builtin_ia32_pmovzxwd128)
@@ -917,6 +929,12 @@ uint16_t single_to_bfloat16(float f)
     long long ocannl_nq__ = 0; __builtin_memcpy(&ocannl_nq__, (src), (LANES) * 2); \
     (dst) = (__typeof__(dst))((U32V)__builtin_ia32_pmovzxwd128( \
       (ocannl_w8hi__)(ocannl_w2di__){ocannl_nq__, 0}) << 16); \
+  } while (0)
+#elif defined(__aarch64__) && __has_builtin(__builtin_aarch64_ushll_nv4hi_uus)
+  #define OCANNL_VEC_WIDEN_BFLOAT16_X4(U16V, U32V, LANES, dst, src) do { \
+    __Uint16x4_t ocannl_nb__ = {0}; __builtin_memcpy(&ocannl_nb__, (src), (LANES) * 2); \
+    __Uint32x4_t ocannl_nw__ = __builtin_aarch64_ushll_nv4hi_uus(ocannl_nb__, 16); \
+    __builtin_memcpy(&(dst), &ocannl_nw__, sizeof(dst)); \
   } while (0)
 #else
   #define OCANNL_VEC_WIDEN_BFLOAT16_X4 OCANNL_VEC_WIDEN_BFLOAT16
@@ -959,6 +977,12 @@ uint16_t single_to_bfloat16(float f)
     typedef long long ocannl_w2di__ __attribute__((vector_size(16))); \
     long long ocannl_nq__ = 0; __builtin_memcpy(&ocannl_nq__, (src), (LANES) * 2); \
     (dst) = (FV)__builtin_ia32_vcvtph2ps((ocannl_w8hi__)(ocannl_w2di__){ocannl_nq__, 0}); \
+  } while (0)
+#elif HAS_NATIVE_FLOAT16 && defined(__aarch64__) && \
+    __has_builtin(__builtin_aarch64_float_extend_lo_v4sf)
+  #define OCANNL_VEC_WIDEN_HALF_X4(FV, HV, LANES, dst, src) do { \
+    __Float16x4_t ocannl_nh__ = {0}; __builtin_memcpy(&ocannl_nh__, (src), (LANES) * 2); \
+    (dst) = (FV)__builtin_aarch64_float_extend_lo_v4sf(ocannl_nh__); \
   } while (0)
 #else
   #define OCANNL_VEC_WIDEN_HALF_X4 OCANNL_VEC_WIDEN_HALF
@@ -1016,7 +1040,11 @@ uint16_t single_to_bfloat16(float f)
        scalar cast, matches an integer round-to-nearest-even reference bit for bit (all 2^32, F16C
        host, gh-ocannl-1101); [test/operations/narrow_storage_compute.ml] pins the arm its host
        takes against the serial twin at every fp16 rounding boundary. Only LANES elements are
-       written, as in the portable arm. *)
+       written, as in the portable arm.
+
+       The X4 macro's aarch64 arm (gh-ocannl-1158) is [<arm_neon.h>]'s [vcvt_f16_f32] as gcc spells
+       it, one [fcvtn] where gcc 13 and 14 convert the portable spelling lane by lane: it rounds as
+       FPCR says, as the scalar path's [fcvt] does, with the same NaN rule. *)
     ( "OCANNL_VEC_NARROW_HALF_X4",
       {|
 #if !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtps2ph)
@@ -1024,6 +1052,12 @@ uint16_t single_to_bfloat16(float f)
     typedef float ocannl_n4sf__ __attribute__((vector_size(16))); \
     typedef short ocannl_n8hi__ __attribute__((vector_size(16))); \
     ocannl_n8hi__ ocannl_nh__ = __builtin_ia32_vcvtps2ph((ocannl_n4sf__)(src), 4); \
+    __builtin_memcpy((dst), &ocannl_nh__, (LANES) * 2); \
+  } while (0)
+#elif HAS_NATIVE_FLOAT16 && defined(__aarch64__) && \
+    __has_builtin(__builtin_aarch64_float_truncate_lo_v4hf)
+  #define OCANNL_VEC_NARROW_HALF_X4(HV, LANES, dst, src) do { \
+    __Float16x4_t ocannl_nh__ = __builtin_aarch64_float_truncate_lo_v4hf((__Float32x4_t)(src)); \
     __builtin_memcpy((dst), &ocannl_nh__, (LANES) * 2); \
   } while (0)
 #else
@@ -1071,6 +1105,10 @@ uint16_t single_to_bfloat16(float f)
        its own [widened] conversion, so after preprocessing the tile is the per-row rendering, byte
        for byte.
 
+       The packed group widens through [OCANNL_VEC_WIDEN_BFLOAT16_X4], so it is the one [shll] gcc
+       13 and 14 emit only for that macro's aarch64 arm (gh-ocannl-1158): from the portable
+       [__builtin_convertvector] they extend the four lanes one at a time.
+
        Parity: the zero-extend and shift is [bfloat16_to_single]'s, lane for lane, as in
        [OCANNL_VEC_WIDEN_BFLOAT16]. *)
     ( "OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4",
@@ -1079,8 +1117,7 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4(U16V, U32V, FV, dst, a0, a1, a2, a3) \
     FV dst; do { \
       U16V ocannl_rh__ = {(a0), (a1), (a2), (a3)}; \
-      U32V ocannl_rw__ = __builtin_convertvector(ocannl_rh__, U32V) << 16; \
-      __builtin_memcpy(&(dst), &ocannl_rw__, sizeof(dst)); \
+      OCANNL_VEC_WIDEN_BFLOAT16_X4(U16V, U32V, 4, dst, &ocannl_rh__); \
     } while (0)
   #define OCANNL_VEC_WIDENED_ROW_X4(packed, lane, widened) ((packed)[lane])
 #else
@@ -1088,7 +1125,28 @@ uint16_t single_to_bfloat16(float f)
   #define OCANNL_VEC_WIDENED_ROW_X4(packed, lane, widened) (widened)
 #endif
 |},
-      [ "OCANNL_HAS_CONVERTVECTOR" ] );
+      [ "OCANNL_HAS_CONVERTVECTOR"; "OCANNL_VEC_WIDEN_BFLOAT16_X4" ] );
+    (* A scheduling fence inside a register tile ([C_syntax.try_register_tile], gh-ocannl-1158): an
+       empty volatile asm, which gcc's schedulers do not move instructions across. aarch64 gcc 13's
+       pre-RA scheduler hoists for latency until NEON's 32 registers run out. In the k step it loads
+       all four rows' A elements at the top, and a 4x6 tile's 24 accumulators, 6 B vectors and 4 A
+       values are 34 registers: 6 stack references per k step, where gcc 14 and 15 load each row's A
+       where its FMAs use it and spill nothing. After the k-loop it interleaves the C-tile's
+       narrowing stores, whose bf16 rounding holds temporaries of its own, until accumulators spill.
+       The tile fences each row of the k step after the first, and each narrowing store after the
+       first, which is what gcc 14 and 15 schedule anyway: with the fences, every register-tile
+       k-loop the census reads keeps their instruction count and stays stack-free
+       ([-fno-schedule-insns] gives gcc 13 the same effect). Only gcc on aarch64 gets the fence: its
+       x86 rows pass the census without one, and clang's scheduler is another program. *)
+    ( "OCANNL_TILE_FENCE",
+      {|
+#if defined(__aarch64__) && defined(__GNUC__) && !defined(__clang__)
+  #define OCANNL_TILE_FENCE() __asm__ __volatile__("")
+#else
+  #define OCANNL_TILE_FENCE() do { } while (0)
+#endif
+|},
+      [] );
     ( "half_to_single",
       {|
 /* Half (Float16) to Float conversion (C function) */

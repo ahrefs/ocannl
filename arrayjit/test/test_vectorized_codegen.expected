@@ -326,6 +326,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_1__ = tmma_a__[(tmma_i__ + 1) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
@@ -342,6 +343,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_1__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_1_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_2__ = tmma_a__[(tmma_i__ + 2) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_2__ = (ocannl_vec8f){tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
@@ -358,6 +360,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_2_1__[ocannl_l__] = fmaf(tmma_a_2__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_2_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_3__ = tmma_a__[(tmma_i__ + 3) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_3__ = (ocannl_vec8f){tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
@@ -435,6 +438,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_1__ = tmma_a__[(tmma_i__ + 1) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
@@ -451,6 +455,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_1__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_1_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_2__ = tmma_a__[(tmma_i__ + 2) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_2__ = (ocannl_vec8f){tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
@@ -467,6 +472,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_2_1__[ocannl_l__] = fmaf(tmma_a_2__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_2_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_3__ = tmma_a__[(tmma_i__ + 3) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_3__ = (ocannl_vec8f){tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
@@ -541,6 +547,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_1__ = tmma_a__[(4 + 1) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
@@ -596,6 +603,7 @@
               #else
               for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
               #endif
+              OCANNL_TILE_FENCE();
               float tmma_as_1__ = tmma_a__[(4 + 1) * 5 + tmma_l__];
               ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
               #if OCANNL_HAS_ELEMENTWISE_FMA
