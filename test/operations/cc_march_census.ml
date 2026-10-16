@@ -110,9 +110,10 @@
    linux-libc-dev-arm64-cross libgcc-<n>-dev-arm64-cross] then [dpkg-deb -x] each into one prefix.
    Point [AARCH64_CROSS_GCC] at the resulting [aarch64-linux-gnu-gcc-<n>], or leave it unset and the
    check looks for [aarch64-linux-gnu-gcc] on [PATH]; only the unset form skips an absent compiler,
-   a named one that does not compile fails. CI stages gcc 15 this way with
-   [tools/ci-aarch64-cross.sh], because the gcc 13 and 14 crosses ubuntu-24.04 installs fail four
-   claims gcc 15 passes (gh-ocannl-1120). *)
+   a named one that does not compile fails. CI stages gcc 13 this way with
+   [tools/ci-aarch64-cross.sh] (gh-ocannl-1120), the oldest of the three majors the claims hold on:
+   gcc 13 and 14 failed five that gcc 15 passed until gh-ocannl-1158 fixed the emission (the last
+   item of the "no known defects" note below). *)
 
 open Base
 open Ocannl.Operation.DSL_modules

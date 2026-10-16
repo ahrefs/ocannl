@@ -1162,10 +1162,13 @@ files.
   toolchain and nothing else; the ARM columns need a cross gcc, pointed at by `AARCH64_CROSS_GCC`
   and reported through `Verdict.skipped` when absent, so the golden does not depend on the box
   having one. A NAMED `AARCH64_CROSS_GCC` that does not compile fails instead of skipping: CI's
-  ubuntu leg names the gcc 15 cross `tools/ci-aarch64-cross.sh` stages from Ubuntu 26.04's archive
-  (gh-ocannl-1120), because the gcc 13 and 14 crosses ubuntu-24.04 can install fail four claims
-  (the w16 register tile spills at `-O2` too, the fp16 widening goes lane by lane) that gcc 15
-  passes. Two shapes are load-bearing and were each arrived at from their failure. The census
+  ubuntu leg names the gcc 13 cross `tools/ci-aarch64-cross.sh` stages from Ubuntu 24.04's archive
+  (gh-ocannl-1120; `MAJOR` 14 or 15 stages the others for a local rerun). gcc 13 and 14 failed
+  five claims gcc 15 passed until gh-ocannl-1158: aarch64 gcc before 15 lowers
+  `__builtin_convertvector` at 4 lanes one lane at a time (hence the X4 bridges' NEON-builtin
+  arms), and gcc 13's pre-RA scheduler hoists loads and interleaves stores until NEON's 32
+  registers spill (hence `OCANNL_TILE_FENCE`; `-fno-schedule-insns` is the quick test for that
+  cause). Two shapes are load-bearing and were each arrived at from their failure. The census
   ordinarily picks the SMALLEST-span loop carrying the construct, identified through the `.loc`
   line numbers `-g` leaves in the assembly rather than guessed from the instruction mix — an outer
   loop dilutes every ratio, and a surviving serial tail is a smaller loop mentioning the same array,

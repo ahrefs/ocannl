@@ -5,26 +5,28 @@
 # Usage:
 #   tools/ci-aarch64-cross.sh PREFIX [MAJOR]
 #
-# MAJOR is 15 (the default, what CI stages), or 13 or 14: the crosses Ubuntu
-# 24.04 (noble) ships, staged the same way, for reproducing the census's known
-# gcc 13/14 aarch64 defect classes (gh-ocannl-1158) on any Ubuntu/Debian host.
+# MAJOR is 13 (the default, what CI stages), 14 or 15. 13 and 14 are the
+# crosses Ubuntu 24.04 (noble) ships, 15 the one from Ubuntu 26.04 (resolute);
+# all three are staged the same way, on any Ubuntu/Debian host.
 # CI's ubuntu leg exports the printed path as AARCH64_CROSS_GCC. Everything
 # else this prints goes to stderr, so `$(tools/ci-aarch64-cross.sh ...)` is the
 # path and nothing but the path.
 #
-# Why gcc 15, and why from Ubuntu 26.04 (resolute) rather than the runner's
-# own release: the census's claims were written against the gcc 15 cross the
-# fleet boxes carry, and the aarch64 cross gccs ubuntu-24.04 can install fail
-# four of them -- gcc 13 (`gcc-aarch64-linux-gnu`) and gcc 14 both spill the
-# 4x6 register tile at w16 and lower the fp16 widening bridge lane by lane,
-# where gcc 15 does neither. Those are facts about older compilers, not about
-# this change; see the issue for the follow-up. The packages are resolved from
-# an isolated scratch apt index over the Ubuntu archive (signed with the
-# archive key every Ubuntu host already trusts), so a superseded version never
-# 404s, and the host's own apt configuration is neither read nor touched.
-# resolute's build needs glibc 2.38 and the isl/mpc/mpfr sonames 24.04 ships;
-# should a rebuild ever need more, the smoke compile below fails the step
-# loudly instead of the census skipping its columns quietly.
+# Why gcc 13: it is the aarch64 cross ubuntu-24.04 installs as
+# `gcc-aarch64-linux-gnu`, the major of the runner's own x86 gcc and of
+# Ubuntu 24.04 LTS's native aarch64 gcc -- and the one the emission had to be
+# fixed for. Until gh-ocannl-1158, gcc 13 and 14 failed
+# census claims gcc 15 passes (the w16 register tiles spilled, the bf16 and
+# fp16 bridges went lane by lane), so CI staged gcc 15 (gh-ocannl-1120); the
+# emission now passes on all three, and CI holds the oldest to it; gcc 15 is
+# what a fleet box answers with when the census finds that cross on its PATH.
+# The packages are resolved from an isolated scratch apt index over the Ubuntu
+# archive (signed with the archive key every Ubuntu host already trusts), so a
+# superseded version never 404s, and the host's own apt configuration is
+# neither read nor touched. resolute's gcc 15 needs glibc 2.38 and the
+# isl/mpc/mpfr sonames 24.04 ships; should a rebuild ever need more, the smoke
+# compile below fails the step loudly instead of the census skipping its
+# columns quietly.
 #
 # Only `cc1` runs: the census compiles to assembly (`-S`), so no binutils are
 # staged, and the arm64 libc headers come from the same index.
@@ -40,7 +42,7 @@ case $prefix in
   *) die "PREFIX must be absolute: $prefix" ;;
 esac
 
-major=${2:-15}
+major=${2:-13}
 case $major in
   15) suite=resolute ;;
   13 | 14) suite=noble ;;
