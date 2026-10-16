@@ -40,6 +40,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   cc_backend_compiler_command
   cc_backend_fast_math
   cc_backend_fp_contract
+  cc_backend_optimization_level
   cc_backend_simd_flags
   cc_fp16_arithmetic
   cc_grid_private_bytes_cap

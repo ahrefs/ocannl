@@ -7,6 +7,12 @@ val compiler_command : unit -> string
     toolchain that will build them for real -- a census run against a different compiler would
     describe guarded arms nothing here selects. *)
 
+val kernel_compiler_flags : unit -> string
+(** The flags a kernel compile passes after {!compiler_command}: optimization level, arch and SIMD
+    flags, fast math, contraction and the parallel-grid runtime, all resolved. Exposed for
+    [test/operations/bridge_arm_coverage] (gh-ocannl-1145), which preprocesses retained kernel
+    sources under exactly these flags to read which storage-bridge arm each one compiled into. *)
+
 val compiler_executable_identity : string -> string
 (** Resolves every executable token in a compiler command and fingerprints its path, size and
     modification time. Exposed for the generated-kernel census's persistent listing identity: an
@@ -22,6 +28,11 @@ val pool_parallel_grid : unit -> bool
 val vector_bytes_setting : unit -> int
 (** The vector register width in bytes for the explicit SIMD renderings (config [cc_vector_bytes];
     auto-probed when unset). Exposed for [Schedulers.cpu_mma_limits]'s [simd_vector_bytes]. *)
+
+val auto_vector_bytes : unit -> int
+(** What {!vector_bytes_setting} answers when [cc_vector_bytes] is unset: the widest vector the
+    configured target holds (64 with AVX-512 F/BW/VL, 32 with AVX2, else 16). Exposed for
+    [test/operations/bridge_arm_coverage], which forces every width up to this one. *)
 
 val effective_pool_width : unit -> int
 (** The worker-pool width after the pool policy: the restricted class's logical CPU count when the

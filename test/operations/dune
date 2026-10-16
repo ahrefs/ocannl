@@ -4275,6 +4275,42 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- re-executes narrow_storage_compute and tile_mma_geometry with OCANNL_BACKEND=cc
+ ; forced: the storage bridges whose arms it covers are the cc backend's C emission (gh-ocannl-1145).
+ (name bridge_arm_coverage)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  narrow_storage_compute.exe
+  narrow_storage_compute.expected
+  tile_mma_geometry.exe
+  tile_mma_geometry.expected
+  ; The settings this test's own reading consults: the compiler command, the kernel flags it
+  ; preprocesses under (Cc_backend.kernel_compiler_flags) and the target width
+  ; (Cc_backend.auto_vector_bytes); and the fp16 arithmetic probe, which decides the children's
+  ; compute precision and so which bridges they call.
+  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND)
+  (env_var OCANNL_CC_BACKEND_OPTIMIZATION_LEVEL)
+  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
+  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
+  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_PARALLEL_GRID)
+  (env_var OCANNL_CC_FP16_ARITHMETIC)
+  ; What the two children declare, less the backend and the vector width (forced) and the build-files
+  ; prefix (removed).
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
+ (modules bridge_arm_coverage)
+ (libraries base ocannl stdio unix arrayjit.verdict))
+
+(test
  (name cpu_simd_reduction)
  (package neural_nets_lib)
  (deps

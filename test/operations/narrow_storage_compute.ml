@@ -159,8 +159,9 @@ let () =
      twin must return each code's exact value, which is read off the format here rather than asked
      of either converter. A NaN code is fed as a NaN (the host init goes through the scalar
      narrowing, which quiets it), and must widen to a NaN. [x *. 1] is exact on every input, so the
-     multiplication hides nothing a copy would show. Which arm runs is the host's: the x86 arm at
-     the native width here, the portable one elsewhere. *)
+     multiplication hides nothing a copy would show. Which arm runs here is the host's: the x86 arm
+     at the native width, the portable one elsewhere. [bridge_arm_coverage] re-runs this test at
+     every width and with the fallback arms forced (gh-ocannl-1145). *)
   Ir.Numerics.set_policy
     {
       base with
