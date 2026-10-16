@@ -20,6 +20,7 @@ import bench_venv
 import box_gate
 import fixture_digest
 import cell_group
+import gh1161_sites
 import orchestrate
 import strict_json
 from runners import bench_common
@@ -3812,6 +3813,104 @@ class FixtureDigestTest(unittest.TestCase):
         # fixtures/<spec name>.safetensors, and every spec's `name` is its file stem.
         for spec in (HERE / "workloads").glob("*.json"):
             self.assertEqual(json.loads(spec.read_text())["name"], spec.stem, spec.name)
+
+
+class Gh1161SitesTest(unittest.TestCase):
+    """gh-ocannl-1161: the cifar_resnet site cells, read off a sweep's cell logs.
+
+    The logs are built here in the producers' formats: `Bench_harness`'s kernel table on stderr
+    (`bench: kernel i/n <ms> ms ... w: <nodes>`, a DECLINED row's detail running over lines) and the
+    runner's result line, under the file names `orchestrate.cell_log_name` gives each label --
+    a tuned cell's search pass included, which logs beside its replay under the same cell.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def log(self, label, kernels, variant="default", p50=10.0, workload="cifar_resnet_b1"):
+        result = {"framework": "ocannl", "backend": "cuda", "variant": variant, "profile": None,
+                  "workload": workload, "step_ms": {"p50": p50, "p10": p50, "p90": p50}}
+        lines = []
+        for row in kernels:
+            if row[1] is None:
+                lines += [f"bench: kernel {row[0]} grid=[1;1;1] block=[32;1;1] DECLINED (codegen",
+                          "failed: duplicate parameter) w: n1"]
+            else:
+                lines.append(f"bench: kernel {row[0]} {row[1]:.4f} ms grid=[1;1;1] block=[1;1;1] "
+                             f"mma:not-requested vol:0 w: {' '.join(row[2])}")
+        lines.append(json.dumps(result, separators=(",", ":")))
+        (self.dir / orchestrate.cell_log_name(label)).write_text("\n".join(lines) + "\n")
+
+    def run_sites(self, *args):
+        with contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            code = gh1161_sites.main([str(self.dir), *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def rows(self, out):
+        cells = [[c.strip() for c in line.strip().strip("|").split("|")]
+                 for line in out.splitlines()[2:]]
+        return {row[0]: row for row in cells}
+
+    def test_a_tuned_cell_reports_its_replay_not_its_search_pass(self):
+        label = "cifar_resnet_b1 ocannl/cuda/tuned"
+        replay = [("0/2", 1.0, ["kernel_s2sc.grad"]), ("1/2", 2.0, ["relu_s1out"])]
+        search = [("0/2", 9.0, ["kernel_s2sc.grad"]), ("1/2", 9.0, ["relu_s1out"])]
+        self.log(label, replay, variant="tuned", p50=3.0)
+        self.log(f"{label} (search pass)", search, variant="tuned", p50=30.0)
+
+        code, out, _ = self.run_sites("--per-site")
+
+        self.assertEqual(code, 0)
+        rows = self.rows(out)
+        self.assertEqual(list(rows), ["cifar_resnet_b1/cuda/tuned/exact"])
+        row = rows["cifar_resnet_b1/cuda/tuned/exact"]
+        self.assertEqual(row[1:4], ["3.000", "2/2", "3.000"])
+
+    def test_a_fused_kernel_counts_once_per_family_and_unnamed_nodes_are_unattributed(self):
+        self.log("cifar_resnet_b1 ocannl/cuda/default", [
+            ("0/3", 1.0, ["kernel_s2c1.grad", "relu_s2c1out.grad", "relu_s1out.grad"]),
+            ("1/3", 2.0, ["kernel_s3sc.grad", "bias_s3sc.grad"]),
+            ("2/3", 4.0, ["n186", "batch_x"]),
+        ])
+
+        code, out, _ = self.run_sites()
+
+        self.assertEqual(code, 0)
+        # cell, p50, timed, sum, pad3x3, resadd, sc1x1s2, unattributed
+        self.assertEqual(self.rows(out)["cifar_resnet_b1/cuda/default/exact"][1:8],
+                         ["10.000", "3/3", "7.000", "1.000", "1.000", "2.000", "4.000"])
+
+    def test_declined_kernels_are_untimed_but_keep_the_table_complete(self):
+        self.log("cifar_resnet_b1 ocannl/cuda/default", [
+            ("0/2", None, None), ("1/2", 2.0, ["kernel_s2sc.grad"])])
+
+        _, out, _ = self.run_sites()
+
+        self.assertEqual(self.rows(out)["cifar_resnet_b1/cuda/default/exact"][2:4], ["1/2", "2.000"])
+
+    def test_a_truncated_table_attributes_nothing(self):
+        # The instrument catches its own failure after the result line is paid for, so a table can
+        # stop short of its declared count (a backend whose compile failure is fatal).
+        self.log("cifar_resnet_b1 ocannl/cuda/default", [("0/3", 1.0, ["kernel_s2sc.grad"])])
+
+        _, out, _ = self.run_sites()
+
+        row = self.rows(out)["cifar_resnet_b1/cuda/default/exact"]
+        self.assertEqual(row[2], "1/3 INCOMPLETE (1 listed)")
+        self.assertEqual(set(row[3:8]), {"n/a"})
+
+    def test_two_logs_for_one_cell_are_refused(self):
+        kernels = [("0/1", 1.0, ["kernel_s2sc.grad"])]
+        self.log("cifar_resnet_b1 ocannl/cuda/default", kernels)
+        self.log("cifar_resnet_b1 ocannl/cuda/default again", kernels)
+
+        code, _, err = self.run_sites()
+
+        self.assertEqual(code, 1)
+        self.assertIn("two logs", err)
 
 
 class CellTimeoutTest(unittest.TestCase):
