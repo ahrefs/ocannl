@@ -506,6 +506,7 @@ benchmarks/gh514_cells.sh parses: true
 benchmarks/gh612_cells.sh parses: true
 benchmarks/gh612v_session.sh parses: true
 benchmarks/gh728_cells.sh parses: true
+benchmarks/gh740_cells.sh parses: true
 benchmarks/gh834_cells.sh parses: true
 benchmarks/runners/ocannl/mma_register_scope_probe_build.sh parses: true
 benchmarks/test-box-gate.sh uses the shared harness contract: true

@@ -603,6 +603,21 @@
 # schedule cache replays its winner without searching again.
 #autotune_register_tile_rm_twin=false
 
+# The pad-waste threshold of the matmul sketch family's geometry menus (gh-ocannl-740). A
+# pipeline that stages both operands through zero-fringe tiles pads a non-multiple extent to its
+# block size instead of refuting the geometry (gh-ocannl-485, gh-ocannl-730). A pad is exact, but
+# it is work: 64x64 blocks with an 8-deep k-split pad a 20x20x20 site to 64x64x24, 12.3x the
+# site's work. A geometry whose padded work (the product, over the axes it pads, of padded over
+# real extent) is at least this many times that of the least-padded geometry its own menu
+# proposes is EXCLUDED from the seeds, with a witness naming both ratios, rather than compiled and
+# timed to lose. Relative, not absolute: on a 6-row site every row block pads at least 2.67x and
+# the least-padded one can be the best sketch, while a 2x pad beside a dividing sibling never won
+# in the gh-ocannl-740 measurement. The least-padded geometry is never excluded; `inf` proposes
+# every pad; 1 proposes only the least-padded geometries. It shapes what a search proposes, not
+# what a crowned schedule means, so a warm schedule cache replays its winner without searching
+# again.
+#autotune_pad_waste_max=2
+
 # How many near-tie singles per keyed fission segment `Autotune.tune`'s composite playoff re-times
 # (gh-ocannl-1166); 0 turns the playoff off (gh-ocannl-1259). A per-segment single is timed as the
 # whole routine with every other segment on its untuned preset, and that backdrop's noise can

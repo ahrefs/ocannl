@@ -657,6 +657,91 @@ let pad_composition_ok ~n_staged ~n_operands = n_operands > 0 && n_staged = n_op
 (* Blocks of size [b] covering a possibly padded extent [n]. *)
 let blocks_of n b = (n + b - 1) / b
 
+(* gh-ocannl-740: [pad_composition_ok] answers whether a geometry MAY pad; this answers whether it
+   SHOULD. A padded geometry does [blocks_of n b * b] iterations of an axis whose real extent is
+   [n], so its work exceeds the site's by the product of those ratios over the axes it pads — the
+   pad-waste ratio. [axes] lists [(name, extent, block)] for each axis the geometry blocks; a block
+   of 0 is an unsplit axis (no pad), and a dividing block contributes exactly 1, so a geometry that
+   pads nothing has ratio 1. *)
+let pad_waste_ratio axes =
+  List.fold axes ~init:1. ~f:(fun acc (_, extent, block) ->
+      if block <= 0 || extent <= 0 then acc
+      else acc *. Float.of_int (blocks_of extent block * block) /. Float.of_int extent)
+
+(* Read per call, like the family's other seeding gates, and through the registered value kind
+   ([Utils.Float_at_least]), which owns the clamp: a value below 1 means 1, a malformed or NaN one
+   the default, 2. So the search trajectory identity, which renders the key through the same
+   canonicalization, gives every spelling of one behaviour one fingerprint. *)
+let pad_waste_max () =
+  let raw = Utils.get_global_arg ~arg_name:"autotune_pad_waste_max" ~default:"2." in
+  match Utils.registered_config_default "autotune_pad_waste_max" with
+  | Some (kind, _) -> Float.of_string (Option.value_exn (Utils.canonical_config_value kind raw))
+  | None -> invalid_arg "Sketch_families.pad_waste_max: autotune_pad_waste_max is not registered"
+
+(* Every pad-waste witness starts with this, which is how {!lift_pad_waste} recognizes the policy:
+   the exclusion sits at a geometry decision, where the CPU packed menu's footprint economy excludes
+   too, so the decision alone cannot tell the two apart. *)
+let pad_waste_witness_prefix = "pad waste:"
+
+(* The exclusion witness of a geometry blocking [axes] in a menu whose least-padded proposed
+   geometry has ratio [menu_min], or [None] when it is within the threshold of that. Only the padded
+   axes are named: the witness says where the waste is. *)
+let pad_waste_witness ~menu_min axes =
+  let ratio = pad_waste_ratio axes in
+  let threshold = pad_waste_max () in
+  if Float.(ratio <= menu_min) || Float.(ratio < threshold * menu_min) then None
+  else
+    let padded =
+      List.filter_map axes ~f:(fun (name, extent, block) ->
+          if block <= 0 || extent <= 0 || extent % block = 0 then None
+          else Some (Printf.sprintf "%s=%d to %d" name extent (blocks_of extent block * block)))
+    in
+    Some
+      (Printf.sprintf
+         "%s padding %s does %.2fx the site's work, %.2fx the %.2fx of this menu's least-padded \
+          geometry, at or above the %gx search-economy threshold (config autotune_pad_waste_max)"
+         pad_waste_witness_prefix (String.concat ~sep:", " padded) ratio (ratio /. menu_min)
+         menu_min threshold)
+
+(* The pad-waste judgment over one geometry menu (gh-ocannl-740): [menu] pairs each geometry's
+   decision with the axes it blocks and its child as the menu's legality gates and policies already
+   judged it.
+
+   WHY RELATIVE. Whether a pad is worth a compile depends on what else the menu offers the site, not
+   on the waste alone. On a 6-row site every row block pads at least 16/6, and the 16-row tensorized
+   geometry at 2.67x was the best sketch the search timed (Metal, M4 Max), so an absolute threshold
+   low enough to catch a 64-row block on a 32-row site (2x, one block per batch where a dividing
+   32-row sibling gives the same block count at half the work; timed 4.9x and 34x slower than the
+   best) would delete it. So the waste is judged against the menu's least-padded PROPOSED geometry —
+   the sibling that replaces an excluded one: a geometry doing at least [pad_waste_max ()] times
+   that sibling's work is [Excluded] with its ratio as witness. It is search ECONOMY, not legality
+   (a padded candidate is exact, gh-ocannl-730): a driver may lift it, the threshold is config
+   [autotune_pad_waste_max] ([inf] proposes every pad), and the least-padded geometry is never
+   excluded, so no pipeline loses its menu to this judgment.
+
+   Legality beats policy: a [Refuted] child stays refuted and never sets the minimum, nor does an
+   [Excluded] one (it is not proposed, so it replaces nothing); the exclusion's payload is the child
+   as judged, so lifting the policy re-proposes exactly what the threshold suppressed. *)
+let judge_pad_waste (menu : ('d * (string * int * int) list * ('l, 'a) Sspace.child) list) :
+    ('d * ('l, 'a) Sspace.child) list =
+  let proposed =
+    List.filter_map menu ~f:(fun (_, axes, child) ->
+        match child with
+        | Sspace.Child _ | Sspace.Unknown _ -> Some (pad_waste_ratio axes)
+        | Sspace.Excluded _ | Sspace.Refuted _ -> None)
+  in
+  match List.min_elt proposed ~compare:Float.compare with
+  | None -> List.map menu ~f:(fun (d, _, child) -> (d, child))
+  | Some menu_min ->
+      List.map menu ~f:(fun (d, axes, child) ->
+          ( d,
+            match child with
+            | Sspace.Child _ | Sspace.Unknown _ -> (
+                match pad_waste_witness ~menu_min axes with
+                | Some w -> Sspace.Excluded (w, lazy child)
+                | None -> child)
+            | Sspace.Excluded _ | Sspace.Refuted _ -> child ))
+
 let mma_scope_of_reduction_extents extents =
   if List.exists extents ~f:(fun extent -> extent > 1) then Ir.Backend_intf.Mma_fragment_scope
   else Ir.Backend_intf.Mma_per_statement
@@ -3099,6 +3184,11 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
   let ndiv_k what c =
     (divides c site.m_nk, Printf.sprintf "%s=%d does not divide %s" what c (k_extent_label site))
   in
+  (* The axes a site geometry blocks, for its pad-waste judgment ([pad_waste_witness]); a 0 block is
+     an unsplit axis. *)
+  let site_pad_axes ~bm ~bn ~bk =
+    [ ("m", site.m_ni, bm); ("n", site.m_nj, bn); ("k", site.m_nk, bk) ]
+  in
   let base_params =
     {
       sk_gpu = false;
@@ -3132,77 +3222,81 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
       let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
       let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
       subt (fun () ->
+          (* The menu's pad waste is judged relative to its least-padded proposed geometry
+             (gh-ocannl-740, [judge_pad_waste]); a dividing geometry has ratio 1. *)
           choice
-            (List.map
-               [
-                 (64, 64, 8, 4, 4);
-                 (32, 32, 8, 4, 4);
-                 (16, 16, 8, 4, 4);
-                 (32, 32, 16, 2, 2);
-                 (16, 16, 8, 2, 2);
-               ]
-               ~f:(fun (bm, bn, bk, tm, tn) ->
-                 ( Family_decision.Geometry
-                     (Gpu_blocktile { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = tm; g_tn = tn }),
-                   refute_unless
-                     ((* Pad composition (gh-ocannl-730): [gpu_sketch_schedule] stages both operands
-                         through zero-fringe workgroup tiles at every geometry, so the block extents
-                         pad rather than gate — the tensorized family's gh-ocannl-485 argument,
-                         measured on this pipeline. The REGISTER split is not padded: [tm]/[tn]
-                         still divide their block tiles. *)
-                      (if pad_composition_ok ~n_staged:(if bk > 0 then 2 else 0) ~n_operands:2 then
-                         []
-                       else
-                         [
-                           ndiv "bm" bm ~into:"m" site.m_ni;
-                           ndiv "bn" bn ~into:"n" site.m_nj;
-                           ndiv_k "bk" bk;
-                         ])
-                     @ [ ndiv "tm" tm ~into:"bm" bm; ndiv "tn" tn ~into:"bn" bn ]
-                     (* The launch size is statically known — two Workgroup dimensions of [bm/tm]
-                        and [bn/tn] threads — so a known thread cap refutes pre-compile what
-                        [Schedule.check_hardware_limits_classified] would reject per candidate;
-                        likewise the two [shared] operand stages' workgroup-memory floor. *)
-                     @ (match limits.Ir.Backend_intf.max_threads_per_workgroup with
-                       | Some cap when tm > 0 && tn > 0 && bm / tm * (bn / tn) > cap ->
-                           [
-                             ( false,
-                               Printf.sprintf
-                                 "block tile launches %d threads per workgroup (bm/tm * bn/tn), \
-                                  exceeding the %d-thread limit"
-                                 (bm / tm * (bn / tn))
-                                 cap );
-                           ]
-                       | _ -> [])
-                     @
-                     match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
-                     | Some cap
-                       when (bm * bk * Ir.Ops.prec_in_bytes a_prec)
-                            + (bk * bn * Ir.Ops.prec_in_bytes b_prec)
-                            > cap ->
-                         [
-                           ( false,
-                             Printf.sprintf
-                               "staged operand tiles need %d bytes of workgroup memory, exceeding \
-                                the %d-byte limit"
-                               ((bm * bk * Ir.Ops.prec_in_bytes a_prec)
-                               + (bk * bn * Ir.Ops.prec_in_bytes b_prec))
-                               cap );
-                         ]
-                     | _ -> [])
-                     (fun () ->
-                       leaf
-                         {
-                           base_params with
-                           sk_gpu = true;
-                           sk_bm = bm;
-                           sk_bn = bn;
-                           sk_bk = bk;
-                           sk_tm = tm;
-                           sk_tn = tn;
-                           sk_batch_grid = batch_grid_of batch;
-                           sk_batch_inner = batch_inner_of batch;
-                         }) ))))
+          @@ judge_pad_waste
+               (List.map
+                  [
+                    (64, 64, 8, 4, 4);
+                    (32, 32, 8, 4, 4);
+                    (16, 16, 8, 4, 4);
+                    (32, 32, 16, 2, 2);
+                    (16, 16, 8, 2, 2);
+                  ]
+                  ~f:(fun (bm, bn, bk, tm, tn) ->
+                    ( Family_decision.Geometry
+                        (Gpu_blocktile { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = tm; g_tn = tn }),
+                      site_pad_axes ~bm ~bn ~bk,
+                      refute_unless
+                        ((* Pad composition (gh-ocannl-730): [gpu_sketch_schedule] stages both
+                            operands through zero-fringe workgroup tiles at every geometry, so the
+                            block extents pad rather than gate — the tensorized family's
+                            gh-ocannl-485 argument, measured on this pipeline. The REGISTER split is
+                            not padded: [tm]/[tn] still divide their block tiles. *)
+                         (if pad_composition_ok ~n_staged:(if bk > 0 then 2 else 0) ~n_operands:2
+                          then []
+                          else
+                            [
+                              ndiv "bm" bm ~into:"m" site.m_ni;
+                              ndiv "bn" bn ~into:"n" site.m_nj;
+                              ndiv_k "bk" bk;
+                            ])
+                        @ [ ndiv "tm" tm ~into:"bm" bm; ndiv "tn" tn ~into:"bn" bn ]
+                        (* The launch size is statically known — two Workgroup dimensions of [bm/tm]
+                           and [bn/tn] threads — so a known thread cap refutes pre-compile what
+                           [Schedule.check_hardware_limits_classified] would reject per candidate;
+                           likewise the two [shared] operand stages' workgroup-memory floor. *)
+                        @ (match limits.Ir.Backend_intf.max_threads_per_workgroup with
+                          | Some cap when tm > 0 && tn > 0 && bm / tm * (bn / tn) > cap ->
+                              [
+                                ( false,
+                                  Printf.sprintf
+                                    "block tile launches %d threads per workgroup (bm/tm * bn/tn), \
+                                     exceeding the %d-thread limit"
+                                    (bm / tm * (bn / tn))
+                                    cap );
+                              ]
+                          | _ -> [])
+                        @
+                        match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
+                        | Some cap
+                          when (bm * bk * Ir.Ops.prec_in_bytes a_prec)
+                               + (bk * bn * Ir.Ops.prec_in_bytes b_prec)
+                               > cap ->
+                            [
+                              ( false,
+                                Printf.sprintf
+                                  "staged operand tiles need %d bytes of workgroup memory, \
+                                   exceeding the %d-byte limit"
+                                  ((bm * bk * Ir.Ops.prec_in_bytes a_prec)
+                                  + (bk * bn * Ir.Ops.prec_in_bytes b_prec))
+                                  cap );
+                            ]
+                        | _ -> [])
+                        (fun () ->
+                          leaf
+                            {
+                              base_params with
+                              sk_gpu = true;
+                              sk_bm = bm;
+                              sk_bn = bn;
+                              sk_bk = bk;
+                              sk_tm = tm;
+                              sk_tn = tn;
+                              sk_batch_grid = batch_grid_of batch;
+                              sk_batch_inner = batch_inner_of batch;
+                            }) ))))
     else if is_cpu then
       (* Hoisted vs in-kernel packing stays a measured choice (gh-ocannl-470): when a constant
          operand can be packed at link time, propose each tiling in both flavors. The packing level
@@ -3386,124 +3480,133 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
             in
             subt (fun () ->
                 choice
-                  (List.map
-                     [ (16, w, 0); (32, w, 0); (16, w, 32); (32, w, 32); (32, w, 16) ]
-                     ~f:(fun (bm, bn, bk) ->
-                       ( Family_decision.Geometry
-                           (Gpu_mma { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = 0; g_tn = 0 }),
-                         refute_unless
-                           ([
-                              nmul "bm" bm ~of_:"m" tm_t;
-                              nmul "bn" bn ~of_:"n" tn_t;
-                              (wide_scope_ok (scope_of_bk bk), wide_scope_witness (scope_of_bk bk));
-                            ]
-                           @ (match staged_tiles_exceed ~bm ~bn ~bk ~depth:1 with
-                             | Some w -> [ (false, w) ]
-                             | None -> [])
-                           @
-                           if bk = 0 then
-                             [
-                               ( site.m_row_stride = 1,
-                                 strided_row_in_place_witness site ~what:"an unstaged full-K block"
-                               );
-                               ndiv "bm" bm ~into:"m" site.m_ni;
-                               ndiv "bn" bn ~into:"n" site.m_nj;
-                               ( site.m_nk % tk_t = 0,
-                                 Printf.sprintf
-                                   "unstaged full-K block: %s is not a multiple of the intrinsic \
-                                    tile k=%d"
-                                   (k_extent_label site) tk_t );
-                             ]
-                           else [ nmul "bk" bk ~of_:"k" tk_t ])
-                           (fun () ->
-                             let base =
-                               {
-                                 base_params with
-                                 sk_gpu = true;
-                                 sk_mma = true;
-                                 sk_simd = w;
-                                 sk_bm = bm;
-                                 sk_bn = bn;
-                                 sk_bk = bk;
-                                 sk_batch_grid = batch_grid_of batch;
-                                 sk_batch_inner = batch_inner_of batch;
-                               }
-                             in
-                             (* The twins level (per staged geometry): the swizzled layout and the
-                                pipelined depths, each measured against the shared plain sibling —
-                                see the field docs on [sk_swizzle]/[sk_depth]. Unstaged geometries
-                                have no cooperative copy, so the twin choices do not arise at all;
-                                ineligible staged twins are refuted (emission constraint) or
-                                excluded (measured-cost policy) with their witnesses (gh-ocannl-481
-                                item 3 D3; Codex P2 on PRs #303 and #317). *)
-                             let swizzle_twins =
-                               match staged_layout with
-                               | None -> []
-                               | Some LL.Swizzle_elem -> []
-                               | Some LL.Swizzle_b128 when bk = 0 -> []
-                               | Some LL.Swizzle_b128 ->
-                                   [
-                                     ( Family_decision.Twin `Swizzled,
-                                       if b128_units_ok a_prec bk && b128_units_ok b_prec bn then
-                                         leaf { base with sk_swizzle = Some LL.Swizzle_b128 }
-                                       else
-                                         Sspace.Refuted
-                                           "Swizzle_b128 permutes whole 16-byte units: each staged \
-                                            tile's minor extent must span a power-of-two count > 1 \
-                                            of them" );
-                                   ]
-                             in
-                             let depth_twins =
-                               if List.is_empty mma.Ir.Backend_intf.mma_pipeline_depths || bk = 0
-                               then []
-                               else
-                                 List.map mma.Ir.Backend_intf.mma_pipeline_depths ~f:(fun d ->
-                                     ( Family_decision.Twin (`Depth d),
-                                       if d < 1 || d > 2 then
-                                         (* The capability list is advisory; the implemented range
-                                            is [Schedule.apply_stage]'s — the wait-all emission has
-                                            single-step lookahead, deeper pipelines need
-                                            commit_group/wait_group N. *)
-                                         Sspace.Refuted
-                                           (Printf.sprintf
-                                              "pipeline depth %d is outside the implemented range \
-                                               1..2 (Schedule.apply_stage)"
-                                              d)
-                                       else
-                                         match staged_tiles_exceed ~bm ~bn ~bk ~depth:d with
-                                         | Some w ->
-                                             (* Legality beats policy: the multiplied footprint
-                                                refutes before the measured-cost exclusions
-                                                apply. *)
-                                             Sspace.Refuted w
-                                         | None ->
-                                             if
-                                               not
-                                                 (divides bm site.m_ni && divides bn site.m_nj
-                                                && divides bk site.m_nk)
-                                             then
-                                               Sspace.Excluded
-                                                 ( "pad-masked site: Tensorize stays on the \
-                                                    barrier-bracketed arm, so the twin could only \
-                                                    pay the doubled shared-memory footprint (Codex \
-                                                    P2 on PR #303)",
-                                                   lazy (leaf { base with sk_depth = d }) )
-                                             else if
-                                               Ir.Ops.prec_in_bytes a_prec < 4
-                                               || Ir.Ops.prec_in_bytes b_prec < 4
-                                             then
-                                               Sspace.Excluded
-                                                 ( "below the async arms' 4-byte element floor: \
-                                                    only the synchronous form would render — the \
-                                                    occupancy cost phase 1 measured, with no \
-                                                    overlap to buy back (Codex P2 on PR #317)",
-                                                   lazy (leaf { base with sk_depth = d }) )
-                                             else leaf { base with sk_depth = d } ))
-                             in
-                             subt (fun () ->
-                                 choice
-                                   (((Family_decision.Twin `Plain, leaf base) :: swizzle_twins)
-                                   @ depth_twins))) ))
+                  ((* The curated menu's pad waste is judged relative to its least-padded proposed
+                      geometry (gh-ocannl-740, [judge_pad_waste]), above the twins: a geometry not
+                      worth one compile is not worth its twins'. An unstaged geometry divides by the
+                      gates below, so its ratio is 1. The lattice is already excluded wholesale. *)
+                   judge_pad_waste
+                     (List.map
+                        [ (16, w, 0); (32, w, 0); (16, w, 32); (32, w, 32); (32, w, 16) ]
+                        ~f:(fun (bm, bn, bk) ->
+                          ( Family_decision.Geometry
+                              (Gpu_mma { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = 0; g_tn = 0 }),
+                            site_pad_axes ~bm ~bn ~bk,
+                            refute_unless
+                              ([
+                                 nmul "bm" bm ~of_:"m" tm_t;
+                                 nmul "bn" bn ~of_:"n" tn_t;
+                                 ( wide_scope_ok (scope_of_bk bk),
+                                   wide_scope_witness (scope_of_bk bk) );
+                               ]
+                              @ (match staged_tiles_exceed ~bm ~bn ~bk ~depth:1 with
+                                | Some w -> [ (false, w) ]
+                                | None -> [])
+                              @
+                              if bk = 0 then
+                                [
+                                  ( site.m_row_stride = 1,
+                                    strided_row_in_place_witness site
+                                      ~what:"an unstaged full-K block" );
+                                  ndiv "bm" bm ~into:"m" site.m_ni;
+                                  ndiv "bn" bn ~into:"n" site.m_nj;
+                                  ( site.m_nk % tk_t = 0,
+                                    Printf.sprintf
+                                      "unstaged full-K block: %s is not a multiple of the \
+                                       intrinsic tile k=%d"
+                                      (k_extent_label site) tk_t );
+                                ]
+                              else [ nmul "bk" bk ~of_:"k" tk_t ])
+                              (fun () ->
+                                let base =
+                                  {
+                                    base_params with
+                                    sk_gpu = true;
+                                    sk_mma = true;
+                                    sk_simd = w;
+                                    sk_bm = bm;
+                                    sk_bn = bn;
+                                    sk_bk = bk;
+                                    sk_batch_grid = batch_grid_of batch;
+                                    sk_batch_inner = batch_inner_of batch;
+                                  }
+                                in
+                                (* The twins level (per staged geometry): the swizzled layout and
+                                   the pipelined depths, each measured against the shared plain
+                                   sibling — see the field docs on [sk_swizzle]/[sk_depth]. Unstaged
+                                   geometries have no cooperative copy, so the twin choices do not
+                                   arise at all; ineligible staged twins are refuted (emission
+                                   constraint) or excluded (measured-cost policy) with their
+                                   witnesses (gh-ocannl-481 item 3 D3; Codex P2 on PRs #303 and
+                                   #317). *)
+                                let swizzle_twins =
+                                  match staged_layout with
+                                  | None -> []
+                                  | Some LL.Swizzle_elem -> []
+                                  | Some LL.Swizzle_b128 when bk = 0 -> []
+                                  | Some LL.Swizzle_b128 ->
+                                      [
+                                        ( Family_decision.Twin `Swizzled,
+                                          if b128_units_ok a_prec bk && b128_units_ok b_prec bn then
+                                            leaf { base with sk_swizzle = Some LL.Swizzle_b128 }
+                                          else
+                                            Sspace.Refuted
+                                              "Swizzle_b128 permutes whole 16-byte units: each \
+                                               staged tile's minor extent must span a power-of-two \
+                                               count > 1 of them" );
+                                      ]
+                                in
+                                let depth_twins =
+                                  if List.is_empty mma.Ir.Backend_intf.mma_pipeline_depths || bk = 0
+                                  then []
+                                  else
+                                    List.map mma.Ir.Backend_intf.mma_pipeline_depths ~f:(fun d ->
+                                        ( Family_decision.Twin (`Depth d),
+                                          if d < 1 || d > 2 then
+                                            (* The capability list is advisory; the implemented
+                                               range is [Schedule.apply_stage]'s — the wait-all
+                                               emission has single-step lookahead, deeper pipelines
+                                               need commit_group/wait_group N. *)
+                                            Sspace.Refuted
+                                              (Printf.sprintf
+                                                 "pipeline depth %d is outside the implemented \
+                                                  range 1..2 (Schedule.apply_stage)"
+                                                 d)
+                                          else
+                                            match staged_tiles_exceed ~bm ~bn ~bk ~depth:d with
+                                            | Some w ->
+                                                (* Legality beats policy: the multiplied footprint
+                                                   refutes before the measured-cost exclusions
+                                                   apply. *)
+                                                Sspace.Refuted w
+                                            | None ->
+                                                if
+                                                  not
+                                                    (divides bm site.m_ni && divides bn site.m_nj
+                                                   && divides bk site.m_nk)
+                                                then
+                                                  Sspace.Excluded
+                                                    ( "pad-masked site: Tensorize stays on the \
+                                                       barrier-bracketed arm, so the twin could \
+                                                       only pay the doubled shared-memory \
+                                                       footprint (Codex P2 on PR #303)",
+                                                      lazy (leaf { base with sk_depth = d }) )
+                                                else if
+                                                  Ir.Ops.prec_in_bytes a_prec < 4
+                                                  || Ir.Ops.prec_in_bytes b_prec < 4
+                                                then
+                                                  Sspace.Excluded
+                                                    ( "below the async arms' 4-byte element floor: \
+                                                       only the synchronous form would render — \
+                                                       the occupancy cost phase 1 measured, with \
+                                                       no overlap to buy back (Codex P2 on PR \
+                                                       #317)",
+                                                      lazy (leaf { base with sk_depth = d }) )
+                                                else leaf { base with sk_depth = d } ))
+                                in
+                                subt (fun () ->
+                                    choice
+                                      (((Family_decision.Twin `Plain, leaf base) :: swizzle_twins)
+                                      @ depth_twins))) )))
                   @ [ (Family_decision.Geometry Lattice, lattice_child) ])))
     | None, _, _ when is_cpu ->
         (* The register-tiled [Tile_mma] rendering needs no MMA units (cc's [limits.mma] is a token
@@ -3729,17 +3832,25 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                  sits ABOVE the geometries, matching the flat enumeration's variant-major emission
                  order. *)
               let geoms ~f =
+                (* The shape's own judgment comes first (legality beats policy): a shape that reads
+                   an operand in place refutes a non-dividing geometry outright, and the ones that
+                   stage both operands pad it. Then the pad waste, judged per shape relative to its
+                   least-padded proposed geometry (gh-ocannl-740, [judge_pad_waste]); a geometry the
+                   footprint threshold excludes is not proposed, so it neither sets that minimum nor
+                   is judged against it. *)
                 choice
-                  (List.map menu ~f:(fun (label, p, verdict, full_div, tiles_bytes) ->
-                       ( label,
-                         match verdict with
-                         | Some (`Refute w) -> Sspace.Refuted w
-                         | Some (`Exclude w) ->
-                             (* The payload re-judges the geometry under the shape with only the
-                                economy threshold lifted — it may still refute (block counts,
-                                per-chunk caps). *)
-                             Sspace.Excluded (w, lazy (f p full_div tiles_bytes))
-                         | None -> f p full_div tiles_bytes )))
+                @@ judge_pad_waste
+                     (List.map menu ~f:(fun (label, p, verdict, full_div, tiles_bytes) ->
+                          ( label,
+                            site_pad_axes ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk,
+                            match verdict with
+                            | Some (`Refute w) -> Sspace.Refuted w
+                            | Some (`Exclude w) ->
+                                (* The payload re-judges the geometry under the shape with only the
+                                   economy threshold lifted — it may still refute (block counts,
+                                   per-chunk caps). *)
+                                Sspace.Excluded (w, lazy (f p full_div tiles_bytes))
+                            | None -> f p full_div tiles_bytes )))
               in
               let any_hoistable = site_hoistable site site.m_a || site_hoistable site site.m_b in
               let no_constant =
@@ -4044,6 +4155,24 @@ let lift_geometry_lattice (tree : family_tree) : family_tree =
     | Sspace.Excluded _ as c
       when Family_decision.equal lbl (Family_decision.Geometry Family_decision.Lattice) ->
         child_f lbl (Sspace.lift_excluded c)
+    | Sspace.Child sub -> Sspace.Child (lazy (tree_f (Lazy.force sub)))
+    | Sspace.Unknown (w, sub) -> Sspace.Unknown (w, lazy (tree_f (Lazy.force sub)))
+    | (Sspace.Excluded _ | Sspace.Refuted _) as c -> c
+  in
+  tree_f tree
+
+(* gh-ocannl-740: lift every pad-waste exclusion in the family tree, as [lift_geometry_lattice]
+   lifts the lattice: laziness preserved, a lifted branch still subject to legality, other policies'
+   exclusions kept. A test or driver asking what the menus may propose, rather than what the search
+   economy proposes, reads this tree's leaves. *)
+let lift_pad_waste (tree : family_tree) : family_tree =
+  let rec tree_f = function
+    | Sspace.Leaf _ as l -> l
+    | Sspace.Choice { level; children } ->
+        Sspace.Choice { level; children = List.map children ~f:(fun (lbl, c) -> (lbl, child_f c)) }
+  and child_f = function
+    | Sspace.Excluded (w, _) as c when String.is_prefix w ~prefix:pad_waste_witness_prefix ->
+        child_f (Sspace.lift_excluded c)
     | Sspace.Child sub -> Sspace.Child (lazy (tree_f (Lazy.force sub)))
     | Sspace.Unknown (w, sub) -> Sspace.Unknown (w, lazy (tree_f (Lazy.force sub)))
     | (Sspace.Excluded _ | Sspace.Refuted _) as c -> c

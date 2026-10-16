@@ -4,6 +4,8 @@ the registry names no key outside the Search_shaping class: true
 with every Search_shaping key unset or at its default, the identity is empty: true
 each Search_shaping key stated at its default, spelled otherwise, leaves the identity alone: true
 each Search_shaping key stated off its default renders, canonically spelled: true
+each clamped key stated unparsable or NaN renders as its fallback: true
+each clamped key stated below its floor renders as the floor: true
 an unparsable value renders as stated: true
 where the lanes' scalar recompute is cheap, auto is the cooperative preamble and cut lanes: true
 and there the refused preamble, admitted lanes and one simdgroup are not the default: true

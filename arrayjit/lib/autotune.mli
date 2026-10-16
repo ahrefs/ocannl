@@ -505,6 +505,26 @@ val geometry_lattice_witness : string
     whole box pre-expansion). {!Ir.Schedule_space.leaves} never enumerates an excluded branch, so
     the tuner's seed lists are unchanged by the lattice's existence. *)
 
+val pad_waste_max : unit -> float
+(** The pad-waste threshold of the matmul family's geometry menus (gh-ocannl-740), as this process
+    resolves config [autotune_pad_waste_max] (at least 1; a malformed value is the default, 2). A
+    geometry's pad-waste ratio is its padded work over the site's: the product, over the axes it
+    pads to its block sizes, of padded over real extent. A geometry whose ratio is at least this
+    many times that of the least-padded geometry its own menu proposes is
+    {!Ir.Schedule_space.child.Excluded} with a witness naming both ratios: valid, never proposed by
+    default, re-proposed exactly by {!Ir.Schedule_space.lift_excluded}. The least-padded geometry is
+    never excluded, and legality refutations take precedence. Judged in the GPU blocktile menu, the
+    GPU tensorized curated menu and the CPU packed menu of each packing shape. Exposed so a test
+    judges the tree against the threshold the tree was built with. *)
+
+val lift_pad_waste :
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree
+(** Lift every {!pad_waste_max} exclusion in the family tree (gh-ocannl-740), as
+    {!lift_geometry_lattice} lifts the lattice: laziness preserved, the lifted geometries still
+    subject to legality, other policies' exclusions kept. Its {!Ir.Schedule_space.leaves} are what
+    the menus may propose with the pad-waste economy off. *)
+
 val lift_geometry_lattice :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree

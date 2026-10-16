@@ -41,7 +41,8 @@
   bench_gpt_diag
   bench_conv_diag
   bench_min_repro
-  bench_wgrad)
+  bench_wgrad
+  bench_pad_waste)
  (modules
   bench_mlp
   bench_conv
@@ -49,7 +50,8 @@
   bench_gpt_diag
   bench_conv_diag
   bench_min_repro
-  bench_wgrad)
+  bench_wgrad
+  bench_pad_waste)
  (libraries
   base
   bench_harness
