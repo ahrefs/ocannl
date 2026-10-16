@@ -23,8 +23,9 @@
    The odd-extent section (gh-ocannl-730) runs the same out projection at head_dim 12, which neither
    curated blocktile [bk] divides: the GPU family stages both operands through zero-fringe workgroup
    tiles, so the extent PADS to the block size and every geometry is seeded and executed there,
-   where the k gate used to delete the family wholesale. The CPU blocktile pipeline packs outside
-   that composition and keeps the gate, so it is where the gh-ocannl-683 extent label is read off.
+   where the k gate used to delete the family wholesale. The CPU blocktile pipeline could pad by the
+   same argument, but it keeps the gate because padding it measured as no cc win (gh-ocannl-741), so
+   it is where the gh-ocannl-683 extent label is read off.
 
    Executed assertions compare every candidate against a serial reference computed from the same
    discriminating inputs. For the f32 legs the values vary with every index and keep all partial
@@ -515,8 +516,9 @@ let pipelined_leg ~tag ~build =
    Read off the CPU blocktile pipeline: since gh-ocannl-730 the GPU blocktile family PADS its
    k-extent instead of gating on it (both operands are staged through zero-fringe workgroup tiles),
    so it no longer produces a k-divisibility witness at all -- which the padded leg below asserts.
-   The CPU blocktile pipeline packs into stack scratch outside that composition and keeps the gate,
-   so its witnesses are where the label is still rendered. *)
+   The CPU blocktile pipeline stages into stack scratch through the same zero-fringe [Stage], so it
+   could pad as well, but it keeps the gate because padding it measured as no cc win
+   (gh-ocannl-741). Its witnesses are therefore where the label is still rendered. *)
 let k_refutations ~name ~is_gpu build =
   let opt = capture (named name (Train.forward (build ()))) in
   match

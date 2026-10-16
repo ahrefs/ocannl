@@ -3149,7 +3149,17 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
       (* Hoisted vs in-kernel packing stays a measured choice (gh-ocannl-470): when a constant
          operand can be packed at link time, propose each tiling in both flavors. The packing level
          sits ABOVE its geometries: the flat enumeration emitted all in-kernel tilings before the
-         hoisted twins. *)
+         hoisted twins.
+
+         The divisibility gate is kept by MEASUREMENT, not by necessity (gh-ocannl-741). Both
+         operands are staged through zero-fringe tiles ([shared = false] changes only where the tile
+         lives), so [pad_composition_ok] holds and a [pad_to] triple would be sound: padded
+         candidates match the serial reference bitwise and cost no more than their dividing control.
+         But on cc the family loses to the CPU tensorized family even where it divides (attention's
+         out projection at head_dim 16: 18.0 ms vs 13.5 ms on an M-series Mac, 21.2 ms vs 17.3 ms on
+         AVX2), and so at the sites padding would add too (head_dim 12, padded: 16.1 vs 13.1 ms and
+         20.8 vs 16.9 ms), so the padded leaves would only lengthen the search. Revisit if this
+         family starts winning where it divides. *)
       let geoms hoist =
         choice
           (List.map [ 16; 8 ] ~f:(fun b ->
