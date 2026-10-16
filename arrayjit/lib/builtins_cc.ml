@@ -718,8 +718,9 @@ uint16_t single_to_bfloat16(float f)
        clang both have [__builtin_convertvector], so without it every fallback arm is preprocessed
        away on every compiler the tests run on. Set -- a [-DOCANNL_FORCE_PORTABLE_BRIDGES] in
        [cc_backend_compiler_command] -- it selects every fallback arm: [OCANNL_HAS_CONVERTVECTOR]
-       answers 0, and the x86 width-specific bridges further down become renames of the portable
-       ones. [test/operations/bridge_arm_coverage] compiles and runs kernels that way. *)
+       answers 0, and the width-specific bridges further down, x86 and aarch64 alike, become renames
+       of the portable ones. [test/operations/bridge_arm_coverage] compiles and runs kernels that
+       way. *)
     ( "OCANNL_FORCE_PORTABLE_BRIDGES",
       {|
 #ifndef OCANNL_FORCE_PORTABLE_BRIDGES
@@ -930,7 +931,8 @@ uint16_t single_to_bfloat16(float f)
     (dst) = (__typeof__(dst))((U32V)__builtin_ia32_pmovzxwd128( \
       (ocannl_w8hi__)(ocannl_w2di__){ocannl_nq__, 0}) << 16); \
   } while (0)
-#elif defined(__aarch64__) && __has_builtin(__builtin_aarch64_ushll_nv4hi_uus)
+#elif !OCANNL_FORCE_PORTABLE_BRIDGES && defined(__aarch64__) && \
+    __has_builtin(__builtin_aarch64_ushll_nv4hi_uus)
   #define OCANNL_VEC_WIDEN_BFLOAT16_X4(U16V, U32V, LANES, dst, src) do { \
     __Uint16x4_t ocannl_nb__ = {0}; __builtin_memcpy(&ocannl_nb__, (src), (LANES) * 2); \
     __Uint32x4_t ocannl_nw__ = __builtin_aarch64_ushll_nv4hi_uus(ocannl_nb__, 16); \
@@ -978,7 +980,7 @@ uint16_t single_to_bfloat16(float f)
     long long ocannl_nq__ = 0; __builtin_memcpy(&ocannl_nq__, (src), (LANES) * 2); \
     (dst) = (FV)__builtin_ia32_vcvtph2ps((ocannl_w8hi__)(ocannl_w2di__){ocannl_nq__, 0}); \
   } while (0)
-#elif HAS_NATIVE_FLOAT16 && defined(__aarch64__) && \
+#elif !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__aarch64__) && \
     __has_builtin(__builtin_aarch64_float_extend_lo_v4sf)
   #define OCANNL_VEC_WIDEN_HALF_X4(FV, HV, LANES, dst, src) do { \
     __Float16x4_t ocannl_nh__ = {0}; __builtin_memcpy(&ocannl_nh__, (src), (LANES) * 2); \
@@ -1054,7 +1056,7 @@ uint16_t single_to_bfloat16(float f)
     ocannl_n8hi__ ocannl_nh__ = __builtin_ia32_vcvtps2ph((ocannl_n4sf__)(src), 4); \
     __builtin_memcpy((dst), &ocannl_nh__, (LANES) * 2); \
   } while (0)
-#elif HAS_NATIVE_FLOAT16 && defined(__aarch64__) && \
+#elif !OCANNL_FORCE_PORTABLE_BRIDGES && HAS_NATIVE_FLOAT16 && defined(__aarch64__) && \
     __has_builtin(__builtin_aarch64_float_truncate_lo_v4hf)
   #define OCANNL_VEC_NARROW_HALF_X4(HV, LANES, dst, src) do { \
     __Float16x4_t ocannl_nh__ = __builtin_aarch64_float_truncate_lo_v4hf((__Float32x4_t)(src)); \
