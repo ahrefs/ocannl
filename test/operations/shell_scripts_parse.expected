@@ -552,6 +552,7 @@ tools/kernel-window.sh parses: true
 tools/lab-map.sh parses: true
 tools/machine-verify-far.sh parses: true
 tools/machine-verify.sh parses: true
+tools/merge-build-check.sh parses: true
 tools/mutation-run.sh parses: true
 tools/opam-env.sh parses: true
 tools/per-test-cap.sh parses: true
@@ -575,6 +576,8 @@ tools/test-fmt-check.sh parses: true
 tools/test-harnesses.sh parses: true
 tools/test-machine-verify.sh uses the shared harness contract: true
 tools/test-machine-verify.sh parses: true
+tools/test-merge-build-check.sh uses the shared harness contract: true
+tools/test-merge-build-check.sh parses: true
 tools/test-mutation-run.sh uses the shared harness contract: true
 tools/test-mutation-run.sh parses: true
 tools/test-pin-revisions.sh uses the shared harness contract: true

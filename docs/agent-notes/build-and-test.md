@@ -170,8 +170,22 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   refused as not mergeable. Push that resolution only once the head's own run has finished, never
   while it is in flight: `ci.yml`'s `cancel-in-progress` cancels the running one, and its verdict on
   the change with it. Interactions with siblings merged meanwhile are a clean GitHub merge's risk as
-  much as a stale branch's, and they belong to the integration loop on the merged tip or to the
-  CI-red triage routine (the CI section below), not to the session that merged.
+  much as a stale branch's. Past the merge build (next bullet) they belong to the integration loop
+  on the merged tip or to the CI-red triage routine (the CI section below), not to the session that
+  merged.
+- The merge itself builds the interactions that are cheap to catch. Two green PRs broke master
+  together twice on 2026-10-15: staging#1139 with staging#1142 did not compile, and staging#1171
+  with staging#1172 broke `tools/test-test-run.sh`'s repeat leg. `.github/ship-pr-merge-build`
+  therefore has ship-pr's `merge` build the PR head merged with master's tip before the merge call,
+  whenever a path BOTH sides changed since their merge base is an OCaml build input or a `*.sh`,
+  and refuse the merge when `tools/merge-build-check.sh` fails there. That script always runs
+  `dune build @check @test/operations/scans`, about 40 s from a fresh tree on mac-studio, and adds
+  the shell harness tier, about 470 s, only when a shared path is a `*.sh`. In the month before it
+  landed, 140 of 441 merges shared an input and 5 shared a script, so the expensive tier stays
+  rare. Run on the two merge commits above, it refused the first in its compile tier and the
+  second in its shell tier. A clash confined to Markdown or goldens, or across paths only one side
+  changed, is outside that boundary. To check a merge by hand, run the script at the root of a
+  checkout whose HEAD is that merge; `--plan` prints the tiers it selects and why.
 
 ### Scan corpora, goldens and floors
 
