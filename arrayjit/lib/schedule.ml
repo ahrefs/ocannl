@@ -1188,13 +1188,15 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
     reads of [source] to use one index vector (v1). Each source axis's index is decomposed into a
     tile part (terms over [tile_loops], positive coefficients) and an outer part; source axes with a
     nonempty tile part become tile axes, sized by the tile part's range over the tile loops' extents
-    — except that a single-term tile part with coefficient > 1 (a strided window, e.g. a stride-2
-    conv's implicit-GEMM row) is {e compacted} (gh-ocannl-502): the tile axis is sized by the loop
-    extent and stored/read at coefficient 1, while the load nest's source index (and edge guard)
-    keeps the stride, so the packed tile is dense and satisfies [Tensorize]'s unit-coefficient index
-    discipline. Hoisted staging rejects compaction (v1). The tile's axes follow the {e tile_loops}
-    order (the position of each axis's first tile-part symbol in the list; ties keep source order),
-    not the source's: a packing Stage over a transposed operand normalizes its layout —
+    — except that a tile part whose coefficients share a factor [g > 1] (a strided window: a
+    stride-2 conv's implicit-GEMM row, or a stride-2 1x1 conv's row, split or not) is {e compacted}
+    (gh-ocannl-502, gh-ocannl-1148; {!stage_compaction_factor}): the tile axis is indexed by the
+    tile part divided by [g] and sized by that quotient's range, while the load nest's source index
+    (and edge guard) keeps the stride, so the packed tile is dense — a single strided term is stored
+    and read at coefficient 1, which satisfies [Tensorize]'s unit-coefficient index discipline.
+    Hoisted staging rejects compaction (v1). The tile's axes follow the {e tile_loops} order (the
+    position of each axis's first tile-part symbol in the list; ties keep source order), not the
+    source's: a packing Stage over a transposed operand normalizes its layout —
     [tile_loops = [k; j]] on a [j, k]-stored source packs a [k]-major tile — which is what lets
     packed tiles feed [Tensorize]'s register-tiled micro-kernel with [ta = tb = false]
     (gh-ocannl-469). Every in-tree pipeline before this passed [tile_loops] in source order, where
@@ -1240,6 +1242,19 @@ let terms_of_index (idx : Indexing.axis_index) : index_terms =
   | Indexing.Affine { symbols; offset } -> Terms (symbols, offset)
   | Indexing.Sub_axis -> Flattened
   | Indexing.Concat _ -> Concatenated
+
+(* The factor a [Stage] tile axis is compacted by (gh-ocannl-502, generalized by gh-ocannl-1148):
+   the gcd of its tile part's coefficients, so [1] when the part is empty or any term is
+   unit-coefficient. The tile coordinate is the tile part divided by this factor. Dividing every
+   term by a common factor keeps the map from tile-loop values to tile coordinates injective exactly
+   when the undivided one was, so the remap stays a bijection onto the cells actually read, and the
+   tile shrinks by the factor along that axis: a single strided term [c*i] (a strided conv window,
+   the row of a stride-2 1x1 conv) is stored and read at [i]; the same row split into a block and a
+   register part ([2*tm*i_w + 2*i_t]) is stored densely at [tm*i_w + i_t] rather than in a tile
+   twice the height with every other row empty. A part mixing coefficients without a common factor
+   (a dilated window over two tile loops) keeps the range-sized layout. *)
+let stage_compaction_factor (tile_part : (int * Indexing.symbol) list) : int =
+  List.fold tile_part ~init:0 ~f:(fun g (c, _) -> Utils.gcd g c) |> Int.max 1
 
 (* [idx] plus the fresh symbol [s] (coefficient 1): the tile coordinate a cooperative-tile transform
    adds to an accumulator's base index. [None] for an index with no per-axis affine form to extend,
@@ -1600,25 +1615,28 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     let fl = floop_of_exn s in
     fl.to_ - fl.from_ + 1
   in
-  (* Compacting Stage (gh-ocannl-502): a single-term tile part with coefficient [c > 1] — a strided
-     window, e.g. the implicit-GEMM row of a stride-2 conv, whose source index carries [c*row] — is
-     packed densely: the tile axis is sized by the loop extent rather than the strided range, and
-     the tile store/read indices use the symbol with coefficient 1, so downstream [Tensorize]'s
-     unit-coefficient index discipline accepts the tile. Only the load's source index (and its edge
-     guard) keeps the stride. Multi-term tile parts keep the range-sized (dilated) layout: their
-     dense remap is not injective in general. *)
-  let compacted a = match decomp.(a) with [ (c, s) ], _, _ when c > 1 -> Some s | _ -> None in
-  (* Tile axes: source axes with a nonempty tile part; dim = the tile part's range (the loop extent
-     when compacted). Ordered by the position in [tile_loops] of each axis's first tile-part symbol
-     (stable within source order), so the caller's [tile_loops] order picks the packed layout (see
-     the section comment). *)
+  (* Compacting Stage (gh-ocannl-502, gh-ocannl-1148): see {!stage_compaction_factor}. [compacted a]
+     is the tile coordinate of axis [a] — its tile part divided by the factor — when the factor
+     exceeds 1; only the load's source index (and its edge guard) keeps the stride. *)
+  let compacted a =
+    let tp, _, _ = decomp.(a) in
+    let g = stage_compaction_factor tp in
+    if g > 1 then Some (List.map tp ~f:(fun (c, s) -> (c / g, s))) else None
+  in
+  let tile_terms a =
+    let tp, _, _ = decomp.(a) in
+    Option.value (compacted a) ~default:tp
+  in
+  (* Tile axes: source axes with a nonempty tile part; dim = the range of the tile coordinate over
+     the tile loops' extents (the loop extent for a compacted single strided term). Ordered by the
+     position in [tile_loops] of each axis's first tile-part symbol (stable within source order), so
+     the caller's [tile_loops] order picks the packed layout (see the section comment). *)
   let tile_axes =
     Array.filter_mapi decomp ~f:(fun a (tp, _, _) ->
         if List.is_empty tp then None
         else
-          match compacted a with
-          | Some s -> Some (a, extent s)
-          | None -> Some (a, List.fold tp ~init:1 ~f:(fun acc (c, s) -> acc + (c * (extent s - 1)))))
+          Some
+            (a, List.fold (tile_terms a) ~init:1 ~f:(fun acc (c, s) -> acc + (c * (extent s - 1)))))
   in
   let tile_loop_pos s =
     match List.findi tile_loops ~f:(fun _ s' -> Indexing.equal_symbol s s') with
@@ -1901,17 +1919,10 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     let load_src_idcs = Array.map idcs0 ~f:(rename_index ~f:load_sym) in
     let tile_store_idcs =
       Array.map tile_axes ~f:(fun (a, _) ->
-          let tp, _, _ = decomp.(a) in
-          let terms =
-            match compacted a with Some s -> [ (1, load_sym s) ] | None -> subst_terms tp
-          in
-          normalize_affine ~terms ~offset:0)
+          normalize_affine ~terms:(subst_terms (tile_terms a)) ~offset:0)
     in
     let tile_read_idcs =
-      Array.map tile_axes ~f:(fun (a, _) ->
-          let tp, _, _ = decomp.(a) in
-          let terms = match compacted a with Some s -> [ (1, s) ] | None -> tp in
-          normalize_affine ~terms ~offset:0)
+      Array.map tile_axes ~f:(fun (a, _) -> normalize_affine ~terms:(tile_terms a) ~offset:0)
     in
     let iprec = Ops.index_prec () in
     (* Per axis, the extent its component ranges over: a component flattened over a [Sub_axis] run

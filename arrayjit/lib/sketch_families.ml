@@ -258,6 +258,13 @@ type matmul_site = {
       (** The axis of [m_d]'s index map carrying [m_i] (the 2-D tile row). [rank - 2] on plain
           sites; smaller when interior batch axes sit between the roles. [m_j] is always on the
           minor axis. *)
+  m_row_stride : int;
+      (** [m_a]'s coefficient on [m_i] (gh-ocannl-1148). [1] on every site with a row [m_a] reads at
+          unit stride. Greater only where no such row exists and a strided window owns the row
+          instead: a stride-2 1x1 conv at batch 1 reads its input at [(2*oh, 2*ow)] and has no other
+          output axis. Such a row can only be tiled through a compacting [Stage] of [m_a]
+          ({!Ir.Schedule.stage_compaction_factor}), so the family tree refutes every geometry that
+          reads [m_a] in place or packs it at link time. *)
   m_d : Ir.Tnode.t;
   m_a : Ir.Tnode.t;
   m_b : Ir.Tnode.t;
@@ -333,11 +340,15 @@ let unit_axis (idcs : Idx.axis_index array) s : int option =
    batch loops above [j]). - Per operand order, [a] must own [k], must not read [j]; [b] must own
    [j] and [k]; [i] is the {e deepest} write loop owned by [a] and absent from [b] — the 2-D tile
    row; a role symbol owns its component alone (a convolution window [ox + kx] is not a tile axis).
-   The exclusions are what keep variance-style self-products [d[b,s] += x[b,s,k] * x[b,s,k]] — whose
-   reads mention every loop — from masquerading as matmuls: they seeded (and always failed candidate
-   compile) before. - Everything else is batch: [m_bo] outside [i], [m_bi] between [i] and [j];
-   batch symbols and outer contraction symbols may appear in the operands freely (their occurrences
-   form the tile block base).
+   Where no write loop qualifies at unit coefficient, the deepest one [a] reads as a single strided
+   term [c*i] owns the row instead ([m_row_stride = c], gh-ocannl-1148): a stride-2 1x1 conv at
+   batch 1 has no other output axis for it. A unit-stride row is kept wherever one exists, so every
+   site the classifier admitted before keeps its roles and its seeds. The exclusions are what keep
+   variance-style self-products [d[b,s] += x[b,s,k] * x[b,s,k]] — whose reads mention every loop —
+   from masquerading as matmuls: they seeded (and always failed candidate compile) before. -
+   Everything else is batch: [m_bo] outside [i], [m_bi] between [i] and [j]; batch symbols and outer
+   contraction symbols may appear in the operands freely (their occurrences form the tile block
+   base).
 
    Detection remains permissive about everything else — a mis-detected site fails its candidate
    compile (op preconditions, [validate_parallel], hardware limits) and is skipped. *)
@@ -384,6 +395,17 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
               let sole_axis idcs s =
                 match unit_axis idcs s with Some p when plain idcs.(p) -> Some p | _ -> None
               in
+              (* The row's strided fallback (gh-ocannl-1148): [s] is the sole symbol of exactly one
+                 component, read there at a coefficient above 1. *)
+              let strided_axis idcs s =
+                match
+                  Array.filter_mapi idcs ~f:(fun p idx ->
+                      Option.some_if (Idx.axis_index_mentions_symbol s idx) p)
+                with
+                | [| p |] when plain idcs.(p) && idx_coeff idcs.(p) s > 1 ->
+                    Some (p, idx_coeff idcs.(p) s)
+                | _ -> None
+              in
               (* The same for the outer contraction loops, wherever an operand mentions one: a
                  conv's kernel-window symbols are exactly the suffix loops that appear mixed into an
                  output axis ([oy + ky]), and with the channel loop innermost the row rule alone
@@ -403,12 +425,23 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
                 || not (ko_plain bi)
               then None
               else
-                let eligible =
-                  List.filter front ~f:(fun ((s, _), _) ->
-                      Option.is_some (sole_axis ai s)
-                      && not (Array.exists bi ~f:(Idx.axis_index_mentions_symbol s)))
+                let eligible ~stride =
+                  List.filter_map front ~f:(fun (((s, _), _) as role) ->
+                      if Array.exists bi ~f:(Idx.axis_index_mentions_symbol s) then None
+                      else match stride ai s with Some c -> Some (role, c) | None -> None)
                 in
-                Option.map (List.last eligible) ~f:(fun ((i, ni), p_row) ->
+                let row =
+                  match
+                    List.last
+                      (eligible ~stride:(fun idcs s ->
+                           Option.map (sole_axis idcs s) ~f:(fun _ -> 1)))
+                  with
+                  | Some _ as unit_row -> unit_row
+                  | None ->
+                      List.last
+                        (eligible ~stride:(fun idcs s -> Option.map (strided_axis idcs s) ~f:snd))
+                in
+                Option.map row ~f:(fun (((i, ni), p_row), row_stride) ->
                     let before_i = ref true in
                     let m_bo = ref [] and m_bi = ref [] in
                     List.iter front ~f:(fun ((s, n), _) ->
@@ -433,6 +466,7 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
                       m_bo = List.rev !m_bo;
                       m_bi = List.rev !m_bi;
                       m_row_axis = p_row;
+                      m_row_stride = row_stride;
                       m_d = d;
                       m_a = a;
                       m_b = b;
@@ -568,8 +602,8 @@ let matmul_site_equal (x : matmul_site) (y : matmul_site) =
   Idx.equal_symbol x.m_i y.m_i && Idx.equal_symbol x.m_j y.m_j && Idx.equal_symbol x.m_k y.m_k
   && x.m_ni = y.m_ni && x.m_nj = y.m_nj && x.m_nk = y.m_nk && batch_equal x.m_ko y.m_ko
   && batch_equal x.m_bo y.m_bo && batch_equal x.m_bi y.m_bi && x.m_row_axis = y.m_row_axis
-  && phys_equal x.m_d y.m_d && phys_equal x.m_a y.m_a && phys_equal x.m_b y.m_b
-  && Bool.equal x.m_zeroed y.m_zeroed
+  && x.m_row_stride = y.m_row_stride && phys_equal x.m_d y.m_d && phys_equal x.m_a y.m_a
+  && phys_equal x.m_b y.m_b && Bool.equal x.m_zeroed y.m_zeroed
   && Option.equal Bool.equal x.m_tb y.m_tb
   && Bool.equal x.m_fma y.m_fma
 
@@ -1772,6 +1806,30 @@ let gpu_sketch_schedule ~accum_prec ~(opt : LL.optimized) (site : matmul_site)
    always measured for constant sites. *)
 let hoistable = Sched.hoistable_constant
 
+(* Whether the matmul pipelines pack operand [tn] of [site] at link time (gh-ocannl-1148): a
+   hoistable constant, unless it is the A of a strided-row site, whose tile must be compacted --
+   which hoisted staging refuses (v1) -- so it packs in kernel instead. Every pipeline and every
+   family-tree verdict asks this, never [hoistable] directly, so a shape the tree proposes stages
+   its operands exactly as the builder will. *)
+let site_hoistable (site : matmul_site) tn =
+  hoistable tn && (site.m_row_stride = 1 || not (phys_equal tn site.m_a))
+
+(* Why a strided-row site whose only constant operand is its A packs nothing at link time
+   (gh-ocannl-1148). *)
+let strided_row_link_time_witness (site : matmul_site) =
+  Printf.sprintf
+    "the only host-init-backed constant operand is A, whose stride-%d row needs a compacting \
+     Stage, which link-time packing refuses (v1)"
+    site.m_row_stride
+
+(* The family tree's witness for a strided-row site's geometries that would read A in place
+   (gh-ocannl-1148). *)
+let strided_row_in_place_witness (site : matmul_site) ~what =
+  Printf.sprintf
+    "the row is a stride-%d window of A: %s reads A in place, and Tensorize needs the row at unit \
+     coefficient, which only a compacting Stage of A gives"
+    site.m_row_stride what
+
 (* The CPU operand-packing matmul (schedule_cpu_pack_matmul.ml): all-serial tiling with the tile
    loops sunk to [i_o j_o k_o k_i i_i j_i], operands packed into contiguous stack scratch, output
    privatized across the k-block loop. With [sk_hoist], constant operands are instead packed once at
@@ -1792,7 +1850,7 @@ let cpu_sketch_schedule ~accum_prec (site : matmul_site)
           tile_loops = [ i_i; k_i ];
           shared = false;
           cooperative = None;
-          hoisted = sk_hoist && hoistable site.m_a;
+          hoisted = sk_hoist && site_hoistable site site.m_a;
           swizzle = None;
           pad_stride = None;
           pipeline_depth = 1;
@@ -1804,7 +1862,7 @@ let cpu_sketch_schedule ~accum_prec (site : matmul_site)
           tile_loops = [ k_i; j_i ];
           shared = false;
           cooperative = None;
-          hoisted = sk_hoist && hoistable site.m_b;
+          hoisted = sk_hoist && site_hoistable site site.m_b;
           swizzle = None;
           pad_stride = None;
           pipeline_depth = 1;
@@ -2045,13 +2103,13 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
       List.filter_map
         [ (site.m_b, [ k_i; j_col ]); (site.m_a, [ i_i; k_i ]) ]
         ~f:(fun (src, tls) ->
-          if hoistable src then Some (stage ~hoisted:true src tls)
+          if site_hoistable site src then Some (stage ~hoisted:true src tls)
           else if sk_pack_rest then Some (stage ~hoisted:false src tls)
           else None)
     else
       [
-        stage ~hoisted:(sk_hoist && hoistable site.m_b) site.m_b [ k_i; j_col ];
-        stage ~hoisted:(sk_hoist && hoistable site.m_a) site.m_a [ i_i; k_i ];
+        stage ~hoisted:(sk_hoist && site_hoistable site site.m_b) site.m_b [ k_i; j_col ];
+        stage ~hoisted:(sk_hoist && site_hoistable site site.m_a) site.m_a [ i_i; k_i ];
       ]
   in
   let zops =
@@ -3164,11 +3222,14 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
             [
               (Family_decision.Packing `In_kernel, subt (fun () -> geoms false));
               ( Family_decision.Packing `Hoisted,
-                if hoistable site.m_a || hoistable site.m_b then subt (fun () -> geoms true)
+                if site_hoistable site site.m_a || site_hoistable site site.m_b then
+                  subt (fun () -> geoms true)
                 else
                   Sspace.Refuted
-                    "hoisted packing needs a host-init-backed constant operand; neither operand is \
-                     one" );
+                    (if hoistable site.m_a then strided_row_link_time_witness site
+                     else
+                       "hoisted packing needs a host-init-backed constant operand; neither operand \
+                        is one") );
             ])
     else Sspace.Refuted "backend kind seeds no scalar blocktile pipeline"
   in
@@ -3332,6 +3393,9 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                            @
                            if bk = 0 then
                              [
+                               ( site.m_row_stride = 1,
+                                 strided_row_in_place_witness site ~what:"an unstaged full-K block"
+                               );
                                ndiv "bm" bm ~into:"m" site.m_ni;
                                ndiv "bn" bn ~into:"n" site.m_nj;
                                ( site.m_nk % tk_t = 0,
@@ -3529,6 +3593,8 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
             let whole_child =
               refute_unless
                 [
+                  ( site.m_row_stride = 1,
+                    strided_row_in_place_witness site ~what:"the whole-triple form" );
                   ( not tb_in_place,
                     "stored B is transposed: whole-triple reads B in place, which the register \
                      tiling statically declines" );
@@ -3665,8 +3731,11 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                              Sspace.Excluded (w, lazy (f p full_div tiles_bytes))
                          | None -> f p full_div tiles_bytes )))
               in
-              let any_hoistable = hoistable site.m_a || hoistable site.m_b in
-              let no_constant = "no host-init-backed constant operand to pack at link time" in
+              let any_hoistable = site_hoistable site site.m_a || site_hoistable site site.m_b in
+              let no_constant =
+                if hoistable site.m_a then strided_row_link_time_witness site
+                else "no host-init-backed constant operand to pack at link time"
+              in
               (* See the flat enumeration's rationale, now attached to the shapes it judges: hoisted
                  packing (gh-ocannl-470) needs a constant operand; the hoisted-only Grid shape reads
                  non-hoistable operands in place (no pad absorption, and a transposed non-hoistable
@@ -3688,13 +3757,18 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                     if not any_hoistable then Sspace.Refuted no_constant
                     else if Option.is_some (Lazy.force cpu_grid_rendering_disabled) then
                       Sspace.Refuted (Option.value_exn (Lazy.force cpu_grid_rendering_disabled))
+                    else if site.m_row_stride > 1 then
+                      (* A strided-row site's A is never [site_hoistable], so this shape omits its
+                         stage. *)
+                      Sspace.Refuted
+                        (strided_row_in_place_witness site ~what:"the hoisted-grid shape")
                     else if
                       (* A non-hoistable B is read in place by this shape (its stage is omitted), so
                          only the clean untransposed orientation survives: transposed B statically
                          declines the register tiling, and [m_tb = None] means no role symbol
                          occupies B's minor axis — Tensorize's role check rejects every in-place
                          read deterministically. *)
-                      (not (hoistable site.m_b))
+                      (not (site_hoistable site site.m_b))
                       && not (Option.value_map site.m_tb ~default:false ~f:not)
                     then
                       Sspace.Refuted
@@ -3709,7 +3783,12 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                     else
                       subt (fun () ->
                           geoms ~f:(fun p full_div _ ->
-                              if not (full_div || (hoistable site.m_a && hoistable site.m_b)) then
+                              if
+                                not
+                                  (full_div
+                                  || (site_hoistable site site.m_a && site_hoistable site site.m_b)
+                                  )
+                              then
                                 Sspace.Refuted
                                   "extents do not divide the blocks: the non-hoistable operand is \
                                    read in place and cannot absorb the zero-fringe pad"
@@ -3719,7 +3798,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                     if not any_hoistable then Sspace.Refuted no_constant
                     else if Option.is_some (Lazy.force cpu_grid_rendering_disabled) then
                       Sspace.Refuted (Option.value_exn (Lazy.force cpu_grid_rendering_disabled))
-                    else if hoistable site.m_a && hoistable site.m_b then
+                    else if site_hoistable site site.m_a && site_hoistable site site.m_b then
                       Sspace.Excluded
                         ( "both operands are hoistable: nothing is left to pack in-kernel, the \
                            shape degenerates to hoisted-grid",
@@ -3742,7 +3821,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                               (* The non-hoistable operand's in-kernel packing Stage lands inside
                                  the Grid body and privatizes per chunk. *)
                               let rest_tile =
-                                if hoistable site.m_a then p.sk_bk * bn_eff * prec_bytes
+                                if site_hoistable site site.m_a then p.sk_bk * bn_eff * prec_bytes
                                 else p.sk_bm * p.sk_bk * prec_bytes
                               in
                               if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
@@ -3764,8 +3843,8 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                        a lifted one-hoistable site, just the in-kernel one). *)
                     let privatized_bytes p =
                       let bn_eff = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
-                      (if hoistable site.m_a then 0 else p.sk_bm * p.sk_bk * prec_bytes)
-                      + if hoistable site.m_b then 0 else p.sk_bk * bn_eff * prec_bytes
+                      (if site_hoistable site site.m_a then 0 else p.sk_bm * p.sk_bk * prec_bytes)
+                      + if site_hoistable site site.m_b then 0 else p.sk_bk * bn_eff * prec_bytes
                     in
                     let judged () =
                       geoms ~f:(fun p _ _ ->

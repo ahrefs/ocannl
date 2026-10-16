@@ -211,6 +211,9 @@ type matmul_site = {
   m_bo : (Ir.Indexing.symbol * int) list;
   m_bi : (Ir.Indexing.symbol * int) list;
   m_row_axis : int;
+  m_row_stride : int;
+      (** [m_a]'s coefficient on [m_i]: [1] wherever a unit-stride row exists, greater on a strided
+          row only a compacting [Stage] of [m_a] can tile (gh-ocannl-1148). *)
   m_d : Ir.Tnode.t;
   m_a : Ir.Tnode.t;
   m_b : Ir.Tnode.t;

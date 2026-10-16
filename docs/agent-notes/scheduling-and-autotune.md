@@ -406,20 +406,26 @@ files.
   that "is not detected" usually has a singleton somewhere — keep every axis at extent >= 2 unless
   the singleton is the point. `test/operations/conv_detection_boundary` pins each class with its
   reason, derived from the lowered maps.
-- **The matmul family never tiles or packs along a strided axis** (gh-ocannl-1076): a role needs
-  unit coefficient in the operand (`Sketch_families.unit_axis`), so a stride-2 1x1 conv
-  (`resnet_block`'s downsample) classifies with the BATCH axis as the GEMM row and `oh, ow` as
-  interior batch loops (`m_bi`) — every seed stages dense tiles from a strided source address and
-  executes correctly on cc and HIP, but the row is only `b` rows tall, and at batch 1 no family
-  seeds the site at all. Inside the full block (at 64 channels; at 16 the shortcut's conv is
-  virtualized into its norm and is no site) cc does not fission it and every whole-routine seed
-  declines — the operand `Stage` meets the 3x3 conv's second read of `x` — so the tuner times no
-  sketch for the shortcut there; GPU fissions it and the segment's seeds run.
-  `test/operations/schedule_strided_1x1` uses the public `resnet_block` with explicit `out_channels`
-  (gh-ocannl-1146) and PINS the role
-  structure, the batch-1 refusal and every seed's parity (or typed decline, in the block); which
-  seeds decline where it only reports on stderr, and the 16-channel virtualization is a manual
-  observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
+- **A strided 1x1 conv's GEMM row is the batch axis wherever there is one** (gh-ocannl-1076,
+  gh-ocannl-1148): `classify_matmul` prefers a row the A operand reads at unit coefficient
+  (`Sketch_families.unit_axis`), so a stride-2 1x1 conv (`resnet_block`'s downsample) at batch 2+
+  rows on `b`, with `oh, ow` as interior batch loops (`m_bi`), and every seed stages dense tiles
+  from a strided source address. Only where no unit-stride row exists (batch 1) does the strided
+  window own the row (`m_row_stride = 2`, row `ow`); then every pipeline must pack A through a
+  compacting `Stage` (`Schedule.stage_compaction_factor`: the gcd of the tile part's
+  coefficients, so the blocktile's twice-split row `2*tm*i_w + 2*i_t` compacts too), and the
+  family tree refutes the shapes that read A in place (unstaged full-K mma, whole-triple,
+  hoisted-grid) or pack it at link time (`site_hoistable`: hoisted staging refuses compaction).
+  At batch 2+ the row stays `b` rows tall even though `ow` would be a taller one; that preference
+  is what kept every pre-existing site's seeds unchanged. Inside the full block (at 64 channels;
+  at 16 the shortcut's conv is virtualized into its norm and is no site) cc does not fission it
+  and every whole-routine seed declines — the operand `Stage` meets the 3x3 conv's second read of
+  `x` (gh-ocannl-1147) — so the tuner times no sketch for the shortcut there; GPU fissions it and
+  the segment's seeds run. `test/operations/schedule_strided_1x1` uses the public `resnet_block`
+  with explicit `out_channels` (gh-ocannl-1146) and PINS the role structure at both batch sizes
+  and every seed's parity (or typed decline, in the block); which seeds decline where it only
+  reports on stderr, and the 16-channel virtualization is a manual observation (conv2d into
+  batch_norm2d, 16 channels) that no test exercises.
 - **A per-segment candidate's executed-parity reference is its own segmentation on the default
   preset, not the unscheduled form, wherever the values are inexact** (gh-ocannl-1217). The
   candidate schedules every OTHER segment by the default preset too, so against the unscheduled

@@ -15,9 +15,16 @@
    loops ([m_bi]), which the pipelines hoist and iterate but never tile or pack along, and the GEMM
    row is the batch axis. The packing copies [row x k] tiles at a fixed strided spatial position.
    The executed claims cover that addressing; the structural claims say why no tile row is strided,
-   and a unit-stride control shows the reason predicate discriminates (there the row is [ow]). The
-   consequence for a batch of one is pinned too: no unit-stride output axis is left for the row, so
-   no sketch family seeds the site at all.
+   and a unit-stride control shows the reason predicate discriminates (there the row is [ow]).
+
+   A batch of one leaves no unit-stride output axis for the row, and until gh-ocannl-1148 no sketch
+   family seeded the site at all. Now the strided window owns the row there ([m_row_stride = 2], the
+   minor output axis [ow]), and every pipeline packs A through a compacting [Stage]
+   ({!Ir.Schedule.stage_compaction_factor}): the tile is dense, stored and read at the row's
+   quotient, and only the load keeps the stride. The family tree refutes the geometries that would
+   read A in place or pack it at link time, so the batch-one legs claim what the batch-two legs do:
+   both flavors seed, every seed runs and matches, and the tensorized ones render tensorized. A
+   unit-stride row is still preferred wherever one exists, so the batch-two legs keep their roles.
 
    The producers discriminate: every operand cell is a small positive integer varying with each of
    its indices ([Ll_test.weighted], distinct weights, none a multiple of the modulus), so every
@@ -212,7 +219,7 @@ let fission ~arity_cuts ~preset opt =
 
 (* The keyed segments of one segmentation, on a hermetic copy of the lowering; [None] when the
    routine does not fission (the tuner then runs no per-segment flavor). *)
-let segment_seeds ?(matmul_only = true) ~seeds_of ~arity_cuts (opt : LL.optimized) =
+let segment_seeds ~seeds_of ~arity_cuts (opt : LL.optimized) =
   let scratch =
     {
       opt with
@@ -225,11 +232,10 @@ let segment_seeds ?(matmul_only = true) ~seeds_of ~arity_cuts (opt : LL.optimize
   | tuples ->
       Some
         (List.filter_map tuples ~f:(fun (kind, pre, _, _) ->
-             (* Matmul segments only, by default: a segment of the block's 3x3 convs seeds the conv
-                family, for another site (schedule_conv_gemm's). *)
+             (* Matmul segments only: a segment of the block's 3x3 convs seeds the conv family, for
+                another site (schedule_conv_gemm's). *)
              match kind with
-             | `Normal when (not matmul_only) || Option.is_some (Autotune.detect_matmul pre.LL.llc)
-               -> (
+             | `Normal when Option.is_some (Autotune.detect_matmul pre.LL.llc) -> (
                  match seeds_of pre with [] -> None | seeds -> Some (seg_key pre, seeds))
              | _ -> None))
 
@@ -356,15 +362,11 @@ let dedup seeds =
 
 type probed = {
   site : Autotune.matmul_site option;
-  conv : bool;
   in_map : Idx.axis_index array;
   out_map : Idx.axis_index array;
   whole : Autotune.sketch_params list;
   segs : (bool * string * Autotune.sketch_params list) list option;
       (** [(arity_cuts, key, seeds)] per keyed segment; [None] when the routine does not fission. *)
-  any_segment_seeds : int;
-      (** Seeds of every [`Normal] segment, whatever family — for the boundary claim that nothing
-          seeds a site. *)
   device_whole : Autotune.sketch_params list;
   device_segs : (bool * string * Autotune.sketch_params list) list option;
       (** The whole-routine and keyed per-segment seeds under the device's own limits alone — what
@@ -387,20 +389,17 @@ let probe ~tag s =
            Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt))
   in
   let device_seeds_of opt = Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits:device_limits opt in
-  let keyed ?matmul_only ~seeds_of opt =
-    Option.map (segment_seeds ?matmul_only ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
+  let keyed ~seeds_of opt =
+    Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
         let fine =
           if on_cpu then []
           else
-            Option.value ~default:[] (segment_seeds ?matmul_only ~seeds_of ~arity_cuts:true opt)
+            Option.value ~default:[] (segment_seeds ~seeds_of ~arity_cuts:true opt)
             |> List.filter ~f:(fun (k, _) ->
                 not (List.exists coarse ~f:(fun (c, _) -> String.equal c k)))
         in
         List.map coarse ~f:(fun (k, q) -> (false, k, q))
         @ List.map fine ~f:(fun (k, q) -> (true, k, q)))
-  in
-  let count_segs =
-    Option.value_map ~default:0 ~f:(List.sum (module Int) ~f:(fun (_, _, q) -> List.length q))
   in
   let found = ref None in
   (let x, y = make s (tag ^ "_probe") in
@@ -414,12 +413,10 @@ let probe ~tag s =
            Some
              {
                site;
-               conv = Option.is_some (Autotune.detect_conv opt.LL.llc);
                in_map;
                out_map;
                whole = seeds_of opt;
                segs = keyed ~seeds_of opt;
-               any_segment_seeds = count_segs (keyed ~matmul_only:false ~seeds_of opt);
                device_whole = device_seeds_of opt;
                device_segs = keyed ~seeds_of:device_seeds_of opt;
              };
@@ -456,9 +453,22 @@ let stride_on_batch_loops o =
   | None, _ | _, [] -> false
   | Some m, strided ->
       same_syms strided (List.map m.Autotune.m_bi ~f:fst)
+      && m.Autotune.m_row_stride = 1
       && List.mem
            (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map)
            m.Autotune.m_i ~equal:Idx.equal_symbol
+
+(* gh-ocannl-1148, where no output axis is read at unit stride: the GEMM row is the minor stride-2
+   output axis, with the site's stride recorded, and no interior batch loop is left between the
+   roles. *)
+let stride_on_row o =
+  match (o.site, strided_syms o.in_map) with
+  | None, _ | _, [] -> false
+  | Some m, strided ->
+      m.Autotune.m_row_stride = 2
+      && List.mem strided m.Autotune.m_i ~equal:Idx.equal_symbol
+      && m.Autotune.m_row_axis = Array.length o.out_map - 2
+      && List.is_empty m.Autotune.m_bi
 
 (* The seeder's own judgment of a tensorized pipeline for the site's operands on this backend
    ([Ll_test.tensorized_capability], gh-ocannl-1115): the register tiling on the C backends, an
@@ -482,7 +492,15 @@ let rendered name q census =
       (Ir.C_syntax.mma_summary_string census);
   ok
 
-let leg ?(declines = false) ~what ~tag s =
+(* The structural claim a leg makes about where the stride lands. *)
+let structure_claim = function
+  | `Batch ->
+      "a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride"
+  | `Strided ->
+      "a matmul site whose row is the minor output axis, read at stride 2, with no interior batch \
+       loop"
+
+let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
   let o = probe ~tag s in
   let unscheduled = run_plain (tag ^ "_ref") s in
   (match s.build with
@@ -499,10 +517,8 @@ let leg ?(declines = false) ~what ~tag s =
         (Array.fold unscheduled ~init:0. ~f:(fun m a -> Float.max m (Float.abs a)))
         (Array.length unscheduled));
   p
-    (what
-   ^ ": a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride"
-    )
-    (stride_on_batch_loops o);
+    (what ^ ": " ^ structure_claim row)
+    (match row with `Batch -> stride_on_batch_loops o | `Strided -> stride_on_row o);
   let close ~tol ~want got =
     Array.length got = Array.length want
     && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) < tol b))
@@ -703,7 +719,8 @@ let leg ?(declines = false) ~what ~tag s =
     if on_cpu then skipped label
     else
       p_all label seg_baselines ~f:(fun (_, got) ->
-          Option.value_map got ~default:false ~f:(close ~tol:rounding ~want:unscheduled)))
+          Option.value_map got ~default:false ~f:(close ~tol:rounding ~want:unscheduled)));
+  o
 
 (* [conv_detection_boundary]'s [cdb_k11s] witness: a valid-mode 1x1 window at stride 2 over a 7x7
    map, 4 in-channels, 8 out-channels. *)
@@ -713,16 +730,40 @@ let valid1 = "...| 1*oh<+kh, 1*ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...|
 (* [Nn_blocks.conv2d ~kernel_size:1 ~stride:2]'s spec (padded mode), as a bare einsum. *)
 let padded = "... | 2*oh=+kh, 2*ow=+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ... | oh, ow, ..oc.."
 
+(* The f16 legs: every GPU runs them — the block-tile seeds do not depend on an MMA capability — and
+   only the tensorized-seed claims wait on the f16 capability (an advertised f16 fragment format:
+   HIP's rocWMMA, CUDA, Metal), where the operands reach the Stage + Tensorize pipelines. The C
+   backends' seeding pre-filters to uniform f32/f64, so there every claim is skipped. *)
+let f16_leg ~row ~what ~tag s =
+  if not on_cpu then ignore (leg ~row ~what ~tag s : probed)
+  else
+    List.iter
+      [
+        "the producers discriminate: a unit-stride read of A changes the result";
+        "the unscheduled form matches the host oracle";
+        structure_claim row;
+        "the device's own limits seed both flavors";
+        "every whole-routine seed runs and matches the unscheduled form";
+        "every per-segment seed runs, scheduling the segment it was keyed on, and matches the \
+         unscheduled form";
+        "the whole-routine seeds include tensorized ones, and every one renders tensorized per its \
+         routine's mma census";
+        "the per-segment seeds include tensorized ones, and every one renders tensorized per its \
+         routine's mma census";
+      ]
+      ~f:(fun c -> skipped (what ^ ": " ^ c))
+
 let () =
   let f32 = Ir.Ops.single in
-  leg ~what:"k11s witness" ~tag:"s11w"
+  let run_leg ?declines ?row ~what ~tag s = ignore (leg ?declines ?row ~what ~tag s : probed) in
+  run_leg ~what:"k11s witness" ~tag:"s11w"
     { prec = f32; b = 2; h = 7; w = 7; ic = 4; oc = 8; stride = 2; build = `Einsum valid };
-  leg ~what:"downsample einsum f32" ~tag:"s11r"
+  run_leg ~what:"downsample einsum f32" ~tag:"s11r"
     { prec = f32; b = 2; h = 16; w = 32; ic = 16; oc = 16; stride = 2; build = `Einsum padded };
   (* The production construction — the whole block, main branch included — at a ResNet downsample's
      channel width. (At 16 channels the shortcut's conv output is virtualized instead, inlined as a
      local dot product into each of its batch norm's three consumers, and no family sees a site.) *)
-  leg ~declines:true ~what:"resnet block" ~tag:"s11d"
+  run_leg ~declines:true ~what:"resnet block" ~tag:"s11d"
     { prec = f32; b = 2; h = 8; w = 16; ic = 64; oc = 64; stride = 2; build = `Resnet_block };
   (* The unit-stride control: the row is [ow], and the predicate above is false. *)
   (let o =
@@ -740,46 +781,38 @@ let () =
    p_empty "unit-stride control: the input is read at no stride-2 axis"
      ~over:(Array.to_list o.in_map) (strided_syms o.in_map);
    p "unit-stride control: the stride predicate is false" (not (stride_on_batch_loops o)));
-  (* A batch of one: the stride-2 axes cannot own the row and no other output axis is left. *)
+  (* A batch of one (gh-ocannl-1148): no output axis is read at unit stride, so the strided window
+     owns the row, and every seed packs A through a compacting [Stage]. *)
   (let o =
-     probe ~tag:"s11o"
+     leg ~row:`Strided ~what:"batch of one" ~tag:"s11o"
        { prec = f32; b = 1; h = 16; w = 32; ic = 16; oc = 16; stride = 2; build = `Einsum padded }
    in
-   p "batch of one: not a matmul or conv site, and no sketch family seeds it"
-     (Option.is_none o.site && (not o.conv) && List.is_empty o.whole && o.any_segment_seeds = 0);
-   p_empty "batch of one: because the input is read at no unit-stride output axis"
+   p_empty "batch of one: the input is read at no unit-stride output axis"
      ~over:(Array.to_list o.in_map)
      (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map));
-  (* The f16 leg: every GPU runs it — the block-tile seeds do not depend on an MMA capability — and
-     only the tensorized-seed claims wait on the f16 capability (an advertised f16 fragment format:
-     HIP's rocWMMA, CUDA, Metal), where the operands reach the Stage + Tensorize pipelines. The C
-     backends' seeding pre-filters to uniform f32/f64. *)
-  let what = "downsample einsum f16" in
-  if not on_cpu then
-    leg ~what ~tag:"s11h"
-      {
-        prec = Ir.Ops.half;
-        b = 2;
-        h = 16;
-        w = 32;
-        ic = 16;
-        oc = 16;
-        stride = 2;
-        build = `Einsum padded;
-      }
-  else
-    List.iter
-      [
-        "the producers discriminate: a unit-stride read of A changes the result";
-        "the unscheduled form matches the host oracle";
-        "a matmul site whose stride-2 axes are its interior batch loops, the row read at unit \
-         stride";
-        "the device's own limits seed both flavors";
-        "every whole-routine seed runs and matches the unscheduled form";
-        "every per-segment seed runs, scheduling the segment it was keyed on, and matches the \
-         unscheduled form";
-        "the whole-routine seeds include tensorized ones, and every one renders tensorized per its \
-         routine's mma census";
-        "the per-segment seeds include tensorized ones, and every one renders tensorized per its \
-         routine's mma census";
-      ] ~f:(fun c -> skipped (what ^ ": " ^ c))
+  (* The same at the valid 7x7 witness's odd extents: a 4-wide strided row that no block size
+     divides, so the staged pipelines pad it and the compacted tile's edge guards hold. *)
+  run_leg ~row:`Strided ~what:"batch of one, valid 7x7" ~tag:"s11v"
+    { prec = f32; b = 1; h = 7; w = 7; ic = 4; oc = 8; stride = 2; build = `Einsum valid };
+  f16_leg ~row:`Batch ~what:"downsample einsum f16" ~tag:"s11h"
+    {
+      prec = Ir.Ops.half;
+      b = 2;
+      h = 16;
+      w = 32;
+      ic = 16;
+      oc = 16;
+      stride = 2;
+      build = `Einsum padded;
+    };
+  f16_leg ~row:`Strided ~what:"batch of one f16" ~tag:"s11p"
+    {
+      prec = Ir.Ops.half;
+      b = 1;
+      h = 16;
+      w = 32;
+      ic = 16;
+      oc = 16;
+      stride = 2;
+      build = `Einsum padded;
+    }
