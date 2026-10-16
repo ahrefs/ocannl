@@ -1,0 +1,27 @@
+# ship-pr's build of the would-be merge commit (lukstafi/ludics-lite#611, landed by
+# lukstafi/ludics-lite#630). `pr-review.sh merge` reads this file from master: when master has
+# moved since the PR's merge base and a path BOTH sides changed is an input below, it builds the
+# PR head merged with master's tip in a scratch repository, runs `command` at its root inside the
+# box's run-time slot, and refuses the merge (exit 1, no waiver) when that fails. Without this
+# file a merge builds nothing.
+#
+# Inputs -- the boundary. A path is an input when one glob matches the WHOLE repository path
+# (fnmatch, case-sensitive, `*` crossing `/`): `*.ml` is every OCaml source at any depth, `dune`
+# the root file only and `*/dune` every nested one, `*.sh` every shell script (the trigger of the
+# command's shell tier). A shared path renamed on either side counts by its other name too.
+# Nothing else is an input: a clash confined to Markdown, YAML, goldens or Python is not built
+# here, nor one across paths only ONE side changed; both stay the integration loop's, on master.
+#
+# Trust. The command is this repository's own code, trusted as a developer's build is: the
+# scratch repository is a place to build, not a sandbox. It runs from whatever environment
+# `merge` has; tools/merge-build-check.sh states its tiers, what selects them, their measured
+# cost and how it finds dune when that environment lacks the opam switch.
+command tools/merge-build-check.sh
+input *.ml
+input *.mli
+input dune
+input */dune
+input dune-project
+input *.opam
+input *.sh
+timeout 1200
