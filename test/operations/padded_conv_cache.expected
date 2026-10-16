@@ -8,5 +8,5 @@ the untuned gradients are not all zero: true
 pass 1's tuned gradients match the untuned compile: true
 pass 2's gradients match the untuned compile: true
 pass 1 searched: true
-pass 1 stored a schedule-cache entry: true
+pass 1 committed a schedule-cache entry: true
 pass 2 replayed the cached winner: true

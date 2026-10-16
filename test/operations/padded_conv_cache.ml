@@ -21,6 +21,7 @@ open Nn_blocks.DSL_modules
 module IDX = Train.IDX
 module LL = Ir.Low_level
 module SC = Ir.Schedule_cache
+module Cache_plant = Test_utils.Cache_plant
 open Verdict.Claims
 
 let distinct_binders label llc =
@@ -119,31 +120,34 @@ let () =
   if Stdlib.Sys.file_exists cache_dir && Stdlib.Sys.is_directory cache_dir then
     Array.iter (Stdlib.Sys.readdir cache_dir) ~f:(fun f ->
         Stdlib.Sys.remove (Stdlib.Filename.concat cache_dir f));
-  let entries () =
-    if Stdlib.Sys.file_exists cache_dir then Array.length (Stdlib.Sys.readdir cache_dir) else 0
-  in
   let untuned_grads () =
     let ctx = fresh () in
     let ctx, routine = Context.compile ctx comp bindings in
     grads_of (run_with ctx routine)
   in
   let reports = ref [] in
+  (* Each pass's own context's timing identity (what its cache key rests on) and the cache I/O it
+     made, for the waivers below. *)
   let tune_once () =
     let ctx = fresh () in
-    let ctx, routine =
-      Autotune.tune ~beam_width:1 ~rounds:1 ~repeats:1 ~cache_dir
-        ~report:(fun r -> reports := r :: !reports)
-        ctx comp bindings
+    let identity = Option.is_some (Context.timing_identity ctx) in
+    let grads, ios =
+      SC.recording_cache_io (fun () ->
+          let ctx, routine =
+            Autotune.tune ~beam_width:1 ~rounds:1 ~repeats:1 ~cache_dir
+              ~report:(fun r -> reports := r :: !reports)
+              ctx comp bindings
+          in
+          grads_of (run_with ctx routine))
     in
-    grads_of (run_with ctx routine)
+    (grads, identity, ios)
   in
   let reference = untuned_grads () in
   (* An all-zero reference (a relu that killed everything) would let any routine match it. *)
   p_exists "the untuned gradients are not all zero" (Array.to_list reference) ~f:(fun g ->
       Float.(abs g > 1e-3));
-  let tuned1 = tune_once () in
-  let stored = entries () in
-  let tuned2 = tune_once () in
+  let tuned1, identity1, ios1 = tune_once () in
+  let tuned2, _identity2, ios2 = tune_once () in
   let r2, r1 =
     match !reports with [ r2; r1 ] -> (r2, r1) | _ -> failwith "expected two reports"
   in
@@ -152,19 +156,25 @@ let () =
   p_all2 "pass 2's gradients match the untuned compile" tuned2 reference ~f:approx;
   p "pass 1 searched" (match r1.Autotune.outcome with Autotune.Searched -> true | _ -> false);
   (* A search whose timings were refused for contention is not stored, by design
-     ([Autotune.search_measurements_cacheable]), and a backend with no device identity has no
-     persistent cache; neither is this issue's question, so both close the gate rather than pass. *)
-  let cacheable =
-    Option.is_some (Context.timing_identity (fresh ()))
-    && r1.Autotune.timings_contended = 0 && r1.Autotune.candidates_timed > 0
-  in
+     ([Autotune.search_measurements_cacheable]); that is not this issue's question, so it closes the
+     gate rather than passing. The device-identity gate and the refusal waiver are
+     [Cache_plant]'s. *)
+  let clean = r1.Autotune.timings_contended = 0 && r1.Autotune.candidates_timed > 0 in
   Stdio.eprintf
-    "pass 1 (not part of the golden): %d candidate(s) timed, %d timing(s) refused, %d stored \
-     entr(y/ies)\n\
+    "pass 1 (not part of the golden): %d candidate(s) timed, %d timing(s) refused, %d cache \
+     operation(s); pass 2: %d\n\
      %!"
-    r1.Autotune.candidates_timed r1.Autotune.timings_contended stored;
-  gated ~aggregation:`Environment ~when_:cacheable ~on:"an uncacheable pass 1"
-    "pass 1 stored a schedule-cache entry" (stored > 0);
-  gated ~aggregation:`Environment ~when_:cacheable ~on:"an uncacheable pass 1"
-    "pass 2 replayed the cached winner"
+    r1.Autotune.candidates_timed r1.Autotune.timings_contended (List.length ios1) (List.length ios2);
+  let schedule_stores ios =
+    List.filter ios ~f:(fun (io : SC.cache_io) ->
+        (match io.op with SC.Store -> true | SC.Lookup -> false)
+        && String.equal (Cache_plant.store_kind io) "schedule")
+  in
+  let cache_claim ios label b =
+    if clean then Cache_plant.unless_unkeyed_or_refused ~identity:identity1 ios label b
+    else gated ~aggregation:`Environment ~when_:false ~on:"a contended pass 1" label b
+  in
+  cache_claim ios1 "pass 1 committed a schedule-cache entry"
+    (List.exists (schedule_stores ios1) ~f:(Fn.non Cache_plant.refused));
+  cache_claim (ios1 @ ios2) "pass 2 replayed the cached winner"
     (match r2.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false)
