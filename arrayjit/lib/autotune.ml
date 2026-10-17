@@ -4604,14 +4604,21 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
        consulted, whose replay would be refused alike. A [Pre_search_failure] is no search and no
        replay, which is how {!Train.tune_placements}' other arm still ships and how a benchmark
        harness tells this from a search. *)
-    (match baseline_decline with
-    | Some
-        ({ Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ } as
-         classified) ->
-        logf "baseline: REFUSED, the search cannot run: one candidate's footprint does not fit: %s"
-          (Outcome.detail_of_cause classified.cause);
-        raise_pre_search ~base:(census ()) (Outcome.Classified classified)
-    | Some _ | None -> ());
+    let refuse_if_device_memory = function
+      | Some
+          ({ Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ }
+           as classified) ->
+          logf
+            "baseline: REFUSED, the search cannot run: one candidate's footprint does not fit: %s"
+            (Outcome.detail_of_cause classified.cause);
+          (* Both callers refuse on a declined baseline, the relink's included, which [census] reads
+             off the base compile alone. *)
+          raise_pre_search
+            ~base:{ (census ()) with baseline_declined = true }
+            (Outcome.Classified classified)
+      | Some _ | None -> ()
+    in
+    refuse_if_device_memory baseline_decline;
     let cached =
       if use_cache then
         match SC.lookup ~dir:cache_dir ~key with
@@ -4840,6 +4847,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             | Error (Outcome.Classified classified) ->
                 baseline_linked := None;
                 record_decline declines classified;
+                (* The same footprint probe as the base compile's, so the same refusal: a relink the
+                   device refused leaves no candidate room either. *)
+                refuse_if_device_memory (Some classified);
                 Some classified
             | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
           else baseline_decline
