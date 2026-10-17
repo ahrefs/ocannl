@@ -337,7 +337,9 @@
 # legality and enabling interchange. This changes those reductions' summation order (a
 # deterministic balanced tree over the blocks, chosen from the routine alone), as the default
 # plan's cooperative all-reduces do, and as the autotuner's own split-reduce candidates do; the
-# `reproducible` profile pins it at 0. CUDA only: on gpt2_mini_train at batch 256 the split took
+# `reproducible` profile pins it at 0. A maintainer-approved exception to the rule that a
+# numerics-changing gate defaults off and joins the `approximate` payload (it reassociates within
+# about 2.4e-6 relative on gpt2_mini_train's losses). CUDA only: on gpt2_mini_train at batch 256 the split took
 # the CUDA step from 543 to 391 ms (RTX 5070 Ti) but the HIP step from 885 to 1256 ms (gfx1151,
 # unified memory), so HIP ignores this key and keeps the unsplit plan. Ignored where
 # gpu_default_sketch_min_reduction is ignored too, except that it does not need the sketch seeding
