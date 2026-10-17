@@ -242,6 +242,20 @@ val detect_matmul_canonical :
     interchanged one. [None] when the plain matcher fails and {!detect_conv} succeeds: the conv
     family keeps its segments. Exposed for tests. *)
 
+val reduction_sink :
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) -> Ir.Low_level.optimized -> Ir.Schedule.schedule
+(** The interchange {!seeded_default} gives a segment it does not seed (gh-ocannl-1348): for each
+    perfectly nested serial accumulation whose reduction loops (those absent from the accumulator's
+    index map) enclose a write loop, the adjacent-[Swap] chain of {!detect_matmul_canonical}'s
+    contraction sink, taking the reduction loops below the write loops in their original relative
+    order, so the default preset maps the write loops and code generation keeps the accumulator in a
+    register instead of reading and writing device memory every step. Statement by statement, each
+    chain kept only when every [Swap] is [Op_legal] after the chains kept before it. A statement
+    qualifies only when every write loop owns an accumulator axis as a plain iterator (so the
+    interchange keeps each cell's summation order: values are unchanged bitwise) and its storage
+    precision is its own accumulator precision under [accum_prec]. Empty where nothing qualifies.
+    Exposed for tests. *)
+
 type conv_axis = {
   cx_o : Ir.Indexing.symbol;  (** Output spatial symbol (a plain iterator of the output). *)
   cx_no : int;
@@ -1649,6 +1663,10 @@ type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
       (** Per seeded segment, in order: its first unit and the parameters seeded into it. Empty when
           nothing was seeded. *)
+  sd_sunk : (int * int) list;
+      (** Per unseeded segment whose accumulations' reduction loops were sunk below their write
+          loops ({!reduction_sink}, gh-ocannl-1348), in order: its first unit and the number of
+          [Swap]s. *)
   sd_refined : int;
       (** Default segments replaced by their finer [arity_cuts] pieces, because a piece seeds. *)
   sd_split : (Ir.Tnode.t * int) list;
@@ -1699,6 +1717,7 @@ val seeded_split_sites :
 val seeded_transform :
   ?min_reduction:int ->
   ?min_serial:int ->
+  ?reduction_sink:bool ->
   ?on_choice:(seeded_choice -> unit) ->
   Context.t ->
   Ir.Indexing.unit_bindings ->
@@ -1706,14 +1725,16 @@ val seeded_transform :
 (** The [lowered_transform] {!seeded_default} compiles through, for a caller that drives
     {!Context.compile_outcome} itself (a benchmark keeping its own failure classification): [None]
     where {!seeded_default} would compile the plain default (another backend, automatic scheduling
-    inactive, fission off, a threshold of 0). The transform calls [on_choice] with what it seeded,
-    and falls back to the default segments itself when the seeded pipeline does not apply; a failure
-    in backend compilation is the caller's, as {!seeded_default}'s fallback is not part of it. *)
+    inactive, fission off, a threshold of 0 with the reduction sink off). The transform calls
+    [on_choice] with what it seeded and sank, and falls back to the default segments itself when the
+    seeded pipeline does not apply; a failure in backend compilation is the caller's, as
+    {!seeded_default}'s fallback is not part of it. *)
 
 val seeded_default :
   ?name:string ->
   ?min_reduction:int ->
   ?min_serial:int ->
+  ?reduction_sink:bool ->
   ?report:(seeded_choice -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->
@@ -1740,8 +1761,16 @@ val seeded_default :
     which the default runs as one thread per output cell walking every batch row in sequence,
     becomes a parallel pass over blocks of rows and a combine. That DOES change the summation order
     of those reductions -- a deterministic balanced tree over the blocks, chosen from the routine
-    alone -- as the default plan's cooperative all-reduces (gh-ocannl-1124) do. Reads and writes no
-    schedule cache. *)
+    alone -- as the default plan's cooperative all-reduces (gh-ocannl-1124) do.
+
+    Every [`Normal] segment no sketch takes gets {!reduction_sink}'s interchange, then the default
+    preset of the interchanged code (gh-ocannl-1348), probed alone like a seed, and covered by the
+    same fallback to the default pipeline when the compile fails classified: a batch reduction into
+    a bias or layer-norm parameter gradient then keeps its accumulator in a register instead of
+    reading and writing its device cell every step under the preset's in-loop guard — which HIP's
+    compiler does not promote, though NVRTC does. Values stay bitwise the default's.
+    [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
+    with the seeding disabled too. Reads and writes no schedule cache. *)
 
 val untuned_compile :
   ?name:string ->
@@ -2300,9 +2329,10 @@ val tune :
      scratch/zero data can even poison them with inf/NaN). It must contain the nodes the computation
      requires from a prior context, e.g. by repeating parameter initialization on a fresh root
      context, and must live on the same backend and device as the target context (raises
-     [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). Only the
-     winning schedule is then compiled from [ctx], exactly like a cache hit. Without it, the search
-     shares [ctx]'s buffers and the caller should re-initialize mutated state afterwards. *)
+     [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). The
+     winning schedule is compiled from [ctx], exactly like a cache hit, with or without it. Without
+     it, the search shares [ctx]'s buffers and the caller should re-initialize mutated state
+     afterwards. *)
   ?abandon:abandon_rule ->
   (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
      report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
@@ -2340,12 +2370,20 @@ val tune :
     different names therefore share one tuned entry, which is what the cache is for; naming a
     routine neither invalidates a crown nor mints a private one.
 
-    Memory (gh-ocannl-550): every candidate this searches is {!Context.release}d as soon as it stops
-    being a beam survivor, so the search's live {e working} pools and contexts are bounded by
-    [beam_width] rather than by candidates attempted. The bound holds across contained failures and
-    across dedups — a deduplicated candidate has still paid for a compile and a link — and the
-    returned routine is the only artifact left when [tune] returns. Nothing about the returned value
-    changes: it is the same live context and routine as before, from the same lineage.
+    Memory (gh-ocannl-550, gh-ocannl-1326): every candidate this searches is {!Context.release}d as
+    soon as its timing window is over — the incumbents the beam ranks included, which are kept as
+    descriptions (saved schedules), not artifacts — so at most one candidate's {e working} pools are
+    live at a time, and a step that uses over half the device can be tuned. The winner is then
+    compiled from [ctx] out of its saved schedule, the one compile this costs over keeping it, and
+    the returned routine is the only artifact left when [tune] returns. The bound holds across
+    contained failures and across dedups — a deduplicated candidate has still paid for a compile and
+    a link. A cache replay is not co-resident with the base compile either: the baseline is released
+    before the replay compile.
+
+    A device that refuses the base compile's allocation ({!Ir.Schedule_outcome.Device_memory}) has
+    refused one candidate's working set, which every candidate, a replay and the untuned fallback
+    need about as much of: the call reports {!Pre_search_failure} at [Backend_link] with that
+    decline in its census, and raises, instead of declining every candidate in turn.
 
     The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
     free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per

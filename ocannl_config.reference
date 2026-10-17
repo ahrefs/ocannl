@@ -343,6 +343,20 @@
 # each), and batch 8 splits nothing.
 #gpu_default_split_reduce_min_serial=4096
 
+# If true, the recipes' untuned compiles (the same ones gpu_default_sketch_min_reduction applies
+# to) sink the reduction loops of each CUDA or HIP fission segment no sketch takes below their
+# write loops before the default preset maps it (gh-ocannl-1348). Backprop lowers a reduction into
+# a small output -- a bias or layer-norm parameter gradient, reduced over the batch -- with its
+# reduction loops outermost, so the preset maps the output loop to hardware below them and every
+# thread reads and writes its device-memory cell once per reduction step; sunk, the accumulator
+# stays in a register for the whole reduction. Each interchange is checked legal first. Results are
+# unchanged: only accumulations whose output cell is one tuple of write-loop values are sunk, so
+# every cell keeps its summation order, and one whose accumulator would be wider than its storage is
+# left alone. Ignored where gpu_default_sketch_min_reduction is: under model_default_schedule=true,
+# on a budgeted compile, on Metal and the CPU backends. Independent of the threshold: with the
+# seeding disabled (0) the sink still applies, to every segment.
+#gpu_default_reduction_sink=true
+
 # If true, backend compilation logs one stderr line per compiled kernel/segment with its launch
 # grid/block dimensions and statement count — for diffing what two compiles of nominally
 # identical code actually emit. Debugging aid; independent of the ppx_minidebug log levels.

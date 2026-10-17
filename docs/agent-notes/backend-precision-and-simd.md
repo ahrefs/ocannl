@@ -568,6 +568,21 @@ files.
   must DRIFT out of storage exactness — a zero-mean operand random-walks small enough that every
   bf16 partial sum stays exact and per-step narrowing is invisible (`accum_width.ml`'s policy-off
   negative control is the canary).
+- **A read-modify-write in the generated SOURCE is not necessarily one in the machine code; read
+  the PTX or ISA before attributing time to it** (gh-ocannl-1348). Every GPU kernel pointer is
+  `__restrict__` (`Cuda_like_config.restrict_keyword`), so the device compilers may promote a
+  loop-invariant cell to a register themselves. On gpt2_mini's untuned training step, NVRTC did
+  it for every accumulation the source still updated in device memory: the plain default's
+  attention `dP` (fully unrolled, no load of the cell at all), and the bias and layer-norm gamma/beta
+  gradients (one `ld.global` before the `b, s` nest, one `st.global` after it), so interchanging
+  them changed no CUDA step time. HIP's AMDGPU backend promoted the same dP, dQ/dK, weight and
+  bias gradients, but NOT the layer-norm gamma/beta nests, whose preset places an
+  `if (blockIdx.x < 1)` guard inside the serial loops: there every 8-step unrolled trip loaded and
+  stored the cell. The CUDA backend leaves the `.ptx` beside each kernel in `build_files/` (count
+  `st.global` between the loop's label and its backward branch). HIP leaves a `.hsaco`, which
+  `llvm-objdump -d --mcpu=<gfx>` disassembles; a backward `s_cbranch` prints its offset as an
+  unsigned 16-bit word count. Where HIP compiles a routine's kernels as one module the files
+  are `__seg.hip`/`__seg.hsaco`, one `__seg<N>` symbol per kernel.
 ## Numerics policies and cache identity
 - **On GPU the accumulator residency follows the backend's tensor-unit formats, per backend**
   (gh-ocannl-663): `C_syntax_config.accum_prec` — the width a recognized reduction accumulator

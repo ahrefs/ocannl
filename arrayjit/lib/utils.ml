@@ -143,6 +143,7 @@ let known_config_keys =
       "gpu_elide_covered_zeros";
       "gpu_default_sketch_min_reduction";
       "gpu_default_split_reduce_min_serial";
+      "gpu_default_reduction_sink";
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
@@ -430,6 +431,13 @@ let config_key_classification : (config_key_class * string * string list) list =
        pipeline a search seeds from and reports against (Schedule.maybe_default_schedules) does \
        not consult them",
       [ "gpu_default_sketch_min_reduction"; "gpu_default_split_reduce_min_serial" ] );
+    ( Untimed_model,
+      "it decides whether the recipes' untuned CUDA/HIP compile sinks the reduction loops of the \
+       segments it does not seed below their write loops (Autotune.reduction_sink, \
+       gh-ocannl-1348), which times and scores nothing and never reads or writes the schedule \
+       cache; Autotune.tune reads none of it, and the default pipeline a search seeds from and \
+       reports against (Schedule.maybe_default_schedules) does not consult it",
+      [ "gpu_default_reduction_sink" ] );
     ( Execution_neutral,
       "startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter \
        follows",

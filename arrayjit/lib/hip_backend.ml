@@ -79,7 +79,26 @@ module Slab = struct
           invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
         else Hashtbl.remove pools key;
         H.Deviceptr.mem_free old);
-    let ptr = H.Deviceptr.mem_alloc ~size_in_bytes in
+    let ptr =
+      try H.Deviceptr.mem_alloc ~size_in_bytes
+      with
+      | H.Hip_error { status; message }
+      when match H.sexp_of_result status with
+           | Sexp.Atom "HIP_ERROR_OUT_OF_MEMORY" -> true
+           | _ -> false
+      ->
+        (* gh-ocannl-1326: typed here, where the refused size is known, so that every allocation
+           site reports one backend-independent shape ([Schedule_outcome.protect] classifies it). *)
+        let free = try Some (fst (H.Device.get_free_and_total_mem ())) with _ -> None in
+        raise
+          (Schedule_outcome.Device_memory_exhausted
+             {
+               backend = name;
+               requested = size_in_bytes;
+               free;
+               detail = "HIP_ERROR_OUT_OF_MEMORY raised by " ^ message;
+             })
+    in
     if Int.equal pool_id merge_buffer_pool_id then
       commit_merge_slab device ~size_in_bytes ~install_slab_claim:(fun () ->
           Hashtbl.set pools ~key ~data:(ptr, size_in_bytes))

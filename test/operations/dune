@@ -200,6 +200,7 @@
   (alias runtest-alloc_census_peak)
   (alias runtest-autotune_candidate_release)
   (alias runtest-autotune_callback_release)
+  (alias runtest-autotune_device_memory)
   (alias runtest-set_values_pool_coalescing)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
@@ -6657,6 +6658,37 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1326: a search on a simulated device with room for one and a half routine footprints.
+
+(test
+ ; ocannl-lifecycle: autotune_device_memory -- drives the allocator seam to simulate device capacity
+ (name autotune_device_memory)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_device_memory)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1326: the real driver refusing a 1 TiB device allocation, typed (cuda and hip only).
+
+(test
+ (name device_memory_refused)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules device_memory_refused)
+ ; 64-bit indices: the 1 TiB intermediate counts 2^38 elements, past the int32 index range the
+ ; compile otherwise refuses it at before ever reaching the allocator.
+ (action
+  (run %{test} --ocannl_large_models=true))
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-571: GPU-free fault injection for resource-owning seams. It constructs [Context.cpu]
 ; explicitly so this remains a cc lifecycle test even when a sweep selects another backend.
 
@@ -7300,6 +7332,28 @@
   (env_var OCANNL_TF32_MATMULS))
  (modules seeded_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1348: the untuned compile sinks a batch reduction's loops below its write loops -- which
+; statements qualify, on hand-built nests, and a backpropagated dense layer compiled with the
+; seeding off, whose gradients stay bitwise the default pipeline's on non-dyadic inputs while more
+; accumulators localize on CUDA/HIP. The sink is requested and refused explicitly, so the golden
+; does not depend on gpu_default_reduction_sink; the claims compare compiles with each other, so it
+; is backend-uniform.
+
+(test
+ (name reduction_sink)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_TF32_MATMULS))
+ (modules reduction_sink)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

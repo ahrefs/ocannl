@@ -505,6 +505,19 @@ files.
   default plan and the tuner's own split-reduce candidates do under the default
   `autotune_search=true` (`test/operations/seeded_split_reduce` holds it to an f64 reference). The
   `reproducible` profile pins the key at 0, keeping its sums serial.
+- **The seeded default sinks the reduction loops of the segments it does not seed**
+  (gh-ocannl-1348, `Autotune.reduction_sink`). Backprop lowers a batch reduction into a small
+  output as `for b, s, o: db[o] += dy[b,s,o]`, and the preset maps `o` below the serial `b`, `s`
+  loops, so the code generator cannot localize the cell: localization only peels reduction loops
+  BELOW the cell's own. The sink reuses the enabling interchange's `contraction_sink_swaps`
+  statement by statement, each chain `Op_legal` after the ones kept before it, and the preset then
+  runs on the interchanged code. Bitwise identical because only accumulators whose write loops each
+  own an axis as a plain `Iterator` qualify (one cell, one tuple of write-loop values), and a
+  narrow-storage cell the backend widens is skipped, as for seeding. Its machine-level effect is
+  HIP's alone (see the backend-precision note on reading the PTX/ISA first): the layer-norm
+  gamma/beta nests stop round-tripping their cells, while NVRTC had already promoted every one.
+  Not in `maybe_default_schedules`: the tuner's presets, the fission probes and the schedule cache
+  are unchanged (`gpu_default_reduction_sink`, `Untimed_model`).
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
@@ -799,7 +812,12 @@ files.
   `Backend_link` declines — but after the search concluded, when the exhausted device defeated both
   the winner replay and the untuned-default fallback compile behind it. Containment tests do not
   need a device that can fail: `Autotune.on_candidate_attempt` injects one
-  (`test/operations/autotune_arm_containment`).
+  (`test/operations/autotune_arm_containment`). An arm the device cannot hold BESIDE the other
+  arm's shipped routine (materialize-all next to arm A's 6.6 GiB at b256 on 12 GiB) is refused at
+  its base compile, typed, as a `Pre_search_failure` (gh-ocannl-1326; backend-memory.md has the
+  mechanism). The placement store records no decision over a failed arm, so a warm process
+  replays arm A and re-refuses arm B, and a benchmark harness counts that call as a replay
+  (`no_searches`), not a search.
 ## Failure phases and lineage containment
 - A timing failure's *phase* decides whether the lineage is condemned, so pre-dispatch validation
   needs its own. `Context.run` validates (poisoned lineage, uninitialized inputs, unsatisfied

@@ -32,7 +32,12 @@ type phase =
     {!Workgroup_x_extent} / {!Workgroup_y_extent} / {!Workgroup_z_extent} are per-dimension and
     therefore not implied by {!Workgroup_threads}, which caps only the thread {e product}: on CUDA a
     [2 x 2 x 128] workgroup is 512 threads (legal) with a [.z] of 128 against a cap of 64
-    (gh-ocannl-679). *)
+    (gh-ocannl-679).
+
+    {!Device_memory} is the one resource that is not a launch dimension: the device refused a buffer
+    allocation ({!Device_memory_exhausted}, gh-ocannl-1326). Its [requested] is the bytes of the
+    allocation the driver refused, its [limit] the driver's free bytes read right after the refusal
+    ([None] where the backend cannot read them). *)
 type resource =
   | Workgroup_threads
   | Workgroup_memory
@@ -42,6 +47,7 @@ type resource =
   | Workgroup_z_extent
   | Grid_y_extent
   | Grid_z_extent
+  | Device_memory
 [@@deriving sexp_of, compare, equal]
 
 type severity = Expected | Compiler_bug [@@deriving sexp_of, compare, equal]
@@ -140,6 +146,21 @@ val fatal_of_classified : ?candidate:string -> classified_cause -> fatal
 
 exception Cause_at of phase * cause
 exception Raised_at of phase * exn * Stdlib.Printexc.raw_backtrace
+
+exception
+  Device_memory_exhausted of {
+    backend : string;
+    requested : int;  (** Bytes of the one allocation the device refused. *)
+    free : int option;  (** The driver's free bytes, read after the refusal. *)
+    detail : string;  (** The driver's own report. *)
+  }
+(** The device refused a buffer allocation (gh-ocannl-1326). Raised by a GPU backend's pool
+    allocator in place of its driver's out-of-memory error, so that every allocation site — a
+    compile's delta, a transfer's destination — reports it in one backend-independent shape.
+    {!protect} classifies it as a contained {!Resource_exceeded} [Device_memory] decline with
+    [No_device_writes], whatever the backend's own classifier says (an allocation precedes any
+    dispatch); {!Autotune.tune} refuses a whole search when its baseline compile, one candidate's
+    footprint, meets it. *)
 
 type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
