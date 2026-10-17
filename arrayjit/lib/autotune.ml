@@ -4455,7 +4455,8 @@ let seeded_default ?name ?min_reduction ?reduction_sink ?report ctx comp binding
       in
       let result =
         compile_advisory ?name ~on_fallback
-          ~fallback_if:(fun () -> not (List.is_empty !choice.sd_seeded))
+          ~fallback_if:(fun () ->
+            not (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_sunk))
           transform ctx comp bindings
       in
       emit ();

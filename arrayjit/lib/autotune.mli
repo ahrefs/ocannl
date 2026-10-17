@@ -1738,8 +1738,9 @@ val seeded_default :
     the routine's results are bitwise the default's. Reads and writes no schedule cache.
 
     Every [`Normal] segment no sketch takes gets {!reduction_sink}'s interchange, then the default
-    preset of the interchanged code (gh-ocannl-1348), probed alone like a seed: a batch reduction
-    into a bias or layer-norm parameter gradient then keeps its accumulator in a register instead of
+    preset of the interchanged code (gh-ocannl-1348), probed alone like a seed, and covered by the
+    same fallback to the default pipeline when the compile fails classified: a batch reduction into
+    a bias or layer-norm parameter gradient then keeps its accumulator in a register instead of
     reading and writing its device cell every step under the preset's in-loop guard — which HIP's
     compiler does not promote, though NVRTC does. Values stay bitwise the default's.
     [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
