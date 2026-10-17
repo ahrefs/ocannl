@@ -113,6 +113,7 @@ let () =
   ignore mc;
   let comp = Train.forward t2 in
   let ctx_ref, routine_ref = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
+  Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name ctx_ref);
   let ctx_ref = Context.run ctx_ref routine_ref in
   let expected = Context.get_values ctx_ref t2.Tensor.value in
   let check_values what (ctx, routine) =
@@ -234,7 +235,10 @@ let () =
       room4
       (Option.value_map !a_resident ~default:"-" ~f:(Printf.sprintf "%d B"))
       (!peak - start) refused
-      (String.concat ~sep:", " (List.map reports ~f:(fun r -> r.Autotune.best_label)));
+      (String.concat ~sep:", "
+         (List.map reports ~f:(fun r ->
+              if String.is_empty r.Autotune.best_label then "nothing timed"
+              else r.Autotune.best_label)));
     (result, !a_resident, reports, !shipped)
   in
   (* A missing report is a failed claim, never a crash: every claim about an arm holds of a report
