@@ -10,13 +10,16 @@ a routine that does not fit is refused, not searched: true
 the refusal is a typed pre-search failure at link, with the device-memory decline: true
 only the base compile was attempted: true
 the device refused exactly one allocation: true
-the materialize-all arm's base compile does not fit beside the default arm's routine: true
+the room holds the default compile alone: true
 both arms reported, in position: true
 arm A searched without a device-memory decline: true
+arm A's shipped routine holds at least the unscheduled footprint, leaving arm B no room: true
 arm B was refused for device memory before its search: true
 arm A shipped: true
 the shipped arm computes the right values: true
+the next call reports both arms again: true
 the next call replays arm A's winner, or its search was contended: true
+arm A's replayed routine holds at least the unscheduled footprint, leaving arm B no room: true
 and searches nothing: arm B is refused again: true
 arm A shipped again: true
 the replayed arm computes the right values: true

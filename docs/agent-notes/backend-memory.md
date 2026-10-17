@@ -93,7 +93,12 @@ files.
   scheduling only adds device buffers to the base lowering (new tiles, fission's local-to-device
   promotions), so no candidate, replay or fallback would fit either. Size such a probe on the
   UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's
-  workload under CUDA), which made a half-footprint test capacity fit the baseline there.
+  workload under CUDA), which made a half-footprint test capacity fit the baseline there. The
+  same holds for a search WINNER: the unscheduled footprint bounds every shipped routine from
+  below, but the default compile's does not, since a winner such as an epilogue-fused sketch need
+  not carry fission's promotions (4096 B on Metal where the default holds 8192). A capacity meant
+  to leave no room beside "the shipped routine" is sized from the unscheduled footprint, or it
+  passes or fails by which candidate the timings crowned (gh-ocannl-1415).
 - **`Context.t.context_id` names a release unit, not a value** (gh-ocannl-1203). The merge-buffer
   ledger retires a consumer's registration by the released context's id, so every value that shares
   a backend release flag (`finalized`: a linear upload chain, an upload into an existing buffer)
