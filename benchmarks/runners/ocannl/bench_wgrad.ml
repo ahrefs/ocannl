@@ -7,9 +7,9 @@
    Usage: bench_wgrad.exe [ocannl configuration flags], with the environment selecting the workload
    and the arm. BENCH_WGRAD_DIMS is "b,s,o,i" (default "256,128,256,1024", the l*_ffn_w2 gradient at
    batch 256). BENCH_TUNE=1 times the tuned schedule (Autotune.tune, no disk cache) instead of the
-   untuned default, which goes through Bench_harness.compile_default and so honours the
-   model_default_schedule setting. BENCH_REPEATS is the number of timed runs, min taken (default
-   20).
+   untuned default, which goes through Bench_harness.compile_default (Autotune.untuned_compile) and
+   so honours the model_default_schedule and gpu_default_sketch_min_reduction settings.
+   BENCH_REPEATS is the number of timed runs, min taken (default 20).
 
    Prints one [wgrad:] line -- the arm, the dims, the w.grad nest's lowered loop extents, the
    min-of-repeats synced time of the whole routine, and for a tuned arm the search's crowned label

@@ -1645,6 +1645,87 @@ val model_default :
     lowerings of the placement search alike — and, as there, a comp carrying no
     {!Ir.Assignments.Block_comment} requires it. *)
 
+type seeded_choice = {
+  sd_seeded : (int * sketch_params) list;
+      (** Per seeded segment, in order: its first unit and the parameters seeded into it. Empty when
+          nothing was seeded. *)
+  sd_refined : int;
+      (** Default segments replaced by their finer [arity_cuts] pieces, because a piece seeds. *)
+  sd_fell_back : bool;
+      (** The seeded pipeline failed to compile with a classified rejection and the routine was
+          recompiled on the default pipeline. *)
+}
+(** What {!seeded_default} did to one compile. *)
+
+val site_reduction_extent : matmul_site -> int
+(** A matmul site's reduction extent: its innermost contraction loop's extent times every enclosing
+    contraction loop's — for a backprop weight gradient, the batch-and-sequence product. *)
+
+val seeded_params :
+  limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  min_reduction:int ->
+  Ir.Low_level.optimized ->
+  sketch_params option
+(** The parameters {!seeded_default} seeds into one fission segment (gh-ocannl-1324): [None] unless
+    the segment is a matmul site ({!detect_matmul_canonical}, so backprop's contractions count) with
+    a {!site_reduction_extent} of at least [min_reduction], and whose output's storage precision is
+    its own accumulator precision under [accum_prec] (the backend's resolution): the sketch keeps a
+    wider accumulator across the whole reduction where the default rounds it back per contraction
+    step, so a narrow-storage site stays on the default rather than change its result. Otherwise one
+    leaf of the segment's own GPU {!matmul_sketch_tree} — so every refutation the search applies
+    applies here — restricted to the unfused scalar blocktile pipeline without twin flavors: batch
+    loops as grid blocks on a batched site where the device admits them, and the first geometry of a
+    fixed preference list (64x64x8/4x4, 32x32x8/4x4, 32x32x16/2x2, 16x16x8/2x2, 16x16x8/4x4) whose
+    launch has 128 blocks, else the one putting the most threads on the output — among the
+    geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
+
+val seeded_transform :
+  ?min_reduction:int ->
+  ?on_choice:(seeded_choice -> unit) ->
+  Context.t ->
+  Ir.Indexing.unit_bindings ->
+  (Ir.Low_level.optimized -> Ir.Low_level.optimized list) option
+(** The [lowered_transform] {!seeded_default} compiles through, for a caller that drives
+    {!Context.compile_outcome} itself (a benchmark keeping its own failure classification): [None]
+    where {!seeded_default} would compile the plain default (another backend, automatic scheduling
+    inactive, fission off, a threshold of 0). The transform calls [on_choice] with what it seeded,
+    and falls back to the default segments itself when the seeded pipeline does not apply; a failure
+    in backend compilation is the caller's, as {!seeded_default}'s fallback is not part of it. *)
+
+val seeded_default :
+  ?name:string ->
+  ?min_reduction:int ->
+  ?report:(seeded_choice -> unit) ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  Context.t * Context.routine
+(** A drop-in for {!Context.compile} that gives the untuned GPU default operand reuse on its large
+    contractions (gh-ocannl-1324), without timing or scoring anything: the default pipeline's own
+    fission segmentation, with each segment {!seeded_params} admits scheduled by that sketch instead
+    of the default preset. A default segment that seeds nothing but which the finer [arity_cuts]
+    segmentation ({!Ir.Schedule.fission_segmented}) splits into pieces of which one seeds — a weight
+    gradient sharing its kernel with the bias gradient over the same rows — is replaced by those
+    pieces; every other segment is exactly the default's. On CUDA and HIP only, with automatic
+    scheduling active and fission on; [min_reduction] (default: config
+    [gpu_default_sketch_min_reduction], 32; 0 disables) is the threshold. Every seeded segment is
+    probed alone first (the sketch must apply and pass {!Ir.Low_level.validate_parallel}); a segment
+    that fails keeps the preset, and a classified failure of the whole seeded compile recompiles the
+    default pipeline ({!compile_advisory}). The scalar blocktile pipeline keeps each output's
+    summation order, and only sites whose accumulator is at their storage precision are seeded, so
+    the routine's results are bitwise the default's. Reads and writes no schedule cache. *)
+
+val untuned_compile :
+  ?name:string ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  Context.t * Context.routine
+(** The recipes' untuned compile ({!Train.to_routine}, {!Train.run_once} and the benchmark runners'
+    untuned arms): {!model_default} under config [model_default_schedule=true], {!seeded_default}
+    otherwise. *)
+
 val set_test_bindings : Context.routine -> unit
 (** Binds representative values for timing runs: ranged static indices at [range / 2], and gh-490
     symbolic extents at their upper bound [range] (the schedule-cache identity is

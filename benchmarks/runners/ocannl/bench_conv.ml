@@ -64,10 +64,10 @@ let () =
       Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
         ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss step_comp
         bindings
-    else if Lazy.force Autotune.model_default_enabled then
-      (* gh-ocannl-491: the model-picked untuned default (config [model_default_schedule=true]). *)
-      Autotune.model_default ctx step_comp bindings
-    else Context.compile ctx step_comp bindings
+    else
+      (* The recipes' untuned compile: the model pick under [model_default_schedule=true]
+         (gh-ocannl-491), the seeded default otherwise (gh-ocannl-1324). *)
+      Autotune.untuned_compile ctx step_comp bindings
   in
   (* What the timed artifact emitted, off the routine itself (gh-ocannl-626): a flip refinement or a
      timing_ctx replay fallback ships something no arm report describes. *)

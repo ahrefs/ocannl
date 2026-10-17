@@ -792,13 +792,26 @@ let () =
   (* The default a caller of the runners actually gets: under [model_default_schedule] (the
      [performance]/[approximate] profiles) the benchmark runners' untuned compile is the cost
      model's pick, [Autotune.model_default], not the plain pipeline -- so that is the arm, labelled
-     as such. It is a raising API, so a failure there is contained by [arm]'s handler as one cell. *)
+     as such. It is a raising API, so a failure there is contained by [arm]'s handler as one cell.
+     Otherwise it is the default pipeline with its large CUDA/HIP contractions seeded
+     ([Autotune.seeded_transform], gh-ocannl-1324; no transform where nothing can be seeded),
+     compiled through [compiled] so a fatal failure still ends the experiment, and recompiled on the
+     plain pipeline when the backend rejects the seeded plan otherwise. *)
   let model_default = Lazy.force Autotune.model_default_enabled in
   let default_label = if model_default then "default (model-picked)" else "default (untuned)" in
   let default_arm ?(prefix = "") pr =
     arm pr ~label:(prefix ^ default_label) ~compile:(fun ~name ~fatal_seen fwd ->
-        if model_default then Autotune.model_default ~name (Context.auto ()) fwd Ir.Indexing.Empty
-        else compiled ~fatal_seen ~name (Context.auto ()) fwd)
+        let ctx = Context.auto () in
+        if model_default then Autotune.model_default ~name ctx fwd Ir.Indexing.Empty
+        else
+          match Autotune.seeded_transform ctx Ir.Indexing.Empty with
+          | None -> compiled ~fatal_seen ~name ctx fwd
+          | Some lowered_transform -> (
+              (* As [Autotune.seeded_default] does: a seeded plan the backend rejects, without a
+                 fatal outcome, recompiles on the plain pipeline. *)
+              try compiled ~fatal_seen ~lowered_transform ~name ctx fwd
+              with exn when (not !fatal_seen) && not (is_fatal exn) ->
+                compiled ~fatal_seen ~name ctx fwd))
   in
   run_round ~label:default_label (List.filter_map prepared ~f:default_arm);
   (* A seed arm: the sketch geometry [q] applied to the site's lowering as the pure IR transform it

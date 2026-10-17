@@ -461,8 +461,25 @@ files.
   sees no backward site. A forward einsum spelled like a gradient (`"bso;bsi=>oi"`) lowers with
   the output loops first and is a plain site: reproduce backprop's order with an actual backprop
   (`benchmarks/runners/ocannl/bench_wgrad.ml`) or hand-built IR (`test/operations/matmul_interchange`).
-  Untuned defaults are unchanged: the default GPU plan still renders every contraction with no
-  operand reuse, which is where the batch-scaling collapse itself lives (ahrefs/ocannl#1183).
+  The untuned default reached these sites in gh-ocannl-1324 (next bullet). Bare `Context.compile`
+  still renders every contraction with no operand reuse.
+- **The seeded untuned default replays the DEFAULT segmentation, never the tuner's**
+  (gh-ocannl-1324, `Autotune.seeded_default`). The tuner's per-segment sketches use a different
+  segmentation: they fold each covering zero into its reduction's segment, and their other segments
+  get the `min_parallel:1` presets. The seeded default instead derives `maybe_default_schedules`'
+  own plan and swaps the preset for a sketch only on segments that seed. Where a default segment
+  has no seed but its `arity_cuts` refinement partitions exactly its units into pieces of which one
+  seeds, it takes those pieces; that is how a weight gradient fused with its bias gradient (or
+  `w_q.grad` with `w_k.grad`) is reached. So every other kernel is byte-identical to the default's,
+  and a routine with no seed IS the default compile. Two traps that cost measurable time on
+  gpt2_mini. First, geometry must be padding-aware: attention's value product (32 columns) under a
+  64-column tile wasted half its threads and made threshold 128 slower than 256. With padding at
+  most 1/8 preferred, threshold 32 gave b8 15.4 ms (the tuned step was 15.3) and b256 565 ms
+  (unseeded 1725). Second, seeding is refused where `accum_prec` widens the output's storage
+  precision. A sketch's `Privatize` keeps a wide accumulator across the whole reduction, while the
+  default rounds back to storage after each outer contraction step, so a narrow-storage weight
+  gradient would change its result. Losses stayed bitwise identical on f32 (pinned by
+  `test/operations/seeded_default`).
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only

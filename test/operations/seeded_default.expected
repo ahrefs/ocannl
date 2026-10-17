@@ -1,0 +1,11 @@
+on CUDA/HIP the seeded default seeds a segment at a threshold below the weight gradient's reduction: true
+on CUDA/HIP it cuts the bias gradient's companion away from the weight gradient to seed it: true
+on CUDA/HIP the seeded routine compiles without falling back to the default: true
+off CUDA/HIP the seeded default seeds nothing: true
+the weight gradient is not trivially zero: true
+the fixture is order-sensitive: a reversed f32 reduction differs from it in some cell: true
+the seeded weight gradient is bitwise the default pipeline's: true
+the seeded bias gradient is bitwise the default pipeline's: true
+a threshold above every reduction extent seeds nothing: true
+that routine computes the default pipeline's weight gradient: true
+a threshold of 0 disables the seeding: true

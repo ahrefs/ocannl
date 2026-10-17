@@ -1854,10 +1854,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
 
 module Lazy = Utils.Lazy
 
-(* The untuned compile of the recipes, behind the gh-ocannl-491 config gate: with
-   [model_default_schedule=true], the default schedule is picked by the analytic cost model
-   ({!Autotune.model_default} — zero timing runs, advisory, falls back to the ordinary default
-   pipeline); otherwise plain [Context.compile]. *)
+(* The untuned compile of the recipes ({!Autotune.untuned_compile}): with
+   [model_default_schedule=true] (gh-ocannl-491), the default schedule is picked by the analytic
+   cost model ({!Autotune.model_default} — zero timing runs, advisory, falls back to the ordinary
+   default pipeline); otherwise the default pipeline with its large GPU contractions seeded with the
+   matmul family's reuse-tiled sketch ({!Autotune.seeded_default}, gh-ocannl-1324 — untimed, results
+   unchanged). *)
 let compile_with_model_gate ?(budgeted = false) ctx comp bindings =
   (* gh-ocannl-498: a memory budget is scored against the DEFAULT schedule pipeline
      ({!Ir.Schedule.maybe_default_schedules}, what [Backends.score_footprint] runs). The model gate
@@ -1865,7 +1867,9 @@ let compile_with_model_gate ?(budgeted = false) ctx comp bindings =
      segmentation — so honoring the gate on a budgeted compile would link a layout nobody scored,
      and a plan reported within budget could still exhaust the device. The budget is a constraint
      and the model pick is an advisory optimization, so the constraint wins: a budgeted compile uses
-     the pipeline that was scored. Documented at [memory_budget] in ocannl_config.reference. *)
+     the pipeline that was scored. The seeded default (gh-ocannl-1324) keeps the default
+     segmentation but stages tiles and moves accumulators the scorer did not see, so it yields to
+     the budget too. Documented at [memory_budget] in ocannl_config.reference. *)
   if budgeted then (
     if Lazy.force Autotune.model_default_enabled then
       Stdio.eprintf
@@ -1873,8 +1877,7 @@ let compile_with_model_gate ?(budgeted = false) ctx comp bindings =
          budget was scored against, not model_default_schedule's pick.\n\
          %!";
     Context.compile ctx comp bindings)
-  else if Lazy.force Autotune.model_default_enabled then Autotune.model_default ctx comp bindings
-  else Context.compile ctx comp bindings
+  else Autotune.untuned_compile ctx comp bindings
 
 (** gh-ocannl-498 rematerialization: the configured device-memory budget for a compiled routine, or
     [None] when there is none (the default — under which the planning pass never runs and
