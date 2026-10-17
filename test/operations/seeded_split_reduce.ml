@@ -114,9 +114,10 @@ let () =
   Verdict.gated ~when_:splits_here ~on:backend_name
     "on CUDA the split changed the summation order: some cell differs from the default's"
     (Array.exists2_exn split default ~f:(fun a b -> not (bitwise a b)));
-  (* The threshold: above the serial chain nothing qualifies, and 0 disables the split. *)
-  let high, r_high = seeded ~min_serial:(nb * ns * 2) in
-  p "a threshold above the serial chain splits nothing" (List.is_empty r_high.sd_split);
+  (* The threshold: above every serial chain of the fixture -- the loss sum's [nb * ns * no] too,
+     should the detector ever propose it -- nothing qualifies, and 0 disables the split. *)
+  let high, r_high = seeded ~min_serial:(nb * ns * no * 2) in
+  p "a threshold above every serial chain splits nothing" (List.is_empty r_high.sd_split);
   p_all2 "that routine computes the default pipeline's bias gradient bitwise" high default
     ~f:bitwise;
   let _, r_off = seeded ~min_serial:0 in

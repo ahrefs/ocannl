@@ -4268,15 +4268,18 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
   let min_reduction () =
     match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
   in
-  let min_serial () = match min_serial with Some n -> n | None -> seeded_split_min_serial () in
+  (* Resolved on CUDA only: the threshold is a CUDA setting, so a malformed value must not break a
+     HIP compile that ignores it. *)
+  let min_serial () =
+    if not (seeded_split_backend backend) then 0
+    else match min_serial with Some n -> n | None -> seeded_split_min_serial ()
+  in
   let sink_enabled () =
     match sink_override with Some b -> b | None -> reduction_sink_enabled ()
   in
   if
     (not (seeded_default_backend backend))
-    || min_reduction () <= 0
-       && (min_serial () <= 0 || not (seeded_split_backend backend))
-       && not (sink_enabled ())
+    || (min_reduction () <= 0 && min_serial () <= 0 && not (sink_enabled ()))
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None

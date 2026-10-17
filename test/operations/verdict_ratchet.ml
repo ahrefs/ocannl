@@ -327,10 +327,10 @@ let exempt_quantified_helpers =
       "the untuned split is CUDA-only by design (it measured slower on HIP), so off CUDA an empty \
        split list is the claim; it is gated there, and on CUDA the claim beside it requires the \
        bias gradient in the list from the same fixture" );
-    ( "test/operations/seeded_split_reduce.ml:a threshold above the serial chain splits nothing",
-      "the threshold exceeds the bias gradient's chain, the longest split-reduce site of the \
-       fixture, so nothing qualifies and an empty split list is the claim; the bitwise-gradient \
-       claim beside it witnesses the routine's non-empty output" );
+    ( "test/operations/seeded_split_reduce.ml:a threshold above every serial chain splits nothing",
+      "the threshold exceeds every reduction's chain in the fixture, the loss sum's included, so \
+       nothing qualifies and an empty split list is the claim; the bitwise-gradient claim beside \
+       it witnesses the routine's non-empty output" );
     ( "test/operations/seeded_split_reduce.ml:a threshold of 0 disables the split",
       "a threshold of 0 is the documented off switch, so an empty split list is the claim; the \
        claims above pin a non-empty one at a positive threshold on the backends that split" );
