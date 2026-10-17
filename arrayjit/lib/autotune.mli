@@ -1651,6 +1651,9 @@ type seeded_choice = {
           nothing was seeded. *)
   sd_refined : int;
       (** Default segments replaced by their finer [arity_cuts] pieces, because a piece seeds. *)
+  sd_split : (Ir.Tnode.t * int) list;
+      (** The reductions split before segmentation (gh-ocannl-1325), in detection order: each
+          accumulated node and its block count. Empty when nothing was split. *)
   sd_fell_back : bool;
       (** The seeded pipeline failed to compile with a classified rejection and the routine was
           recompiled on the default pipeline. *)
@@ -1680,8 +1683,22 @@ val seeded_params :
     launch has 128 blocks, else the one putting the most threads on the output — among the
     geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
 
+val seeded_split_sites :
+  min_serial:int ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Low_level.optimized ->
+  (sr_site * int) list
+(** The reductions {!seeded_default} splits (gh-ocannl-1325), each with its block count: the
+    {!split_reduce_sites} (the split's own legality and enabling interchange, as the search proposes
+    them) whose serial chain per output cell -- [sr_cost / sr_out] -- is at least [min_serial] ([0]:
+    none), scatter sites excepted; each at the block count of the search's menu ([32; 128; 512], at
+    most half the split loop's extent) giving the most first-pass threads up to 32768, else the
+    smallest. The choice reads no device property, so the split, and the summation order it fixes,
+    depend on the routine alone. Exposed for tests. *)
+
 val seeded_transform :
   ?min_reduction:int ->
+  ?min_serial:int ->
   ?on_choice:(seeded_choice -> unit) ->
   Context.t ->
   Ir.Indexing.unit_bindings ->
@@ -1696,6 +1713,7 @@ val seeded_transform :
 val seeded_default :
   ?name:string ->
   ?min_reduction:int ->
+  ?min_serial:int ->
   ?report:(seeded_choice -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->
@@ -1714,7 +1732,16 @@ val seeded_default :
     that fails keeps the preset, and a classified failure of the whole seeded compile recompiles the
     default pipeline ({!compile_advisory}). The scalar blocktile pipeline keeps each output's
     summation order, and only sites whose accumulator is at their storage precision are seeded, so
-    the routine's results are bitwise the default's. Reads and writes no schedule cache. *)
+    the seeded sketches leave the routine's results bitwise the default's.
+
+    Before segmenting, the reductions {!seeded_split_sites} admits at [min_serial] (default: config
+    [gpu_default_split_reduce_min_serial], 4096; 0 disables) are split whole-routine, as the
+    search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm parameter gradient,
+    which the default runs as one thread per output cell walking every batch row in sequence,
+    becomes a parallel pass over blocks of rows and a combine. That DOES change the summation order
+    of those reductions -- a deterministic balanced tree over the blocks, chosen from the routine
+    alone -- as the default plan's cooperative all-reduces (gh-ocannl-1124) do. Reads and writes no
+    schedule cache. *)
 
 val untuned_compile :
   ?name:string ->

@@ -142,6 +142,7 @@ let known_config_keys =
       "gpu_fission_keep_mapping";
       "gpu_elide_covered_zeros";
       "gpu_default_sketch_min_reduction";
+      "gpu_default_split_reduce_min_serial";
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
@@ -422,12 +423,13 @@ let config_key_classification : (config_key_class * string * string list) list =
        ranking and bound pruning read them too",
       [ "model_default_schedule"; "model_default_placements"; "model_default_geometry_lattice" ] );
     ( Untimed_model,
-      "it decides which large CUDA/HIP contractions the recipes' untuned compile seeds with the \
-       matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324), which times and scores \
-       nothing and never reads or writes the schedule cache; Autotune.tune reads none of it, and \
-       the default pipeline a search seeds from and reports against \
-       (Schedule.maybe_default_schedules) does not consult it",
-      [ "gpu_default_sketch_min_reduction" ] );
+      "they decide which large CUDA/HIP contractions the recipes' untuned compile seeds with the \
+       matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324) and which long reductions \
+       it splits before segmenting (gh-ocannl-1325), which times and scores nothing and never \
+       reads or writes the schedule cache; Autotune.tune reads none of them, and the default \
+       pipeline a search seeds from and reports against (Schedule.maybe_default_schedules) does \
+       not consult them",
+      [ "gpu_default_sketch_min_reduction"; "gpu_default_split_reduce_min_serial" ] );
     ( Execution_neutral,
       "startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter \
        follows",
