@@ -487,6 +487,19 @@ files.
   default rounds back to storage after each outer contraction step, so a narrow-storage weight
   gradient would change its result. Losses stayed bitwise identical on f32 (pinned by
   `test/operations/seeded_default`).
+- **The seeded default sinks the reduction loops of the segments it does not seed**
+  (gh-ocannl-1348, `Autotune.reduction_sink`). Backprop lowers a batch reduction into a small
+  output as `for b, s, o: db[o] += dy[b,s,o]`, and the preset maps `o` below the serial `b`, `s`
+  loops, so the code generator cannot localize the cell: localization only peels reduction loops
+  BELOW the cell's own. The sink reuses the enabling interchange's `contraction_sink_swaps`
+  statement by statement, each chain `Op_legal` after the ones kept before it, and the preset then
+  runs on the interchanged code. Bitwise identical because only accumulators whose write loops each
+  own an axis as a plain `Iterator` qualify (one cell, one tuple of write-loop values), and a
+  narrow-storage cell the backend widens is skipped, as for seeding. Its machine-level effect is
+  HIP's alone (see the backend-precision note on reading the PTX/ISA first): the layer-norm
+  gamma/beta nests stop round-tripping their cells, while NVRTC had already promoted every one.
+  Not in `maybe_default_schedules`: the tuner's presets, the fission probes and the schedule cache
+  are unchanged (`gpu_default_reduction_sink`, `Untimed_model`).
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only

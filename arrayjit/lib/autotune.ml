@@ -4104,6 +4104,7 @@ let model_default ?name ?report ctx comp bindings =
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
+  sd_sunk : (int * int) list;
   sd_refined : int;
   sd_fell_back : bool;
 }
@@ -4134,6 +4135,11 @@ let seeded_default_min_reduction () =
    as many threads on the same outputs. A geometry is taken once its launch has [seeded_min_blocks]
    blocks — about two per multiprocessor on the RTX 5070 Ti (70 SMs), more per compute unit on the
    HIP parts — so a small output does not leave most of the device idle behind a few large tiles. *)
+(* gh-ocannl-1348: whether the untuned compile sinks the reduction loops of the segments it does not
+   seed below their write loops ({!reduction_sink}). *)
+let reduction_sink_enabled () =
+  Utils.get_global_flag ~default:true ~arg_name:"gpu_default_reduction_sink"
+
 let seeded_geometries =
   [ (64, 64, 8, 4, 4); (32, 32, 8, 4, 4); (32, 32, 16, 2, 2); (16, 16, 8, 2, 2); (16, 16, 8, 4, 4) ]
 
@@ -4207,23 +4213,28 @@ let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sket
               List.fold ranked ~init:None ~f:(fun best p ->
                   match best with Some b when threads b >= threads p -> best | _ -> Some p)))
 
-let no_seeded_choice = { sd_seeded = []; sd_refined = 0; sd_fell_back = false }
+let no_seeded_choice = { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_fell_back = false }
 
-let seeded_transform ?min_reduction ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
+let seeded_transform ?min_reduction ?reduction_sink:sink_override
+    ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
   let backend = Context.backend_name ctx in
   (* The backend first: the threshold is a CUDA/HIP setting, so a malformed value must not break a
      compile on a backend that ignores it. *)
   let min_reduction () =
     match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
   in
+  let sink_enabled () =
+    match sink_override with Some b -> b | None -> reduction_sink_enabled ()
+  in
   if
     (not (seeded_default_backend backend))
-    || min_reduction () <= 0
+    || (min_reduction () <= 0 && not (sink_enabled ()))
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
   else
     let min_reduction = min_reduction () in
+    let sink_enabled = sink_enabled () in
     let limits = Context.hardware_limits ctx in
     let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
     let static_indices = Idx.bound_symbols bindings in
@@ -4247,6 +4258,7 @@ let seeded_transform ?min_reduction ?(on_choice = fun (_ : seeded_choice) -> ())
         let seed_of kind pre =
           match kind with
           | `Zeros | `Solo -> None
+          | `Normal when min_reduction <= 0 -> None
           | `Normal ->
               Hashtbl.find_or_add decided
                 (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
@@ -4267,6 +4279,36 @@ let seeded_transform ?min_reduction ?(on_choice = fun (_ : seeded_choice) -> ())
                           logf "seeded_default: %s declined on a segment; keeping the preset"
                             (sketch_params_label p);
                           None))
+        in
+        (* gh-ocannl-1348: a segment no sketch takes gets its accumulations' reduction loops sunk
+           below their write loops, then the default preset of the interchanged code. Probed on the
+           segment alone like a seed; a chain that does not validate leaves the plain preset. *)
+        let sunk_schedule seg =
+          match reduction_sink ~accum_prec seg with
+          | [] -> None
+          | swaps -> (
+              match Sched.apply_classified ~static_indices swaps (scratch_of seg) with
+              | exception Outcome.Cause_at _ -> None
+              | swapped -> Some (List.length swaps, swaps @ preset swapped))
+        in
+        let sink_of kind pre =
+          match kind with
+          | `Zeros | `Solo -> None
+          | `Normal when not sink_enabled -> None
+          | `Normal -> (
+              match sunk_schedule pre with
+              | None -> None
+              | Some (n_swaps, sched) -> (
+                  match
+                    validate_segments_for_model ~limits
+                      [ Sched.apply_classified ~static_indices sched (scratch_of pre) ]
+                  with
+                  | _ -> Some n_swaps
+                  | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+                      logf
+                        "seeded_default: the reduction sink declined on a segment; keeping the \
+                         preset";
+                      None))
         in
         (* A segmentation derived on a hermetic copy, as [(first unit, kind, units, pre-schedule
            slice)] per segment. *)
@@ -4305,10 +4347,11 @@ let seeded_transform ?min_reduction ?(on_choice = fun (_ : seeded_choice) -> ())
                       k,
                       m,
                       Option.map (seed_of k pre) ~f:(fun p ->
-                          (p, digest ~with_placements:false pre)) )
+                          (p, digest ~with_placements:false pre)),
+                      pre )
                   in
                   match decide (at, kind, n, pre) with
-                  | (_, _, _, Some _) as seeded -> [ seeded ]
+                  | (_, _, _, Some _, _) as seeded -> [ seeded ]
                   | unseeded -> (
                       match (kind, Lazy.force fine) with
                       | `Normal, Some fine ->
@@ -4321,22 +4364,41 @@ let seeded_transform ?min_reduction ?(on_choice = fun (_ : seeded_choice) -> ())
                           then [ unseeded ]
                           else
                             let pieces = List.map pieces ~f:decide in
-                            if List.exists pieces ~f:(fun (_, _, _, s) -> Option.is_some s) then (
+                            if List.exists pieces ~f:(fun (_, _, _, s, _) -> Option.is_some s) then (
                               Int.incr refined;
                               pieces)
                             else [ unseeded ]
                       | _ -> [ unseeded ]))
             in
-            let seeds = Array.of_list (List.map hybrid ~f:(fun (_, _, _, s) -> s)) in
-            if Array.for_all seeds ~f:Option.is_none then default_segs ()
+            let seeds = Array.of_list (List.map hybrid ~f:(fun (_, _, _, s, _) -> s)) in
+            (* The segments no sketch takes, one decision per distinct segment code like the
+               seeds. *)
+            let sink_decided = Hashtbl.create (module String) in
+            let sinks =
+              Array.of_list
+                (List.map hybrid ~f:(fun (_, k, _, s, pre) ->
+                     match s with
+                     | Some _ -> None
+                     | None ->
+                         let d = digest ~with_placements:false pre in
+                         Option.map
+                           (Hashtbl.find_or_add sink_decided
+                              (d ^ "|" ^ digest ~with_placements:true pre)
+                              ~default:(fun () -> sink_of k pre))
+                           ~f:(fun n -> (n, d))))
+            in
+            if Array.for_all seeds ~f:Option.is_none && Array.for_all sinks ~f:Option.is_none then
+              default_segs ()
             else
-              let plan = List.map hybrid ~f:(fun (_, k, n, _) -> (k, n)) in
+              let plan = List.map hybrid ~f:(fun (_, k, n, _, _) -> (k, n)) in
               (* By position, as a replayed segmentation is matched; a slice whose code is not the
                  decided one's keeps its preset. *)
               let schedule i seg =
-                match seeds.(i) with
-                | Some (p, d) when String.equal d (digest ~with_placements:false seg) ->
+                match (seeds.(i), sinks.(i)) with
+                | Some (p, d), _ when String.equal d (digest ~with_placements:false seg) ->
                     Some (sketch_schedule ~accum_prec ~p seg)
+                | None, Some (_, d) when String.equal d (digest ~with_placements:false seg) ->
+                    Option.map (sunk_schedule seg) ~f:snd
                 | _ -> None
               in
               match
@@ -4349,25 +4411,39 @@ let seeded_transform ?min_reduction ?(on_choice = fun (_ : seeded_choice) -> ())
                       (List.map tuples ~f:(fun (_, _, _, post) -> post))
                   in
                   let seeded =
-                    List.filter_map hybrid ~f:(fun (at, _, _, s) ->
+                    List.filter_map hybrid ~f:(fun (at, _, _, s, _) ->
                         Option.map s ~f:(fun (p, _) -> (at, p)))
                   in
-                  logf "seeded_default: %d of %d segments seeded (%d default segments refined): %s"
-                    (List.length seeded) (List.length plan) !refined
+                  let sunk =
+                    List.filter_mapi hybrid ~f:(fun i (at, _, _, _, _) ->
+                        Option.map sinks.(i) ~f:(fun (n, _) -> (at, n)))
+                  in
+                  logf
+                    "seeded_default: %d of %d segments seeded (%d default segments refined), %d \
+                     with reductions sunk: %s"
+                    (List.length seeded) (List.length plan) !refined (List.length sunk)
                     (String.concat ~sep:", "
                        (List.map seeded ~f:(fun (at, p) ->
                             Printf.sprintf "u%d %s" at (sketch_params_label p))));
-                  on_choice { sd_seeded = seeded; sd_refined = !refined; sd_fell_back = false };
+                  on_choice
+                    {
+                      sd_seeded = seeded;
+                      sd_sunk = sunk;
+                      sd_refined = !refined;
+                      sd_fell_back = false;
+                    };
                   segs
               | exception Outcome.Cause_at (_, cause) ->
                   logf "seeded_default: the seeded pipeline FAILED to apply (%s); using the default"
                     (Outcome.detail_of_cause cause);
                   default_segs ()))
 
-let seeded_default ?name ?min_reduction ?report ctx comp bindings =
+let seeded_default ?name ?min_reduction ?reduction_sink ?report ctx comp bindings =
   let choice = ref no_seeded_choice in
   let emit () = Option.iter report ~f:(fun f -> f !choice) in
-  match seeded_transform ?min_reduction ~on_choice:(fun c -> choice := c) ctx bindings with
+  match
+    seeded_transform ?min_reduction ?reduction_sink ~on_choice:(fun c -> choice := c) ctx bindings
+  with
   | None ->
       emit ();
       Context.compile ?name ctx comp bindings
