@@ -68,6 +68,37 @@ let () =
         failwith "BENCH_PROMOTE=0 is forward-only; training diagnostics use the shipped pipeline"
     | _ -> None
   in
+  (* Which accumulations the split-reduce detector proposes on the step, and which rule rejects the
+     rest, as bench_conv_diag's probe of the same name. Only the lowering is needed, so the compile
+     is abandoned once it is in hand: the unscheduled whole-step form need not link. *)
+  if H.env_flag "BENCH_SR_SITES" then (
+    let comp =
+      match step_shape with
+      | `Forward comp
+      | `Train (H.Plain_step comp)
+      | `Train (H.Host_gated (_, _, comp, _))
+      | `Train (H.Device_gated (_, _, comp, _)) ->
+          comp
+    in
+    let stash = ref None in
+    (try
+       ignore
+         (Context.compile_outcome
+            ~lowered_transform:(fun opt ->
+              stash := Some opt;
+              raise Stdlib.Exit)
+            ~provenance:Ir.Schedule_outcome.User_schedule ctx comp bindings
+           : (Context.t * Context.routine, Ir.Schedule_outcome.failure) Result.t)
+     with Stdlib.Exit -> ());
+    let opt = Option.value_exn ~here:[%here] !stash in
+    let sites = Autotune.split_reduce_sites ~static_indices:[ batch_n ] opt in
+    Stdio.printf "split-reduce sites detected: %d\n" (List.length sites);
+    List.iter sites ~f:(fun s ->
+        Stdio.printf "  %s: reduction extent %d, target cells %d, est. segment cost %d, swaps %d\n"
+          (Ir.Tnode.debug_name s.Autotune.sr_target)
+          s.Autotune.sr_red s.Autotune.sr_out s.Autotune.sr_cost (List.length s.Autotune.sr_swaps));
+    H.print_split_reduce_verdicts opt;
+    Stdlib.exit 0);
   let t0 = Unix.gettimeofday () in
   let ctx, routines =
     H.compile_step ~tune:false
