@@ -1,4 +1,5 @@
 a bias-shaped reduction sinks q then r below o, and nothing else: true
+a two-loop bias reduction sinks its one reduction loop below o: true
 a reduction already innermost gets no interchange: true
 an accumulator a reduction loop's affine index also moves is left alone: true
 an overwrite (no self-read) is not an accumulation and is left alone: true

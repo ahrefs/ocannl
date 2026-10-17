@@ -78,6 +78,20 @@ let () =
   let (r, q, o), bias = reduce3 ~tag:"bias" ~idx:(fun _ _ o -> [| it o |]) ~d_dims:[| no |] () in
   p "a bias-shaped reduction sinks q then r below o, and nothing else"
     (swaps_are [ (q, o); (r, o) ] (fst (chain ~name:"rs_bias" bias)));
+  (* A single batch axis, [for b, o: db[o] += dy[b,o]]: the shortest nest the sink takes. *)
+  let a2 = node ~dims:[| nr; no |] "rs_two_a" and d2 = node ~dims:[| no |] "rs_two_d" in
+  List.iter [ a2; d2 ] ~f:Ll_test.materialize;
+  let r2 = Ll_test.sym () and o2 = Ll_test.sym () in
+  let two =
+    Ll_test.seq (Ll_test.zero d2)
+      (Ll_test.loop_n r2 nr
+         (Ll_test.loop_n o2 no
+            (Ll_test.set d2
+               [| it o2 |]
+               (Ll_test.add (Ll_test.get d2 [| it o2 |]) (Ll_test.get a2 [| it r2; it o2 |])))))
+  in
+  p "a two-loop bias reduction sinks its one reduction loop below o"
+    (swaps_are [ (r2, o2) ] (fst (chain ~name:"rs_two" two)));
   let a = node ~dims:[| no; nr |] "rs_fwd_a" and d = node ~dims:[| no |] "rs_fwd_d" in
   List.iter [ a; d ] ~f:Ll_test.materialize;
   let o' = Ll_test.sym () and r' = Ll_test.sym () in
