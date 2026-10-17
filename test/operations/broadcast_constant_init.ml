@@ -132,24 +132,35 @@ let padded_fill_offsets label dims pads =
    of OCaml heap words, independent of its cell count: a full-size float temporary alone is [numel]
    words, and a view per contiguous run grows with the run count. 512 is about five times what the
    buffer's own creation costs. Measured while lowering, after shape inference committed the padding
-   and before linking forces it. gh-ocannl-1258 holds multi-value data to the same bound. *)
+   and before linking forces it. gh-ocannl-1258 holds multi-value data to the same bound.
+
+   The counter is the domain's, so it also counts whatever OCaml code the GC runs inside the window:
+   the buffer's large custom block can close a major cycle, which calls the finalisers of everything
+   that died earlier in the executable -- on metal, one [release] message (a ctypes [msg_send]) per
+   dead Objective-C object, tens of thousands of words in all, landing in whichever witness the GC
+   phase happens to put them (gh-ocannl-1416). A full major collection first runs those finalisers
+   outside the window, which then holds the fill alone; what it drained goes to stderr. *)
 let allocation_witness ?(data = "scalar") ~name ~numel (x : Tensor.t) y ~check_layout =
   let measured = ref None in
   let ctx, _routine =
     compile name y ~inspect:(fun _ ->
-        if Option.is_none !measured then
+        if Option.is_none !measured then (
           let init = Option.value_exn (Ir.Host_inits.find x.value) in
           let forced_before = Lazy.is_val init in
+          let to_words bytes = bytes /. Float.of_int (Stdlib.Sys.word_size / 8) in
+          let drain_start = Stdlib.Gc.allocated_bytes () in
+          Stdlib.Gc.full_major ();
           let before = Stdlib.Gc.allocated_bytes () in
           let _ : Ir.Ndarray.t = Lazy.force init in
-          let words =
-            (Stdlib.Gc.allocated_bytes () -. before) /. Float.of_int (Stdlib.Sys.word_size / 8)
-          in
-          measured := Some (forced_before, Ir.Tnode.get_padding x.value, words))
+          let words = to_words (Stdlib.Gc.allocated_bytes () -. before) in
+          let drained = to_words (before -. drain_start) in
+          measured := Some (forced_before, Ir.Tnode.get_padding x.value, words, drained)))
   in
-  let forced_before, padding, words = Option.value_exn !measured in
-  Stdio.eprintf "allocation witness %s: %.0f words for %d cells (not part of the golden)\n" name
-    words numel;
+  let forced_before, padding, words, drained = Option.value_exn !measured in
+  Stdio.eprintf
+    "allocation witness %s: %.0f words for %d cells, after draining %.0f words of finalisers (not \
+     part of the golden)\n"
+    name words numel drained;
   p "witness forces the host initializer itself" (not forced_before);
   p "witness buffer carries committed padding" (check_layout padding);
   pf "padded %s host fill allocates under 512 heap words, whatever its cell count" data
