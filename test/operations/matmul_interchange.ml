@@ -14,8 +14,10 @@
 
    Hand-built nests (each built twice, with fresh symbols, for the replay leg), in the exact loop
    orders the training step's lowering produces: - wgrad: the weight gradient, two outer contraction
-   loops (b, s); - dgrad: the data gradient, the contraction loop third of four; - fwd: the forward
-   product, contraction innermost -- the control the interchange leaves alone.
+   loops (b, s); - dgrad: the data gradient, the contraction loop third of four; - lmhead and vgrad
+   (gh-ocannl-1325): the tied lm_head's weight gradient and attention's value gradient, whose
+   minor-axis write loop is not the innermost write loop either, so the chain goes on to sink it; -
+   fwd: the forward product, contraction innermost -- the control the interchange leaves alone.
 
    Executed assertions compare against a serial reference computed on the host from the same
    discriminating inputs: every cell is a small dyadic, so every partial sum is exact in f32 and
@@ -141,6 +143,86 @@ let dgrad =
         !acc)
   in
   { tag = "dgrad"; build; out = dx; seed = [ (dy, dy_v); (w, w_v) ]; want }
+
+(* gh-ocannl-1325: the tied lm_head's weight gradient [wte.grad[e,v] += logits.grad[b,s,v] *
+   x[b,s,e]], loops (b, s, v, e) -- the forward product's write order, so after the contraction sink
+   the loop owning the gradient's minor axis [v] is the OUTER write loop. *)
+let lmhead =
+  let dy = node ~dims:dy_dims "mi_l_dy" and x = node ~dims:x_dims "mi_l_x" in
+  let dw = node ~dims:[| ni; no |] "mi_l_dw" in
+  List.iter [ dy; x; dw ] ~f:Ll_test.materialize;
+  let build () =
+    let b = Ll_test.sym () and s = Ll_test.sym () and v = Ll_test.sym () and e = Ll_test.sym () in
+    Ll_test.seq (Ll_test.zero dw)
+      (Ll_test.loop_n b nb
+         (Ll_test.loop_n s ns
+            (Ll_test.loop_n v no
+               (Ll_test.loop_n e ni
+                  (Ll_test.set dw
+                     [| it e; it v |]
+                     (fma
+                        (Ll_test.get dy [| it b; it s; it v |])
+                        (Ll_test.get x [| it b; it s; it e |])
+                        (Ll_test.get dw [| it e; it v |])))))))
+  in
+  let want =
+    Array.init (ni * no) ~f:(fun c ->
+        let cell = Ll_test.unflat ~dims:[| ni; no |] c in
+        let e = cell.(0) and v = cell.(1) in
+        let acc = ref 0. in
+        for b = 0 to nb - 1 do
+          for s = 0 to ns - 1 do
+            acc := !acc +. (at dy_dims dy_v [| b; s; v |] *. at x_dims x_v [| b; s; e |])
+          done
+        done;
+        !acc)
+  in
+  { tag = "lmhead"; build; out = dw; seed = [ (dy, dy_v); (x, x_v) ]; want }
+
+(* gh-ocannl-1325: attention's value gradient [v.grad[b,t,h,d] += softmax[b,s,h,t] *
+   y.grad[b,s,h,d]], loops (b, s, h, d, t) -- the forward [y = softmax * v] product's order: the
+   contraction loop [s] second, and the minor-axis owner [d] above the write loop [t]. *)
+let nh = 2
+and nd = 32
+
+let sm_dims = [| nb; ns; nh; ns |]
+let hd_dims = [| nb; ns; nh; nd |]
+let sm_v = values ~dims:sm_dims ~modulus:7 ~stride:0.125
+let hd_v = values ~dims:hd_dims ~modulus:5 ~stride:0.25
+
+let vgrad =
+  let sm = node ~dims:sm_dims "mi_v_sm" and dy = node ~dims:hd_dims "mi_v_dy" in
+  let dv = node ~dims:hd_dims "mi_v_dv" in
+  List.iter [ sm; dy; dv ] ~f:Ll_test.materialize;
+  let build () =
+    let b = Ll_test.sym () and s = Ll_test.sym () and h = Ll_test.sym () in
+    let d = Ll_test.sym () and t = Ll_test.sym () in
+    Ll_test.seq (Ll_test.zero dv)
+      (Ll_test.loop_n b nb
+         (Ll_test.loop_n s ns
+            (Ll_test.loop_n h nh
+               (Ll_test.loop_n d nd
+                  (Ll_test.loop_n t ns
+                     (Ll_test.set dv
+                        [| it b; it t; it h; it d |]
+                        (fma
+                           (Ll_test.get sm [| it b; it s; it h; it t |])
+                           (Ll_test.get dy [| it b; it s; it h; it d |])
+                           (Ll_test.get dv [| it b; it t; it h; it d |]))))))))
+  in
+  let want =
+    Array.init
+      (nb * ns * nh * nd)
+      ~f:(fun c ->
+        let cell = Ll_test.unflat ~dims:hd_dims c in
+        let b = cell.(0) and t = cell.(1) and h = cell.(2) and d = cell.(3) in
+        let acc = ref 0. in
+        for s = 0 to ns - 1 do
+          acc := !acc +. (at sm_dims sm_v [| b; s; h; t |] *. at hd_dims hd_v [| b; s; h; d |])
+        done;
+        !acc)
+  in
+  { tag = "vgrad"; build; out = dv; seed = [ (sm, sm_v); (dy, hd_v) ]; want }
 
 (* y[b,s,o] = sum_i x[b,s,i] * w[o,i], loops (b, s, o, i): already a plain site. *)
 let fwd_build () =
@@ -352,11 +434,19 @@ let () =
       Float.(v <> 0.));
   p_all "reference: every data-gradient cell is nonzero" (Array.to_list dgrad.want) ~f:(fun v ->
       Float.(v <> 0.));
+  p_all "reference: every lm_head-gradient cell is nonzero" (Array.to_list lmhead.want) ~f:(fun v ->
+      Float.(v <> 0.));
+  p_all "reference: every value-gradient cell is nonzero" (Array.to_list vgrad.want) ~f:(fun v ->
+      Float.(v <> 0.));
   (* Sink (b, s) below (o, i): each of the two passes moves one contraction loop across both write
      loops. *)
   leg wgrad ~expect_prefix:4 ~ko_extents:[ nb ] ~nk:ns;
   (* Sink o below i: one swap. *)
   leg dgrad ~expect_prefix:1 ~ko_extents:[] ~nk:no;
+  (* Sink (b, s) below (v, e), then the minor-axis owner v below e. *)
+  leg lmhead ~expect_prefix:5 ~ko_extents:[ nb ] ~nk:ns;
+  (* Sink s below (h, d, t), then the minor-axis owner d below t. *)
+  leg vgrad ~expect_prefix:4 ~ko_extents:[] ~nk:ns;
   let f = Ll_test.optimize ~name:"mi_fwd" (fwd_build ()) in
   p "fwd: a forward product is a plain site, with no prefix"
     (match Autotune.detect_matmul_canonical f with

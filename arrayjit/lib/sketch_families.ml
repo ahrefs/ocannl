@@ -344,14 +344,15 @@ let unit_axis (idcs : Idx.axis_index array) s : int option =
    interchange of [detect_matmul_canonical], gh-ocannl-1183): [k] is its innermost loop, the rest
    are [m_ko] (gh-ocannl-683). - Every other loop must own a distinct axis of [di] (unit
    coefficient, sole occurrence). - [j] owns [di]'s minor axis and must be the innermost of the
-   write loops (how lowering orders them — the sketch pipelines' hoisting normalization only handles
-   batch loops above [j]). - Per operand order, [a] must own [k], must not read [j]; [b] must own
-   [j] and [k]; [i] is the {e deepest} write loop owned by [a] and absent from [b] — the 2-D tile
-   row; a role symbol owns its component alone (a convolution window [ox + kx] is not a tile axis).
-   Where no write loop qualifies at unit coefficient, the deepest one [a] reads as a single strided
-   term [c*i] owns the row instead ([m_row_stride = c], gh-ocannl-1148): a stride-2 1x1 conv at
-   batch 1 has no other output axis for it. A unit-stride row is kept wherever one exists, so every
-   site the classifier admitted before keeps its roles and its seeds. The exclusions are what keep
+   write loops (how a forward product lowers them — the sketch pipelines' hoisting normalization
+   only handles batch loops above [j]; backprop's other orders arrive through the same interchange,
+   gh-ocannl-1325). - Per operand order, [a] must own [k], must not read [j]; [b] must own [j] and
+   [k]; [i] is the {e deepest} write loop owned by [a] and absent from [b] — the 2-D tile row; a
+   role symbol owns its component alone (a convolution window [ox + kx] is not a tile axis). Where
+   no write loop qualifies at unit coefficient, the deepest one [a] reads as a single strided term
+   [c*i] owns the row instead ([m_row_stride = c], gh-ocannl-1148): a stride-2 1x1 conv at batch 1
+   has no other output axis for it. A unit-stride row is kept wherever one exists, so every site the
+   classifier admitted before keeps its roles and its seeds. The exclusions are what keep
    variance-style self-products [d[b,s] += x[b,s,k] * x[b,s,k]] — whose reads mention every loop —
    from masquerading as matmuls: they seeded (and always failed candidate compile) before. -
    Everything else is batch: [m_bo] outside [i], [m_bi] between [i] and [j]; batch symbols and outer
@@ -1150,9 +1151,11 @@ let detect_conv (llc : LL.t) : conv_site option =
     dominated by. The answer is the split-reduce precedent's (gh-ocannl-537): an adjacent-[Swap]
     chain that sinks the contraction loops below the write loops, each [Swap] confirmed [Op_legal]
     on the code it is applied to, after which the statement is re-detected on the interchanged code.
-    The chain is the prefix of every schedule built from such a site, so replaying it from the
-    original code reproduces the code the site was detected on — and since [Swap] mints no symbol,
-    the site's symbols name the same loops in both.
+    Where the write loop owning the accumulator's minor axis is not the innermost write loop either
+    (the tied lm_head's [wte.grad], attention's [v.grad], gh-ocannl-1325), the chain goes on to sink
+    that loop below the other write loops. The chain is the prefix of every schedule built from such
+    a site, so replaying it from the original code reproduces the code the site was detected on —
+    and since [Swap] mints no symbol, the site's symbols name the same loops in both.
 
     Interchanging only reorders whole cells' sequences: for any one accumulator cell the contraction
     loops still run in their original relative order, so the interchanged code computes the same
@@ -1181,9 +1184,27 @@ let contraction_sink_swaps ~(is_write : Idx.symbol -> bool) (loops : Idx.symbol 
   in
   step loops []
 
+(* The second half of the chain (gh-ocannl-1325): [classify_matmul] also wants the write loop owning
+   the accumulator's minor axis innermost among the write loops, and backprop does not always lower
+   it there. The tied lm_head's [wte.grad[e,v] += logits.grad[b,s,v] * x[b,s,e]] runs its write
+   loops [v, e] (the forward product's order) and attention's [v.grad[b,t,h,d] += softmax[b,s,h,t] *
+   y.grad[b,s,h,d]] runs [b, h, d, t], so after the contraction sink neither is a site. Given the
+   order the sink leaves ([write loops @ contraction loops]), the adjacent swaps moving that owner
+   [minor] below the write loops after it, which keep their relative order. Nothing when [minor] is
+   already the innermost write loop, so every chain that was a site before is unchanged. Like the
+   sink, it reorders whole cells' sequences only. *)
+let minor_owner_sink_swaps ~(is_write : Idx.symbol -> bool) ~(minor : Idx.symbol)
+    (sunk : Idx.symbol list) : (Idx.symbol * Idx.symbol) list =
+  match
+    List.drop_while (List.filter sunk ~f:is_write) ~f:(fun s -> not (Idx.equal_symbol s minor))
+  with
+  | _ :: below -> List.map below ~f:(fun inner -> (minor, inner))
+  | [] -> []
+
 (* The interchange enabling the first statement of [opt] that is an accumulation of a product of two
-   reads but whose contraction loops are not its innermost suffix: the chain, and the code it
-   produces, once every [Swap] is [Op_legal] and the interchanged code is a matmul site. *)
+   reads but whose contraction loops are not its innermost suffix, or whose minor-axis write loop is
+   not its innermost write loop: the chain, and the code it produces, once every [Swap] is
+   [Op_legal] and the interchanged code is a matmul site. *)
 let matmul_interchange (opt : LL.optimized) : (Sched.schedule * LL.optimized * matmul_site) option =
   let candidate stmt =
     match serial_nest_of stmt with
@@ -1193,7 +1214,19 @@ let matmul_interchange (opt : LL.optimized) : (Sched.schedule * LL.optimized * m
         match List.partition_tf gets ~f:is_d_read with
         | _ :: _, [ _; _ ] ->
             let is_write s = Array.exists di ~f:(Idx.axis_index_mentions_symbol s) in
-            let swaps = contraction_sink_swaps ~is_write (List.map loops ~f:fst) in
+            let order = List.map loops ~f:fst in
+            let sink = contraction_sink_swaps ~is_write order in
+            let sunk = List.filter order ~f:is_write @ List.filter order ~f:(Fn.non is_write) in
+            let minor =
+              match Array.to_list di |> List.last with
+              | Some (Idx.Iterator s) when Option.is_some (unit_axis di s) -> Some s
+              | _ -> None
+            in
+            let swaps =
+              sink
+              @ Option.value_map minor ~default:[] ~f:(fun minor ->
+                  minor_owner_sink_swaps ~is_write ~minor sunk)
+            in
             if List.is_empty swaps then None
             else Some (List.map swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner }))
         | _ -> None)

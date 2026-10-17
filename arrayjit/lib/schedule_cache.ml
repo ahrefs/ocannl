@@ -759,8 +759,9 @@ type entry = {
    11: gh-ocannl-1183 -- backprop's contractions become matmul sites through an interchange
    12: gh-ocannl-1175 -- a reduction's zero folds into its own segment's sketches
    13: gh-ocannl-1165 -- the coalesced layout's seeds, a search branch beside the sketch families
+   14: gh-ocannl-1325 -- wte.grad / v.grad become matmul sites; the scalar blocktile ep twins compile
 *)
-let entry_version = 13
+let entry_version = 14
 
 let sanitize name =
   String.map name ~f:(fun c ->

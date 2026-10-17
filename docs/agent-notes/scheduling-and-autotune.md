@@ -229,13 +229,16 @@ files.
   would build (or vice versa) — keep the invariant, or re-derive the witness. The fused
   (`Fuse_epilogue`) flavor is judged separately: skipping the epilogue tail can empty the
   coverage demand before the alignment analysis is consulted, so twins can survive a routine the
-  unfused family is refuted on — but on GPU only the TENSORIZED twins compile: `Fuse_epilogue`
-  refuses the scalar block-tiling pipeline's register-tiled store path (an output loop on the write
-  path that is neither Serial nor Grid, or a guarded store), on every backend. So a segment the
-  unfused family is refuted on (a `Local` product whose consumer shares its kernel) has no
-  compilable sketch on a backend without a tensorized pipeline for its triple — CUDA at the
-  default `tf32_matmuls=false`, HIP for f32. A test claiming such a segment is seeded gates on
-  `Ll_test.tensorized_matmul_capability` (`autotune_sketch_placements`' differ leg). Since gh-ocannl-613 the flavor is the family tree's ROOT level
+  unfused family is refuted on (a `Local` product whose consumer shares its kernel). Until
+  gh-ocannl-1325 only the TENSORIZED twins compiled on GPU: `Fuse_epilogue` refused the scalar
+  block-tiling pipeline's `Privatize` store-back, which sits under the register split's
+  `Workgroup` loops and, at a padded geometry, under its pad masks, so every `gpu …/TMxTN ep`
+  candidate was a wasted compile and such a segment had no sketch at all on CUDA at the default
+  `tf32_matmuls=false` or on HIP for f32. The store-back fusion now admits `Workgroup` write-path
+  loops (the tail runs per element after the thread's own store) and per-axis range guards in
+  `guard_axis`'s form (the tail lands inside them); `epilogue_fusion_mma_seeds` executes every
+  scalar twin, and `autotune_sketch_placements`' differ leg claims the first twin's single on
+  every GPU backend. Since gh-ocannl-613 the flavor is the family tree's ROOT level
   (`fusion = unfused | fused`, `matmul_family_tree`): the fused child is refuted with the
   recognizer's own reason (`Schedule.fuse_epilogue_witness`) on a site with no fusable tail —
   so a tree's `refutations` always carries one entry more than its pipelines produce, and a
@@ -454,7 +457,11 @@ files.
   are 76% of the batch-256 step. The canonical form sinks the contraction loops below the write
   loops by `Op_legal` adjacent `Swap`s (the gh-537 split-reduce precedent), re-detects, and every
   schedule built from the site carries the chain as its PREFIX, so it applies to the original code
-  and replays from a fresh lowering. A plain site keeps an empty prefix, and a segment `detect_conv`
+  and replays from a fresh lowering. The chain also sinks the write loop owning the output's minor
+  axis below the other write loops where backprop left it above them (gh-ocannl-1325): the tied
+  lm_head's `wte.grad[e,v]` and attention's `v.grad[b,t,h,d]` keep the forward product's write
+  order, so the sink alone left them unclassified (in gpt2_mini's GPU segmentation, 78 of the 116
+  product accumulations were their segment's site before, 83 after). A plain site keeps an empty prefix, and a segment `detect_conv`
   claims is never interchanged, so every seed that existed before is byte-identical. Every entry point that
   reads a site off `opt` must go through the canonical form (seeding, the family tree, the traffic
   floor, `mma_eligible_sites`, `sketch_schedule`); one that calls `detect_matmul` directly silently
