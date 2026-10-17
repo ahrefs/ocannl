@@ -794,6 +794,16 @@ files.
   tabulation of the record is equal, both sides populated; on CUDA the tf32 pair is where an
   arm-blind fingerprint fails it), and gh-ocannl-663's width uniformity read off the arm table
   (every uniform-storage arm accumulates at `accum_prec`; skipped where there are no arms).
+- **One maintainer-approved exception to the numerics-gate rule** (the next bullet, and AGENTS.md's
+  config-profiles rule): **the untuned CUDA split** (gh-ocannl-1325,
+  `gpu_default_split_reduce_min_serial`). It reassociates the long, narrow reductions of a training
+  step (bias and layer-norm parameter gradients, the loss sum) into a deterministic tree over
+  blocks chosen from the routine alone, and ships ON by default in the exact regime rather than
+  in the `approximate` payload: within ~2.4e-6 relative on gpt2_mini_train b256's losses, for
+  543 → 391 ms on CUDA. The `reproducible` profile pins it at 0. The precedent the decision rests
+  on: the default GPU plan's cooperative all-reduces (gh-ocannl-1124) and, under the default
+  `autotune_search=true`, the tuner's own split-reduce candidates already reassociate in the
+  exact regime. A new numerics-changing gate still follows the rule below.
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact

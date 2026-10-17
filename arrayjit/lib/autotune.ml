@@ -1971,6 +1971,15 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
      [max_split_reduce_sites]), which records the sites it evicts in the decline census. *)
   List.stable_sort (List.rev !acc) ~compare:(fun a b -> Int.compare b.sr_cost a.sr_cost)
 
+(* The whole-routine prelude splitting [sites], each at its block count: per site, the gh-537
+   enabling interchange (empty for a site splittable as lowered), then the split itself. Sites are
+   distinct statements, so their preludes compose. Shared by the search's [F_split] seeds and the
+   untuned plan's split ({!seeded_split_sites}, gh-ocannl-1325). *)
+let split_reduce_prelude (sites : (sr_site * int) list) : Sched.schedule =
+  List.concat_map sites ~f:(fun (s, num_blocks) ->
+      let op, _, _, _ = Sched.split_reduce ~axis:s.sr_axis ~target:s.sr_target ~num_blocks in
+      List.map s.sr_swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner }) @ [ op ])
+
 (** {2 Analytic cost-model scoring (gh-ocannl-491, the selection half)}
 
     The extraction half lives in {!Ir.Cost_model}; here it is consumed for ranking candidate
@@ -2679,17 +2688,7 @@ let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_
             match flavor with
             | F_preset _ | F_saved _ | F_sketch _ -> ([], [])
             | F_split { sites } ->
-                let sched =
-                  (* Per site: the gh-537 enabling interchange (empty for a site splittable as
-                     lowered), then the split itself. Sites are distinct statements, so their
-                     preludes compose. *)
-                  List.concat_map sites ~f:(fun (s, num_blocks) ->
-                      let op, _, _, _ =
-                        Sched.split_reduce ~axis:s.sr_axis ~target:s.sr_target ~num_blocks
-                      in
-                      List.map s.sr_swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner })
-                      @ [ op ])
-                in
+                let sched = split_reduce_prelude sites in
                 let saved, _ = SC.to_saved (SC.base_registry canon) sched in
                 (sched, saved)
             | F_split_saved (psaved, _, _) ->
@@ -4106,6 +4105,7 @@ type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
   sd_sunk : (int * int) list;
   sd_refined : int;
+  sd_split : (Ir.Tnode.t * int) list;
   sd_fell_back : bool;
 }
 
@@ -4213,9 +4213,54 @@ let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sket
               List.fold ranked ~init:None ~f:(fun best p ->
                   match best with Some b when threads b >= threads p -> best | _ -> Some p)))
 
-let no_seeded_choice = { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_fell_back = false }
+(* The untuned split is CUDA's alone (gh-ocannl-1325). On gpt2_mini_train b256 it took the CUDA step
+   from 543 to 391 ms, but HIP's from 885 to 1256 ms (minix, gfx1151, unified memory): HIP's
+   compiler does not register-promote such accumulators (gh-ocannl-1348), so the first pass
+   presumably round-trips its partials cell through device memory on every row. A HIP-safe first
+   pass is a follow-up; until then HIP keeps the unsplit plan. *)
+let seeded_split_backend backend = String.is_substring backend ~substring:"cuda"
 
-let seeded_transform ?min_reduction ?reduction_sink:sink_override
+let seeded_split_min_serial () =
+  let raw =
+    String.strip
+      (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"4096")
+  in
+  match Int.of_string_opt raw with
+  | Some n when n >= 0 -> n
+  | _ ->
+      raise
+      @@ Utils.User_error
+           ("Autotune: ocannl_gpu_default_split_reduce_min_serial should be a non-negative integer \
+             (0 disables the untuned split); found: " ^ raw)
+
+(* The first pass's thread count a split aims for: every output cell gets [num_blocks] partial sums
+   computed in parallel. About two waves of the RTX 5070 Ti's 70 multiprocessors at 256 threads
+   each; deliberately a constant rather than a device query, so that which split the plan takes --
+   hence the summation order, hence the result -- depends on the routine alone. *)
+let seeded_split_threads = 32768
+
+(* The untuned plan's split reductions (gh-ocannl-1325): the {!split_reduce_sites} -- so the split's
+   own legality and the gh-537 enabling interchange are the search's -- whose serial chain per
+   output cell (the accumulation's trip count over its cell count) is at least [min_serial], each at
+   the block count of the search's menu ([32; 128; 512], at most half the split loop) that comes
+   closest to {!seeded_split_threads} first-pass threads without exceeding it, else the smallest. A
+   scatter site ([Set_dynamic]) is left to the search. *)
+let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized) :
+    (sr_site * int) list =
+  if min_serial <= 0 || not (seeded_split_backend backend) then []
+  else
+    List.filter_map (split_reduce_sites ~static_indices opt) ~f:(fun s ->
+        if s.sr_dynamic || s.sr_cost / s.sr_out < min_serial then None
+        else
+          let fitting = List.filter [ 512; 128; 32 ] ~f:(fun b -> 2 * b <= s.sr_red) in
+          match List.find fitting ~f:(fun b -> s.sr_out * b <= seeded_split_threads) with
+          | Some b -> Some (s, b)
+          | None -> Option.map (List.last fitting) ~f:(fun b -> (s, b)))
+
+let no_seeded_choice =
+  { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_split = []; sd_fell_back = false }
+
+let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
     ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
   let backend = Context.backend_name ctx in
   (* The backend first: the threshold is a CUDA/HIP setting, so a malformed value must not break a
@@ -4223,17 +4268,23 @@ let seeded_transform ?min_reduction ?reduction_sink:sink_override
   let min_reduction () =
     match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
   in
+  (* Resolved on CUDA only: the threshold is a CUDA setting, so a malformed value must not break a
+     HIP compile that ignores it. *)
+  let min_serial () =
+    if not (seeded_split_backend backend) then 0
+    else match min_serial with Some n -> n | None -> seeded_split_min_serial ()
+  in
   let sink_enabled () =
     match sink_override with Some b -> b | None -> reduction_sink_enabled ()
   in
   if
     (not (seeded_default_backend backend))
-    || (min_reduction () <= 0 && not (sink_enabled ()))
+    || (min_reduction () <= 0 && min_serial () <= 0 && not (sink_enabled ()))
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
   else
-    let min_reduction = min_reduction () in
+    let min_reduction = min_reduction () and min_serial = min_serial () in
     let sink_enabled = sink_enabled () in
     let limits = Context.hardware_limits ctx in
     let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
@@ -4244,9 +4295,35 @@ let seeded_transform ?min_reduction ?reduction_sink:sink_override
     let none = no_seeded_choice in
     Some
       (fun (opt : LL.optimized) : LL.optimized list ->
+        (* The split reductions first, whole-routine and before any segmentation, as the search's
+           [F_split] seeds apply them: the partials edge each split mints is what fission cuts the
+           two passes apart at, and every later step -- the default segments, the seeding below --
+           works on the split routine. A prelude that does not apply leaves the routine unsplit. *)
+        let opt, split =
+          match seeded_split_sites ~backend ~min_serial ~static_indices opt with
+          | [] -> (opt, [])
+          | sites -> (
+              (* A copy of the traced store only, as the search's [F_split] candidates rebase: the
+                 placement table is the compile's own, which the partials nodes the prelude mints
+                 must be registered in for the routine to link. A prelude that fails leaves at most
+                 placements for nodes no routine mentions. *)
+              match
+                Sched.apply_classified ~static_indices (split_reduce_prelude sites)
+                  { opt with LL.traced_store = Hashtbl.copy opt.LL.traced_store }
+              with
+              | split_opt ->
+                  logf "seeded_default: %d reduction(s) split: %s" (List.length sites)
+                    (String.concat ~sep:", " (List.map sites ~f:split_site_label));
+                  (split_opt, List.map sites ~f:(fun (s, b) -> (s.sr_target, b)))
+              | exception Outcome.Cause_at (_, cause) ->
+                  logf "seeded_default: the split reductions FAILED to apply (%s); left unsplit"
+                    (Outcome.detail_of_cause cause);
+                  (opt, []))
+        in
         let default_segs () =
           Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices opt
         in
+        let none = { none with sd_split = split } in
         on_choice none;
         let digest ~with_placements seg =
           SC.digest (SC.canonicalize ~static_indices ~with_placements seg)
@@ -4425,24 +4502,20 @@ let seeded_transform ?min_reduction ?reduction_sink:sink_override
                     (String.concat ~sep:", "
                        (List.map seeded ~f:(fun (at, p) ->
                             Printf.sprintf "u%d %s" at (sketch_params_label p))));
-                  on_choice
-                    {
-                      sd_seeded = seeded;
-                      sd_sunk = sunk;
-                      sd_refined = !refined;
-                      sd_fell_back = false;
-                    };
+                  on_choice { none with sd_seeded = seeded; sd_sunk = sunk; sd_refined = !refined };
                   segs
               | exception Outcome.Cause_at (_, cause) ->
                   logf "seeded_default: the seeded pipeline FAILED to apply (%s); using the default"
                     (Outcome.detail_of_cause cause);
                   default_segs ()))
 
-let seeded_default ?name ?min_reduction ?reduction_sink ?report ctx comp bindings =
+let seeded_default ?name ?min_reduction ?min_serial ?reduction_sink ?report ctx comp bindings =
   let choice = ref no_seeded_choice in
   let emit () = Option.iter report ~f:(fun f -> f !choice) in
   match
-    seeded_transform ?min_reduction ?reduction_sink ~on_choice:(fun c -> choice := c) ctx bindings
+    seeded_transform ?min_reduction ?min_serial ?reduction_sink
+      ~on_choice:(fun c -> choice := c)
+      ctx bindings
   with
   | None ->
       emit ();
@@ -4456,7 +4529,9 @@ let seeded_default ?name ?min_reduction ?reduction_sink ?report ctx comp binding
       let result =
         compile_advisory ?name ~on_fallback
           ~fallback_if:(fun () ->
-            not (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_sunk))
+            not
+              (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
+             && List.is_empty !choice.sd_sunk))
           transform ctx comp bindings
       in
       emit ();

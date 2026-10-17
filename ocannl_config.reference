@@ -329,6 +329,24 @@
 # 256), it gave the fastest step at both batch 8 and batch 256 on CUDA.
 #gpu_default_sketch_min_reduction=32
 
+# The same untuned compiles also split a CUDA reduction whose serial chain per output cell --
+# its accumulation's trip count over the output's cell count -- is at least this long
+# (gh-ocannl-1325): the bias and layer-norm parameter gradients of a training step, which the
+# default runs as one thread per parameter walking every batch row in sequence, become a parallel
+# pass over blocks of rows plus a combine, the split-reduce seeds of the autotuner applied with its
+# legality and enabling interchange. This changes those reductions' summation order (a
+# deterministic balanced tree over the blocks, chosen from the routine alone), as the default
+# plan's cooperative all-reduces do, and as the autotuner's own split-reduce candidates do; the
+# `reproducible` profile pins it at 0. A maintainer-approved exception to the rule that a
+# numerics-changing gate defaults off and joins the `approximate` payload (it reassociates within
+# about 2.4e-6 relative on gpt2_mini_train's losses). CUDA only: on gpt2_mini_train at batch 256 the split took
+# the CUDA step from 543 to 391 ms (RTX 5070 Ti) but the HIP step from 885 to 1256 ms (gfx1151,
+# unified memory), so HIP ignores this key and keeps the unsplit plan. Ignored where
+# gpu_default_sketch_min_reduction is ignored too, except that it does not need the sketch seeding
+# on. 0 disables the split. At 4096, gpt2_mini_train at batch 256 splits its 26 bias and layer-norm
+# parameter gradients and its loss sum (32768 rows each), and batch 8 splits nothing.
+#gpu_default_split_reduce_min_serial=4096
+
 # If true, the recipes' untuned compiles (the same ones gpu_default_sketch_min_reduction applies
 # to) sink the reduction loops of each CUDA or HIP fission segment no sketch takes below their
 # write loops before the default preset maps it (gh-ocannl-1348). Backprop lowers a reduction into
@@ -1613,6 +1631,10 @@
 # online_softmax=false
 # online_softmax_backward=false
 # online_softmax_block=0
+# # The untuned GPU default's split reductions (gh-ocannl-1325) likewise: deterministic and chosen
+# # from the routine alone, but they reassociate long sums into a tree over blocks, which this
+# # profile keeps serial.
+# gpu_default_split_reduce_min_serial=0
 # --- END PROFILE PAYLOAD reproducible ---
 
 # --- BEGIN PROFILE PAYLOAD performance ---

@@ -639,7 +639,7 @@ cell is the step: cite the step cell. Each issue's cell:
   opaque constructs. A lowering that is not complete is never stored (`Autotune.tune` says so on
   stderr, `autotune: WARNING: schedule cache not used`), so a tuned cell's pass 2 searches again
   and fails the provenance gate (gh-ocannl-1161).
-  `BENCH_SR_SITES=1` (`bench_conv_diag`) prints what `Autotune.split_reduce_sites` proposes on the
+  `BENCH_SR_SITES=1` (`bench_conv_diag`, and `bench_gpt_diag` on the GPT step) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did
   not move a workload (it is what showed the detector finding only the classifier head on all three

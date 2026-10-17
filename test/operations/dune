@@ -7316,6 +7316,25 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1325: the seeded untuned default splits a long, narrow bias-gradient reduction on CUDA and
+; HIP and nowhere else, within an f32 tolerance of an f64 host reference. The thresholds are passed
+; explicitly, so the golden depends on no split-reduce config key; it is backend-uniform.
+
+(test
+ (name seeded_split_reduce)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_TF32_MATMULS))
+ (modules seeded_split_reduce)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1348: the untuned compile sinks a batch reduction's loops below its write loops -- which
 ; statements qualify, on hand-built nests, and a backpropagated dense layer compiled with the
 ; seeding off, whose gradients stay bitwise the default pipeline's on non-dyadic inputs while more
