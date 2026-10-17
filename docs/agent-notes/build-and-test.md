@@ -2342,6 +2342,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   again at the new head; otherwise the merge needs `--override` naming the master red's issue.
   The guard step refuses a floor dispatch without `expected_sha`, and one combined with
   `windows_only`.
+- A heap-allocation witness (`Gc.allocated_bytes` before and after the code under test) counts
+  every OCaml word the domain allocates inside the window, the finalisers the GC runs there
+  included. On metal those are not small: the bindings release each dead Objective-C object
+  through a ctypes `msg_send` finaliser, and an executable that ran earlier routines carries tens
+  of thousands of words of them. A large custom block (a bigarray) allocated in the window can
+  close a major cycle and run them all, so the witness fails or passes by GC phase, and an
+  unrelated merge flips it (gh-ocannl-1416: a 512-word bound read 25k words, in a different
+  witness on each build). Call `Gc.full_major ()` just before the window so they run outside it,
+  and print what it drained to stderr. `test/operations/broadcast_constant_init.ml`'s
+  `allocation_witness` is the pattern. To find what allocates, `Gc.Memprof` sampling
+  shows the call stacks, but its callbacks allocate too, so their own words land in the window.
 - A scan's synthetic fixtures are parsed by the parser of the compiler RUNNING the scan, so a
   fixture spelled in syntax newer than the floor fails only on the floor leg, as a bare
   `Syntaxerr.Error` from the scanner's `parse` (5.4's `let exception E = M.E in`, gh-ocannl-1271).
