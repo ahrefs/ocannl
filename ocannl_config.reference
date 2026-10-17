@@ -336,7 +336,8 @@
 # pass over blocks of rows plus a combine, the split-reduce seeds of the autotuner applied with its
 # legality and enabling interchange. This changes those reductions' summation order (a
 # deterministic balanced tree over the blocks, chosen from the routine alone), as the default
-# plan's cooperative all-reduces do. Ignored where gpu_default_sketch_min_reduction is ignored,
+# plan's cooperative all-reduces do, and as the autotuner's own split-reduce candidates do; the
+# `reproducible` profile pins it at 0. Ignored where gpu_default_sketch_min_reduction is ignored,
 # except that it does not need the sketch seeding on. 0 disables the split. At 4096, gpt2_mini_train
 # at batch 256 splits its 26 bias and layer-norm parameter gradients and its loss sum (32768 rows
 # each), and batch 8 splits nothing.
@@ -1612,6 +1613,10 @@
 # online_softmax=false
 # online_softmax_backward=false
 # online_softmax_block=0
+# # The untuned GPU default's split reductions (gh-ocannl-1325) likewise: deterministic and chosen
+# # from the routine alone, but they reassociate long sums into a tree over blocks, which this
+# # profile keeps serial.
+# gpu_default_split_reduce_min_serial=0
 # --- END PROFILE PAYLOAD reproducible ---
 
 # --- BEGIN PROFILE PAYLOAD performance ---

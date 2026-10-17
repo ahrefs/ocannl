@@ -1333,6 +1333,10 @@ narrow_compute_f32=true
 online_softmax=false
 online_softmax_backward=false
 online_softmax_block=0
+# The untuned GPU default's split reductions (gh-ocannl-1325) likewise: deterministic and chosen
+# from the routine alone, but they reassociate long sums into a tree over blocks, which this
+# profile keeps serial.
+gpu_default_split_reduce_min_serial=0
 |}
 
 let performance_profile_payload =

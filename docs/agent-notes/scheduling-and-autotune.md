@@ -502,7 +502,9 @@ files.
   link reads, and the compile dies in `Tnode.Placements.is_materialized_force`. And unlike the
   seeded sketches the split changes results: it reassociates those sums into a fixed balanced tree
   over blocks chosen from the routine alone, as gh-ocannl-1124's cooperative all-reduces do in the
-  default plan (`test/operations/seeded_split_reduce` holds it to an f64 reference).
+  default plan and the tuner's own split-reduce candidates do under the default
+  `autotune_search=true` (`test/operations/seeded_split_reduce` holds it to an f64 reference). The
+  `reproducible` profile pins the key at 0, keeping its sums serial.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
