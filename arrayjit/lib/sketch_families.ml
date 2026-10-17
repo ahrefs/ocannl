@@ -1269,6 +1269,60 @@ let detect_matmul_canonical (opt : LL.optimized) :
         Option.map (matmul_interchange opt) ~f:(fun (prefix, swapped, site) ->
             (site, prefix, swapped))
 
+(** {2 The reduction sink (gh-ocannl-1348)}
+
+    Backprop lowers a reduction over the batch into a small output — a bias or layer-norm parameter
+    gradient — as [for b, s, o: db[o] += dy[b,s,o]], its reduction loops outermost. The default GPU
+    preset maps [o] to hardware below the serial [b] and [s] loops, so every thread reads and writes
+    its device-memory cell once per reduction step: code generation localizes an accumulator only
+    over a nest of reduction loops BELOW the cell's own loops. The same adjacent-[Swap] chain as the
+    enabling interchange above ({!contraction_sink_swaps}) sinks the reduction loops below the write
+    loops; the preset then maps the write loops and the localizer keeps the accumulator in a
+    register for the whole reduction.
+
+    Values are unchanged bitwise where the accumulator's index map is injective in the write loops
+    (each a plain [Iterator] owning its own axis): one cell is then one tuple of write-loop values,
+    and its contributions arrive in the reduction loops' original relative order, which the chain
+    keeps. A statement whose cell a reduction loop's [Affine] or [Concat] index also moves (a
+    convolution's input gradient, an embedding's scattered rows) is left alone, as is one whose
+    storage precision is narrower than its accumulator's: localized, it would round once where the
+    default rounds after every step. *)
+
+let reduction_sink ~(accum_prec : Ir.Ops.prec -> Ir.Ops.prec) (opt : LL.optimized) : Sched.schedule
+    =
+  let candidate stmt =
+    match serial_nest_of stmt with
+    | (_ :: _ :: _ as loops), LL.Set { tn = d; idcs = di; llsc; _ } ->
+        let order = List.map loops ~f:fst in
+        let is_write s = Array.exists di ~f:(Idx.axis_index_mentions_symbol s) in
+        let plain s = Array.count di ~f:(Idx.equal_axis_index (Idx.Iterator s)) = 1 in
+        let self_read (tn, idcs) = phys_equal tn d && Array.equal Idx.equal_axis_index idcs di in
+        let d_prec = Lazy.force d.Ir.Tnode.storage_prec in
+        if
+          List.exists (collect_gets llsc) ~f:self_read
+          && List.for_all order ~f:(fun s -> (not (is_write s)) || plain s)
+          && Ir.Ops.equal_prec (accum_prec d_prec) d_prec
+        then contraction_sink_swaps ~is_write order
+        else []
+    | _ -> []
+  in
+  (* Statement by statement, each chain confirmed [Op_legal] after the chains kept before it, so a
+     statement the oracle cannot clear costs only its own interchange. *)
+  let legal ops =
+    let verdicts = Sched.schedule_legality opt ops in
+    List.length verdicts = List.length ops
+    && List.for_all verdicts ~f:(fun (_, v) -> Sched.equal_op_verdict v Sched.Op_legal)
+  in
+  List.fold
+    (strip_stmts (LL.flat_lines [ opt.LL.llc ]))
+    ~init:[]
+    ~f:(fun kept stmt ->
+      match candidate stmt with
+      | [] -> kept
+      | chain ->
+          let ops = kept @ List.map chain ~f:(fun (outer, inner) -> Sched.Swap { outer; inner }) in
+          if legal ops then ops else kept)
+
 (* The statically-decidable precondition of {!zero_geometry}, shared with the family tree's
    construction-time verdicts (gh-ocannl-577): a zeroed site whose output lacks a row axis before
    the minor axis fails every pipeline's zero expansion, whatever the tile geometry. *)

@@ -558,7 +558,8 @@ this) — as a model-ranked pick among the default-schedule flavors with zero ti
 With the model off, those wrappers still tile on CUDA and HIP: each contraction segment with a
 reduction extent of at least `gpu_default_sketch_min_reduction` gets the matmul family's
 register-blocktiled sketch, untimed and with results unchanged (`Autotune.seeded_default`,
-gh-ocannl-1324).
+gh-ocannl-1324), and every other segment has its batch reductions' loops sunk below their write
+loops, so their accumulators stay in registers (gh-ocannl-1348).
 Transform *application* is strict: an invalid composition (a missing loop symbol, a
 non-positive split factor, an illegal interchange) fails loudly at apply time rather than
 falling back. Rendering an applied schedule then never produces *wrong* code, and for the

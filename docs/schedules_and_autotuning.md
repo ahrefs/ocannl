@@ -305,6 +305,10 @@ the retained procedural analyses alongside the affine engine and raises on diver
   register-blocktiled sketch. The geometry is a fixed rule over the family tree's own leaves, and
   nothing is timed. Each output's summation order is kept, so results are bitwise those of the
   plain default. The search still reports against, and seeds from, the plain default pipeline.
+  Every segment it does not seed has its accumulations' reduction loops sunk below their write
+  loops first (`Autotune.reduction_sink`, gh-ocannl-1348; `gpu_default_reduction_sink`), so a
+  bias or layer-norm parameter gradient reduced over the batch keeps its accumulator in a register
+  rather than in its device cell; each cell keeps its summation order.
 - **Caching**: winners persist in `autotune_cache_dir`, keyed by `Schedule_cache.canonicalize` —
   an alpha-renamed structural digest of the optimized code including dims, precisions, operand
   hoistability, and placement classes — plus the backend name and a digest of the numerics

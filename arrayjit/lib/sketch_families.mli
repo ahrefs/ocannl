@@ -202,6 +202,12 @@ val detect_matmul_canonical :
 (** The site with its enabling-interchange prefix and the code it was detected on (gh-ocannl-1183);
     see {!Autotune.detect_matmul_canonical}. *)
 
+val reduction_sink :
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) -> Ir.Low_level.optimized -> Ir.Schedule.schedule
+(** The adjacent-[Swap] chain sinking each accumulation's reduction loops below its write loops
+    (gh-ocannl-1348), statement by statement, every [Swap] [Op_legal]; empty where no statement
+    qualifies. See {!Autotune.reduction_sink}. *)
+
 type conv_axis = {
   cx_o : Ir.Indexing.symbol;  (** Output spatial iterator. *)
   cx_no : int;
