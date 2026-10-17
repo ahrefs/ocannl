@@ -1,0 +1,22 @@
+a compile of the routine allocates working memory: true
+the cold search completed: true
+it timed more than one candidate: true
+no candidate was declined for device memory: true
+the cold search's winner computes the right values: true
+the warm call replays the cached winner, or the cold search was contended: true
+nothing was refused for device memory in the warm call: true
+the replayed winner computes the right values: true
+a routine that does not fit is refused, not searched: true
+the refusal is a typed pre-search failure at link, with the device-memory decline: true
+only the base compile was attempted: true
+the device refused exactly one allocation: true
+the materialize-all arm's base compile does not fit beside the default arm's routine: true
+both arms reported, in position: true
+arm A searched without a device-memory decline: true
+arm B was refused for device memory before its search: true
+arm A shipped: true
+the shipped arm computes the right values: true
+the next call replays arm A's winner, or its search was contended: true
+and searches nothing: arm B is refused again: true
+arm A shipped again: true
+the replayed arm computes the right values: true

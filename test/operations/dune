@@ -200,6 +200,7 @@
   (alias runtest-alloc_census_peak)
   (alias runtest-autotune_candidate_release)
   (alias runtest-autotune_callback_release)
+  (alias runtest-autotune_device_memory)
   (alias runtest-set_values_pool_coalescing)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
@@ -6654,6 +6655,37 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_candidate_release)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1326: a search on a simulated device with room for one and a half routine footprints.
+
+(test
+ ; ocannl-lifecycle: autotune_device_memory -- drives the allocator seam to simulate device capacity
+ (name autotune_device_memory)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_device_memory)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1326: the real driver refusing a 1 TiB device allocation, typed (cuda and hip only).
+
+(test
+ (name device_memory_refused)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules device_memory_refused)
+ ; 64-bit indices: the 1 TiB intermediate counts 2^38 elements, past the int32 index range the
+ ; compile otherwise refuses it at before ever reaching the allocator.
+ (action
+  (run %{test} --ocannl_large_models=true))
+ (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

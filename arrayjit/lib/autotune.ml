@@ -4803,12 +4803,18 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
     (* gh-ocannl-550: the base compile runs BEFORE the cache is consulted — its lowering is what
        every candidate and every replay derives from — so on the two paths that do not search, its
        linked artifact is dead as soon as that decision is taken, and nothing downstream can reach
-       it. On the search path it enters the beam instead and is released there. Without this, a
-       warm-cache process leaked one full base-candidate pool per [tune] call, permanently (the pool
-       table roots it), which for a repeatedly-tuning process is the very accumulation this issue is
-       about. *)
+       it. On the search path it is timed (where it is dispatchable) and then released like any
+       candidate. Without this, a warm-cache process leaked one full base-candidate pool per [tune]
+       call, permanently (the pool table roots it), which for a repeatedly-tuning process is the
+       very accumulation this issue is about.
+
+       A ref, because a cache replay releases it BEFORE the replay compile (gh-ocannl-1326) and a
+       stale entry that sends the call on to search relinks it where it is to be timed. *)
+    let baseline_linked = ref baseline_linked in
+    let baseline_released = ref false in
     let release_baseline () =
-      Option.iter baseline_linked ~f:(fun (bctx, _) ->
+      Option.iter !baseline_linked ~f:(fun (bctx, _) ->
+          baseline_released := true;
           release_quietly ~what:"the baseline compile" bctx)
     in
     release_baseline_hook := release_baseline;
@@ -4889,6 +4895,29 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         cache_replay_refusal = !cache_replay_refusal;
       }
     in
+    (* gh-ocannl-1326: the base compile allocated one candidate's working set for real, so a device
+       that refused it has answered for the whole search: every candidate, a cache replay and the
+       untuned fallback need about as much. Refused here, typed, rather than by declining every
+       candidate in turn at link (a b256 [gpt2_mini_train] arm on a 12 GiB card spent 12 minutes
+       doing that before its fallback compile died of the same cause), and before the cache is
+       consulted, whose replay would be refused alike. A [Pre_search_failure] is no search and no
+       replay, which is how {!Train.tune_placements}' other arm still ships and how a benchmark
+       harness tells this from a search. *)
+    let refuse_if_device_memory = function
+      | Some
+          ({ Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ }
+           as classified) ->
+          logf
+            "baseline: REFUSED, the search cannot run: one candidate's footprint does not fit: %s"
+            (Outcome.detail_of_cause classified.cause);
+          (* Both callers refuse on a declined baseline, the relink's included, which [census] reads
+             off the base compile alone. *)
+          raise_pre_search
+            ~base:{ (census ()) with baseline_declined = true }
+            (Outcome.Classified classified)
+      | Some _ | None -> ()
+    in
+    refuse_if_device_memory baseline_decline;
     let cached =
       if use_cache then
         match SC.lookup ~dir:cache_dir ~key with
@@ -4912,6 +4941,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               | Some segs -> Fiss (F_saved (segs, None))
               | None -> Whole (W_saved (entry.SC.saved, None))
             in
+            (* gh-ocannl-1326: the replay must not find the baseline's working set still resident:
+               on a step that uses over half the device it was refused at link while the baseline
+               held the rest, so every warm process re-searched. Dead on a hit, and relinked by the
+               search if this entry turns out stale. *)
+            release_baseline ();
             progress_stage "cache_replay";
             match compile_spec_real Outcome.Cache_replay spec with
             | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
@@ -5099,10 +5133,30 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               execution_effect = Outcome.No_device_writes;
             }
         in
+        (* A stale cache entry released the baseline before its replay (gh-ocannl-1326); relink it
+           where it is to be timed. Not where it is not: an undispatched baseline is only ever
+           released. *)
+        let baseline_decline =
+          if !baseline_released && dispatchable ~is_gpu [ base_opt ] then (
+            progress_stage "baseline_relink";
+            match compile_spec (Whole (W_saved ([], None))) with
+            | Ok c ->
+                baseline_linked := Some (c.cctx, c.routine);
+                baseline_decline
+            | Error (Outcome.Classified classified) ->
+                baseline_linked := None;
+                record_decline declines classified;
+                (* The same footprint probe as the base compile's, so the same refusal: a relink the
+                   device refused leaves no candidate room either. *)
+                refuse_if_device_memory (Some classified);
+                Some classified
+            | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
+          else baseline_decline
+        in
         (* [None] when the baseline compile was declined (gh-ocannl-533): there is no routine to
            time and none to return, and the search runs on the scheduled candidates alone. *)
         let baseline =
-          Option.map baseline_linked ~f:(fun (bctx, broutine) ->
+          Option.map !baseline_linked ~f:(fun (bctx, broutine) ->
               {
                 form = Whole_saved [];
                 cctx = bctx;
@@ -5221,6 +5275,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               (Outcome.detail_of_cause classified.cause)
         | None ->
             if baseline_timed then (
+              (* Ranked like any timed candidate, and released like one (gh-ocannl-1326). *)
+              release_baseline ();
               logf "baseline: %.4f ms (digest %s)" baseline_ms (dshort base_digest);
               emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
                 ~label:"baseline" ~digest:base_digest
@@ -5316,24 +5372,25 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
            timing it did (gh-ocannl-1110). *)
         let best_steps = ref (if baseline_timed then [ (1, baseline_ms) ] else []) in
         let by_time (_, a) (_, b) = Float.compare a b in
-        (* gh-ocannl-550: the search's live artifacts are bounded by [beam_width], not by candidates
-           processed. [beam] IS the candidate pool — it holds the fastest [beam_width] entries seen
-           so far, and [admit] releases whatever falls out of it. It starts with the baseline when
-           the baseline is eligible; a declined one contributes no entry, so the beam can be empty
-           and every consumer below takes that as "nothing was timed" (gh-ocannl-533).
+        (* [beam] holds the fastest [beam_width] entries seen so far: the incumbents the rounds
+           expand. It starts with the baseline when the baseline is eligible; a declined one
+           contributes no entry, so the beam can be empty and every consumer below takes that as
+           "nothing was timed" (gh-ocannl-533). Keeping the k smallest incrementally keeps the k
+           smallest overall, with one difference from sorting at the end: a tie between exactly
+           equal times resolves by arrival rather than by seed order.
 
-           Bounding as we go is equivalent to the old "keep every timed candidate, sort, then take
-           [beam_width]" — keeping the k smallest incrementally keeps the k smallest overall — with
-           one difference: a tie between exactly equal times now resolves by arrival rather than by
-           seed order.
-
-           Why bound it at all: a candidate's device buffers are invisible to the OCaml GC, because
-           the backends' pool tables root every slab they allocate (see {!Context.release}), so a
-           pool holding every ranked candidate holds its device memory too — a cold tf32 gpt2_mini
-           search filled a 12 GB card a fifth of the way through and then ran the remaining
-           candidates, its winner replay and its fallback compile against a full device. The tune
-           loop is the one place that needs no allocator to fix that: it knows each candidate's
-           exact lifetime — timed, then dead unless it is a beam survivor. *)
+           Its entries are descriptions, not artifacts (gh-ocannl-1326): every candidate's buffers
+           are released as soon as its timing window is over, the incumbent's included, and the
+           winner is recompiled from its saved form once the search ends. A candidate's device
+           buffers are invisible to the OCaml GC (the backends' pool tables root every slab, see
+           {!Context.release}), so whatever the search keeps holds device memory. gh-ocannl-550
+           bounded that at [beam_width + 2] routine footprints, which is still too many for a step
+           that uses over half the device: on a 12 GiB card a b256 [gpt2_mini_train] search timed
+           its first candidate and then declined every later one at link with
+           [CUDA_ERROR_OUT_OF_MEMORY], because the incumbent's 6.6 GiB stayed resident. What a
+           ranked candidate is still read for — its saved form, units, compiled segments and the
+           routine's tensorization census — is host data, and all a round needs is its saved form:
+           every compile derives from [base_opt], never from another candidate's context. *)
         let beam =
           ref
             (Option.to_list
@@ -5341,56 +5398,35 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   (if baseline_timed then baseline else None)
                   ~f:(fun b -> (b, baseline_ms))))
         in
-        (* The beam-expansion round's own bounded accumulator, hoisted to this scope for one reason:
-           the exit sweep has to be able to see it. A fatal launch/sync failure part way through a
-           round used to abandon up to [beam_width] already-timed survivors that were in neither
-           [beam] nor [best_so_far] (gh-ocannl-550, round-three review). Reset at the top of each
-           round. *)
+        (* The beam-expansion round's own bounded accumulator. Reset at the top of each round. *)
         let round = ref [] in
-        (* Own the just-compiled candidate until admission transfers it to beam/round. In
-           particular, a nonwinner is not in [best_so_far] when either callback raises. *)
+        (* Owns the just-compiled candidate until its timing window is over and it is released, so
+           that a failure in between (a seam, a fatal timing failure) still frees it. *)
         let pending = ref None in
-        (* Set by the exit sweep: past it there is no reader left for any candidate the search
-           compiled, so retention stops applying. A flag rather than clearing [best_so_far], which
-           the reports still read for the winner's label after the sweep has freed its buffers. *)
-        let search_over = ref false in
         let release_candidate c =
-          (* Physical identity, not digest: the beam is the authority on what is live, and a
-             released candidate's digest deliberately STAYS in [seen] — it must keep deduplicating,
-             and dedup cannot resurrect an artifact, since [seen], [timed_ms_by_digest] and
-             [label_by_digest] hold strings and floats and never a [compiled]. [best_so_far] is
-             normally the beam's head, but it can lag one round behind it (a sub-threshold
-             improvement updates the former and not the latter), so it is checked separately. *)
-          if
-            !search_over
-            || not
-                 (List.exists !beam ~f:(fun (c', _) -> phys_equal c c')
-                 || List.exists !round ~f:(fun (c', _) -> phys_equal c c')
-                 || Option.exists (fst !best_so_far) ~f:(phys_equal c))
-          then (
-            if Option.exists !pending ~f:(phys_equal c) then pending := None;
-            (* Best-effort: a failure to free must not replace the candidate's own outcome, and this
-               runs on failure paths too, where the device may already be refusing work.
-               Process-fatal conditions still propagate. *)
-            release_quietly ~what:("candidate " ^ dshort c.digest_after) c.cctx)
+          if Option.exists !pending ~f:(phys_equal c) then pending := None;
+          (* Best-effort: a failure to free must not replace the candidate's own outcome, and this
+             runs on failure paths too, where the device may already be refusing work. Process-fatal
+             conditions still propagate. Idempotent ({!Context.release}), so a ranked candidate
+             released at its timing can meet this again harmlessly. A released candidate's digest
+             deliberately STAYS in [seen]: it must keep deduplicating, and dedup cannot resurrect an
+             artifact, since [seen], [timed_ms_by_digest] and [label_by_digest] hold strings and
+             floats and never a [compiled]. *)
+          release_quietly ~what:("candidate " ^ dshort c.digest_after) c.cctx
         in
         let admit entry =
-          let kept, evicted =
+          let kept, _evicted =
             List.split_n (List.sort (entry :: !beam) ~compare:by_time) beam_width
           in
-          beam := kept;
-          pending := None;
-          List.iter evicted ~f:(fun (c, _) -> release_candidate c)
+          beam := kept
         in
-        (* The exit sweep. Once the search has produced its report, the beam survivors and the
-           running best have no reader left either — and on the [timing_ctx] path not even the
-           winner does, since it is recompiled from the caller's context out of its saved schedule,
-           which is data. Ordering matters twice: the sweep must run AFTER the report record has
-           been built (it reads [best_so_far]) and BEFORE the compiles that follow it, which are the
-           two the exhausted device used to defeat (the winner replay and the untuned-default
-           fallback behind it). *)
-        let release_all_candidates ~keep () =
-          search_over := true;
+        (* The exit sweep: whatever the search still owns when it stops. Every ranked candidate was
+           released at its timing, so that is the pending one, cut short between its compile and the
+           end of its timing window; the ranked ones are swept too, which costs nothing ([release]
+           is idempotent) and keeps the sweep's meaning independent of where each one was released.
+           It must run BEFORE the compiles that follow a search, which are the two an exhausted
+           device used to defeat (the winner replay and the untuned-default fallback behind it). *)
+        let release_all_candidates () =
           let live =
             List.map !beam ~f:fst @ List.map !round ~f:fst
             @ Option.to_list (fst !best_so_far)
@@ -5399,8 +5435,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           beam := [];
           round := [];
           pending := None;
-          List.iter live ~f:(fun c ->
-              if not (List.exists keep ~f:(phys_equal c)) then release_candidate c)
+          List.iter live ~f:release_candidate
         in
         (* The gh-ocannl-552 reference point. [baseline_ms] is the serial form's time ([infinity] on
            GPU), so it cannot answer "did tuning beat what the user gets without tuning?". The
@@ -5508,7 +5543,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              holds is dead. It matters most exactly here: a caller that CONTAINS this failure per
              arm ([Train.tune_placements]) goes on to search its other arm, and used to do so
              against a device still holding everything this arm had compiled. *)
-          release_all_candidates ~keep:[] ();
+          release_all_candidates ();
           Outcome.raise_failure (Outcome.Fatal fatal)
         in
         (* The post-search fallbacks to the untuned default (nothing timed; the winner replay failed
@@ -5681,6 +5716,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                         release_candidate c;
                         None
                     | Ok timing_result ->
+                        (* gh-ocannl-1326: the timing is all a candidate is for, the incumbent-to-be
+                           included, so its buffers go before anything else happens: the next
+                           compile must not find this one's working set still resident. A winner is
+                           recompiled from its saved form when the search ends. *)
+                        release_candidate c;
                         let ms = Option.value_exn (admitted_timing_ms timing_result) in
                         Int.incr n_timed;
                         (* Publish window accounting before the post-admission injection seam: it
@@ -5718,12 +5758,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                         if saved_is_tensorized (flat_schedule c.form) && Float.(ms < !mma_best_ms)
                         then mma_best_ms := ms;
                         if Float.(ms < snd !best_so_far) then (
-                          let previous = fst !best_so_far in
                           best_so_far := (Some c, ms);
-                          best_steps := (!n_timed, ms) :: !best_steps;
-                          (* A timing tie can evict the old best from the beam while the best
-                             reference retains it. Replacing that last owner must release it. *)
-                          Option.iter previous ~f:release_candidate);
+                          best_steps := (!n_timed, ms) :: !best_steps);
                         Seam.get on_candidate_callback `Timed ~candidate_ms:ms
                           ~incumbent_ms:(snd !best_so_far);
                         Seam.get on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
@@ -6307,20 +6343,15 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                             (Option.value_map (units_differing head elem) ~default:"resegmented"
                                ~f:Int.to_string)
                             n_units (List.length elem.units) (List.length c)))));
-            (* gh-ocannl-550: bounded like the seed pass, but in a SECOND accumulator, because a
-               round's decision compares its own best against the incumbent and, if it wins,
-               replaces the beam wholesale — so the previous beam has to stay alive until that
-               decision is taken, and this round's also-rans must not (16 compiles per round on the
-               gh-ocannl-543 chain). An evicted entry is provably outside [!round] by the time it is
-               released, so [release_candidate]'s beam/best check is the whole guard it needs. *)
+            (* Ranked like the seed pass, but in a SECOND accumulator, because a round's decision
+               compares its own best against the incumbent and, if it wins, replaces the beam
+               wholesale. Its entries were released at their timings, like every candidate's. *)
             round := [];
             let round_admit entry =
-              let kept, evicted =
+              let kept, _evicted =
                 List.split_n (List.sort (entry :: !round) ~compare:by_time) beam_width
               in
-              round := kept;
-              pending := None;
-              List.iter evicted ~f:(fun (c, _) -> release_candidate c)
+              round := kept
             in
             progress_phase_begin (Printf.sprintf "round%d" !rounds_run) (Some (List.length cands));
             List.iter cands ~f:(fun spec -> Option.iter (try_spec spec) ~f:round_admit);
@@ -6328,21 +6359,14 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             | [] -> continue_ := false
             | (_, round_best_ms) :: _ ->
                 let incumbent_ms = Option.value_map !best ~default:Float.infinity ~f:snd in
-                let previous = !beam in
                 if Float.(round_best_ms < incumbent_ms *. (1. -. min_progress)) then (
                   beam := !round;
-                  best := List.hd !beam;
-                  (* The displaced incumbents are dead. *)
-                  List.iter previous ~f:(fun (c, _) -> release_candidate c))
+                  best := List.hd !beam)
                 else (
+                  (* The round did not beat the incumbent by enough: the beam is unchanged, and the
+                     search stops. *)
                   continue_ := false;
-                  (* The round did not beat the incumbent by enough: the beam is unchanged, so
-                     everything this round produced is dead — except a sub-threshold improvement
-                     that became [best_so_far], which [release_candidate] keeps and the exit cleanup
-                     releases. *)
-                  let produced = !round in
-                  round := [];
-                  List.iter produced ~f:(fun (c, _) -> release_candidate c))
+                  round := [])
           done;
           let best_c, best_ms =
             match !best with Some (c, ms) -> (Some c, ms) | None -> (None, Float.infinity)
@@ -6481,61 +6505,54 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                  GPU unbounded. The untuned default pipeline is the honest fallback: the same code
                  the caller would have compiled without the tuner. *)
               logf "nothing was timed: falling back to the untuned default compile (gh-ocannl-532)";
-              release_all_candidates ~keep:[] ();
+              release_all_candidates ();
               untuned_default_or_raise ())
             else
               (* [nothing_timed] is false, so the beam holds a timed winner. *)
               let best_c = Option.value_exn best_c ~message:timed_winner_exists in
-              if Option.is_none timing_ctx then (
-                (* The winner's own artifacts ARE the return value here; every other candidate is
-                   dead. *)
-                release_all_candidates ~keep:[ best_c ] ();
-                (best_c.cctx, best_c.routine))
-              else
-                (* The search ran against the scratch lineage; compile the winner from the caller's
-                   context (like the cache-hit path). Digest mismatch or replay failure falls back
-                   to the production default schedule. *)
-                let spec =
-                  match best_c.form with
-                  | Whole_saved saved -> Whole (W_saved (saved, None))
-                  | Fiss_saved segs -> Fiss (F_saved (segs, None))
-                  | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
-                in
-                (* The rebuilt spec has lost what the winner was timed as: a round candidate's
-                   parent and move, a sketch's or preset's parameters -- its saved form alone would
-                   print as the bare [F_saved[N segs]] every round candidate of one parent shares.
-                   So the replay, and a failure it reports, carry the label the winner was timed
-                   under, which is also the report's [best_label]. *)
-                let label =
-                  match winner_label (Some best_c) with "" -> spec_label spec | l -> l
-                in
-                (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
-                   schedule — so the whole beam goes before the compile that reproduces it
-                   (gh-ocannl-550). *)
-                release_all_candidates ~keep:[] ();
-                progress_stage "winner_compile";
-                match compile_spec_real ~label Outcome.Candidate spec with
-                | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
-                    (* Completes the invariant rather than fixing an observed bug: the winner was
-                       timed, so it was dispatchable when measured, and the replay is
-                       digest-guarded. But this is the last of the three ways [tune] hands back a
-                       routine, and none of them may return an unparallelized GPU routine
-                       (gh-ocannl-532). The default compile is the same fallback a failed replay
-                       takes. *)
-                    logf "winner replay produced an unparallelized routine, falling back: %s" label;
-                    (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
-                       memory. Same one-liner as the rejected cache replay above; the pre-replay
-                       sweep could not cover this context, which did not exist yet. *)
-                    release_quietly ~what:"the rejected winner replay" c.cctx;
-                    untuned_default_or_raise ()
-                | Ok c ->
-                    logf "winner replay ok: %s" label;
-                    (c.cctx, c.routine)
-                | Error (Outcome.Classified classified) ->
-                    logf "winner replay FAILED (%s), falling back to the default compile: %s" label
-                      (Outcome.detail_of_cause classified.cause);
-                    untuned_default_or_raise ()
-                | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+              (* Compile the winner from the caller's context out of its saved schedule, as the
+                 cache-hit path does: every candidate's buffers were released at its timing
+                 (gh-ocannl-1326), and with [timing_ctx] the search ran against the scratch lineage
+                 anyway. Digest mismatch or replay failure falls back to the production default
+                 schedule. *)
+              let spec =
+                match best_c.form with
+                | Whole_saved saved -> Whole (W_saved (saved, None))
+                | Fiss_saved segs -> Fiss (F_saved (segs, None))
+                | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
+              in
+              (* The rebuilt spec has lost what the winner was timed as: a round candidate's parent
+                 and move, a sketch's or preset's parameters -- its saved form alone would print as
+                 the bare [F_saved[N segs]] every round candidate of one parent shares. So the
+                 replay, and a failure it reports, carry the label the winner was timed under, which
+                 is also the report's [best_label]. *)
+              let label = match winner_label (Some best_c) with "" -> spec_label spec | l -> l in
+              (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
+                 schedule — so whatever the search still owns goes before the compile that
+                 reproduces it (gh-ocannl-550). *)
+              release_all_candidates ();
+              progress_stage "winner_compile";
+              match compile_spec_real ~label Outcome.Candidate spec with
+              | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
+                  (* Completes the invariant rather than fixing an observed bug: the winner was
+                     timed, so it was dispatchable when measured, and the replay is digest-guarded.
+                     But this is the last of the three ways [tune] hands back a routine, and none of
+                     them may return an unparallelized GPU routine (gh-ocannl-532). The default
+                     compile is the same fallback a failed replay takes. *)
+                  logf "winner replay produced an unparallelized routine, falling back: %s" label;
+                  (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
+                     memory. Same one-liner as the rejected cache replay above; the pre-replay sweep
+                     could not cover this context, which did not exist yet. *)
+                  release_quietly ~what:"the rejected winner replay" c.cctx;
+                  untuned_default_or_raise ()
+              | Ok c ->
+                  logf "winner replay ok: %s" label;
+                  (c.cctx, c.routine)
+              | Error (Outcome.Classified classified) ->
+                  logf "winner replay FAILED (%s), falling back to the default compile: %s" label
+                    (Outcome.detail_of_cause classified.cause);
+                  untuned_default_or_raise ()
+              | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
           in
           (result, completed_report)
         in
@@ -6554,7 +6571,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                  [release_all_candidates]). No winner is crowned, but the clean measured prefix can
                  spare a replay this same search (gh-ocannl-1136). *)
               let r = partial_report (Abandoned ab) in
-              release_all_candidates ~keep:[] ();
+              release_all_candidates ();
               if
                 use_cache
                 && search_measurements_cacheable ~nothing_timed:false

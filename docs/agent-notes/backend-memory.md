@@ -64,8 +64,8 @@ files.
   `nvidia-smi` is the wrong instrument — `Context.get_used_memory` sums the pool table's requested
   bytes and matched the census to the decimal at every sample.
 - Anything that knows an artifact's exact lifetime should call `Context.release` (idempotent, eager,
-  finalizer-independent); `Autotune.tune` does it per candidate, bounding a search at
-  `beam_width + 2` live candidates instead of one per attempt. Not calling it is never a
+  finalizer-independent); `Autotune.tune` does it per candidate at the end of its timing window,
+  so at most one candidate is live (next entry). Not calling it is never a
   correctness bug, only a memory one. What `release` frees is precisely the pools a context holds
   that its parent does not and that are not per-device constants — so sibling contexts are
   independent (each `compile` mints its own `pool_id`s) but a released context is a dead handle, and
@@ -73,6 +73,27 @@ files.
   locations, so releasing an ancestor leaves the descendant resolving a dropped `pool_id`. This
   precondition remains for compiled descendants; upload siblings reference-count shared working
   pools (gh-ocannl-1173) without counting superseded values in a linear upload chain.
+- **A search holds one candidate, and a replay never sits beside the base compile**
+  (gh-ocannl-1326). gh-ocannl-550's beam bound (`beam_width + 2` routine footprints) still caps
+  tuning at half the device: a b256 `gpt2_mini_train` search on a 12 GiB card timed one candidate
+  (6.6 GiB) and declined every later one at link with `CUDA_ERROR_OUT_OF_MEMORY`. `Autotune.tune`
+  now releases each candidate when its timing window ends, ranks incumbents by their saved forms,
+  and recompiles the winner from `ctx` on both paths (one compile; the `timing_ctx` path always
+  paid it). The issue read the warm-run re-search as "nothing cached"; the entry WAS stored, and
+  the replay compile was refused because the base compile's 6.6 GiB was still resident, so the
+  baseline is now released before any replay and relinked if the entry is stale.
+  `test/operations/autotune_device_memory` simulates a capacity at the `Delta_pool_allocated`
+  fault-injection seam; `autotune_candidate_release` pins zero working pools between candidates.
+- Device allocation refusals are typed at the GPU pool allocators
+  (`Schedule_outcome.Device_memory_exhausted`, the `Resource_exceeded Device_memory` decline with
+  the refused bytes and the driver's free bytes), because HIP has no `classify_failure` and its
+  out-of-memory error was therefore unclassified, i.e. fatal under strict classification, and
+  CUDA's was a `Backend_rejected` stage string nothing could reason about. A refused BASE compile
+  refuses the whole search before the cache is consulted (`Pre_search_failure` at `Backend_link`):
+  scheduling only adds device buffers to the base lowering (new tiles, fission's local-to-device
+  promotions), so no candidate, replay or fallback would fit either. Size such a probe on the
+  UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's
+  workload under CUDA), which made a half-footprint test capacity fit the baseline there.
 - **`Context.t.context_id` names a release unit, not a value** (gh-ocannl-1203). The merge-buffer
   ledger retires a consumer's registration by the released context's id, so every value that shares
   a backend release flag (`finalized`: a linear upload chain, an upload into an existing buffer)

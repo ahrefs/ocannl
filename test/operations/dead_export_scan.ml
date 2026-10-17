@@ -375,7 +375,6 @@ let exempt_zero_reference_exports =
     "Train.compile_within_budget";
     "Train.decision_lowering_digest";
     "Train.dump_cd_file";
-    "Train.embedded_nodes";
     "Train.ensure_printable";
     "Train.filter_out_grad_zeroing";
     "Train.fit_memory_budget";

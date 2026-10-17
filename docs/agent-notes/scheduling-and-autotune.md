@@ -781,7 +781,12 @@ files.
   `Backend_link` declines — but after the search concluded, when the exhausted device defeated both
   the winner replay and the untuned-default fallback compile behind it. Containment tests do not
   need a device that can fail: `Autotune.on_candidate_attempt` injects one
-  (`test/operations/autotune_arm_containment`).
+  (`test/operations/autotune_arm_containment`). An arm the device cannot hold BESIDE the other
+  arm's shipped routine (materialize-all next to arm A's 6.6 GiB at b256 on 12 GiB) is refused at
+  its base compile, typed, as a `Pre_search_failure` (gh-ocannl-1326; backend-memory.md has the
+  mechanism). The placement store records no decision over a failed arm, so a warm process
+  replays arm A and re-refuses arm B, and a benchmark harness counts that call as a replay
+  (`no_searches`), not a search.
 ## Failure phases and lineage containment
 - A timing failure's *phase* decides whether the lineage is condemned, so pre-dispatch validation
   needs its own. `Context.run` validates (poisoned lineage, uninitialized inputs, unsatisfied
