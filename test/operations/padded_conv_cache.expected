@@ -10,3 +10,4 @@ pass 2's gradients match the untuned compile: true
 pass 1 searched: true
 pass 1 committed a schedule-cache entry: true
 pass 2 replayed the cached winner: true
+not every schedule store pass 1 attempted was refused: true

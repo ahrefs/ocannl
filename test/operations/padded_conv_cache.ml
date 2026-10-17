@@ -127,27 +127,41 @@ let () =
   in
   let reports = ref [] in
   (* Each pass's own context's timing identity (what its cache key rests on) and the cache I/O it
-     made, for the waivers below. *)
-  let tune_once () =
+     made, for the waivers below. Pass 1 also tunes the forward-only step, a second padded-conv
+     routine into the same directory, so the claim no refusal waives has two schedule stores to
+     judge. *)
+  let fwd_comp =
+    let fwd = Train.forward loss in
+    { fwd with asgns = Ir.Assignments.Block_comment ("padded_conv_forward", fwd.asgns) }
+  in
+  let tune_once ~with_forward () =
     let ctx = fresh () in
     let identity = Option.is_some (Context.timing_identity ctx) in
-    let grads, ios =
+    let (grads, fwd_report), ios =
       SC.recording_cache_io (fun () ->
           let ctx, routine =
             Autotune.tune ~beam_width:1 ~rounds:1 ~repeats:1 ~cache_dir
               ~report:(fun r -> reports := r :: !reports)
               ctx comp bindings
           in
-          grads_of (run_with ctx routine))
+          let grads = grads_of (run_with ctx routine) in
+          let fwd_report = ref None in
+          if with_forward then
+            ignore
+              (Autotune.tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
+                 ~report:(fun r -> fwd_report := Some r)
+                 (fresh ()) fwd_comp bindings
+                : Context.t * Context.routine);
+          (grads, !fwd_report))
     in
-    (grads, identity, ios)
+    (grads, identity, ios, fwd_report)
   in
   let reference = untuned_grads () in
   (* An all-zero reference (a relu that killed everything) would let any routine match it. *)
   p_exists "the untuned gradients are not all zero" (Array.to_list reference) ~f:(fun g ->
       Float.(abs g > 1e-3));
-  let tuned1, identity1, ios1 = tune_once () in
-  let tuned2, _identity2, ios2 = tune_once () in
+  let tuned1, identity1, ios1, fwd_report = tune_once ~with_forward:true () in
+  let tuned2, _identity2, ios2, _ = tune_once ~with_forward:false () in
   let r2, r1 =
     match !reports with [ r2; r1 ] -> (r2, r1) | _ -> failwith "expected two reports"
   in
@@ -159,7 +173,11 @@ let () =
      ([Autotune.search_measurements_cacheable]); that is not this issue's question, so it closes the
      gate rather than passing. The device-identity gate and the refusal waiver are
      [Cache_plant]'s. *)
-  let clean = r1.Autotune.timings_contended = 0 && r1.Autotune.candidates_timed > 0 in
+  let clean_search (r : Autotune.report) =
+    (match r.Autotune.outcome with Autotune.Searched -> true | _ -> false)
+    && r.Autotune.timings_contended = 0 && r.Autotune.candidates_timed > 0
+  in
+  let clean = clean_search r1 in
   Stdio.eprintf
     "pass 1 (not part of the golden): %d candidate(s) timed, %d timing(s) refused, %d cache \
      operation(s); pass 2: %d\n\
@@ -177,4 +195,9 @@ let () =
   cache_claim ios1 "pass 1 committed a schedule-cache entry"
     (List.exists (schedule_stores ios1) ~f:(Fn.non Cache_plant.refused));
   cache_claim (ios1 @ ios2) "pass 2 replayed the cached winner"
-    (match r2.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false)
+    (match r2.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false);
+  (* The claim no refusal waives: pass 1's two clean, keyed searches were each bound to attempt a
+     schedule store, and a cache that refuses every store fails here instead of skipping above. *)
+  Cache_plant.not_every_store_refused
+    ~expected:(identity1 && clean && Option.exists fwd_report ~f:clean_search)
+    "not every schedule store pass 1 attempted was refused" ios1
