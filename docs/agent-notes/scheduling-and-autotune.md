@@ -487,8 +487,13 @@ files.
   default rounds back to storage after each outer contraction step, so a narrow-storage weight
   gradient would change its result. Losses stayed bitwise identical on f32 (pinned by
   `test/operations/seeded_default`).
-- **The seeded untuned default also splits long, narrow reductions, before segmenting**
-  (gh-ocannl-1325, `Autotune.seeded_split_sites`, config `gpu_default_split_reduce_min_serial`).
+- **The seeded untuned default also splits long, narrow reductions, before segmenting, on CUDA
+  only** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
+  `gpu_default_split_reduce_min_serial`). Measured on gpt2_mini_train b256: CUDA 543 → 391 ms, but
+  HIP (gfx1151, unified memory) 885 → 1256 ms when ungated. The likely cause is gh-ocannl-1348's
+  finding that HIP's compiler does not register-promote such accumulators, so the split's first
+  pass would round-trip its partials cell through device memory on every row; that is unconfirmed
+  (no per-kernel HIP table). HIP keeps the unsplit plan until a HIP-safe first pass lands.
   It applies the search's split-reduce detection and enabling interchange as a whole-routine
   prelude (`Autotune.split_reduce_prelude`, the `F_split` seeds' own), to every site whose serial
   chain per output cell reaches the threshold. On gpt2_mini_train b256 these are the 26 bias and

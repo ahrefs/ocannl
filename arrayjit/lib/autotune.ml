@@ -4213,6 +4213,13 @@ let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sket
               List.fold ranked ~init:None ~f:(fun best p ->
                   match best with Some b when threads b >= threads p -> best | _ -> Some p)))
 
+(* The untuned split is CUDA's alone (gh-ocannl-1325). On gpt2_mini_train b256 it took the CUDA step
+   from 543 to 391 ms, but HIP's from 885 to 1256 ms (minix, gfx1151, unified memory): HIP's
+   compiler does not register-promote such accumulators (gh-ocannl-1348), so the first pass
+   presumably round-trips its partials cell through device memory on every row. A HIP-safe first
+   pass is a follow-up; until then HIP keeps the unsplit plan. *)
+let seeded_split_backend backend = String.is_substring backend ~substring:"cuda"
+
 let seeded_split_min_serial () =
   let raw =
     String.strip
@@ -4238,8 +4245,9 @@ let seeded_split_threads = 32768
    the block count of the search's menu ([32; 128; 512], at most half the split loop) that comes
    closest to {!seeded_split_threads} first-pass threads without exceeding it, else the smallest. A
    scatter site ([Set_dynamic]) is left to the search. *)
-let seeded_split_sites ~min_serial ~static_indices (opt : LL.optimized) : (sr_site * int) list =
-  if min_serial <= 0 then []
+let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized) :
+    (sr_site * int) list =
+  if min_serial <= 0 || not (seeded_split_backend backend) then []
   else
     List.filter_map (split_reduce_sites ~static_indices opt) ~f:(fun s ->
         if s.sr_dynamic || s.sr_cost / s.sr_out < min_serial then None
@@ -4266,7 +4274,9 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
   in
   if
     (not (seeded_default_backend backend))
-    || (min_reduction () <= 0 && min_serial () <= 0 && not (sink_enabled ()))
+    || min_reduction () <= 0
+       && (min_serial () <= 0 || not (seeded_split_backend backend))
+       && not (sink_enabled ())
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
@@ -4287,7 +4297,7 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
            two passes apart at, and every later step -- the default segments, the seeding below --
            works on the split routine. A prelude that does not apply leaves the routine unsplit. *)
         let opt, split =
-          match seeded_split_sites ~min_serial ~static_indices opt with
+          match seeded_split_sites ~backend ~min_serial ~static_indices opt with
           | [] -> (opt, [])
           | sites -> (
               (* A copy of the traced store only, as the search's [F_split] candidates rebase: the

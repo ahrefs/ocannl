@@ -1,10 +1,11 @@
-on CUDA/HIP the seeded default splits the bias gradient at a threshold below its serial chain: true
-on CUDA/HIP the split routine compiles without falling back to the default: true
-off CUDA/HIP the seeded default splits nothing: true
+on CUDA the seeded default splits the bias gradient at a threshold below its serial chain: true
+on CUDA the split routine compiles without falling back to the default: true
+off CUDA, HIP included, the seeded default splits nothing: true
 the bias gradient is not trivially zero: true
 the default pipeline's bias gradient is within the f32 tolerance of the f64 reference: true
 the seeded default's bias gradient is within the f32 tolerance of the f64 reference: true
-on CUDA/HIP the split changed the summation order: some cell differs from the default's: true
+off CUDA, HIP included, the seeded default's bias gradient is bitwise the default's: true
+on CUDA the split changed the summation order: some cell differs from the default's: true
 a threshold above the serial chain splits nothing: true
 that routine computes the default pipeline's bias gradient bitwise: true
 a threshold of 0 disables the split: true

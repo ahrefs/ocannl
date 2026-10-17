@@ -1702,6 +1702,7 @@ val seeded_params :
     geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
 
 val seeded_split_sites :
+  backend:string ->
   min_serial:int ->
   static_indices:Ir.Indexing.static_symbol list ->
   Ir.Low_level.optimized ->
@@ -1712,7 +1713,10 @@ val seeded_split_sites :
     none), scatter sites excepted; each at the block count of the search's menu ([32; 128; 512], at
     most half the split loop's extent) giving the most first-pass threads up to 32768, else the
     smallest. The choice reads no device property, so the split, and the summation order it fixes,
-    depend on the routine alone. Exposed for tests. *)
+    depend on the routine alone. CUDA only ([backend] is the {!Context.backend_name}): on HIP the
+    split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to 1256 ms, gfx1151 unified memory)
+    where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the unsplit plan; elsewhere the result is
+    empty. Exposed for tests. *)
 
 val seeded_transform :
   ?min_reduction:int ->
@@ -1755,13 +1759,13 @@ val seeded_default :
     summation order, and only sites whose accumulator is at their storage precision are seeded, so
     the seeded sketches leave the routine's results bitwise the default's.
 
-    Before segmenting, the reductions {!seeded_split_sites} admits at [min_serial] (default: config
-    [gpu_default_split_reduce_min_serial], 4096; 0 disables) are split whole-routine, as the
-    search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm parameter gradient,
-    which the default runs as one thread per output cell walking every batch row in sequence,
-    becomes a parallel pass over blocks of rows and a combine. That DOES change the summation order
-    of those reductions -- a deterministic balanced tree over the blocks, chosen from the routine
-    alone -- as the default plan's cooperative all-reduces (gh-ocannl-1124) do.
+    Before segmenting (on CUDA), the reductions {!seeded_split_sites} admits at [min_serial]
+    (default: config [gpu_default_split_reduce_min_serial], 4096; 0 disables) are split
+    whole-routine, as the search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm
+    parameter gradient, which the default runs as one thread per output cell walking every batch row
+    in sequence, becomes a parallel pass over blocks of rows and a combine. That DOES change the
+    summation order of those reductions -- a deterministic balanced tree over the blocks, chosen
+    from the routine alone -- as the default plan's cooperative all-reduces (gh-ocannl-1124) do.
 
     Every [`Normal] segment no sketch takes gets {!reduction_sink}'s interchange, then the default
     preset of the interchanged code (gh-ocannl-1348), probed alone like a seed, and covered by the

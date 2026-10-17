@@ -329,7 +329,7 @@
 # 256), it gave the fastest step at both batch 8 and batch 256 on CUDA.
 #gpu_default_sketch_min_reduction=32
 
-# The same untuned compiles also split a CUDA or HIP reduction whose serial chain per output cell --
+# The same untuned compiles also split a CUDA reduction whose serial chain per output cell --
 # its accumulation's trip count over the output's cell count -- is at least this long
 # (gh-ocannl-1325): the bias and layer-norm parameter gradients of a training step, which the
 # default runs as one thread per parameter walking every batch row in sequence, become a parallel
@@ -337,10 +337,12 @@
 # legality and enabling interchange. This changes those reductions' summation order (a
 # deterministic balanced tree over the blocks, chosen from the routine alone), as the default
 # plan's cooperative all-reduces do, and as the autotuner's own split-reduce candidates do; the
-# `reproducible` profile pins it at 0. Ignored where gpu_default_sketch_min_reduction is ignored,
-# except that it does not need the sketch seeding on. 0 disables the split. At 4096, gpt2_mini_train
-# at batch 256 splits its 26 bias and layer-norm parameter gradients and its loss sum (32768 rows
-# each), and batch 8 splits nothing.
+# `reproducible` profile pins it at 0. CUDA only: on gpt2_mini_train at batch 256 the split took
+# the CUDA step from 543 to 391 ms (RTX 5070 Ti) but the HIP step from 885 to 1256 ms (gfx1151,
+# unified memory), so HIP ignores this key and keeps the unsplit plan. Ignored where
+# gpu_default_sketch_min_reduction is ignored too, except that it does not need the sketch seeding
+# on. 0 disables the split. At 4096, gpt2_mini_train at batch 256 splits its 26 bias and layer-norm
+# parameter gradients and its loss sum (32768 rows each), and batch 8 splits nothing.
 #gpu_default_split_reduce_min_serial=4096
 
 # If true, the recipes' untuned compiles (the same ones gpu_default_sketch_min_reduction applies

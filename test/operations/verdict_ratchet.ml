@@ -322,10 +322,11 @@ let exempt_quantified_helpers =
     ( "test/operations/seeded_default.ml:a threshold of 0 disables the seeding",
       "a threshold of 0 is the documented off switch, so an empty seed list is the claim; the \
        claims above pin a non-empty one at a positive threshold on the backends that seed" );
-    ( "test/operations/seeded_split_reduce.ml:off CUDA/HIP the seeded default splits nothing",
-      "the untuned split is CUDA/HIP-only by design, so off those backends an empty split list is \
-       the claim; it is gated to them, and on CUDA/HIP the claim beside it requires the bias \
-       gradient in the list from the same fixture" );
+    ( "test/operations/seeded_split_reduce.ml:off CUDA, HIP included, the seeded default splits \
+       nothing",
+      "the untuned split is CUDA-only by design (it measured slower on HIP), so off CUDA an empty \
+       split list is the claim; it is gated there, and on CUDA the claim beside it requires the \
+       bias gradient in the list from the same fixture" );
     ( "test/operations/seeded_split_reduce.ml:a threshold above the serial chain splits nothing",
       "the threshold exceeds the bias gradient's chain, the longest split-reduce site of the \
        fixture, so nothing qualifies and an empty split list is the claim; the bitwise-gradient \
