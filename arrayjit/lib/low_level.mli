@@ -386,8 +386,9 @@ val unroll_dims : int array -> body:(Indexing.axis_index array -> offset:int -> 
 val loop_over_padding_region :
   dims:int array -> padding:Ops.axis_padding array -> body:(Indexing.axis_index array -> t) -> t
 (** Generate loops that iterate only over the padding margins of a tensor. For dimensions with
-    padding, generates separate loops for left margin, middle (recursing), and right margin. The
-    middle region continues recursing to find padding in other dimensions. *)
+    padding, generates separate loops for left margin, middle (recursing), and right margin, each
+    binding its own fresh symbol (gh-ocannl-1384). The middle region continues recursing to find
+    padding in other dimensions. *)
 
 val has_accumulation : t -> bool
 (** Whether the tree carries a read-modify-write accumulation: some [Set] (resp. [Set_local]) reads

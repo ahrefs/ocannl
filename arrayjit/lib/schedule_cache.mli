@@ -175,9 +175,17 @@ val digest : canonical -> string
 
 val complete : canonical -> bool
 (** [false] when the code contains constructs the canonical rendering cannot capture
-    ([Staged_compilation] closures, unbound or shadowed loop symbols). Incomplete canonical forms
+    ([Staged_compilation] closures, unbound symbols, a loop symbol bound by more than one loop --
+    nested or sibling: a schedule's reference to it would be ambiguous). Incomplete canonical forms
     must not be used as {b disk}-cache keys (distinct programs could collide); within one process
     they still support {!to_saved}/{!of_saved} round-trips. *)
+
+val incomplete_reason : canonical -> string option
+(** Why {!complete} is [false] ([None] exactly when it is [true]): how many loop binders re-bind an
+    already-bound symbol, how many symbol references are free, how many constructs are opaque,
+    naming the first few re-bound symbols. For the diagnostic a caller prints when it declines the
+    disk cache on that ground (gh-ocannl-1384: a silent decline hid that every padded conv was
+    uncacheable). *)
 
 val tn_of_ref : canonical -> int -> Tnode.t
 (** The tensor node at a canonical index. On out-of-range raises

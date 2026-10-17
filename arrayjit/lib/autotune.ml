@@ -4531,6 +4531,16 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         ~objective ~limits ~capabilities canon ~backend
     in
     let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key in
+    (* gh-ocannl-1384: unconditional, not [logf]. Declining the cache this way is invisible
+       otherwise -- the call searches, returns a good routine and stores nothing, so every later
+       call searches again -- and for weeks it was why no padded-conv cell ever replayed. *)
+    if (not (String.is_empty cache_dir)) && not (SC.complete canon) then
+      Stdio.eprintf
+        "autotune: WARNING: schedule cache not used for routine %S (digest %s): its canonical form \
+         is incomplete (%s), so this search's winner is neither looked up nor stored\n\
+         %!"
+        (Lazy.force routine_name) base_digest
+        (Option.value (SC.incomplete_reason canon) ~default:"no reason recorded");
     if Option.is_none key then
       logf "persistent timed cache disabled for %s: concrete device identity unavailable" backend;
     let compile_spec =
