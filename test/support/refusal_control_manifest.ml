@@ -436,6 +436,12 @@ let raw_entries =
         "[scanner-refusal:2aa043e6a8bd4e45a080d2f62d8af168] Ir.Backend_intf.no_hardware_limits";
         "[scanner-refusal:d5139f7e86708309a46549017b6c0f68] Cc_backend";
         "[scanner-refusal:840d9d1ef23497bec8d699caa98d67d6] linked library whose";
+        "[scanner-refusal:0592d760a046f0395065418e9c342a58] is recognised case-insensitively";
+        "[scanner-refusal:7e956ea74253311af8c0a9b9fa543587] Cc_backend";
+        "[scanner-refusal:549301882f72c66accc4981283aad8e2] no_hardware_limits";
+        "[scanner-refusal:10334c2250270979aa32ddc7a10d93e3] library's interface-only module";
+        "[scanner-refusal:9c6ae4964c8b00fe27c0607da0135f80] field filled through";
+        "[scanner-refusal:f9bd0cf9b0592ab82941e27281a7dc4c] let stays unplaced";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";

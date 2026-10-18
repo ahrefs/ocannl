@@ -662,10 +662,12 @@ let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) sexp =
      that pform declares no dependency, so the run still varies with the variable and pins nothing
      (gh-ocannl-1320, Codex P2 round 1). *)
   | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest) ->
+      (* Case-insensitively: Windows environment names are (Codex P2, round 7). *)
       let reads_itself =
         List.exists (atoms value) ~f:(fun v ->
             List.exists [ "="; "}" ] ~f:(fun stop ->
-                String.is_substring v ~substring:("%{env:" ^ name ^ stop)))
+                String.is_substring (String.lowercase v)
+                  ~substring:(String.lowercase ("%{env:" ^ name ^ stop))))
       in
       List.concat_map rest
         ~f:(commands_in ~cwd ~pinned:(if reads_itself then pinned else Set.add pinned name))

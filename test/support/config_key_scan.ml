@@ -1199,6 +1199,16 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
               List.iter bindings ~f:(fun binding ->
                   Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
                       found := (name, direct_of binding.pvb_expr) :: !found))
+          (* A [let module M = struct … end in] helper's values, reached as [M.v] (Codex P2, round
+             7). *)
+          | Pexp_letmodule ({ txt = Some m; _ }, { pmod_desc = Pmod_structure items; _ }, _) ->
+              List.iter items ~f:(fun item ->
+                  match item.pstr_desc with
+                  | Pstr_value (_, bindings) ->
+                      List.iter bindings ~f:(fun binding ->
+                          Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
+                              found := (m ^ "." ^ name, direct_of binding.pvb_expr) :: !found))
+                  | _ -> ())
           | _ -> ());
           super#expression expr
       end
@@ -1265,7 +1275,12 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             (* A field's initializer sees what the binding's body sees: the earlier values, and for
                a recursive group the group itself. *)
             let field_env = match rec_flag with Recursive -> env' | Nonrecursive -> env in
-            List.iter bindings ~f:(fun binding ->
+            (* Named bindings only: [direct_of] marks every literal read it visits as placed, and an
+               unnamed [let () = …] must keep its reads in [unplaced] (Codex P2, round 7). *)
+            let named =
+              List.filter bindings ~f:(fun b -> Option.is_some (pattern_name b.pvb_pat))
+            in
+            List.iter named ~f:(fun binding ->
                 (* And the helpers the binding declares locally (Codex P2, round 2): a single name
                    bound by a `let` anywhere inside the binding stands for what every such binding
                    of it reads -- flow-insensitively, so shadowing over-reads, the direction whose
@@ -1275,8 +1290,9 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                   List.fold names
                     ~init:(Set.of_list (module String) keys)
                     ~f:(fun acc path ->
+                      let name = dotted path in
                       match path with
-                      | [ name ] when Map.mem locals name ->
+                      | _ when Map.mem locals name ->
                           if Set.mem seen name then acc
                           else
                             List.fold (Map.find_multi locals name) ~init:acc ~f:(fun acc direct ->
@@ -1302,6 +1318,18 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         | Pstr_include { pincl_mod; _ } -> (
             match (unwrap pincl_mod).pmod_desc with
             | Pmod_structure inner -> walk ~scope env inner
+            (* [include M] of a structure this file walked as [M.v] re-exports each [v] here (Codex
+               P2, round 7). *)
+            | Pmod_ident { txt; _ } -> (
+                match flatten_module_path txt with
+                | Some path ->
+                    let prefix = dotted (scope @ path) ^ "." in
+                    Map.fold env ~init:env ~f:(fun ~key ~data acc ->
+                        match String.chop_prefix key ~prefix with
+                        | Some leaf when not (String.contains leaf '.') ->
+                            Map.set acc ~key:(dotted (scope @ [ leaf ])) ~data
+                        | _ -> acc)
+                | None -> env)
             | _ -> env)
         | _ -> env)
   in
@@ -1470,7 +1498,9 @@ let field_reads_in_source content ~fields ~record_fields ~constant_base:(base_ho
         match flatten_module_path txt with
         | Some [ name ] when List.exists bindings ~f:(fun (n, _) -> String.equal n name) ->
             Set.mem known name
-        | Some [ name ] -> String.equal name base_value
+        (* A bare name the file does not bind came from an `open` this scan does not resolve, so it
+           may be anything (Codex P2, round 7). *)
+        | Some [ _ ] -> false
         | Some path -> (
             match List.rev path with
             (* Unless the file rebinds a module the path goes through: [module Ir = Local] makes

@@ -1436,7 +1436,14 @@ let main () =
                   let entry =
                     ( List.hd (atoms "name") |> Option.value ~default:"<unnamed>",
                       d,
-                      Scan.modules_of ~directory_modules group stanza,
+                      (* Less the modules dune is told have no implementation, which make no
+                         run-time read (Codex P2, round 7). *)
+                      (let interface_only =
+                         List.concat_map [ "modules_without_implementation"; "virtual_modules" ]
+                           ~f:(fun field -> List.map (atoms field) ~f:String.lowercase)
+                       in
+                       List.filter (Scan.modules_of ~directory_modules group stanza) ~f:(fun m ->
+                           not (List.mem interface_only (String.lowercase m) ~equal:String.equal))),
                       (* Every atom of the field, so `(re_export x)` and a `(select …)`'s
                          alternatives are followed too; an atom naming no program-local library
                          matches nothing (Codex P2, round 3). *)
@@ -5398,13 +5405,16 @@ let width_subject ?(links = "") answer =
   let deps =
     match answer with
     | `Declares -> Printf.sprintf " (env_var %s)" var
-    | `Pins | `Pins_ambient | `Neither -> ""
+    | `Pins | `Pins_ambient | `Pins_ambient_lower | `Neither -> ""
   in
   let action =
     match answer with
     | `Pins -> Printf.sprintf "\n (action\n  (setenv %s 16\n   (run %%{test})))" var
     | `Pins_ambient ->
         Printf.sprintf "\n (action\n  (setenv %s %%{env:%s=-1}\n   (run %%{test})))" var var
+    | `Pins_ambient_lower ->
+        Printf.sprintf "\n (action\n  (setenv %s %%{env:%s=-1}\n   (run %%{test})))" var
+          (String.lowercase var)
     | `Declares | `Neither -> ""
   in
   Printf.sprintf
@@ -5447,6 +5457,12 @@ let width_support_dune inline =
   in
   match inline with
   | `Plain -> "(library\n (name support)\n (modules support)\n (libraries arrayjit.ir))\n"
+  | `Plain_with_interface ->
+      "(library\n\
+      \ (name support)\n\
+      \ (modules support iface)\n\
+      \ (modules_without_implementation iface)\n\
+      \ (libraries arrayjit.ir))\n"
   | (`Inline_undeclared | `Inline_declared) as inline ->
       Printf.sprintf
         "(library\n\
@@ -5624,6 +5640,49 @@ let width_control () =
       ~probe:aliased `Neither
   in
   let unseen_library = run ~links:" unseen" ~probe:"let () = ()\n" `Declares in
+  let pinned_ambient_lower = run ~probe:projected `Pins_ambient_lower in
+  let via_named_include =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            end\n\
+            include Public\n\
+            let vector_bytes_setting () = Public.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let opened_bare =
+    run
+      ~probe:
+        "open Dynamic_limits\n\
+         let narrow = { no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let interface_only =
+    run ~inline:`Plain_with_interface ~links:" support" ~probe:"let () = ()\n" `Neither
+  in
+  let via_local_module =
+    run
+      ~limits:
+        "module CC = Cc_backend\n\
+         let cpu_mma_limits () =\n\
+        \  let module W = struct let get () = CC.registers () end in\n\
+        \  { no_hardware_limits with\n\
+        \    simd_vector_bytes = CC.vector_bytes_setting ();\n\
+        \    simd_vector_registers = W.get (); worker_pool_tag = Cc_backend.chunks () }\n"
+      ~probe:updated `Neither
+  in
+  let unplaced_record =
+    run
+      ~backend:
+        (Some
+           (width_backend_stub
+          ^ "let () = ignore { x = Utils.get_global_arg ~default:\"-1\" \
+             ~arg_name:\"cc_vector_bytes\" }\n"))
+      ~probe:projected `Declares
+  in
   let undeclared_ok =
     refused undeclared
     && says (Utils.env_var_name width_key) undeclared
@@ -5673,6 +5732,22 @@ let width_control () =
     refused shadowed_home && says "leaving `simd_vector_bytes` to its base" shadowed_home
   in
   let via_include_ok = refused via_include && says "`Cc_backend.registers`" via_include in
+  let pinned_ambient_lower_ok = refused pinned_ambient_lower in
+  let via_named_include_ok =
+    refused via_named_include && says "`Cc_backend.registers`" via_named_include
+  in
+  let opened_bare_ok =
+    refused opened_bare && says "leaving `simd_vector_bytes` to its base" opened_bare
+  in
+  let interface_only_ok =
+    exited 0 interface_only && not (says "which a program links" interface_only)
+  in
+  let via_local_module_ok =
+    refused via_local_module && says "leaving `simd_vector_registers` to its base" via_local_module
+  in
+  let unplaced_record_ok =
+    exited 1 unplaced_record && says "outside every named top-level value, so no" unplaced_record
+  in
   let unseen_library_ok =
     exited 1 unseen_library && says "library unseen, which a program links" unseen_library
   in
@@ -5699,6 +5774,12 @@ let width_control () =
   if not shadowed_home_ok then report "shadowed-home" shadowed_home;
   if not via_include_ok then report "via-include" via_include;
   if not unseen_library_ok then report "unseen-library" unseen_library;
+  if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
+  if not via_named_include_ok then report "via-named-include" via_named_include;
+  if not opened_bare_ok then report "opened-bare" opened_bare;
+  if not interface_only_ok then report "interface-only" interface_only;
+  if not via_local_module_ok then report "via-local-module" via_local_module;
+  if not unplaced_record_ok then report "unplaced-record" unplaced_record;
   printf
     "\n\
      The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
@@ -5779,6 +5860,20 @@ let width_control () =
     "a linked library whose source the scan was never handed is refused, not read as making no \
      reads"
     unseen_library_ok;
+  Verdict.p "and the self-read is recognised case-insensitively, as Windows reads the variable"
+    pinned_ambient_lower_ok;
+  Verdict.p "a `Cc_backend` value re-exported by `include` of a named structure is a width value"
+    via_named_include_ok;
+  Verdict.p
+    "a bare `no_hardware_limits` the file does not bind came from an `open`, and an update of it \
+     is a read"
+    opened_bare_ok;
+  Verdict.p "a library's interface-only module has no source to hand over, and is not refused"
+    interface_only_ok;
+  Verdict.p "a field filled through a `let module` helper still carries the width"
+    via_local_module_ok;
+  Verdict.p "a width read inside a record under an unnamed `let ()` stays unplaced, and is refused"
+    unplaced_record_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)
