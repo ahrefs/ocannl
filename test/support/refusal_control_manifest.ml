@@ -273,6 +273,8 @@ let raw_entries =
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
         "[scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated";
         "[scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration";
+        "[scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key";
+        "[scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
         "[scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend";
         "[scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker";
@@ -422,6 +424,9 @@ let raw_entries =
         "[scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests";
         "[scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable";
         "[scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend";
+        "[scanner-refusal:abc9643d1cda7ae5a236d8652b9d56d1] no_hardware_limits";
+        "[scanner-refusal:4fa531ab8ce35f5bfe13706d82823855] Cc_backend";
+        "[scanner-refusal:2f4d8b9f7e61558560479600d35f74ac] than passing vacuously";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
@@ -714,6 +719,12 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:ae1b95995f2c4aa10cdeee699ccb3413",
       "a test naming the pipeline is reported, with the key its value reaches through the module's \
        own calls and the execution-neutral trace key, when its stanza declares neither: true" );
+    ( "env_var_deps.ml:ea9bbac4c8b7dd80c2aba00aaa7c31ff",
+      "a `Cc_backend` reading the width key outside every named value is refused, not read as \
+       having no width readers: true" );
+    ( "env_var_deps.ml:c0d3ae6ca0018d4cbf12e95986af7220",
+      "and one whose values no longer reach the key at all is refused rather than passing \
+       vacuously: true" );
     ( "env_var_deps.ml:77abb7920eac5544c6bf60dd498ec9cf",
       "a test projecting a width field off a limits record is reported, naming the variable and \
        the read, when its stanza declares neither: true" );

@@ -256,6 +256,8 @@ env_var_deps.ml: [scanner-refusal:8dbf084aae3ed7d3e4ce33fb0d06e710] the credenti
 env_var_deps.ml: [scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -405,6 +407,9 @@ env_var_deps.ml: [scanner-refusal:ec11239fab853f2292b2255dcbe588e9] re_export (c
 env_var_deps.ml: [scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:abc9643d1cda7ae5a236d8652b9d56d1] no_hardware_limits (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:4fa531ab8ce35f5bfe13706d82823855] Cc_backend (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:2f4d8b9f7e61558560479600d35f74ac] than passing vacuously (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

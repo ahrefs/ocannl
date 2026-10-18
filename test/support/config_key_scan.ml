@@ -1421,9 +1421,15 @@ let field_reads_in_source content ~fields ~record_fields ~constant_bases =
   let constant_names =
     let names = List.dedup_and_sort (List.map bindings ~f:fst) ~compare:String.compare in
     let rec close known =
+      (* A bare name this file binds means its binding, which the closure judges -- a local
+         [no_hardware_limits] bound to a device's limits is not the library's constant (Codex P2,
+         round 4). A qualified path, or a bare name the file never binds, is judged by
+         [constant_bases]. *)
       let constant_ident txt =
-        List.exists constant_bases ~f:(fun name -> path_ends_in name txt)
-        || match flatten_module_path txt with Some [ name ] -> Set.mem known name | _ -> false
+        match flatten_module_path txt with
+        | Some [ name ] when List.exists bindings ~f:(fun (n, _) -> String.equal n name) ->
+            Set.mem known name
+        | _ -> List.exists constant_bases ~f:(fun name -> path_ends_in name txt)
       in
       let is_constant_base base =
         match (unwrap base).pexp_desc with

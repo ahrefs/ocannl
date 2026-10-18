@@ -1303,6 +1303,33 @@ let main () =
         List.filter_map reach ~f:(fun (name, keys) ->
             Option.some_if (List.mem keys width_key ~equal:String.equal) name)
   in
+  (* A width read the derivation cannot attribute retires the rule in silence -- no value, so no
+     field and no reader -- so it is refused rather than read as an absence of readers (Codex P2,
+     round 4): the key read outside every named top-level value of `Cc_backend`, or reached by none
+     of them at all. *)
+  (match List.Assoc.find library_modules width_module ~equal:String.equal with
+  | None -> ()
+  | Some on_disk ->
+      let unplaced =
+        (Sources.top_level_key_reach ~external_keys ~settings_field_keys
+           (In_channel.read_all on_disk))
+          .unplaced
+      in
+      if List.mem unplaced width_key ~equal:String.equal then
+        fail
+          (Printf.sprintf
+             "%s reads the cc vector width key `%s` outside every named top-level value, so no \
+              value is credited with it and no width reader would be asked to declare `%s` -- move \
+              the read into a named top-level function"
+             width_module width_key (Utils.env_var_name width_key))
+      else if List.is_empty width_values then
+        fail
+          (Printf.sprintf
+             "no top-level value of %s reaches the cc vector width key `%s`, so the width rule \
+              derives no reader at all -- if the key moved, follow it in \
+              `width_module`/`width_key`; if it is gone, retire the rule rather than let it pass \
+              vacuously"
+             width_module width_key));
   (* A field carries the width when its initializer reaches the key: through a top-level or
      function-local helper, or by naming one of the width values -- matched by its last component,
      so no alias, `open`, `let open` or local open of `Cc_backend` hides it (Codex P2, rounds 1-3).
@@ -5408,7 +5435,6 @@ let width_control () =
   let backend_home =
     Stdlib.Filename.concat (Stdlib.Filename.dirname width_limits_home) "cc_backend.ml"
   in
-  write_file (Stdlib.Filename.concat root backend_home) width_backend_stub;
   write_file (Stdlib.Filename.concat root width_limits_home) width_limits_stub;
   write_file (Stdlib.Filename.concat root width_limits_type_home) width_type_stub;
   write_file (Stdlib.Filename.concat root "test/t/ambient.ml") "let () = ()\n";
@@ -5423,7 +5449,9 @@ let width_control () =
     :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
     :: backend_home :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
   in
-  let run ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe answer =
+  let run ?(backend = width_backend_stub) ?(support = "let () = ()\n") ?(inline = `Plain) ?links
+      ~probe answer =
+    write_file (Stdlib.Filename.concat root backend_home) backend;
     write_file (Stdlib.Filename.concat root "test/lib/support.ml") support;
     write_file (Stdlib.Filename.concat root "test/lib/dune") (width_support_dune inline);
     write_file (Stdlib.Filename.concat root "test/t/probe.ml") probe;
@@ -5476,6 +5504,26 @@ let width_control () =
     run ~support:projected ~inline:`Inline_declared ~probe:"let () = ()\n" `Neither
   in
   let constant = run ~probe:unrelated `Neither in
+  let shadowed =
+    run
+      ~probe:
+        "let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+         let narrow = { no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let unplaced_backend =
+    run
+      ~backend:
+        "let () = ignore (Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\")\n\
+         let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n"
+      ~probe:projected `Declares
+  in
+  let unreached_backend =
+    run
+      ~backend:
+        "let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n"
+      ~probe:projected `Declares
+  in
   let undeclared_ok =
     refused undeclared
     && says (Utils.env_var_name width_key) undeclared
@@ -5501,6 +5549,13 @@ let width_control () =
   in
   let inline_declared_ok = passed inline_declared in
   let constant_ok = passed constant in
+  let shadowed_ok = refused shadowed && says "leaving `simd_vector_bytes` to its base" shadowed in
+  let unplaced_backend_ok =
+    exited 1 unplaced_backend && says "outside every named top-level value, so no" unplaced_backend
+  in
+  let unreached_backend_ok =
+    exited 1 unreached_backend && says "derives no reader at all" unreached_backend
+  in
   if not undeclared_ok then report "undeclared" undeclared;
   if not declared_ok then report "declared" declared;
   if not pinned_ok then report "pinned" pinned;
@@ -5514,6 +5569,9 @@ let width_control () =
   if not inline_undeclared_ok then report "inline-undeclared" inline_undeclared;
   if not inline_declared_ok then report "inline-declared" inline_declared;
   if not constant_ok then report "constant" constant;
+  if not shadowed_ok then report "shadowed" shadowed;
+  if not unplaced_backend_ok then report "unplaced-backend" unplaced_backend;
+  if not unreached_backend_ok then report "unreached-backend" unreached_backend;
   printf
     "\n\
      The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
@@ -5559,6 +5617,17 @@ let width_control () =
      returning an update of it -- an update of another record, a field the width does not fill, \
      and `Cc_backend` values not reaching the width ask for nothing"
     constant_ok;
+  Verdict.p
+    "but a bare `no_hardware_limits` the test binds to a device's limits is that binding, and an \
+     update of it is a read"
+    shadowed_ok;
+  Verdict.p
+    "a `Cc_backend` reading the width key outside every named value is refused, not read as having \
+     no width readers"
+    unplaced_backend_ok;
+  Verdict.p
+    "and one whose values no longer reach the key at all is refused rather than passing vacuously"
+    unreached_backend_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)
