@@ -1,79 +1,126 @@
 (** CUDA's tensor-core tables as pure functions of storage precisions, the numerics policy and the
-    compute capability: the arm resolver the backend's [mma_syntax] and [mma_fragment_syntax] hooks
-    dispatch on, the arch floors those arms check, and the capability descriptor
-    ({!Backend_intf.mma_capability}) that autotune seeds from.
+    compute capability: the one arm variant the backend's [mma_syntax] and [mma_fragment_syntax]
+    hooks dispatch on, its arch floors, markers and tiles, the capability descriptor
+    ({!Backend_intf.mma_capability}) autotune seeds from, and the nvrtc arch-target policy that
+    reads the floors back out of rendered source.
 
-    They live here, outside the [cudajit]-gated [Cuda_backend], so the agreement between the two
-    owners of the 70/80/89 cutoffs -- the descriptor's [entry ~min_cc] and the resolver's floors
-    ([wc_min_cc], {!mma16_min_cc}) -- is tested on both sides of every cutoff wherever OCANNL
-    builds, with no toolkit and no device ([test/operations/cuda_mma_cutoffs], gh-ocannl-1214). The
-    backend consumes these definitions directly: [Cuda_backend.Impl] includes this whole interface
-    into its syntax configuration, and builds [hardware_limits.mma] as [capability ~cc] at the
-    attached devices' minimum compute capability. Compute capabilities are [major * 10 + minor]
-    throughout. *)
+    They live here, outside the [cudajit]-gated [Cuda_backend], so they are tested wherever OCANNL
+    builds, with no toolkit and no device ([test/operations/cuda_mma_cutoffs], gh-ocannl-1214;
+    [test/operations/cuda_mma_arms] and [arrayjit/test/test_cuda_arch_flags], gh-ocannl-1232).
 
-(** {1 The wmma arm} *)
+    {b One resolution} (gh-ocannl-1232). Every CUDA mma cutoff is written once, in {!arm_floor}.
+    {!resolve_arm} is the single table from a storage triple, the policy and the emission scope to
+    an arm; the hooks match on its result (so they have no dispatch order to restate), {!mma_arm}
+    projects it into {!Backend_intf.codegen_capabilities}, {!capability} names each descriptor entry
+    by the arm it seeds, and {!gpu_arch_options} maps each arm's rendering marker to that arm's
+    floor. Compute capabilities are [major * 10 + minor] throughout. *)
 
-type wmma_combo_info = {
+(** {1 The arm variant} *)
+
+type m16n8k16_kind =
+  | M16n8k16_bf16  (** Uniform bf16 (gh-ocannl-545): the combination wmma cannot express. *)
+  | M16n8k16_f16  (** Uniform f16 under [Numerics.Fp16_wide], per statement (gh-ocannl-680). *)
+[@@deriving equal, sexp_of, enumerate]
+
+(** The inline-PTX arms. Both accumulate in the architected m16n8 f32 per-lane register layout,
+    which is what lets their persistent-fragment scope hold registers across an outer reduction
+    (gh-ocannl-1063). *)
+type inline_ptx =
+  | Fp8_m16n8k32  (** [mma.sync.aligned.m16n8k32] over e5m2 x e5m2 -> f32. *)
+  | M16n8k16 of m16n8k16_kind
+      (** [mma.sync.aligned.m16n8k16] with 16-bit operands; one body over both element types, the
+          PTX fragment layouts being shared by .f16 and .bf16. *)
+[@@deriving equal, sexp_of, enumerate]
+
+(** The [nvcuda::wmma] C++-API arms (tensorize-mma T3). *)
+type wmma_kind =
+  | Wmma_f16_f32
+  | Wmma_f16_f16  (** Gated off under [Numerics.Fp16_wide]. *)
+  | Wmma_f16_wide
+      (** f16 x f16 -> f32 fragments over an f16 destination converted at the [d] boundary
+          (gh-ocannl-925): only a fragment scope renders it. *)
+  | Wmma_bf16
+  | Wmma_tf32  (** Uniform f32 read as tf32, only when [Numerics.t.tf32_matmuls] opts in. *)
+[@@deriving equal, sexp_of, enumerate]
+
+(** Every tensor-core rendering the CUDA hooks can emit. [all_of_arm] enumerates them, so a table
+    over arms (the arch-target markers, the floors' minimum) covers a new arm automatically. *)
+type arm = Inline_ptx of inline_ptx | Wmma of wmma_kind [@@deriving equal, sexp_of, enumerate]
+
+val resolve_arm :
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  d_prec:Ops.prec ->
+  scope:Backend_intf.mma_emission_scope ->
+  arm option
+(** The arm the hooks render a storage triple with in an emission scope, under the current numerics
+    policy; [None]: no tensor-core form, the scalar fallback renders. Only the precision- and
+    policy-level choice: the hooks still decline on extents, strides, address spaces, layouts and
+    {!arm_floor}, and a decline is final -- no hook falls through to another arm. An update-only
+    statement against a fragment array is resolved at [Mma_fragment_scope], the scope that declared
+    the array. The one scope-dependent triple is uniform f16 under [Numerics.Fp16_wide]: inline-PTX
+    m16n8k16 per statement, [Wmma_f16_wide] in a fragment scope; a per-statement arm never has a
+    converted destination. *)
+
+val arm_floor : arm -> int
+(** The arm's arch floor, the minimum compute capability whose PTX contains its instructions: the
+    only place CUDA's mma cutoffs are written. *)
+
+val arm_marker : arm -> string
+(** The marker the arm's rendering comment carries in parentheses (e.g. [wmma-tf32], [mma-bf16]),
+    published as [Backend_intf.mma_arm.arm_name]; {!gpu_arch_options} reads it back. *)
+
+val arm_tile : arm -> int * int * int
+(** The intrinsic tile [(m, n, k)]: 16x8x32 for fp8, 16x8x16 for m16n8k16, 16x16x8 for tf32 and
+    16x16x16 for the other wmma arms. *)
+
+val arm_accumulator : arm -> Ops.prec
+(** The precision the arm's accumulator resides at: f32 for both inline-PTX instructions whatever
+    the storage, the fragment's for wmma. *)
+
+val arm_ldmatrix_operands : arm -> ta:bool -> tb:bool -> a:bool -> b:bool -> bool * bool
+(** Which operands the arm loads with the warp-cooperative [ldmatrix], given whether each is
+    eligible at all (shared memory in the swizzled 16-byte-unit layout) and stored transposed. fp8
+    registers are contiguous only in A's row-major and B's transposed orientations; the 16-bit arms
+    use [ldmatrix] in both; wmma never. Shared by emission and its census, and the per-arm place an
+    operand-load description for the cost model hangs (gh-ocannl-1254). *)
+
+(** {1 Per-arm rendering data} *)
+
+type wmma_info = {
   wc_ab_typ : string;
       (** The [matrix_a]/[matrix_b] fragment element type: a C++ type for the 16-bit combinations,
           the tag type [nvcuda::wmma::precision::tf32] for tf32 (whose storage stays [float]). *)
   wc_acc_prec : Ops.prec;  (** The accumulator fragment's precision. *)
-  wc_tm : int;
-  wc_tn : int;
-  wc_tk : int;
-      (** The intrinsic tile shape: 16x16x16 for the 16-bit combinations, 16x16x8 for tf32. *)
   wc_ab_ld_mult : int;  (** wmma stride constraint: a/b leading-dim multiple, in elements. *)
   wc_d_ld_mult : int;  (** wmma stride constraint: d leading-dim multiple, in elements. *)
-  wc_min_cc : int;  (** The arm's arch floor. *)
-  wc_marker : string;
-      (** Marker suffix of the rendering comment ([""], ["-bf16"], ["-tf32"], ["-f16-wide"]);
-          [Cuda_backend.gpu_arch_options] greps the [-bf16] and [-tf32] ones for their floor. *)
   wc_cvt_tf32 : bool;
       (** Convert loaded a/b fragment elements with [__float_to_tf32] (the intrinsic requires
           already-converted inputs). *)
   wc_d_cvt : (string * string) option;
       (** The [(widen, narrow)] conversions of a destination whose storage type is not the
-          accumulator fragment's (the wide-f16 arm, gh-ocannl-925): [d] then crosses the fragment
-          boundary element by element, and only a fragment scope renders the combination. *)
+          accumulator fragment's ([Wmma_f16_wide]): [d] then crosses the fragment boundary element
+          by element. *)
 }
-(** One wmma-supported precision combination (tensorize-mma T3). *)
 
-val wmma_combo : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> wmma_combo_info option
-(** The wmma combination of a storage triple under the current numerics policy, shared by
-    [mma_syntax] and [mma_fragment_syntax] so that a fragment scope accepts exactly when its nested
-    update-only calls would. *)
+val wmma_info : wmma_kind -> wmma_info
+(** A wmma arm's fragment types and stride constraints; its tile is {!arm_tile}. *)
 
-(** {1 The inline-PTX arms} *)
+type m16n8k16_spelling = {
+  ms_elt_typ : string;  (** The C element type. *)
+  ms_as_ushort : string;  (** The bits-as-ushort intrinsic. *)
+  ms_widen : string;  (** Element to [float]. *)
+  ms_narrow : string;  (** [float] to element. *)
+  ms_infix : string;  (** The instruction's element infix ([bf16], [f16]). *)
+}
 
-val mma16_spellings :
-  a_prec:Ops.prec ->
-  b_prec:Ops.prec ->
-  d_prec:Ops.prec ->
-  (string * string * string * string * string * string) option
-(** The m16n8k16 arm's element spellings: the C type, the bits-as-ushort intrinsic, the widening and
-    narrowing conversions, the instruction's element infix, and the arch marker. Returns [Some] for
-    uniform bf16 under every policy and uniform f16 under [Numerics.Fp16_wide]; [None] otherwise. *)
+val m16n8k16_spelling : m16n8k16_kind -> m16n8k16_spelling
 
-val mma_fp8_marker : string
-(** The marker of the fp8 m16n8k32 arm, shared by its statement and register-scope renderings. *)
+val inline_ptx_d_storage : inline_ptx -> string * (string * string) option
+(** An inline-PTX arm's destination element type and its [(widen, narrow)] boundary conversions
+    ([None] for fp8's f32 destination, moved directly). *)
 
-val mma_fp8_combo : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool
-(** Whether the triple is the fp8 x fp8 -> f32 combination of the m16n8k32 arm. *)
-
-val mma16_register_scope :
-  a_prec:Ops.prec ->
-  b_prec:Ops.prec ->
-  d_prec:Ops.prec ->
-  (string * (string * string) option * string) option
-(** The persistent per-lane register scope of the inline-PTX arms: the destination's element type,
-    its [(widen, narrow)] boundary conversions ([None] for an f32 destination), and the arm marker.
-    [None] where the fragment scope renders through wmma instead. *)
-
-val mma16_min_cc : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> int
-(** The inline-PTX arms' arch floor: 89 for the fp8 arm, 80 otherwise. *)
-
-(** {1 Resolution and capability} *)
+(** {1 Capability} *)
 
 val mma_arm :
   a_prec:Ops.prec ->
@@ -81,13 +128,25 @@ val mma_arm :
   d_prec:Ops.prec ->
   scope:Backend_intf.mma_emission_scope ->
   Backend_intf.mma_arm option
-(** The arm each hook selects at the precision level, in the hooks' own dispatch order
-    (gh-ocannl-1153); the backend's [C_syntax.C_syntax_config.mma_arm]. *)
+(** {!resolve_arm} projected to its marker, accumulator and floor (gh-ocannl-1153): the backend's
+    [C_syntax.C_syntax_config.mma_arm]. *)
 
 val async_copy_floor : int
 (** The [cp.async] staging arm's arch floor (gh-ocannl-487 phase 2): the backend renders it, and
     {!capability} proposes software-pipelined depths, exactly at and above it. *)
 
 val capability : cc:int -> Backend_intf.mma_capability option
-(** The tile-MMA descriptor of a device of compute capability [cc]; [None] below sm_70. Each entry
-    mirrors an arm of {!mma_arm}, including its accumulator format and arch floor. *)
+(** The tile-MMA descriptor of a device of compute capability [cc]; [None] below every arm's floor.
+    Each entry is named by the arm it seeds and takes that arm's floor and tile. *)
+
+(** {1 nvrtc architecture targets} *)
+
+val gpu_arch_options : device_cc:int -> string -> string list
+(** The [--gpu-architecture] options one nvrtc compile of the given CUDA source gets, given the
+    minimum compute capability across the attached devices: a pure function of the source's arch
+    markers. A FLOOR target (forward-JIT-compiled on every later GPU) is the max of the triggered
+    floors -- each arm's [(<arm_marker>)] at its {!arm_floor}, [nvcuda::wmma] at the lowest wmma
+    floor, [cp.async.] at {!async_copy_floor}, half/bf16 arithmetic at theirs -- raised to
+    compute_75 where every device can load that (CUDA 13 dropped offline compilation below it). The
+    [(mma-mxfp8)] marker instead selects a [compute_<cc>a] FAMILY target, only on a device of that
+    family (gh-ocannl-481 item 3, D4). *)

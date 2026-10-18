@@ -8905,6 +8905,19 @@
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
 
+; gh-ocannl-1232: CUDA's mma arms resolve once, in `Ir.Cuda_mma.resolve_arm`, which both hooks
+; dispatch on. The table's shape -- where the scopes split a triple, which arms ever resolve -- as
+; pure functions of the policy, with nothing rendered.
+
+(test
+ ; ocannl-backend: none -- links arrayjit.ir alone and evaluates the pure Ir.Cuda_mma resolver over
+ ; every precision triple, emission scope and numerics policy.
+ (name cuda_mma_arms)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cuda_mma_arms)
+ (libraries base stdio arrayjit.ir arrayjit.verdict))
+
 ; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter and
 ; every split-reduce site field reaches its label, each beam-round candidate names its parent,
 ; segment and move, and a winner replayed into the caller's context keeps the label it was timed
