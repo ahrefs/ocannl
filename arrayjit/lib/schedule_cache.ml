@@ -1089,6 +1089,11 @@ let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 let lookup ~dir ~key =
   lookup_sexp ~dir ~key ~of_sexp:entry_of_sexp ~current:(fun e -> e.version = entry_version)
 
+let read_entry_file file =
+  match stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) with
+  | { key; payload } -> Some (key, payload)
+  | exception exn when not (process_level exn) -> None
+
 (** {2 Abandoned searches} *)
 
 (* This is timed evidence, not a crowned schedule. Keep it beside the winner, under the very same
