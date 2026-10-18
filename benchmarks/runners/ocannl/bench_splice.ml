@@ -402,9 +402,17 @@ let arm_entry plan arm key (c : SC.entry) =
       | Some p ->
           let ts = Option.value_exn p.treatment.SC.segments in
           let rows = Option.value_exn p.rows in
+          (* The hybrid was never timed: the control winner's measurements describe another
+             schedule, so they are dropped -- [best_ms] to the never-measured [infinity] a result
+             line emits as null. The unscheduled baseline's time is the routine's, and stays. *)
           {
             c with
-            SC.segments =
+            SC.best_ms = Float.infinity;
+            default_ms = None;
+            default_fingerprint = None;
+            mma_best_ms = None;
+            best_steps = None;
+            segments =
               Some
                 (List.map2_exn rows ts ~f:(fun r (t : SC.saved_segment) ->
                      if r.targeted then t else r.seg));
@@ -658,15 +666,27 @@ let from_env ~tune =
         fail
           "a splice arm must replay, never search: pass --ocannl_autotune_search=false (a key its \
            cache lacks then ships the untuned default, and the run fails)";
-      if
-        List.exists plan.pairs ~f:(fun p ->
-            match p.splice with `Left _ -> true | `Untargeted | `Spliced -> false)
-        && not (Utils.get_global_flag ~arg_name:"tune_placement_store" ~default:true)
-      then
+      (* Which routine is timed must be the control's placement decision, replayed: without it
+         [Train.tune_placements] replays both placement candidates and ships the faster, and a
+         target confined to the discarded one is a null measurement however the lookups read. *)
+      if List.is_empty plan.placements then
         fail
-          "a routine the control's placement decisions do not ship was left unspliced, and with \
-           tune_placement_store=false the arms are compared afresh, so it could ship: keep the \
-           placement store on";
+          "the control cache records no placement decision, so the arm cannot ship the routine the \
+           control shipped (both placement candidates would replay and the faster ship)";
+      if not (Utils.get_global_flag ~arg_name:"tune_placement_store" ~default:true) then
+        fail
+          "tune_placement_store=false compares the placement candidates afresh instead of \
+           replaying the control's decision: keep the placement store on";
+      (match
+         String.lowercase
+           (String.strip (Utils.get_global_arg ~arg_name:"tune_ship_arm" ~default:"auto"))
+       with
+      | "auto" | "measured" -> ()
+      | forced ->
+          fail
+            "tune_ship_arm=%s forces a placement candidate instead of replaying the control's \
+             decision: leave it at auto"
+            forced);
       (match Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"" with
       | _, Utils.From_default ->
           fail
@@ -680,7 +700,8 @@ let from_env ~tune =
         (Autotune.resolve_cache_dir ~search:true ());
       Some plan
 
-(** Whether a compile that looked up the schedule keys [looked_up] measured the splice: it must have
+(** Whether a compile that looked up the cache keys [looked_up] measured the splice: it must have
+    looked up one of the control's placement decisions (replaying it decides which candidate ships),
     replayed at least one routine the plan splices -- inputs holding several workloads or profiles
     can splice one routine while the run replays another, untargeted one, whose two arms are then
     the same control schedule -- and no routine a target was left unspliced in, which replays only
@@ -688,6 +709,9 @@ let from_env ~tune =
     replay the control in both arms, which is the method. *)
 let replay_verdict plan ~looked_up =
   let looked p = List.mem looked_up p.key ~equal:String.equal in
+  let decided =
+    List.exists plan.placements ~f:(fun (key, _) -> List.mem looked_up key ~equal:String.equal)
+  in
   let left p = match p.splice with `Left _ -> true | `Untargeted | `Spliced -> false in
   match List.find plan.pairs ~f:(fun p -> looked p && left p) with
   | Some p ->
@@ -696,6 +720,10 @@ let replay_verdict plan ~looked_up =
            "the compile replayed entry %s, where a target was left unspliced: its step is the \
             control's in both arms"
            (entry_id p.control))
+  | None when not decided ->
+      Error
+        "the compile looked up none of the control's placement decisions: which placement \
+         candidate shipped is not the control's"
   | None ->
       if List.exists plan.pairs ~f:(fun p -> looked p && Poly.equal p.splice `Spliced) then Ok ()
       else
@@ -723,13 +751,7 @@ let replay_guarded session ~counts compile =
         Stdlib.exit 1);
       let looked_up =
         List.filter_map io ~f:(fun (r : SC.cache_io) ->
-            match r.SC.op with
-            | SC.Lookup
-              when not
-                     (String.is_prefix r.SC.key ~prefix:placements_prefix
-                     || String.is_prefix r.SC.key ~prefix:abandonment_prefix) ->
-                Some r.SC.key
-            | _ -> None)
+            match r.SC.op with SC.Lookup -> Some r.SC.key | SC.Store -> None)
       in
       (match replay_verdict plan ~looked_up with
       | Ok () -> ()

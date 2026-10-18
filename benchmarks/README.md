@@ -1170,7 +1170,7 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
   the control's placement decision (its source digest is the decision's `outcome_digest`; with no
   decision recorded, every routine counts). The other placement arm's winner replays only with the
   placement store bypassed, so there such a target is left as the control's and reported (`NOT
-  spliced`), and the mode then refuses `tune_placement_store=false`. It also refuses a target that
+  spliced). It also refuses a target that
   selects nothing, targets that splice no shipping routine, and an ambiguous index. Entries pair
   by cache key, which carries the routine's source digest, so the method measures a treatment that changes what the search finds, not one that changes the program
   it searches (that leaves no pair). A treatment that adds a search branch bumps `entry_version`,
@@ -1182,8 +1182,12 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
   -0.051 ms (-1.12%) exact and -0.065 ms (-1.39%) approximate, per-arm round-to-round stdev
   0.006-0.012 ms -- against the q/k/v kernels' isolated saving of -0.050 / -0.040 ms, where the two
   independently searched schedules had read +1.3% / -1.8%.
-  The run also fails when its compile replayed no spliced routine (caches of another workload or
-  profile than the run) or one where a target was left unspliced (a forced `tune_ship_arm`). A
+  Which routine is timed must be the control's placement decision, replayed: the mode refuses a
+  control cache with no decision, `tune_placement_store=false` and a forced `tune_ship_arm`, and the
+  run fails when its compile looked up no decision, replayed no spliced routine (caches of another
+  workload or profile than the run) or one where a target was left unspliced. A spliced entry was
+  never timed, so it carries no measurement: its `best_ms` reads as never measured (`null` on the
+  result line), its tensorized best and trajectory as absent. A
   runner adopts the mode with two calls, `Bench_splice.from_env` before compiling and
   `Bench_splice.replay_guarded` around the compile;
   `test/operations/bench_splice_dirs` pins the arms' contents and every refusal.

@@ -199,6 +199,15 @@ let () =
     && List.equal SC.equal_saved_schedule
          (schedules ~cache_dir:arm_t_cache_dir "k-arm-b")
          [ coal; split 16 ]);
+  let entry_of ~cache_dir key = SC.lookup ~dir:cache_dir ~key:(Some key) in
+  pf "a spliced entry carries no timing: the hybrid was never measured"
+    (Option.value_map (entry_of ~cache_dir:arm_t_cache_dir "k-step") ~default:false ~f:(fun e ->
+         Float.equal e.SC.best_ms Float.infinity
+         && Option.is_none e.SC.mma_best_ms && Option.is_none e.SC.best_steps
+         && Option.is_none e.SC.default_ms));
+  pf "an entry replayed unchanged keeps its measurements"
+    (Option.value_map (entry_of ~cache_dir:arm_c_cache_dir "k-step") ~default:false ~f:(fun e ->
+         Float.equal e.SC.best_ms 0.));
   pf "the control arm is the control's cache"
     (List.equal SC.equal_saved_schedule
        (schedules ~cache_dir:arm_c_cache_dir "k-step")
@@ -322,12 +331,15 @@ let () =
   (* What a run replayed decides whether it measured the splice: the cache lookups of its compile
      must reach a spliced routine, and no routine a target was left unspliced in. *)
   pf "a compile that replayed the spliced routine measured the splice"
-    (Result.is_ok (S.replay_verdict p ~looked_up:[ "k-step"; "k-small" ]));
+    (Result.is_ok (S.replay_verdict p ~looked_up:[ "placements-k"; "k-step"; "k-small" ]));
+  refusal "a compile that replayed no placement decision"
+    (S.replay_verdict p ~looked_up:[ "k-step"; "k-arm-b" ])
+    ~mentions:"none of the control's placement decisions";
   refusal "a compile that replayed only untargeted routines"
-    (S.replay_verdict p ~looked_up:[ "k-small"; "k-ctrl-only" ])
+    (S.replay_verdict p ~looked_up:[ "placements-k"; "k-small"; "k-ctrl-only" ])
     ~mentions:"replayed no spliced routine";
   refusal "a compile that replayed a routine left unspliced"
-    (S.replay_verdict p_left ~looked_up:[ "k-step"; "k-arm-b" ])
+    (S.replay_verdict p_left ~looked_up:[ "placements-k"; "k-step"; "k-arm-b" ])
     ~mentions:"left unspliced";
   let no_decision_cache_dir = "autotune_cache_splice_no_decision" in
   plant_control ~placements:false ~cache_dir:no_decision_cache_dir ();

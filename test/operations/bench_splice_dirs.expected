@@ -16,6 +16,8 @@ splice: 3 targeted segments, 3 with schedules that differ between the arms
 the digest prefix selects the three Q segments across both routines: true
 each arm holds the control's four schedule entries and its placement decision: true
 the treatment arm takes the targets' schedules from the treatment and the rest from the control: true
+a spliced entry carries no timing: the hybrid was never measured: true
+an entry replayed unchanged keeps its measurements: true
 the control arm is the control's cache: true
 an untargeted whole-routine entry replays the control's schedule in both arms: true
 a control-only entry is in both arms, a treatment-only entry in neither: true
@@ -66,6 +68,8 @@ splice: target c0ffee selects 2 segments
 splice: 2 targeted segments, 2 with schedules that differ between the arms
 an unspliceable target in a routine that does not ship leaves it as the control's: true
 a compile that replayed the spliced routine measured the splice: true
+a compile that replayed no placement decision: the compile looked up none of the control's placement decisions: which placement candidate shipped is not the control's
+a compile that replayed no placement decision is refused, naming "none of the control's placement decisions": true
 a compile that replayed only untargeted routines: the compile replayed no spliced routine: the two arms time the same control schedules (are the caches of another workload, profile or placement than this run?)
 a compile that replayed only untargeted routines is refused, naming "replayed no spliced routine": true
 a compile that replayed a routine left unspliced: the compile replayed entry 222222222222, where a target was left unspliced: its step is the control's in both arms
