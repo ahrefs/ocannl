@@ -271,6 +271,31 @@ let () =
         (Option.is_none site.sr_coalesce
         && Option.equal Int.equal (extent opt site.sr_axis) (Some rows))
 
+(* --- Two accumulations sharing one two-loop band yield one site, whose prelude applies. --- *)
+
+let () =
+  let node = L.node_factory ~first_id:14150 ~dims:[| 8; 128; 4 |] () in
+  let x = node "srp_sx" and y = node "srp_sy" in
+  let g1 = node ~dims:[| 4 |] "srp_g1" and g2 = node ~dims:[| 4 |] "srp_g2" in
+  List.iter [ g1; g2 ] ~f:L.materialize;
+  let b = L.sym () and s = L.sym () and o = L.sym () in
+  let acc g src =
+    L.set g
+      [| L.iter o |]
+      (L.add (L.get g [| L.iter o |]) (L.get src [| L.iter b; L.iter s; L.iter o |]))
+  in
+  let llc = L.loop_n b 8 (L.loop_n s 128 (L.loop_n o 4 (L.seq (acc g1 x) (acc g2 y)))) in
+  let opt = L.optimize ~materialized:[ g1; g2 ] ~name:"srp_shared" llc in
+  let sites = Autotune.split_reduce_sites opt in
+  p "two accumulations over one two-loop band yield one site, coalesced"
+    (match sites with [ site ] -> Option.is_some site.Autotune.sr_coalesce | _ -> false);
+  p "the prelude of every site found applies"
+    (match
+       Sched.apply (Autotune.split_reduce_prelude (List.map sites ~f:(fun s -> (s, 32)))) opt
+     with
+    | (_ : LL.optimized) -> true
+    | exception Ir.Schedule_outcome.Cause_at _ -> false)
+
 (* --- The matmul detector on a split's first-pass shape: [for i { p[i] := 0; for k { ... } }].
    --- *)
 

@@ -2017,8 +2017,22 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
         | _ -> None
       in
       let legal = match single with Some _ -> single | None -> pair () in
+      (* The loops a site's prelude rewrites: its split loop, and the pair a coalescing merges into
+         it. Two accumulations in one nest find the same loops; a site sharing any with a site
+         already taken would replay a rewrite of loops the first prelude has removed (two
+         coalescings of one pair mint two merged symbols, so comparing the split loops alone would
+         keep both). For two uncoalesced sites this is the split loop's identity, as before. *)
+      let rewritten s coalesce =
+        s :: (match coalesce with Some (o, i) -> [ o; i ] | None -> [])
+      in
       Option.iter legal ~f:(fun (s, n, swaps, coalesce) ->
-          if not (List.exists !acc ~f:(fun site -> Idx.equal_symbol site.sr_axis s)) then
+          let mine = rewritten s coalesce in
+          if
+            not
+              (List.exists !acc ~f:(fun site ->
+                   List.exists (rewritten site.sr_axis site.sr_coalesce) ~f:(fun x ->
+                       List.mem mine x ~equal:Idx.equal_symbol)))
+          then
             acc :=
               {
                 sr_axis = s;
