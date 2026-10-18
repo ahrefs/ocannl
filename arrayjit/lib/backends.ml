@@ -206,7 +206,20 @@ let maybe_elide_zeros ~backend_name (segments : Low_level.optimized list) : Low_
            (Low_level.elide_covered_zeros (List.map segments ~f:(fun seg -> seg.Low_level.llc))))
         ~f:(fun (seg, llc) ->
           Option.map llc ~f:(fun llc ->
-              if phys_equal llc seg.Low_level.llc then seg else { seg with Low_level.llc }))
+              if phys_equal llc seg.Low_level.llc then seg
+              else
+                (* The nodes whose only touch was a dropped zero leave the segment's store too
+                   (gh-ocannl-1391): every store entry the code no longer touches stays a kernel
+                   parameter, and parameter names are disambiguated over the code alone, so a folded
+                   zero segment that lost two same-labelled zeros named two parameters alike --
+                   harmless inside the routine's batch, whose other kernels still touch them, and a
+                   compile error for the segment compiled on its own. *)
+                let traced_store =
+                  Hashtbl.filteri seg.Low_level.traced_store ~f:(fun ~key ~data:_ ->
+                      Low_level.code_touches_tn key llc
+                      || not (Low_level.code_touches_tn key seg.Low_level.llc))
+                in
+                { seg with Low_level.llc; traced_store }))
     in
     if List.is_empty elided then segments else elided
 
