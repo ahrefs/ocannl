@@ -15,7 +15,16 @@
    min-of-repeats synced time of the whole routine, and for a tuned arm the search's crowned label
    and counters -- then the shipped kernels' isolated times ([Bench_harness.time_shipped_segments]),
    where the [w: wg_w.grad] row is the weight gradient's. Inputs are small positive dyadics, so the
-   gradient's checksum is exact whatever the schedule and must agree across arms. *)
+   gradient's checksum is exact whatever the schedule and must agree across arms.
+
+   Before timing, [wgrad-model:] lines give the cost model's view (gh-ocannl-1253), per kernel of
+   two plans compiled for the purpose: [plan=default], the plain default pipeline (untiled), and
+   [plan=seeded], the seeded untuned default's ([Autotune.seeded_transform]; absent where it does
+   not apply). Each kernel row names the global nodes it writes, as the shipped-kernel rows do, with
+   its ranking score ([rank_ms], the score [Autotune.model_default] minimizes, under the capacity in
+   force) and its distinct-cell roofline ([bound_ms]); a [capacity=] line names the capacity and
+   residency. Predicted against measured for the weight gradient's row is the calibration evidence
+   for [model_cache_capacity]. *)
 
 open Base
 open Ocannl
@@ -84,6 +93,44 @@ let () =
       ~provenance:Ir.Schedule_outcome.User_schedule ctx comp Ir.Indexing.Empty
   in
   let backend = Context.backend_name ctx in
+  (* The cost model's predictions per kernel of the default and the seeded plans
+     (gh-ocannl-1253). *)
+  let limits = Context.hardware_limits ctx in
+  let capacity, resident = Autotune.ranking_capacity ~limits in
+  let opt_int = Option.value_map ~default:"none" ~f:Int.to_string in
+  Stdio.printf "wgrad-model: capacity=%s resident_threads=%s\n" (opt_int capacity)
+    (opt_int resident);
+  let written (o : Ir.Low_level.optimized) =
+    List.filter_map (Ir.Cost_model.analyze o.Ir.Low_level.llc).Ir.Cost_model.per_node
+      ~f:(fun (tn, fp) ->
+        if fp.Ir.Cost_model.fp_write_bytes > 0 && Ir.Cost_model.global_in o tn then
+          Some (Ir.Tnode.debug_name tn)
+        else None)
+    |> String.concat ~sep:","
+  in
+  let predict plan transform =
+    let segments = ref [] in
+    match
+      Context.compile_outcome
+        ~lowered_transform:(fun opt ->
+          let segs = transform opt in
+          segments := segs;
+          segs)
+        ~provenance:Ir.Schedule_outcome.User_schedule ctx comp Ir.Indexing.Empty
+    with
+    | Error _ -> Stdio.printf "wgrad-model: plan=%s did not compile\n" plan
+    | Ok (plan_ctx, _) ->
+        Context.release plan_ctx;
+        List.iter !segments ~f:(fun o ->
+            match Autotune.ranking_ms ~limits [ o ] with
+            | Some (rank, bound) ->
+                Stdio.printf "wgrad-model: plan=%s kernel=[%s] rank_ms=%.4f bound_ms=%.4f\n" plan
+                  (written o) rank bound
+            | None -> Stdio.printf "wgrad-model: plan=%s kernel=[%s] no coverage\n" plan (written o))
+  in
+  predict "default"
+    (Ir.Schedule.maybe_default_schedules ~backend_name:backend ~limits ~static_indices:[]);
+  Option.iter (Autotune.seeded_transform ctx Ir.Indexing.Empty) ~f:(predict "seeded");
   let report = ref None in
   let t0 = Unix.gettimeofday () in
   let ctx, routine =

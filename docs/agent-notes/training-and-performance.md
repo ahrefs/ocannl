@@ -121,6 +121,13 @@ files.
   node never below `analyze`'s charge — so it is never below any bound, which
   `test/operations/cost_model_reuse` claims over every leaf of a sketch tree. Never feed the
   ranking score to a bound: a kernel that hits in cache would then trip `BOUND VIOLATION`.
+- The ranking score's `cache_capacity_bytes` is fitted, not looked up (gh-ocannl-1253): the working
+  set sums per-block footprints that co-resident blocks share, so the boundary sits far above any
+  L2. `tools/calibrate_cache_capacity.exe` (`Ocannl.Calibrate.working_set`/`fit_capacity`) sweeps
+  the untiled weight-gradient contraction over reduction extents on the plain default pipeline and
+  splits the requested-bytes rate into its cached and DRAM plateaus; `bench_wgrad`'s
+  `wgrad-model:` lines print each plan's per-kernel rank beside its distinct-cell bound for the
+  predicted-vs-measured check. Sweep both sides of the boundary, or the fit has nothing to split.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes

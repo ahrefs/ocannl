@@ -87,3 +87,150 @@ let stream ?(elems = 1 lsl 26) ?repeats ctx =
               (* [tune] reports exactly once per call on every path that does any work. *)
               raise
                 (Utils.User_error (Printf.sprintf "Calibrate.stream: no tuning report for %s" name))))
+
+(** {2 Cache-capacity calibration (gh-ocannl-1253)}
+
+    The ranking score ({!Ir.Cost_model.ranking_seconds}) charges an untiled contraction's operand
+    re-reads once its working set — per-block global read bytes times resident blocks — exceeds a
+    capacity. That capacity is a fitted constant of the proxy, not the device's L2 size, so it is
+    calibrated the way the bandwidth leg is: by a sweep whose kernels sit on both sides of it. *)
+
+type ws_point = {
+  wp_k : int;  (** The contraction's reduction extent. *)
+  wp_working_set : int;
+      (** The contraction kernel's working set under the default plan, in bytes
+          ({!Ir.Cost_model.reuse_traffic}). *)
+  wp_requested : int;  (** Its global read bytes under per-block caching. *)
+  wp_distinct : int;  (** Its distinct-cell bytes, read and written ({!Ir.Cost_model.analyze}). *)
+  wp_ms : float;  (** The routine's best synced wall time over the repeats, in milliseconds. *)
+  wp_rank_ms : float option;
+      (** The kernel's ranking score under the capacity in force ({!Autotune.ranking_ms}). *)
+  wp_bound_ms : float option;  (** Its distinct-cell roofline lower bound. *)
+}
+
+(** [working_set ?m ?n ?ks ?repeats ctx] times the untiled weight-gradient contraction
+    [dw[o,i] = sum_k dy[k,o] * x[k,i]] — [m] rows of output (default 256), [n] columns (default
+    1024: a gpt2_mini_train layer's [l*_ffn_w2] gradient) — at each reduction extent of [ks]
+    (default [256] to [32768] in powers of two, batch 2 to 256 at sequence 128), on the plain
+    default pipeline ({!Context.compile}: the plan whose re-reads the score charges, never a seeded
+    or tuned one). The inputs are explicitly initialized host arrays (a standalone fixture: nothing
+    upstream of the kernel is timed or left lazily initialized); the time is the whole routine's,
+    synced, best of [repeats] (default 10) after one warm-up run. Each point carries the contraction
+    kernel's working set and byte charges as the cost model reads them off the scheduled code. *)
+let working_set ?(m = 256) ?(n = 1024) ?(ks = [ 256; 512; 1024; 2048; 4096; 8192; 16384; 32768 ])
+    ?(repeats = 10) ctx =
+  if m <= 0 || n <= 0 || repeats <= 0 || List.exists ks ~f:(fun k -> k <= 0) then
+    raise (Utils.User_error "Calibrate.working_set: extents and repeats must be positive");
+  let backend_name = Context.backend_name ctx in
+  let limits = Context.hardware_limits ctx in
+  let _capacity, max_resident_threads = Autotune.ranking_capacity ~limits in
+  let cyc len modulus stride =
+    Array.init len ~f:(fun c -> Float.of_int (1 + (c % modulus)) *. stride)
+  in
+  List.map ks ~f:(fun k ->
+      let tag = Printf.sprintf "ws_k%d" k in
+      let dy = NTDSL.ndarray (cyc (k * m) 7 0.25) ~label:[ tag ^ "_dy" ] ~output_dims:[ k; m ] () in
+      let x = NTDSL.ndarray (cyc (k * n) 5 0.125) ~label:[ tag ^ "_x" ] ~output_dims:[ k; n ] () in
+      let%op dw = dy +* "ko; ki => oi" x in
+      Train.set_materialized dw.Tensor.value;
+      let segments = ref [] in
+      let lowered_transform opt =
+        let segs =
+          Ir.Schedule.maybe_default_schedules ~backend_name ~limits ~static_indices:[] opt
+        in
+        segments := segs;
+        segs
+      in
+      let comp = named (tag ^ "_wgrad") (Train.forward dw) in
+      let run_ctx, routine =
+        Context.compile ~name:(tag ^ "_wgrad") ~lowered_transform ctx comp Idx.Empty
+      in
+      Exn.protect
+        ~finally:(fun () -> Context.release run_ctx)
+        ~f:(fun () ->
+          let reuse_of (o : Ir.Low_level.optimized) =
+            Ir.Cost_model.reuse_traffic ?max_resident_threads ~is_global:(Ir.Cost_model.global_in o)
+              o.Ir.Low_level.llc
+          in
+          let requested r = List.sum (module Int) r.Ir.Cost_model.ru_requested ~f:snd in
+          (* The contraction's kernel: the segment requesting the most, beside its zero fill. *)
+          let seg =
+            List.max_elt !segments ~compare:(fun a b ->
+                Int.compare (requested (reuse_of a)) (requested (reuse_of b)))
+          in
+          let r, distinct, scores =
+            match seg with
+            | Some o ->
+                ( reuse_of o,
+                  Ir.Cost_model.total_bytes (Ir.Cost_model.analyze o.Ir.Low_level.llc),
+                  Autotune.ranking_ms ~limits [ o ] )
+            | None -> ({ Ir.Cost_model.ru_requested = []; ru_working_set_bytes = 0 }, 0, None)
+          in
+          let ctx' = Context.run run_ctx routine in
+          Context.sync ctx';
+          let best = ref Float.infinity in
+          for _ = 1 to repeats do
+            let t0 = Unix.gettimeofday () in
+            let ctx' = Context.run run_ctx routine in
+            Context.sync ctx';
+            best := Float.min !best ((Unix.gettimeofday () -. t0) *. 1000.)
+          done;
+          {
+            wp_k = k;
+            wp_working_set = r.Ir.Cost_model.ru_working_set_bytes;
+            wp_requested = requested r;
+            wp_distinct = distinct;
+            wp_ms = !best;
+            wp_rank_ms = Option.map scores ~f:fst;
+            wp_bound_ms = Option.map scores ~f:snd;
+          }))
+
+type capacity_fit =
+  | Transition of {
+      cached_ws : int;  (** The largest working set still served at the cached rate. *)
+      spilled_ws : int;  (** The smallest working set served at the DRAM rate. *)
+      capacity : int;  (** Their geometric mean: the fitted [model_cache_capacity]. *)
+      monotone : bool;
+          (** Every cached point's working set is below every spilled point's. [false] means the
+              sweep's rates do not split cleanly by working set, and the capacity is a guess. *)
+    }
+  | No_transition of { contrast : float }
+      (** The fastest and slowest requested rates differ by [contrast] < 2: the sweep stayed on one
+          side of the capacity. Extend [ks] (both sides) and rerun. *)
+  | Too_few_points
+
+(** The capacity the sweep implies. A point's requested rate is its per-block read bytes over its
+    time: on the cached side re-reads are served from cache and the rate sits far above DRAM
+    bandwidth, on the spilled side it falls to it. The two plateaus are split at the geometric mean
+    of the fastest and slowest rates, and the capacity is placed at the geometric mean of the
+    working sets either side of the split — the model's decision boundary, between the shapes that
+    demonstrably sit on each side of it. *)
+let fit_capacity (points : ws_point list) : capacity_fit =
+  let timed =
+    List.filter points ~f:(fun p ->
+        Float.(p.wp_ms > 0.)
+        && Float.is_finite p.wp_ms && p.wp_requested > 0 && p.wp_working_set > 0)
+  in
+  if List.length timed < 2 then Too_few_points
+  else
+    let rate p = Float.of_int p.wp_requested /. p.wp_ms in
+    let rates = List.map timed ~f:rate in
+    let hi = List.fold rates ~init:Float.neg_infinity ~f:Float.max in
+    let lo = List.fold rates ~init:Float.infinity ~f:Float.min in
+    let contrast = hi /. lo in
+    if Float.(contrast < 2.) then No_transition { contrast }
+    else
+      let threshold = Float.sqrt (hi *. lo) in
+      let cached, spilled = List.partition_tf timed ~f:(fun p -> Float.(rate p >= threshold)) in
+      let ws p = p.wp_working_set in
+      let max_ws l = List.fold l ~init:0 ~f:(fun acc p -> max acc (ws p)) in
+      let min_ws l = List.fold l ~init:Int.max_value ~f:(fun acc p -> min acc (ws p)) in
+      let cached_ws = max_ws cached and spilled_ws = min_ws spilled in
+      let lo_ws = min cached_ws spilled_ws and hi_ws = max cached_ws spilled_ws in
+      Transition
+        {
+          cached_ws;
+          spilled_ws;
+          capacity = Float.to_int (Float.sqrt (Float.of_int lo_ws *. Float.of_int hi_ws));
+          monotone = cached_ws < spilled_ws;
+        }

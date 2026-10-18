@@ -2120,6 +2120,11 @@ let segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optim
       in
       Some (rank, bound)
 
+let ranking_ms ~limits segs =
+  let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  Option.map (segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits segs)
+    ~f:(fun (rank, bound) -> (rank *. 1e3, bound *. 1e3))
+
 let model_score ~static_indices ~limits (opt : LL.optimized) (sched : Sched.schedule) : float option
     =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in

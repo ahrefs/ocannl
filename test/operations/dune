@@ -9121,3 +9121,15 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff limits_field_classes.expected limits_field_classes.actual)))
+
+; gh-ocannl-1253: the cache-capacity fit on synthetic sweeps, and a toy working-set sweep on the
+; configured backend (structural claims only).
+
+(test
+ (name capacity_calibration)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules capacity_calibration)
+ (libraries base ocannl arrayjit.verdict))

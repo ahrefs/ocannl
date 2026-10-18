@@ -1,0 +1,5 @@
+a clean step fits a monotone capacity between the last cached and first spilled working set: true
+a sweep that never crosses fits no capacity: true
+rates that do not split by working set fit a capacity flagged non-monotone: true
+one timed point fits nothing: true
+every swept extent is timed and requests at least its operands' distinct bytes: true

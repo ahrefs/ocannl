@@ -1336,6 +1336,21 @@ val envelope_legs :
     scoring a measured kernel against the envelope reads the very constants the model ranks with,
     and can say whose they are (gh-ocannl-1006). *)
 
+val ranking_capacity : limits:Ir.Backend_intf.hardware_limits -> int option * int option
+(** The cache capacity (bytes) and device residency (threads) the ranking score
+    ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253) uses: config [model_cache_capacity] ([none]
+    turns the capacity off) over the backend's advisory [cache_capacity_bytes], and its
+    [max_resident_threads]. Both are [Untimed] readings of the device description: only the untimed
+    choosers and the calibration tools call this, never anything {!tune} reaches. *)
+
+val ranking_ms :
+  limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized list -> (float * float) option
+(** [(rank, bound)] in milliseconds for scheduled kernels run in sequence: the ranking score
+    {!model_default} minimizes and {!model_score}'s roofline lower bound, under {!envelope_legs}'
+    constants and {!ranking_capacity}. [None] without model coverage. For reports
+    ([benchmarks/runners/ocannl/bench_wgrad.ml], [tools/calibrate_cache_capacity.exe]): a ranking
+    score, not a runtime prediction. *)
+
 val model_prefilter : keep_fraction:float -> ('a * float option) list -> ('a * float option) list
 (** The order-preserving pre-filter over model-scored candidates: keeps every unscored ([None])
     candidate — the no-coverage exemption: never dropped, only measured — plus the best
