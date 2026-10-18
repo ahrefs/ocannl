@@ -1468,3 +1468,120 @@ let run_self_test ?(out = Stdio.stdout) ?checkpoint_out ?(leg = self_test_leg) ?
   Option.iter inspect_step ~f:(fun inspect ->
       inspect !ctx_ref bindings loss (step_routines routines));
   line
+
+(** Diagnostic (gh-ocannl-1413): the product-site census of a lowered routine under the four GPU
+    segmentations (the default's and the search's, each plain and [arity_cuts]) — per [`Normal]
+    segment, its product accumulations (a serial nest assigning a cell from its own read and exactly
+    two other reads), which of them is the segment's matmul site as the seeders see it
+    ({!Autotune.detect_matmul_canonical}, marked [*]), which other one is a site in a segment of its
+    own ([+]), and how many seeds the search's lists hold for the segment. A site is not a seed: a
+    companion can refute every seed of its segment, so read the seed counts (and, for the untuned
+    plan, [bench_gpt_diag]'s seeded-default line) before concluding a site is tiled. Prints the
+    segments with several products or none that is a site. Not part of the benchmark protocol. *)
+let print_site_census ~limits ~static_indices opt =
+  let module LL = Ir.Low_level in
+  let module Sched = Ir.Schedule in
+  let scratch (o : LL.optimized) =
+    {
+      o with
+      LL.traced_store = Hashtbl.copy o.LL.traced_store;
+      LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+    }
+  in
+  let rec nest (llc : LL.t) depth =
+    match llc with
+    | LL.For_loop { body; _ } -> (
+        match
+          List.filter (LL.flat_lines [ body ]) ~f:(function
+            | LL.Noop | LL.Comment _ -> false
+            | _ -> true)
+        with
+        | [ single ] -> nest single (depth + 1)
+        | _ -> None)
+    | LL.If { body; _ } -> nest body depth
+    | LL.Set { tn; idcs; llsc; _ } -> (
+        let rec gets (sc : LL.scalar_t) =
+          let arg (s, _) = gets s in
+          match sc with
+          | LL.Get (t, i) -> [ (t, i) ]
+          | LL.Ternop (_, a, b, c) -> arg a @ arg b @ arg c
+          | LL.Binop (_, a, b) -> arg a @ arg b
+          | LL.Unop (_, a) -> arg a
+          | _ -> []
+        in
+        let gets = gets llsc in
+        let self (t, i) = phys_equal t tn && Array.equal Ir.Indexing.equal_axis_index i idcs in
+        match List.partition_tf gets ~f:self with _ :: _, [ _; _ ] -> Some (tn, depth) | _ -> None)
+    | _ -> None
+  in
+  let products (pre : LL.optimized) =
+    List.filter_map (LL.flat_lines [ pre.LL.llc ]) ~f:(fun stmt ->
+        Option.map (nest stmt 0) ~f:(fun (tn, depth) -> (stmt, tn, depth)))
+  in
+  let one ~label ~arity_cuts ~fold_zeros ~min_parallel =
+    let preset seg = Sched.default_gpu ?min_parallel ~limits seg in
+    let zero_sched tns = Sched.zero_expansion ~limits tns in
+    match
+      Sched.fission_segmented ~promote_locals:true ~arity_cuts ~fold_zeros
+        ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
+        ~preset ~zero_sched ~static_indices (scratch opt)
+    with
+    | exception Ir.Schedule_outcome.Cause_at (_, c) ->
+        Stdio.printf "site census [%s]: fission refused (%s)\n" label
+          (Ir.Schedule_outcome.detail_of_cause c)
+    | plan, tuples ->
+        let at = ref 0 in
+        let total = ref 0 and sites = ref 0 and alone = ref 0 and multi = ref 0 in
+        let seedable = ref 0 in
+        Stdio.printf "site census [%s]: %d segments\n" label (List.length plan);
+        List.iteri (List.zip_exn plan tuples) ~f:(fun i ((kind, n), (_, pre, _, _)) ->
+            let start = !at in
+            at := !at + n;
+            match kind with
+            | `Zeros | `Solo -> ()
+            | `Normal -> (
+                match products pre with
+                | [] -> ()
+                | ps ->
+                    let site =
+                      Option.map (Autotune.detect_matmul_canonical pre) ~f:(fun (s, _, _) ->
+                          s.Autotune.m_d)
+                    in
+                    total := !total + List.length ps;
+                    if List.length ps > 1 then Int.incr multi;
+                    let items =
+                      List.map ps ~f:(fun (stmt, tn, depth) ->
+                          let is_site = Option.exists site ~f:(phys_equal tn) in
+                          if is_site then Int.incr sites;
+                          let alone_site =
+                            (not is_site)
+                            && Option.is_some
+                                 (Autotune.detect_matmul_canonical
+                                    { (scratch pre) with LL.llc = stmt })
+                          in
+                          if alone_site then Int.incr alone;
+                          Printf.sprintf "%s%s(%d,d%d)" (Tn.debug_name tn)
+                            (if is_site then "*" else if alone_site then "+" else "")
+                            (Tn.num_elems tn) depth)
+                    in
+                    (* The search's seed list for the segment, as its per-segment seeding sees
+                       it. *)
+                    let seeds =
+                      List.length
+                        (Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits pre
+                        @ Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits pre)
+                    in
+                    if seeds > 0 then Int.incr seedable;
+                    if List.length ps > 1 || Option.is_none site then
+                      Stdio.printf "  seg%d u%d n%d seeds=%d: %s\n" i start n seeds
+                        (String.concat ~sep:" " items)));
+        Stdio.printf
+          "site census [%s]: %d product accumulations, %d their segment's site, %d more sites \
+           alone, %d multi-product segments, %d product segments the search seeds\n\
+           %!"
+          label !total !sites !alone !multi !seedable
+  in
+  one ~label:"default" ~arity_cuts:false ~fold_zeros:false ~min_parallel:None;
+  one ~label:"default arity_cuts" ~arity_cuts:true ~fold_zeros:false ~min_parallel:None;
+  one ~label:"search" ~arity_cuts:false ~fold_zeros:true ~min_parallel:(Some 1);
+  one ~label:"search arity_cuts" ~arity_cuts:true ~fold_zeros:true ~min_parallel:(Some 1)
