@@ -1372,14 +1372,17 @@ let record_type_labels content =
     of [record_fields] (every label of the record type [fields] belong to) or of [fields], so
     [{ limits with native_fp16_arithmetic = false }] copies every one of [fields] from its base.
 
-    A CONSTANT base is no read: a path whose last component is one of [constant_bases], or a name
-    every binding of which in this file is a constant record -- a full record literal, or an update
-    of a constant base -- so [let cpu_limits = { no_hardware_limits with … }] and a later
-    [{ cpu_limits with … }] read nothing. A name bound to anything else anywhere in the file is not
-    constant, the direction whose cost is a declaration. Field names are matched by their last
-    component, without types: a field of another record spelled the same way is read as this one,
-    for the same reason (gh-ocannl-1320). *)
-let field_reads_in_source content ~fields ~record_fields ~constant_bases =
+    A CONSTANT base is no read: [base_value] (the library's synthetic limits) at its home module
+    [base_home] ([Ir.Backend_intf.no_hardware_limits]), through a module alias every binding of
+    which names that home ([module BI = Ir.Backend_intf]), or bare where the file does not bind the
+    name; or a name every binding of which in this file is a constant record -- a full record
+    literal, an update of a constant base, or a function returning one -- so
+    [let cpu_limits = { no_hardware_limits with … }] and a later [{ cpu_limits with … }] read
+    nothing. Any other path is not constant -- a [Local.no_hardware_limits] may be anything (Codex
+    P2, rounds 4-5) -- the direction whose cost is a declaration. Field names are matched by their
+    last component, without types: a field of another record spelled the same way is read as this
+    one, for the same reason (gh-ocannl-1320). *)
+let field_reads_in_source content ~fields ~record_fields ~constant_base:(base_home, base_value) =
   let wanted field = List.mem fields field ~equal:String.equal in
   let of_the_record field = wanted field || List.mem record_fields field ~equal:String.equal in
   let structure = structure_of content in
@@ -1407,6 +1410,37 @@ let field_reads_in_source content ~fields ~record_fields ~constant_bases =
     iterator#structure structure;
     !found
   in
+  (* Every module name the file binds to a path, anywhere: [module BI = Ir.Backend_intf], or a [let
+     module … in]. *)
+  let module_aliases =
+    let found = ref [] in
+    let note name module_expr =
+      match (name, module_expr.pmod_desc) with
+      | Some name, Pmod_ident { txt; _ } ->
+          Option.iter (flatten_module_path txt) ~f:(fun path -> found := (name, path) :: !found)
+      | Some name, _ -> found := (name, []) :: !found
+      | None, _ -> ()
+    in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! structure_item item =
+          (match item.pstr_desc with
+          | Pstr_module { pmb_name = { txt; _ }; pmb_expr; _ } -> note txt pmb_expr
+          | _ -> ());
+          super#structure_item item
+
+        method! expression expr =
+          (match expr.pexp_desc with
+          | Pexp_letmodule ({ txt; _ }, module_expr, _) -> note txt module_expr
+          | _ -> ());
+          super#expression expr
+      end
+    in
+    iterator#structure structure;
+    Map.of_alist_multi (module String) !found
+  in
   let rec unwrap expr =
     match expr.pexp_desc with Pexp_constraint (inner, _) -> unwrap inner | _ -> expr
   in
@@ -1429,7 +1463,22 @@ let field_reads_in_source content ~fields ~record_fields ~constant_bases =
         match flatten_module_path txt with
         | Some [ name ] when List.exists bindings ~f:(fun (n, _) -> String.equal n name) ->
             Set.mem known name
-        | _ -> List.exists constant_bases ~f:(fun name -> path_ends_in name txt)
+        | Some [ name ] -> String.equal name base_value
+        | Some path -> (
+            match List.rev path with
+            | value :: home :: _ when String.equal value base_value && String.equal home base_home
+              ->
+                true
+            | [ value; alias ] when String.equal value base_value -> (
+                match Map.find_multi module_aliases alias with
+                | [] -> false
+                | targets ->
+                    List.for_all targets ~f:(fun target ->
+                        match List.last target with
+                        | Some m -> String.equal m base_home
+                        | None -> false))
+            | _ -> false)
+        | None -> false
       in
       let is_constant_base base =
         match (unwrap base).pexp_desc with

@@ -1347,12 +1347,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   helpers and, through `~by_last_component`, matches a width value by its last component, so no
   alias, `open` or `let open` in between hides it. The record's type (`hardware_limits` in
   `backend_intf.ml`) supplies the labels, any of which marks a limits update. A program reads the
-  width when its own modules, or a library under `test/`/`arrayjit/test/` it links (transitively,
+  width when its own modules, or a library it links that is not the compiler's (outside `arrayjit/lib`, `tensor`, `lib`) (transitively,
   through `re_export` and `select` forms too), do one of three things. They name such a value through `Context.Cc_backend` (alias and `open`
   included). They project such a field or match it in a record pattern. Or they write
   `{ base with … }`, overwriting any label of the type and leaving a width field to a non-constant
-  base. A constant base is `no_hardware_limits` (unless the file rebinds the bare name), or a name
-  every binding of which is a constant record or a function returning one. staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
+  base. A constant base is `Backend_intf.no_hardware_limits` (directly, through an alias of
+  `Backend_intf`, or bare where the file does not bind the name), or a name every binding of which
+  is a constant record or a function returning one. staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
   keeps the device's register count, so it is a read. Every rule running such a program declares or
   pins the variable, or depends on `(universe)`. A library with inline tests is a program of its
   own: its `(inline_tests (deps …))` and every per-module rule running its runner answer for it. A
@@ -1363,7 +1364,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `Context.compile` route above. Field names match without types, so an unrelated
   `.simd_vector_bytes` costs a declaration, never a stale pass. The golden lists the derived values,
   fields and record type, and each reading stanza; a `Cc_backend` that reads the key outside every
-  named value, or whose values no longer reach it, is refused rather than deriving no reader.
+  named value, or whose values no longer reach it, and a lost anchor (module, fields or record type
+  not found) are refused rather than deriving no reader.
 - Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
   and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory

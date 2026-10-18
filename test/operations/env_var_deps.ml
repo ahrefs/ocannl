@@ -977,7 +977,7 @@ let pipeline_module = [ "Ir"; "Schedule" ]
    record expressions of [width_limits_home] -- whose initializer reaches it through a helper or
    names one of those values by its last component, however qualified; the record's TYPE, in
    [width_limits_type_home], gives the labels that mark a limits update. A program reads the width
-   when its own modules, or a test-tree library it links, name such a value
+   when its own modules, or a program-local library it links, name such a value
    (`Context.Cc_backend.vector_bytes_setting`, under an alias or an `open` too), project such a
    field off a record (`limits.simd_vector_bytes`, or a record pattern), or update a limits record
    leaving such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits
@@ -992,14 +992,17 @@ let pipeline_module = [ "Ir"; "Schedule" ]
    the notes tell a developer to turn. A program that only CONSTRUCTS limits (every width field
    given, or `{ no_hardware_limits with … }`) and lets codegen read the configured width inside the
    library is out of reach for the same reason: that is the route every compiled program takes.
-   Libraries are followed only in [width_library_roots]: test support is a program's own code by
-   extension, while a library under `arrayjit/lib` naming the width is the compiler. *)
+   Every library the scan sees is followed except those under [width_compiler_roots]: test support
+   and a `bin` or benchmark helper library are a program's own code by extension (Codex P2, round
+   5), while a library of the compiler or the framework naming the width is the compiler. *)
 let width_key = "cc_vector_bytes"
 let width_module = "Cc_backend"
 let width_limits_home = "arrayjit/lib/schedulers.ml"
 let width_limits_type_home = "arrayjit/lib/backend_intf.ml"
-let width_constant_bases = [ "no_hardware_limits" ]
-let width_library_roots = [ "test/"; "arrayjit/test/" ]
+
+(* The library's synthetic limits, by its home module and name. *)
+let width_constant_base = ("Backend_intf", "no_hardware_limits")
+let width_compiler_roots = [ "arrayjit/lib/"; "tensor/"; "lib/" ]
 
 (* The spellings a program names a `Cc_backend` value by: through the `Context` re-export, or
    directly where the stanza links the backend library itself. *)
@@ -1359,8 +1362,10 @@ let main () =
     | Some on_disk ->
         Sources.record_type_labels (In_channel.read_all on_disk)
         |> List.filter ~f:(fun (_, labels) ->
-            (not (List.is_empty width_fields))
-            && List.for_all width_fields ~f:(fun field -> List.mem labels field ~equal:String.equal))
+            (* ANY width field, not every one: the last-component match can over-read a field of
+               another record into [width_fields], and that may only add types -- more labels mark
+               more updates -- never remove `hardware_limits` (Codex P2, round 5). *)
+            List.exists width_fields ~f:(fun field -> List.mem labels field ~equal:String.equal))
   in
   let width_record_fields =
     List.concat_map width_record_types ~f:snd |> List.dedup_and_sort ~compare:String.compare
@@ -1391,21 +1396,21 @@ let main () =
           match
             named
             @ Sources.field_reads_in_source content ~fields:width_fields
-                ~record_fields:width_record_fields ~constant_bases:width_constant_bases
+                ~record_fields:width_record_fields ~constant_base:width_constant_base
           with
           | [] -> None
           | spellings -> Some (String.lowercase path, spellings))
     |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
   in
-  (* The test-tree libraries, by every name a `(libraries …)` field can give them, with the modules
-     each owns and the libraries it links in turn. *)
+  (* The program-local libraries -- every one outside [width_compiler_roots] -- by every name a
+     `(libraries …)` field can give them, with the modules each owns and the libraries it links in
+     turn. *)
   let width_libraries =
     List.concat_map dune_files ~f:(fun (file, on_disk) ->
         let dir = match Stdlib.Filename.dirname file with "." -> "" | dir -> dir in
         if
-          not
-            (List.exists width_library_roots ~f:(fun root ->
-                 String.is_prefix (dir ^ "/") ~prefix:root))
+          List.exists width_compiler_roots ~f:(fun root ->
+              String.is_prefix (dir ^ "/") ~prefix:root)
         then []
         else
           let walked =
@@ -1433,15 +1438,15 @@ let main () =
                       d,
                       Scan.modules_of ~directory_modules group stanza,
                       (* Every atom of the field, so `(re_export x)` and a `(select …)`'s
-                         alternatives are followed too; an atom naming no test-tree library matches
-                         nothing (Codex P2, round 3). *)
+                         alternatives are followed too; an atom naming no program-local library
+                         matches nothing (Codex P2, round 3). *)
                       Option.value_map (Scan.field stanza "libraries") ~default:[]
                         ~f:(List.concat_map ~f:Scan.atoms) )
                   in
                   List.map (atoms "name" @ atoms "public_name") ~f:(fun name -> (name, entry))
               | _ -> []))
   in
-  (* What a program's linked test-tree libraries read of the width, transitively, each read
+  (* What a program's linked program-local libraries read of the width, transitively, each read
      attributed to the library and module it sits in. *)
   let width_reads_linked stanza =
     let rec close seen = function
@@ -1473,6 +1478,29 @@ let main () =
      a run was in goes into the golden, so a glob that breaks flips that line rather than quietly
      retiring the floor. *)
   let repository_census = List.is_empty (Sources.floor_violations (List.map source_files ~f:fst)) in
+  (* gh-ocannl-1320: the width derivation's anchors. A rename or a narrowed glob that loses one of
+     them would empty the derivation, and a promoted golden would then retire every requirement in
+     silence (Codex P2, round 5). So on the repository, and in any tree holding the limits record,
+     each anchor must be found and must yield something. *)
+  (if repository_census || List.Assoc.mem source_files ~equal:String.equal width_limits_home then
+     let missing =
+       List.filter_map
+         [
+           ( Option.is_none (List.Assoc.find library_modules width_module ~equal:String.equal),
+             Printf.sprintf "no `%s` module among arrayjit/lib's sources" width_module );
+           (List.is_empty width_fields, Printf.sprintf "no field of %s carries it" width_limits_home);
+           ( List.is_empty width_record_types,
+             Printf.sprintf "no record type of %s declares those fields" width_limits_type_home );
+         ]
+         ~f:(fun (absent, what) -> Option.some_if absent what)
+     in
+     if not (List.is_empty missing) then
+       fail
+         (Printf.sprintf
+            "the cc vector-width derivation lost an anchor: %s -- the rule would derive no reader \
+             and pass every stanza; follow the rename in `width_module`, `width_limits_home` or \
+             `width_limits_type_home`, or extend the rule's globs"
+            (String.concat ~sep:"; " missing)));
   let artifact_claimed = ref (Set.empty (module String)) in
   let artifact_violations = ref 0 in
   (* One line per subject for stderr, and per dune file for the golden: what the golden holds is
@@ -2739,9 +2767,9 @@ let main () =
                                          be declared -- pin it, or fix the spelling"
                                         key)));
                       (* gh-ocannl-1320: the cc vector width, read by the program's own modules or a
-                         test-tree library it links, asked of every run of it. A plain library is
-                         not asked -- its linkers are -- but one with inline tests is a program of
-                         its own: its generated runner runs under `(inline_tests (deps …))`, and
+                         program-local library it links, asked of every run of it. A plain library
+                         is not asked -- its linkers are -- but one with inline tests is a program
+                         of its own: its generated runner runs under `(inline_tests (deps …))`, and
                          each hand-written per-module rule running that runner under its own deps
                          (Codex P2, round 1). *)
                       (let width_runners, width_program =
@@ -5435,7 +5463,6 @@ let width_control () =
   let backend_home =
     Stdlib.Filename.concat (Stdlib.Filename.dirname width_limits_home) "cc_backend.ml"
   in
-  write_file (Stdlib.Filename.concat root width_limits_home) width_limits_stub;
   write_file (Stdlib.Filename.concat root width_limits_type_home) width_type_stub;
   write_file (Stdlib.Filename.concat root "test/t/ambient.ml") "let () = ()\n";
   write_file (Stdlib.Filename.concat root "test/lib/ambient.ml") "let () = ()\n";
@@ -5444,18 +5471,33 @@ let width_control () =
     (Stdlib.Filename.concat root "test/wrap/dune")
     "(library\n (name wrapper)\n (modules wrapper)\n (libraries (re_export support)))\n";
   write_file (Stdlib.Filename.concat root "test/wrap/wrapper.ml") "let () = ()\n";
+  (* A helper library outside the test roots, as a `bin` or benchmark one would be. *)
+  write_file
+    (Stdlib.Filename.concat root "tools/helper/dune")
+    "(library\n (name helper_lib)\n (modules helper_lib)\n (libraries arrayjit.ir))\n";
   let paths =
     "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
     :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
-    :: backend_home :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
+    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: backend_home :: width_limits_home
+    :: width_limits_type_home :: List.map context ~f:fst
   in
-  let run ?(backend = width_backend_stub) ?(support = "let () = ()\n") ?(inline = `Plain) ?links
-      ~probe answer =
-    write_file (Stdlib.Filename.concat root backend_home) backend;
+  let run ?(backend = Some width_backend_stub) ?(limits = width_limits_stub)
+      ?(helper = "let () = ()\n") ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe
+      answer =
+    let backend_file = Stdlib.Filename.concat root backend_home in
+    (match backend with
+    | Some backend -> write_file backend_file backend
+    | None -> ( try Stdlib.Sys.remove backend_file with Sys_error _ -> ()));
+    write_file (Stdlib.Filename.concat root width_limits_home) limits;
+    write_file (Stdlib.Filename.concat root "tools/helper/helper_lib.ml") helper;
     write_file (Stdlib.Filename.concat root "test/lib/support.ml") support;
     write_file (Stdlib.Filename.concat root "test/lib/dune") (width_support_dune inline);
     write_file (Stdlib.Filename.concat root "test/t/probe.ml") probe;
     write_file (Stdlib.Filename.concat root "test/t/dune") (width_subject ?links answer);
+    let paths =
+      if Option.is_some backend then paths
+      else List.filter paths ~f:(fun path -> not (String.equal path backend_home))
+    in
     run_checker ~root ~exe ("." :: paths)
   in
   let projected = "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n" in
@@ -5474,6 +5516,8 @@ let width_control () =
      let base = Ir.Backend_intf.no_hardware_limits\n\
      let make w = { base with simd_vector_bytes = w }\n\
      let derived = { (make 16) with worker_pool_tag = 0 }\n\
+     module BI = Ir.Backend_intf\n\
+     let aliased = { BI.no_hardware_limits with BI.native_fp16_arithmetic = false }\n\
      let tag limits = limits.Ir.Backend_intf.worker_pool_tag\n\
      let () = ignore (Context.Cc_backend.auto_vector_bytes ()); ignore (Context.Cc_backend.chunks \
      ())\n"
@@ -5514,16 +5558,35 @@ let width_control () =
   let unplaced_backend =
     run
       ~backend:
-        "let () = ignore (Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\")\n\
-         let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n"
+        (Some
+           "let () = ignore (Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\")\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
       ~probe:projected `Declares
   in
   let unreached_backend =
     run
       ~backend:
-        "let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n"
+        (Some
+           "let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
       ~probe:projected `Declares
   in
+  let lost_anchor = run ~backend:None ~probe:projected `Declares in
+  let over_read =
+    run
+      ~limits:(width_limits_stub ^ "let other () = { other_tag = Other.registers () }\n")
+      ~probe:copied `Neither
+  in
+  let local_qualified =
+    run
+      ~probe:
+        "module Local = struct\n\
+        \  let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+         end\n\
+         let narrow = { Local.no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = \
+         false }\n"
+      `Neither
+  in
+  let via_helper_lib = run ~helper:projected ~links:" helper_lib" ~probe:"let () = ()\n" `Neither in
   let undeclared_ok =
     refused undeclared
     && says (Utils.env_var_name width_key) undeclared
@@ -5556,6 +5619,19 @@ let width_control () =
   let unreached_backend_ok =
     exited 1 unreached_backend && says "derives no reader at all" unreached_backend
   in
+  let lost_anchor_ok =
+    exited 1 lost_anchor && says "lost an anchor" lost_anchor
+    && says ("no `" ^ width_module ^ "` module") lost_anchor
+  in
+  let over_read_ok =
+    refused over_read && says "leaving `simd_vector_registers` to its base" over_read
+  in
+  let local_qualified_ok =
+    refused local_qualified && says "leaving `simd_vector_bytes` to its base" local_qualified
+  in
+  let via_helper_lib_ok =
+    refused via_helper_lib && says "library helper_lib (helper_lib.ml)" via_helper_lib
+  in
   if not undeclared_ok then report "undeclared" undeclared;
   if not declared_ok then report "declared" declared;
   if not pinned_ok then report "pinned" pinned;
@@ -5572,6 +5648,10 @@ let width_control () =
   if not shadowed_ok then report "shadowed" shadowed;
   if not unplaced_backend_ok then report "unplaced-backend" unplaced_backend;
   if not unreached_backend_ok then report "unreached-backend" unreached_backend;
+  if not lost_anchor_ok then report "lost-anchor" lost_anchor;
+  if not over_read_ok then report "over-read" over_read;
+  if not local_qualified_ok then report "local-qualified" local_qualified;
+  if not via_helper_lib_ok then report "via-helper-lib" via_helper_lib;
   printf
     "\n\
      The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
@@ -5628,6 +5708,20 @@ let width_control () =
   Verdict.p
     "and one whose values no longer reach the key at all is refused rather than passing vacuously"
     unreached_backend_ok;
+  Verdict.p
+    "a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not passed \
+     with no readers"
+    lost_anchor_ok;
+  Verdict.p
+    "a field of another record over-read by name adds requirements and keeps the limits type's \
+     updates recognised"
+    over_read_ok;
+  Verdict.p
+    "a `no_hardware_limits` reached through a local module of the test is not the library's \
+     constant, and an update of it is a read"
+    local_qualified_ok;
+  Verdict.p "a read in a helper library outside the test roots is the linking program's read"
+    via_helper_lib_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)
