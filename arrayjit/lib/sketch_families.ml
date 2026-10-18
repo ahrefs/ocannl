@@ -286,10 +286,11 @@ type matmul_site = {
           normalizes it. A transposed A never declines (its feeds are scalar splats either way), so
           it is not tracked. *)
   m_fma : bool;
-      (** The accumulation is in fused ([Ops.FMA]) form, as [optimize]'s simplify leaves it — the
-          form the register-tiled [Tile_mma] rendering requires (its vector twin promises bitwise
-          equality only for fused rounding). Candidate schedules rewrite operand reads but never the
-          accumulation form, so this is decidable at seeding time. *)
+      (** The accumulation is fused in the [Tile_mma] fallback [Tensorize] writes
+          ({!Ir.Schedule.fused_accumulation}: an [Ops.FMA], or a floating plain add of the product,
+          gh-ocannl-998) — the form the register-tiled rendering requires (its vector twin promises
+          bitwise equality only for fused rounding). Candidate schedules rewrite operand reads but
+          never the accumulation form, so this is decidable at seeding time. *)
 }
 
 let strip_stmts stmts =
@@ -498,11 +499,7 @@ let detect_matmul_procedural (llc : LL.t) : matmul_site option =
           let d_reads, others = List.partition_tf gets ~f:is_d_read in
           match (d_reads, others) with
           | _ :: _, [ o1; o2 ] ->
-              let fma =
-                match llsc with
-                | LL.Ternop (Ir.Ops.FMA, _, _, (LL.Get (tn, idcs), _)) -> is_d_read (tn, idcs)
-                | _ -> false
-              in
+              let fma = Option.is_some (Ir.Schedule.fused_accumulation ~d ~di llsc) in
               classify_matmul ~loops ~d ~di ~o1 ~o2
                 ~zeroed:(List.exists zeroed ~f:(phys_equal d))
                 ~fma
@@ -540,8 +537,9 @@ let path_head = A.stmt_head
 let accesses_by_statement (accs : Ir.Tnode.t A.access list) =
   List.group accs ~break:(fun a b -> path_head a.A.a_path <> path_head b.A.a_path)
 
-(* The accumulation form (fused [Ops.FMA] vs add-of-product) is scalar structure the access records
-   do not carry; probe the recognized statement's leaf assignment directly. *)
+(* The accumulation form (fused, or fusable by [Tensorize]: {!Ir.Schedule.fused_accumulation}) is
+   scalar structure the access records do not carry; probe the recognized statement's leaf
+   assignment directly. *)
 let fma_form (llc : LL.t) ~stmt_path ~d ~(di : Idx.axis_index array) : bool =
   let stmt =
     match path_head stmt_path with -1 -> llc | h -> List.nth_exn (LL.flat_lines [ llc ]) h
@@ -554,8 +552,8 @@ let fma_form (llc : LL.t) ~stmt_path ~d ~(di : Idx.axis_index array) : bool =
     | _ -> None
   in
   match find stmt with
-  | Some (LL.Ternop (Ir.Ops.FMA, _, _, (LL.Get (tn, idcs), _))) -> is_d_read tn idcs
-  | _ -> false
+  | Some llsc -> Option.is_some (Ir.Schedule.fused_accumulation ~d ~di llsc)
+  | None -> false
 
 (* The perfect all-serial from-0 accumulation statement, as the relations express it: a single
    interpretable write whose enclosing statement's accesses are all the statement's own direct reads
@@ -935,10 +933,7 @@ let detect_conv_procedural (llc : LL.t) : conv_site option =
                               let axes = Option.all (List.map a_axes ~f:with_extents) in
                               let loop_syms = List.map loops ~f:fst in
                               let m_fma =
-                                match llsc with
-                                | LL.Ternop (Ir.Ops.FMA, _, _, (LL.Get (tn, idcs), _)) ->
-                                    is_d_read (tn, idcs)
-                                | _ -> false
+                                Option.is_some (Ir.Schedule.fused_accumulation ~d ~di llsc)
                               in
                               let is_kernel s = List.mem kernel_syms s ~equal:Idx.equal_symbol in
                               let outer =

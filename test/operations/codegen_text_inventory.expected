@@ -139,9 +139,9 @@ arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; als
 arrayjit/test/test_vectorized_codegen.ml [renders generated text in memory]
 arrayjit/test/test_zero_out_codegen.ml [renders generated text in memory]
 test/operations/accum_width.ml
+    "= single_to_bfloat16(v"
     "Vectorized reduction rendering"
-    "fmaf("
-    "single_to_bfloat16(fmaf("
+    "single_to_bfloat16((bfloat16_to_single("
 test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component]
     "?"
     "s0"

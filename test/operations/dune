@@ -222,6 +222,7 @@
   (alias runtest-kernel_attribution)
   (alias runtest-gh1002_kernels)
   (alias runtest-online_softmax_fast_math)
+  (alias runtest-online_softmax_fp_licences)
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-qkv_zero_init-approximate)
   (alias runtest-fast_math_libmvec)
@@ -658,6 +659,36 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff online_softmax_fast_math.expected online_softmax_fast_math.actual)))
+
+; The same executable with the floating-point licences on (gh-ocannl-998), as the `approximate`
+; profile has them: their tier member runs after this rewrite, and contraction would otherwise hide
+; the value reduction from the probability hoist. The same claims, masked prefixes and the
+; lowest-finite scores included; the golden differs in its regime lines only.
+
+(rule
+ ; ocannl-backend: cc -- the licences are backend-independent; the command line pins cc beside them.
+ (target online_softmax_fp_licences.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:online_softmax.exe}
+    --ocannl_backend=cc
+    --ocannl_fp_contract=true
+    --ocannl_fp_reassociate=true
+    --ocannl_fp_finite_math=true))))
+
+(rule
+ (alias runtest-online_softmax_fp_licences)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   online_softmax_fp_licences.expected
+   online_softmax_fp_licences.actual)))
 
 ; gh-ocannl-1045: a fast-math cc kernel whose `expf` loop vectorizes into libmvec must load and run.
 ; The compiler command adds `-D__FAST_MATH__`, which `cc_backend_fast_math`'s

@@ -872,7 +872,9 @@ files.
   regime was bumped for the identical digests whose scheduled kernels changed. A raw-tier pow
   unroll must not take a base exact simplification folds to a constant (an `Identity`-wrapped
   constant, a fixed embedded index): the folded product would be computed in double, not at the
-  target's multiplication rounding. `reproducible` pins the licences off, `approximate` on. The
+  target's multiplication rounding. All three are off by default (no family showed a measured
+  speed benefit), on under `approximate` -- `runtest-online_softmax_fp_licences` reruns the
+  online-softmax claims with them on -- and pinned off by `reproducible`. The
   development selector `simplify_fp_algebra` (six arm families) is retired with no alias;
   `benchmarks/gh998_cells.py` ablates the three keys, and a result line records each under
   `fp_licences` with its source.

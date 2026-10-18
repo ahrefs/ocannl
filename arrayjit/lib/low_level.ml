@@ -4214,12 +4214,13 @@ module Fp_licence = struct
   let exact = { contract = false; reassociate = false; finite_math = false }
   let all = { contract = true; reassociate = true; finite_math = true }
 
-  (* Each licence is its own key, read where the algebra runs (gh-ocannl-998). *)
+  (* Each licence is its own key, read where the algebra runs, and off by default: they change
+     results, so the [approximate] profile is the word that opts in (gh-ocannl-998). *)
   let of_config () =
     {
-      contract = Utils.get_global_flag ~default:true ~arg_name:"fp_contract";
-      reassociate = Utils.get_global_flag ~default:true ~arg_name:"fp_reassociate";
-      finite_math = Utils.get_global_flag ~default:true ~arg_name:"fp_finite_math";
+      contract = Utils.get_global_flag ~default:false ~arg_name:"fp_contract";
+      reassociate = Utils.get_global_flag ~default:false ~arg_name:"fp_reassociate";
+      finite_math = Utils.get_global_flag ~default:false ~arg_name:"fp_finite_math";
     }
 
   let fields { contract; reassociate; finite_math } =

@@ -1462,7 +1462,10 @@
 #bf16_arithmetic=auto
 
 # The licences of the floating-point algebra over lowered code (gh-ocannl-998): rewrites that are
-# identities over the reals but change IEEE results. Each is its own boolean key; the exact
+# identities over the reals but change IEEE results. Each is its own boolean key, off by default
+# like every numerics-changing gate: the `approximate` profile turns all three on and
+# `reproducible` pins them off. With them off, the arithmetic is the program's own; the
+# measurement that split them found no family with a demonstrated speed benefit. The exact
 # canonicalization (index and constant folding, interval-driven guard folds, x*1) always runs, and
 # integer precisions take every licence but the two floating-only rewrites (contraction and the
 # multiplication/division interchange), since wrapping integer arithmetic reassociates exactly.
@@ -1477,18 +1480,18 @@
 # Contraction: a floating a*b+c becomes one fused multiply-add, one rounding instead of two. An
 # explicit FMA the program or a schedule wrote (a tensorized accumulation's fallback) is not this
 # licence's and stays.
-#fp_contract=true
+#fp_contract=false
 #
 # Reassociation: constant reassociation through Add and Mul ((x + c2) + c1 to x + (c1 + c2)),
 # re-parenthesized subtraction chains (a + (b - c) to (a + b) - c), the multiplication/division
 # interchanges (a * (b / c) to (a * b) / c, and constant divisors), and unrolling a known integer
 # power 0..8 into multiplications (whose rounding is that chain's, not the ocannl_powi helper's).
-#fp_reassociate=true
+#fp_reassociate=false
 #
 # Finite math: the zero identities x + 0 = x, 0 - x = -x, 0 * x = 0 and 0 / x = 0, which hold only
 # when no operand is infinite or NaN and the sign of zero does not matter (-0 + 0 is +0, 0 * inf
 # is NaN).
-#fp_finite_math=true
+#fp_finite_math=false
 
 # Algebraic rewrite over lowered code (gh-ocannl-483): the online-softmax attention rewrite. The
 # composed softmax's max-reduction and sum-of-exp reduction over one axis become a single scan per
@@ -1629,11 +1632,11 @@
 # # Contraction the codegen did not ask for (the explicit `fmaf` selections stay): whether a*b+c
 # # becomes one fused op is compiler- and target-discretionary.
 # cc_backend_fp_contract=off
-# # OCaml-side licences of the same kinds (gh-ocannl-998): the lowered code itself contracts no
-# # a*b+c into an fma, reassociates no constant, sum or product, and folds no zero identity that
-# # infinities, NaNs or the sign of zero would contradict. What remains is the arithmetic the
-# # program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized accumulation's,
-# # stay).
+# # The lowered code's own licences of the same kinds (gh-ocannl-998), pinned at their defaults: it
+# # contracts no a*b+c into an fma, reassociates no constant, sum or product, and folds no zero
+# # identity that infinities, NaNs or the sign of zero would contradict. What remains is the
+# # arithmetic the program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized
+# # accumulation's, stay).
 # fp_contract=false
 # fp_reassociate=false
 # fp_finite_math=false
@@ -1687,7 +1690,7 @@
 # fp16_arithmetic=true
 #
 # # The floating-point licences (fp_contract, fp_reassociate, fp_finite_math; gh-ocannl-998) stay
-# # at their defaults: they change results, which is the `approximate` profile's axis.
+# # at their defaults, off: they change results, which is the `approximate` profile's axis.
 # --- END PROFILE PAYLOAD performance ---
 
 # --- BEGIN PROFILE PAYLOAD approximate ---

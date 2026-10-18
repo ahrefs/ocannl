@@ -121,9 +121,9 @@ let () =
   p "census: the honoured schedule's routine is labeled tensorized"
     ((not on_cpu)
     || Ir.C_syntax.equal_tensorization census.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized);
-  (* gh-ocannl-998: with the simplifier's contraction licence off the accumulation reaches
-     [Tensorize] in plain-add form, which the register tile declines; the tile's own fallback is
-     written fused, so the rendering survives. *)
+  (* gh-ocannl-998: with the contraction licence off (the default, pinned here) the accumulation
+     reaches [Tensorize] in plain-add form, which the register tile declines; the tile's own
+     fallback is written fused, so the rendering survives. *)
   let%op mc_unfused = ma * mb in
   let var = "OCANNL_FP_CONTRACT" in
   let previous = Stdlib.Sys.getenv_opt var in

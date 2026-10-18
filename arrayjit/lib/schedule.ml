@@ -468,6 +468,28 @@ type pad_mask = {
   pm_bound : int;
 }
 
+(* gh-ocannl-998: the accumulation a [Tile_mma] fallback states, fused. A tile multiply-accumulate
+   is fused on every tensor unit and in the cc register tile, so [Tensorize] writes a floating
+   plain-add accumulation [d += a * b] as the explicit [FMA] -- a schedule decision, not the
+   contraction licence, which may be off. [None] where the fallback stays unfused: an integer
+   accumulation (gh-ocannl-824), or no product accumulated into [d[di]]. The sketch seeding asks the
+   same question of the pre-schedule code (the register tile renders only a fused fallback). *)
+let fused_accumulation ~(d : Tn.t) ~(di : Indexing.axis_index array) (llsc : Low_level.scalar_t) :
+    Low_level.scalar_t option =
+  let is_d_read (sc : Low_level.scalar_t) =
+    match sc with
+    | Get (tn, idcs) -> Tn.equal tn d && Array.equal Indexing.equal_axis_index idcs di
+    | _ -> false
+  in
+  match llsc with
+  | Ternop (Ops.FMA, _, _, (acc, _)) when is_d_read acc -> Some llsc
+  | _ when not (Ops.is_float (Lazy.force d.Tn.storage_prec)) -> None
+  | Binop (Ops.Add, ((acc, _) as acc_arg), (Binop (Ops.Mul, x, y), _)) when is_d_read acc ->
+      Some (Ternop (Ops.FMA, x, y, acc_arg))
+  | Binop (Ops.Add, (Binop (Ops.Mul, x, y), _), ((acc, _) as acc_arg)) when is_d_read acc ->
+      Some (Ternop (Ops.FMA, x, y, acc_arg))
+  | _ -> None
+
 (* docs/proposals/tensorize-mma.md §3: replace the innermost serial [i × j × k] matmul micro-kernel
    — whose body is a single accumulation [d[...] += a[...] * b[...]] (plain-add or FMA form,
    whichever the contraction licence left), possibly under pad/remainder guards (gh-ocannl-485) —
@@ -744,36 +766,25 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
               subst_axis_index ~sym:i ~by:zero
                 (subst_axis_index ~sym:j ~by:zero (subst_axis_index ~sym:k ~by:zero idx)))
         in
-        (* The fallback states the block's arithmetic, and a tile multiply-accumulate is fused:
-           every tensor unit, and the cc register tile, applies one rounding per k step. So a
-           floating plain-add accumulation is written as the explicit [FMA] here -- a schedule
-           decision, not the simplifier's contraction licence (gh-ocannl-998), which may be off. The
-           cc register tile renders only the fused form, bitwise equal to this fallback; integer
-           accumulations stay unfused (gh-ocannl-824). *)
+        (* The fallback states the block's arithmetic, fused as the tile computes it
+           ({!fused_accumulation}): the cc register tile renders only the fused form, bitwise equal
+           to this fallback. *)
         let fused_fallback (c : Low_level.t) : Low_level.t =
-          if not (Ops.is_float (Lazy.force d_tn.Tn.storage_prec)) then c
-          else
-            let fuse (llsc : scalar_t) =
-              match llsc with
-              | Binop (Ops.Add, ((acc, _) as acc_arg), (Binop (Ops.Mul, x, y), _))
-                when is_d_read acc ->
-                  Ternop (Ops.FMA, x, y, acc_arg)
-              | Binop (Ops.Add, (Binop (Ops.Mul, x, y), _), ((acc, _) as acc_arg))
-                when is_d_read acc ->
-                  Ternop (Ops.FMA, x, y, acc_arg)
-              | _ -> llsc
-            in
-            let rec go (c : Low_level.t) : Low_level.t =
-              match c with
-              | Set ({ tn; idcs; llsc; _ } as set)
-                when Tn.equal tn d_tn && Array.equal Indexing.equal_axis_index idcs d_idcs ->
-                  Set { set with llsc = fuse llsc }
-              | For_loop fc -> For_loop { fc with body = go fc.body }
-              | If ({ body; _ } as guard) -> If { guard with body = go body }
-              | Seq (c1, c2) -> Seq (go c1, go c2)
-              | c -> c
-            in
-            go c
+          let rec go (c : Low_level.t) : Low_level.t =
+            match c with
+            | Set ({ tn; idcs; llsc; _ } as set)
+              when Tn.equal tn d_tn && Array.equal Indexing.equal_axis_index idcs d_idcs ->
+                Set
+                  {
+                    set with
+                    llsc = Option.value (fused_accumulation ~d:d_tn ~di:d_idcs llsc) ~default:llsc;
+                  }
+            | For_loop fc -> For_loop { fc with body = go fc.body }
+            | If ({ body; _ } as guard) -> If { guard with body = go body }
+            | Seq (c1, c2) -> Seq (go c1, go c2)
+            | c -> c
+          in
+          go c
         in
         For_loop
           {

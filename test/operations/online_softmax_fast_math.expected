@@ -1,4 +1,5 @@
 --- run under cc_backend_fast_math=true ---
+--- with the floating-point licences: fp_contract off, fp_reassociate off, fp_finite_math off ---
 --- leg 1: the gate -- key off keeps the composed form ---
 composed: no scan in the routine: true
 composed: the routine writes seq^2-sized intermediates: true

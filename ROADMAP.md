@@ -351,7 +351,8 @@ benchmark coverage. Release scope does not close or reassign those issues.
   allocation peaks (#1006), regime/parity provenance and explicit skipped cells. #998's ablation
   ([PR #935](https://github.com/lukstafi/ocannl-staging/pull/935)) split the simplifier's
   floating-point algebra into three licence keys (`fp_contract`, `fp_reassociate`,
-  `fp_finite_math`) that every profile states.
+  `fp_finite_math`), applied once on the raw lowering, off by default and on under the
+  `approximate` profile.
 
 **What the measurements establish:**
 

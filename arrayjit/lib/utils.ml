@@ -1326,11 +1326,11 @@ cc_backend_simd_flags=none
 # Contraction the codegen did not ask for (the explicit `fmaf` selections stay): whether a*b+c
 # becomes one fused op is compiler- and target-discretionary.
 cc_backend_fp_contract=off
-# OCaml-side licences of the same kinds (gh-ocannl-998): the lowered code itself contracts no
-# a*b+c into an fma, reassociates no constant, sum or product, and folds no zero identity that
-# infinities, NaNs or the sign of zero would contradict. What remains is the arithmetic the
-# program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized accumulation's,
-# stay).
+# The lowered code's own licences of the same kinds (gh-ocannl-998), pinned at their defaults: it
+# contracts no a*b+c into an fma, reassociates no constant, sum or product, and folds no zero
+# identity that infinities, NaNs or the sign of zero would contradict. What remains is the
+# arithmetic the program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized
+# accumulation's, stay).
 fp_contract=false
 fp_reassociate=false
 fp_finite_math=false
@@ -1384,7 +1384,7 @@ cc_backend_simd_flags=auto
 fp16_arithmetic=true
 
 # The floating-point licences (fp_contract, fp_reassociate, fp_finite_math; gh-ocannl-998) stay
-# at their defaults: they change results, which is the `approximate` profile's axis.
+# at their defaults, off: they change results, which is the `approximate` profile's axis.
 |}
 
 let approximate_profile_payload =
