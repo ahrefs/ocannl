@@ -268,6 +268,37 @@ let percentile sorted p =
     rendering, so a launch count bounds them only together with the candidate's parallel-region
     count. *)
 
+(** {1 A search cut short (gh-ocannl-1388)}
+
+    [BENCH_TUNE_CUT_AFTER=N] keeps the readings of each search's first [N] admitted timing windows
+    and refuses every later one, through {!Autotune.on_candidate_measured}: a refused reading counts
+    as a contended window, so the search goes on compiling and attempting its candidates but crowns
+    among the first [N] timed. That is the search a budget or a contended box cuts short, and with
+    [N = 1] it shows the floor a search's first candidate sets: on CUDA and HIP the seeded untuned
+    plan, which the tuner seeds first. A search starts at its [baseline] attempt, which resets the
+    count. The cut is visible in the result line: each [tune] arm's [timings_contended] counts every
+    window after the first [N]. *)
+let install_search_cut () =
+  match Stdlib.Sys.getenv_opt "BENCH_TUNE_CUT_AFTER" with
+  | None -> ()
+  | Some raw ->
+      let n =
+        match Int.of_string_opt (String.strip raw) with
+        | Some n when n >= 1 -> n
+        | _ -> failwith ("BENCH_TUNE_CUT_AFTER must be a positive integer; found: " ^ raw)
+      in
+      Stdio.eprintf "bench: every search crowns among its first %d admitted timing(s)\n%!" n;
+      let admitted = ref 0 in
+      let prev_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+        if String.equal label "baseline" then admitted := 0;
+        prev_attempt label );
+      let prev_measured = Autotune.Seam.get Autotune.on_candidate_measured in
+      Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
+      let ms = prev_measured ~label ~digest ms in
+      Int.incr admitted;
+      if !admitted <= n then ms else Float.nan
+
 let timing_trace_on = ref false
 
 (** Marks the end of the measured compile (the search, when tuning) on a traced run, so a cell cut

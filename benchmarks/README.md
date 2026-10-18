@@ -319,6 +319,14 @@ cell is the step: cite the step cell. Each issue's cell:
   `flip_candidates` list, which is how "this node is not a searchable decision" is told apart from
   "it ranked below `tune_inline_flips`" (gh-ocannl-558,
   [report-gh558-hip-flips.md](report-gh558-hip-flips.md)).
+  `BENCH_TUNE_CUT_AFTER=N` (all three runners, gh-ocannl-1388) keeps the readings of each
+  search's first N admitted timing windows and refuses every later one through the measurement
+  seam, so a search still compiles and attempts its candidates but crowns among the first N timed:
+  the search a budget or a contended box cuts short. With N=1 it measures the floor a search's
+  first candidate sets -- on CUDA and HIP the seeded untuned plan, which the tuner seeds first --
+  so a tuned cell under it should match the untuned cell. Each `tune` arm's `timings_contended`
+  in the result line counts the refused windows, which is how a cut cell reads apart from a full
+  search.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
