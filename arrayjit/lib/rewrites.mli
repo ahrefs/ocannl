@@ -4,7 +4,7 @@
     traced store and the placements see the rewritten routine and a rewrite may remove a node's
     definition outright.
 
-    Each member is gated by a config key of its own (the [approximate] profile is the umbrella that
+    Each member is gated by config keys of its own (the [approximate] profile is the umbrella that
     turns them all on), classified [Code_borne]: the rewritten code carries the decision, so no
     digest needs the key. The tier is a static list -- explicit order, and no registration that a
     dropped unreferenced module could silently skip.
@@ -24,7 +24,7 @@ val conservative_target : target
 (** Backend-free lowerings decline automatic block folding. Explicit numeric sizes still apply. *)
 
 type rewrite = {
-  name : string;  (** The config key that gates it. *)
+  name : string;  (** The config key that gates it, or the keys when several do. *)
   enabled : unit -> bool;
   apply : target -> Low_level.t -> Low_level.t;
   reset : unit -> unit;
@@ -33,7 +33,9 @@ type rewrite = {
 }
 
 val tier : rewrite list
-(** The members, in application order: {!Online_softmax} (gh-ocannl-483). *)
+(** The members, in application order: {!Online_softmax} (gh-ocannl-483), then {!Fp_algebra}
+    (gh-ocannl-998) -- the recognizers first, the normalizing algebra last, since contraction would
+    hide the value reduction the softmax hoist matches. *)
 
 val max_rounds : int
 

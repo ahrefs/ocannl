@@ -4322,7 +4322,24 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
       Some (Binop (Div, llv1, (Binop (Mul, llv2, llv3), prec)), prec12)
   | Binop (ToPowOf, (v1, _), (Constant c, _))
     when !optimize_integer_pow && reassociate
-         && (not (Ops.is_float prec && match v1 with Constant _ -> true | _ -> false))
+         (* A base that exact simplification folds to a constant stays a power: the folded product
+            would be computed in double, not at the target's multiplication rounding. On the raw
+            lowering such a base can still be wrapped ([Identity], a fixed embedded index). *)
+         && (not
+               (Ops.is_float prec
+               &&
+               let rec folds_to_constant = function
+                 | Constant _ | Constant_bits _ | Embed_index (Fixed_idx _ | Sub_axis) -> true
+                 | Unop (_, (a, _)) | Binop (Arg1, (a, _), _) | Binop (Arg2, _, (a, _)) ->
+                     folds_to_constant a
+                 | Binop (_, (a, _), (b, _)) -> folds_to_constant a && folds_to_constant b
+                 | Ternop (_, (a, _), (b, _), (c, _)) ->
+                     folds_to_constant a && folds_to_constant b && folds_to_constant c
+                 | Get _ | Get_dynamic _ | Get_local _ | Get_merge_buffer _ | Local_scope _
+                 | Embed_index _ ->
+                     false
+               in
+               folds_to_constant v1))
          && Float.is_finite c && Float.is_integer c
          (* Negative powers keep the helper's reciprocal-after-positive-power order; [unroll_pow]
             instead reciprocates the base before multiplication. *)
@@ -4346,8 +4363,13 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
       Some (Ternop (FMA, llv1, llv2, llv3), Ops.promote_prec prec12 prec)
   | _ -> None
 
-let simplify_llc ?licence static_indices llc =
-  let licence = match licence with Some l -> l | None -> Fp_licence.of_config () in
+(* Exact canonicalization: every rewrite here preserves IEEE results. The licensed floating-point
+   algebra runs once, on the raw lowering ({!Fp_algebra}, gh-ocannl-998); here [fp_algebra_step]
+   runs unlicensed, which still canonicalizes integer arithmetic. *)
+let simplify_llc static_indices llc =
+  let licence = Fp_licence.exact in
+  let positive_zero c = Float.(c = 0.) && not (Stdlib.Float.sign_bit c) in
+  let negative_zero c = Float.(c = 0.) && Stdlib.Float.sign_bit c in
   (* Implements top-down rewriting. The interval environment [ienv] tracks every in-scope symbol's
      bounds (seeded from the static indices, extended per [For_loop]) for the interval-driven
      comparison folds. *)
@@ -4482,10 +4504,22 @@ let simplify_llc ?licence static_indices llc =
            the same multiplication and reciprocal rounding. *)
         (llsc, prec)
     | Binop (op, (Constant c1, prec1), (Constant c2, prec2)) ->
+        (* Folded in double and rounded once where the constant is rendered. For operands
+           representable at the target precision (f32, f16, bf16) that is the target's correctly
+           rounded result: 53 >= 2p + 2 bits, so double rounding is innocuous. A constant that is
+           not representable there is rounded once after folding, where a kernel would round each
+           operand first -- the documented choice. *)
         (Constant (Ops.interpret_binop op c1 c2), Ops.promote_prec prec1 prec2)
     | Binop (Mul, (llsc, prec1), (Constant 1., _))
     | Binop (Div, (llsc, prec1), (Constant 1., _))
     | Binop (Mul, (Constant 1., _), (llsc, prec1)) ->
+        loop_scalar (llsc, prec1)
+    (* The zero identities that hold in IEEE arithmetic: [x - (+0) = x] and [x + (-0) = x] for every
+       [x], signed zeros, infinities and NaNs included. [x + (+0)] is not one ([-0 + 0 = +0]): it is
+       [fp_finite_math]'s. *)
+    | Binop (Sub, (llsc, prec1), (Constant c, _)) when positive_zero c -> loop_scalar (llsc, prec1)
+    | (Binop (Add, (llsc, prec1), (Constant c, _)) | Binop (Add, (Constant c, _), (llsc, prec1)))
+      when negative_zero c ->
         loop_scalar (llsc, prec1)
     | Binop (ToPowOf, llv1, llv2) -> (
         let v1 = loop_scalar llv1 in

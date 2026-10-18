@@ -1,11 +1,14 @@
-the exact simplifier preserves each floating-point witness: true
+the post-virtualization simplifier is exact on every floating-point witness: true
 each licence rewrites its own witnesses: true
 each licence leaves the other licences' witnesses alone: true
-unqualified simplification follows the configured licences: true
+the tier member reaches its fixpoint in one application: true
+the tier member is disabled with every licence off: true
+the exact zero identities x - (+0) and x + (-0) fold unlicensed: true
 constant folding is exact and runs unlicensed: true
-the integer zero identity runs unlicensed: true
-integer constant reassociation runs unlicensed: true
-the unroll witness has identical pre-schedule digests across licences: true
-unrolling exposes licence-dependent constant reassociation: true
-the cache numerics tag separates identical sources with different scheduled algebra: true
-the all-licensed cache tag remains compatible with existing entries: true
+the integer zero identity is exact canonicalization: true
+integer constant reassociation is exact canonicalization: true
+the tier member leaves integer expressions to the canonicalizer: true
+identical code schedules identically whatever the licences: true
+the cache numerics tag does not depend on the licences: true
+a routine no licence touches keeps one cache identity: true
+a routine the licences rewrite is separated by its code digest: true

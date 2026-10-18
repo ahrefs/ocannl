@@ -1340,7 +1340,7 @@ val fp_algebra_step : Fp_licence.t -> scalar_t * Ops.prec -> (scalar_t * Ops.pre
     matches (first-match order matters), not yet re-simplified, or [None]. A [ToPowOf] is expected
     with its operands already simplified. *)
 
-val simplify_llc : ?licence:Fp_licence.t -> Indexing.static_symbol list -> t -> t
+val simplify_llc : Indexing.static_symbol list -> t -> t
 (** Top-down algebraic simplification with interval-driven comparison folding (in particular, it
     erases [If] guards whose conditions the loop extents prove). The interval environment is
     narrowed by every enclosing [If] condition that is a conjunction of integer-affine index
@@ -1350,8 +1350,11 @@ val simplify_llc : ?licence:Fp_licence.t -> Indexing.static_symbol list -> t -> 
     simplify already ran (docs/proposals/schedule-ir-optops.md §2), and for testing. Pure and
     idempotent.
 
-    [licence] overrides the configured {!Fp_licence.of_config} for focused tests;
-    {!Fp_licence.exact} disables only the floating-point algebra. *)
+    Exact: every rewrite preserves IEEE results (the [x * 1] and [x - (+0)] identities, constant
+    folding, guard folds); integer arithmetic is reassociated as {!fp_algebra_step} does with no
+    licence. The licensed floating-point algebra runs once, on the raw lowering, in the rewrite tier
+    member [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun
+    it can contract or reassociate across an inlining boundary. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable

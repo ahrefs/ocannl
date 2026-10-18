@@ -276,6 +276,11 @@ let config_key_classification : (config_key_class * string * string list) list =
         "online_softmax_block";
       ] );
     ( Code_borne,
+      "a licence of the floating-point algebra, applied once by the rewrite tier on the raw \
+       lowering (gh-ocannl-998): the rewritten code carries it, and the post-scheduling \
+       simplification is exact, so no transform consults it",
+      [ "fp_contract"; "fp_reassociate"; "fp_finite_math" ] );
+    ( Code_borne,
       "it changes the assignments the front end builds, hence the code they lower to",
       [ "default_prec"; "default_prng_variant"; "limit_constant_fill_size" ] );
     ( Code_borne,
@@ -289,10 +294,6 @@ let config_key_classification : (config_key_class * string * string list) list =
       "the numerics policy is consulted at codegen and by the autotune tile-shape choice, never in \
        the lowered code (gh-ocannl-568)",
       [ "tf32_matmuls"; "narrow_compute_f32"; "fp16_arithmetic"; "bf16_arithmetic" ] );
-    ( Keyed "numerics",
-      "simplification also runs after scheduling, where unrolling can expose licensed algebra \
-       absent from the base code digest (gh-ocannl-998)",
-      [ "fp_contract"; "fp_reassociate"; "fp_finite_math" ] );
     ( Keyed "pool",
       "it decides the worker pool timings execute on, and CPU crowns do not transfer across pools \
        (gh-ocannl-530)",
@@ -1433,7 +1434,8 @@ cc_backend_fp_contract=fast
 # The lowered code's own licences of the same kinds (gh-ocannl-998), on every backend: contract
 # a*b+c into an fma, reassociate constants, sums and products (and unroll known integer
 # powers), and fold the zero identities x+0 and 0*x as if no operand were infinite, NaN or a
-# negative zero.
+# negative zero. Each applies within one assignment of the raw lowering, never across an
+# inlining boundary.
 fp_contract=true
 fp_reassociate=true
 fp_finite_math=true

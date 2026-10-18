@@ -20,6 +20,11 @@ code-borne (digest) -- an optimizer decision: it changes the code that comes out
   virtualize_max_inline_reduction
   virtualize_max_visits
 
+code-borne (digest) -- a licence of the floating-point algebra, applied once by the rewrite tier on the raw lowering (gh-ocannl-998): the rewritten code carries it, and the post-scheduling simplification is exact, so no transform consults it
+  fp_contract
+  fp_finite_math
+  fp_reassociate
+
 code-borne (digest) -- it changes the assignments the front end builds, hence the code they lower to
   default_prec
   default_prng_variant
@@ -36,11 +41,6 @@ keyed: numerics -- the numerics policy is consulted at codegen and by the autotu
   fp16_arithmetic
   narrow_compute_f32
   tf32_matmuls
-
-keyed: numerics -- simplification also runs after scheduling, where unrolling can expose licensed algebra absent from the base code digest (gh-ocannl-998)
-  fp_contract
-  fp_finite_math
-  fp_reassociate
 
 keyed: pool -- it decides the worker pool timings execute on, and CPU crowns do not transfer across pools (gh-ocannl-530)
   cc_pool_core_class [read at codegen]

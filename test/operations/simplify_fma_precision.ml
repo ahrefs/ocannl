@@ -1,6 +1,7 @@
-(* gh-ocannl-824: [simplify_llc]'s mul-add rewrite must stay restricted to floating-point
-   evaluation. Integer precisions otherwise reach the C-family [fma] renderers through hand-built
-   low-level IR, converting through a floating mantissa and changing exact integer arithmetic. *)
+(* gh-ocannl-824: the contraction licence's mul-add rewrite ([Fp_algebra], gh-ocannl-998; formerly
+   inside [simplify_llc]) must stay restricted to floating-point evaluation. Integer precisions
+   otherwise reach the C-family [fma] renderers through hand-built low-level IR, converting through
+   a floating mantissa and changing exact integer arithmetic. *)
 
 open Base
 module LL = Ir.Low_level
@@ -25,15 +26,17 @@ let scalar_case ~prec ~first_id label =
 let () =
   let int_llc, input, output = scalar_case ~prec:Ops.int64 ~first_id:8240 "int64" in
   let float_llc, _, _ = scalar_case ~prec:Ops.single ~first_id:8250 "single" in
-  let int_simplified = LL.simplify_llc ~licence:LL.Fp_licence.all [] int_llc in
-  let float_simplified = LL.simplify_llc ~licence:LL.Fp_licence.all [] float_llc in
+  let int_simplified = Ir.Fp_algebra.rewrite LL.Fp_licence.all int_llc in
+  let float_simplified = Ir.Fp_algebra.rewrite LL.Fp_licence.all float_llc in
   p "int64 mul-add remains integer arithmetic" (fmas int_simplified = 0);
   p "single-precision mul-add still rewrites to FMA" (fmas float_simplified = 1);
 
   (* [2^53] is exactly representable as both int64 and double, but [2^53 + 1] is not. The intended
      integer evaluation [(x * 1 + 1) - x] therefore returns 1; an intervening double [fma] rounds
      the sum back to [2^53] and returns 0. *)
-  let optimized = Ll_test.optimize ~materialized:[ input; output ] ~name:"fma_int64" int_llc in
+  let optimized =
+    Ll_test.optimize ~materialized:[ input; output ] ~name:"fma_int64" int_simplified
+  in
   let got =
     Ll_test.execute ~name:"fma_int64" optimized
       ~seed:[ (input, [| 9007199254740992. |]) ]

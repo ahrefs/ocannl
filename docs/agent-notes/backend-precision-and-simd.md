@@ -851,20 +851,31 @@ files.
   `ambient_ocannl_shadowed`, the inherited variables its own command line outranks
   (gh-ocannl-1273), and `--cell-flag KEY=VALUE` is the way to set a payload key per cell — the
   regime gate accepts it as a declared override, never as a leak.
-- **The floating-point licences are three keys, and every profile states them** (gh-ocannl-998):
+- **The floating-point licences are three keys, applied once on the raw lowering** (gh-ocannl-998):
   `fp_contract` (a float `a * b + c` into one `FMA`), `fp_reassociate` (constant reassociation,
   subtraction re-parenthesizing, the multiplication/division interchanges, integer-power
   unrolling) and `fp_finite_math` (the zero identities, which infinities, NaNs and the sign of
-  zero contradict), read as `Low_level.Fp_licence.of_config`; the arms live in one first-match
-  step function, `Low_level.fp_algebra_step`. Integer precisions take every licence but the two
-  floating-only arms, so the index canonicalizer never depends on them. `reproducible` pins all
-  three off, `approximate` on. While `simplify_llc` applies them it also runs after scheduling,
-  where a materializing unroll exposes algebra absent from the pre-schedule digest, so they are
-  `Keyed "numerics"` and `Schedule_cache.numerics_tag` carries a non-all-on licence record
-  (all-on keeps the old tags); `fp_licences` pins the equal-source/different-unrolled-code witness
-  and the tag separation. The development selector `simplify_fp_algebra` that measured them
-  (six arm families) is retired with no alias; `benchmarks/gh998_cells.py` ablates the three
-  keys, and a benchmark result line records each under `fp_licences` with its source.
+  zero contradict), read as `Low_level.Fp_licence.of_config`. The arms live in one first-match
+  step function, `Low_level.fp_algebra_step`; the `Rewrites` tier member `Fp_algebra` applies it
+  bottom-up per assignment, after `Online_softmax` (contraction would hide `o := o + w * v` from
+  the hoist). `simplify_llc` -- after virtualization and again after scheduling -- is exact: it
+  keeps only IEEE identities (`x * 1`, `x - (+0)`, `x + (-0)`), constant folding and, for integer
+  precisions, the unlicensed reassociation the index canonicalizer needs. So OCANNL never
+  contracts an inlined producer with its consumer, and a placement flip cannot change a result at
+  uniform f32 -- with the C compiler's own contraction off; `fp_licence_values` executes that
+  claim (cc, `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 either way, `2^-24` fused). Backend
+  compilers keep their licences (`cc_backend_fp_contract`, NVRTC's `--use_fast_math` implies
+  `--fmad=true`), so production-wide neutrality would need backend enforcement too. The trade:
+  folds that existed only after inlining (a consumer contracting its producer's product, a scalar
+  constant node folding into a quotient, algebra a materializing unroll exposes) are gone. The keys
+  are `Code_borne` (the rewritten code carries them; no transform consults them), and the cache
+  regime was bumped for the identical digests whose scheduled kernels changed. A raw-tier pow
+  unroll must not take a base exact simplification folds to a constant (an `Identity`-wrapped
+  constant, a fixed embedded index): the folded product would be computed in double, not at the
+  target's multiplication rounding. `reproducible` pins the licences off, `approximate` on. The
+  development selector `simplify_fp_algebra` (six arm families) is retired with no alias;
+  `benchmarks/gh998_cells.py` ablates the three keys, and a result line records each under
+  `fp_licences` with its source.
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator

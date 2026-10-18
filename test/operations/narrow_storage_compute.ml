@@ -416,7 +416,9 @@ let () =
   let fma_leg () =
     let a = NTDSL.init ~l:"fma_a" ~prec:Ir.Ops.half ~o:[ 4 ] ~f:(fun _ -> 1.5) () in
     let b = NTDSL.init ~l:"fma_b" ~prec:Ir.Ops.half ~o:[ 4 ] ~f:(fun _ -> 2.0) () in
-    let%op y = (a *. b) + a in
+    (* An explicit [fma]: [(a *. b) + a] is two assignments, fused only by the contraction licence
+       and never across the inlining boundary between them (gh-ocannl-998). *)
+    let%op y = fma a b a in
     Tn.update_prec y.Tensor.value Ir.Ops.half;
     Ir.Numerics.set_policy { base with narrow_compute_f32 = false; fp16_arithmetic = Fp16_auto };
     let ctx = Context.auto () in

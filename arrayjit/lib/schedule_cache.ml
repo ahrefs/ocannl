@@ -562,14 +562,6 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
    process the policy is fixed, across processes only the cache carries schedules. *)
 let numerics_tag () =
   let policy = Numerics.fingerprint (Numerics.get ()) in
-  let licence = Low_level.Fp_licence.of_config () in
-  (* Schedule.apply simplifies again after transforms such as materializing unroll, so two identical
-     base programs may expose different licensed algebra there (gh-ocannl-998). Preserve existing
-     all-licensed cache identities. *)
-  let policy =
-    if Low_level.Fp_licence.(equal licence all) then policy
-    else policy ^ ";fp_licence=" ^ Sexp.to_string (Low_level.Fp_licence.sexp_of_t licence)
-  in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string policy)) 8
 
 (* gh-ocannl-572: the same argument as the numerics tag, for the rest of the settings a backend
@@ -861,8 +853,9 @@ let cache_file ~dir ~key =
    5: gh-ocannl-1167 -- lane geometry gated per device: HIP segmentation moves under unchanged keys
    6: gh-ocannl-1164 -- [fission] is gone: a fissioned winner persists its own segmentation
    7: gh-ocannl-1228 -- an entry's filename is a digest of its key, which the entry now stores
+   8: gh-ocannl-998 -- the licensed float algebra left the post-schedule simplifier for the raw tier
 *)
-let cache_regime_version = 7
+let cache_regime_version = 8
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename

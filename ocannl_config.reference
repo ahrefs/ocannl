@@ -1468,9 +1468,11 @@
 # multiplication/division interchange), since wrapping integer arithmetic reassociates exactly.
 # These are the lowered code's own licences; the C compiler's are cc_backend_fp_contract and
 # cc_backend_fast_math, and a GPU compiler's are its own (NVRTC's --use_fast_math contracts).
-# Simplification also runs after scheduling, where unrolling can expose licensed algebra absent
-# from the base code digest, so the licences enter the schedule cache's numerics identity (all
-# three on keeps the existing tags).
+# They apply once, on the raw lowering, one assignment at a time (the rewrite tier, after the
+# online-softmax rewrite): an inlined producer is never contracted or reassociated with its
+# consumer, so a placement change cannot change what OCANNL's own algebra computes, and the
+# simplification after virtualization and after scheduling is exact. The rewritten code carries
+# the decision, so no schedule-cache component is needed.
 #
 # Contraction: a floating a*b+c becomes one fused multiply-add, one rounding instead of two. An
 # explicit FMA the program or a schedule wrote (a tensorized accumulation's fallback) is not this
@@ -1735,7 +1737,8 @@
 # # The lowered code's own licences of the same kinds (gh-ocannl-998), on every backend: contract
 # # a*b+c into an fma, reassociate constants, sums and products (and unroll known integer
 # # powers), and fold the zero identities x+0 and 0*x as if no operand were infinite, NaN or a
-# # negative zero.
+# # negative zero. Each applies within one assignment of the raw lowering, never across an
+# # inlining boundary.
 # fp_contract=true
 # fp_reassociate=true
 # fp_finite_math=true
