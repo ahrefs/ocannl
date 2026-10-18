@@ -1739,8 +1739,28 @@ val seeded_split_sites :
     where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the unsplit plan; elsewhere the result is
     empty. Exposed for tests. *)
 
+(** Which segments {!seeded_default} seeds (gh-ocannl-1253). *)
+type seed_gate =
+  | Min_reduction of int
+      (** gh-ocannl-1324's threshold: a site whose {!site_reduction_extent} is at least this; [0]
+          disables the seeding. *)
+  | Ranked of { capacity : int }
+      (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
+          ({!Ir.Cost_model.ranking_seconds}) puts strictly below the default preset of the same
+          segment, scored alone with the cache capacity [capacity] (bytes) — so it seeds exactly
+          where the operand re-reads the sketch removes are charged, i.e. where the working set
+          exceeds the capacity. The geometry and the numerics-preserving candidate set are
+          {!seeded_params}' either way. *)
+
+val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
+(** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]
+    under {!ranking_capacity}'s capacity where the device has one, and [Min_reduction 32] — the
+    threshold's measured default — where it has none (Metal, the C backends). Raises
+    {!Utils.User_error} on anything else. *)
+
 val seeded_transform :
   ?min_reduction:int ->
+  ?seed_gate:seed_gate ->
   ?min_serial:int ->
   ?reduction_sink:bool ->
   ?on_choice:(seeded_choice -> unit) ->
@@ -1758,6 +1778,7 @@ val seeded_transform :
 val seeded_default :
   ?name:string ->
   ?min_reduction:int ->
+  ?seed_gate:seed_gate ->
   ?min_serial:int ->
   ?reduction_sink:bool ->
   ?report:(seeded_choice -> unit) ->
@@ -1772,8 +1793,9 @@ val seeded_default :
     segmentation ({!Ir.Schedule.fission_segmented}) splits into pieces of which one seeds — a weight
     gradient sharing its kernel with the bias gradient over the same rows — is replaced by those
     pieces; every other segment is exactly the default's. On CUDA and HIP only, with automatic
-    scheduling active and fission on; [min_reduction] (default: config
-    [gpu_default_sketch_min_reduction], 32; 0 disables) is the threshold. Every seeded segment is
+    scheduling active and fission on; [seed_gate] (default: {!seeded_default_gate}, config
+    [gpu_default_sketch_min_reduction], 32) decides which segments seed, and [min_reduction] is
+    [~seed_gate:(Min_reduction n)] (passing both is an [Invalid_argument]). Every seeded segment is
     probed alone first (the sketch must apply and pass {!Ir.Low_level.validate_parallel}); a segment
     that fails keeps the preset, and a classified failure of the whole seeded compile recompiles the
     default pipeline ({!compile_advisory}). The scalar blocktile pipeline keeps each output's

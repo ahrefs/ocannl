@@ -2098,9 +2098,12 @@ let ranking_capacity ~limits =
    kernels ([summaries_roofline]'s): [(rank, bound)], [rank >= bound] by
    {!Ir.Cost_model.ranked_bytes}' contract. [None] exactly where [summaries_roofline] is. Read by
    the untimed choosers only — [model_default] and the [auto] seeding gate. *)
-let segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
-    (float * float) option =
+let segments_ranking ?capacity ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list)
+    : (float * float) option =
   let cache_capacity_bytes, max_resident_threads = ranking_capacity ~limits in
+  (* An explicit [capacity] (the [auto] seeding gate resolved, or a test's) overrides the
+     reading. *)
+  let cache_capacity_bytes = Option.value capacity ~default:cache_capacity_bytes in
   let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
   match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
   | None -> None
@@ -4204,17 +4207,27 @@ let site_reduction_extent (site : matmul_site) =
 let seeded_default_backend backend =
   String.is_substring backend ~substring:"cuda" || String.is_substring backend ~substring:"hip"
 
-let seeded_default_min_reduction () =
+type seed_gate = Min_reduction of int | Ranked of { capacity : int }
+
+(* The threshold [auto] falls back to where the device publishes no capacity (gh-ocannl-1253):
+   gh-ocannl-1324's measured value. *)
+let seed_gate_fallback = 32
+
+let seeded_default_gate ~limits =
   let raw =
     String.strip (Utils.get_global_arg ~arg_name:"gpu_default_sketch_min_reduction" ~default:"32")
   in
-  match Int.of_string_opt raw with
-  | Some n when n >= 0 -> n
+  match (String.lowercase raw, Int.of_string_opt raw) with
+  | "auto", _ -> (
+      match ranking_capacity ~limits with
+      | Some capacity, _ -> Ranked { capacity }
+      | None, _ -> Min_reduction seed_gate_fallback)
+  | _, Some n when n >= 0 -> Min_reduction n
   | _ ->
       raise
       @@ Utils.User_error
-           ("Autotune: ocannl_gpu_default_sketch_min_reduction should be a non-negative integer (0 \
-             disables the seeded default); found: " ^ raw)
+           ("Autotune: ocannl_gpu_default_sketch_min_reduction should be auto or a non-negative \
+             integer (0 disables the seeded default); found: " ^ raw)
 
 (* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
    then the 4x4 register tile at a smaller block, then the 2x2 register tiles, which put four times
@@ -4346,14 +4359,20 @@ let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized)
 let no_seeded_choice =
   { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_split = []; sd_fell_back = false }
 
-let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
+let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_override
     ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
   let backend = Context.backend_name ctx in
   (* The backend first: the threshold is a CUDA/HIP setting, so a malformed value must not break a
      compile on a backend that ignores it. *)
-  let min_reduction () =
-    match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
+  let gate () =
+    match (seed_gate, min_reduction) with
+    | Some _, Some _ ->
+        invalid_arg "Autotune.seeded_transform: pass ~min_reduction or ~seed_gate, not both"
+    | Some g, None -> g
+    | None, Some n -> Min_reduction n
+    | None, None -> seeded_default_gate ~limits:(Context.hardware_limits ctx)
   in
+  let gate_off () = match gate () with Min_reduction n -> n <= 0 | Ranked _ -> false in
   (* Resolved on CUDA only: the threshold is a CUDA setting, so a malformed value must not break a
      HIP compile that ignores it. *)
   let min_serial () =
@@ -4365,14 +4384,15 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
   in
   if
     (not (seeded_default_backend backend))
-    || (min_reduction () <= 0 && min_serial () <= 0 && not (sink_enabled ()))
+    || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
   else
-    let min_reduction = min_reduction () and min_serial = min_serial () in
+    let gate = gate () and min_serial = min_serial () in
     let sink_enabled = sink_enabled () in
     let limits = Context.hardware_limits ctx in
+    let peak_flops, peak_memory_bandwidth = envelope ~limits in
     let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
     let static_indices = Idx.bound_symbols bindings in
     let preset seg = Sched.default_gpu ~limits seg in
@@ -4418,15 +4438,41 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
            the segment alone: a sketch that does not apply or validate there leaves the segment to
            the default preset rather than costing the routine its other seeds. *)
         let decided = Hashtbl.create (module String) in
+        (* gh-ocannl-1253, the [auto] gate: the seeded sketch's ranking score strictly below the
+           preset's, on the segment alone, under the gate's capacity. Either failing to apply or
+           score keeps the preset. *)
+        let ranked_below ~capacity p pre =
+          let rank sched =
+            match Sched.apply_classified ~static_indices sched (scratch_of pre) with
+            | exception (Outcome.Cause_at _ | Invalid_argument _) -> None
+            | post ->
+                Option.map
+                  (segments_ranking ~capacity:(Some capacity) ~peak_flops ~peak_memory_bandwidth
+                     ~limits [ post ])
+                  ~f:fst
+          in
+          match (rank (sketch_schedule ~accum_prec ~p pre), rank (preset pre)) with
+          | Some sketch, Some plain -> Float.(sketch < plain)
+          | _ -> false
+        in
         let seed_of kind pre =
-          match kind with
-          | `Zeros | `Solo -> None
-          | `Normal when min_reduction <= 0 -> None
-          | `Normal ->
+          match (kind, gate) with
+          | (`Zeros | `Solo), _ -> None
+          | `Normal, Min_reduction n when n <= 0 -> None
+          | `Normal, _ ->
               Hashtbl.find_or_add decided
                 (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
                 ~default:(fun () ->
-                  match seeded_params ~limits ~accum_prec ~min_reduction pre with
+                  let candidate =
+                    match gate with
+                    | Min_reduction min_reduction ->
+                        seeded_params ~limits ~accum_prec ~min_reduction pre
+                    | Ranked { capacity } -> (
+                        match seeded_params ~limits ~accum_prec ~min_reduction:1 pre with
+                        | Some p when ranked_below ~capacity p pre -> Some p
+                        | Some _ | None -> None)
+                  in
+                  match candidate with
                   | None -> None
                   | Some p -> (
                       match
@@ -4595,11 +4641,12 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
                     (Outcome.detail_of_cause cause);
                   default_segs ()))
 
-let seeded_default ?name ?min_reduction ?min_serial ?reduction_sink ?report ctx comp bindings =
+let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?report ctx comp
+    bindings =
   let choice = ref no_seeded_choice in
   let emit () = Option.iter report ~f:(fun f -> f !choice) in
   match
-    seeded_transform ?min_reduction ?min_serial ?reduction_sink
+    seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink
       ~on_choice:(fun c -> choice := c)
       ctx bindings
   with

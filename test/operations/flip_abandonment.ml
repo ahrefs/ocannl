@@ -623,6 +623,8 @@ let () =
       ("gpu_default_sketch_min_reduction", "32");
       ("gpu_default_split_reduce_min_serial", "4096");
       ("gpu_default_reduction_sink", "true");
+      (* gh-ocannl-1253: the ranking score's capacity, at its default (the backend's advisory). *)
+      ("model_cache_capacity", "");
     ]
   in
   p "they are exactly the Untimed_model class" (same_keys model_keys Utils.Untimed_model);

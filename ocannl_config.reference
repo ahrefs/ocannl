@@ -327,6 +327,12 @@
 # (memory_budget), and on Metal and the CPU backends. 0 disables the seeding. 32 admits
 # attention's head-dimension contractions; of the thresholds tried on gpt2_mini_train (32, 64, 128,
 # 256), it gave the fastest step at both batch 8 and batch 256 on CUDA.
+# `auto` (gh-ocannl-1253) replaces the threshold by the analytic model: a segment is seeded when
+# the ranking score (see model_cache_capacity) puts its sketch strictly below the default preset of
+# that segment -- exactly where its working set exceeds the cache capacity, so the re-reads the
+# sketch removes are charged. Still untimed and still the same sketch geometry and
+# numerics-preserving candidates; on a device publishing no capacity (Metal, the CPU backends)
+# `auto` means 32.
 #gpu_default_sketch_min_reduction=32
 
 # The same untuned compiles also split a CUDA reduction whose serial chain per output cell --
@@ -948,7 +954,8 @@
 #model_peak_memory_bandwidth=
 
 # gh-ocannl-1253: overrides the backend's advisory cache capacity (bytes) of the analytic cost
-# model's ranking score, the score `Autotune.model_default` ranks candidates by. Once a kernel's
+# model's ranking score, the score `Autotune.model_default` and the `auto` seeding gate
+# (gpu_default_sketch_min_reduction) rank candidates by. Once a kernel's
 # working set -- the global bytes one block reads, its Grid loops standing still, times the
 # blocks resident at once -- exceeds it, global reads are charged per block (the re-reads an
 # untiled contraction pays) instead of as distinct cells; at or below it, and with no capacity,

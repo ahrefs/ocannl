@@ -86,13 +86,15 @@ let run compile =
   Context.sync ctx;
   (Context.get_values ctx wgrad, Context.get_values ctx bgrad)
 
-let seeded ~min_reduction =
+let seeded_gated seed_gate =
   let report = ref None in
   let values =
     run (fun ctx comp bindings ->
-        Autotune.seeded_default ~min_reduction ~report:(fun r -> report := Some r) ctx comp bindings)
+        Autotune.seeded_default ~seed_gate ~report:(fun r -> report := Some r) ctx comp bindings)
   in
   (values, Option.value_exn ~here:[%here] !report)
+
+let seeded ~min_reduction = seeded_gated (Autotune.Min_reduction min_reduction)
 
 let () =
   let w_default, b_default = run Context.compile in
@@ -127,4 +129,27 @@ let () =
     (List.is_empty r_high.sd_seeded && r_high.sd_refined = 0);
   p_all2 "that routine computes the default pipeline's weight gradient" w_high w_default ~f:bitwise;
   let _, r_off = seeded ~min_reduction:0 in
-  p "a threshold of 0 disables the seeding" (List.is_empty r_off.sd_seeded)
+  p "a threshold of 0 disables the seeding" (List.is_empty r_off.sd_seeded);
+  (* gh-ocannl-1253, the [auto] gate: seed where the ranking score puts the sketch below the preset.
+     With a capacity every working set exceeds, the charge is on everywhere, and the gate must seed
+     exactly what threshold 32 seeds here (both matmul sites, refinement included); with a capacity
+     none reaches, the scores are distinct-cell rooflines and it must seed less. *)
+  let census r =
+    List.map r.Autotune.sd_seeded ~f:(fun (at, p) -> (at, Autotune.sketch_params_label p))
+  in
+  let _, r32 = seeded ~min_reduction:32 in
+  let (w_auto, b_auto), r_auto = seeded_gated (Autotune.Ranked { capacity = 0 }) in
+  let _, r_auto_cached = seeded_gated (Autotune.Ranked { capacity = Int.max_value }) in
+  List.iter (census r_auto) ~f:(fun (at, label) ->
+      Stdio.eprintf "auto seeded: unit %d %s (not part of the golden)\n" at label);
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP, past capacity the auto gate seeds the census threshold 32 seeds"
+    ((not (List.is_empty (census r32)))
+    && List.equal (fun (a, l) (b, m) -> a = b && String.equal l m) (census r_auto) (census r32));
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP, below capacity the auto gate seeds fewer segments than threshold 32"
+    (List.length r_auto_cached.sd_seeded < List.length r32.sd_seeded);
+  p_all2 "the auto-gated weight gradient is bitwise the default pipeline's" w_auto w_default
+    ~f:bitwise;
+  p_all2 "the auto-gated bias gradient is bitwise the default pipeline's" b_auto b_default
+    ~f:bitwise
