@@ -2,6 +2,7 @@ the batch-8 bias gradient is a split-reduce site: true
 its site merges the batch and sequence loops: true
 its split loop ranges over every row: true
 its split loop is the merged loop, not a loop of the lowering: true
+the untuned split takes it at 32 blocks, the square root of its 1024-row chain: true
 coalesced (b, s): the split prelude applied (the compiled code reads its partials): true
 coalesced (b, s): the exact result is not trivially zero: true
 coalesced (b, s): the default pipeline computes the exact sums: true
@@ -16,6 +17,7 @@ interchanged (b, s): the split computes bitwise the default pipeline's result: t
 the two-axis contraction is a split-reduce site: true
 its site merges the two contracted loops: true
 its split loop ranges over the whole contraction: true
+the untuned split declines this site, its chain shorter than every block count squared: true
 coalesced (h, e): the split prelude applied (the compiled code reads its partials): true
 coalesced (h, e): the exact result is not trivially zero: true
 coalesced (h, e): the default pipeline computes the exact sums: true

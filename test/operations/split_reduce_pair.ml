@@ -177,6 +177,10 @@ let () =
       p "its split loop ranges over every row" (site.sr_red = nb * ns);
       p "its split loop is the merged loop, not a loop of the lowering"
         (Option.is_none (extent opt site.sr_axis));
+      p "the untuned split takes it at 32 blocks, the square root of its 1024-row chain"
+        (List.exists
+           (Autotune.seeded_split_sites ~backend:"cuda" ~min_serial:1 ~static_indices:[] opt)
+           ~f:(fun (s, b) -> Ir.Tnode.equal s.Autotune.sr_target g && b = 32));
       parity ~what:"coalesced (b, s)" ~comp ~tn:g ~exact ~site;
       (* The prelude the search stores and a later process replays. *)
       let canon = SC.canonicalize opt in
@@ -243,6 +247,15 @@ let () =
             && Option.equal Int.equal (extent opt inner) (Some ce)
         | None -> false);
       p "its split loop ranges over the whole contraction" (site.sr_red = ch * ce);
+      (* A 256-row chain: below 32 * 32, so no block count is within its square root. *)
+      let split =
+        Autotune.seeded_split_sites ~backend:"cuda" ~min_serial:1 ~static_indices:[] opt
+      in
+      p_none
+        "the untuned split declines this site, its chain shorter than every block count squared"
+        (Autotune.split_reduce_sites opt) ~f:(fun s ->
+          List.exists split ~f:(fun (s', _) ->
+              Ir.Tnode.equal s'.Autotune.sr_target s.Autotune.sr_target));
       parity ~what:"coalesced (h, e)" ~comp ~tn:d.Tensor.value ~exact ~site
 
 (* --- A reduction one loop already splits keeps that split. --- *)

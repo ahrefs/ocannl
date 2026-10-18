@@ -1745,12 +1745,13 @@ val seeded_split_sites :
     {!split_reduce_sites} (the split's own legality and enabling interchange, as the search proposes
     them) whose serial chain per output cell -- [sr_cost / sr_out] -- is at least [min_serial] ([0]:
     none), scatter sites excepted; each at the block count of the search's menu ([32; 128; 512], at
-    most half the split loop's extent) giving the most first-pass threads up to 32768, else the
-    smallest. The choice reads no device property, so the split, and the summation order it fixes,
-    depend on the routine alone. CUDA only ([backend] is the {!Context.backend_name}): on HIP the
-    split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to 1256 ms, gfx1151 unified memory)
-    where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the unsplit plan; elsewhere the result is
-    empty. Exposed for tests. *)
+    most half the split loop's extent and at most the square root of the chain, gh-ocannl-1414)
+    giving the most first-pass threads up to 32768, else the smallest such; a chain too short for
+    every count is not split. The choice reads no device property, so the split, and the summation
+    order it fixes, depend on the routine alone. CUDA only ([backend] is the
+    {!Context.backend_name}): on HIP the split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to
+    1256 ms, gfx1151 unified memory) where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the
+    unsplit plan; elsewhere the result is empty. Exposed for tests. *)
 
 val seeded_transform :
   ?min_reduction:int ->

@@ -4355,7 +4355,9 @@ let seeded_split_threads = 32768
    The block count also stays within the square root of the chain (gh-ocannl-1414): the combine
    reads one partial per block, so beyond it the combine's serial chain outgrows the first pass's. A
    1024-row chain into one cell would otherwise take 512 blocks of 2 rows each; it takes 32 of 32.
-   Every split of gh-ocannl-1325's b256 measurement chains 32768 rows and keeps its count. *)
+   The cap binds the fallback too: a chain shorter than 32 * 32, reachable only below the default
+   threshold, is not split. Every split of gh-ocannl-1325's b256 measurement chains 32768 rows and
+   keeps its count. *)
 let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized) :
     (sr_site * int) list =
   if min_serial <= 0 || not (seeded_split_backend backend) then []
@@ -4364,10 +4366,10 @@ let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized)
         let chain = s.sr_cost / s.sr_out in
         if s.sr_dynamic || chain < min_serial then None
         else
-          let fitting = List.filter [ 512; 128; 32 ] ~f:(fun b -> 2 * b <= s.sr_red) in
-          match
-            List.find fitting ~f:(fun b -> s.sr_out * b <= seeded_split_threads && b * b <= chain)
-          with
+          let fitting =
+            List.filter [ 512; 128; 32 ] ~f:(fun b -> 2 * b <= s.sr_red && b * b <= chain)
+          in
+          match List.find fitting ~f:(fun b -> s.sr_out * b <= seeded_split_threads) with
           | Some b -> Some (s, b)
           | None -> Option.map (List.last fitting) ~f:(fun b -> (s, b)))
 
