@@ -1668,7 +1668,9 @@ type seeded_choice = {
           loops ({!reduction_sink}, gh-ocannl-1348), in order: its first unit and the number of
           [Swap]s. *)
   sd_refined : int;
-      (** Default segments replaced by their finer [arity_cuts] pieces, because a piece seeds. *)
+      (** Default segments replaced by their finer [arity_cuts] pieces, because more of the pieces
+          seed than the segment itself (gh-ocannl-1413): a segment with no seed, or one whose other
+          product sites seed once cut apart. *)
   sd_split : (Ir.Tnode.t * int) list;
       (** The reductions split before segmentation (gh-ocannl-1325), in detection order: each
           accumulated node and its block count. Empty when nothing was split. *)
@@ -1717,6 +1719,18 @@ val seeded_split_sites :
     split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to 1256 ms, gfx1151 unified memory)
     where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the unsplit plan; elsewhere the result is
     empty. Exposed for tests. *)
+
+val refine_segments :
+  coarse:(int * 'k * int * 'p) list ->
+  fine:(int * 'k * int * 'p) list option Lazy.t ->
+  seed:('k -> 'p -> 's option) ->
+  (int * 'k * int * 's option * 'p) list * int
+(** The site refinement of {!seeded_default} (gh-ocannl-1413): two segmentations of one routine,
+    given as [(first unit, kind, units, pre-schedule slice)] per segment, are compared block by
+    block, a block being a maximal run of units whose ends are segment boundaries in both. A block
+    takes its [fine] segments when more of them [seed] than of its [coarse] ones, and keeps its
+    coarse segments otherwise. Returns the result with each segment's seed, and the number of coarse
+    segments replaced. *)
 
 val seeded_transform :
   ?min_reduction:int ->
