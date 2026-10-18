@@ -5598,6 +5598,7 @@
   ocannl
   arrayjit.autotune
   stdio
+  unix
   arrayjit.verdict
   test_utils
   ll_test)

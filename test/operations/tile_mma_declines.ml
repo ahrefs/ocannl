@@ -121,6 +121,27 @@ let () =
   p "census: the honoured schedule's routine is labeled tensorized"
     ((not on_cpu)
     || Ir.C_syntax.equal_tensorization census.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized);
+  (* gh-ocannl-998: with the simplifier's contraction licence off the accumulation reaches
+     [Tensorize] in plain-add form, which the register tile declines; the tile's own fallback is
+     written fused, so the rendering survives. *)
+  let%op mc_unfused = ma * mb in
+  let var = "OCANNL_SIMPLIFY_FP_ALGEBRA" in
+  let previous = Stdlib.Sys.getenv_opt var in
+  Unix.putenv var "none";
+  let census_unfused =
+    Exn.protect
+      ~finally:(fun () -> Unix.putenv var (Option.value previous ~default:""))
+      ~f:(fun () ->
+        compile_with_census
+          ~transform:(fun opt ->
+            if on_cpu then Sched.apply (tensorize_schedule ~out:mc_unfused.Tensor.value opt) opt
+            else opt)
+          (named "tmd_regtile_unfused" (Train.forward mc_unfused)))
+  in
+  p "census: without the contraction licence the standard layout still renders register-tiled"
+    ((not on_cpu)
+    || List.equal Ir.C_syntax.equal_mma_rendering (renderings census_unfused)
+         [ Ir.C_syntax.Mma_register_tiled ]);
   let mta = TDSL.ndarray mav ~label:[ "tmd_ta" ] ~output_dims:[ n; n ] () in
   let mtb = TDSL.ndarray mbv ~label:[ "tmd_tb" ] ~output_dims:[ n; n ] () in
   let%op td = mta +* "ik;jk=>ij" mtb in

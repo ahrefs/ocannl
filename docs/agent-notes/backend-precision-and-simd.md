@@ -1083,6 +1083,14 @@ files.
   (width 48 over 512, a 4-column tail) runs 1.15–1.29 ms against 1.40–1.53 ms for the tail-free
   `--rn=4`, i.e. ~20% — the gh-ocannl-620 reuse-only ranking is right here by well more than the
   bench's timing noise, and `--rn=6` is what `Register_tile.default` picks.
+- **`Tensorize` writes a floating fallback fused, whatever the contraction licence**
+  (gh-ocannl-998). The register tile renders only an `FMA`-form fallback, because a plain
+  `acc + a * b` is contracted or not at the C compiler's discretion and no vector twin could match
+  it bitwise. When the simplifier contracted every float `a * b + c`, every accumulation reached
+  `Tensorize` fused; with the licence off it arrives plain, and every cc register tile would have
+  declined silently. A tile multiply-accumulate is fused on every unit, so the fallback states that:
+  a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
+  the register-tiled census with every floating licence off.
 ## SIMD operations and rounding
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
