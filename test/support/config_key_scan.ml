@@ -1296,6 +1296,13 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             match (unwrap pmb_expr).pmod_desc with
             | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
             | _ -> env)
+        (* An [include struct … end] exports its values into the enclosing scope, so they are walked
+           there (gh-ocannl-1320, Codex P2 round 6). An included functor application is not: what
+           its values read depends on its argument, as for a functor's body. *)
+        | Pstr_include { pincl_mod; _ } -> (
+            match (unwrap pincl_mod).pmod_desc with
+            | Pmod_structure inner -> walk ~scope env inner
+            | _ -> env)
         | _ -> env)
   in
   let env = walk ~scope:[] (Map.empty (module String)) structure in
@@ -1466,8 +1473,13 @@ let field_reads_in_source content ~fields ~record_fields ~constant_base:(base_ho
         | Some [ name ] -> String.equal name base_value
         | Some path -> (
             match List.rev path with
-            | value :: home :: _ when String.equal value base_value && String.equal home base_home
-              ->
+            (* Unless the file rebinds a module the path goes through: [module Ir = Local] makes
+               [Ir.Backend_intf.no_hardware_limits] Local's (Codex P2, round 6). *)
+            | value :: home :: _
+              when String.equal value base_value && String.equal home base_home
+                   && not
+                        (List.exists (List.drop_last_exn path) ~f:(fun m ->
+                             Map.mem module_aliases m)) ->
                 true
             | [ value; alias ] when String.equal value base_value -> (
                 match Map.find_multi module_aliases alias with

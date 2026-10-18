@@ -275,6 +275,7 @@ let raw_entries =
         "[scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration";
         "[scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key";
         "[scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value";
+        "[scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names";
         "[scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
         "[scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend";
@@ -432,6 +433,9 @@ let raw_entries =
         "[scanner-refusal:c408a2684ba7b8916375d06fdb3e7330] type's updates recognised";
         "[scanner-refusal:a966ee873537b3b8c382531ffea8f095] no_hardware_limits";
         "[scanner-refusal:69ae4cf5f5249bd390b16e305c1f45d7] helper library outside";
+        "[scanner-refusal:2aa043e6a8bd4e45a080d2f62d8af168] Ir.Backend_intf.no_hardware_limits";
+        "[scanner-refusal:d5139f7e86708309a46549017b6c0f68] Cc_backend";
+        "[scanner-refusal:840d9d1ef23497bec8d699caa98d67d6] linked library whose";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
@@ -733,6 +737,9 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:cdf0668c2967d73ed0c8b32a7c794932",
       "a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not \
        passed with no readers: true" );
+    ( "env_var_deps.ml:3d0e227333c3757cabc427ac4fb81130",
+      "a linked library whose source the scan was never handed is refused, not read as making no \
+       reads: true" );
     ( "env_var_deps.ml:77abb7920eac5544c6bf60dd498ec9cf",
       "a test projecting a width field off a limits record is reported, naming the variable and \
        the read, when its stanza declares neither: true" );

@@ -258,6 +258,7 @@ env_var_deps.ml: [scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.G
 env_var_deps.ml: [scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -415,6 +416,9 @@ env_var_deps.ml: [scanner-refusal:7efbc10da3b495bc80f884dd42737612] Cc_backend (
 env_var_deps.ml: [scanner-refusal:c408a2684ba7b8916375d06fdb3e7330] type's updates recognised (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a966ee873537b3b8c382531ffea8f095] no_hardware_limits (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:69ae4cf5f5249bd390b16e305c1f45d7] helper library outside (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:2aa043e6a8bd4e45a080d2f62d8af168] Ir.Backend_intf.no_hardware_limits (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:d5139f7e86708309a46549017b6c0f68] Cc_backend (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:840d9d1ef23497bec8d699caa98d67d6] linked library whose (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

@@ -185,6 +185,9 @@ a tree holding the limits record but not `Cc_backend` is refused as a lost ancho
 a field of another record over-read by name adds requirements and keeps the limits type's updates recognised: true
 a `no_hardware_limits` reached through a local module of the test is not the library's constant, and an update of it is a read: true
 a read in a helper library outside the test roots is the linking program's read: true
+a canonical `Ir.Backend_intf.no_hardware_limits` under a file's own `module Ir` is that module's, and an update of it is a read: true
+a `Cc_backend` value exported through `include struct … end` is a width value too: true
+a linked library whose source the scan was never handed is refused, not read as making no reads: true
 
 Synthetic controls: ambient gates derive identity from the program actually run.
 a renamed direct-utils universe test and its resolved runner are gates: true
@@ -232,6 +235,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration
   [scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key
   [scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value
+  [scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names
   [scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost
   [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does
   [scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend
@@ -369,6 +373,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:c408a2684ba7b8916375d06fdb3e7330] type's updates recognised
   [scanner-refusal:a966ee873537b3b8c382531ffea8f095] no_hardware_limits
   [scanner-refusal:69ae4cf5f5249bd390b16e305c1f45d7] helper library outside
+  [scanner-refusal:2aa043e6a8bd4e45a080d2f62d8af168] Ir.Backend_intf.no_hardware_limits
+  [scanner-refusal:d5139f7e86708309a46549017b6c0f68] Cc_backend
+  [scanner-refusal:840d9d1ef23497bec8d699caa98d67d6] linked library whose
   [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree
   [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree
   [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias

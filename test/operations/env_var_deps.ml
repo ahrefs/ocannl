@@ -1448,6 +1448,7 @@ let main () =
   in
   (* What a program's linked program-local libraries read of the width, transitively, each read
      attributed to the library and module it sits in. *)
+  let width_unseen_reported = Hashtbl.create (module String) in
   let width_reads_linked stanza =
     let rec close seen = function
       | [] -> List.rev seen
@@ -1464,9 +1465,19 @@ let main () =
     in
     List.concat_map (close [] direct) ~f:(fun (library, d, modules, _) ->
         List.filter_map modules ~f:(fun m ->
-            Option.map
-              (Map.find width_reach (String.lowercase (Scan.in_subdir d (m ^ ".ml"))))
-              ~f:(fun spellings ->
+            let key = String.lowercase (Scan.in_subdir d (m ^ ".ml")) in
+            (* A followed library module the scan was handed no source for is one whose reads it
+               cannot see, which looks exactly like one that makes none (Codex P2, round 6). *)
+            if Option.is_none (source_of ~dir:d m) && not (Hashtbl.mem width_unseen_reported key)
+            then (
+              Hashtbl.set width_unseen_reported ~key ~data:();
+              fail
+                (Printf.sprintf
+                   "library %s, which a program links, names the module `%s`, and this check was \
+                    handed no `%s` to read -- a width read there would be invisible to every \
+                    program linking it. Add the directory to the rule's globs"
+                   library m key));
+            Option.map (Map.find width_reach key) ~f:(fun spellings ->
                 Printf.sprintf "library %s (%s.ml) reads %s" library (String.lowercase m)
                   (String.concat ~sep:", " spellings))))
   in
@@ -5471,6 +5482,10 @@ let width_control () =
     (Stdlib.Filename.concat root "test/wrap/dune")
     "(library\n (name wrapper)\n (modules wrapper)\n (libraries (re_export support)))\n";
   write_file (Stdlib.Filename.concat root "test/wrap/wrapper.ml") "let () = ()\n";
+  (* A library whose directory the scan's globs do not reach: its source is never handed over. *)
+  write_file
+    (Stdlib.Filename.concat root "other/lib/dune")
+    "(library\n (name unseen)\n (modules unseen))\n";
   (* A helper library outside the test roots, as a `bin` or benchmark one would be. *)
   write_file
     (Stdlib.Filename.concat root "tools/helper/dune")
@@ -5478,8 +5493,8 @@ let width_control () =
   let paths =
     "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
     :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
-    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: backend_home :: width_limits_home
-    :: width_limits_type_home :: List.map context ~f:fst
+    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: "other/lib/dune" :: backend_home
+    :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
   in
   let run ?(backend = Some width_backend_stub) ?(limits = width_limits_stub)
       ?(helper = "let () = ()\n") ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe
@@ -5587,6 +5602,28 @@ let width_control () =
       `Neither
   in
   let via_helper_lib = run ~helper:projected ~links:" helper_lib" ~probe:"let () = ()\n" `Neither in
+  let shadowed_home =
+    run
+      ~probe:
+        "module Ir = struct\n\
+        \  module Backend_intf = struct\n\
+        \    let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+        \  end\n\
+         end\n\
+         let narrow = { Ir.Backend_intf.no_hardware_limits with native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let via_include =
+    run
+      ~backend:
+        (Some
+           "let read_width () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            include struct let registers () = read_width () end\n\
+            let vector_bytes_setting () = read_width ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let unseen_library = run ~links:" unseen" ~probe:"let () = ()\n" `Declares in
   let undeclared_ok =
     refused undeclared
     && says (Utils.env_var_name width_key) undeclared
@@ -5632,6 +5669,13 @@ let width_control () =
   let via_helper_lib_ok =
     refused via_helper_lib && says "library helper_lib (helper_lib.ml)" via_helper_lib
   in
+  let shadowed_home_ok =
+    refused shadowed_home && says "leaving `simd_vector_bytes` to its base" shadowed_home
+  in
+  let via_include_ok = refused via_include && says "`Cc_backend.registers`" via_include in
+  let unseen_library_ok =
+    exited 1 unseen_library && says "library unseen, which a program links" unseen_library
+  in
   if not undeclared_ok then report "undeclared" undeclared;
   if not declared_ok then report "declared" declared;
   if not pinned_ok then report "pinned" pinned;
@@ -5652,6 +5696,9 @@ let width_control () =
   if not over_read_ok then report "over-read" over_read;
   if not local_qualified_ok then report "local-qualified" local_qualified;
   if not via_helper_lib_ok then report "via-helper-lib" via_helper_lib;
+  if not shadowed_home_ok then report "shadowed-home" shadowed_home;
+  if not via_include_ok then report "via-include" via_include;
+  if not unseen_library_ok then report "unseen-library" unseen_library;
   printf
     "\n\
      The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
@@ -5722,6 +5769,16 @@ let width_control () =
     local_qualified_ok;
   Verdict.p "a read in a helper library outside the test roots is the linking program's read"
     via_helper_lib_ok;
+  Verdict.p
+    "a canonical `Ir.Backend_intf.no_hardware_limits` under a file's own `module Ir` is that \
+     module's, and an update of it is a read"
+    shadowed_home_ok;
+  Verdict.p "a `Cc_backend` value exported through `include struct … end` is a width value too"
+    via_include_ok;
+  Verdict.p
+    "a linked library whose source the scan was never handed is refused, not read as making no \
+     reads"
+    unseen_library_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)
