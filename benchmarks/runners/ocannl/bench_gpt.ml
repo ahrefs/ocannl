@@ -74,7 +74,8 @@ let () =
   in
   let ctx, routines =
     Bench_splice.replay_guarded splice
-      ~counts:(fun () -> (arms.H.searches, arms.H.replays, arms.H.no_searches))
+      ~counts:(fun () ->
+        (arms.H.searches, arms.H.replays, arms.H.no_searches, List.length arms.H.arm_reports))
       (fun () -> H.compile_step ~tune ~tuned ctx bindings step_shape)
   in
   (* What the timed artifact emitted, off the routines themselves (gh-ocannl-626): a flip refinement

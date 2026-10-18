@@ -68,8 +68,10 @@ splice: target c0ffee selects 2 segments
 splice: 2 targeted segments, 2 with schedules that differ between the arms
 an unspliceable target in a routine that does not ship leaves it as the control's: true
 a compile that replayed the spliced routine measured the splice: true
-a compile that replayed no placement decision: the compile looked up none of the control's placement decisions: which placement candidate shipped is not the control's
-a compile that replayed no placement decision is refused, naming "none of the control's placement decisions": true
+a compile that replayed no placement decision: the compile did not replay the control's placement decision (0 decision lookups, 2 placement arms reported; a replayed decision reports one arm per lookup): which candidate shipped is not the control's
+a compile that replayed no placement decision is refused, naming "did not replay the control's placement decision": true
+a compile whose looked-up decision was rejected, both candidates compared: the compile did not replay the control's placement decision (1 decision lookups, 2 placement arms reported; a replayed decision reports one arm per lookup): which candidate shipped is not the control's
+a compile whose looked-up decision was rejected, both candidates compared is refused, naming "did not replay the control's placement decision": true
 a compile that replayed only untargeted routines: the compile replayed no spliced routine: the two arms time the same control schedules (are the caches of another workload, profile or placement than this run?)
 a compile that replayed only untargeted routines is refused, naming "replayed no spliced routine": true
 a compile that replayed a routine left unspliced: the compile replayed entry 222222222222, where a target was left unspliced: its step is the control's in both arms

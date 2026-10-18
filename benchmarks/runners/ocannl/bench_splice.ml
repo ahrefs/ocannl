@@ -700,18 +700,26 @@ let from_env ~tune =
         (Autotune.resolve_cache_dir ~search:true ());
       Some plan
 
-(** Whether a compile that looked up the cache keys [looked_up] measured the splice: it must have
-    looked up one of the control's placement decisions (replaying it decides which candidate ships),
-    replayed at least one routine the plan splices -- inputs holding several workloads or profiles
-    can splice one routine while the run replays another, untargeted one, whose two arms are then
-    the same control schedule -- and no routine a target was left unspliced in, which replays only
-    off the control's placement decision (a forced [tune_ship_arm], say). Other untargeted routines
-    replay the control in both arms, which is the method. *)
-let replay_verdict plan ~looked_up =
+(** Whether a compile that looked up the cache keys [looked_up] and reported [arm_reports] placement
+    arms measured the splice: it must have replayed the control's placement decision, which decides
+    which candidate ships (one arm reported per decision lookup), replayed at least one routine the
+    plan splices -- inputs holding several workloads or profiles can splice one routine while the
+    run replays another, untargeted one, whose two arms are then the same control schedule -- and no
+    routine a target was left unspliced in, which replays only off the control's placement decision
+    (a forced [tune_ship_arm], say). Other untargeted routines replay the control in both arms,
+    which is the method. *)
+let replay_verdict plan ~looked_up ~arm_reports =
   let looked p = List.mem looked_up p.key ~equal:String.equal in
-  let decided =
-    List.exists plan.placements ~f:(fun (key, _) -> List.mem looked_up key ~equal:String.equal)
+  (* A lookup is recorded whether or not its entry is then accepted, so a looked-up decision is no
+     evidence that it replayed: one the tuning call rejects (its outcome digest no longer reproduces
+     the lowering) falls back to timing both placement candidates. What tells the two apart is the
+     arm count: each [Train.tune_placements] call looks its decision up once, and reports exactly
+     one arm when it replays it, two when it compares the candidates afresh. *)
+  let decision_lookups =
+    List.count looked_up ~f:(fun key ->
+        List.exists plan.placements ~f:(fun (pkey, _) -> String.equal key pkey))
   in
+  let decided = decision_lookups > 0 && arm_reports = decision_lookups in
   let left p = match p.splice with `Left _ -> true | `Untargeted | `Spliced -> false in
   match List.find plan.pairs ~f:(fun p -> looked p && left p) with
   | Some p ->
@@ -722,8 +730,11 @@ let replay_verdict plan ~looked_up =
            (entry_id p.control))
   | None when not decided ->
       Error
-        "the compile looked up none of the control's placement decisions: which placement \
-         candidate shipped is not the control's"
+        (Printf.sprintf
+           "the compile did not replay the control's placement decision (%d decision lookups, %d \
+            placement arms reported; a replayed decision reports one arm per lookup): which \
+            candidate shipped is not the control's"
+           decision_lookups arm_reports)
   | None ->
       if List.exists plan.pairs ~f:(fun p -> looked p && Poly.equal p.splice `Spliced) then Ok ()
       else
@@ -733,15 +744,15 @@ let replay_verdict plan ~looked_up =
 
 (** [replay_guarded session ~counts compile] runs a runner's [compile] -- directly without a splice
     [session] -- and otherwise records the schedule-cache lookups it makes, then exits 1 when the
-    step did not come entirely from the arm's cache ([counts] reads the runner's searches, replays
-    and untuned fallbacks after the compile), or did not replay a spliced routine
-    ({!replay_verdict}). *)
+    step did not come entirely from the arm's cache ([counts] reads the runner's searches, replays,
+    untuned fallbacks and placement-arm reports after the compile), or did not replay the control's
+    placement decision and a spliced routine ({!replay_verdict}). *)
 let replay_guarded session ~counts compile =
   match session with
   | None -> compile ()
   | Some plan ->
       let result, io = SC.recording_cache_io compile in
-      let searches, replays, no_searches = counts () in
+      let searches, replays, no_searches, arm_reports = counts () in
       if searches > 0 || no_searches > 0 || replays = 0 then (
         Stdio.eprintf
           "splice: the arm did not replay its cache throughout (searches=%d replays=%d \
@@ -753,7 +764,7 @@ let replay_guarded session ~counts compile =
         List.filter_map io ~f:(fun (r : SC.cache_io) ->
             match r.SC.op with SC.Lookup -> Some r.SC.key | SC.Store -> None)
       in
-      (match replay_verdict plan ~looked_up with
+      (match replay_verdict plan ~looked_up ~arm_reports with
       | Ok () -> ()
       | Error e ->
           Stdio.eprintf "splice: %s\n%!" e;
