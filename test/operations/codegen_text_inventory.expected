@@ -184,6 +184,8 @@ test/operations/half_float_power.ml
     "ocannl_powi_"
     "pow("
     "reinterpret_cast"
+test/operations/half_unary_math.ml
+    "(half)" ^ ... ^ "((float)("
 test/operations/hardware_axes_parity.ml
     " = 0;"
     " = 7;"

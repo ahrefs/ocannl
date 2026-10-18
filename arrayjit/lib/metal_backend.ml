@@ -1370,16 +1370,30 @@ module Impl = struct
       let func_doc fn v = group (string fn ^^ parens v) in
       (* Math-library calls need the bfloat16 result bridged back; see [bf16_from_builtin]. *)
       let math_doc fn v = bf16_from_builtin prec (func_doc fn v) in
+      (* Half operands widen and round back once, as half [ToPowOf] does (gh-ocannl-1288): a half
+         result is the f32 builtin narrowed under whichever compile-option math policy is in force,
+         rather than whatever the half overload does under it. Measured on M4 Max over all 65536
+         half inputs ([benchmarks/runners/ocannl/metal_half_math_probe.ml]), the overloads already
+         matched the widened form bitwise under both policies except [sin(-0)] (the overload drops
+         the sign) and, under the modern policy only, [sin]/[cos] of inf and NaN (the overload gives
+         NaN, the fast f32 functions 0). [Recip_sqrt] and [Tanh_approx] keep their overloads: see
+         the backend-precision note. *)
+      let widened_math fn =
+        match prec with
+        | Ops.Half_prec _ ->
+            fun v -> group (string ("(half)" ^ fn ^ "((float)") ^^ parens v ^^ rparen)
+        | _ -> math_doc fn
+      in
       match (op, prec) with
       | Ops.Identity, _ -> fun v -> v
       | Neg, _ -> fun v -> string "-" ^^ v
-      | Exp, _ -> math_doc "exp"
-      | Log, _ -> math_doc "log"
-      | Exp2, _ -> math_doc "exp2"
-      | Log2, _ -> math_doc "log2"
-      | Sin, _ -> math_doc "sin"
-      | Cos, _ -> math_doc "cos"
-      | Sqrt, _ -> math_doc "sqrt"
+      | Exp, _ -> widened_math "exp"
+      | Log, _ -> widened_math "log"
+      | Exp2, _ -> widened_math "exp2"
+      | Log2, _ -> widened_math "log2"
+      | Sin, _ -> widened_math "sin"
+      | Cos, _ -> widened_math "cos"
+      | Sqrt, _ -> widened_math "sqrt"
       | Relu, Ops.Half_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0h"; v ])
       | Relu, Ops.Single_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0f"; v ])
       | Relu, Ops.Bfloat16_prec _ ->
