@@ -974,8 +974,8 @@ let pipeline_module = [ "Ir"; "Schedule" ]
    Who reads the width is derived, as the pipeline's keys are. The VALUES are those of `Cc_backend`
    whose key reach ([Sources.top_level_key_reach], the module read the way the pipeline's sibling
    modules are) includes [width_key]; the FIELDS are those of the cc device's limits record -- the
-   record expressions of [width_limits_home] -- whose initializer reaches it, resolved the same way
-   (an alias, an `open` or a local helper in between still counts); the record's TYPE, in
+   record expressions of [width_limits_home] -- whose initializer reaches it through a helper or
+   names one of those values by its last component, however qualified; the record's TYPE, in
    [width_limits_type_home], gives the labels that mark a limits update. A program reads the width
    when its own modules, or a test-tree library it links, name such a value
    (`Context.Cc_backend.vector_bytes_setting`, under an alias or an `open` too), project such a
@@ -1303,13 +1303,21 @@ let main () =
         List.filter_map reach ~f:(fun (name, keys) ->
             Option.some_if (List.mem keys width_key ~equal:String.equal) name)
   in
-  (* The fields are read with the same resolution as the values: an alias of `Cc_backend`, an `open`
-     of it, or a local helper between the field and the value still carries the width. *)
+  (* A field carries the width when its initializer reaches the key: through a top-level or
+     function-local helper, or by naming one of the width values -- matched by its last component,
+     so no alias, `open`, `let open` or local open of `Cc_backend` hides it (Codex P2, rounds 1-3).
+     A same-named value of another module over-reads, which costs declarations, not a stale pass. *)
   let width_fields =
     match List.Assoc.find source_files ~equal:String.equal width_limits_home with
     | None -> []
     | Some on_disk ->
-        (Sources.top_level_key_reach ~external_keys ~settings_field_keys ~follow_opens:true
+        (Sources.top_level_key_reach ~external_keys ~settings_field_keys
+           ~by_last_component:(fun name ->
+             if
+               List.exists width_values ~f:(fun value ->
+                   String.equal (List.last_exn (String.split value ~on:'.')) name)
+             then [ width_key ]
+             else [])
            (In_channel.read_all on_disk))
           .field_reach
         |> List.filter_map ~f:(fun (field, keys) ->
@@ -1397,7 +1405,11 @@ let main () =
                     ( List.hd (atoms "name") |> Option.value ~default:"<unnamed>",
                       d,
                       Scan.modules_of ~directory_modules group stanza,
-                      atoms "libraries" )
+                      (* Every atom of the field, so `(re_export x)` and a `(select …)`'s
+                         alternatives are followed too; an atom naming no test-tree library matches
+                         nothing (Codex P2, round 3). *)
+                      Option.value_map (Scan.field stanza "libraries") ~default:[]
+                        ~f:(List.concat_map ~f:Scan.atoms) )
                   in
                   List.map (atoms "name" @ atoms "public_name") ~f:(fun name -> (name, entry))
               | _ -> []))
@@ -1415,8 +1427,8 @@ let main () =
           | _ -> close seen rest)
     in
     let direct =
-      Option.value_map (Scan.field stanza "libraries") ~default:[] ~f:(fun args ->
-          List.filter_map args ~f:(function Sexp.Atom a -> Some a | _ -> None))
+      Option.value_map (Scan.field stanza "libraries") ~default:[]
+        ~f:(List.concat_map ~f:Scan.atoms)
     in
     List.concat_map (close [] direct) ~f:(fun (library, d, modules, _) ->
         List.filter_map modules ~f:(fun m ->
@@ -5288,12 +5300,11 @@ let pipeline_control () =
 
    The stand-in `cc_backend.ml` reads the width key in one value, reaches it one call away in a
    second, and reads another key in a third. The stand-in `schedulers.ml` fills three fields from
-   those three -- one through a module alias, one through a helper the function declares locally,
-   calling under an `open`, one directly -- so the derivation has to resolve the first two as the
-   readers' references are resolved, and tell both from the third (Codex P2, round 1). The stand-in
-   `backend_intf.ml` declares the record type, whose other label marks an update that copies every
-   width field. The tree sits under `test/` so that a library beside the subject is one the rule
-   follows. *)
+   those three -- one under a `let open`, one through a helper the function declares locally,
+   calling through a module alias, one directly -- so the derivation has to see through the first
+   two and tell both from the third (Codex P2, rounds 1-3). The stand-in `backend_intf.ml` declares
+   the record type, whose other label marks an update that copies every width field. The tree sits
+   under `test/` so that a library beside the subject is one the rule follows. *)
 let width_backend_stub =
   "let auto_vector_bytes () = 16\n\
    let vector_bytes_setting () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
@@ -5302,10 +5313,10 @@ let width_backend_stub =
 
 let width_limits_stub =
   "module CC = Cc_backend\n\
-   open Cc_backend\n\
    let cpu_mma_limits () =\n\
-  \  let helper () = registers () in\n\
-  \  { no_hardware_limits with simd_vector_bytes = CC.vector_bytes_setting ();\n\
+  \  let helper () = CC.registers () in\n\
+  \  { no_hardware_limits with\n\
+  \    simd_vector_bytes = (let open Cc_backend in vector_bytes_setting ());\n\
   \    simd_vector_registers = helper (); worker_pool_tag = Cc_backend.chunks () }\n"
 
 let width_type_stub =
@@ -5316,7 +5327,7 @@ let width_type_stub =
   \  native_fp16_arithmetic : bool;\n\
    }\n"
 
-let width_subject ?(links_support = false) answer =
+let width_subject ?(links = "") answer =
   let var = Utils.env_var_name width_key in
   let deps =
     match answer with
@@ -5348,9 +5359,7 @@ let width_subject ?(links_support = false) answer =
     \ (modules ambient)\n\
     \ (link_flags -linkall)\n\
     \ (libraries arrayjit.utils))\n"
-    deps
-    (if links_support then " support" else "")
-    action
+    deps links action
 
 (* The library beside the subject: a plain one, or one with inline tests -- a program of its own --
    whose `(inline_tests (deps …))` does or does not declare the variable. A directory with inline
@@ -5404,16 +5413,21 @@ let width_control () =
   write_file (Stdlib.Filename.concat root width_limits_type_home) width_type_stub;
   write_file (Stdlib.Filename.concat root "test/t/ambient.ml") "let () = ()\n";
   write_file (Stdlib.Filename.concat root "test/lib/ambient.ml") "let () = ()\n";
+  (* A wrapper library re-exporting the reader: `(libraries (re_export support))` is a link too. *)
+  write_file
+    (Stdlib.Filename.concat root "test/wrap/dune")
+    "(library\n (name wrapper)\n (modules wrapper)\n (libraries (re_export support)))\n";
+  write_file (Stdlib.Filename.concat root "test/wrap/wrapper.ml") "let () = ()\n";
   let paths =
     "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
-    :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: backend_home :: width_limits_home
-    :: width_limits_type_home :: List.map context ~f:fst
+    :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
+    :: backend_home :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
   in
-  let run ?(support = "let () = ()\n") ?(inline = `Plain) ?links_support ~probe answer =
+  let run ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe answer =
     write_file (Stdlib.Filename.concat root "test/lib/support.ml") support;
     write_file (Stdlib.Filename.concat root "test/lib/dune") (width_support_dune inline);
     write_file (Stdlib.Filename.concat root "test/t/probe.ml") probe;
-    write_file (Stdlib.Filename.concat root "test/t/dune") (width_subject ?links_support answer);
+    write_file (Stdlib.Filename.concat root "test/t/dune") (width_subject ?links answer);
     run_checker ~root ~exe ("." :: paths)
   in
   let projected = "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n" in
@@ -5452,7 +5466,8 @@ let width_control () =
   let via_alias = run ~probe:aliased `Neither in
   let via_update = run ~probe:updated `Neither in
   let via_copy = run ~probe:copied `Neither in
-  let via_library = run ~support:projected ~links_support:true ~probe:"let () = ()\n" `Neither in
+  let via_library = run ~support:projected ~links:" support" ~probe:"let () = ()\n" `Neither in
+  let via_reexport = run ~support:projected ~links:" wrapper" ~probe:"let () = ()\n" `Neither in
   let not_linked = run ~support:projected ~probe:"let () = ()\n" `Neither in
   let inline_undeclared =
     run ~support:projected ~inline:`Inline_undeclared ~probe:"let () = ()\n" `Neither
@@ -5480,6 +5495,7 @@ let width_control () =
   in
   let via_library_ok = refused via_library && says "library support (support.ml)" via_library in
   let not_linked_ok = passed not_linked in
+  let via_reexport_ok = refused via_reexport && says "library support (support.ml)" via_reexport in
   let inline_undeclared_ok =
     refused inline_undeclared && says "running its inline tests" inline_undeclared
   in
@@ -5494,6 +5510,7 @@ let width_control () =
   if not via_copy_ok then report "via-copy" via_copy;
   if not via_library_ok then report "via-library" via_library;
   if not not_linked_ok then report "not-linked" not_linked;
+  if not via_reexport_ok then report "via-reexport" via_reexport;
   if not inline_undeclared_ok then report "inline-undeclared" inline_undeclared;
   if not inline_declared_ok then report "inline-declared" inline_declared;
   if not constant_ok then report "constant" constant;
@@ -5501,9 +5518,9 @@ let width_control () =
     "\n\
      The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
      library, over a stand-in `Cc_backend` reading `%s` in one value and one call away in\n\
-     another, and a stand-in limits record filling two fields from those -- through a module alias,\n\
-     and through a function-local helper calling under an `open` -- and a third from a value reading\n\
-     another key.\n\
+     another, and a stand-in limits record filling two fields from those --\n\
+     under a `let open` and through a function-local helper calling through an alias -- and a third\n\
+     from a value reading another key.\n\
      The arms differ in how the module reads the width, whether the test links the library that\n\
      reads it, whether that library has inline tests, and how the stanza answers for the variable.\n\n"
     width_key;
@@ -5530,6 +5547,8 @@ let width_control () =
     via_copy_ok;
   Verdict.p "a read in a test-tree library the test links is the test's read" via_library_ok;
   Verdict.p "and the same library, not linked, asks nothing of the test" not_linked_ok;
+  Verdict.p "a read reached through a library's `(re_export …)` dependency is the test's read too"
+    via_reexport_ok;
   Verdict.p
     "a read in a library with inline tests is asked of its `(inline_tests (deps …))` when nothing \
      links it"

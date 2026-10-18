@@ -401,6 +401,7 @@ env_var_deps.ml: [scanner-refusal:d86762f9ec334387db672f5035ac305e] limits updat
 env_var_deps.ml: [scanner-refusal:448ab51835350320d2d9b13f46f2f82e] limits update overwriting (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:ec11239fab853f2292b2255dcbe588e9] re_export (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

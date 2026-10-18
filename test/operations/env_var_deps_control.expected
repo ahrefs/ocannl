@@ -159,9 +159,9 @@ a key the pipeline reads outside every named value is refused, not dropped from 
 
 The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree
 library, over a stand-in `Cc_backend` reading `cc_vector_bytes` in one value and one call away in
-another, and a stand-in limits record filling two fields from those -- through a module alias,
-and through a function-local helper calling under an `open` -- and a third from a value reading
-another key.
+another, and a stand-in limits record filling two fields from those --
+under a `let open` and through a function-local helper calling through an alias -- and a third
+from a value reading another key.
 The arms differ in how the module reads the width, whether the test links the library that
 reads it, whether that library has inline tests, and how the stanza answers for the variable.
 
@@ -174,6 +174,7 @@ a limits update overwriting one width field leaves the other to a device base, a
 a limits update overwriting only a label the width does not fill copies every width field, and is a read: true
 a read in a test-tree library the test links is the test's read: true
 and the same library, not linked, asks nothing of the test: true
+a read reached through a library's `(re_export …)` dependency is the test's read too: true
 a read in a library with inline tests is asked of its `(inline_tests (deps …))` when nothing links it: true
 and declaring the variable there answers for it: true
 a fully synthetic limits record -- through an alias of the constant base and a function returning an update of it -- an update of another record, a field the width does not fill, and `Cc_backend` values not reaching the width ask for nothing: true
@@ -347,6 +348,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:448ab51835350320d2d9b13f46f2f82e] limits update overwriting
   [scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the
   [scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing
+  [scanner-refusal:ec11239fab853f2292b2255dcbe588e9] re_export
   [scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests
   [scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable
   [scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend

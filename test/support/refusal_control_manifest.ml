@@ -418,6 +418,7 @@ let raw_entries =
         "[scanner-refusal:448ab51835350320d2d9b13f46f2f82e] limits update overwriting";
         "[scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the";
         "[scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing";
+        "[scanner-refusal:ec11239fab853f2292b2255dcbe588e9] re_export";
         "[scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests";
         "[scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable";
         "[scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend";

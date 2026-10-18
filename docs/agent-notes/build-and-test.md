@@ -1343,11 +1343,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `OCANNL_CC_VECTOR_BYTES=32` (backend-precision-and-simd.md), and an undeclared stanza answers it
   from the cache. Three things are derived. The values are the `Cc_backend` values whose key reach
   includes `cc_vector_bytes`. The fields are those `schedulers.ml`'s cc limits record fills from
-  those values: `top_level_key_reach`'s `field_reach`, with `~follow_opens`, so a module alias, an
-  `open` or a local helper in between still counts. The record's type (`hardware_limits` in
+  those values: `top_level_key_reach`'s `field_reach`, which follows top-level and function-local
+  helpers and, through `~by_last_component`, matches a width value by its last component, so no
+  alias, `open` or `let open` in between hides it. The record's type (`hardware_limits` in
   `backend_intf.ml`) supplies the labels, any of which marks a limits update. A program reads the
-  width when its own modules, or a library under `test/`/`arrayjit/test/` it links (transitively),
-  do one of three things. They name such a value through `Context.Cc_backend` (alias and `open`
+  width when its own modules, or a library under `test/`/`arrayjit/test/` it links (transitively,
+  through `re_export` and `select` forms too), do one of three things. They name such a value through `Context.Cc_backend` (alias and `open`
   included). They project such a field or match it in a record pattern. Or they write
   `{ base with … }`, overwriting any label of the type and leaving a width field to a non-constant
   base. A constant base is `no_hardware_limits`, or a name every binding of which is a constant

@@ -1094,23 +1094,16 @@ type key_reach = {
     this function sees one file. A field of [Utils.settings] contributes what [settings_field_keys]
     answers for it (the field's own name by default).
 
-    With [~follow_opens:true], a path no local value answers to is also tried under each top-level
-    [open M] of the module, as [M.path] -- so [open Cc_backend] and a bare [vector_bytes_setting ()]
-    reach what [Cc_backend.vector_bytes_setting] does. Off by default: the schedule pipeline's
-    derivation predates it, and turning it on there widens a requirement two hundred stanzas meet.
-*)
+    [by_last_component] answers for any path no local value answers to by its LAST component alone,
+    whatever qualifies it and whatever brought it into scope -- an `open`, a `let open … in`, a
+    local [M.( … )], an alias of any shape. It is for a caller that knows the value names it is
+    after and would rather over-read a same-named value elsewhere than track every scoping construct
+    OCaml has (gh-ocannl-1320, Codex P2 rounds 1 and 3). Empty by default: the schedule pipeline's
+    derivation predates it. *)
 let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
-    ?(settings_field_keys = fun field -> [ field ]) ?(follow_opens = false) content =
+    ?(settings_field_keys = fun field -> [ field ]) ?(by_last_component = fun (_ : string) -> [])
+    content =
   let structure = structure_of content in
-  let opens =
-    if not follow_opens then []
-    else
-      List.filter_map structure ~f:(fun item ->
-          match item.pstr_desc with
-          | Pstr_open { popen_expr = { pmod_desc = Pmod_ident { txt; _ }; _ }; _ } ->
-              flatten_module_path txt
-          | _ -> None)
-  in
   let aliases =
     List.filter_map structure ~f:(fun item ->
         match item.pstr_desc with
@@ -1180,18 +1173,17 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         | Some keys -> Some keys
         | None -> local (depth - 1)
     in
-    let under_opens =
-      List.fold opens
-        ~init:(Set.empty (module String))
-        ~f:(fun acc opened ->
-          Set.union acc (Set.of_list (module String) (external_keys (expand (opened @ path)))))
+    let by_name =
+      Option.value_map (List.last path)
+        ~default:(Set.empty (module String))
+        ~f:(fun name -> Set.of_list (module String) (by_last_component name))
     in
     match local (List.length scope) with
     | Some keys -> keys
     | None -> (
         match path with
-        | [ _ ] -> under_opens
-        | _ -> Set.union under_opens (Set.of_list (module String) (external_keys (expand path))))
+        | [ _ ] -> by_name
+        | _ -> Set.union by_name (Set.of_list (module String) (external_keys (expand path))))
   in
   let field_reach = ref [] in
   (* Every simple name a `let … in` inside [expr] binds, with what each binding reads and names. *)
