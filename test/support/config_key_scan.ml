@@ -1258,6 +1258,97 @@ let settings_field_initializers content =
   iterator#structure (structure_of content);
   List.rev !found
 
+(** Every field a record expression of [content] initializes, with the value paths its initializer
+    names: [{ simd_vector_bytes = Cc_backend.vector_bytes_setting (); … }] contributes
+    [("simd_vector_bytes", [["Cc_backend"; "vector_bytes_setting"]])]. A [{ base with … }] update
+    contributes its own fields alone. What the paths reach is the caller's question: this reads one
+    file (gh-ocannl-1320, where it says which device-limits fields the cc vector width fills). *)
+let record_field_value_paths content =
+  let found = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_record (fields, _) ->
+            List.iter fields ~f:(fun ({ txt = field; _ }, value) ->
+                let names = ref [] in
+                let collect =
+                  object
+                    inherit Ast_traverse.iter as super
+
+                    method! expression e =
+                      (match e.pexp_desc with
+                      | Pexp_ident { txt; _ } ->
+                          Option.iter (flatten_module_path txt) ~f:(fun path ->
+                              names := path :: !names)
+                      | _ -> ());
+                      super#expression e
+                  end
+                in
+                collect#expression value;
+                Option.iter
+                  (List.last (flatten_longident field))
+                  ~f:(fun field -> found := (field, List.rev !names) :: !found))
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  iterator#structure (structure_of content);
+  List.rev !found
+
+(** Where [content] reads one of [fields] off a record, in words a diagnostic can quote: a field
+    projection [limits.simd_vector_bytes], a record pattern naming the field, and a
+    [{ base with … }] update that overwrites some of [fields] and leaves the rest to its base -- a
+    copy of the base's value, read where the base came from. A base whose last path component is one
+    of [constant_bases] supplies constants and is no read. Field names are matched by their last
+    component, without types: a field of another record spelled the same way is read as this one,
+    the direction whose cost is a declaration rather than a stale pass (gh-ocannl-1320). *)
+let field_reads_in_source content ~fields ~constant_bases =
+  let wanted field = List.mem fields field ~equal:String.equal in
+  let found = ref [] in
+  let add spelling =
+    if not (List.mem !found spelling ~equal:String.equal) then found := spelling :: !found
+  in
+  let last lid = List.last (flatten_longident lid) in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_field (_, { txt; _ }) ->
+            Option.iter (last txt) ~f:(fun field ->
+                if wanted field then add (Printf.sprintf "`.%s`" field))
+        | Pexp_record (set, Some base) ->
+            let overwritten = List.filter_map set ~f:(fun ({ txt; _ }, _) -> last txt) in
+            let constant =
+              match base.pexp_desc with
+              | Pexp_ident { txt; _ } ->
+                  List.exists constant_bases ~f:(fun name -> path_ends_in name txt)
+              | _ -> false
+            in
+            if List.exists overwritten ~f:wanted && not constant then
+              List.iter fields ~f:(fun field ->
+                  if not (List.mem overwritten field ~equal:String.equal) then
+                    add (Printf.sprintf "`{ … with … }` leaving `%s` to its base" field))
+        | _ -> ());
+        super#expression expr
+
+      method! pattern pat =
+        (match pat.ppat_desc with
+        | Ppat_record (named, _) ->
+            List.iter named ~f:(fun ({ txt; _ }, _) ->
+                Option.iter (last txt) ~f:(fun field ->
+                    if wanted field then add (Printf.sprintf "`{ %s; … }` pattern" field)))
+        | _ -> ());
+        super#pattern pat
+    end
+  in
+  iterator#structure (structure_of content);
+  List.rev !found
+
 (** The library sources among a rule's dependencies, sorted and deduplicated.
 
     Both consistency tests are handed [%{deps}] — the whole dependency set of the rule that runs

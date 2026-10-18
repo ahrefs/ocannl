@@ -4161,6 +4161,8 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -5291,6 +5293,8 @@
   (env_var LOCALAPPDATA)
   (env_var HIP_PATH)
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -5504,6 +5508,8 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_CC_FP16_ARITHMETIC)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -5554,6 +5560,8 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)

@@ -311,6 +311,7 @@ let raw_entries =
         "[scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration";
         "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
+        "[scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width";
         "[scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
@@ -408,6 +409,14 @@ let raw_entries =
         "[scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule";
         "[scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule";
         "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";
+        "[scanner-refusal:ae4c5182763a52487befbd3029c2fd91] stanza declares neither";
+        "[scanner-refusal:d52ce57d79cc2a310f3f2d2d037e9b2e] declaring the variable";
+        "[scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning";
+        "[scanner-refusal:6ed1faa93fb2465cb3c3a746f850f77c] Context.Cc_backend";
+        "[scanner-refusal:d86762f9ec334387db672f5035ac305e] limits update overwriting";
+        "[scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the";
+        "[scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing";
+        "[scanner-refusal:0822aa2f865fc626af0b55375500dd2a] Cc_backend";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
@@ -700,6 +709,9 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:ae1b95995f2c4aa10cdeee699ccb3413",
       "a test naming the pipeline is reported, with the key its value reaches through the module's \
        own calls and the execution-neutral trace key, when its stanza declares neither: true" );
+    ( "env_var_deps.ml:77abb7920eac5544c6bf60dd498ec9cf",
+      "a test projecting a width field off a limits record is reported, naming the variable and \
+       the read, when its stanza declares neither: true" );
     ( "test_config_consistency.ml:40f6a4df02a115c327391e051bacd5c6",
       "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:dfd9b6901bf188f6500bcc1284778dcd",

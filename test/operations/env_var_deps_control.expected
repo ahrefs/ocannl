@@ -157,6 +157,22 @@ a value reached under `open Ir.Schedule` is a reference too: true
 another library's `Schedule` is not the pipeline, and asks for nothing: true
 a key the pipeline reads outside every named value is refused, not dropped from every requirement: true
 
+The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree
+library, over a stand-in `Cc_backend` reading `cc_vector_bytes` in one value and one call away in
+another, and a stand-in limits record filling two fields from those and a third from a value
+reading another key.
+The arms differ in how the module reads the width, whether the test links the library that
+reads it, and how the stanza answers for the variable.
+
+a test projecting a width field off a limits record is reported, naming the variable and the read, when its stanza declares neither: true
+the same stanza declaring the variable passes: true
+and so does the same stanza pinning it with `setenv` around its run: true
+a `Cc_backend` value reaching the width one call away, named through a module alias of `Context.Cc_backend`, is a read: true
+a limits update overwriting one width field leaves the other to a device base, and is a read: true
+a read in a test-tree library the test links is the test's read: true
+and the same library, not linked, asks nothing of the test: true
+a fully synthetic limits record, a field the width does not fill, and `Cc_backend` values not reaching the width ask for nothing: true
+
 Synthetic controls: ambient gates derive identity from the program actually run.
 a renamed direct-utils universe test and its resolved runner are gates: true
 a universe-dependent compiler census and backend-free test are not ambient gates: true
@@ -234,6 +250,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration
   [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration
   [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration
+  [scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width
   [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
@@ -316,6 +333,14 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule
   [scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule
   [scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside
+  [scanner-refusal:ae4c5182763a52487befbd3029c2fd91] stanza declares neither
+  [scanner-refusal:d52ce57d79cc2a310f3f2d2d037e9b2e] declaring the variable
+  [scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning
+  [scanner-refusal:6ed1faa93fb2465cb3c3a746f850f77c] Context.Cc_backend
+  [scanner-refusal:d86762f9ec334387db672f5035ac305e] limits update overwriting
+  [scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the
+  [scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing
+  [scanner-refusal:0822aa2f865fc626af0b55375500dd2a] Cc_backend
   [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree
   [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree
   [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias
