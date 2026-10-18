@@ -1,12 +1,14 @@
 (* CUDA's tensor-core cutoffs on both sides of every boundary (gh-ocannl-1214).
 
-   Two tables own the compute-capability cutoffs of CUDA's tile-MMA support: the capability
-   descriptor ([Cuda_mma.capability], the [entry ~min_cc] literals autotune seeds from) and the arm
-   resolver ([Cuda_mma.mma_arm], whose [arm_floor] is the [wc_min_cc] / [mma16_min_cc] each emitting
-   hook checks against the attached devices). A seed the descriptor admits but the hook declines is
-   a candidate timed as scalar code under a tensorized label (gh-ocannl-545); the reverse withholds
-   a rendering the device has. One fleet device (sm_120) sits above every cutoff and can vary
-   neither side, so the agreement is checked here as pure functions of the compute capability.
+   Two tables decide where CUDA's tile-MMA support starts: the capability descriptor
+   ([Cuda_mma.capability], whose entries autotune seeds from) and the arm resolver
+   ([Cuda_mma.mma_arm], whose [arm_floor] is the floor each emitting hook checks against the
+   attached devices). Since gh-ocannl-1232 both read the floors from [Cuda_mma.arm_floor], but which
+   arm a descriptor entry (a format key and scope) stands for is still the descriptor's own claim,
+   and that pairing is what this checks. A seed the descriptor admits but the hook declines is a
+   candidate timed as scalar code under a tensorized label (gh-ocannl-545); the reverse withholds a
+   rendering the device has. One fleet device (sm_120) sits above every cutoff and can vary neither
+   side, so the agreement is checked here as pure functions of the compute capability.
 
    Nothing below names a cutoff. The descriptor's cutoffs are OBSERVED, as the capabilities where
    its record changes over a sweep, and the resolver's are its floors tabulated over every storage
@@ -54,11 +56,10 @@ let capabilities = Array.of_list_map ccs ~f:(fun cc -> M.capability ~cc)
 let capability cc = capabilities.(cc)
 
 (* The resolver's verdict at [cc]: the arm the hooks select for these storage precisions, if any,
-   and whether the device meets its floor. A hook that declines an arm on capability falls through
-   to the next table in its order (gh-ocannl-1153), and today no table it can fall through to has a
-   lower floor, so the selected arm's floor is the hooks' whole capability gate. That ordering is
-   [mma_arm]'s own premise, pinned against rendered CUDA by [schedule_mma_matmul]; it is assumed
-   here, not re-derived. *)
+   and whether the device meets its floor. Both hooks dispatch on [Cuda_mma.resolve_arm], which
+   [mma_arm] projects, and a hook that declines its arm on capability declines to the scalar
+   fallback, never to another arm (gh-ocannl-1232), so the selected arm's floor is the hooks' whole
+   capability gate. *)
 let resolver_admits ~cc ~scope (a_prec, b_prec, d_prec) =
   match M.mma_arm ~a_prec ~b_prec ~d_prec ~scope with
   | None -> false

@@ -316,24 +316,17 @@
     test_cuda_classify_failure.real.ml)
    (-> test_cuda_classify_failure.missing.ml))))
 
-; The nvrtc arch-flag policy (gh-ocannl-481 item 3, D4). Same `select` reasoning as the tests
-; above; the checks themselves need no GPU, the policy being a pure function.
+; The nvrtc arch-flag policy (gh-ocannl-481 item 3, D4). A pure function in `Ir.Cuda_mma` since
+; gh-ocannl-1232, so it runs everywhere: no cudajit, no GPU.
 
 (test
- ; ocannl-backend: cuda -- calls Cuda_backend.gpu_arch_options, a pure function over a literal
+ ; ocannl-backend: none -- calls Ir.Cuda_mma.gpu_arch_options, a pure function over a literal
  ; device capability and literal source strings.
  (name test_cuda_arch_flags)
  (package arrayjit)
  (modules test_cuda_arch_flags)
- (deps ocannl_config test_cuda_arch_flags.expected)
- (libraries
-  base
-  stdio
-  (select
-   test_cuda_arch_flags.ml
-   from
-   (arrayjit.cuda_backend arrayjit.ir -> test_cuda_arch_flags.real.ml)
-   (-> test_cuda_arch_flags.missing.ml))))
+ (deps ocannl_config)
+ (libraries base stdio arrayjit.ir))
 
 (test
  ; ocannl-backend: none -- links arrayjit.context for one pure function of it,

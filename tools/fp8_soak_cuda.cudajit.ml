@@ -117,7 +117,8 @@ let init () =
       let ctx = Cu.Context.get_primary device in
       Cu.Context.set_current ctx;
       let attrs = Cu.Device.get_attributes device in
-      (* Both option groups come from [Cuda_backend], not from a local guess. The include discovery
+      (* Both option groups come from the backend's own policies ([Cuda_backend]'s include
+         discovery, [Ir.Cuda_mma]'s arch targets), not from a local guess. The include discovery
          especially: this kernel `#include`s <cuda_fp8.h>, and a soak that looked only in
          /usr/local/cuda would probe "ready" and then fail to compile on every Windows installation
          and every Linux one outside that prefix (Codex P2 on PR #463). The arch policy is shared
@@ -130,7 +131,7 @@ let init () =
         @
         match !arch_policy with
         | `Device -> [ Printf.sprintf "--gpu-architecture=compute_%d" device_cc ]
-        | `Backend -> Cuda_backend.gpu_arch_options ~device_cc source
+        | `Backend -> Ir.Cuda_mma.gpu_arch_options ~device_cc source
       in
       let ptx =
         Nvrtc.compile_to_ptx ~cu_src:source ~name:"ocannl_fp8_soak.cu" ~options ~with_debug:false

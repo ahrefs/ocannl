@@ -140,7 +140,7 @@ files.
 - **`--arch` decides what the CUDA soak is measuring**, and the default is not the backend's
   setting. `cuda_fp8.hpp` guards its conversions with `#if __CUDA_ARCH__ >= 890`: at or above sm_89
   the cast is the hardware `cvt` instruction, below it the header's own software emulation. The
-  repo's arch policy (`Cuda_backend.gpu_arch_options`) is MARKER-driven — a source with no
+  repo's arch policy (`Ir.Cuda_mma.gpu_arch_options`) is MARKER-driven — a source with no
   tensor-core markers gets no `--gpu-architecture` at all, so nvrtc's default target applies:
   measured as `__CUDA_ARCH__ = 750` under CUDA 13.3, hence the software path. That is the honest
   answer to "does the codec agree with what the backend emits" (`--arch=backend`), but it is not the
@@ -626,7 +626,7 @@ files.
   `Numerics.fp16_accum_wide` policy predicate and the backend capability's scope list. On CUDA
   sm_80+ the per-statement uniform-f16 statement routes to the f32-accumulate inline-PTX m16n8k16
   arm (the bf16 uniform arm's body parameterized by `mma16_spellings` — the PTX fragment layouts
-  are shared by .f16/.bf16; marker `(mma-f16)`, arch floor 80 in `gpu_arch_options`), and its
+  are shared by .f16/.bf16; marker `(mma-f16)`, arch floor 80 from `Cuda_mma.arm_floor`), and its
   f16-accumulate wmma combo is gated off. The persistent-fragment scope is wmma's `__half` x
   `__half` -> `float` fragments behind a converted `d` boundary since gh-ocannl-925 (the
   `wmma-f16-wide` combo, `wc_d_cvt`; see the coordinate-table bullet below); before it the list
@@ -779,14 +779,24 @@ files.
   exists for CUDA's tf32 gate: the tf32 arm reads f32 storage as tf32 and accumulates at
   the same f32 `accum_prec` reports with the gate shut, so a code change to that gate under an
   unchanged mode moved nothing before. Each backend derives `mma_arm` from the very table its hooks
-  dispatch on — CUDA's `wmma_combo` (in `Ir.Cuda_mma` since gh-ocannl-1214, beside the other arm
-  tables and the descriptor; its accumulator is now a precision, `wc_acc_prec`, spelled
-  through `typ_of_prec`) behind the inline-PTX arms in the hooks' own order, HIP's and Metal's
-  `mma_accumulator` tables (from which their fragment spellings now follow) — so a new arm or a
-  changed gate reaches the key with no hand-added component. CUDA's hooks try several tables in an
-  order, and that ORDER is restated in its `mma_arm`; it is pinned against the hooks by
-  `schedule_mma_matmul` and `schedule_ldmatrix_matmul`, which read every arm marker they expect in
-  rendered CUDA from `mma_arm` rather than as literals — a new CUDA arm test does the same. Pinned by
+  dispatch on — CUDA's `Ir.Cuda_mma.resolve_arm`, HIP's and Metal's `mma_accumulator` tables (from
+  which their fragment spellings now follow) — so a new arm or a changed gate reaches the key with
+  no hand-added component. **CUDA resolves its arms once** (gh-ocannl-1232): `resolve_arm` maps
+  (storage triple, policy, emission scope) to one variant (`Inline_ptx` fp8 m16n8k32 / m16n8k16
+  bf16|f16, or `Wmma` of five kinds), both hooks `match` on it (an update-only call against a
+  `` `Fragment `` destination resolves at `Mma_fragment_scope`, the scope that declared the array),
+  and an arm's own conditions decline to the scalar fallback, never to another arm. Floors, markers,
+  tiles, accumulators and the `ldmatrix` operand rule are functions of the variant
+  (`arm_floor` is the ONLY place the 70/80/89 cutoffs are written); `mma_arm` is its projection,
+  `capability` names each entry by the arm it seeds, and `gpu_arch_options` (moved into `Cuda_mma`,
+  so `test_cuda_arch_flags` runs everywhere) maps each arm's `(<marker>)` to its floor over
+  `all_of_arm`. The one scope-split triple is wide uniform f16 (per statement m16n8k16, fragment
+  scope the converted `wmma-f16-wide`) — before, a fall-through. Its marker now floors the nvrtc
+  target at compute_80 (it was compute_70 via `nvcuda::wmma`). A new arm is a new constructor:
+  every `match` over `arm` fails to compile until it is handled, and `cuda_mma_arms` checks the
+  table's shape (no per-statement arm converts its destination, scopes split only there, every arm
+  resolves somewhere). `schedule_mma_matmul` and `schedule_ldmatrix_matmul` still read the markers
+  they expect in rendered CUDA from `mma_arm` rather than as literals. Pinned by
   `codegen_resolution_identity`: synthetic records (a changed resolution or arm table — an arm
   appearing, another arm, its accumulator, its floor — moves the tag, an extensionally equal
   closure does not; dropping the fingerprint's arm row fails the four arm claims on every backend),
