@@ -498,10 +498,9 @@ files.
   prelude (`Autotune.split_reduce_prelude`, the `F_split` seeds' own), to every site whose serial
   chain per output cell reaches the threshold. On gpt2_mini_train b256 these are the 26 bias and
   layer-norm parameter gradients and the loss sum, at 32768 rows each. Each split launches
-  32768 first-pass threads, where the default ran one thread per parameter. The b8 step splits
-  nothing: its parameter gradients reduce over `b, s` with `b = 8` outermost, below `sr_red_min`,
-  and with `s` enclosed by a reduction loop that pins no component, so the detector proposes none
-  of them (`bench_gpt_diag` `BENCH_SR_SITES=1` lists the verdicts). Two traps. The prelude must run
+  32768 first-pass threads, where the default ran one thread per parameter. The b8 step's
+  parameter gradients reduce over `b, s` with `b = 8` outermost; the next bullet is how they became
+  sites (`bench_gpt_diag` `BENCH_SR_SITES=1` lists the sites and the verdicts). Two traps. The prelude must run
   on a copy of the traced store only, with the compile's own placement table (as the search's
   `rebase` does); on a fully hermetic copy the partials nodes never reach the placements the
   link reads, and the compile dies in `Tnode.Placements.is_materialized_force`. And unlike the
@@ -510,6 +509,24 @@ files.
   default plan and the tuner's own split-reduce candidates do under the default
   `autotune_search=true` (`test/operations/seeded_split_reduce` holds it to an f64 reference). The
   `reproducible` profile pins the key at 0, keeping its sums serial.
+- **A two-loop reduction band neither of whose loops splits alone is split as a pair**
+  (gh-ocannl-1414, `Autotune.coalesce_reduction_pair`, field `sr_coalesce`). At b8 a parameter
+  gradient `for b, s, o: g[o] += dy[b,s,o]` has `b` below `sr_red_min`, and `s` fails the split's
+  pinning rule because `b`, a reduction loop, encloses it. So where no single loop of a site
+  splits, `split_reduce_sites` hoists the cell loops above the two outermost reduction loops,
+  merges them with `Sched.Coalesce`, and re-probes the split on the merged loop; the prelude
+  replays the swaps, the `Coalesce` (under the merged symbol detection minted), then the split. A
+  site one loop already splits keeps that split, so b256 keeps its 27 sites and block counts. The same
+  path admits a small-output contraction over two axes (the out projection's `(h, e)`, gh-1279's
+  pair), pinned by `test/operations/split_reduce_pair`. Trap: the first two layers' gradients read
+  the positional table `wpe[s, o]`, inlined into the residual stream, and that read has no
+  flattened address, so `Coalesce` declines 7 of the 26 b8 sites. For those the pair is
+  interchanged instead, `Swap (b, s)` appended to the chain, and `s` is split with `b` running
+  inside each block. Second trap, latent before this: `Sketch_families.fma_form` took an access
+  path's head `Stmt` as an index into the segment's top-level statements, but loops add no path
+  component, so a segment that is one loop around a sequence (a split's first pass,
+  `for blk { init; for inner { .. } }`) indexed past the end and raised in the seeded default's
+  matmul detection; it now follows the path (`stmt_at`).
 - **The seeded default sinks the reduction loops of the segments it does not seed**
   (gh-ocannl-1348, `Autotune.reduction_sink`). Backprop lowers a batch reduction into a small
   output as `for b, s, o: db[o] += dy[b,s,o]`, and the preset maps `o` below the serial `b`, `s`

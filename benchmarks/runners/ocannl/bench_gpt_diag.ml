@@ -93,10 +93,31 @@ let () =
     let opt = Option.value_exn ~here:[%here] !stash in
     let sites = Autotune.split_reduce_sites ~static_indices:[ batch_n ] opt in
     Stdio.printf "split-reduce sites detected: %d\n" (List.length sites);
+    (* The serial chain per cell is what [gpu_default_split_reduce_min_serial] compares against; a
+       coalesced site (gh-ocannl-1414) splits its two reduction loops merged into one. *)
     List.iter sites ~f:(fun s ->
-        Stdio.printf "  %s: reduction extent %d, target cells %d, est. segment cost %d, swaps %d\n"
+        Stdio.printf
+          "  %s: reduction extent %d, target cells %d, est. segment cost %d, chain %d, swaps %d%s\n"
           (Ir.Tnode.debug_name s.Autotune.sr_target)
-          s.Autotune.sr_red s.Autotune.sr_out s.Autotune.sr_cost (List.length s.Autotune.sr_swaps));
+          s.Autotune.sr_red s.Autotune.sr_out s.Autotune.sr_cost
+          (s.Autotune.sr_cost / s.Autotune.sr_out)
+          (List.length s.Autotune.sr_swaps)
+          (match s.Autotune.sr_coalesce with
+          | None -> ""
+          | Some (o, i) ->
+              Printf.sprintf ", coalesced %s*%s" (Ir.Indexing.symbol_ident o)
+                (Ir.Indexing.symbol_ident i)));
+    (* The sites the untuned CUDA plan splits at the configured threshold, with their block counts,
+       as the compile would choose them. *)
+    let min_serial =
+      Int.of_string
+        (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"4096")
+    in
+    let split =
+      Autotune.seeded_split_sites ~backend:"cuda" ~min_serial ~static_indices:[ batch_n ] opt
+    in
+    Stdio.printf "untuned CUDA split at min_serial=%d: %d site(s)\n" min_serial (List.length split);
+    List.iter split ~f:(fun site -> Stdio.printf "  %s\n" (Autotune.split_sites_label [ site ]));
     H.print_split_reduce_verdicts opt;
     Stdlib.exit 0);
   let t0 = Unix.gettimeofday () in
