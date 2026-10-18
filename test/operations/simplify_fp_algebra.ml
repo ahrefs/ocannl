@@ -33,8 +33,11 @@ let () =
     List.concat_map cases ~f:(fun (family, _) ->
         List.map cases ~f:(fun (other, rhs) -> (family, other, rhs)))
   in
-  p_all "each family leaves other witnesses alone" pairs ~f:(fun (family, other, rhs) ->
-      String.equal family other || LL.equal_scalar_t rhs (simplify family rhs));
+  let same_licence family other =
+    LL.Fp_licence.equal (LL.Fp_licence.of_selection family) (LL.Fp_licence.of_selection other)
+  in
+  p_all "each family leaves other licences' witnesses alone" pairs ~f:(fun (family, other, rhs) ->
+      same_licence family other || LL.equal_scalar_t rhs (simplify family rhs));
   let resolved = Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra" in
   p_all "unqualified simplification matches the resolved selector" cases ~f:(fun (_, rhs) ->
       let default = LL.simplify_llc [] (set_at output (fixed 0) rhs) in

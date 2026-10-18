@@ -4207,28 +4207,153 @@ let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
       else None
   | _ -> None
 
-(* Development ablation for gh-ocannl-998. This does not change the phase order or the production
-   profiles: the later rewrite-tier split is decided from the measurements. *)
-let simplify_llc ?fp_algebra static_indices llc =
-  let selection =
-    match fp_algebra with
-    | Some s -> s
-    | None -> Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra"
-  in
-  let families = [ "contract"; "constants"; "sub"; "mul_div"; "pow"; "identities" ] in
-  let selected =
-    List.concat_map (String.split selection ~on:',') ~f:(fun token ->
+module Fp_licence = struct
+  type t = { contract : bool; reassociate : bool; finite_math : bool }
+  [@@deriving sexp, equal, compare]
+
+  let exact = { contract = false; reassociate = false; finite_math = false }
+  let all = { contract = true; reassociate = true; finite_math = true }
+
+  (* Development ablation for gh-ocannl-998: the measurement families, each selecting the licence
+     its arms belong to. *)
+  let of_selection selection =
+    List.fold (String.split selection ~on:',') ~init:exact ~f:(fun acc token ->
         match String.strip token with
-        | "all" -> families
-        | "none" -> []
-        | name when List.mem families name ~equal:String.equal -> [ name ]
+        | "all" -> all
+        | "none" -> acc
+        | "contract" -> { acc with contract = true }
+        | "constants" | "sub" | "mul_div" | "pow" -> { acc with reassociate = true }
+        | "identities" -> { acc with finite_math = true }
         | name -> raise (Utils.User_error ("Unknown simplify_fp_algebra family: " ^ name)))
+end
+
+(* One step of the rounding-changing algebra at the root of [llsc]: the first licensed arm that
+   matches, unsimplified (the caller re-simplifies the result), or [None]. Arm order is the
+   first-match order of the simplifier it was lifted from. Integer precisions take every licence but
+   the floating-only arms (multiplication/division interchange, contraction): their reassociation is
+   exact in wrapping arithmetic. [ToPowOf] expects its operands simplified. *)
+let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec) :
+    (scalar_t * Ops.prec) option =
+  let licensed flag = flag || not (Ops.is_float prec) in
+  let float_only flag = flag && Ops.is_float prec in
+  let identities = licensed licence.finite_math in
+  let reassociate = licensed licence.reassociate in
+  let mul_div = float_only licence.reassociate in
+  let contract = float_only licence.contract in
+  match llsc with
+  | Binop (Add, (llsc, prec1), (Constant 0., _))
+  | Binop (Sub, (llsc, prec1), (Constant 0., _))
+  | Binop (Add, (Constant 0., _), (llsc, prec1))
+    when identities ->
+      Some (llsc, prec1)
+  | Binop (Sub, (Constant 0., _), (llsc, prec1)) when identities ->
+      Some (Binop (Mul, (Constant (-1.), prec1), (llsc, prec1)), prec1)
+  | Binop (Mul, (_, prec1), (Constant 0., _))
+  | Binop (Div, (Constant 0., _), (_, prec1))
+  | Binop (Mul, (Constant 0., _), (_, prec1))
+    when identities ->
+      Some (Constant 0., prec1)
+  | Binop
+      ( Add,
+        ( Binop (Add, (Constant c2, prec2), llsc), prec3
+        | Binop (Add, llsc, (Constant c2, prec2)), prec3 ),
+        (Constant c1, prec1) )
+  | Binop
+      ( Add,
+        (Constant c1, prec1),
+        ( Binop (Add, (Constant c2, prec2), llsc), prec3
+        | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
+    when reassociate ->
+      Some (Binop (Add, (Constant (c1 +. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+  | Binop
+      ( Sub,
+        ( Binop (Add, (Constant c2, prec2), llsc), prec3
+        | Binop (Add, llsc, (Constant c2, prec2)), prec3 ),
+        (Constant c1, prec1) )
+    when reassociate ->
+      Some (Binop (Add, (Constant (c2 -. c1), Ops.promote_prec prec2 prec1), llsc), prec3)
+  | Binop
+      ( Sub,
+        (Constant c1, prec1),
+        ( Binop (Add, (Constant c2, prec2), llsc), prec3
+        | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
+    when reassociate ->
+      (* c1 - (c2 + x) = (c1 - c2) - x: the summand keeps its negation. *)
+      Some (Binop (Sub, (Constant (c1 -. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+  | Binop (Add, llv1, (Binop (Sub, llv2, llv3), prec3))
+  | Binop (Add, (Binop (Sub, llv2, llv3), prec3), llv1)
+    when reassociate ->
+      Some (Binop (Sub, (Binop (Add, llv1, llv2), prec), llv3), prec3)
+  | Binop (Sub, llv1, (Binop (Sub, llv2, llv3), prec3)) when reassociate ->
+      Some (Binop (Sub, (Binop (Add, llv1, llv3), prec), llv2), prec3)
+  | Binop (Sub, (Binop (Sub, llv1, llv2), prec1), llv3) when reassociate ->
+      Some (Binop (Sub, llv1, (Binop (Add, llv2, llv3), prec1)), prec1)
+  | Binop
+      ( Mul,
+        ( Binop (Mul, (Constant c2, prec2), llsc), prec3
+        | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ),
+        (Constant c1, prec1) )
+  | Binop
+      ( Mul,
+        (Constant c1, prec1),
+        ( Binop (Mul, (Constant c2, prec2), llsc), prec3
+        | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ) )
+    when reassociate ->
+      Some (Binop (Mul, (Constant (c1 *. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+  | Binop
+      ( Div,
+        ( Binop (Mul, (Constant c2, prec2), llsc), prec3
+        | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ),
+        (Constant c1, prec1) )
+    when mul_div ->
+      Some (Binop (Mul, (Constant (c2 /. c1), Ops.promote_prec prec2 prec1), llsc), prec3)
+  | Binop (Div, (Constant c1, prec1), (Binop (Mul, (Constant c2, prec2), llsc), prec3))
+  | Binop (Div, (Constant c1, prec1), (Binop (Mul, llsc, (Constant c2, prec2)), prec3))
+    when mul_div ->
+      (* TODO: this might worsen the conditioning in hand-designed formula cases. *)
+      Some (Binop (Div, (Constant (c1 /. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+  | Binop (Mul, llv1, (Binop (Div, llv2, llv3), prec23))
+  | Binop (Mul, (Binop (Div, llv2, llv3), prec23), llv1)
+    when mul_div ->
+      Some (Binop (Div, (Binop (Mul, llv1, llv2), prec), llv3), prec23)
+  | Binop (Div, llv1, (Binop (Div, llv2, llv3), prec23)) when mul_div ->
+      Some (Binop (Div, (Binop (Mul, llv1, llv3), prec), llv2), prec23)
+  | Binop (Div, (Binop (Div, llv1, llv2), prec12), llv3) when mul_div ->
+      (* (a / b) / c = a / (b * c). *)
+      Some (Binop (Div, llv1, (Binop (Mul, llv2, llv3), prec)), prec12)
+  | Binop (ToPowOf, (v1, _), (Constant c, _))
+    when !optimize_integer_pow && reassociate
+         && (not (Ops.is_float prec && match v1 with Constant _ -> true | _ -> false))
+         && Float.is_finite c && Float.is_integer c
+         (* Negative powers keep the helper's reciprocal-after-positive-power order; [unroll_pow]
+            instead reciprocates the base before multiplication. *)
+         && Float.(c >= 0. && c <= 8.)
+         &&
+         let rec effect_free = function
+           | Local_scope _ -> false
+           | Binop (_, (a, _), (b, _)) -> effect_free a && effect_free b
+           | Ternop (_, (a, _), (b, _), (c, _)) -> effect_free a && effect_free b && effect_free c
+           | Unop (_, (a, _)) -> effect_free a
+           | Get_dynamic { dyn_value = v, _; _ } -> effect_free v
+           | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _
+             ->
+               true
+         in
+         effect_free v1 ->
+      Some (unroll_pow ~base:v1 ~exp:(Float.to_int c), prec)
+  | Binop (Add, (Binop (Mul, llv1, llv2), prec12), llv3)
+  | Binop (Add, llv3, (Binop (Mul, llv1, llv2), prec12))
+    when contract ->
+      Some (Ternop (FMA, llv1, llv2, llv3), Ops.promote_prec prec12 prec)
+  | _ -> None
+
+let simplify_llc ?fp_algebra static_indices llc =
+  let licence =
+    Fp_licence.of_selection
+      (match fp_algebra with
+      | Some s -> s
+      | None -> Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra")
   in
-  let enabled name = List.mem selected name ~equal:String.equal in
-  let constants = enabled "constants" in
-  let sub = enabled "sub" and mul_div = enabled "mul_div" in
-  let identities = enabled "identities" and contract = enabled "contract" in
-  let pow = enabled "pow" in
   (* Implements top-down rewriting. The interval environment [ienv] tracks every in-scope symbol's
      bounds (seeded from the static indices, extended per [For_loop]) for the interval-driven
      comparison folds. *)
@@ -4303,8 +4428,6 @@ let simplify_llc ?fp_algebra static_indices llc =
                 body = loop_proc ~ienv:(ienv_narrow_from_cond ienv ~cprec c') body;
               })
   and loop_scalar ~ienv ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
-    (* Preserve the integer canonicalizer even in an all-off floating-point ablation. *)
-    let licensed family = family || not (Ops.is_float prec) in
     let loop_scalar = loop_scalar ~ienv in
     let loop_proc = loop_proc ~ienv in
     let local_scope_body, llsc' =
@@ -4366,144 +4489,36 @@ let simplify_llc ?fp_algebra static_indices llc =
         (llsc, prec)
     | Binop (op, (Constant c1, prec1), (Constant c2, prec2)) ->
         (Constant (Ops.interpret_binop op c1 c2), Ops.promote_prec prec1 prec2)
-    | Binop (Add, (llsc, prec1), (Constant 0., _))
-    | Binop (Sub, (llsc, prec1), (Constant 0., _))
-    | Binop (Add, (Constant 0., _), (llsc, prec1))
-      when licensed identities ->
-        loop_scalar (llsc, prec1)
-    | Binop (Sub, (Constant 0., _), (llsc, prec1)) when licensed identities ->
-        loop_scalar (Binop (Mul, (Constant (-1.), prec1), (llsc, prec1)), prec1)
     | Binop (Mul, (llsc, prec1), (Constant 1., _))
     | Binop (Div, (llsc, prec1), (Constant 1., _))
     | Binop (Mul, (Constant 1., _), (llsc, prec1)) ->
         loop_scalar (llsc, prec1)
-    | Binop (Mul, (_, prec1), (Constant 0., _))
-    | Binop (Div, (Constant 0., _), (_, prec1))
-    | Binop (Mul, (Constant 0., _), (_, prec1))
-      when licensed identities ->
-        (Constant 0., prec1)
-    | Binop
-        ( Add,
-          ( Binop (Add, (Constant c2, prec2), llsc), prec3
-          | Binop (Add, llsc, (Constant c2, prec2)), prec3 ),
-          (Constant c1, prec1) )
-    | Binop
-        ( Add,
-          (Constant c1, prec1),
-          ( Binop (Add, (Constant c2, prec2), llsc), prec3
-          | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
-      when licensed constants ->
-        loop_scalar (Binop (Add, (Constant (c1 +. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
-    | Binop
-        ( Sub,
-          ( Binop (Add, (Constant c2, prec2), llsc), prec3
-          | Binop (Add, llsc, (Constant c2, prec2)), prec3 ),
-          (Constant c1, prec1) )
-      when licensed constants ->
-        loop_scalar (Binop (Add, (Constant (c2 -. c1), Ops.promote_prec prec2 prec1), llsc), prec3)
-    | Binop
-        ( Sub,
-          (Constant c1, prec1),
-          ( Binop (Add, (Constant c2, prec2), llsc), prec3
-          | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
-      when licensed constants ->
-        (* c1 - (c2 + x) = (c1 - c2) - x: the summand keeps its negation. *)
-        loop_scalar (Binop (Sub, (Constant (c1 -. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
-    | Binop (Add, llv1, (Binop (Sub, llv2, llv3), prec3))
-    | Binop (Add, (Binop (Sub, llv2, llv3), prec3), llv1)
-      when licensed sub ->
-        loop_scalar (Binop (Sub, (Binop (Add, llv1, llv2), prec), llv3), prec3)
-    | Binop (Sub, llv1, (Binop (Sub, llv2, llv3), prec3)) when licensed sub ->
-        loop_scalar (Binop (Sub, (Binop (Add, llv1, llv3), prec), llv2), prec3)
-    | Binop (Sub, (Binop (Sub, llv1, llv2), prec1), llv3) when licensed sub ->
-        loop_scalar (Binop (Sub, llv1, (Binop (Add, llv2, llv3), prec1)), prec1)
-    | Binop
-        ( Mul,
-          ( Binop (Mul, (Constant c2, prec2), llsc), prec3
-          | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ),
-          (Constant c1, prec1) )
-    | Binop
-        ( Mul,
-          (Constant c1, prec1),
-          ( Binop (Mul, (Constant c2, prec2), llsc), prec3
-          | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ) )
-      when licensed constants ->
-        loop_scalar (Binop (Mul, (Constant (c1 *. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
-    | Binop
-        ( Div,
-          ( Binop (Mul, (Constant c2, prec2), llsc), prec3
-          | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ),
-          (Constant c1, prec1) )
-      when Ops.is_float prec && mul_div ->
-        loop_scalar (Binop (Mul, (Constant (c2 /. c1), Ops.promote_prec prec2 prec1), llsc), prec3)
-    | Binop (Div, (Constant c1, prec1), (Binop (Mul, (Constant c2, prec2), llsc), prec3))
-    | Binop (Div, (Constant c1, prec1), (Binop (Mul, llsc, (Constant c2, prec2)), prec3))
-      when Ops.is_float prec && mul_div ->
-        (* TODO: this might worsen the conditioning in hand-designed formula cases. *)
-        loop_scalar (Binop (Div, (Constant (c1 /. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
-    | Binop (Mul, llv1, (Binop (Div, llv2, llv3), prec23))
-    | Binop (Mul, (Binop (Div, llv2, llv3), prec23), llv1)
-      when Ops.is_float prec && mul_div ->
-        loop_scalar (Binop (Div, (Binop (Mul, llv1, llv2), prec), llv3), prec23)
-    | Binop (Div, llv1, (Binop (Div, llv2, llv3), prec23)) when Ops.is_float prec && mul_div ->
-        loop_scalar (Binop (Div, (Binop (Mul, llv1, llv3), prec), llv2), prec23)
-    | Binop (Div, (Binop (Div, llv1, llv2), prec12), llv3) when Ops.is_float prec && mul_div ->
-        (* (a / b) / c = a / (b * c). *)
-        loop_scalar (Binop (Div, llv1, (Binop (Mul, llv2, llv3), prec)), prec12)
     | Binop (ToPowOf, llv1, llv2) -> (
-        let ((v1_scalar, _) as v1) = loop_scalar llv1 in
-        let v2 = loop_scalar llv2 in
-        let result = (Binop (ToPowOf, v1, v2), prec) in
-        if
-          (not !optimize_integer_pow)
-          || (not (licensed pow))
-          || (Ops.is_float prec && match v1_scalar with Constant _ -> true | _ -> false)
-        then result
-        else
-          match v2 with
-          | Constant c, _
-            when Float.is_finite c && Float.is_integer c
-                 (* Negative powers keep the helper's reciprocal-after-positive-power order;
-                    [unroll_pow] instead reciprocates the base before multiplication. *)
-                 && Float.(c >= 0. && c <= 8.)
-                 &&
-                 let rec effect_free = function
-                   | Local_scope _ -> false
-                   | Binop (_, (a, _), (b, _)) -> effect_free a && effect_free b
-                   | Ternop (_, (a, _), (b, _), (c, _)) ->
-                       effect_free a && effect_free b && effect_free c
-                   | Unop (_, (a, _)) -> effect_free a
-                   | Get_dynamic { dyn_value = v, _; _ } -> effect_free v
-                   | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _
-                   | Embed_index _ ->
-                       true
-                 in
-                 effect_free v1_scalar ->
-              loop_scalar (unroll_pow ~base:v1_scalar ~exp:(Float.to_int c), prec)
-          | _ -> result)
-    | Binop (Add, (Binop (Mul, llv1, llv2), prec12), llv3)
-    | Binop (Add, llv3, (Binop (Mul, llv1, llv2), prec12))
-      when Ops.is_float prec && contract ->
-        (* TODO: this is tentative. *)
-        loop_scalar @@ (Ternop (FMA, llv1, llv2, llv3), Ops.promote_prec prec12 prec)
-    | Binop (op, llv1, llv2) ->
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
-        let result = (Binop (op, v1, v2), prec) in
-        if
-          Ops.equal_binop op Ops.And
-          && is_pure_index_conjunction (fst result)
-          && index_comparisons_total ~ienv ~prec (fst result)
-        then
-          (* Two total pure comparisons yield 0/1; their product is an eager conjunction. [Where]
-             still gates its arms, so an unmatched solved index never reads a tensor. *)
-          loop_scalar (Binop (Ops.Mul, v1, v2), prec)
-        else if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then
-          (* At the rewriting fixpoint, try the interval-driven comparison fold. *)
-          match try_interval_fold ~ienv ~prec (fst result) with
-          | Some c -> (c, prec)
-          | None -> result
-        else loop_scalar result
+        let result = (Binop (ToPowOf, v1, v2), prec) in
+        match fp_algebra_step licence result with Some r -> loop_scalar r | None -> result)
+    | Binop (op, llv1, llv2) -> (
+        match fp_algebra_step licence (llsc, prec) with
+        | Some rewritten -> loop_scalar rewritten
+        | None ->
+            let v1 = loop_scalar llv1 in
+            let v2 = loop_scalar llv2 in
+            let result = (Binop (op, v1, v2), prec) in
+            if
+              Ops.equal_binop op Ops.And
+              && is_pure_index_conjunction (fst result)
+              && index_comparisons_total ~ienv ~prec (fst result)
+            then
+              (* Two total pure comparisons yield 0/1; their product is an eager conjunction.
+                 [Where] still gates its arms, so an unmatched solved index never reads a tensor. *)
+              loop_scalar (Binop (Ops.Mul, v1, v2), prec)
+            else if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then
+              (* At the rewriting fixpoint, try the interval-driven comparison fold. *)
+              match try_interval_fold ~ienv ~prec (fst result) with
+              | Some c -> (c, prec)
+              | None -> result
+            else loop_scalar result)
     | Ternop (Where, (Binop (Cmpeq, (Embed_index a, _), (Embed_index b, _)), _), then_, _)
       when Indexing.equal_axis_index a b ->
         (* gh-133 Stage A: a repeated-symbol equality guard whose two embedded indices are

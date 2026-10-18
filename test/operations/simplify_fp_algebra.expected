@@ -1,6 +1,6 @@
 all-off preserves each floating-point expression: true
 each family changes its witness when selected: true
-each family leaves other witnesses alone: true
+each family leaves other licences' witnesses alone: true
 unqualified simplification matches the resolved selector: true
 all-off retains signed-zero addition: true
 constant folding still runs all-off: true
