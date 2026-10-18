@@ -1874,6 +1874,15 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               clock, memory clock x bus width) remain calibration follow-up work. *)
            peak_flops = Some 1.5e13;
            peak_memory_bandwidth = Some 8.0e12;
+           (* gh-ocannl-1253: the ranking score's cache capacity and residency, read only by the
+              untimed choosers (Untimed, outside the schedule-cache key). Residency is queried --
+              multiprocessors times resident threads per multiprocessor, minimum over devices. The
+              capacity is a fitted constant of the score's working-set proxy, not the L2 size (see
+              the field): provisional until the per-class calibration. *)
+           cache_capacity_bytes = Some (1 lsl 30);
+           max_resident_threads =
+             min_over (fun (a : Cu.Device.attributes) ->
+                 a.multiprocessor_count * a.max_threads_per_multiprocessor);
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

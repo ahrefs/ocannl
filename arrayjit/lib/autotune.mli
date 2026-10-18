@@ -1595,8 +1595,11 @@ type model_choice = {
       (** ["default"], or the winning candidate's spec label (matching the [autotune_log] labels).
       *)
   mc_model_ms : float option;
-      (** The winner's roofline lower bound in ms — a ranking score, not a runtime prediction;
-          [None] when selection did not run. *)
+      (** The applied winner's roofline lower bound in ms ({!Ir.Cost_model.analyze}'s counts) — not
+          a runtime prediction; [None] when selection did not run. *)
+  mc_rank_ms : float option;
+      (** The winner's ranking score in ms ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253), the
+          quantity the pick minimizes; at least [mc_model_ms], and [None] exactly when it is. *)
   mc_scored : int;
       (** Model evaluations that produced a score (the default pipeline included; the fissioned flow
           also scores per segment). *)
@@ -1643,16 +1646,19 @@ val model_default :
 (** A drop-in for {!Context.compile} that raises the untuned floor (gh-ocannl-491 task 3): inside
     the compile's own transform seam, the untuned default pipeline and the sketch families
     (whole-routine, and per-fission-segment substitutions when the default fissions) are scored with
-    the roofline model, and the model-argmin schedule is applied — zero measurement, one backend
-    compile. Advisory by construction: a candidate without model coverage is never picked over the
-    default, ties go to the default, and missing envelope constants, a disabled default annotator
-    ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
-    validation, or compilation failure fall back to the ordinary default pipeline — the reported
-    {!model_choice} then says ["default"]. Fatal failures propagate without retrying. Once the
-    compile is on that pipeline there is nothing left to fall back to, so its failures propagate as
-    they would from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is
-    executed and no cache is involved — results depend only on the computation, backend, and
-    envelope constants.
+    the cost model's ranking score ({!Ir.Cost_model.ranking_seconds}: the roofline, with operand
+    re-reads charged per block once the working set exceeds the cache capacity — the backend's
+    advisory [cache_capacity_bytes] or config [model_cache_capacity], gh-ocannl-1253), and the
+    argmin schedule is applied — zero measurement, one backend compile. The family search's bound
+    stays the distinct-cell floor, below every ranking score. Advisory by construction: a candidate
+    without model coverage is never picked over the default, ties go to the default, and missing
+    envelope constants, a disabled default annotator ({!Ir.Schedule.automatic_schedule_active}), or
+    any classified scoring, application, backend validation, or compilation failure fall back to the
+    ordinary default pipeline — the reported {!model_choice} then says ["default"]. Fatal failures
+    propagate without retrying. Once the compile is on that pipeline there is nothing left to fall
+    back to, so its failures propagate as they would from {!Context.compile}, without a duplicate
+    attempt. Unlike {!tune}, nothing is executed and no cache is involved — results depend only on
+    the computation, backend, and envelope constants.
 
     Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the routine
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic

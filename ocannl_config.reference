@@ -947,6 +947,17 @@
 # autotune_calibration_file).
 #model_peak_memory_bandwidth=
 
+# gh-ocannl-1253: overrides the backend's advisory cache capacity (bytes) of the analytic cost
+# model's ranking score, the score `Autotune.model_default` ranks candidates by. Once a kernel's
+# working set -- the global bytes one block reads, its Grid loops standing still, times the
+# blocks resident at once -- exceeds it, global reads are charged per block (the re-reads an
+# untiled contraction pays) instead of as distinct cells; at or below it, and with no capacity,
+# the score is the distinct-cell roofline. A fitted constant of that proxy, not the device's L2
+# size. `none` turns the per-block charge off; unset/empty uses the backend's value (CUDA and HIP
+# carry one, the other backends none). Never read by `Autotune.tune`, whose bound pruning and
+# keep-fraction ranking use the distinct-cell roofline, and not part of the schedule-cache key.
+#model_cache_capacity=
+
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.
 #

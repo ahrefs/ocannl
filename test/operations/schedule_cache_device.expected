@@ -2,6 +2,7 @@ hardware UUID discovery normalizes case: true
 distinct hardware UUIDs separate otherwise identical hosts: true
 missing, malformed and placeholder UUIDs decline identity: true
 identity queries preserve conservative construction limits: true
+the cache key's limits projection renders as the record without its Untimed fields: true
 a concrete context's identity is stable: true
 the available identity contains concrete device facts: true
 device, driver and compiler changes independently separate schedule keys: true

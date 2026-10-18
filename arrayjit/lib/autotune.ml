@@ -2065,6 +2065,61 @@ let summaries_roofline ~peak_flops ~peak_memory_bandwidth (summaries : CM.summar
              ~bytes:(CM.total_bytes s) ())
         |> Option.map ~f:(fun (a, b) -> a +. b))
 
+(* gh-ocannl-1253: the ranking score's cache capacity — config [model_cache_capacity] (bytes; [none]
+   turns the per-block charge off) beats the backend's advisory [cache_capacity_bytes]. Like that
+   field, an [Untimed] reading: only the untimed choosers below call [ranking_capacity], and nothing
+   [tune] reaches does ([test/operations/limits_field_classes]). *)
+let cache_capacity_override =
+  lazy
+    (let raw = String.strip (Utils.get_global_arg ~arg_name:"model_cache_capacity" ~default:"") in
+     match String.lowercase raw with
+     | "" -> `Advisory
+     | "none" -> `Off
+     | _ -> (
+         match Float.of_string raw with
+         | f when Float.is_finite f && Float.(f >= 0.) -> `Bytes (Int.of_float f)
+         | _ | (exception _) ->
+             raise
+             @@ Utils.User_error
+                  ("Autotune: ocannl_model_cache_capacity should be a non-negative byte count, or \
+                    none; found: " ^ raw)))
+
+let ranking_capacity ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  let capacity =
+    match Lazy.force cache_capacity_override with
+    | `Advisory -> u.cache_capacity
+    | `Off -> None
+    | `Bytes b -> Some b
+  in
+  (capacity, u.resident_threads)
+
+(* The ranking score summed over a candidate's kernels, beside the roofline lower bound of the same
+   kernels ([summaries_roofline]'s): [(rank, bound)], [rank >= bound] by
+   {!Ir.Cost_model.ranked_bytes}' contract. [None] exactly where [summaries_roofline] is. Read by
+   the untimed choosers only — [model_default] and the [auto] seeding gate. *)
+let segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
+    (float * float) option =
+  let cache_capacity_bytes, max_resident_threads = ranking_capacity ~limits in
+  let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
+  match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
+  | None -> None
+  | Some bound ->
+      let rank =
+        List.fold summaries ~init:0. ~f:(fun acc (o, s) ->
+            let bytes =
+              match cache_capacity_bytes with
+              | None -> CM.total_bytes s
+              | Some _ ->
+                  CM.ranked_bytes ?cache_capacity_bytes s
+                    (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
+            in
+            acc
+            +. Option.value ~default:0.
+                 (CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:s.CM.flops ~bytes ()))
+      in
+      Some (rank, bound)
+
 let model_score ~static_indices ~limits (opt : LL.optimized) (sched : Sched.schedule) : float option
     =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
@@ -3612,9 +3667,13 @@ type model_choice = {
       (** ["default"] or the winning candidate's spec label (matching {!tune}'s [autotune_log]
           labels). *)
   mc_model_ms : float option;
-      (** The winner's roofline lower bound in ms — a ranking score, not a runtime prediction;
-          [None] when selection did not run (no envelope constants, automatic scheduling disabled,
-          or the default itself had no model coverage). *)
+      (** The winner's roofline lower bound in ms — not a runtime prediction; [None] when selection
+          did not run (no envelope constants, automatic scheduling disabled, or the default itself
+          had no model coverage). *)
+  mc_rank_ms : float option;
+      (** The winner's ranking score in ms ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253), the
+          quantity the pick minimized; at least [mc_model_ms]. [None] exactly when [mc_model_ms] is.
+      *)
   mc_scored : int;
       (** Model evaluations that produced a score (the default pipeline included; the fissioned flow
           also scores per segment). *)
@@ -3675,7 +3734,14 @@ let model_default ?name ?report ctx comp bindings =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let emit r = Option.iter report ~f:(fun f -> f r) in
   let no_selection =
-    { mc_label = "default"; mc_model_ms = None; mc_scored = 0; mc_skipped = 0; mc_rejected = 0 }
+    {
+      mc_label = "default";
+      mc_model_ms = None;
+      mc_rank_ms = None;
+      mc_scored = 0;
+      mc_skipped = 0;
+      mc_rejected = 0;
+    }
   in
   if
     (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
@@ -3693,14 +3759,16 @@ let model_default ?name ?report ctx comp bindings =
        pre-search (config [model_default_placements]) scores hermetic lowerings before any compile
        runs, and its work accumulates into the same reported totals as the in-compile selection. *)
     let n_scored = ref 0 and n_skipped = ref 0 and n_rejected = ref 0 in
+    (* Candidates rank by the ranking score (gh-ocannl-1253), which charges operand re-reads once
+       the working set leaves the cache — under [analyze]'s distinct-cell roofline an untiled
+       contraction scores at the family's floor and no sketch can win. The family search's bound
+       below stays [completion_floor]'s roofline: the ranking score is never below [analyze]'s, so
+       it is never below the bound, and fathoming stays sound. *)
     let score opts =
-      match
-        summaries_roofline ~peak_flops ~peak_memory_bandwidth
-          (List.map opts ~f:(fun o -> CM.analyze o.LL.llc))
-      with
-      | Some s ->
+      match segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits opts with
+      | Some (rank, _bound) ->
           Int.incr n_scored;
-          Some s
+          Some rank
       | None ->
           Int.incr n_skipped;
           None
@@ -3909,7 +3977,8 @@ let model_default ?name ?report ctx comp bindings =
       choice :=
         {
           mc_label = label;
-          mc_model_ms = Option.map model_s ~f:(fun s -> s *. 1e3);
+          mc_model_ms = None;
+          mc_rank_ms = Option.map model_s ~f:(fun s -> s *. 1e3);
           mc_scored = !n_scored;
           mc_skipped = !n_skipped;
           mc_rejected = !n_rejected;
@@ -3927,7 +3996,19 @@ let model_default ?name ?report ctx comp bindings =
       in
       match apply_action () with
       | segs ->
-          logf "model_default: chose %s (model %s; %d scored, %d without coverage, %d unbuildable)"
+          (* The lower bound of what is applied, beside the rank the pick minimized. *)
+          (if Option.is_some model_s then
+             let bound =
+               summaries_roofline ~peak_flops ~peak_memory_bandwidth
+                 (List.map segs ~f:(fun o -> CM.analyze o.LL.llc))
+             in
+             choice :=
+               {
+                 !choice with
+                 mc_model_ms = Option.map bound ~f:(fun s -> s *. 1e3);
+                 mc_rank_ms = Option.bind bound ~f:(fun _ -> !choice.mc_rank_ms);
+               });
+          logf "model_default: chose %s (rank %s; %d scored, %d without coverage, %d unbuildable)"
             label
             (match model_s with Some s -> Printf.sprintf "%.6f ms" (s *. 1e3) | None -> "n/a")
             !n_scored !n_skipped !n_rejected;
@@ -3950,7 +4031,7 @@ let model_default ?name ?report ctx comp bindings =
     let on_fallback exn =
       logf "model_default: compiling the pick %s FAILED (%s); recompiling the default pipeline"
         !choice.mc_label (Exn.to_string exn);
-      choice := { !choice with mc_label = "default"; mc_model_ms = None }
+      choice := { !choice with mc_label = "default"; mc_model_ms = None; mc_rank_ms = None }
     in
     (* gh-ocannl-514, the placement levels of the untuned regime (config [model_default_placements]
        = N > 0): before the compile, branch-and-bound over the top-N ranked flip candidates of the
@@ -4875,8 +4956,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
        (gh-ocannl-1241). A key renders only when its resolved value is not its default, as this
        device resolves the default (gh-ocannl-1272): stating a key at its default must not cost a
        warm chain its records. Hence computed here, once [limits] is known: the cache key the
-       trajectory is stored under hashes the whole limits record, so two processes sharing a record
-       resolve every [auto] alike. *)
+       trajectory is stored under hashes the limits record's [Key]-class projection, so two
+       processes sharing it resolve every [auto] alike -- an [auto] resolved from an [Untimed] field
+       would break that, which is why no search reads one (gh-ocannl-1253). *)
     let search_shape =
       Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
         search beam_width rounds repeats keep_fraction max_split_reduce_sites

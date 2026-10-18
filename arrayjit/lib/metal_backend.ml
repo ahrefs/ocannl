@@ -459,6 +459,10 @@ module Impl = struct
               an M4 Max), tripping the gh-514 agreement warning on every exact streaming row. *)
            peak_flops = Some 5.0e12;
            peak_memory_bandwidth = Some 1.0e12;
+           (* gh-ocannl-1253: no ranking-score capacity until a Metal measurement (gh-ocannl-1404):
+              the score charges distinct cells here. *)
+           cache_capacity_bytes = None;
+           max_resident_threads = None;
          })
     in
     fun () -> Lazy.force limits

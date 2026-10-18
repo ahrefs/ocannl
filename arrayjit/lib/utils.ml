@@ -184,6 +184,7 @@ let known_config_keys =
       "model_default_geometry_lattice";
       "model_peak_flops";
       "model_peak_memory_bandwidth";
+      "model_cache_capacity";
       (* Numerics policy (gh-ocannl-478) *)
       "tf32_matmuls";
       "narrow_compute_f32";
@@ -423,6 +424,15 @@ let config_key_classification : (config_key_class * string * string list) list =
        (model_peak_flops, model_peak_memory_bandwidth) stay search-shaping: tune's keep-fraction \
        ranking and bound pruning read them too",
       [ "model_default_schedule"; "model_default_placements"; "model_default_geometry_lattice" ] );
+    ( Untimed_model,
+      "it is the cache capacity of the analytic model's ranking score (gh-ocannl-1253), which only \
+       the untimed choosers read (Autotune.model_default's pick) -- like the backends' advisory \
+       cache_capacity_bytes it overrides, an Untimed field of the device description and outside \
+       the cache key for the same reason: a stored winner is a measured schedule, which the \
+       capacity changes neither the compilation nor the speed of. Autotune.tune reads none of it; \
+       its bound pruning and keep-fraction ranking read the distinct-cell roofline, which no \
+       capacity enters",
+      [ "model_cache_capacity" ] );
     ( Untimed_model,
       "they decide which large CUDA/HIP contractions the recipes' untuned compile seeds with the \
        matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324) and which long reductions \

@@ -205,6 +205,16 @@ files.
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an
   identity of their own still state their own extra inputs (the analysis cache's
   `inline_complex_computations`, the cc probe cache's compiler/arch/simd settings).
+- The device description is classified per FIELD the same way (gh-ocannl-1253):
+  `Backend_intf.limits_key` destructures the whole `hardware_limits` record with no `; _`,
+  copying each `Key` field (read by schedule construction, codegen or timing) into
+  `Limits_key.t` and binding each `Untimed` one (read only by the untimed choosers) to `_`, and
+  the codegen key component hashes that projection. So a new field is a compile error until it is
+  classified, an `Untimed` field gets `[@sexp.option]` so the projection still renders exactly as
+  the pre-field record did, and its readers go through `Backend_intf.untimed_limits` from
+  `autotune.ml` alone — `test/operations/limits_field_classes` holds the toggles, the byte
+  identity and a call-graph reach from `tune` (a `tune`-reachable read would let an `auto` the
+  cache key cannot see resolve differently between two processes sharing a key).
 - `Affine.access.a_path` components are TYPED (`Affine.path_comp`, gh-ocannl-561): `Stmt` indices
   interleaved with `Cond`/`Body` (`If`) and `Rhs`/`Write` (`Set` family), constructor order =
   execution order, so lexicographic comparison is program order within a statement too. Every

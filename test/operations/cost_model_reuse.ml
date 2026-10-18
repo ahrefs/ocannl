@@ -12,13 +12,13 @@
    executed, and every claim is an integer or a comparison of two scores. The envelope is passed
    explicitly (bandwidth-dominant, so the byte counts decide), never read from configuration.
 
-   Claims: - the untiled default plan requests between [M·N·K·elt] and [M·N·K·elt·(1 + 1/wg)] of its
-   operands, [wg] its workgroup size; - a [bm × bn] scalar blocktile requests exactly
-   [M·N·K·elt·(1/bm + 1/bn)]; - at or below capacity, and with no capacity, the score is [analyze]'s
-   roofline; - raising the capacity never raises the score; - on every leaf of the site's GPU sketch
+   The claims: the untiled default plan requests between [M·N·K·elt] and [M·N·K·elt·(1 + 1/wg)] of
+   its operands, [wg] its workgroup size; a [bm × bn] scalar blocktile requests exactly
+   [M·N·K·elt·(1/bm + 1/bn)]; at or below capacity, and with no capacity, the score is [analyze]'s
+   roofline; raising the capacity never raises the score; and on every leaf of the site's GPU sketch
    tree and on the default plan, the branch-and-bound's bound ([completion_floor]'s roofline) is at
-   most [analyze]'s roofline, which is at most the score: the score can never make the bound prune a
-   winner. *)
+   most [analyze]'s roofline, which is at most the score -- the score can never make the bound prune
+   a winner. *)
 
 open Base
 module LL = Ir.Low_level
@@ -176,10 +176,10 @@ let () =
          match (rank ~cache_capacity_bytes:0 o, rank ~cache_capacity_bytes:0 untiled) with
          | Some a, Some b -> Float.(a < b)
          | _ -> false));
-  p "with no capacity no scalar blocktile ranks strictly below the untiled plan"
-    (not
-       (List.exists (List.filter_map scalar_blocktiles ~f:applied) ~f:(fun o ->
-            match (rank o, rank untiled) with Some a, Some b -> Float.(a < b) | _ -> false)))
+  p_none ~min:(List.length scalar_blocktiles)
+    "with no capacity no scalar blocktile ranks strictly below the untiled plan"
+    (List.filter_map scalar_blocktiles ~f:applied) ~f:(fun o ->
+      match (rank o, rank untiled) with Some a, Some b -> Float.(a < b) | _ -> false)
 
 let () =
   (* Every leaf of the family, tensorized and twin flavors included, at capacity 0 -- the charge on

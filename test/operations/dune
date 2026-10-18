@@ -109,6 +109,7 @@
   (alias runtest-env_spelling_gate)
   (alias runtest-test_config_consistency)
   (alias runtest-digest_completeness)
+  (alias runtest-limits_field_classes)
   (alias runtest-config_dep_completeness)
   (alias runtest-refused_action_streams)
   (alias runtest-refused_action_scan_cases)
@@ -278,6 +279,7 @@
   (alias runtest-bandwidth_calibration)
   (alias runtest-autotune_routine_name)
   (alias runtest-cost_model_selection)
+  (alias runtest-limits_field_classes)
   (alias runtest-model_default_fallback)
   (alias runtest-placement_surface)
   (alias runtest-flip_bound_pruning)
@@ -3151,6 +3153,8 @@
   digest_completeness.ml
   config_scan_lexing.expected
   digest_completeness.expected
+  limits_field_classes.ml
+  limits_field_classes.expected
   env_var_deps.ml
   env_var_deps_control.expected
   env_var_deps.expected
@@ -3211,6 +3215,8 @@
    dead_export_scan.expected,dead_export_scan_control.expected
    digest_completeness.ml
    config_scan_lexing.expected,digest_completeness.expected
+   limits_field_classes.ml
+   limits_field_classes.expected
    env_var_deps.ml
    env_var_deps_control.expected,env_var_deps.expected
    refused_action_streams.ml
@@ -6268,7 +6274,8 @@
     %{dep:cost_model_selection.exe}
     "--ocannl_backend=cc"
     "--ocannl_model_peak_flops=1e12"
-    "--ocannl_model_peak_memory_bandwidth=1e6"))))
+    "--ocannl_model_peak_memory_bandwidth=1e6"
+    "--ocannl_model_cache_capacity=1048576"))))
 
 (rule
  (alias runtest-cost_model_selection)
@@ -9052,6 +9059,65 @@
  ; ocannl-backend: none -- hand-built IR is optimized, scheduled and scored, never linked or executed.
  (name cost_model_reuse)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules cost_model_reuse)
  (libraries base stdio ocannl arrayjit.verdict ll_test))
+
+; gh-ocannl-1253: every hardware_limits field has a cache-identity class; the cache key hashes the
+; Key-class projection, byte-identical to the pre-classification record; no Untimed field is read
+; outside its readers. The globs are the library and tool sources the Untimed fields could leak
+; into.
+
+(executable
+ (name limits_field_classes)
+ (modules limits_field_classes)
+ (libraries
+  base
+  stdio
+  ppxlib
+  arrayjit.ir
+  arrayjit.utils
+  test_utils
+  arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links no backend: it compares synthetic limits records and reads the
+ ; globbed sources as text.
+ (target limits_field_classes.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (glob_files_rec ../../arrayjit/lib/*.ml)
+  (glob_files_rec ../../tensor/*.ml)
+  (glob_files_rec ../../lib/*.ml)
+  (glob_files_rec ../../bin/*.ml)
+  (glob_files_rec ../../tools/*.ml)
+  (glob_files_rec ../../benchmarks/runners/ocannl/*.ml))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:limits_field_classes.exe} %{deps}))))
+
+(rule
+ (alias runtest-limits_field_classes)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff limits_field_classes.expected limits_field_classes.actual)))

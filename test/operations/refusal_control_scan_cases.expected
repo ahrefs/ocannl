@@ -243,6 +243,22 @@ digest_completeness.ml: [scanner-refusal:1825a277ba0eda3313fbe079e465c15d] but c
 digest_completeness.ml: [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count (claim) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
 digest_completeness.ml: [scanner-refusal:a9c0305e1a7d7817b8ba147ce52e8f90] classified exactly once (claim) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
 digest_completeness.ml: [scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is classified code-borne (claim) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
+limits_field_classes.ml has exactly the explicitly assigned refusal controls: true
+limits_field_classes.ml: [scanner-refusal:6dd30560f9e032ec9afc45a6fec9ce97] every field of (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:280bb27b49e792a7b0d751509c083f70] every toggle here (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:2d5147cf85e6b2514ce0a7ddcffd1002] ranking score's capacity (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:fdcb8ce65a493ff3ca298ab6cd096a0d] Untimed field leaves (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:485270c2563c18422ec15dd9e3271cb0] reaching the accessor (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:5de8818597d1f7b0e33446b61b0cf363] backend_intf.ml (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:8f9176198240323dbd1fb605e9c46ba6] backend_intf.ml (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:ef99980e8fef8e93f88e9ada52db5875] autotune.ml (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:190f5d5f9cf7b1a188c423cc9c9159e6] arrayjit/lib/autotune.ml (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:887690bba79db7186f007c0ee3bc4d55] autotune.ml (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:02907ae08467c5deca8ec391bc107c00] model_default (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:fe049afe671ea46b4b4e1a97110057e0] autotune.ml (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:0c0c7155597ab67b382780abd0a1bc65] Autotune.tune (claim) is catalogued beside limits_field_classes.expected: true
 env_var_deps.ml has exactly the explicitly assigned refusal controls: true
 env_var_deps.ml: [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

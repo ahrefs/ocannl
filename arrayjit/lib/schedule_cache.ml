@@ -594,8 +594,10 @@ let codegen_tag ~(backend : string) ~(limits : Backend_intf.hardware_limits)
          while generating, rendering and timing candidates differently. The record is exactly the
          device description schedule construction already consults, so hashing it keeps the key as
          discriminating as the decisions it stands for, and a device's own [codegen_tag] rides along
-         in it. *)
-      Sexp.to_string (Backend_intf.sexp_of_hardware_limits limits);
+         in it. Its [Key]-class projection (gh-ocannl-1253): the fields only the untimed choosers
+         read change neither how a stored winner compiles nor how fast it runs, and the projection
+         renders exactly as the whole record did before they existed. *)
+      Sexp.to_string (Backend_intf.Limits_key.sexp_of_t (Backend_intf.limits_key limits));
       (* What the numerics policy RESOLVES to on this backend (gh-ocannl-1117): the backend's own
          compute and accumulator resolution functions, tabulated over every precision, and its mma
          arm table (gh-ocannl-1153: CUDA's tf32 arm, which [accum_prec] cannot tell from no arm).

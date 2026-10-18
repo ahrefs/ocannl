@@ -154,9 +154,9 @@ val roofline_seconds :
     and what scores an untiled contraction exactly at its roofline floor however often its operands
     are re-read from DRAM — the branch-and-bound over the tiling families then fathoms every sketch.
     The ranking score is the second, separate quantity the untimed choosers rank by
-    ([Autotune.model_default], the [auto] seeding gate). The bound is unchanged and keeps serving
-    pruning, pre-filtering, the agreement check and calibration rows; putting a cache model into it
-    would raise [BOUND VIOLATION] whenever a kernel hits in cache.
+    ([Autotune.model_default]). The bound is unchanged and keeps serving pruning, pre-filtering, the
+    agreement check and calibration rows; putting a cache model into it would raise
+    [BOUND VIOLATION] whenever a kernel hits in cache.
 
     Contract:
     - Global reads are charged per block: the cells one block touches — its [Grid] loops standing

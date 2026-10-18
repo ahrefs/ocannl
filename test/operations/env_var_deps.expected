@@ -170,6 +170,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test bench_mma_writes: Ir.Schedule.apply
   test/operations/dune, test clamped_window_pool: Ir.Schedule.apply
   test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test cost_model_reuse: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test cpu_parallel: Ir.Schedule.apply
   test/operations/dune, test cpu_simd_reduction: Ir.Schedule.apply
   test/operations/dune, test cpu_vectorized: Ir.Schedule.apply
@@ -316,6 +317,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-gh1133_summary
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
+  test/operations/dune                     @runtest-limits_field_classes
   test/operations/dune                     @runtest-ll_test_ratchet
   test/operations/dune                     @runtest-log_index_width_narrow
   test/operations/dune                     @runtest-log_index_width_wide
