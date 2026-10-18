@@ -1,0 +1,79 @@
+== listing, target c0ffee
+splice: control autotune_cache_splice_control, treatment autotune_cache_splice_treatment
+splice: entry 333333333333 [does not ship under the control's placement decisions]: whole-routine in the control, schedules differ
+splice: entry 111111111111 [ships]: 5 segments (treatment: 5 segments), 3 schedules differ, 2 targeted
+    0 normal   1u aaaaaaaaaaaa x1  DIFF .  Split #cbbad3 | Split #2ef6ef
+    1 solo     2u eeeeeeeeeeee x1  same .  -
+    2 normal   1u c0ffee000000 x2  DIFF T  Split #e40697 | Coalesce Split #09da68
+    3 normal   1u c0ffee000000 x2  DIFF T  Split #e40697 | Coalesce Split #09da68
+    4 normal   1u bbbbbbbbbbbb x1  same .  Split #efaa3c
+splice: entry 222222222222 [does not ship under the control's placement decisions]: 2 segments (treatment: 2 segments), 1 schedules differ, 1 targeted
+    0 normal   1u c0ffee000000 x1  DIFF T  Split #e40697 | Coalesce Split #09da68
+    1 normal   1u bbbbbbbbbbbb x1  same .  Split #ea24fb
+splice: 3 entries in both caches, 1 only in the control (copied into both arms), 1 only in the treatment (in neither arm), 1 placement decisions (the control's, in both arms)
+splice: target c0ffee selects 3 segments
+splice: 3 targeted segments, 3 with schedules that differ between the arms
+the digest prefix selects the three Q segments across both routines: true
+each arm holds the control's four schedule entries and its placement decision: true
+the treatment arm takes the targets' schedules from the treatment and the rest from the control: true
+the control arm is the control's cache: true
+an untargeted whole-routine entry replays the control's schedule in both arms: true
+a control-only entry is in both arms, a treatment-only entry in neither: true
+both arms ship the control's placement decision: true
+reading the two caches left them unchanged: true
+a cache stamped by no regime is spliced from, and left whole: true
+where a lookup would have swept it: true
+writing an arm into a non-empty directory: autotune_cache_splice_arm_t: the arm's cache directory must be absent or empty
+writing an arm into a non-empty directory is refused, naming "absent or empty": true
+a bare index with two fissioned entries: target #2 is ambiguous: 2 entries are fissioned in both caches (111111111111, 222222222222); name one as <entry>#<index>
+a bare index with two fissioned entries is refused, naming "ambiguous": true
+an entry-prefixed index selects that one segment: true
+an index past the entry's segments: target 1111#9: entry 111111111111 has 5 segments
+an index past the entry's segments is refused, naming "has 5 segments": true
+a target that selects nothing: target dddddd selects no segment that can be spliced, of any entry present in both caches: a splice of it would replay the control in both arms
+a target that selects nothing is refused, naming "selects no segment": true
+a too-short digest prefix: target "c0f" is neither a segment digest prefix (at least 6 hex digits) nor [<entry>]#<index>
+a too-short digest prefix is refused, naming "at least 6 hex digits": true
+writing an arm with nothing targeted: nothing is targeted: both arms would replay the control
+writing an arm with nothing targeted is refused, naming "nothing is targeted": true
+a segmentation that differs outside the target: entry 111111111111: the segmentations differ at segment 0: control normal/1 units/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, treatment normal/2 units/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+a segmentation that differs outside the target is refused, naming "segmentations differ at segment 0": true
+a different code cut at a non-target position: entry 111111111111: the segmentations differ at segment 4: control normal/1 units/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, treatment normal/1 units/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+a different code cut at a non-target position is refused, naming "segmentations differ at segment 4": true
+a different number of segments: entry 111111111111: the segmentations differ: 5 control segments, 4 treatment segments
+a different number of segments is refused, naming "5 control segments, 4 treatment segments": true
+a whole-routine prelude that differs: entry 111111111111: the two winners' whole-routine preludes differ (a split-reduce winner's [saved]); the prelude schedules the whole routine, not a segment
+a whole-routine prelude that differs is refused, naming "preludes differ": true
+a target in a shipping routine the treatment won whole: entry 111111111111 (k-step): a target selects segments of it, but the treatment's winner is whole-routine, so it has no segments to splice
+a target in a shipping routine the treatment won whole is refused, naming "whole-routine": true
+one key held for two source digests: entry k-arm-b: the two caches hold it for different source digests
+one key held for two source digests is refused, naming "different source digests": true
+== listing, arm B's winner whole-routine in the treatment
+splice: control autotune_cache_splice_control, treatment autotune_cache_splice_t_arm_b
+splice: entry 333333333333 [does not ship under the control's placement decisions]: whole-routine in the control, schedules differ
+splice: entry 111111111111 [ships]: 5 segments (treatment: 5 segments), 3 schedules differ, 2 targeted
+    0 normal   1u aaaaaaaaaaaa x1  DIFF .  Split #cbbad3 | Split #2ef6ef
+    1 solo     2u eeeeeeeeeeee x1  same .  -
+    2 normal   1u c0ffee000000 x2  DIFF T  Split #e40697 | Coalesce Split #09da68
+    3 normal   1u c0ffee000000 x2  DIFF T  Split #e40697 | Coalesce Split #09da68
+    4 normal   1u bbbbbbbbbbbb x1  same .  Split #efaa3c
+splice: NOT spliced: entry 222222222222 (k-arm-b): a target selects segments of it, but the treatment's winner is whole-routine, so it has no segments to splice
+splice: entry 222222222222 [does not ship under the control's placement decisions]: 2 segments (treatment: whole-routine), 2 schedules differ, 0 targeted
+    0 normal   1u c0ffee000000 x1  DIFF .  Split #e40697 | (no segment)
+    1 normal   1u bbbbbbbbbbbb x1  DIFF .  Split #ea24fb | (no segment)
+splice: 3 entries in both caches, 1 only in the control (copied into both arms), 1 only in the treatment (in neither arm), 1 placement decisions (the control's, in both arms)
+splice: target c0ffee selects 2 segments
+splice: 2 targeted segments, 2 with schedules that differ between the arms
+an unspliceable target in a routine that does not ship leaves it as the control's: true
+a compile that replayed the spliced routine measured the splice: true
+a compile that replayed only untargeted routines: the compile replayed no spliced routine: the two arms time the same control schedules (are the caches of another workload, profile or placement than this run?)
+a compile that replayed only untargeted routines is refused, naming "replayed no spliced routine": true
+a compile that replayed a routine left unspliced: the compile replayed entry 222222222222, where a target was left unspliced: its step is the control's in both arms
+a compile that replayed a routine left unspliced is refused, naming "left unspliced": true
+the same target with no placement decision recorded: entry 222222222222 (k-arm-b): a target selects segments of it, but the treatment's winner is whole-routine, so it has no segments to splice
+the same target with no placement decision recorded is refused, naming "whole-routine": true
+targets that splice only a routine that does not ship: the targets splice no routine the control's placement decisions ship: the treatment arm would replay the control wherever it is timed
+targets that splice only a routine that does not ship is refused, naming "no routine the control's placement decisions ship": true
+an older control version, not adopted: target c0ffee selects no segment that can be spliced, of any entry present in both caches: a splice of it would replay the control in both arms (4 control and 0 treatment entries did not decode at this build's entry version: stale, or an older version to adopt with BENCH_SPLICE_ADOPT_VERSION)
+an older control version, not adopted is refused, naming "selects no segment": true
+an adopted control replays re-stamped at the current version, spliced alike: true

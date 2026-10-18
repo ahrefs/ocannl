@@ -463,6 +463,12 @@ files.
   Metal kernel timings) was larger than the effect under test. After `Train.tune_placements` the
   debug source left on disk is arm B's — the returned already-compiled arm — so grep the artifact you
   actually mean.
+- An effect smaller than the variance between two independent searches (on `gpt2_mini` that
+  variance is several percent of a step, gh-ocannl-1165) is measured by SPLICING, not by comparing
+  two searched schedules: both arms replay the control's winner except at the target segments
+  (`bench_gpt`'s `BENCH_SPLICE_*` mode, `benchmarks/runners/ocannl/bench_splice.ml`, gh-ocannl-1277;
+  the benchmarks README has the recipe). Pick the targets from its `BENCH_SPLICE_LIST=1` digest
+  groups, and run both arms on the treatment's build.
 - Benchmark drivers should START hermetic rather than be hardened into it: unset ambient
   `OCANNL_*`/`BENCH_*` wholesale, pin every treatment on argv (the command line outranks every other
   config source), content-stamp the fixtures, fail loudly per cell — and name the DRIVER, not a

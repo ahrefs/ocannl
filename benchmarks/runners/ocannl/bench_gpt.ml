@@ -20,8 +20,11 @@ module St = Safetensors
 module H = Bench_harness
 
 let () =
-  let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   let tune = H.env_flag "BENCH_TUNE" in
+  (* The splice-segments A/B (gh-ocannl-1277): this arm's cache, written from the control's and the
+     treatment's before anything else, so the listing needs no fixture. *)
+  let splice = Bench_splice.from_env ~tune in
+  let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   H.install_timing_trace ();
   let materialize = H.env_flag "BENCH_MATERIALIZE" in
   let debug = H.env_flag "BENCH_DEBUG" in
@@ -69,7 +72,11 @@ let () =
     Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
       ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss comp bindings
   in
-  let ctx, routines = H.compile_step ~tune ~tuned ctx bindings step_shape in
+  let ctx, routines =
+    Bench_splice.replay_guarded splice
+      ~counts:(fun () -> (arms.H.searches, arms.H.replays, arms.H.no_searches))
+      (fun () -> H.compile_step ~tune ~tuned ctx bindings step_shape)
+  in
   (* What the timed artifact emitted, off the routines themselves (gh-ocannl-626): a flip refinement
      or a timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms routines;

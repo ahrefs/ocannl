@@ -1133,6 +1133,60 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
   framework internals (tinygrad's beam disk cache, torch's FX-graph cache counters) and answer
   `null` — reported as `?` — when they cannot tell, rather than guessing a `false` that would be
   exactly the silent claim this field exists to prevent.
+- **Splice-segments A/B: the default for an effect below the search variance** (gh-ocannl-1277).
+  Two independently searched step schedules differ in far more than the treatment: on `gpt2_mini`
+  (HIP, gfx1151) gh-ocannl-1165's q/k/v saving of ~1% of the step read +1.3% under the exact
+  profile and -1.8% under the approximate one, because the rest of the two searches crowned other
+  winners for 6-9 unrelated segments (replay noise was under 0.5%, so both readings were real
+  properties of the two schedules, and neither was the treatment's). The splice removes that
+  variance by construction: **both arms replay the control's schedule for every segment except the
+  target ones**, which the treatment arm takes from the treatment's own crowned winner. Run every
+  arm on the treatment's build, each a fresh process, alternating the arm order round by round:
+
+  ```
+  BENCH_TUNE=1 BENCH_SPLICE_CONTROL=<control cache dir> BENCH_SPLICE_TREATMENT=<treatment cache dir> \
+    BENCH_SPLICE_TARGET=<targets> BENCH_SPLICE_ARM=control|treatment BENCH_FIXTURE=... \
+    bench_gpt.exe --ocannl_backend=... --ocannl_autotune_search=false \
+    --ocannl_autotune_cache_dir=<a fresh directory per run> [--ocannl_profile=...]
+  ```
+
+  `BENCH_SPLICE_LIST=1` (with the two directories, before any fixture is read) prints every entry
+  both caches hold, a row per fissioned segment: position, kind, units, structural digest, how many
+  segments of the routine share that digest (`x12` is the twelve q/k/v kernels), whether the two
+  winners' schedules agree, and both schedules' operations with a short hash. Pick the targets from
+  it: `BENCH_SPLICE_TARGET` takes comma-separated digest prefixes (at least 6 hex digits; every
+  segment with that pre-schedule code, in every routine) and `[<entry>]#<index>` positions (the
+  entry is a source-digest prefix, needed when more than one routine is fissioned in both caches,
+  as the two placement arms are). A run writes its arm's cache into the configured
+  `autotune_cache_dir` (which must be set, and absent or empty), prints the same listing on stderr
+  with the targeted rows marked `T`, replays it, and exits 1 unless the step came entirely from that
+  cache (`searched=false`, no untuned fallback). The two input caches are only read, never opened
+  as caches: a cache-open sweeps a directory an older regime stamped. What each arm holds:
+  every schedule entry of the control (the targeted ones spliced in the treatment arm) and the
+  control's placement decisions, so both arms ship the control's placement; entries only the
+  treatment has are in neither arm. The splice **refuses**, rather than repairs, a routine holding a
+  target whose two winners cut it differently anywhere (segment count, kind, units or code), whose
+  split-reduce preludes differ, or which one arm won whole-routine -- when that routine ships under
+  the control's placement decision (its source digest is the decision's `outcome_digest`; with no
+  decision recorded, every routine counts). The other placement arm's winner replays only with the
+  placement store bypassed, so there such a target is left as the control's and reported (`NOT
+  spliced`), and the mode then refuses `tune_placement_store=false`. It also refuses a target that
+  selects nothing, targets that splice no shipping routine, and an ambiguous index. Entries pair
+  by cache key, which carries the routine's source digest, so the method measures a treatment that changes what the search finds, not one that changes the program
+  it searches (that leaves no pair). A treatment that adds a search branch bumps `entry_version`,
+  which makes the control's entries a miss on the treatment's build: `BENCH_SPLICE_ADOPT_VERSION=<n>`
+  adopts them, re-stamped, which is sound across a bump that changed the search menu, not the
+  saved format or the canonical rendering. Measured on gh-ocannl-1165's own
+  caches (minix, gfx1151, 6 alternating rounds per profile, the q/k/v group `32d26aa17118` as the
+  target, both arms on the treatment's build): the treatment arm was faster in all 12 rounds, by
+  -0.051 ms (-1.12%) exact and -0.065 ms (-1.39%) approximate, per-arm round-to-round stdev
+  0.006-0.012 ms -- against the q/k/v kernels' isolated saving of -0.050 / -0.040 ms, where the two
+  independently searched schedules had read +1.3% / -1.8%.
+  The run also fails when its compile replayed no spliced routine (caches of another workload or
+  profile than the run) or one where a target was left unspliced (a forced `tune_ship_arm`). A
+  runner adopts the mode with two calls, `Bench_splice.from_env` before compiling and
+  `Bench_splice.replay_guarded` around the compile;
+  `test/operations/bench_splice_dirs` pins the arms' contents and every refusal.
 - **A report states the fixture digest its numbers are on, whose bytes those are, and the declared
   measurement-box set.**
   `orchestrate.py` puts both in each workload section of `results/report.md` and in every
