@@ -760,8 +760,9 @@ type entry = {
    12: gh-ocannl-1175 -- a reduction's zero folds into its own segment's sketches
    13: gh-ocannl-1165 -- the coalesced layout's seeds, a search branch beside the sketch families
    14: gh-ocannl-1325 -- wte.grad / v.grad become matmul sites; the scalar blocktile ep twins compile
+   15: gh-ocannl-1388 -- the seeded untuned plan seeds the search first, a floor older crowns lack
 *)
-let entry_version = 14
+let entry_version = 15
 
 let sanitize name =
   String.map name ~f:(fun c ->
