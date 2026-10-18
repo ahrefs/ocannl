@@ -284,30 +284,36 @@ let () =
         (Option.is_none site.sr_coalesce
         && Option.equal Int.equal (extent opt site.sr_axis) (Some rows))
 
-(* --- Two accumulations sharing one two-loop band yield one site, whose prelude applies. --- *)
+(* --- A split loop that also writes another node is declined, whichever loop it splits. --- *)
 
-let () =
-  let node = L.node_factory ~first_id:14150 ~dims:[| 8; 128; 4 |] () in
-  let x = node "srp_sx" and y = node "srp_sy" in
-  let g1 = node ~dims:[| 4 |] "srp_g1" and g2 = node ~dims:[| 4 |] "srp_g2" in
-  List.iter [ g1; g2 ] ~f:L.materialize;
+(* The split redirects only its target to partials, so another accumulation under the block loop
+   would race across blocks once the presets parallelize it: [g[o] += x[b,s,o]; h[o] += y[b,s,o]]
+   over one nest yields no site, over the two-loop band (b = 8) and over a 128-row batch loop alike,
+   while the same nest with one accumulation is a site. *)
+let shared_band ~label ~nb ~both =
+  let node = L.node_factory ~first_id:(14150 + nb) ~dims:[| nb; 128; 4 |] () in
+  let x = node (label ^ "_x") and y = node (label ^ "_y") in
+  let g1 = node ~dims:[| 4 |] (label ^ "_g1") and g2 = node ~dims:[| 4 |] (label ^ "_g2") in
   let b = L.sym () and s = L.sym () and o = L.sym () in
   let acc g src =
     L.set g
       [| L.iter o |]
       (L.add (L.get g [| L.iter o |]) (L.get src [| L.iter b; L.iter s; L.iter o |]))
   in
-  let llc = L.loop_n b 8 (L.loop_n s 128 (L.loop_n o 4 (L.seq (acc g1 x) (acc g2 y)))) in
-  let opt = L.optimize ~materialized:[ g1; g2 ] ~name:"srp_shared" llc in
-  let sites = Autotune.split_reduce_sites opt in
-  p "two accumulations over one two-loop band yield one site, coalesced"
-    (match sites with [ site ] -> Option.is_some site.Autotune.sr_coalesce | _ -> false);
-  p "the prelude of every site found applies"
-    (match
-       Sched.apply (Autotune.split_reduce_prelude (List.map sites ~f:(fun s -> (s, 32)))) opt
-     with
-    | (_ : LL.optimized) -> true
-    | exception Ir.Schedule_outcome.Cause_at _ -> false)
+  let body = if both then L.seq (acc g1 x) (acc g2 y) else acc g1 x in
+  let llc = L.loop_n b nb (L.loop_n s 128 (L.loop_n o 4 body)) in
+  let opt = L.optimize ~materialized:[ g1; g2 ] ~name:label llc in
+  (LL.loop_bounds opt.LL.llc, Autotune.split_reduce_sites opt)
+
+let () =
+  p "one accumulation over the two-loop band is a coalesced site"
+    (match shared_band ~label:"srp_one" ~nb:8 ~both:false with
+    | _, [ site ] -> Option.is_some site.Autotune.sr_coalesce
+    | _ -> false);
+  let loops, sites = shared_band ~label:"srp_two" ~nb:8 ~both:true in
+  p_empty "two accumulations over the two-loop band yield no site" ~over:loops sites;
+  let loops, sites = shared_band ~label:"srp_two_long" ~nb:128 ~both:true in
+  p_empty "two accumulations under a 128-row batch loop yield no site either" ~over:loops sites
 
 (* --- The matmul detector on a split's first-pass shape: [for i { p[i] := 0; for k { ... } }].
    --- *)

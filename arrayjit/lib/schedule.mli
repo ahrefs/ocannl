@@ -649,6 +649,10 @@ val pipeline_violation_cause : site:string -> pipeline_violation -> Schedule_out
     so the oracle and the renderer state each fact in one wording; [pipelined_move_legality] pins
     that, on the same IR, they reach the same violation. *)
 
+val written_nodes : Low_level.t -> Set.M(Tnode).t
+(** The nodes the code writes: [Set]-family and [Zero_out] statements, [Tile_mma] accumulators, and
+    the statements inside [Local_scope] bodies and scan-loop inits. *)
+
 val op_legality : Low_level.optimized -> optop -> op_verdict
 (** gh-494 waypoint 3: the op-legality oracle. A schedule op is a thread-pairing transform over the
     routine's access relations; its obligation is decided by the {!Affine} queries — pairing the

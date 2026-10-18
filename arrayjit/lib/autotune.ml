@@ -1915,6 +1915,8 @@ let coalesce_reduction_pair ?(static_indices = []) (opt : LL.optimized) ~outer ~
 let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site list =
   let acc = ref [] in
   let hermetic = sr_hermetic in
+  (* Each loop's body, by its index: a site's split runs this body inside its block loop. *)
+  let loop_body = Hashtbl.create (module Idx.Symbol) in
   (* The interchanged code, once every [Swap] of the chain is confirmed [Op_legal] against the code
      it is applied to ({!Sched.schedule_legality} walks the chain exactly as application will —
      [Swap]'s reassociation license covers accumulations, but each site is checked, not assumed).
@@ -2017,6 +2019,19 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
         | _ -> None
       in
       let legal = match single with Some _ -> single | None -> pair () in
+      (* The split redirects only its target to partials: every other write under the loops it
+         rewrites would keep running once per block, and the block loop is the one the presets
+         parallelize, so blocks would race on it (or, kept serial, a non-additive write would see
+         its iterations reordered). So a site whose outermost rewritten loop -- the outer loop of a
+         pair, else the split loop -- encloses a write of any other node is declined. Lowering gives
+         each assignment its own nest, so only hand-built or fused code meets this. *)
+      let legal =
+        Option.filter legal ~f:(fun (s, _, _, coalesce) ->
+            let outermost = match coalesce with Some (o, _) -> o | None -> s in
+            match Hashtbl.find loop_body outermost with
+            | None -> false
+            | Some body -> Set.for_all (Sched.written_nodes body) ~f:(Ir.Tnode.equal tn))
+      in
       (* The loops a site's prelude rewrites: its split loop, and the pair a coalescing merges into
          it. Two accumulations in one nest find the same loops; a site sharing any with a site
          already taken would replay a rewrite of loops the first prelude has removed (two
@@ -2053,6 +2068,7 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
         walk enclosing b
     | LL.If { body; _ } -> walk enclosing body
     | LL.For_loop { index; from_; to_; body; axis; _ } ->
+        Hashtbl.set loop_body ~key:index ~data:body;
         walk (enclosing @ [ (index, to_ - from_ + 1, axis) ]) body
     | LL.Set { tn; idcs; llsc; _ } ->
         (* rmw accumulation: the value re-reads the written node ([op_legality] then enforces the
