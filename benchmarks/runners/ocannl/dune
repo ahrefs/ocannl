@@ -25,6 +25,16 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; The splice-segments A/B (gh-ocannl-1277): both arms replay the control's schedule outside the
+; target segments. A library so that test/operations/bench_splice_dirs drives it on synthetic cache
+; directories, and so that any runner can adopt the mode with two calls.
+
+(library
+ (name bench_splice)
+ (package neural_nets_lib)
+ (modules bench_splice)
+ (libraries base stdio arrayjit.ir arrayjit.utils arrayjit.autotune))
+
 (library
  (name bench_conv_model)
  (package neural_nets_lib)
@@ -66,6 +76,7 @@
   bench_conv_model
   bench_gpt_model
   bench_json
+  bench_splice
   ocannl
   stdio
   unix

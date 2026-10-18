@@ -3969,6 +3969,25 @@
 ; characters. Yojson is the parse oracle -- it rejects OCaml's `nan`/`inf` spellings, which is the
 ; regression (gh-ocannl-676), and the test's last verdicts show that it does.
 
+; gh-ocannl-1277: the splice-segments A/B's cache splicing on synthetic cache directories -- what
+; each arm's directory holds, both target spellings, and every refusal (a splice by position into a
+; different cut, a target that selects nothing, an unadopted older entry version).
+
+(test
+ ; ocannl-backend: none -- links no backend: it plants and reads schedule-cache entries by hand.
+ (name bench_splice_dirs)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules bench_splice_dirs)
+ (libraries
+  base
+  stdio
+  sexplib
+  arrayjit.ir
+  bench_splice
+  test_utils
+  arrayjit.verdict))
+
 (test
  ; ocannl-backend: none -- links no backend: it formats and re-parses JSON strings.
  (name bench_result_line)
