@@ -201,9 +201,12 @@ type capacity_fit =
 
 (** The capacity the sweep implies. A point's requested rate is its per-block read bytes over its
     time: on the cached side re-reads are served from cache and the rate sits far above DRAM
-    bandwidth, on the spilled side it falls to it. The two plateaus are split at the geometric mean
-    of the fastest and slowest rates, and the capacity is placed at the geometric mean of the
-    working sets either side of the split — the model's decision boundary, between the shapes that
+    bandwidth, on the spilled side it falls to it. Points with a smaller working set than the
+    fastest one are dropped first: a kernel too short to amortize its launch shows a LOW rate for a
+    reason that is not the cache (tuf's 0.4 ms floor at the smallest extent read as spilled and made
+    the first fit non-monotone). Over the rest, the two plateaus are split at the geometric mean of
+    the fastest and slowest rates, and the capacity is placed at the geometric mean of the working
+    sets either side of the split — the model's decision boundary, between the shapes that
     demonstrably sit on each side of it. *)
 let fit_capacity (points : ws_point list) : capacity_fit =
   let timed =
@@ -211,9 +214,14 @@ let fit_capacity (points : ws_point list) : capacity_fit =
         Float.(p.wp_ms > 0.)
         && Float.is_finite p.wp_ms && p.wp_requested > 0 && p.wp_working_set > 0)
   in
+  let rate p = Float.of_int p.wp_requested /. p.wp_ms in
+  let timed =
+    match List.max_elt timed ~compare:(fun a b -> Float.compare (rate a) (rate b)) with
+    | None -> []
+    | Some fastest -> List.filter timed ~f:(fun p -> p.wp_working_set >= fastest.wp_working_set)
+  in
   if List.length timed < 2 then Too_few_points
   else
-    let rate p = Float.of_int p.wp_requested /. p.wp_ms in
     let rates = List.map timed ~f:rate in
     let hi = List.fold rates ~init:Float.neg_infinity ~f:Float.max in
     let lo = List.fold rates ~init:Float.infinity ~f:Float.min in

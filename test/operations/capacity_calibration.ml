@@ -38,6 +38,32 @@ let () =
         cached_ws = 1_000_000 && spilled_ws = 10_000_000 && monotone && capacity > cached_ws
         && capacity < spilled_ws
     | Cal.No_transition _ | Cal.Too_few_points -> false);
+  p "a launch-bound point below the fastest one does not break the fit"
+    (match Cal.fit_capacity (point ~ws:10_000 ~rate:200_000 :: step) with
+    | Cal.Transition { cached_ws; spilled_ws; monotone; _ } ->
+        cached_ws = 1_000_000 && spilled_ws = 10_000_000 && monotone
+    | Cal.No_transition _ | Cal.Too_few_points -> false);
+  (* The tuf-amd-linux sweep of 2026-10-18 (gh1253_cells, k = 256..32768): a gradual fall from the
+     cached plateau, with a launch-bound smallest extent. *)
+  p "the recorded tuf sweep fits a monotone capacity between 1.08 GB and 2.16 GB"
+    (match
+       Cal.fit_capacity
+         (List.map
+            [
+              (33816576, 698.70);
+              (67502080, 1950.90);
+              (134873088, 2210.84);
+              (269615104, 2034.81);
+              (539099136, 1426.14);
+              (1078067200, 1180.80);
+              (2156003328, 693.92);
+              (4311875584, 354.44);
+            ]
+            ~f:(fun (ws, gbps) -> point ~ws ~rate:(Float.to_int (gbps *. 1e6))))
+     with
+    | Cal.Transition { cached_ws; spilled_ws; monotone; _ } ->
+        cached_ws = 1078067200 && spilled_ws = 2156003328 && monotone
+    | Cal.No_transition _ | Cal.Too_few_points -> false);
   p "a sweep that never crosses fits no capacity"
     (match
        Cal.fit_capacity [ point ~ws:100_000 ~rate:1_000_000; point ~ws:100_000_000 ~rate:900_000 ]

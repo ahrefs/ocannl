@@ -11,9 +11,14 @@
 #
 # Cells, all on explicitly initialized standalone fixtures (host arrays built in the runner; no
 # safetensors fixture, so no box fixture gate applies):
+#   bandwidth          tools/calibrate_bandwidth.exe: the STREAM kernels, rows into
+#                      OUT/calibration.tsv; its fitted model_peak_memory_bandwidth is passed to every
+#                      later cell, so the model's milliseconds are this box's rather than the
+#                      backend's class ceiling.
 #   calibrate          tools/calibrate_cache_capacity.exe: the untiled weight-gradient contraction
 #                      (256 x 1024 output) swept over reduction extents 256..32768 on the plain
-#                      default pipeline; prints the fitted model_cache_capacity.
+#                      default pipeline; prints the fitted model_cache_capacity, which is passed to
+#                      the wgrad cells.
 #   wgrad_b<B>_untiled bench_wgrad at batch B in {8, 256} (gpt2_mini_train's l*_ffn_w2 gradient)
 #                      with seeding and the reduction sink off -- the plain default plan, whose
 #                      `wgrad-model: plan=default` rows predict it.
@@ -49,7 +54,9 @@ cd "$root"
 echo "gh1253_cells: revision $(git rev-parse HEAD) backend $backend host $(hostname) at $(date -u +%FT%TZ)"
 git status --porcelain --untracked-files=no | sed 's/^/  dirty: /'
 
-dune build tools/calibrate_cache_capacity.exe benchmarks/runners/ocannl/bench_wgrad.exe
+dune build tools/calibrate_bandwidth.exe tools/calibrate_cache_capacity.exe \
+  benchmarks/runners/ocannl/bench_wgrad.exe
+bandwidth=$root/_build/default/tools/calibrate_bandwidth.exe
 calibrate=$root/_build/default/tools/calibrate_cache_capacity.exe
 wgrad=$root/_build/default/benchmarks/runners/ocannl/bench_wgrad.exe
 
@@ -67,14 +74,28 @@ cell() {
   cat "$out/$name.out"
 }
 
-cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend"
+# A fitted constant read back from a cell's config-pasteable line; empty when the cell printed none
+# (its failure is already counted).
+fitted() { sed -n "s/^$1=//p" "$2" | tail -1; }
+
+cell bandwidth "$bandwidth" "--ocannl_backend=$backend" \
+  "--ocannl_autotune_calibration_file=$out/calibration.tsv"
+model=()
+bw=$(fitted model_peak_memory_bandwidth "$out/bandwidth.out")
+if [[ -n "$bw" ]]; then model+=("--ocannl_model_peak_memory_bandwidth=$bw"); fi
+echo "   model flags after bandwidth: ${model[*]:-none}"
+cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
+cap=$(fitted model_cache_capacity "$out/calibrate.out")
+if [[ -n "$cap" ]]; then model+=("--ocannl_model_cache_capacity=$cap"); fi
+echo "   model flags for the wgrad cells: ${model[*]:-none}"
 for batch in 8 256; do
   dims="$batch,128,256,1024"
   cell "wgrad_b${batch}_untiled" env BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=0 \
-    --ocannl_gpu_default_reduction_sink=false
+    --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
   cell "wgrad_b${batch}_seeded" env BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
-    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32
+    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${model[@]+"${model[@]}"}
 done
 
 echo "gh1253_cells: $failed failed cell(s)"
