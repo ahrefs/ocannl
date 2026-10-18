@@ -2065,10 +2065,12 @@ let summaries_roofline ~peak_flops ~peak_memory_bandwidth (summaries : CM.summar
              ~bytes:(CM.total_bytes s) ())
         |> Option.map ~f:(fun (a, b) -> a +. b))
 
-(* gh-ocannl-1253: the ranking score's cache capacity — config [model_cache_capacity] (bytes; [none]
-   turns the per-block charge off) beats the backend's advisory [cache_capacity_bytes]. Like that
-   field, an [Untimed] reading: only the untimed choosers below call [ranking_capacity], and nothing
-   [tune] reaches does ([test/operations/limits_field_classes]). *)
+(* gh-ocannl-1253: the ranking score's cache capacity — config [model_cache_capacity] (bytes;
+   [none]: no capacity, so no DRAM tier) beats the backend's advisory [cache_capacity_bytes], and
+   its cache bandwidth — config [model_cache_bandwidth] (bytes/s; [none]: re-reads within capacity
+   uncharged) beats the advisory [cache_bandwidth]. Like those fields, [Untimed] readings: only the
+   untimed choosers below call [ranking_capacity] / [ranking_cache_bandwidth], and nothing [tune]
+   reaches does ([test/operations/limits_field_classes]). *)
 let cache_capacity_override =
   lazy
     (let raw = String.strip (Utils.get_global_arg ~arg_name:"model_cache_capacity" ~default:"") in
@@ -2077,49 +2079,67 @@ let cache_capacity_override =
      | "none" -> `Off
      | _ -> (
          match Float.of_string raw with
-         | f when Float.is_finite f && Float.(f >= 0.) -> `Bytes (Int.of_float f)
+         | f when Float.is_finite f && Float.(f >= 0.) -> `Value (Int.of_float f)
          | _ | (exception _) ->
              raise
              @@ Utils.User_error
                   ("Autotune: ocannl_model_cache_capacity should be a non-negative byte count, or \
                     none; found: " ^ raw)))
 
+let cache_bandwidth_override =
+  lazy
+    (let raw = String.strip (Utils.get_global_arg ~arg_name:"model_cache_bandwidth" ~default:"") in
+     match String.lowercase raw with
+     | "" -> `Advisory
+     | "none" -> `Off
+     | _ -> (
+         match Float.of_string raw with
+         | f when Float.is_finite f && Float.(f > 0.) -> `Value f
+         | _ | (exception _) ->
+             raise
+             @@ Utils.User_error
+                  ("Autotune: ocannl_model_cache_bandwidth should be a positive rate in bytes/s, \
+                    or none; found: " ^ raw)))
+
+let resolve override advisory =
+  match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
+
 let ranking_capacity ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
-  let capacity =
-    match Lazy.force cache_capacity_override with
-    | `Advisory -> u.cache_capacity
-    | `Off -> None
-    | `Bytes b -> Some b
-  in
-  (capacity, u.resident_threads)
+  (resolve cache_capacity_override u.cache_capacity, u.resident_threads)
+
+let ranking_cache_bandwidth ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve cache_bandwidth_override u.cache_rate
 
 (* The ranking score summed over a candidate's kernels, beside the roofline lower bound of the same
    kernels ([summaries_roofline]'s): [(rank, bound)], [rank >= bound] by
-   {!Ir.Cost_model.ranked_bytes}' contract. [None] exactly where [summaries_roofline] is. Read by
-   the untimed choosers only — [model_default] and the [auto] seeding gate. *)
-let segments_ranking ?capacity ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list)
-    : (float * float) option =
+   {!Ir.Cost_model.ranking_seconds_of}' contract. [None] exactly where [summaries_roofline] is. Read
+   by the untimed choosers only — [model_default] and the [auto] seeding gate. An explicit
+   [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
+let segments_ranking ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
+    (segs : LL.optimized list) : (float * float) option =
   let cache_capacity_bytes, max_resident_threads = ranking_capacity ~limits in
-  (* An explicit [capacity] (the [auto] seeding gate resolved, or a test's) overrides the
-     reading. *)
   let cache_capacity_bytes = Option.value capacity ~default:cache_capacity_bytes in
+  let cache_bandwidth =
+    match cache_bandwidth with Some cb -> cb | None -> ranking_cache_bandwidth ~limits
+  in
   let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
   match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
   | None -> None
   | Some bound ->
       let rank =
         List.fold summaries ~init:0. ~f:(fun acc (o, s) ->
-            let bytes =
-              match cache_capacity_bytes with
-              | None -> CM.total_bytes s
-              | Some _ ->
-                  CM.ranked_bytes ?cache_capacity_bytes s
-                    (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
+            let reuse =
+              match (cache_capacity_bytes, cache_bandwidth) with
+              | None, None -> None
+              | _ ->
+                  Some (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
             in
             acc
             +. Option.value ~default:0.
-                 (CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:s.CM.flops ~bytes ()))
+                 (CM.ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
+                    ?cache_bandwidth s reuse))
       in
       Some (rank, bound)
 
@@ -4207,7 +4227,9 @@ let site_reduction_extent (site : matmul_site) =
 let seeded_default_backend backend =
   String.is_substring backend ~substring:"cuda" || String.is_substring backend ~substring:"hip"
 
-type seed_gate = Min_reduction of int | Ranked of { capacity : int }
+type seed_gate =
+  | Min_reduction of int
+  | Ranked of { capacity : int option; cache_rate : float option }
 
 (* The threshold [auto] falls back to where the device publishes no capacity (gh-ocannl-1253):
    gh-ocannl-1324's measured value. *)
@@ -4219,9 +4241,9 @@ let seeded_default_gate ~limits =
   in
   match (String.lowercase raw, Int.of_string_opt raw) with
   | "auto", _ -> (
-      match ranking_capacity ~limits with
-      | Some capacity, _ -> Ranked { capacity }
-      | None, _ -> Min_reduction seed_gate_fallback)
+      match (fst (ranking_capacity ~limits), ranking_cache_bandwidth ~limits) with
+      | None, None -> Min_reduction seed_gate_fallback
+      | capacity, cache_rate -> Ranked { capacity; cache_rate })
   | _, Some n when n >= 0 -> Min_reduction n
   | _ ->
       raise
@@ -4441,13 +4463,13 @@ let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_
         (* gh-ocannl-1253, the [auto] gate: the seeded sketch's ranking score strictly below the
            preset's, on the segment alone, under the gate's capacity. Either failing to apply or
            score keeps the preset. *)
-        let ranked_below ~capacity p pre =
+        let ranked_below ~capacity ~cache_bandwidth p pre =
           let rank sched =
             match Sched.apply_classified ~static_indices sched (scratch_of pre) with
             | exception (Outcome.Cause_at _ | Invalid_argument _) -> None
             | post ->
                 Option.map
-                  (segments_ranking ~capacity:(Some capacity) ~peak_flops ~peak_memory_bandwidth
+                  (segments_ranking ~capacity ~cache_bandwidth ~peak_flops ~peak_memory_bandwidth
                      ~limits [ post ])
                   ~f:fst
           in
@@ -4467,9 +4489,10 @@ let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_
                     match gate with
                     | Min_reduction min_reduction ->
                         seeded_params ~limits ~accum_prec ~min_reduction pre
-                    | Ranked { capacity } -> (
+                    | Ranked { capacity; cache_rate } -> (
                         match seeded_params ~limits ~accum_prec ~min_reduction:1 pre with
-                        | Some p when ranked_below ~capacity p pre -> Some p
+                        | Some p when ranked_below ~capacity ~cache_bandwidth:cache_rate p pre ->
+                            Some p
                         | Some _ | None -> None)
                   in
                   match candidate with

@@ -6,7 +6,12 @@ the untiled plan's working set is positive: true
 with no capacity the score is analyze's roofline: true
 at capacity (working set = capacity) the score is analyze's roofline: true
 past capacity the untiled score exceeds analyze's roofline: true
-raising the capacity never raises the score, on every plan: true
+raising the capacity never raises the score, with or without a cache tier, on every plan: true
 past capacity some scalar blocktile ranks strictly below the untiled plan: true
 with no capacity no scalar blocktile ranks strictly below the untiled plan: true
 the bound is at most analyze's roofline is at most the score, on every leaf: true
+within capacity, the cache tier charges the untiled plan above analyze's roofline: true
+within capacity, the cache tier charges less than the DRAM tier past it: true
+within capacity, some scalar blocktile ranks strictly below the untiled plan: true
+raising the cache bandwidth never raises the score, on every plan: true
+a cache bandwidth below DRAM's is read as DRAM's: true

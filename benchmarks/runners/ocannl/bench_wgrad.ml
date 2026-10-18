@@ -98,8 +98,11 @@ let () =
   let limits = Context.hardware_limits ctx in
   let capacity, resident = Autotune.ranking_capacity ~limits in
   let opt_int = Option.value_map ~default:"none" ~f:Int.to_string in
-  Stdio.printf "wgrad-model: capacity=%s resident_threads=%s\n" (opt_int capacity)
-    (opt_int resident);
+  Stdio.printf "wgrad-model: capacity=%s resident_threads=%s cache_bandwidth=%s\n"
+    (opt_int capacity) (opt_int resident)
+    (Option.value_map
+       (Autotune.ranking_cache_bandwidth ~limits)
+       ~default:"none" ~f:(Printf.sprintf "%.6g"));
   let written (o : Ir.Low_level.optimized) =
     List.filter_map (Ir.Cost_model.analyze o.Ir.Low_level.llc).Ir.Cost_model.per_node
       ~f:(fun (tn, fp) ->

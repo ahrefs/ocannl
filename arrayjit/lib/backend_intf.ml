@@ -302,7 +302,7 @@ type hardware_limits = {
           L2 size: the working set sums per-block footprints that resident blocks share, so the
           value that separates cache-resident from DRAM-bound kernels sits well above any physical
           cache. Per-class advisories on CUDA and HIP, overridable by config [model_cache_capacity];
-          [None] elsewhere, where the score charges distinct cells. Read only by the untimed
+          [None] elsewhere: no DRAM tier (see {!field-cache_bandwidth}). Read only by the untimed
           choosers, never by schedule construction, codegen or timing — so it is not in the
           schedule-cache key ({!limits_key}). *)
   max_resident_threads : int option; [@sexp.option]
@@ -310,6 +310,14 @@ type hardware_limits = {
           threads per multiprocessor), which divided by a kernel's workgroup size is the ranking
           score's resident-block count. [None] where unknown: every block then counts as resident.
           Same readers and same cache identity as {!field-cache_capacity_bytes}. *)
+  cache_bandwidth : float option; [@sexp.option]
+      (** [Untimed]: the rate, in bytes/s, at which the cache serves re-reads within capacity — the
+          ranking score's second tier (gh-ocannl-1253): cross-block re-reads of a kernel whose
+          working set fits {!field-cache_capacity_bytes} are charged at this rate rather than for
+          free; it is the requested-rate plateau of the capacity sweep below the capacity
+          ([tools/calibrate_cache_capacity.exe]). Overridable by config [model_cache_bandwidth];
+          [None] where unmeasured, which leaves re-reads within capacity uncharged. Same readers and
+          same cache identity as {!field-cache_capacity_bytes}. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -581,6 +589,7 @@ let no_hardware_limits =
     peak_memory_bandwidth = None;
     cache_capacity_bytes = None;
     max_resident_threads = None;
+    cache_bandwidth = None;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -656,6 +665,7 @@ let limits_key
        peak_memory_bandwidth;
        cache_capacity_bytes = _;
        max_resident_threads = _;
+       cache_bandwidth = _;
        native_fp16_arithmetic;
        simdgroup_width;
        lane_scalar_recompute_cheap;
@@ -686,12 +696,20 @@ let limits_key
     codegen_tag;
   }
 
-type untimed_limits = { cache_capacity : int option; resident_threads : int option }
+type untimed_limits = {
+  cache_capacity : int option;
+  resident_threads : int option;
+  cache_rate : float option;
+}
 (** The [Untimed] fields' readings, the one accessor their readers go through
     ([test/operations/limits_field_classes] refuses a direct read elsewhere). *)
 
 let untimed_limits (l : hardware_limits) : untimed_limits =
-  { cache_capacity = l.cache_capacity_bytes; resident_threads = l.max_resident_threads }
+  {
+    cache_capacity = l.cache_capacity_bytes;
+    resident_threads = l.max_resident_threads;
+    cache_rate = l.cache_bandwidth;
+  }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to
     {!mma_capability} touches one record instead of every mock and CPU descriptor: a 32-wide

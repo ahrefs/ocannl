@@ -672,29 +672,52 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
     ru_working_set_bytes = working_set;
   }
 
-let ranked_bytes ?cache_capacity_bytes (s : summary) (r : reuse) =
-  match cache_capacity_bytes with
-  | Some capacity when r.ru_working_set_bytes > capacity ->
-      (* Per node, the larger of the two charges: the score stays at or above [analyze]'s whatever
-         the two extractions' approximations do, which keeps every bound below it a bound. *)
-      let distinct tn =
-        List.Assoc.find s.per_node tn ~equal:Tn.equal
-        |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_read_bytes)
-      in
-      total_bytes s
-      + List.sum (module Int) r.ru_requested ~f:(fun (tn, req) -> max 0 (req - distinct tn))
-  | _ -> total_bytes s
-
-let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?max_resident_threads
-    ~is_global (code : Low_level.t) : float option =
-  let s = analyze code in
-  let bytes =
-    match cache_capacity_bytes with
-    | None -> total_bytes s
-    | Some _ ->
-        ranked_bytes ?cache_capacity_bytes s (reuse_traffic ?max_resident_threads ~is_global code)
+let requested_bytes (s : summary) (r : reuse) =
+  (* Per node, the larger of the two charges: the score stays at or above [analyze]'s whatever the
+     two extractions' approximations do, which keeps every bound below it a bound. *)
+  let distinct tn =
+    List.Assoc.find s.per_node tn ~equal:Tn.equal
+    |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_read_bytes)
   in
-  roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:s.flops ~bytes ()
+  total_bytes s
+  + List.sum (module Int) r.ru_requested ~f:(fun (tn, req) -> max 0 (req - distinct tn))
+
+let spills ?cache_capacity_bytes (r : reuse) =
+  match cache_capacity_bytes with
+  | Some capacity -> r.ru_working_set_bytes > capacity
+  | None -> false
+
+let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    (s : summary) (r : reuse option) : float option =
+  let total = Float.of_int (total_bytes s) in
+  let memory =
+    Option.map peak_memory_bandwidth ~f:(fun dram ->
+        match r with
+        | None -> total /. dram
+        | Some r -> (
+            let requested = Float.of_int (requested_bytes s r) in
+            if spills ?cache_capacity_bytes r then requested /. dram
+            else
+              match cache_bandwidth with
+              | None -> total /. dram
+              | Some cache ->
+                  (* A cache slower than DRAM would make raising the capacity raise the score. *)
+                  Float.max (total /. dram) (requested /. Float.max cache dram)))
+  in
+  let legs =
+    List.filter_opt [ Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p); memory ]
+  in
+  match legs with [] -> None | l -> Some (List.reduce_exn l ~f:Float.max)
+
+let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    ?max_resident_threads ~is_global (code : Low_level.t) : float option =
+  let s = analyze code in
+  let r =
+    match (cache_capacity_bytes, cache_bandwidth) with
+    | None, None -> None
+    | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
+  in
+  ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 

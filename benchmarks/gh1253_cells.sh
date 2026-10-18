@@ -16,9 +16,11 @@
 #                      later cell, so the model's milliseconds are this box's rather than the
 #                      backend's class ceiling.
 #   calibrate          tools/calibrate_cache_capacity.exe: the untiled weight-gradient contraction
-#                      (256 x 1024 output) swept over reduction extents 256..32768 on the plain
-#                      default pipeline; prints the fitted model_cache_capacity, which is passed to
-#                      the wgrad cells.
+#                      (256 x 1024 output) swept over reduction extents 256..65536 on the plain
+#                      default pipeline, split against the calibrated DRAM bandwidth; prints the
+#                      fitted model_cache_capacity (none when no point reaches DRAM) and
+#                      model_cache_bandwidth (the below-capacity plateau), passed to the wgrad
+#                      cells.
 #   wgrad_b<B>_untiled bench_wgrad at batch B in {8, 256} (gpt2_mini_train's l*_ffn_w2 gradient)
 #                      with seeding and the reduction sink off -- the plain default plan, whose
 #                      `wgrad-model: plan=default` rows predict it.
@@ -87,6 +89,8 @@ echo "   model flags after bandwidth: ${model[*]:-none}"
 cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
 cap=$(fitted model_cache_capacity "$out/calibrate.out")
 if [[ -n "$cap" ]]; then model+=("--ocannl_model_cache_capacity=$cap"); fi
+cache_bw=$(fitted model_cache_bandwidth "$out/calibrate.out")
+if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
 echo "   model flags for the wgrad cells: ${model[*]:-none}"
 for batch in 8 256; do
   dims="$batch,128,256,1024"

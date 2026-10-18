@@ -57,7 +57,12 @@ let () =
     (Sexp.equal
        (BI.Limits_key.sexp_of_t (BI.limits_key limits))
        (BI.sexp_of_hardware_limits
-          { limits with cache_capacity_bytes = None; max_resident_threads = None }));
+          {
+            limits with
+            cache_capacity_bytes = None;
+            max_resident_threads = None;
+            cache_bandwidth = None;
+          }));
   p "a concrete context's identity is stable"
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
   (match identity with

@@ -1880,6 +1880,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               capacity is a fitted constant of the score's working-set proxy, not the L2 size (see
               the field): provisional until the per-class calibration. *)
            cache_capacity_bytes = Some (1 lsl 30);
+           cache_bandwidth = None;
            max_resident_threads =
              min_over (fun (a : Cu.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);

@@ -463,6 +463,7 @@ module Impl = struct
               the score charges distinct cells here. *)
            cache_capacity_bytes = None;
            max_resident_threads = None;
+           cache_bandwidth = None;
          })
     in
     fun () -> Lazy.force limits

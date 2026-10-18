@@ -123,7 +123,8 @@ untimed-model -- it steers Autotune.model_default -- whether the recipes' untune
   model_default_placements
   model_default_schedule
 
-untimed-model -- it is the cache capacity of the analytic model's ranking score (gh-ocannl-1253), which only the untimed choosers read (Autotune.model_default's pick, and the auto seeding gate of Autotune.seeded_default) -- like the backends' advisory cache_capacity_bytes it overrides, an Untimed field of the device description and outside the cache key for the same reason: a stored winner is a measured schedule, which the capacity changes neither the compilation nor the speed of. Autotune.tune reads none of it; its bound pruning and keep-fraction ranking read the distinct-cell roofline, which no capacity enters
+untimed-model -- they are the cache capacity and cache bandwidth of the analytic model's ranking score (gh-ocannl-1253), which only the untimed choosers read (Autotune.model_default's pick, and the auto seeding gate of Autotune.seeded_default) -- like the backends' advisory cache_capacity_bytes and cache_bandwidth they override, Untimed fields of the device description and outside the cache key for the same reason: a stored winner is a measured schedule, which they change neither the compilation nor the speed of. Autotune.tune reads neither; its bound pruning and keep-fraction ranking read the distinct-cell roofline
+  model_cache_bandwidth
   model_cache_capacity
 
 untimed-model -- they decide which large CUDA/HIP contractions the recipes' untuned compile seeds with the matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324) and which long reductions it splits before segmenting (gh-ocannl-1325), which times and scores nothing and never reads or writes the schedule cache; Autotune.tune reads none of them, and the default pipeline a search seeds from and reports against (Schedule.maybe_default_schedules) does not consult them

@@ -15,7 +15,8 @@
    The claims: the untiled default plan requests between [M·N·K·elt] and [M·N·K·elt·(1 + 1/wg)] of
    its operands, [wg] its workgroup size; a [bm × bn] scalar blocktile requests exactly
    [M·N·K·elt·(1/bm + 1/bn)]; at or below capacity, and with no capacity, the score is [analyze]'s
-   roofline; raising the capacity never raises the score; and on every leaf of the site's GPU sketch
+   roofline; raising the capacity never raises the score; within capacity a cache tier charges the
+   re-reads at the cache bandwidth, monotonically in it; and on every leaf of the site's GPU sketch
    tree and on the default plan, the branch-and-bound's bound ([completion_floor]'s roofline) is at
    most [analyze]'s roofline, which is at most the score -- the score can never make the bound prune
    a winner. *)
@@ -71,6 +72,9 @@ let peak_flops = 1e15
 and peak_memory_bandwidth = 1e11
 
 let resident = 8192
+
+(* The within-capacity tier: a cache 10x faster than DRAM, as the HIP boxes measured. *)
+let cache = 10. *. peak_memory_bandwidth
 let base = Ll_test.optimize ~name:"cmr_wgrad" (wgrad ())
 
 let hermetic (o : LL.optimized) =
@@ -88,8 +92,8 @@ let requested (o : LL.optimized) =
   let of_ tn = List.Assoc.find r.CM.ru_requested tn ~equal:Tn.equal |> Option.value ~default:0 in
   (r, of_ dy + of_ x)
 
-let rank ?cache_capacity_bytes (o : LL.optimized) =
-  CM.ranking_seconds ~peak_flops ~peak_memory_bandwidth ?cache_capacity_bytes
+let rank ?cache_capacity_bytes ?cache_bandwidth (o : LL.optimized) =
+  CM.ranking_seconds ~peak_flops ~peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ~max_resident_threads:resident ~is_global:(CM.global_in o) o.LL.llc
 
 let bound_of (o : LL.optimized) =
@@ -165,12 +169,16 @@ let () =
     | _ -> false);
   let capacities = [ 0; ws / 4; ws / 2; ws - 1; ws; 2 * ws; Int.max_value / 2 ] in
   let plans = untiled :: List.filter_map scalar_blocktiles ~f:applied in
-  p_all "raising the capacity never raises the score, on every plan"
+  p_all "raising the capacity never raises the score, with or without a cache tier, on every plan"
     (List.concat_map plans ~f:(fun o ->
          List.map
            (List.zip_exn (List.drop_last_exn capacities) (List.tl_exn capacities))
            ~f:(fun (lo, hi) -> (o, lo, hi))))
-    ~f:(fun (o, lo, hi) -> le (rank ~cache_capacity_bytes:hi o) (rank ~cache_capacity_bytes:lo o));
+    ~f:(fun (o, lo, hi) ->
+      le (rank ~cache_capacity_bytes:hi o) (rank ~cache_capacity_bytes:lo o)
+      && le
+           (rank ~cache_capacity_bytes:hi ~cache_bandwidth:cache o)
+           (rank ~cache_capacity_bytes:lo ~cache_bandwidth:cache o));
   p "past capacity some scalar blocktile ranks strictly below the untiled plan"
     (List.exists (List.filter_map scalar_blocktiles ~f:applied) ~f:(fun o ->
          match (rank ~cache_capacity_bytes:0 o, rank ~cache_capacity_bytes:0 untiled) with
@@ -191,4 +199,30 @@ let () =
     ~f:(fun o ->
       le floor_bound (bound_of o)
       && le (bound_of o) (rank ~cache_capacity_bytes:0 o)
+      && le (bound_of o) (rank ~cache_bandwidth:cache o)
       && le (bound_of o) (rank o))
+
+let () =
+  (* The two tiers (the wave decision of 2026-10-18): within capacity, cross-block re-reads are
+     charged at the cache bandwidth -- not for free, which is what tied the untiled and the seeded
+     plans at batch 8 while the seeded one measured faster on both HIP boxes. *)
+  let blocktiles = List.filter_map scalar_blocktiles ~f:applied in
+  let huge = Int.max_value / 2 in
+  let within ?(cb = cache) o = rank ~cache_capacity_bytes:huge ~cache_bandwidth:cb o in
+  p "within capacity, the cache tier charges the untiled plan above analyze's roofline"
+    (match (within untiled, bound_of untiled) with Some a, Some b -> Float.(a > b) | _ -> false);
+  p "within capacity, the cache tier charges less than the DRAM tier past it"
+    (match (within untiled, rank ~cache_capacity_bytes:0 ~cache_bandwidth:cache untiled) with
+    | Some a, Some b -> Float.(a < b)
+    | _ -> false);
+  p "within capacity, some scalar blocktile ranks strictly below the untiled plan"
+    (List.exists blocktiles ~f:(fun o ->
+         match (within o, within untiled) with Some a, Some b -> Float.(a < b) | _ -> false));
+  p_all
+    ~min:(1 + List.length scalar_blocktiles)
+    "raising the cache bandwidth never raises the score, on every plan" (untiled :: blocktiles)
+    ~f:(fun o -> le (within ~cb:(2. *. cache) o) (within o));
+  p "a cache bandwidth below DRAM's is read as DRAM's"
+    (match (within ~cb:1. untiled, within ~cb:peak_memory_bandwidth untiled) with
+    | Some a, Some b -> Float.equal a b
+    | _ -> false)

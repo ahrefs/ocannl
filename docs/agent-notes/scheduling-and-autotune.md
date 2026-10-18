@@ -525,12 +525,13 @@ files.
   are unchanged (`gpu_default_reduction_sink`, `Untimed_model`).
 - **`gpu_default_sketch_min_reduction=auto` replaces the threshold by the ranking score**
   (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks strictly
-  below the same segment's preset, scored alone under the device's capacity — so it seeds where
-  the working set exceeds the capacity and never below it, since under the distinct-cell roofline
-  a staged sketch only adds traffic. Geometry and the numerics-preserving candidate set are
-  `seeded_params`' either way, and a device publishing no capacity falls back to 32. Its census
-  claim (`test/operations/seeded_default`) pins capacity 0 against threshold 32 and is CUDA/HIP
-  only; on cc the seeded default is off altogether.
+  below the same segment's preset, scored alone under the device's capacity and cache bandwidth —
+  so it seeds where the cross-block re-reads the sketch removes cost more than its staging adds;
+  without the cache tier, never within capacity, where under the distinct-cell roofline a staged
+  sketch only adds traffic. Geometry and the numerics-preserving candidate set are
+  `seeded_params`' either way, and a device publishing neither constant falls back to 32. Its
+  census claim (`test/operations/seeded_default`) pins capacity 0, no cache tier, against
+  threshold 32 and is CUDA/HIP only; on cc the seeded default is off altogether.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only

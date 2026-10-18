@@ -10,9 +10,11 @@
    model reads off the scheduled kernel, the distinct bytes, the best time, the requested and
    distinct rates, and the ranking score's prediction under the capacity in force (rank) beside the
    distinct-cell roofline (bound) -- then a config-pasteable [model_cache_capacity=] line under [#]
-   comment lines, or a [#] line saying why the sweep implies none. Calibrate on an otherwise idle
-   device: the fit reads rates. Backend and device follow the ordinary config
-   (--ocannl_backend=...); startup chatter goes to stderr. *)
+   comment lines, with the [model_cache_bandwidth=] the below-capacity plateau implies -- or a [#]
+   line saying why the sweep implies none. [model_cache_capacity=none] is printed, honestly, when no
+   point of the sweep reaches DRAM. Calibrate on an otherwise idle device: the fit reads rates.
+   Backend and device follow the ordinary config (--ocannl_backend=...); startup chatter goes to
+   stderr. *)
 
 open Base
 module Cal = Ocannl.Calibrate
@@ -57,15 +59,34 @@ let () =
         p.Cal.wp_working_set p.Cal.wp_requested p.Cal.wp_distinct p.Cal.wp_ms
         (gbps p.Cal.wp_requested) (gbps p.Cal.wp_distinct) (ms p.Cal.wp_rank_ms)
         (ms p.Cal.wp_bound_ms));
-  match Cal.fit_capacity points with
-  | Cal.Transition { cached_ws; spilled_ws; capacity; monotone } ->
+  (* The DRAM reference the fit splits against: the envelope's memory leg, as configured (pass the
+     STREAM-calibrated [--ocannl_model_peak_memory_bandwidth]; the backends' advisory value is a
+     class ceiling, far above any one device's DRAM). *)
+  let dram_rate = Option.map (snd (Autotune.envelope_legs ~limits)) ~f:fst in
+  Stdio.printf "# DRAM reference: %s bytes/s\n"
+    (Option.value_map dram_rate ~default:"none (splitting on the sweep's own contrast)"
+       ~f:(Printf.sprintf "%.6g"));
+  match Cal.fit_capacity ?dram_rate points with
+  | Cal.Transition { cached_ws; spilled_ws; capacity; monotone; cache_rate } ->
       Stdio.printf "# cached up to a working set of %d bytes, spilled from %d bytes%s\n" cached_ws
         spilled_ws
         (if monotone then "" else " -- NOT MONOTONE: the rates do not split by working set");
-      Stdio.printf "model_cache_capacity=%d\n" capacity
+      Stdio.printf "model_cache_capacity=%d\nmodel_cache_bandwidth=%.6e\n" capacity cache_rate;
+      if not monotone then Stdlib.exit 1
+  | Cal.All_cached { largest_ws; cache_rate } ->
+      Stdio.printf
+        "# every point is cache-served: the capacity is at least %d bytes, the largest swept \
+         working set -- extend --ks to find it; none is invented\n"
+        largest_ws;
+      Stdio.printf "model_cache_capacity=none\nmodel_cache_bandwidth=%.6e\n" cache_rate
+  | Cal.All_spilled { smallest_ws } ->
+      Stdio.printf
+        "# every point is DRAM-bound: the capacity is below %d bytes -- extend --ks downward\n"
+        smallest_ws;
+      Stdlib.exit 1
   | Cal.No_transition { contrast } ->
       Stdio.printf
-        "# no transition: requested rates differ by only %.2fx -- extend --ks on both sides\n"
+        "# no transition: requested rates differ by only %.2fx and no DRAM reference was given\n"
         contrast;
       Stdlib.exit 1
   | Cal.Too_few_points ->

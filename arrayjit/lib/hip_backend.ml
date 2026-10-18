@@ -1669,6 +1669,7 @@ end = struct
               capacity is a fitted constant of the score's working-set proxy, not the L2 size (see
               the field): provisional until the per-class calibration. *)
            cache_capacity_bytes = Some (1 lsl 30);
+           cache_bandwidth = None;
            max_resident_threads =
              min_over (fun (a : H.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);

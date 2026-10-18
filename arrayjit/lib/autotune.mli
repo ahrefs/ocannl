@@ -1343,6 +1343,11 @@ val ranking_capacity : limits:Ir.Backend_intf.hardware_limits -> int option * in
     [max_resident_threads]. Both are [Untimed] readings of the device description: only the untimed
     choosers and the calibration tools call this, never anything {!tune} reaches. *)
 
+val ranking_cache_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's within-capacity tier, in bytes/s: config [model_cache_bandwidth] ([none]
+    turns it off) over the backend's advisory [cache_bandwidth]. An [Untimed] reading, like
+    {!ranking_capacity}. *)
+
 val ranking_ms :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized list -> (float * float) option
 (** [(rank, bound)] in milliseconds for scheduled kernels run in sequence: the ranking score
@@ -1661,19 +1666,20 @@ val model_default :
 (** A drop-in for {!Context.compile} that raises the untuned floor (gh-ocannl-491 task 3): inside
     the compile's own transform seam, the untuned default pipeline and the sketch families
     (whole-routine, and per-fission-segment substitutions when the default fissions) are scored with
-    the cost model's ranking score ({!Ir.Cost_model.ranking_seconds}: the roofline, with operand
-    re-reads charged per block once the working set exceeds the cache capacity — the backend's
-    advisory [cache_capacity_bytes] or config [model_cache_capacity], gh-ocannl-1253), and the
-    argmin schedule is applied — zero measurement, one backend compile. The family search's bound
-    stays the distinct-cell floor, below every ranking score. Advisory by construction: a candidate
-    without model coverage is never picked over the default, ties go to the default, and missing
-    envelope constants, a disabled default annotator ({!Ir.Schedule.automatic_schedule_active}), or
-    any classified scoring, application, backend validation, or compilation failure fall back to the
-    ordinary default pipeline — the reported {!model_choice} then says ["default"]. Fatal failures
-    propagate without retrying. Once the compile is on that pipeline there is nothing left to fall
-    back to, so its failures propagate as they would from {!Context.compile}, without a duplicate
-    attempt. Unlike {!tune}, nothing is executed and no cache is involved — results depend only on
-    the computation, backend, and envelope constants.
+    the cost model's ranking score ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253: the roofline,
+    with operand re-reads requested per block and charged at DRAM bandwidth once the working set
+    exceeds the cache capacity, at the cache bandwidth within it — {!ranking_capacity},
+    {!ranking_cache_bandwidth}), and the argmin schedule is applied — zero measurement, one backend
+    compile. The family search's bound stays the distinct-cell floor, below every ranking score.
+    Advisory by construction: a candidate without model coverage is never picked over the default,
+    ties go to the default, and missing envelope constants, a disabled default annotator
+    ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
+    validation, or compilation failure fall back to the ordinary default pipeline — the reported
+    {!model_choice} then says ["default"]. Fatal failures propagate without retrying. Once the
+    compile is on that pipeline there is nothing left to fall back to, so its failures propagate as
+    they would from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is
+    executed and no cache is involved — results depend only on the computation, backend, and
+    envelope constants.
 
     Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the routine
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic
@@ -1744,19 +1750,19 @@ type seed_gate =
   | Min_reduction of int
       (** gh-ocannl-1324's threshold: a site whose {!site_reduction_extent} is at least this; [0]
           disables the seeding. *)
-  | Ranked of { capacity : int }
+  | Ranked of { capacity : int option; cache_rate : float option }
       (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
           ({!Ir.Cost_model.ranking_seconds}) puts strictly below the default preset of the same
-          segment, scored alone with the cache capacity [capacity] (bytes) — so it seeds exactly
-          where the operand re-reads the sketch removes are charged, i.e. where the working set
-          exceeds the capacity. The geometry and the numerics-preserving candidate set are
-          {!seeded_params}' either way. *)
+          segment, scored alone with this cache capacity (bytes; [None]: no DRAM tier) and cache
+          bandwidth (bytes/s; [None]: re-reads within capacity uncharged) — so it seeds exactly
+          where the cross-block re-reads the sketch removes are priced. The geometry and the
+          numerics-preserving candidate set are {!seeded_params}' either way. *)
 
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
 (** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]
-    under {!ranking_capacity}'s capacity where the device has one, and [Min_reduction 32] — the
-    threshold's measured default — where it has none (Metal, the C backends). Raises
-    {!Utils.User_error} on anything else. *)
+    under {!ranking_capacity}'s capacity and {!ranking_cache_bandwidth}, and [Min_reduction 32] —
+    the threshold's measured default — where it has neither a capacity nor a cache bandwidth (Metal,
+    the C backends). Raises {!Utils.User_error} on anything else. *)
 
 val seeded_transform :
   ?min_reduction:int ->

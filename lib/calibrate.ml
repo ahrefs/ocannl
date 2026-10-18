@@ -111,14 +111,14 @@ type ws_point = {
 (** [working_set ?m ?n ?ks ?repeats ctx] times the untiled weight-gradient contraction
     [dw[o,i] = sum_k dy[k,o] * x[k,i]] — [m] rows of output (default 256), [n] columns (default
     1024: a gpt2_mini_train layer's [l*_ffn_w2] gradient) — at each reduction extent of [ks]
-    (default [256] to [32768] in powers of two, batch 2 to 256 at sequence 128), on the plain
+    (default [256] to [65536] in powers of two, batch 2 to 512 at sequence 128), on the plain
     default pipeline ({!Context.compile}: the plan whose re-reads the score charges, never a seeded
     or tuned one). The inputs are explicitly initialized host arrays (a standalone fixture: nothing
     upstream of the kernel is timed or left lazily initialized); the time is the whole routine's,
     synced, best of [repeats] (default 10) after one warm-up run. Each point carries the contraction
     kernel's working set and byte charges as the cost model reads them off the scheduled code. *)
-let working_set ?(m = 256) ?(n = 1024) ?(ks = [ 256; 512; 1024; 2048; 4096; 8192; 16384; 32768 ])
-    ?(repeats = 10) ctx =
+let working_set ?(m = 256) ?(n = 1024)
+    ?(ks = [ 256; 512; 1024; 2048; 4096; 8192; 16384; 32768; 65536 ]) ?(repeats = 10) ctx =
   if m <= 0 || n <= 0 || repeats <= 0 || List.exists ks ~f:(fun k -> k <= 0) then
     raise (Utils.User_error "Calibrate.working_set: extents and repeats must be positive");
   let backend_name = Context.backend_name ctx in
@@ -187,34 +187,45 @@ let working_set ?(m = 256) ?(n = 1024) ?(ks = [ 256; 512; 1024; 2048; 4096; 8192
 
 type capacity_fit =
   | Transition of {
-      cached_ws : int;  (** The largest working set still served at the cached rate. *)
+      cached_ws : int;  (** The largest working set still served at the cache rate. *)
       spilled_ws : int;  (** The smallest working set served at the DRAM rate. *)
       capacity : int;  (** Their geometric mean: the fitted [model_cache_capacity]. *)
       monotone : bool;
           (** Every cached point's working set is below every spilled point's. [false] means the
               sweep's rates do not split cleanly by working set, and the capacity is a guess. *)
+      cache_rate : float;
+          (** The median requested rate of the cached points, bytes/s: the fitted
+              [model_cache_bandwidth]. *)
     }
+  | All_cached of { largest_ws : int; cache_rate : float }
+      (** Every point is served at the cache rate: the capacity is at least [largest_ws], and the
+          sweep says no more than that (no capacity is invented; extend [ks] to find one). *)
+  | All_spilled of { smallest_ws : int }
+      (** Every point is served at the DRAM rate: the capacity is below [smallest_ws]. *)
   | No_transition of { contrast : float }
-      (** The fastest and slowest requested rates differ by [contrast] < 2: the sweep stayed on one
-          side of the capacity. Extend [ks] (both sides) and rerun. *)
+      (** Without a DRAM rate to compare against, the fastest and slowest requested rates differ by
+          [contrast] < 2: the sweep cannot tell which side of the capacity it sits on. *)
   | Too_few_points
 
-(** The capacity the sweep implies. A point's requested rate is its per-block read bytes over its
-    time: on the cached side re-reads are served from cache and the rate sits far above DRAM
-    bandwidth, on the spilled side it falls to it. Points with a smaller working set than the
+(** The capacity and cache bandwidth the sweep implies. A point's requested rate is its per-block
+    read bytes over its time: within capacity, re-reads are served from cache and the rate sits far
+    above DRAM bandwidth; past it, the rate falls to it. Points with a smaller working set than the
     fastest one are dropped first: a kernel too short to amortize its launch shows a LOW rate for a
     reason that is not the cache (tuf's 0.4 ms floor at the smallest extent read as spilled and made
-    the first fit non-monotone). Over the rest, the two plateaus are split at the geometric mean of
-    the fastest and slowest rates, and the capacity is placed at the geometric mean of the working
-    sets either side of the split — the model's decision boundary, between the shapes that
-    demonstrably sit on each side of it. *)
-let fit_capacity (points : ws_point list) : capacity_fit =
+    the first fit non-monotone). Over the rest, a point is cached when its rate is at least the
+    geometric mean of the fastest rate and [dram_rate] (bytes/s, the calibrated DRAM bandwidth) —
+    or, without one, of the fastest and the slowest rates, which needs a contrast of at least 2 to
+    mean anything. The capacity is placed at the geometric mean of the working sets either side of
+    the split — the model's decision boundary, between the shapes that demonstrably sit on each side
+    of it — and the cache bandwidth is the cached points' median rate. *)
+let fit_capacity ?dram_rate (points : ws_point list) : capacity_fit =
   let timed =
     List.filter points ~f:(fun p ->
         Float.(p.wp_ms > 0.)
         && Float.is_finite p.wp_ms && p.wp_requested > 0 && p.wp_working_set > 0)
   in
-  let rate p = Float.of_int p.wp_requested /. p.wp_ms in
+  (* Bytes per second. *)
+  let rate p = Float.of_int p.wp_requested /. (p.wp_ms *. 1e-3) in
   let timed =
     match List.max_elt timed ~compare:(fun a b -> Float.compare (rate a) (rate b)) with
     | None -> []
@@ -225,20 +236,35 @@ let fit_capacity (points : ws_point list) : capacity_fit =
     let rates = List.map timed ~f:rate in
     let hi = List.fold rates ~init:Float.neg_infinity ~f:Float.max in
     let lo = List.fold rates ~init:Float.infinity ~f:Float.min in
-    let contrast = hi /. lo in
-    if Float.(contrast < 2.) then No_transition { contrast }
-    else
-      let threshold = Float.sqrt (hi *. lo) in
-      let cached, spilled = List.partition_tf timed ~f:(fun p -> Float.(rate p >= threshold)) in
-      let ws p = p.wp_working_set in
-      let max_ws l = List.fold l ~init:0 ~f:(fun acc p -> max acc (ws p)) in
-      let min_ws l = List.fold l ~init:Int.max_value ~f:(fun acc p -> min acc (ws p)) in
-      let cached_ws = max_ws cached and spilled_ws = min_ws spilled in
-      let lo_ws = min cached_ws spilled_ws and hi_ws = max cached_ws spilled_ws in
-      Transition
-        {
-          cached_ws;
-          spilled_ws;
-          capacity = Float.to_int (Float.sqrt (Float.of_int lo_ws *. Float.of_int hi_ws));
-          monotone = cached_ws < spilled_ws;
-        }
+    let threshold =
+      match dram_rate with
+      | Some d -> Some (Float.sqrt (hi *. d))
+      | None -> if Float.(hi /. lo < 2.) then None else Some (Float.sqrt (hi *. lo))
+    in
+    match threshold with
+    | None -> No_transition { contrast = hi /. lo }
+    | Some threshold -> (
+        let cached, spilled = List.partition_tf timed ~f:(fun p -> Float.(rate p >= threshold)) in
+        let ws p = p.wp_working_set in
+        let median l =
+          let sorted = List.sort (List.map l ~f:rate) ~compare:Float.compare in
+          let n = List.length sorted in
+          if n % 2 = 1 then List.nth_exn sorted (n / 2)
+          else (List.nth_exn sorted ((n / 2) - 1) +. List.nth_exn sorted (n / 2)) /. 2.
+        in
+        let max_ws l = List.fold l ~init:0 ~f:(fun acc p -> max acc (ws p)) in
+        let min_ws l = List.fold l ~init:Int.max_value ~f:(fun acc p -> min acc (ws p)) in
+        match (cached, spilled) with
+        | [], _ -> All_spilled { smallest_ws = min_ws spilled }
+        | _, [] -> All_cached { largest_ws = max_ws cached; cache_rate = median cached }
+        | _ ->
+            let cached_ws = max_ws cached and spilled_ws = min_ws spilled in
+            let lo_ws = min cached_ws spilled_ws and hi_ws = max cached_ws spilled_ws in
+            Transition
+              {
+                cached_ws;
+                spilled_ws;
+                capacity = Float.to_int (Float.sqrt (Float.of_int lo_ws *. Float.of_int hi_ws));
+                monotone = cached_ws < spilled_ws;
+                cache_rate = median cached;
+              })

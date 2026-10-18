@@ -328,11 +328,12 @@
 # attention's head-dimension contractions; of the thresholds tried on gpt2_mini_train (32, 64, 128,
 # 256), it gave the fastest step at both batch 8 and batch 256 on CUDA.
 # `auto` (gh-ocannl-1253) replaces the threshold by the analytic model: a segment is seeded when
-# the ranking score (see model_cache_capacity) puts its sketch strictly below the default preset of
-# that segment -- exactly where its working set exceeds the cache capacity, so the re-reads the
-# sketch removes are charged. Still untimed and still the same sketch geometry and
-# numerics-preserving candidates; on a device publishing no capacity (Metal, the CPU backends)
-# `auto` means 32.
+# the ranking score (see model_cache_capacity and model_cache_bandwidth) puts its sketch strictly
+# below the default preset of that segment -- where the cross-block re-reads the sketch removes
+# cost more, at DRAM bandwidth past the cache capacity or at cache bandwidth within it, than the
+# staging it adds. Still untimed and still the same sketch geometry and numerics-preserving
+# candidates; on a device publishing neither a capacity nor a cache bandwidth (Metal, the CPU
+# backends) `auto` means 32.
 #gpu_default_sketch_min_reduction=32
 
 # The same untuned compiles also split a CUDA reduction whose serial chain per output cell --
@@ -955,17 +956,26 @@
 
 # gh-ocannl-1253: overrides the backend's advisory cache capacity (bytes) of the analytic cost
 # model's ranking score, the score `Autotune.model_default` and the `auto` seeding gate
-# (gpu_default_sketch_min_reduction) rank candidates by. Once a kernel's
-# working set -- the global bytes one block reads, its Grid loops standing still, times the
-# blocks resident at once -- exceeds it, global reads are charged per block (the re-reads an
-# untiled contraction pays) instead of as distinct cells; at or below it, and with no capacity,
-# the score is the distinct-cell roofline. A fitted constant of that proxy, not the device's L2
-# size: fit it with `tools/calibrate_cache_capacity.exe`, a working-set sweep of an untiled
-# contraction across the boundary. `none` turns the per-block charge off; unset/empty uses the
-# backend's value (CUDA and HIP carry one, the other backends none). Never read by
-# `Autotune.tune`, whose bound pruning and keep-fraction ranking use the distinct-cell roofline,
-# and not part of the schedule-cache key.
+# (gpu_default_sketch_min_reduction) rank candidates by. The score requests a kernel's global
+# reads per block (the cells one block touches, its Grid loops standing still, times the blocks),
+# so an untiled contraction pays for its cross-block re-reads. Once the working set -- per-block
+# bytes times the blocks resident at once -- exceeds the capacity, those requests are charged at
+# DRAM bandwidth (model_peak_memory_bandwidth); within it, at model_cache_bandwidth. Fit it with
+# `tools/calibrate_cache_capacity.exe`, a working-set sweep of an untiled contraction: it is
+# where the requested rate falls from the cache plateau to DRAM. `none`: no capacity, so no DRAM
+# tier (a device whose sweep never reaches DRAM). Unset/empty uses the backend's value. Never read
+# by `Autotune.tune`, whose bound pruning and keep-fraction ranking use the distinct-cell
+# roofline, and not part of the schedule-cache key.
 #model_cache_capacity=
+
+# gh-ocannl-1253: overrides the backend's advisory cache bandwidth (bytes/s), the ranking score's
+# within-capacity tier: cross-block re-reads of a kernel whose working set fits the cache are
+# charged at this rate (beside the distinct bytes at DRAM bandwidth, whichever is longer) rather
+# than for free -- measured at 1.5-2.8 TB/s on the HIP boxes against 235-261 GB/s from DRAM. The
+# capacity sweep reports it, as the requested rate on its below-capacity plateau. `none`
+# leaves re-reads within capacity uncharged; a value below the DRAM bandwidth reads as it.
+# Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
+#model_cache_bandwidth=
 
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.

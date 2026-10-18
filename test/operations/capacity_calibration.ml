@@ -12,7 +12,7 @@ open Verdict.Claims
 module Cal = Ocannl.Calibrate
 
 let point ~ws ~rate =
-  (* [rate] bytes per millisecond, so a 1 ms point requesting [rate] bytes. *)
+  (* [rate] bytes per millisecond: a 1 ms point requesting [rate] bytes. *)
   {
     Cal.wp_k = 1;
     wp_working_set = ws;
@@ -23,6 +23,38 @@ let point ~ws ~rate =
     wp_bound_ms = None;
   }
 
+(* The gh1253_cells sweeps of 2026-10-18 at 6867efcf, (working set, requested GB/s), with each box's
+   STREAM-calibrated DRAM bandwidth: tuf-amd-linux (discrete) falls to DRAM between 1.08 and 2.16
+   GB; minix-amd-linux (unified) never does within the sweep. *)
+let recorded rows =
+  List.map rows ~f:(fun (ws, gbps) -> point ~ws ~rate:(Float.to_int (gbps *. 1e6)))
+
+let tuf =
+  recorded
+    [
+      (33816576, 697.42);
+      (67502080, 1985.10);
+      (134873088, 2193.69);
+      (269615104, 1997.08);
+      (539099136, 1568.74);
+      (1078067200, 1128.88);
+      (2156003328, 667.55);
+      (4311875584, 342.31);
+    ]
+
+let minix =
+  recorded
+    [
+      (42270720, 1866.28);
+      (84377600, 2594.49);
+      (168591360, 2773.03);
+      (337018880, 2805.20);
+      (673873920, 2871.75);
+      (1347584000, 1843.63);
+      (2695004160, 1706.17);
+      (5389844480, 1709.02);
+    ]
+
 let () =
   let step =
     [
@@ -32,44 +64,33 @@ let () =
       point ~ws:100_000_000 ~rate:250_000;
     ]
   in
-  p "a clean step fits a monotone capacity between the last cached and first spilled working set"
-    (match Cal.fit_capacity step with
-    | Cal.Transition { cached_ws; spilled_ws; capacity; monotone } ->
-        cached_ws = 1_000_000 && spilled_ws = 10_000_000 && monotone && capacity > cached_ws
+  let transition_at ~cached ~spilled = function
+    | Cal.Transition { cached_ws; spilled_ws; capacity; monotone; _ } ->
+        cached_ws = cached && spilled_ws = spilled && monotone && capacity > cached_ws
         && capacity < spilled_ws
-    | Cal.No_transition _ | Cal.Too_few_points -> false);
+    | Cal.All_cached _ | Cal.All_spilled _ | Cal.No_transition _ | Cal.Too_few_points -> false
+  in
+  p "a clean step fits a monotone capacity between the last cached and first spilled working set"
+    (transition_at ~cached:1_000_000 ~spilled:10_000_000 (Cal.fit_capacity step));
   p "a launch-bound point below the fastest one does not break the fit"
-    (match Cal.fit_capacity (point ~ws:10_000 ~rate:200_000 :: step) with
-    | Cal.Transition { cached_ws; spilled_ws; monotone; _ } ->
-        cached_ws = 1_000_000 && spilled_ws = 10_000_000 && monotone
-    | Cal.No_transition _ | Cal.Too_few_points -> false);
-  (* The tuf-amd-linux sweep of 2026-10-18 (gh1253_cells, k = 256..32768): a gradual fall from the
-     cached plateau, with a launch-bound smallest extent. *)
-  p "the recorded tuf sweep fits a monotone capacity between 1.08 GB and 2.16 GB"
-    (match
-       Cal.fit_capacity
-         (List.map
-            [
-              (33816576, 698.70);
-              (67502080, 1950.90);
-              (134873088, 2210.84);
-              (269615104, 2034.81);
-              (539099136, 1426.14);
-              (1078067200, 1180.80);
-              (2156003328, 693.92);
-              (4311875584, 354.44);
-            ]
-            ~f:(fun (ws, gbps) -> point ~ws ~rate:(Float.to_int (gbps *. 1e6))))
-     with
-    | Cal.Transition { cached_ws; spilled_ws; monotone; _ } ->
-        cached_ws = 1078067200 && spilled_ws = 2156003328 && monotone
-    | Cal.No_transition _ | Cal.Too_few_points -> false);
-  p "a sweep that never crosses fits no capacity"
-    (match
-       Cal.fit_capacity [ point ~ws:100_000 ~rate:1_000_000; point ~ws:100_000_000 ~rate:900_000 ]
-     with
+    (transition_at ~cached:1_000_000 ~spilled:10_000_000
+       (Cal.fit_capacity (point ~ws:10_000 ~rate:200_000 :: step)));
+  p "the recorded tuf sweep fits a capacity between 1.08 GB and 2.16 GB, against its DRAM rate"
+    (transition_at ~cached:1078067200 ~spilled:2156003328
+       (Cal.fit_capacity ~dram_rate:2.606882e11 tuf));
+  p "the recorded tuf sweep's cache bandwidth is its cached plateau, 1.1 to 2.2 TB/s"
+    (match Cal.fit_capacity ~dram_rate:2.606882e11 tuf with
+    | Cal.Transition { cache_rate; _ } -> Float.(cache_rate >= 1.1e12 && cache_rate <= 2.2e12)
+    | _ -> false);
+  p "the recorded minix sweep never reaches DRAM: the capacity is at least its largest working set"
+    (match Cal.fit_capacity ~dram_rate:2.350682e11 minix with
+    | Cal.All_cached { largest_ws; cache_rate } ->
+        largest_ws = 5389844480 && Float.(cache_rate >= 1.7e12 && cache_rate <= 2.9e12)
+    | _ -> false);
+  p "without a DRAM reference, the minix sweep's 1.7x contrast fits nothing"
+    (match Cal.fit_capacity minix with
     | Cal.No_transition { contrast } -> Float.(contrast < 2.)
-    | Cal.Transition _ | Cal.Too_few_points -> false);
+    | _ -> false);
   p "rates that do not split by working set fit a capacity flagged non-monotone"
     (match
        Cal.fit_capacity
@@ -81,7 +102,9 @@ let () =
          ]
      with
     | Cal.Transition { monotone; _ } -> not monotone
-    | Cal.No_transition _ | Cal.Too_few_points -> false);
+    | _ -> false);
+  p "a sweep entirely below the DRAM reference is all spilled"
+    (match Cal.fit_capacity ~dram_rate:1e12 step with Cal.All_spilled _ -> true | _ -> false);
   p "one timed point fits nothing"
     (match Cal.fit_capacity [ List.hd_exn step ] with Cal.Too_few_points -> true | _ -> false)
 

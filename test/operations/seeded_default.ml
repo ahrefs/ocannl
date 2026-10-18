@@ -138,8 +138,12 @@ let () =
     List.map r.Autotune.sd_seeded ~f:(fun (at, p) -> (at, Autotune.sketch_params_label p))
   in
   let _, r32 = seeded ~min_reduction:32 in
-  let (w_auto, b_auto), r_auto = seeded_gated (Autotune.Ranked { capacity = 0 }) in
-  let _, r_auto_cached = seeded_gated (Autotune.Ranked { capacity = Int.max_value }) in
+  let (w_auto, b_auto), r_auto =
+    seeded_gated (Autotune.Ranked { capacity = Some 0; cache_rate = None })
+  in
+  let _, r_auto_cached =
+    seeded_gated (Autotune.Ranked { capacity = Some Int.max_value; cache_rate = None })
+  in
   List.iter (census r_auto) ~f:(fun (at, label) ->
       Stdio.eprintf "auto seeded: unit %d %s (not part of the golden)\n" at label);
   Verdict.gated ~when_:seeds_here ~on:backend_name

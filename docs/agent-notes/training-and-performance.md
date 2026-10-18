@@ -115,19 +115,25 @@ files.
   perfect-cache roofline is the lower bound that `tune`'s bound pruning, the keep-fraction
   pre-filter, the agreement warning and the calibration rows read; it scores an untiled contraction
   exactly at its floor however often blocks re-read the operands, so on it no reuse-tiled sketch
-  can ever win. `Cost_model.ranking_seconds` is the untimed choosers' score: global reads charged
-  per block (`reuse_traffic`: `access_cells ~fixed` over the non-`Grid` loop box, times the
-  blocks), but only once per-block bytes times resident blocks exceed a cache capacity, and per
-  node never below `analyze`'s charge — so it is never below any bound, which
+  can ever win. `Cost_model.ranking_seconds` is the untimed choosers' score: global reads
+  requested per block (`reuse_traffic`: `access_cells ~fixed` over the non-`Grid` loop box, times
+  the blocks), charged in two tiers — at DRAM bandwidth once per-block bytes times resident blocks
+  exceed the cache capacity, at the cache bandwidth within it (free re-reads tied the untiled and
+  seeded plans at batch 8 on the HIP boxes, where seeded measured faster) — and every memory leg
+  at least `analyze`'s distinct bytes at DRAM bandwidth, so it is never below any bound, which
   `test/operations/cost_model_reuse` claims over every leaf of a sketch tree. Never feed the
   ranking score to a bound: a kernel that hits in cache would then trip `BOUND VIOLATION`.
-- The ranking score's `cache_capacity_bytes` is fitted, not looked up (gh-ocannl-1253): the working
-  set sums per-block footprints that co-resident blocks share, so the boundary sits far above any
-  L2. `tools/calibrate_cache_capacity.exe` (`Ocannl.Calibrate.working_set`/`fit_capacity`) sweeps
-  the untiled weight-gradient contraction over reduction extents on the plain default pipeline and
-  splits the requested-bytes rate into its cached and DRAM plateaus; `bench_wgrad`'s
-  `wgrad-model:` lines print each plan's per-kernel rank beside its distinct-cell bound for the
-  predicted-vs-measured check. Sweep both sides of the boundary, or the fit has nothing to split.
+- The ranking score's `cache_capacity_bytes` and `cache_bandwidth` are calibrated, not looked up
+  (gh-ocannl-1253): the working set sums per-block footprints that co-resident blocks share, so
+  the boundary sits above any L2. `tools/calibrate_cache_capacity.exe`
+  (`Ocannl.Calibrate.working_set`/`fit_capacity`) sweeps the untiled weight-gradient contraction
+  over reduction extents on the plain default pipeline and splits the requested-bytes rate against
+  the STREAM-calibrated DRAM bandwidth (pass it: the advisory is a class ceiling): the boundary is
+  the capacity, the cached plateau's median the cache bandwidth. Drop launch-bound points first
+  (the fit does: below the fastest point's working set), and print `none` rather than invent a
+  capacity when no point reaches DRAM — minix's unified gfx1151 stayed at 1.7 TB/s requested to
+  5.4 GB. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
+  distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes
