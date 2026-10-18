@@ -9044,3 +9044,14 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1253: the ranking score's per-block read charge, on hand-built IR scheduled under a
+; GPU-shaped limits record; the envelope, capacity and residency are passed explicitly.
+
+(test
+ ; ocannl-backend: none -- hand-built IR is optimized, scheduled and scored, never linked or executed.
+ (name cost_model_reuse)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_reuse)
+ (libraries base stdio ocannl arrayjit.verdict ll_test))

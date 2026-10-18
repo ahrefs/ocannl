@@ -148,6 +148,72 @@ val roofline_seconds :
     raising either constant never increases the bound. A lower bound only up to the model's
     upper-bound byte/op counts — rank with it, do not predict. *)
 
+(** {2 The ranking score (gh-ocannl-1253)}
+
+    {!analyze} charges distinct cells under a perfect cache: that is what makes it a lower bound,
+    and what scores an untiled contraction exactly at its roofline floor however often its operands
+    are re-read from DRAM — the branch-and-bound over the tiling families then fathoms every sketch.
+    The ranking score is the second, separate quantity the untimed choosers rank by
+    ([Autotune.model_default], the [auto] seeding gate). The bound is unchanged and keeps serving
+    pruning, pre-filtering, the agreement check and calibration rows; putting a cache model into it
+    would raise [BOUND VIOLATION] whenever a kernel hits in cache.
+
+    Contract:
+    - Global reads are charged per block: the cells one block touches — its [Grid] loops standing
+      still, {!Affine.fiber_cardinality} over the remaining loop box, capped by the node — times the
+      number of blocks (the product of the enclosing [Grid] extents). An untiled weight gradient
+      under a [Grid] row and a [wg]-thread [Workgroup] requests [M·N·K·elt·(1 + 1/wg)]; a [bm × bn]
+      blocktile [M·N·K·elt·(1/bm + 1/bn)]. Reuse within a block is free (it is what the block's
+      shared tiles and L1 are for); reuse across blocks is what this charges.
+    - Only past capacity: the per-block charge applies when the working set — per-block bytes times
+      the blocks resident at once ([max_resident_threads] over the workgroup size, at most the
+      blocks; all blocks when no residency is given), the largest over the kernel's launch nests —
+      exceeds [cache_capacity_bytes]. At or below it, and with no capacity at all, reads are charged
+      as distinct cells, exactly as {!analyze} charges them.
+    - Global means neither [Local] nor workgroup-shared ({!global_in}): staged tiles and
+      thread-private scratch keep their distinct-cell charge.
+    - Never below the bound: per node, the larger of the per-block and the distinct charge, so
+      {!ranking_seconds} is at least {!roofline_seconds} over {!analyze}'s counts — and therefore at
+      least any roofline over {!completion_floor}. Monotone: raising the capacity never raises the
+      score.
+
+    Writes, op counts and the opacity flag are {!analyze}'s. *)
+
+type reuse = {
+  ru_requested : (Tnode.t * int) list;
+      (** Per global node read, in first-access order: the bytes its reads request under per-block
+          caching — blocks times per-block cells times byte width, summed over its read accesses,
+          NOT capped by the node's size (re-reads are the point). *)
+  ru_working_set_bytes : int;
+      (** The largest over the kernel's launch nests of per-block global read bytes times resident
+          blocks. *)
+}
+[@@deriving sexp_of]
+
+val global_in : Low_level.optimized -> Tnode.t -> bool
+(** Whether a node lives in global memory under the specialization's placements: neither [Local]
+    (thread-private scratch, {!Tnode.Placements.is_local_peek}) nor a workgroup-shared tile. *)
+
+val reuse_traffic : ?max_resident_threads:int -> is_global:(Tnode.t -> bool) -> Low_level.t -> reuse
+(** The per-block read charge and working set of one kernel (see the section contract). *)
+
+val ranked_bytes : ?cache_capacity_bytes:int -> summary -> reuse -> int
+(** {!total_bytes}, with each global node's read bytes raised to its requested bytes when the
+    working set exceeds [cache_capacity_bytes]; {!total_bytes} itself otherwise or without a
+    capacity. Never below {!total_bytes}. *)
+
+val ranking_seconds :
+  ?peak_flops:float ->
+  ?peak_memory_bandwidth:float ->
+  ?cache_capacity_bytes:int ->
+  ?max_resident_threads:int ->
+  is_global:(Tnode.t -> bool) ->
+  Low_level.t ->
+  float option
+(** The ranking score of one kernel: {!roofline_seconds} over {!analyze}'s op count and
+    {!ranked_bytes}. [None] exactly when {!roofline_seconds} is. A ranking score, not a runtime
+    prediction — and, unlike {!roofline_seconds}, not a lower bound either. *)
+
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 
     The cost model's account of what a node costs to recompute at ONE read site — the flops and

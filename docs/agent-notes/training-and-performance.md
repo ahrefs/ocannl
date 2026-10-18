@@ -111,6 +111,16 @@ files.
   a vectorized run whose minor-axis base spacing is at least the run length
   (`Affine.vec_runs_disjoint`, coefficient-gcd argument) counts exactly — so scheduled streaming
   candidates stay fit-eligible, and the floor agrees with the upper extraction on disjoint unions.
+- The cost model keeps TWO scores apart (gh-ocannl-1253). `Cost_model.analyze`'s distinct-cell,
+  perfect-cache roofline is the lower bound that `tune`'s bound pruning, the keep-fraction
+  pre-filter, the agreement warning and the calibration rows read; it scores an untiled contraction
+  exactly at its floor however often blocks re-read the operands, so on it no reuse-tiled sketch
+  can ever win. `Cost_model.ranking_seconds` is the untimed choosers' score: global reads charged
+  per block (`reuse_traffic`: `access_cells ~fixed` over the non-`Grid` loop box, times the
+  blocks), but only once per-block bytes times resident blocks exceed a cache capacity, and per
+  node never below `analyze`'s charge — so it is never below any bound, which
+  `test/operations/cost_model_reuse` claims over every leaf of a sketch tree. Never feed the
+  ranking score to a bound: a kernel that hits in cache would then trip `BOUND VIOLATION`.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes
