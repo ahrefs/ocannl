@@ -1,0 +1,2 @@
+Metal half exp, log, exp2, log2, sin, cos and sqrt are the same kernel's f32 results rounded to half once, signed zeros, infinities and NaN included: true
+Metal renders each half unary builtin as the widened f32 call narrowed once: true
