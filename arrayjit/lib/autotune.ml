@@ -4260,11 +4260,26 @@ let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized)
 let no_seeded_choice =
   { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_split = []; sd_fell_back = false }
 
-let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
-    ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
-  let backend = Context.backend_name ctx in
-  (* The backend first: the threshold is a CUDA/HIP setting, so a malformed value must not break a
-     compile on a backend that ignores it. *)
+(* gh-ocannl-1388: the seeded untuned plan as a value, so the search can seed it, name it and (in
+   gh-ocannl-1138) extend it. Deciding it and replaying it are separate steps: the untuned compile
+   does both inside one transform, the search decides once on its base lowering and replays the plan
+   in a candidate compile, and both replay through {!seeded_replay}, so the candidate compiles the
+   code the untuned compile ships. *)
+type seeded_segment =
+  | Seeded_preset
+  | Seeded_sketch of { digest : string; params : sketch_params }
+  | Seeded_sunk of { digest : string; swaps : int }
+
+type seeded_plan = {
+  sp_split : (sr_site * int) list;
+  sp_segments : (Sched.segmentation * seeded_segment list) option;
+  sp_refined : int;
+}
+
+(* The resolved thresholds, or [None] where the untuned compile is the plain default. The backend
+   first: the thresholds are CUDA/HIP settings, so a malformed value must not break a compile on a
+   backend that ignores them. *)
+let seeded_settings ?min_reduction ?min_serial ?reduction_sink:sink_override ~backend () =
   let min_reduction () =
     match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
   in
@@ -4283,231 +4298,283 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
-  else
-    let min_reduction = min_reduction () and min_serial = min_serial () in
-    let sink_enabled = sink_enabled () in
-    let limits = Context.hardware_limits ctx in
-    let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
-    let static_indices = Idx.bound_symbols bindings in
-    let preset seg = Sched.default_gpu ~limits seg in
-    let zero_sched tns = Sched.zero_expansion ~limits tns in
-    let keep_mapping = Sched.fission_keep_mapping ~is_gpu:true ~limits in
-    let none = no_seeded_choice in
-    Some
-      (fun (opt : LL.optimized) : LL.optimized list ->
-        (* The split reductions first, whole-routine and before any segmentation, as the search's
-           [F_split] seeds apply them: the partials edge each split mints is what fission cuts the
-           two passes apart at, and every later step -- the default segments, the seeding below --
-           works on the split routine. A prelude that does not apply leaves the routine unsplit. *)
-        let opt, split =
-          match seeded_split_sites ~backend ~min_serial ~static_indices opt with
-          | [] -> (opt, [])
-          | sites -> (
-              (* A copy of the traced store only, as the search's [F_split] candidates rebase: the
-                 placement table is the compile's own, which the partials nodes the prelude mints
-                 must be registered in for the routine to link. A prelude that fails leaves at most
-                 placements for nodes no routine mentions. *)
-              match
-                Sched.apply_classified ~static_indices (split_reduce_prelude sites)
-                  { opt with LL.traced_store = Hashtbl.copy opt.LL.traced_store }
-              with
-              | split_opt ->
-                  logf "seeded_default: %d reduction(s) split: %s" (List.length sites)
-                    (String.concat ~sep:", " (List.map sites ~f:split_site_label));
-                  (split_opt, List.map sites ~f:(fun (s, b) -> (s.sr_target, b)))
-              | exception Outcome.Cause_at (_, cause) ->
-                  logf "seeded_default: the split reductions FAILED to apply (%s); left unsplit"
-                    (Outcome.detail_of_cause cause);
-                  (opt, []))
-        in
-        let default_segs () =
-          Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices opt
-        in
-        let none = { none with sd_split = split } in
-        on_choice none;
-        let digest ~with_placements seg =
-          SC.digest (SC.canonicalize ~static_indices ~with_placements seg)
-        in
-        (* One decision per distinct segment code — a model's repeated layers decide once. Probed on
-           the segment alone: a sketch that does not apply or validate there leaves the segment to
-           the default preset rather than costing the routine its other seeds. *)
-        let decided = Hashtbl.create (module String) in
-        let seed_of kind pre =
-          match kind with
-          | `Zeros | `Solo -> None
-          | `Normal when min_reduction <= 0 -> None
-          | `Normal ->
-              Hashtbl.find_or_add decided
-                (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
-                ~default:(fun () ->
-                  match seeded_params ~limits ~accum_prec ~min_reduction pre with
-                  | None -> None
-                  | Some p -> (
-                      match
-                        validate_segments_for_model ~limits
-                          [
-                            Sched.apply_classified ~static_indices
-                              (sketch_schedule ~accum_prec ~p pre)
-                              (scratch_of pre);
-                          ]
-                      with
-                      | _ -> Some p
-                      | exception (Outcome.Cause_at _ | Invalid_argument _) ->
-                          logf "seeded_default: %s declined on a segment; keeping the preset"
-                            (sketch_params_label p);
-                          None))
-        in
-        (* gh-ocannl-1348: a segment no sketch takes gets its accumulations' reduction loops sunk
-           below their write loops, then the default preset of the interchanged code. Probed on the
-           segment alone like a seed; a chain that does not validate leaves the plain preset. *)
-        let sunk_schedule seg =
-          match reduction_sink ~accum_prec seg with
-          | [] -> None
-          | swaps -> (
-              match Sched.apply_classified ~static_indices swaps (scratch_of seg) with
-              | exception Outcome.Cause_at _ -> None
-              | swapped -> Some (List.length swaps, swaps @ preset swapped))
-        in
-        let sink_of kind pre =
-          match kind with
-          | `Zeros | `Solo -> None
-          | `Normal when not sink_enabled -> None
-          | `Normal -> (
-              match sunk_schedule pre with
-              | None -> None
-              | Some (n_swaps, sched) -> (
-                  match
-                    validate_segments_for_model ~limits
-                      [ Sched.apply_classified ~static_indices sched (scratch_of pre) ]
-                  with
-                  | _ -> Some n_swaps
-                  | exception (Outcome.Cause_at _ | Invalid_argument _) ->
-                      logf
-                        "seeded_default: the reduction sink declined on a segment; keeping the \
-                         preset";
-                      None))
-        in
-        (* A segmentation derived on a hermetic copy, as [(first unit, kind, units, pre-schedule
-           slice)] per segment. *)
-        let derive ~arity_cuts =
-          match
-            Sched.fission_segmented ~promote_locals:true ?keep_mapping ~arity_cuts ~preset
-              ~zero_sched ~static_indices (scratch_of opt)
-          with
-          | exception Outcome.Cause_at _ -> None
-          | plan, tuples ->
-              Some
-                (List.map2_exn
-                   (Array.to_list (segment_starts plan))
-                   (List.zip_exn plan tuples)
-                   ~f:(fun at ((kind, n), (_, pre, _, _)) -> (at, kind, n, pre)))
-        in
-        (* The default pipeline's own segmentation — derived exactly as [maybe_default_schedules]
-           derives it, no zero fold — so every segment the seeding leaves alone is the default's
-           segment under the default's schedule. *)
-        match derive ~arity_cuts:false with
-        | None -> default_segs ()
-        | Some coarse -> (
-            (* A default segment with no seed of its own can still hold a site: fission keeps
-               aligned nests together, so a weight gradient shares its kernel with the bias gradient
-               reducing the same rows, and two weight gradients of one input share theirs, and a
-               second reduction is a companion no sketch covers. The finer [arity_cuts] segmentation
-               (gh-ocannl-574) cuts those apart. Where it partitions exactly that segment's units
-               and one of the pieces seeds, the pieces replace the segment; elsewhere the default
-               segmentation stands, so no launch is added that buys no seed. *)
-            let fine = lazy (derive ~arity_cuts:true) in
-            let refined = ref 0 in
-            let hybrid =
-              List.concat_map coarse ~f:(fun (at, kind, n, pre) ->
-                  let decide (s, k, m, pre) =
-                    ( s,
-                      k,
-                      m,
-                      Option.map (seed_of k pre) ~f:(fun p ->
-                          (p, digest ~with_placements:false pre)),
-                      pre )
-                  in
-                  match decide (at, kind, n, pre) with
-                  | (_, _, _, Some _, _) as seeded -> [ seeded ]
-                  | unseeded -> (
-                      match (kind, Lazy.force fine) with
-                      | `Normal, Some fine ->
-                          let pieces =
-                            List.filter fine ~f:(fun (s, _, m, _) -> s >= at && s + m <= at + n)
-                          in
-                          if
-                            List.length pieces < 2
-                            || List.sum (module Int) pieces ~f:(fun (_, _, m, _) -> m) <> n
-                          then [ unseeded ]
-                          else
-                            let pieces = List.map pieces ~f:decide in
-                            if List.exists pieces ~f:(fun (_, _, _, s, _) -> Option.is_some s) then (
-                              Int.incr refined;
-                              pieces)
-                            else [ unseeded ]
-                      | _ -> [ unseeded ]))
+  else Some (min_reduction (), min_serial (), sink_enabled ())
+
+(* The split reductions first, whole-routine and before any segmentation, as the search's [F_split]
+   seeds apply them: the partials edge each split mints is what fission cuts the two passes apart
+   at, and every later step -- the default segments, the seeding -- works on the split routine. A
+   copy of the traced store only, as the search's [F_split] candidates rebase: the placement table
+   is the caller's, which the partials nodes the prelude mints must be registered in for the routine
+   to link. A prelude that fails leaves at most placements for nodes no routine mentions, and the
+   routine unsplit. *)
+let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
+  match seeded_split_sites ~backend ~min_serial ~static_indices opt with
+  | [] -> (opt, [])
+  | sites -> (
+      match
+        Sched.apply_classified ~static_indices (split_reduce_prelude sites)
+          { opt with LL.traced_store = Hashtbl.copy opt.LL.traced_store }
+      with
+      | split_opt ->
+          logf "seeded_default: %d reduction(s) split: %s" (List.length sites)
+            (String.concat ~sep:", " (List.map sites ~f:split_site_label));
+          (split_opt, sites)
+      | exception Outcome.Cause_at (_, cause) ->
+          logf "seeded_default: the split reductions FAILED to apply (%s); left unsplit"
+            (Outcome.detail_of_cause cause);
+          (opt, []))
+
+let seeded_preset ~limits seg = Sched.default_gpu ~limits seg
+
+(* gh-ocannl-1348: a segment no sketch takes gets its accumulations' reduction loops sunk below
+   their write loops, then the default preset of the interchanged code: the number of [Swap]s and
+   the schedule, or [None] where nothing sinks. *)
+let seeded_sunk_schedule ~limits ~accum_prec ~static_indices seg =
+  match reduction_sink ~accum_prec seg with
+  | [] -> None
+  | swaps -> (
+      match Sched.apply_classified ~static_indices swaps (scratch_of seg) with
+      | exception Outcome.Cause_at _ -> None
+      | swapped -> Some (List.length swaps, swaps @ seeded_preset ~limits swapped))
+
+(* What the seeded plan does with each segment of the (split) routine: the segmentation and one
+   decision per segment, plus how many default segments were refined, or [None] where the plan is
+   the default segments (nothing seeds or sinks, or the segmentation is refused). Hermetic: every
+   probe runs on a copy. *)
+let seeded_decisions ~limits ~accum_prec ~static_indices ~min_reduction ~sink_enabled
+    (opt : LL.optimized) =
+  let preset = seeded_preset ~limits in
+  let zero_sched tns = Sched.zero_expansion ~limits tns in
+  let keep_mapping = Sched.fission_keep_mapping ~is_gpu:true ~limits in
+  let digest ~with_placements seg =
+    SC.digest (SC.canonicalize ~static_indices ~with_placements seg)
+  in
+  (* One decision per distinct segment code — a model's repeated layers decide once. Probed on the
+     segment alone: a sketch that does not apply or validate there leaves the segment to the default
+     preset rather than costing the routine its other seeds. *)
+  let decided = Hashtbl.create (module String) in
+  let seed_of kind pre =
+    match kind with
+    | `Zeros | `Solo -> None
+    | `Normal when min_reduction <= 0 -> None
+    | `Normal ->
+        Hashtbl.find_or_add decided
+          (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
+          ~default:(fun () ->
+            match seeded_params ~limits ~accum_prec ~min_reduction pre with
+            | None -> None
+            | Some p -> (
+                match
+                  validate_segments_for_model ~limits
+                    [
+                      Sched.apply_classified ~static_indices
+                        (sketch_schedule ~accum_prec ~p pre)
+                        (scratch_of pre);
+                    ]
+                with
+                | _ -> Some p
+                | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+                    logf "seeded_default: %s declined on a segment; keeping the preset"
+                      (sketch_params_label p);
+                    None))
+  in
+  (* Probed on the segment alone like a seed; a chain that does not validate leaves the plain
+     preset. *)
+  let sink_of kind pre =
+    match kind with
+    | `Zeros | `Solo -> None
+    | `Normal when not sink_enabled -> None
+    | `Normal -> (
+        match seeded_sunk_schedule ~limits ~accum_prec ~static_indices pre with
+        | None -> None
+        | Some (n_swaps, sched) -> (
+            match
+              validate_segments_for_model ~limits
+                [ Sched.apply_classified ~static_indices sched (scratch_of pre) ]
+            with
+            | _ -> Some n_swaps
+            | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+                logf "seeded_default: the reduction sink declined on a segment; keeping the preset";
+                None))
+  in
+  (* A segmentation derived on a hermetic copy, as [(first unit, kind, units, pre-schedule slice)]
+     per segment. *)
+  let derive ~arity_cuts =
+    match
+      Sched.fission_segmented ~promote_locals:true ?keep_mapping ~arity_cuts ~preset ~zero_sched
+        ~static_indices (scratch_of opt)
+    with
+    | exception Outcome.Cause_at _ -> None
+    | plan, tuples ->
+        Some
+          (List.map2_exn
+             (Array.to_list (segment_starts plan))
+             (List.zip_exn plan tuples)
+             ~f:(fun at ((kind, n), (_, pre, _, _)) -> (at, kind, n, pre)))
+  in
+  (* The default pipeline's own segmentation — derived exactly as [maybe_default_schedules] derives
+     it, no zero fold — so every segment the seeding leaves alone is the default's segment under the
+     default's schedule. *)
+  match derive ~arity_cuts:false with
+  | None -> None
+  | Some coarse ->
+      (* A default segment with no seed of its own can still hold a site: fission keeps aligned
+         nests together, so a weight gradient shares its kernel with the bias gradient reducing the
+         same rows, and two weight gradients of one input share theirs, and a second reduction is a
+         companion no sketch covers. The finer [arity_cuts] segmentation (gh-ocannl-574) cuts those
+         apart. Where it partitions exactly that segment's units and one of the pieces seeds, the
+         pieces replace the segment; elsewhere the default segmentation stands, so no launch is
+         added that buys no seed. *)
+      let fine = lazy (derive ~arity_cuts:true) in
+      let refined = ref 0 in
+      let hybrid =
+        List.concat_map coarse ~f:(fun (at, kind, n, pre) ->
+            let decide (s, k, m, pre) =
+              ( s,
+                k,
+                m,
+                Option.map (seed_of k pre) ~f:(fun p -> (p, digest ~with_placements:false pre)),
+                pre )
             in
-            let seeds = Array.of_list (List.map hybrid ~f:(fun (_, _, _, s, _) -> s)) in
-            (* The segments no sketch takes, one decision per distinct segment code like the
-               seeds. *)
-            let sink_decided = Hashtbl.create (module String) in
-            let sinks =
-              Array.of_list
-                (List.map hybrid ~f:(fun (_, k, _, s, pre) ->
-                     match s with
-                     | Some _ -> None
-                     | None ->
-                         let d = digest ~with_placements:false pre in
-                         Option.map
-                           (Hashtbl.find_or_add sink_decided
-                              (d ^ "|" ^ digest ~with_placements:true pre)
-                              ~default:(fun () -> sink_of k pre))
-                           ~f:(fun n -> (n, d))))
-            in
-            if Array.for_all seeds ~f:Option.is_none && Array.for_all sinks ~f:Option.is_none then
-              default_segs ()
-            else
-              let plan = List.map hybrid ~f:(fun (_, k, n, _, _) -> (k, n)) in
-              (* By position, as a replayed segmentation is matched; a slice whose code is not the
-                 decided one's keeps its preset. *)
-              let schedule i seg =
-                match (seeds.(i), sinks.(i)) with
-                | Some (p, d), _ when String.equal d (digest ~with_placements:false seg) ->
-                    Some (sketch_schedule ~accum_prec ~p seg)
-                | None, Some (_, d) when String.equal d (digest ~with_placements:false seg) ->
-                    Option.map (sunk_schedule seg) ~f:snd
-                | _ -> None
-              in
-              match
-                Sched.fission_segmented ~promote_locals:true ~replay:(plan, schedule) ~preset
-                  ~zero_sched ~static_indices opt
-              with
-              | _, tuples ->
-                  let segs =
-                    validate_segments_for_model ~limits
-                      (List.map tuples ~f:(fun (_, _, _, post) -> post))
-                  in
-                  let seeded =
-                    List.filter_map hybrid ~f:(fun (at, _, _, s, _) ->
-                        Option.map s ~f:(fun (p, _) -> (at, p)))
-                  in
-                  let sunk =
-                    List.filter_mapi hybrid ~f:(fun i (at, _, _, _, _) ->
-                        Option.map sinks.(i) ~f:(fun (n, _) -> (at, n)))
-                  in
-                  logf
-                    "seeded_default: %d of %d segments seeded (%d default segments refined), %d \
-                     with reductions sunk: %s"
-                    (List.length seeded) (List.length plan) !refined (List.length sunk)
-                    (String.concat ~sep:", "
-                       (List.map seeded ~f:(fun (at, p) ->
-                            Printf.sprintf "u%d %s" at (sketch_params_label p))));
-                  on_choice { none with sd_seeded = seeded; sd_sunk = sunk; sd_refined = !refined };
-                  segs
-              | exception Outcome.Cause_at (_, cause) ->
-                  logf "seeded_default: the seeded pipeline FAILED to apply (%s); using the default"
-                    (Outcome.detail_of_cause cause);
-                  default_segs ()))
+            match decide (at, kind, n, pre) with
+            | (_, _, _, Some _, _) as seeded -> [ seeded ]
+            | unseeded -> (
+                match (kind, Lazy.force fine) with
+                | `Normal, Some fine ->
+                    let pieces =
+                      List.filter fine ~f:(fun (s, _, m, _) -> s >= at && s + m <= at + n)
+                    in
+                    if
+                      List.length pieces < 2
+                      || List.sum (module Int) pieces ~f:(fun (_, _, m, _) -> m) <> n
+                    then [ unseeded ]
+                    else
+                      let pieces = List.map pieces ~f:decide in
+                      if List.exists pieces ~f:(fun (_, _, _, s, _) -> Option.is_some s) then (
+                        Int.incr refined;
+                        pieces)
+                      else [ unseeded ]
+                | _ -> [ unseeded ]))
+      in
+      (* The segments no sketch takes, one decision per distinct segment code like the seeds. *)
+      let sink_decided = Hashtbl.create (module String) in
+      let segments =
+        List.map hybrid ~f:(fun (_, k, _, s, pre) ->
+            match s with
+            | Some (params, digest) -> Seeded_sketch { digest; params }
+            | None -> (
+                let d = digest ~with_placements:false pre in
+                match
+                  Hashtbl.find_or_add sink_decided
+                    (d ^ "|" ^ digest ~with_placements:true pre)
+                    ~default:(fun () -> sink_of k pre)
+                with
+                | Some swaps -> Seeded_sunk { digest = d; swaps }
+                | None -> Seeded_preset))
+      in
+      if List.for_all segments ~f:(function Seeded_preset -> true | _ -> false) then None
+      else Some (List.map hybrid ~f:(fun (_, k, n, _, _) -> (k, n)), segments, !refined)
+
+(* The seeded plan's segments of [opt], the routine its split (if any) has been applied to: the
+   segmentation and [Sched.fission_segmented]'s tuples, and whether the plan's segments applied.
+   Where the plan has none, or its segmentation is refused, these are the default pipeline's own
+   segments ([maybe_default_schedules]'s, derived the same way). A plan segment is matched by
+   position, as a replayed segmentation is; a slice whose code is not the decided one's keeps its
+   preset. Every applied segment is validated, which raises on a parallelization the backend would
+   refuse. *)
+let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimized) =
+  let preset = seeded_preset ~limits in
+  let zero_sched tns = Sched.zero_expansion ~limits tns in
+  let default () =
+    Sched.fission_segmented ~promote_locals:true
+      ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
+      ~preset ~zero_sched ~static_indices opt
+  in
+  match segments with
+  | None -> (default (), false)
+  | Some (plan, segs) -> (
+      let segs = Array.of_list segs in
+      let digest seg = SC.digest (SC.canonicalize ~static_indices ~with_placements:false seg) in
+      let schedule i seg =
+        match segs.(i) with
+        | Seeded_sketch { digest = d; params = p } when String.equal d (digest seg) ->
+            Some (sketch_schedule ~accum_prec ~p seg)
+        | Seeded_sunk { digest = d; _ } when String.equal d (digest seg) ->
+            Option.map (seeded_sunk_schedule ~limits ~accum_prec ~static_indices seg) ~f:snd
+        | Seeded_preset | Seeded_sketch _ | Seeded_sunk _ -> None
+      in
+      match
+        Sched.fission_segmented ~promote_locals:true ~replay:(plan, schedule) ~preset ~zero_sched
+          ~static_indices opt
+      with
+      | (_, tuples) as segmented ->
+          ignore
+            (validate_segments_for_model ~limits (List.map tuples ~f:(fun (_, _, _, post) -> post))
+              : LL.optimized list);
+          (segmented, true)
+      | exception Outcome.Cause_at (_, cause) ->
+          logf "seeded_default: the seeded pipeline FAILED to apply (%s); using the default"
+            (Outcome.detail_of_cause cause);
+          (default (), false))
+
+let seeded_plan_choice (plan : seeded_plan) =
+  let split = List.map plan.sp_split ~f:(fun (s, b) -> (s.sr_target, b)) in
+  match plan.sp_segments with
+  | None -> { no_seeded_choice with sd_split = split }
+  | Some (segmentation, segs) ->
+      let starts = segment_starts segmentation in
+      {
+        no_seeded_choice with
+        sd_split = split;
+        sd_seeded =
+          List.filter_mapi segs ~f:(fun i -> function
+            | Seeded_sketch { params; _ } -> Some (starts.(i), params)
+            | _ -> None);
+        sd_sunk =
+          List.filter_mapi segs ~f:(fun i -> function
+            | Seeded_sunk { swaps; _ } -> Some (starts.(i), swaps)
+            | _ -> None);
+        sd_refined = plan.sp_refined;
+      }
+
+let seeded_transform ?min_reduction ?min_serial ?reduction_sink
+    ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
+  let backend = Context.backend_name ctx in
+  match seeded_settings ?min_reduction ?min_serial ?reduction_sink ~backend () with
+  | None -> None
+  | Some (min_reduction, min_serial, sink_enabled) ->
+      let limits = Context.hardware_limits ctx in
+      let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
+      let static_indices = Idx.bound_symbols bindings in
+      Some
+        (fun (opt : LL.optimized) : LL.optimized list ->
+          let opt, split = seeded_split ~backend ~min_serial ~static_indices opt in
+          let unsegmented = { sp_split = split; sp_segments = None; sp_refined = 0 } in
+          on_choice (seeded_plan_choice unsegmented);
+          let plan =
+            match
+              seeded_decisions ~limits ~accum_prec ~static_indices ~min_reduction ~sink_enabled opt
+            with
+            | None -> unsegmented
+            | Some (segmentation, segs, refined) ->
+                { unsegmented with sp_segments = Some (segmentation, segs); sp_refined = refined }
+          in
+          let (_, tuples), applied =
+            seeded_replay ~limits ~accum_prec ~static_indices plan.sp_segments opt
+          in
+          if applied then (
+            let choice = seeded_plan_choice plan in
+            logf
+              "seeded_default: %d of %d segments seeded (%d default segments refined), %d with \
+               reductions sunk: %s"
+              (List.length choice.sd_seeded)
+              (List.length (fst (Option.value_exn plan.sp_segments)))
+              choice.sd_refined (List.length choice.sd_sunk)
+              (String.concat ~sep:", "
+                 (List.map choice.sd_seeded ~f:(fun (at, p) ->
+                      Printf.sprintf "u%d %s" at (sketch_params_label p))));
+            on_choice choice);
+          List.map tuples ~f:(fun (_, _, _, post) -> post))
 
 let seeded_default ?name ?min_reduction ?min_serial ?reduction_sink ?report ctx comp bindings =
   let choice = ref no_seeded_choice in
