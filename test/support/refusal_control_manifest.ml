@@ -412,11 +412,15 @@ let raw_entries =
         "[scanner-refusal:ae4c5182763a52487befbd3029c2fd91] stanza declares neither";
         "[scanner-refusal:d52ce57d79cc2a310f3f2d2d037e9b2e] declaring the variable";
         "[scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning";
+        "[scanner-refusal:b5b10305ef82fa7d9077db1eceb93561] variable back through";
         "[scanner-refusal:6ed1faa93fb2465cb3c3a746f850f77c] Context.Cc_backend";
         "[scanner-refusal:d86762f9ec334387db672f5035ac305e] limits update overwriting";
+        "[scanner-refusal:448ab51835350320d2d9b13f46f2f82e] limits update overwriting";
         "[scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the";
         "[scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing";
-        "[scanner-refusal:0822aa2f865fc626af0b55375500dd2a] Cc_backend";
+        "[scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests";
+        "[scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable";
+        "[scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";

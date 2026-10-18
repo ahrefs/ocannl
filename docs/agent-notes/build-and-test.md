@@ -1340,21 +1340,28 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   a new key the pipeline reaches shows up as a diff and as a failure on each stanza that reaches it.
 - **A test that reads the cc vector width declares `(env_var OCANNL_CC_VECTOR_BYTES)` — derived
   the same way** (gh-ocannl-1320). The local proxy for the ubuntu leg's wider vectors is a rerun at
-  `OCANNL_CC_VECTOR_BYTES=32` (backend-precision-and-simd.md), which an undeclared stanza answers
-  from the cache. The readers are derived: the `Cc_backend` values whose key reach includes
-  `cc_vector_bytes` (`vector_bytes_setting`, `vector_registers_setting`, `codegen_tag`), and the
-  fields `schedulers.ml`'s cc limits record fills from them (`simd_vector_bytes`,
-  `simd_vector_registers`, `codegen_tag`). A program reads the width when its own modules, or a
-  library under `test/`/`arrayjit/test/` it links (transitively), name such a value through
-  `Context.Cc_backend` (alias and `open` included), project such a field or match it in a record
-  pattern, or write `{ base with … }` overwriting one such field and leaving another to a base
-  other than `no_hardware_limits` — staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
-  keeps the device's register count. Every rule running it declares or pins the variable, or
-  depends on `(universe)`. Only the width key is asked for: the SIMD/arch-flag keys move the auto
-  width only through the probe every compiled program runs, and a test that merely constructs
-  limits and lets codegen read the width inside the library is the `Context.compile` route above.
-  Field names match without types, so an unrelated `.simd_vector_bytes` costs a declaration, never
-  a stale pass. The golden lists the derived values and fields and each reading stanza.
+  `OCANNL_CC_VECTOR_BYTES=32` (backend-precision-and-simd.md), and an undeclared stanza answers it
+  from the cache. Three things are derived. The values are the `Cc_backend` values whose key reach
+  includes `cc_vector_bytes`. The fields are those `schedulers.ml`'s cc limits record fills from
+  those values: `top_level_key_reach`'s `field_reach`, with `~follow_opens`, so a module alias, an
+  `open` or a local helper in between still counts. The record's type (`hardware_limits` in
+  `backend_intf.ml`) supplies the labels, any of which marks a limits update. A program reads the
+  width when its own modules, or a library under `test/`/`arrayjit/test/` it links (transitively),
+  do one of three things. They name such a value through `Context.Cc_backend` (alias and `open`
+  included). They project such a field or match it in a record pattern. Or they write
+  `{ base with … }`, overwriting any label of the type and leaving a width field to a non-constant
+  base. A constant base is `no_hardware_limits`, or a name every binding of which is a constant
+  record or a function returning one. staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
+  keeps the device's register count, so it is a read. Every rule running such a program declares or
+  pins the variable, or depends on `(universe)`. A library with inline tests is a program of its
+  own: its `(inline_tests (deps …))` and every per-module rule running its runner answer for it. A
+  `setenv` whose value reads the variable back through `%{env:…}` pins nothing: `Scan`'s pin walk
+  drops it for every rule that credits pins. Only the width key is asked for, since the
+  SIMD/arch-flag keys move the auto width only through the probe every compiled program runs. A
+  test that merely constructs limits and lets codegen read the width inside the library is the
+  `Context.compile` route above. Field names match without types, so an unrelated
+  `.simd_vector_bytes` costs a declaration, never a stale pass. The golden lists the derived values,
+  fields and record type, and each reading stanza.
 - Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
   and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory

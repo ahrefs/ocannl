@@ -1063,6 +1063,11 @@ let keys_in_source content =
 type key_reach = {
   reach : (string * string list) list;
       (** Every top-level value of the module, with the keys it reaches. *)
+  field_reach : (string * string list) list;
+      (** Every field a record expression inside a top-level value initializes, with the keys its
+          initializer reaches, resolved exactly as the value's own reach is (gh-ocannl-1320: which
+          device-limits fields the cc vector width fills). A field initialized in several records
+          appears once per record. *)
   unplaced : string list;
       (** Keys read outside every NAMED top-level value binding -- in a nested module, or under
           [let () = …] -- which no entry is credited with, and which a caller has to refuse rather
@@ -1087,10 +1092,25 @@ type key_reach = {
     -- contributes whatever [external_keys] answers for its path, after a top-level [module X = Y]
     alias of this module has been expanded; the caller decides which modules it can follow, since
     this function sees one file. A field of [Utils.settings] contributes what [settings_field_keys]
-    answers for it (the field's own name by default). *)
+    answers for it (the field's own name by default).
+
+    With [~follow_opens:true], a path no local value answers to is also tried under each top-level
+    [open M] of the module, as [M.path] -- so [open Cc_backend] and a bare [vector_bytes_setting ()]
+    reach what [Cc_backend.vector_bytes_setting] does. Off by default: the schedule pipeline's
+    derivation predates it, and turning it on there widens a requirement two hundred stanzas meet.
+*)
 let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
-    ?(settings_field_keys = fun field -> [ field ]) content =
+    ?(settings_field_keys = fun field -> [ field ]) ?(follow_opens = false) content =
   let structure = structure_of content in
+  let opens =
+    if not follow_opens then []
+    else
+      List.filter_map structure ~f:(fun item ->
+          match item.pstr_desc with
+          | Pstr_open { popen_expr = { pmod_desc = Pmod_ident { txt; _ }; _ }; _ } ->
+              flatten_module_path txt
+          | _ -> None)
+  in
   let aliases =
     List.filter_map structure ~f:(fun item ->
         match item.pstr_desc with
@@ -1160,12 +1180,41 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         | Some keys -> Some keys
         | None -> local (depth - 1)
     in
+    let under_opens =
+      List.fold opens
+        ~init:(Set.empty (module String))
+        ~f:(fun acc opened ->
+          Set.union acc (Set.of_list (module String) (external_keys (expand (opened @ path)))))
+    in
     match local (List.length scope) with
     | Some keys -> keys
     | None -> (
         match path with
-        | [ _ ] -> Set.empty (module String)
-        | _ -> Set.of_list (module String) (external_keys (expand path)))
+        | [ _ ] -> under_opens
+        | _ -> Set.union under_opens (Set.of_list (module String) (external_keys (expand path))))
+  in
+  let field_reach = ref [] in
+  (* The record fields a binding's body initializes, each with its initializer, resolved once the
+     binding's own scope is known. *)
+  let record_fields_of expr =
+    let found = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          (match expr.pexp_desc with
+          | Pexp_record (fields, _) ->
+              List.iter fields ~f:(fun ({ txt = field; _ }, value) ->
+                  Option.iter
+                    (List.last (flatten_longident field))
+                    ~f:(fun field -> found := (field, value) :: !found))
+          | _ -> ());
+          super#expression expr
+      end
+    in
+    iterator#expression expr;
+    List.rev !found
   in
   let reach_of ~env ~scope (keys, names) =
     List.fold names
@@ -1178,7 +1227,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
   let rec walk ~scope env items =
     List.fold items ~init:env ~f:(fun env item ->
         match item.pstr_desc with
-        | Pstr_value (rec_flag, bindings) -> (
+        | Pstr_value (rec_flag, bindings) ->
             let group =
               List.filter_map bindings ~f:(fun binding ->
                   Option.map (pattern_name binding.pvb_pat) ~f:(fun name ->
@@ -1191,14 +1240,25 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
               in
               if Map.equal Set.equal env env' then env else close env'
             in
-            match rec_flag with
-            | Recursive ->
-                close
-                  (List.fold group ~init:env ~f:(fun acc (name, _) ->
-                       Map.set acc ~key:name ~data:(Set.empty (module String))))
-            | Nonrecursive ->
-                List.fold group ~init:env ~f:(fun acc (name, direct) ->
-                    Map.set acc ~key:name ~data:(reach_of ~env ~scope direct)))
+            let env' =
+              match rec_flag with
+              | Recursive ->
+                  close
+                    (List.fold group ~init:env ~f:(fun acc (name, _) ->
+                         Map.set acc ~key:name ~data:(Set.empty (module String))))
+              | Nonrecursive ->
+                  List.fold group ~init:env ~f:(fun acc (name, direct) ->
+                      Map.set acc ~key:name ~data:(reach_of ~env ~scope direct))
+            in
+            (* A field's initializer sees what the binding's body sees: the earlier values, and for
+               a recursive group the group itself. *)
+            let field_env = match rec_flag with Recursive -> env' | Nonrecursive -> env in
+            List.iter bindings ~f:(fun binding ->
+                List.iter (record_fields_of binding.pvb_expr) ~f:(fun (field, value) ->
+                    field_reach :=
+                      (field, Set.to_list (reach_of ~env:field_env ~scope (direct_of value)))
+                      :: !field_reach));
+            env'
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
            functor's body is not walked: what its values read depends on its argument. *)
         | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } -> (
@@ -1214,6 +1274,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
   in
   {
     reach = Map.to_alist env |> List.map ~f:(fun (name, keys) -> (name, Set.to_list keys));
+    field_reach = List.rev !field_reach;
     unplaced;
   }
 
@@ -1258,60 +1319,113 @@ let settings_field_initializers content =
   iterator#structure (structure_of content);
   List.rev !found
 
-(** Every field a record expression of [content] initializes, with the value paths its initializer
-    names: [{ simd_vector_bytes = Cc_backend.vector_bytes_setting (); … }] contributes
-    [("simd_vector_bytes", [["Cc_backend"; "vector_bytes_setting"]])]. A [{ base with … }] update
-    contributes its own fields alone. What the paths reach is the caller's question: this reads one
-    file (gh-ocannl-1320, where it says which device-limits fields the cc vector width fills). *)
-let record_field_value_paths content =
-  let found = ref [] in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression expr =
-        (match expr.pexp_desc with
-        | Pexp_record (fields, _) ->
-            List.iter fields ~f:(fun ({ txt = field; _ }, value) ->
-                let names = ref [] in
-                let collect =
-                  object
-                    inherit Ast_traverse.iter as super
-
-                    method! expression e =
-                      (match e.pexp_desc with
-                      | Pexp_ident { txt; _ } ->
-                          Option.iter (flatten_module_path txt) ~f:(fun path ->
-                              names := path :: !names)
-                      | _ -> ());
-                      super#expression e
-                  end
-                in
-                collect#expression value;
-                Option.iter
-                  (List.last (flatten_longident field))
-                  ~f:(fun field -> found := (field, List.rev !names) :: !found))
-        | _ -> ());
-        super#expression expr
-    end
-  in
-  iterator#structure (structure_of content);
-  List.rev !found
+(** Every record type [content] declares at top level, with its labels:
+    [type t = { a : int; b : int }] contributes [("t", ["a"; "b"])]. *)
+let record_type_labels content =
+  List.concat_map (structure_of content) ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_type (_, declarations) ->
+          List.filter_map declarations ~f:(fun declaration ->
+              match declaration.ptype_kind with
+              | Ptype_record labels ->
+                  Some
+                    ( declaration.ptype_name.txt,
+                      List.map labels ~f:(fun label -> label.pld_name.txt) )
+              | _ -> None)
+      | _ -> [])
 
 (** Where [content] reads one of [fields] off a record, in words a diagnostic can quote: a field
     projection [limits.simd_vector_bytes], a record pattern naming the field, and a
-    [{ base with … }] update that overwrites some of [fields] and leaves the rest to its base -- a
-    copy of the base's value, read where the base came from. A base whose last path component is one
-    of [constant_bases] supplies constants and is no read. Field names are matched by their last
+    [{ base with … }] update that leaves some of [fields] to its base -- a copy of the base's value,
+    read where the base came from. An update is recognised as one of the record by overwriting any
+    of [record_fields] (every label of the record type [fields] belong to) or of [fields], so
+    [{ limits with native_fp16_arithmetic = false }] copies every one of [fields] from its base.
+
+    A CONSTANT base is no read: a path whose last component is one of [constant_bases], or a name
+    every binding of which in this file is a constant record -- a full record literal, or an update
+    of a constant base -- so [let cpu_limits = { no_hardware_limits with … }] and a later
+    [{ cpu_limits with … }] read nothing. A name bound to anything else anywhere in the file is not
+    constant, the direction whose cost is a declaration. Field names are matched by their last
     component, without types: a field of another record spelled the same way is read as this one,
-    the direction whose cost is a declaration rather than a stale pass (gh-ocannl-1320). *)
-let field_reads_in_source content ~fields ~constant_bases =
+    for the same reason (gh-ocannl-1320). *)
+let field_reads_in_source content ~fields ~record_fields ~constant_bases =
   let wanted field = List.mem fields field ~equal:String.equal in
+  let of_the_record field = wanted field || List.mem record_fields field ~equal:String.equal in
+  let structure = structure_of content in
+  let last lid = List.last (flatten_longident lid) in
+  (* Every simple-name value binding in the file, with what it binds. *)
+  let bindings =
+    let found = ref [] in
+    let note binding =
+      Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
+          found := (name, binding.pvb_expr) :: !found)
+    in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! structure_item item =
+          (match item.pstr_desc with Pstr_value (_, bs) -> List.iter bs ~f:note | _ -> ());
+          super#structure_item item
+
+        method! expression expr =
+          (match expr.pexp_desc with Pexp_let (_, bs, _) -> List.iter bs ~f:note | _ -> ());
+          super#expression expr
+      end
+    in
+    iterator#structure structure;
+    !found
+  in
+  let rec unwrap expr =
+    match expr.pexp_desc with Pexp_constraint (inner, _) -> unwrap inner | _ -> expr
+  in
+  (* What a binding produces once applied: a function's body, so [let simd w = { no_hardware_limits
+     with … }] makes [simd 32] a constant base too. *)
+  let rec result expr =
+    match (unwrap expr).pexp_desc with
+    | Pexp_function (_, _, Pfunction_body body) -> result body
+    | _ -> unwrap expr
+  in
+  (* Closed to a fixpoint: a name is constant once every binding of it is a constant record. *)
+  let constant_names =
+    let names = List.dedup_and_sort (List.map bindings ~f:fst) ~compare:String.compare in
+    let rec close known =
+      let constant_ident txt =
+        List.exists constant_bases ~f:(fun name -> path_ends_in name txt)
+        || match flatten_module_path txt with Some [ name ] -> Set.mem known name | _ -> false
+      in
+      let is_constant_base base =
+        match (unwrap base).pexp_desc with
+        | Pexp_ident { txt; _ } -> constant_ident txt
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> constant_ident txt
+        | _ -> false
+      in
+      (* A binding's result is a constant record, or an alias of a constant base. *)
+      let constant_record expr =
+        let result = result expr in
+        match result.pexp_desc with
+        | Pexp_record (_, None) -> true
+        | Pexp_record (_, Some base) -> is_constant_base base
+        | Pexp_ident _ -> is_constant_base result
+        | _ -> false
+      in
+      let known' =
+        List.filter names ~f:(fun name ->
+            List.for_all bindings ~f:(fun (n, expr) ->
+                (not (String.equal n name)) || constant_record expr))
+        |> Set.of_list (module String)
+      in
+      if Set.equal known known' then (known, is_constant_base) else close known'
+    in
+    (* Start from every name and shrink: a name whose bindings are all literals stays, and one built
+       from a non-constant base drops out, taking its dependents with it. *)
+    close (Set.of_list (module String) names)
+  in
+  let _, is_constant_base = constant_names in
   let found = ref [] in
   let add spelling =
     if not (List.mem !found spelling ~equal:String.equal) then found := spelling :: !found
   in
-  let last lid = List.last (flatten_longident lid) in
   let iterator =
     object
       inherit Ast_traverse.iter as super
@@ -1323,13 +1437,7 @@ let field_reads_in_source content ~fields ~constant_bases =
                 if wanted field then add (Printf.sprintf "`.%s`" field))
         | Pexp_record (set, Some base) ->
             let overwritten = List.filter_map set ~f:(fun ({ txt; _ }, _) -> last txt) in
-            let constant =
-              match base.pexp_desc with
-              | Pexp_ident { txt; _ } ->
-                  List.exists constant_bases ~f:(fun name -> path_ends_in name txt)
-              | _ -> false
-            in
-            if List.exists overwritten ~f:wanted && not constant then
+            if List.exists overwritten ~f:of_the_record && not (is_constant_base base) then
               List.iter fields ~f:(fun field ->
                   if not (List.mem overwritten field ~equal:String.equal) then
                     add (Printf.sprintf "`{ … with … }` leaving `%s` to its base" field))
@@ -1346,7 +1454,7 @@ let field_reads_in_source content ~fields ~constant_bases =
         super#pattern pat
     end
   in
-  iterator#structure (structure_of content);
+  iterator#structure structure;
   List.rev !found
 
 (** The library sources among a rule's dependencies, sorted and deduplicated.

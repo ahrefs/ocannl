@@ -8472,6 +8472,8 @@
   ocannl_config
   (env_var OCANNL_BUILD_FILES_PREFIX)
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; Its default-pipeline mirror reads every default-schedule key and the fission merge gate.
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)

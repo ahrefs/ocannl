@@ -871,6 +871,23 @@ let inline_runner_runs ~libraries stanza =
           | _ -> None)
   | _ -> []
 
+(* The pins of each run, in [stanza], of [library]'s inline-test runner -- the counterpart of
+   [inline_runner_runs] that the width rule needs (gh-ocannl-1320), since a per-module rule answers
+   for a variable by its own deps or by pinning it around that run. *)
+let inline_runner_pins ~library stanza =
+  match Scan.head stanza with
+  | Some "rule" ->
+      List.filter_map (Scan.classified_command_sites_with_pins_preserving_multiplicity stanza)
+        ~f:(fun (cwd, pinned, site, command) ->
+          match (site, command) with
+          | Scan.Program _, ((Scan.Runs _ | Scan.Runs_dependency _) as command) ->
+              Option.bind (Scan.command_file_path ~cwd command) ~f:(fun path ->
+                  Option.some_if
+                    (String.equal (normalize_path path) (inline_runner_path library))
+                    pinned)
+          | _ -> None)
+  | _ -> []
+
 (* Whether a module's source holds inline tests: the extension points `ppx_inline_test` and
    `ppx_expect` register. A mention in a comment over-asks, which is the loud direction. *)
 let holds_inline_tests source =
@@ -957,13 +974,17 @@ let pipeline_module = [ "Ir"; "Schedule" ]
    Who reads the width is derived, as the pipeline's keys are. The VALUES are those of `Cc_backend`
    whose key reach ([Sources.top_level_key_reach], the module read the way the pipeline's sibling
    modules are) includes [width_key]; the FIELDS are those of the cc device's limits record -- the
-   record expressions of [width_limits_home] -- whose initializer names one of those values. A
-   program reads the width when its own modules, or a test-tree library it links, name such a value
+   record expressions of [width_limits_home] -- whose initializer reaches it, resolved the same way
+   (an alias, an `open` or a local helper in between still counts); the record's TYPE, in
+   [width_limits_type_home], gives the labels that mark a limits update. A program reads the width
+   when its own modules, or a test-tree library it links, name such a value
    (`Context.Cc_backend.vector_bytes_setting`, under an alias or an `open` too), project such a
    field off a record (`limits.simd_vector_bytes`, or a record pattern), or update a limits record
-   leaving such a field to a base that is not one of [width_constant_bases] (`{ device_limits with
-   simd_vector_bytes = 16 }` keeps the device's register count, which the width scales --
-   staging#1094's worked case). Every rule running it declares or pins [width_key]'s variable.
+   leaving such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits
+   with simd_vector_bytes = 16 }` keeps the device's register count, which the width scales --
+   staging#1094's worked case). Every rule running it declares or pins [width_key]'s variable; a
+   library with inline tests answers for itself, through its `(inline_tests (deps …))` and each
+   per-module rule running its runner.
 
    Asked for is the width key alone. The auto width also follows the SIMD and arch flags and the
    compiler the probe runs through, but those reach it only through the auto probe, as they reach
@@ -976,6 +997,7 @@ let pipeline_module = [ "Ir"; "Schedule" ]
 let width_key = "cc_vector_bytes"
 let width_module = "Cc_backend"
 let width_limits_home = "arrayjit/lib/schedulers.ml"
+let width_limits_type_home = "arrayjit/lib/backend_intf.ml"
 let width_constant_bases = [ "no_hardware_limits" ]
 let width_library_roots = [ "test/"; "arrayjit/test/" ]
 
@@ -1230,7 +1252,7 @@ let main () =
           Sources.top_level_key_reach ~external_keys ~settings_field_keys
             (In_channel.read_all on_disk)
         with
-        | { Sources.reach; unplaced } ->
+        | { Sources.reach; unplaced; _ } ->
             List.iter unplaced ~f:(fun key ->
                 fail
                   (Printf.sprintf
@@ -1281,18 +1303,32 @@ let main () =
         List.filter_map reach ~f:(fun (name, keys) ->
             Option.some_if (List.mem keys width_key ~equal:String.equal) name)
   in
+  (* The fields are read with the same resolution as the values: an alias of `Cc_backend`, an `open`
+     of it, or a local helper between the field and the value still carries the width. *)
   let width_fields =
     match List.Assoc.find source_files ~equal:String.equal width_limits_home with
     | None -> []
     | Some on_disk ->
-        Sources.record_field_value_paths (In_channel.read_all on_disk)
-        |> List.filter_map ~f:(fun (field, paths) ->
-            Option.some_if
-              (List.exists paths ~f:(fun path ->
-                   List.exists width_values ~f:(fun value ->
-                       List.equal String.equal path (width_module :: String.split value ~on:'.'))))
-              field)
+        (Sources.top_level_key_reach ~external_keys ~settings_field_keys ~follow_opens:true
+           (In_channel.read_all on_disk))
+          .field_reach
+        |> List.filter_map ~f:(fun (field, keys) ->
+            Option.some_if (List.mem keys width_key ~equal:String.equal) field)
         |> List.dedup_and_sort ~compare:String.compare
+  in
+  (* Every label of the record type the width fields belong to, which is what tells a limits update
+     from an update of some other record. *)
+  let width_record_types =
+    match List.Assoc.find source_files ~equal:String.equal width_limits_type_home with
+    | None -> []
+    | Some on_disk ->
+        Sources.record_type_labels (In_channel.read_all on_disk)
+        |> List.filter ~f:(fun (_, labels) ->
+            (not (List.is_empty width_fields))
+            && List.for_all width_fields ~f:(fun field -> List.mem labels field ~equal:String.equal))
+  in
+  let width_record_fields =
+    List.concat_map width_record_types ~f:snd |> List.dedup_and_sort ~compare:String.compare
   in
   let width_reach =
     let paths = List.concat_map width_values ~f:width_paths_of in
@@ -1301,7 +1337,7 @@ let main () =
         if
           not
             (String.is_substring content ~substring:width_module
-            || List.exists width_fields ~f:(fun field ->
+            || List.exists (width_fields @ width_record_fields) ~f:(fun field ->
                 String.is_substring content ~substring:field))
         then None
         else
@@ -1320,7 +1356,7 @@ let main () =
           match
             named
             @ Sources.field_reads_in_source content ~fields:width_fields
-                ~constant_bases:width_constant_bases
+                ~record_fields:width_record_fields ~constant_bases:width_constant_bases
           with
           | [] -> None
           | spellings -> Some (String.lowercase path, spellings))
@@ -2664,37 +2700,52 @@ let main () =
                                          be declared -- pin it, or fix the spelling"
                                         key)));
                       (* gh-ocannl-1320: the cc vector width, read by the program's own modules or a
-                         test-tree library it links, asked of every run of it. Not of a library: its
-                         linkers are asked instead. *)
-                      (if not (String.equal kind "library") then
-                         let reads =
-                           List.filter_map own_modules ~f:(fun module_name ->
-                               Option.map
-                                 (Map.find width_reach
-                                    (String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))))
-                                 ~f:(fun spellings ->
-                                   Printf.sprintf "%s.ml reads %s" (String.lowercase module_name)
-                                     (String.concat ~sep:", " spellings)))
-                           @ width_reads_linked stanza
-                         in
-                         let var = Utils.env_var_name width_key in
-                         if not (List.is_empty runners || List.is_empty reads) then
-                           let via = String.concat ~sep:"; " reads in
-                           if
-                             List.for_all runners ~f:(fun (deps, pins) ->
-                                 Scan.declares_env_var deps var || Set.mem pins var
-                                 || Option.value_map deps ~default:false
-                                      ~f:(List.exists ~f:depends_on_universe))
-                           then width_table := (where, via) :: !width_table
-                           else
-                             fail
-                               (Printf.sprintf
-                                  "%s reads the cc vector width (%s), and a rule running %s \
-                                   neither declares nor pins `%s` -- so a rerun at another width, \
-                                   the check an ARM box owes the ubuntu leg, replays the previous \
-                                   width's result as a pass. Add (env_var %s) to every rule that \
-                                   runs %s"
-                                  where via program var var program));
+                         test-tree library it links, asked of every run of it. A plain library is
+                         not asked -- its linkers are -- but one with inline tests is a program of
+                         its own: its generated runner runs under `(inline_tests (deps …))`, and
+                         each hand-written per-module rule running that runner under its own deps
+                         (Codex P2, round 1). *)
+                      (let width_runners, width_program =
+                         match kind with
+                         | "library" -> (
+                             match Scan.field stanza "inline_tests" with
+                             | None -> ([], program)
+                             | Some args ->
+                                 let library = named () in
+                                 ( (Scan.field_in args "deps", Set.empty (module String))
+                                   :: List.concat_map group ~f:(fun rule ->
+                                       List.map (inline_runner_pins ~library rule) ~f:(fun pins ->
+                                           (Scan.field rule "deps", pins))),
+                                   "its inline tests" ))
+                         | _ -> (runners, program)
+                       in
+                       let reads =
+                         List.filter_map own_modules ~f:(fun module_name ->
+                             Option.map
+                               (Map.find width_reach
+                                  (String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))))
+                               ~f:(fun spellings ->
+                                 Printf.sprintf "%s.ml reads %s" (String.lowercase module_name)
+                                   (String.concat ~sep:", " spellings)))
+                         @ width_reads_linked stanza
+                       in
+                       let var = Utils.env_var_name width_key in
+                       if not (List.is_empty width_runners || List.is_empty reads) then
+                         let via = String.concat ~sep:"; " reads in
+                         if
+                           List.for_all width_runners ~f:(fun (deps, pins) ->
+                               Scan.declares_env_var deps var || Set.mem pins var
+                               || Option.value_map deps ~default:false
+                                    ~f:(List.exists ~f:depends_on_universe))
+                         then width_table := (where, via) :: !width_table
+                         else
+                           fail
+                             (Printf.sprintf
+                                "%s reads the cc vector width (%s), and a rule running %s neither \
+                                 declares nor pins `%s` -- so a rerun at another width, the check \
+                                 an ARM box owes the ubuntu leg, replays the previous width's \
+                                 result as a pass. Add (env_var %s) to every rule that runs %s"
+                                where via width_program var var width_program));
                       (* gh-ocannl-1149: the keys the program reaches by naming the schedule
                          pipeline, asked of every run of it exactly as a guard's keys are. Not of a
                          library: one naming the pipeline is the route every compiled program takes,
@@ -2957,6 +3008,9 @@ let main () =
     (String.concat ~sep:", " width_values);
   printf "  (the device-limits fields they fill in %s: %s)\n" width_limits_home
     (String.concat ~sep:", " width_fields);
+  printf "  (the record type of those fields, whose every label marks a limits update, in %s: %s)\n"
+    width_limits_type_home
+    (String.concat ~sep:", " (List.map width_record_types ~f:fst));
   List.sort !width_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
   |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
   let stale_gateless =
@@ -5233,9 +5287,12 @@ let pipeline_control () =
    way of answering for it.
 
    The stand-in `cc_backend.ml` reads the width key in one value, reaches it one call away in a
-   second, and reads another key in a third; the stand-in `schedulers.ml` fills three fields from
-   those three, so the derivation has to tell the two width fields from the third. The tree sits
-   under `test/` so that a library beside the subject is one the rule follows. *)
+   second, and reads another key in a third. The stand-in `schedulers.ml` fills three fields from
+   those three -- one through a module alias, one through a local helper calling under an `open`,
+   one directly -- so the derivation has to resolve the first two as the readers' references are
+   resolved, and tell both from the third (Codex P2, round 1). The stand-in `backend_intf.ml`
+   declares the record type, whose other label marks an update that copies every width field. The
+   tree sits under `test/` so that a library beside the subject is one the rule follows. *)
 let width_backend_stub =
   "let auto_vector_bytes () = 16\n\
    let vector_bytes_setting () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
@@ -5243,18 +5300,33 @@ let width_backend_stub =
    let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n"
 
 let width_limits_stub =
-  "let cpu_mma_limits () =\n\
-  \  { no_hardware_limits with simd_vector_bytes = Cc_backend.vector_bytes_setting ();\n\
-  \    simd_vector_registers = Cc_backend.registers (); worker_pool_tag = Cc_backend.chunks () }\n"
+  "module CC = Cc_backend\n\
+   open Cc_backend\n\
+   let helper () = registers ()\n\
+   let cpu_mma_limits () =\n\
+  \  { no_hardware_limits with simd_vector_bytes = CC.vector_bytes_setting ();\n\
+  \    simd_vector_registers = helper (); worker_pool_tag = Cc_backend.chunks () }\n"
+
+let width_type_stub =
+  "type hardware_limits = {\n\
+  \  simd_vector_bytes : int;\n\
+  \  simd_vector_registers : int;\n\
+  \  worker_pool_tag : int;\n\
+  \  native_fp16_arithmetic : bool;\n\
+   }\n"
 
 let width_subject ?(links_support = false) answer =
   let var = Utils.env_var_name width_key in
   let deps =
-    match answer with `Declares -> Printf.sprintf " (env_var %s)" var | `Pins | `Neither -> ""
+    match answer with
+    | `Declares -> Printf.sprintf " (env_var %s)" var
+    | `Pins | `Pins_ambient | `Neither -> ""
   in
   let action =
     match answer with
     | `Pins -> Printf.sprintf "\n (action\n  (setenv %s 16\n   (run %%{test})))" var
+    | `Pins_ambient ->
+        Printf.sprintf "\n (action\n  (setenv %s %%{env:%s=-1}\n   (run %%{test})))" var var
     | `Declares | `Neither -> ""
   in
   Printf.sprintf
@@ -5279,6 +5351,40 @@ let width_subject ?(links_support = false) answer =
     (if links_support then " support" else "")
     action
 
+(* The library beside the subject: a plain one, or one with inline tests -- a program of its own --
+   whose `(inline_tests (deps …))` does or does not declare the variable. A directory with inline
+   tests carries its own ambient gate, as every directory with runtest actions does. *)
+let width_support_dune inline =
+  let gate =
+    "\n\
+     (rule\n\
+    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
+    \ (alias runtest)\n\
+    \ (deps ocannl_config (universe))\n\
+    \ (action\n\
+    \  (run %{dep:ambient.exe})))\n\n\
+     (executable\n\
+    \ (name ambient)\n\
+    \ (modules ambient)\n\
+    \ (link_flags -linkall)\n\
+    \ (libraries arrayjit.utils))\n"
+  in
+  match inline with
+  | `Plain -> "(library\n (name support)\n (modules support)\n (libraries arrayjit.ir))\n"
+  | (`Inline_undeclared | `Inline_declared) as inline ->
+      Printf.sprintf
+        "(library\n\
+        \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
+        \ (name support)\n\
+        \ (modules support)\n\
+        \ (inline_tests (deps ocannl_config%s))\n\
+        \ (libraries arrayjit.ir))\n\
+         %s"
+        (match inline with
+        | `Inline_declared -> " (env_var " ^ Utils.env_var_name width_key ^ ")"
+        | `Inline_undeclared -> "")
+        gate
+
 let width_control () =
   let exe =
     let name = Stdlib.Sys.executable_name in
@@ -5294,16 +5400,17 @@ let width_control () =
   in
   write_file (Stdlib.Filename.concat root backend_home) width_backend_stub;
   write_file (Stdlib.Filename.concat root width_limits_home) width_limits_stub;
+  write_file (Stdlib.Filename.concat root width_limits_type_home) width_type_stub;
   write_file (Stdlib.Filename.concat root "test/t/ambient.ml") "let () = ()\n";
-  write_file
-    (Stdlib.Filename.concat root "test/lib/dune")
-    "(library\n (name support)\n (modules support)\n (libraries arrayjit.ir))\n";
+  write_file (Stdlib.Filename.concat root "test/lib/ambient.ml") "let () = ()\n";
   let paths =
     "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
-    :: "test/lib/support.ml" :: backend_home :: width_limits_home :: List.map context ~f:fst
+    :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: backend_home :: width_limits_home
+    :: width_limits_type_home :: List.map context ~f:fst
   in
-  let run ?(support = "let () = ()\n") ?links_support ~probe answer =
+  let run ?(support = "let () = ()\n") ?(inline = `Plain) ?links_support ~probe answer =
     write_file (Stdlib.Filename.concat root "test/lib/support.ml") support;
+    write_file (Stdlib.Filename.concat root "test/lib/dune") (width_support_dune inline);
     write_file (Stdlib.Filename.concat root "test/t/probe.ml") probe;
     write_file (Stdlib.Filename.concat root "test/t/dune") (width_subject ?links_support answer);
     run_checker ~root ~exe ("." :: paths)
@@ -5313,10 +5420,17 @@ let width_control () =
     "module Cc_backend = Context.Cc_backend\nlet () = ignore (Cc_backend.registers ())\n"
   in
   let updated = "let pinned device = { device with Ir.Backend_intf.simd_vector_bytes = 16 }\n" in
+  let copied =
+    "let narrow device = { device with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+  in
   let unrelated =
     "let synthetic =\n\
     \  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = \
      16 }\n\
+     let other r = { r with some_other_field = 1 }\n\
+     let base = Ir.Backend_intf.no_hardware_limits\n\
+     let make w = { base with simd_vector_bytes = w }\n\
+     let derived = { (make 16) with worker_pool_tag = 0 }\n\
      let tag limits = limits.Ir.Backend_intf.worker_pool_tag\n\
      let () = ignore (Context.Cc_backend.auto_vector_bytes ()); ignore (Context.Cc_backend.chunks \
      ())\n"
@@ -5333,10 +5447,18 @@ let width_control () =
   let undeclared = run ~probe:projected `Neither in
   let declared = run ~probe:projected `Declares in
   let pinned = run ~probe:projected `Pins in
+  let pinned_ambient = run ~probe:projected `Pins_ambient in
   let via_alias = run ~probe:aliased `Neither in
   let via_update = run ~probe:updated `Neither in
+  let via_copy = run ~probe:copied `Neither in
   let via_library = run ~support:projected ~links_support:true ~probe:"let () = ()\n" `Neither in
   let not_linked = run ~support:projected ~probe:"let () = ()\n" `Neither in
+  let inline_undeclared =
+    run ~support:projected ~inline:`Inline_undeclared ~probe:"let () = ()\n" `Neither
+  in
+  let inline_declared =
+    run ~support:projected ~inline:`Inline_declared ~probe:"let () = ()\n" `Neither
+  in
   let constant = run ~probe:unrelated `Neither in
   let undeclared_ok =
     refused undeclared
@@ -5345,29 +5467,43 @@ let width_control () =
   in
   let declared_ok = passed declared in
   let pinned_ok = passed pinned in
+  let pinned_ambient_ok = refused pinned_ambient in
   let via_alias_ok = refused via_alias && says "`Cc_backend.registers`" via_alias in
   let via_update_ok =
     refused via_update && says "leaving `simd_vector_registers` to its base" via_update
   in
+  let via_copy_ok =
+    refused via_copy
+    && says "leaving `simd_vector_bytes` to its base" via_copy
+    && says "leaving `simd_vector_registers` to its base" via_copy
+  in
   let via_library_ok = refused via_library && says "library support (support.ml)" via_library in
   let not_linked_ok = passed not_linked in
+  let inline_undeclared_ok =
+    refused inline_undeclared && says "running its inline tests" inline_undeclared
+  in
+  let inline_declared_ok = passed inline_declared in
   let constant_ok = passed constant in
   if not undeclared_ok then report "undeclared" undeclared;
   if not declared_ok then report "declared" declared;
   if not pinned_ok then report "pinned" pinned;
+  if not pinned_ambient_ok then report "pinned-ambient" pinned_ambient;
   if not via_alias_ok then report "via-alias" via_alias;
   if not via_update_ok then report "via-update" via_update;
+  if not via_copy_ok then report "via-copy" via_copy;
   if not via_library_ok then report "via-library" via_library;
   if not not_linked_ok then report "not-linked" not_linked;
+  if not inline_undeclared_ok then report "inline-undeclared" inline_undeclared;
+  if not inline_declared_ok then report "inline-declared" inline_declared;
   if not constant_ok then report "constant" constant;
   printf
     "\n\
      The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
      library, over a stand-in `Cc_backend` reading `%s` in one value and one call away in\n\
-     another, and a stand-in limits record filling two fields from those and a third from a value\n\
-     reading another key.\n\
+     another, and a stand-in limits record filling two fields from those -- through a module alias,\n\
+     and through a helper calling under an `open` -- and a third from a value reading another key.\n\
      The arms differ in how the module reads the width, whether the test links the library that\n\
-     reads it, and how the stanza answers for the variable.\n\n"
+     reads it, whether that library has inline tests, and how the stanza answers for the variable.\n\n"
     width_key;
   Verdict.p
     "a test projecting a width field off a limits record is reported, naming the variable and the \
@@ -5376,17 +5512,31 @@ let width_control () =
   Verdict.p "the same stanza declaring the variable passes" declared_ok;
   Verdict.p "and so does the same stanza pinning it with `setenv` around its run" pinned_ok;
   Verdict.p
+    "but a `setenv` whose value reads the same variable back through `%{env:…}` pins nothing, and \
+     is reported"
+    pinned_ambient_ok;
+  Verdict.p
     "a `Cc_backend` value reaching the width one call away, named through a module alias of \
      `Context.Cc_backend`, is a read"
     via_alias_ok;
   Verdict.p
     "a limits update overwriting one width field leaves the other to a device base, and is a read"
     via_update_ok;
+  Verdict.p
+    "a limits update overwriting only a label the width does not fill copies every width field, \
+     and is a read"
+    via_copy_ok;
   Verdict.p "a read in a test-tree library the test links is the test's read" via_library_ok;
   Verdict.p "and the same library, not linked, asks nothing of the test" not_linked_ok;
   Verdict.p
-    "a fully synthetic limits record, a field the width does not fill, and `Cc_backend` values not \
-     reaching the width ask for nothing"
+    "a read in a library with inline tests is asked of its `(inline_tests (deps …))` when nothing \
+     links it"
+    inline_undeclared_ok;
+  Verdict.p "and declaring the variable there answers for it" inline_declared_ok;
+  Verdict.p
+    "a fully synthetic limits record -- through an alias of the constant base and a function \
+     returning an update of it -- an update of another record, a field the width does not fill, \
+     and `Cc_backend` values not reaching the width ask for nothing"
     constant_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
