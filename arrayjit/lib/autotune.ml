@@ -4315,7 +4315,7 @@ let seeded_split_backend backend = String.is_substring backend ~substring:"cuda"
 let seeded_split_min_serial () =
   let raw =
     String.strip
-      (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"4096")
+      (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"1024")
   in
   match Int.of_string_opt raw with
   | Some n when n >= 0 -> n

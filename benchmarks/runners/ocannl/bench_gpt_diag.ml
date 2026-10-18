@@ -111,7 +111,7 @@ let () =
        as the compile would choose them. *)
     let min_serial =
       Int.of_string
-        (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"4096")
+        (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"1024")
     in
     let split =
       Autotune.seeded_split_sites ~backend:"cuda" ~min_serial ~static_indices:[ batch_n ] opt

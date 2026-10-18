@@ -1794,7 +1794,7 @@ val seeded_default :
     the seeded sketches leave the routine's results bitwise the default's.
 
     Before segmenting (on CUDA), the reductions {!seeded_split_sites} admits at [min_serial]
-    (default: config [gpu_default_split_reduce_min_serial], 4096; 0 disables) are split
+    (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split
     whole-routine, as the search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm
     parameter gradient, which the default runs as one thread per output cell walking every batch row
     in sequence, becomes a parallel pass over blocks of rows and a combine. That DOES change the

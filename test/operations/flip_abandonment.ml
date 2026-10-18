@@ -621,7 +621,7 @@ let () =
       ("model_default_placements", "0");
       ("model_default_geometry_lattice", "false");
       ("gpu_default_sketch_min_reduction", "32");
-      ("gpu_default_split_reduce_min_serial", "4096");
+      ("gpu_default_split_reduce_min_serial", "1024");
       ("gpu_default_reduction_sink", "true");
     ]
   in

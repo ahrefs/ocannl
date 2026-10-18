@@ -810,7 +810,9 @@ files.
   step (bias and layer-norm parameter gradients, the loss sum) into a deterministic tree over
   blocks chosen from the routine alone, and ships ON by default in the exact regime rather than
   in the `approximate` payload: within ~2.4e-6 relative on gpt2_mini_train b256's losses, for
-  543 → 391 ms on CUDA. The `reproducible` profile pins it at 0. The precedent the decision rests
+  543 → 391 ms on CUDA. gh-ocannl-1414 lowered the default threshold to 1024 (the wave coordinator
+  approved it on the measurement), which extends it to the batch-8 and long-sequence steps' 1024-row
+  reductions: within ~1.1e-6 relative on their losses, for 15.2 → 12.6 ms at b8. The `reproducible` profile pins it at 0. The precedent the decision rests
   on: the default GPU plan's cooperative all-reduces (gh-ocannl-1124) and, under the default
   `autotune_search=true`, the tuner's own split-reduce candidates already reassociate in the
   exact regime. A new numerics-changing gate still follows the rule below.

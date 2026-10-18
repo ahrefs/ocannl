@@ -526,7 +526,16 @@ files.
   path's head `Stmt` as an index into the segment's top-level statements, but loops add no path
   component, so a segment that is one loop around a sequence (a split's first pass,
   `for blk { init; for inner { .. } }`) indexed past the end and raised in the seeded default's
-  matmul detection; it now follows the path (`stmt_at`).
+  matmul detection; it now follows the path (`stmt_at`). These 1024-row chains are why the
+  threshold's default dropped from 4096 to 1024, measured in one exclusive rog window
+  (`benchmarks/gh1133_cells.sh` treatments `sr4096`/`sr1024`, same binary): the CUDA b8 step went
+  15.16 → 12.59 ms, b2 s512 19.88 → 15.89, b1 s1024 29.03 → 26.29, and b256 stayed at 395 ms
+  (its sites and block counts do not change). In b8's nsys traces the kernels writing a split
+  target or its partials fell 4.19 → 1.89 ms, most of the 2.2 ms the step's kernels lost; the
+  vocabulary-wide softmax reductions that 1024 also admits held under 0.15 ms either way. The
+  block count also stays within the square root of the chain: the menu's "most threads up to
+  32768" rule, tuned on 32768-row chains, would have split b8's 1024-row loss sum into 512 blocks
+  of 2 rows and a 512-term combine.
 - **The seeded default sinks the reduction loops of the segments it does not seed**
   (gh-ocannl-1348, `Autotune.reduction_sink`). Backprop lowers a batch reduction into a small
   output as `for b, s, o: db[o] += dy[b,s,o]`, and the preset maps `o` below the serial `b`, `s`
