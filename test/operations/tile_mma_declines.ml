@@ -125,9 +125,9 @@ let () =
      [Tensorize] in plain-add form, which the register tile declines; the tile's own fallback is
      written fused, so the rendering survives. *)
   let%op mc_unfused = ma * mb in
-  let var = "OCANNL_SIMPLIFY_FP_ALGEBRA" in
+  let var = "OCANNL_FP_CONTRACT" in
   let previous = Stdlib.Sys.getenv_opt var in
-  Unix.putenv var "none";
+  Unix.putenv var "false";
   let census_unfused =
     Exn.protect
       ~finally:(fun () -> Unix.putenv var (Option.value previous ~default:""))

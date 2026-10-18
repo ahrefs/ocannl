@@ -1328,9 +1328,11 @@ module Fp_licence : sig
 
   val all : t
 
-  val of_selection : string -> t
-  (** The development [simplify_fp_algebra] selection, each measurement family selecting the licence
-      its arms belong to. *)
+  val of_config : unit -> t
+  (** The configured licences: the keys [fp_contract], [fp_reassociate] and [fp_finite_math]. *)
+
+  val fields : t -> (string * bool) list
+  (** Each licence under its config key, for reports. *)
 end
 
 val fp_algebra_step : Fp_licence.t -> scalar_t * Ops.prec -> (scalar_t * Ops.prec) option
@@ -1338,7 +1340,7 @@ val fp_algebra_step : Fp_licence.t -> scalar_t * Ops.prec -> (scalar_t * Ops.pre
     matches (first-match order matters), not yet re-simplified, or [None]. A [ToPowOf] is expected
     with its operands already simplified. *)
 
-val simplify_llc : ?fp_algebra:string -> Indexing.static_symbol list -> t -> t
+val simplify_llc : ?licence:Fp_licence.t -> Indexing.static_symbol list -> t -> t
 (** Top-down algebraic simplification with interval-driven comparison folding (in particular, it
     erases [If] guards whose conditions the loop extents prove). The interval environment is
     narrowed by every enclosing [If] condition that is a conjunction of integer-affine index
@@ -1348,10 +1350,8 @@ val simplify_llc : ?fp_algebra:string -> Indexing.static_symbol list -> t -> t
     simplify already ran (docs/proposals/schedule-ir-optops.md §2), and for testing. Pure and
     idempotent.
 
-    [fp_algebra] overrides the development [simplify_fp_algebra] selection for focused tests. The
-    default keeps all existing arms; ["none"] disables only floating-point algebra. See
-    [ocannl_config.reference] for the six families, and {!Fp_licence} for the licences they select.
-*)
+    [licence] overrides the configured {!Fp_licence.of_config} for focused tests;
+    {!Fp_licence.exact} disables only the floating-point algebra. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable

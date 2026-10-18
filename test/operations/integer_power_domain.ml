@@ -81,7 +81,7 @@ let () =
       let power x n = LL.Binop (ToPowOf, (x, Ops.single), (Ll_test.c n, Ops.single)) in
       let constant = Ll_test.set output [| Ll_test.fixed 0 |] (power (Ll_test.c base) 3.) in
       p "constant integer powers remain at target precision through simplification"
-        (match LL.simplify_llc ~fp_algebra:"none" [] constant with
+        (match LL.simplify_llc ~licence:LL.Fp_licence.exact [] constant with
         | LL.Set { llsc = LL.Binop (ToPowOf, (LL.Constant _, _), _); _ } -> true
         | _ -> false);
       let body =
@@ -119,7 +119,9 @@ let () =
           let power x = LL.Binop (ToPowOf, (x, Ops.single), (Ll_test.c 3., Ops.single)) in
           let wrapped = LL.Unop (Identity, (Ll_test.c base, Ops.single)) in
           let constant =
-            LL.simplify_llc ~fp_algebra:"pow" []
+            LL.simplify_llc
+              ~licence:{ LL.Fp_licence.exact with reassociate = true }
+              []
               (Ll_test.set output [| Ll_test.fixed 0 |] (power wrapped))
           in
           let materialized =
@@ -182,8 +184,10 @@ let () =
                (Ll_test.get input [| Ll_test.fixed 0 |], Ops.single),
                (Ll_test.c (-2.), Ops.single) ))
       in
-      let without_pow = LL.simplify_llc ~fp_algebra:"none" [] (body 0) in
-      let with_pow = LL.simplify_llc ~fp_algebra:"pow" [] (body 1) in
+      let without_pow = LL.simplify_llc ~licence:LL.Fp_licence.exact [] (body 0) in
+      let with_pow =
+        LL.simplify_llc ~licence:{ LL.Fp_licence.exact with reassociate = true } [] (body 1)
+      in
       p "negative powers retain reciprocal-after-positive-power ordering when unrolling is enabled"
         (match with_pow with LL.Set { llsc = LL.Binop (ToPowOf, _, _); _ } -> true | _ -> false);
       let o = Ll_test.optimize ~name:"ipow_recip" (Ll_test.seq without_pow with_pow) in
@@ -277,7 +281,7 @@ let () =
           (LL.Binop (ToPowOf, (base, Ops.single), (Ll_test.c 2., Ops.single)))
       in
       p "integer-power simplification retains a scoped base without duplicating its body"
-        (match LL.simplify_llc ~fp_algebra:"pow" [] body with
+        (match LL.simplify_llc ~licence:{ LL.Fp_licence.exact with reassociate = true } [] body with
         | LL.Set { llsc = LL.Binop (ToPowOf, (LL.Local_scope _, _), _); _ } -> true
         | _ -> false);
       let raw = Ll_test.set output index (Ll_test.add (Ll_test.get input index) (Ll_test.c 1.)) in

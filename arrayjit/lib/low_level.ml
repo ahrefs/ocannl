@@ -4214,17 +4214,16 @@ module Fp_licence = struct
   let exact = { contract = false; reassociate = false; finite_math = false }
   let all = { contract = true; reassociate = true; finite_math = true }
 
-  (* Development ablation for gh-ocannl-998: the measurement families, each selecting the licence
-     its arms belong to. *)
-  let of_selection selection =
-    List.fold (String.split selection ~on:',') ~init:exact ~f:(fun acc token ->
-        match String.strip token with
-        | "all" -> all
-        | "none" -> acc
-        | "contract" -> { acc with contract = true }
-        | "constants" | "sub" | "mul_div" | "pow" -> { acc with reassociate = true }
-        | "identities" -> { acc with finite_math = true }
-        | name -> raise (Utils.User_error ("Unknown simplify_fp_algebra family: " ^ name)))
+  (* Each licence is its own key, read where the algebra runs (gh-ocannl-998). *)
+  let of_config () =
+    {
+      contract = Utils.get_global_flag ~default:true ~arg_name:"fp_contract";
+      reassociate = Utils.get_global_flag ~default:true ~arg_name:"fp_reassociate";
+      finite_math = Utils.get_global_flag ~default:true ~arg_name:"fp_finite_math";
+    }
+
+  let fields { contract; reassociate; finite_math } =
+    [ ("fp_contract", contract); ("fp_reassociate", reassociate); ("fp_finite_math", finite_math) ]
 end
 
 (* One step of the rounding-changing algebra at the root of [llsc]: the first licensed arm that
@@ -4347,13 +4346,8 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
       Some (Ternop (FMA, llv1, llv2, llv3), Ops.promote_prec prec12 prec)
   | _ -> None
 
-let simplify_llc ?fp_algebra static_indices llc =
-  let licence =
-    Fp_licence.of_selection
-      (match fp_algebra with
-      | Some s -> s
-      | None -> Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra")
-  in
+let simplify_llc ?licence static_indices llc =
+  let licence = match licence with Some l -> l | None -> Fp_licence.of_config () in
   (* Implements top-down rewriting. The interval environment [ienv] tracks every in-scope symbol's
      bounds (seeded from the static indices, extended per [For_loop]) for the interval-driven
      comparison folds. *)

@@ -562,11 +562,13 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
    process the policy is fixed, across processes only the cache carries schedules. *)
 let numerics_tag () =
   let policy = Numerics.fingerprint (Numerics.get ()) in
-  let algebra = Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra" in
-  (* Schedule.apply simplifies again after transforms such as materializing unroll. Two identical
-     base programs may expose different algebra there. Preserve existing all-on cache identities. *)
+  let licence = Low_level.Fp_licence.of_config () in
+  (* Schedule.apply simplifies again after transforms such as materializing unroll, so two identical
+     base programs may expose different licensed algebra there (gh-ocannl-998). Preserve existing
+     all-licensed cache identities. *)
   let policy =
-    if String.equal algebra "all" then policy else policy ^ ";simplify_fp_algebra=" ^ algebra
+    if Low_level.Fp_licence.(equal licence all) then policy
+    else policy ^ ";fp_licence=" ^ Sexp.to_string (Low_level.Fp_licence.sexp_of_t licence)
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string policy)) 8
 

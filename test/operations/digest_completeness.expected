@@ -37,8 +37,10 @@ keyed: numerics -- the numerics policy is consulted at codegen and by the autotu
   narrow_compute_f32
   tf32_matmuls
 
-keyed: numerics -- simplification also runs after scheduling, where unrolling can expose algebra absent from the base code digest (gh-ocannl-998)
-  simplify_fp_algebra [read at codegen]
+keyed: numerics -- simplification also runs after scheduling, where unrolling can expose licensed algebra absent from the base code digest (gh-ocannl-998)
+  fp_contract
+  fp_finite_math
+  fp_reassociate
 
 keyed: pool -- it decides the worker pool timings execute on, and CPU crowns do not transfer across pools (gh-ocannl-530)
   cc_pool_core_class [read at codegen]

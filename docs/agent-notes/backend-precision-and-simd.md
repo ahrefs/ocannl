@@ -851,13 +851,20 @@ files.
   `ambient_ocannl_shadowed`, the inherited variables its own command line outranks
   (gh-ocannl-1273), and `--cell-flag KEY=VALUE` is the way to set a payload key per cell — the
   regime gate accepts it as a declared override, never as a leak.
-- **The development `simplify_fp_algebra` selector also acts after scheduling** (gh-ocannl-998):
-  `Schedule.apply` reruns `simplify_llc`, so a materializing unroll can expose constant algebra
-  absent from the pre-schedule code digest. Identical base digests can therefore produce different
-  scheduled kernels under different selections. It is `Keyed "numerics"`, not solely `Code_borne`;
-  `Schedule_cache.numerics_tag` carries non-default selections while retaining the existing `all`
-  tag. `simplify_fp_algebra` pins this with an equal-source/different-unrolled-code witness and a
-  cache-tag separation claim. Profiles remain unchanged during the measurement phase.
+- **The floating-point licences are three keys, and every profile states them** (gh-ocannl-998):
+  `fp_contract` (a float `a * b + c` into one `FMA`), `fp_reassociate` (constant reassociation,
+  subtraction re-parenthesizing, the multiplication/division interchanges, integer-power
+  unrolling) and `fp_finite_math` (the zero identities, which infinities, NaNs and the sign of
+  zero contradict), read as `Low_level.Fp_licence.of_config`; the arms live in one first-match
+  step function, `Low_level.fp_algebra_step`. Integer precisions take every licence but the two
+  floating-only arms, so the index canonicalizer never depends on them. `reproducible` pins all
+  three off, `approximate` on. While `simplify_llc` applies them it also runs after scheduling,
+  where a materializing unroll exposes algebra absent from the pre-schedule digest, so they are
+  `Keyed "numerics"` and `Schedule_cache.numerics_tag` carries a non-all-on licence record
+  (all-on keeps the old tags); `fp_licences` pins the equal-source/different-unrolled-code witness
+  and the tag separation. The development selector `simplify_fp_algebra` that measured them
+  (six arm families) is retired with no alias; `benchmarks/gh998_cells.py` ablates the three
+  keys, and a benchmark result line records each under `fp_licences` with its source.
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
@@ -1090,7 +1097,7 @@ files.
   `Tensorize` fused; with the licence off it arrives plain, and every cc register tile would have
   declined silently. A tile multiply-accumulate is fused on every unit, so the fallback states that:
   a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
-  the register-tiled census with every floating licence off.
+  the register-tiled census with the contraction licence off.
 ## SIMD operations and rounding
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written

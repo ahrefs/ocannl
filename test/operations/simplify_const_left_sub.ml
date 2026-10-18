@@ -3,9 +3,9 @@
    With [c1 = 1], [c2 = 2], [x = 3] the correct value is [-4]; dropping the negation gives [2]. All
    values are small integers, exact in every precision used here, so the executed results are exact.
 
-   The arm is licensed for integer precisions whatever [simplify_fp_algebra] selects, so the int32
-   legs simplify under the empty selection ["none"]: an integer program reaches it
-   unconditionally. *)
+   The arm is licensed for integer precisions whatever the floating-point licences say
+   ([Low_level.Fp_licence]), so the int32 legs simplify under [Fp_licence.exact]: an integer program
+   reaches it unconditionally. *)
 
 open Base
 module LL = Ir.Low_level
@@ -36,9 +36,9 @@ let added_reads llc =
     | LL.Binop (Ops.Add, (LL.Get _, _), _) | LL.Binop (Ops.Add, _, (LL.Get _, _)) -> true
     | _ -> false)
 
-let check ~prec ~fp_algebra ~first_id ~const_left label =
+let check ~prec ~licence ~first_id ~const_left label =
   let llc, input, output = case ~prec ~first_id ~const_left label in
-  let simplified = LL.simplify_llc ~fp_algebra [] llc in
+  let simplified = LL.simplify_llc ~licence [] llc in
   p (label ^ ": folds to (c1 - c2) - x") (folded_subtractions simplified = 1);
   p (label ^ ": x is not added after folding") (added_reads simplified = 0);
   let name = "csub_" ^ label in
@@ -47,7 +47,11 @@ let check ~prec ~fp_algebra ~first_id ~const_left label =
   p (label ^ ": 1 - (2 + x) at x = 3 evaluates to -4") (Ll_test.same got [ [| -4. |] ])
 
 let () =
-  check ~prec:Ops.single ~fp_algebra:"all" ~first_id:1239000 ~const_left:true "single_const_left";
-  check ~prec:Ops.single ~fp_algebra:"all" ~first_id:1239010 ~const_left:false "single_const_right";
-  check ~prec:Ops.int32 ~fp_algebra:"none" ~first_id:1239020 ~const_left:true "int32_const_left";
-  check ~prec:Ops.int32 ~fp_algebra:"none" ~first_id:1239030 ~const_left:false "int32_const_right"
+  check ~prec:Ops.single ~licence:LL.Fp_licence.all ~first_id:1239000 ~const_left:true
+    "single_const_left";
+  check ~prec:Ops.single ~licence:LL.Fp_licence.all ~first_id:1239010 ~const_left:false
+    "single_const_right";
+  check ~prec:Ops.int32 ~licence:LL.Fp_licence.exact ~first_id:1239020 ~const_left:true
+    "int32_const_left";
+  check ~prec:Ops.int32 ~licence:LL.Fp_licence.exact ~first_id:1239030 ~const_left:false
+    "int32_const_right"
