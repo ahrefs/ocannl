@@ -160,7 +160,8 @@ a key the pipeline reads outside every named value is refused, not dropped from 
 The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree
 library, over a stand-in `Cc_backend` reading `cc_vector_bytes` in one value and one call away in
 another, and a stand-in limits record filling two fields from those -- through a module alias,
-and through a helper calling under an `open` -- and a third from a value reading another key.
+and through a function-local helper calling under an `open` -- and a third from a value reading
+another key.
 The arms differ in how the module reads the width, whether the test links the library that
 reads it, whether that library has inline tests, and how the stanza answers for the variable.
 

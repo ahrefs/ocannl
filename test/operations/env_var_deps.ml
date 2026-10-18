@@ -5288,11 +5288,12 @@ let pipeline_control () =
 
    The stand-in `cc_backend.ml` reads the width key in one value, reaches it one call away in a
    second, and reads another key in a third. The stand-in `schedulers.ml` fills three fields from
-   those three -- one through a module alias, one through a local helper calling under an `open`,
-   one directly -- so the derivation has to resolve the first two as the readers' references are
-   resolved, and tell both from the third (Codex P2, round 1). The stand-in `backend_intf.ml`
-   declares the record type, whose other label marks an update that copies every width field. The
-   tree sits under `test/` so that a library beside the subject is one the rule follows. *)
+   those three -- one through a module alias, one through a helper the function declares locally,
+   calling under an `open`, one directly -- so the derivation has to resolve the first two as the
+   readers' references are resolved, and tell both from the third (Codex P2, round 1). The stand-in
+   `backend_intf.ml` declares the record type, whose other label marks an update that copies every
+   width field. The tree sits under `test/` so that a library beside the subject is one the rule
+   follows. *)
 let width_backend_stub =
   "let auto_vector_bytes () = 16\n\
    let vector_bytes_setting () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
@@ -5302,8 +5303,8 @@ let width_backend_stub =
 let width_limits_stub =
   "module CC = Cc_backend\n\
    open Cc_backend\n\
-   let helper () = registers ()\n\
    let cpu_mma_limits () =\n\
+  \  let helper () = registers () in\n\
   \  { no_hardware_limits with simd_vector_bytes = CC.vector_bytes_setting ();\n\
   \    simd_vector_registers = helper (); worker_pool_tag = Cc_backend.chunks () }\n"
 
@@ -5501,7 +5502,8 @@ let width_control () =
      The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
      library, over a stand-in `Cc_backend` reading `%s` in one value and one call away in\n\
      another, and a stand-in limits record filling two fields from those -- through a module alias,\n\
-     and through a helper calling under an `open` -- and a third from a value reading another key.\n\
+     and through a function-local helper calling under an `open` -- and a third from a value reading\n\
+     another key.\n\
      The arms differ in how the module reads the width, whether the test links the library that\n\
      reads it, whether that library has inline tests, and how the stanza answers for the variable.\n\n"
     width_key;

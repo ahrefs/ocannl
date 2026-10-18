@@ -1194,6 +1194,26 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         | _ -> Set.union under_opens (Set.of_list (module String) (external_keys (expand path))))
   in
   let field_reach = ref [] in
+  (* Every simple name a `let … in` inside [expr] binds, with what each binding reads and names. *)
+  let local_bindings_of expr =
+    let found = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          (match expr.pexp_desc with
+          | Pexp_let (_, bindings, _) ->
+              List.iter bindings ~f:(fun binding ->
+                  Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
+                      found := (name, direct_of binding.pvb_expr) :: !found))
+          | _ -> ());
+          super#expression expr
+      end
+    in
+    iterator#expression expr;
+    Map.of_alist_multi (module String) !found
+  in
   (* The record fields a binding's body initializes, each with its initializer, resolved once the
      binding's own scope is known. *)
   let record_fields_of expr =
@@ -1254,9 +1274,28 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                a recursive group the group itself. *)
             let field_env = match rec_flag with Recursive -> env' | Nonrecursive -> env in
             List.iter bindings ~f:(fun binding ->
+                (* And the helpers the binding declares locally (Codex P2, round 2): a single name
+                   bound by a `let` anywhere inside the binding stands for what every such binding
+                   of it reads -- flow-insensitively, so shadowing over-reads, the direction whose
+                   cost is a declaration. *)
+                let locals = local_bindings_of binding.pvb_expr in
+                let rec local_reach ~seen (keys, names) =
+                  List.fold names
+                    ~init:(Set.of_list (module String) keys)
+                    ~f:(fun acc path ->
+                      match path with
+                      | [ name ] when Map.mem locals name ->
+                          if Set.mem seen name then acc
+                          else
+                            List.fold (Map.find_multi locals name) ~init:acc ~f:(fun acc direct ->
+                                Set.union acc (local_reach ~seen:(Set.add seen name) direct))
+                      | _ -> Set.union acc (resolve ~env:field_env ~scope path))
+                in
                 List.iter (record_fields_of binding.pvb_expr) ~f:(fun (field, value) ->
                     field_reach :=
-                      (field, Set.to_list (reach_of ~env:field_env ~scope (direct_of value)))
+                      ( field,
+                        Set.to_list
+                          (local_reach ~seen:(Set.empty (module String)) (direct_of value)) )
                       :: !field_reach));
             env'
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
