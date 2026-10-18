@@ -4407,7 +4407,8 @@ let simplify_llc ?fp_algebra static_indices llc =
           ( Binop (Add, (Constant c2, prec2), llsc), prec3
           | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
       when licensed constants ->
-        loop_scalar (Binop (Add, (Constant (c1 -. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+        (* c1 - (c2 + x) = (c1 - c2) - x: the summand keeps its negation. *)
+        loop_scalar (Binop (Sub, (Constant (c1 -. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
     | Binop (Add, llv1, (Binop (Sub, llv2, llv3), prec3))
     | Binop (Add, (Binop (Sub, llv2, llv3), prec3), llv1)
       when licensed sub ->

@@ -1,0 +1,12 @@
+single_const_left: folds to (c1 - c2) - x: true
+single_const_left: x is not added after folding: true
+single_const_left: 1 - (2 + x) at x = 3 evaluates to -4: true
+single_const_right: folds to (c1 - c2) - x: true
+single_const_right: x is not added after folding: true
+single_const_right: 1 - (2 + x) at x = 3 evaluates to -4: true
+int32_const_left: folds to (c1 - c2) - x: true
+int32_const_left: x is not added after folding: true
+int32_const_left: 1 - (2 + x) at x = 3 evaluates to -4: true
+int32_const_right: folds to (c1 - c2) - x: true
+int32_const_right: x is not added after folding: true
+int32_const_right: 1 - (2 + x) at x = 3 evaluates to -4: true
