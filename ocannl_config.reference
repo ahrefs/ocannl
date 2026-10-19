@@ -312,35 +312,37 @@
 # memset. If false, every zeroing is kept.
 #gpu_elide_covered_zeros=true
 
-# The reduction extent from which the recipes' untuned compiles (`Train.to_routine`,
-# `Train.run_once` and its wrappers, the benchmark runners' untuned arms; not a bare
-# `Context.compile`) give a CUDA or HIP contraction operand reuse (gh-ocannl-1324): each fission
-# segment of the default pipeline that is a matmul site -- backprop's weight and data gradients
-# included -- with a reduction extent (the product of its contraction loops) of at least this
-# many is scheduled with the matmul family's register-blocktiled sketch, staging both operands
-# through workgroup tiles, instead of the default preset; every other segment is the default's.
-# Nothing is timed or scored and no schedule cache is read or written. The autotuner seeds this
-# same plan (with the split and the sink below) as its FIRST candidate (gh-ocannl-1388), so a tuned
-# step is never slower than the untuned one even when the search stops early (under
-# model_default_schedule=true the untuned compile is the model's pick instead, which the search
-# does not reproduce, so there the floor is this plan rather than the untuned step); this key and the two
-# below therefore shape a search like the autotune_* keys: a cached crown replays under any value,
-# but a search's timed trajectory is kept only for one under the same values. Results are unchanged: the
-# sketch keeps each output's summation order, and a site whose accumulator would be wider than its
-# storage is left to the default. A sketch that does not apply to its segment leaves the preset,
-# and a seeded compile that fails falls back to the default pipeline. Ignored under
-# model_default_schedule=true (the model picks instead) and on a budgeted compile
-# (memory_budget), and on Metal and the CPU backends. 0 disables the seeding. 32 admits
-# attention's head-dimension contractions; of the thresholds tried on gpt2_mini_train (32, 64, 128,
-# 256), it gave the fastest step at both batch 8 and batch 256 on CUDA.
-# `auto` (gh-ocannl-1253) replaces the threshold by the analytic model: a segment is seeded when
-# the ranking score (see model_cache_capacity and model_cache_bandwidth) puts its sketch strictly
-# below the default preset of that segment -- where the cross-block re-reads the sketch removes
-# cost more, at DRAM bandwidth past the cache capacity or at cache bandwidth within it, than the
-# staging it adds. Still untimed and still the same sketch geometry and numerics-preserving
-# candidates; on a device publishing neither a capacity nor a cache bandwidth (Metal, the CPU
-# backends) `auto` means 32.
-#gpu_default_sketch_min_reduction=32
+# The seeding gate of the recipes' untuned compiles (`Train.to_routine`, `Train.run_once` and its
+# wrappers, the benchmark runners' untuned arms; not a bare `Context.compile`), which give a CUDA
+# or HIP contraction operand reuse (gh-ocannl-1324): each fission segment of the default pipeline
+# that is a matmul site -- backprop's weight and data gradients included -- and passes the gate is
+# scheduled with the matmul family's register-blocktiled sketch, staging both operands through
+# workgroup tiles, instead of the default preset; every other segment is the default's. Nothing is
+# timed and no schedule cache is read or written. Results are unchanged: the sketch keeps each
+# output's summation order, and a site whose accumulator would be wider than its storage is left
+# to the default. A sketch that does not apply to its segment leaves the preset, and a seeded
+# compile that fails falls back to the default pipeline.
+# `auto` (gh-ocannl-1253, the default) seeds a segment when the ranking score (see
+# model_cache_capacity and model_cache_bandwidth) puts its sketch strictly below the default preset
+# of that segment -- where the cross-block re-reads the sketch removes cost more, at DRAM bandwidth
+# past the cache capacity or at cache bandwidth within it, than the staging it adds. On a device
+# publishing neither a capacity nor a cache bandwidth (Metal, the CPU backends) `auto` means 32.
+# An integer seeds every matmul segment whose reduction extent (the product of its contraction
+# loops) is at least that many; 0 disables the seeding. 32 admits attention's head-dimension
+# contractions; of the thresholds tried on gpt2_mini_train (32, 64, 128, 256), it gave the fastest
+# step at both batch 8 and batch 256 on CUDA.
+# The autotuner seeds this same plan (with the split and the sink below) as its FIRST candidate
+# (gh-ocannl-1388), so a tuned step is never slower than the untuned one even when the search
+# stops early; the plan's content digest -- never the device constants behind it -- joins the
+# search trajectory's identity, so this key and the two below shape a search like the autotune_*
+# keys: a cached crown replays under any value, but a search's timed trajectory is kept only for
+# one seeding the same plan. Under model_default_schedule=true the model starts from this plan
+# (gh-ocannl-1253): it is the incumbent a candidate must strictly beat, and the candidates are
+# restricted to the same numerics-preserving sketches; the model's pick, which the search does
+# not reproduce, is then the untuned compile, so there the search's floor is this plan rather than
+# the untuned step. Ignored on a budgeted compile (memory_budget), and on Metal and the CPU
+# backends.
+#gpu_default_sketch_min_reduction=auto
 
 # The same untuned compiles also split a CUDA reduction whose serial chain per output cell --
 # its accumulation's trip count over the output's cell count -- is at least this long
@@ -372,8 +374,8 @@
 # stays in a register for the whole reduction. Each interchange is checked legal first. Results are
 # unchanged: only accumulations whose output cell is one tuple of write-loop values are sunk, so
 # every cell keeps its summation order, and one whose accumulator would be wider than its storage is
-# left alone. Ignored where gpu_default_sketch_min_reduction is: under model_default_schedule=true,
-# on a budgeted compile, on Metal and the CPU backends. Independent of the threshold: with the
+# left alone. Ignored where gpu_default_sketch_min_reduction is: on a budgeted compile, on Metal
+# and the CPU backends. Independent of the threshold: with the
 # seeding disabled (0) the sink still applies, to every segment.
 #gpu_default_reduction_sink=true
 
@@ -908,7 +910,11 @@
 # `Low_level.validate_parallel` (or by anything else downstream of the schedule seam) is
 # recompiled with the default pipeline instead of failing the compile. Candidates whose
 # scheduled form fails that same check are excluded from the ranking, so the model chooses
-# among schedules that can actually be built.
+# among schedules that can actually be built. On CUDA and HIP the model starts from the seeded
+# untuned plan instead of the default pipeline (gh-ocannl-1253, gpu_default_sketch_min_reduction),
+# and its sketch candidates are restricted to the seeding's numerics-preserving forms (scalar
+# register-blocktiled sketches at a site accumulating at its storage precision: no tensor-core,
+# conv or coalesced form), so the pick never changes a value the untuned compile computes.
 #model_default_schedule=false
 
 # gh-ocannl-514, the placement levels of the untuned regime: with model_default_schedule=true and

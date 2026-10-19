@@ -263,7 +263,7 @@ let top_level_graph (source : string) : (string * string list) list =
 
 (* The top-level definitions of [source] that [root] reaches (itself included), and those of them
    that (transitively) reach a definition referencing [reader]. *)
-let reach ~root ~reader (source : string) : string list * string list =
+let reach ?(through = []) ~root ~reader (source : string) : string list * string list =
   let graph = top_level_graph source in
   let edges name =
     List.concat_map graph ~f:(fun (n, refs) -> if String.equal n name then refs else [])
@@ -273,20 +273,31 @@ let reach ~root ~reader (source : string) : string list * string list =
     List.exists graph ~f:(fun (n, refs) ->
         String.equal n name && List.mem refs reader ~equal:String.equal)
   in
-  let rec closure seen = function
+  let rec closure ?(cut = []) seen = function
     | [] -> seen
     | n :: rest ->
-        if Set.mem seen n then closure seen rest else closure (Set.add seen n) (edges n @ rest)
+        if Set.mem seen n then closure ~cut seen rest
+        else
+          let next = List.filter (edges n) ~f:(fun r -> not (List.mem cut r ~equal:String.equal)) in
+          closure ~cut (Set.add seen n) (next @ rest)
   in
   let names = List.dedup_and_sort (List.map graph ~f:fst) ~compare:String.compare in
-  let reaches_reader n = Set.exists (closure (Set.empty (module String)) [ n ]) ~f:direct in
+  let reaches_reader n =
+    Set.exists (closure ~cut:through (Set.empty (module String)) [ n ]) ~f:direct
+  in
+  (* [through]: sanctioned routes -- the root's reach does not continue into them. *)
   let reached =
-    Set.to_list (closure (Set.empty (module String)) [ root ])
+    Set.to_list (closure ~cut:through (Set.empty (module String)) [ root ])
     |> List.filter ~f:(fun n -> List.mem names n ~equal:String.equal)
   in
   (reached, List.filter reached ~f:reaches_reader)
 
-let reached_readers ~root ~reader source = snd (reach ~root ~reader source)
+let reached_readers ?through ~root ~reader source = snd (reach ?through ~root ~reader source)
+
+(* The one route by which an [Untimed] reading may reach [Autotune.tune] (gh-ocannl-1253): the
+   seeded untuned plan, whose [auto] gate reads the capacity, and whose resolved content digest
+   joins the search trajectory's identity -- held below by requiring [tune] to name the digest. *)
+let sanctioned = [ "seeded_plan" ]
 
 let () =
   let fields = [ "cache_capacity_bytes" ] in
@@ -311,11 +322,19 @@ let () =
      let tune () = unrelated ()"
   in
   let reach root = reached_readers ~root ~reader:accessor synthetic in
-  p "the reach rule refuses a root reaching the accessor through a helper or a module only"
+  p
+    "the reach rule refuses a root reaching the accessor through a helper or a module only, and \
+     not through a sanctioned route"
     (List.equal String.equal (reach "via_helper") [ "helper"; "ranking"; "via_helper" ]
     && List.equal String.equal (reach "via_module") [ "M"; "via_module" ]
     && List.equal String.equal (reach "model_default") [ "model_default"; "ranking" ]
-    && List.equal String.equal (reach "tune") [])
+    && List.equal String.equal (reach "tune") []
+    && List.equal String.equal
+         (reached_readers ~through:[ "helper" ] ~root:"via_helper" ~reader:accessor synthetic)
+         []
+    && List.equal String.equal
+         (reached_readers ~through:[ "helper" ] ~root:"via_module" ~reader:accessor synthetic)
+         [ "M"; "via_module" ])
 
 let () =
   let sources =
@@ -354,8 +373,18 @@ let () =
            "model_default" ~equal:String.equal);
       p "tune is a top-level definition of autotune.ml"
         (List.Assoc.mem (top_level_graph source) "tune" ~equal:String.equal);
-      let reached, readers = reach ~root:"tune" ~reader:accessor source in
+      let reached, readers = reach ~through:sanctioned ~root:"tune" ~reader:accessor source in
+      let refs_of n =
+        List.concat_map (top_level_graph source) ~f:(fun (m, refs) ->
+            if String.equal m n then refs else [])
+      in
+      let names r n = List.mem (refs_of n) r ~equal:String.equal in
+      p_exists
+        "the definition tune reaches the seeded plan through records the plan's digest in its \
+         trajectory identity"
+        reached ~f:(fun n -> names "seeded_plan" n && names "seeded_plan_digest" n);
       if not (List.is_empty readers) then
         eprintf "tune reaches: %s\n" (String.concat ~sep:", " readers);
-      p_empty ~min:10 "nothing Autotune.tune reaches reads an Untimed field" ~over:reached readers);
+      p_empty ~min:10 "nothing Autotune.tune reaches outside the seeded plan reads an Untimed field"
+        ~over:reached readers);
   Test_utils.Refusal_control_manifest.print "limits_field_classes.ml"
