@@ -718,3 +718,19 @@ run-constant gate into its value, naming tile_mma_declines.ml:253 and `on_cpu`, 
 sites, and only them (run `20261019T165108Z-75301`); the rebase onto master brought one more
 candidate, `cc_kept_library`'s claim that a library is kept where the configuration requests it,
 which is a claim over the configuration alone and taught the reader the settings record.
+
+## gh-ocannl-1303 mutation runs
+
+The gate reader's residue from staging#1089's review (ahrefs/ocannl#1303): its collection-module
+functions became a closed table (`Verdict_scan.collection_functions`) whose unlisted members are
+refused rather than read by a name-prefix guess, and in-place filters and maps are writers. Every
+run used tools/mutation-run.sh on the named module and the focused verdict_ratchet alias, exited 1
+on exactly the listed false claims, and restored the source byte-for-byte with cmp; the baseline
+run `20261019T200705Z-70844` exited 0.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A population that reaches an unlisted collection-module function is refused | `verdict_scan.ml`: the population side's unlisted call not reported | Failed: `names a collection-module function the table does not list instead of guessing`, and the planted-refusal control, whose unlisted fixture it is | `20261019T200755Z-22996` |
+| A gated boolean that reaches an unlisted collection-module function is refused | `verdict_scan.ml`: the boolean side's unlisted call not reported | Failed: `names an unlisted quantifier-position function of a gated boolean` | `20261019T200836Z-76185` |
+| An unlisted function handed a mutable container may write into it | `verdict_scan.ml`: unlisted calls on a mutable module not recorded | Failed: `names an unlisted function handed a mutable container the population reads` | `20261019T200954Z-53873` |
+| An in-place filter writes what its predicate reads into its container | `verdict_scan.ml`: `filter_keys_inplace` dropped from the writers' row (left unlisted, its write reads as an unlisted call) | Failed: `refuses a gate read off the set an in-place filter keeps the population's keys by` | `20261019T201015Z-98952` |

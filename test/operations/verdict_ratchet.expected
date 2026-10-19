@@ -598,6 +598,10 @@ accepts a gated boolean whose condition, not its value, quantifies what the gate
 accepts a gated boolean comparing against the invariant its gate reads: true
 names a gated boolean claim it cannot complete instead of counting it clean: true
 reads a gated claim nothing binds as Verdict's, its name being Verdict's alone: true
+names a collection-module function the table does not list instead of guessing: true
+names an unlisted quantifier-position function of a gated boolean: true
+names an unlisted function handed a mutable container the population reads: true
+refuses a gate read off the set an in-place filter keeps the population's keys by: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 refuses a negated backend gate folded into a claim's value: true
 refuses a backend gate that is itself a disjunct of the claim: true
@@ -765,6 +769,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b58d64bebca3825149316fa29084d773] which reads
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
+  [scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate
   [scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into
   [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised
   [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict

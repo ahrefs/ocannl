@@ -615,10 +615,13 @@ let line_break_census content =
       [String], ... — see {!collection_modules}), reached by name, through an alias
       ([module Rows = List]), and not under a name a local module took over ([module Map = Custom]);
       an unqualified [List] is [Stdlib]'s until an [open Base] in scope rebinds it. Which arguments
-      carry it is {!collection_arguments}': every positional one, except that a [Base]-ordered
-      selector ([find], [nth], [take], [remove], ...) contributes its collection alone, a
-      [make]/[create] the value it fills in and not its count, an [init] what its callback returns,
-      and a [range] nothing, plus the data-bearing labels [~default], [~init], [~data];
+      carry it is the role {!collection_functions} gives the function by its exact name ({!builds}):
+      every positional one for a transformation, constructor, conversion or quantifier, the
+      collection alone for a [Base]-ordered selector ([find], [nth], [take], [remove], ...), the
+      value filled in for [make]/[create] and not the count, what the callback returns for [init],
+      and nothing for [range], plus the data-bearing labels [~default], [~init], [~data]. A function
+      of a collection module the table does not list is REPORTED ({!unlisted_call}), never read by a
+      guess (gh-ocannl-1303);
     - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
     - the POPULATION of a [gated] claim is what its boolean's quantifiers range over, each followed
       as above: the boolean is read through a name into its right-hand side and what the source
@@ -627,15 +630,20 @@ let line_break_census content =
       condition), the cases of a [match], the body and handlers of a [try], the body of a [let],
       [let module], local [open] or sequence, type constraints, pipelines, and a quantifier's own
       arguments, its predicate's body included (a quantifier nested there ranges over a population
-      of its own, the predicate's parameters none); a quantifier is a {!quantifiers} function of a
-      collection module, whose collection is its first positional argument in [Base]'s order (the
-      first two for a pairwise one) and every positional argument in [Stdlib]'s;
+      of its own, the predicate's parameters none); a quantifier is a collection-module function
+      {!collection_functions} marks [quantifies] ([for_all], [exists], [is_empty] and their indexed
+      and pairwise forms), whose collection is its first positional argument in [Base]'s order (the
+      first two for a pairwise one) and every positional argument in [Stdlib]'s; a collection-module
+      function the table does not list is reported here too;
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
-      a [let alias = name] renaming: the right-hand side of [x := e], and what a writer of a mutable
-      collection module ({!mutable_modules}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... —
-      see {!writers}) is handed with [x], where [x] is the first positional argument in [Base]'s
-      order and any of them in [Stdlib]'s. [x] is a name the source binds; a container only an
-      [open] brought in is not tracked.
+      a [let alias = name] renaming: the right-hand side of [x := e], and what a function of a
+      mutable collection module ({!mutable_modules}) that {!collection_functions} marks as writing
+      ({!writes}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data],
+      [Hashtbl.filter_keys_inplace x ~f], ...) is handed with [x], where [x] is the first positional
+      argument in [Base]'s order and any of them in [Stdlib]'s. A function of a mutable collection
+      module the table does not list, handed [x], may write into it: a claim that reaches [x] is
+      reported as unlisted. [x] is a name the source binds; a container only an [open] brought in is
+      not tracked.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -645,7 +653,9 @@ let line_break_census content =
     {2 What is not read}
 
     The forms above are a closed list: any other expression form ends the population side there, and
-    a population reached only through one is not compared. The ones known to matter:
+    a population reached only through one is not compared. The exception is a collection-module
+    function, which is never outside the list: {!collection_functions} enumerates the ones the
+    reader reads, and any other is reported. The ones known to matter:
 
     The population is not followed through a call to any other function (a file-local
     [gpu_seeds pre] stops at the call), through a record field, through a function parameter (the
@@ -669,8 +679,9 @@ let line_break_census content =
     take arguments in [Stdlib]'s order (the function first, the collection last) rather than
     [Base]'s (the collection first). *)
 type gate_module =
-  | Collection_module of { stdlib : bool; mutable_ : bool }
-      (** [mutable_]: its values are mutable containers ({!mutable_modules}). *)
+  | Collection_module of { stdlib : bool; mutable_ : bool; family : string }
+      (** [mutable_]: its values are mutable containers ({!mutable_modules}). [family]: the module's
+          own name ([Queue] for [module Q = Queue]), which {!Only_in} reads. *)
   | Standard_library of { stdlib : bool }
       (** [Base] or [Core] ([stdlib = false]), [Stdlib] or [Caml] ([true]): an [open] of one rebinds
           the collection modules to its own. *)
@@ -696,10 +707,23 @@ type gate_reading = {
   reads : string list;  (** The population bindings the gate reads, by name, sorted. *)
 }
 
+type unlisted_call = {
+  claim : string;  (** The claim's callee as written. *)
+  claim_line : int;
+  callee : string;
+      (** The collection-module function {!collection_functions} does not list, as written. *)
+  callee_line : int;
+}
+(** A collection-module function a compared claim's population, gated boolean or gate reaches, or
+    one handed a mutable container they reach, that the table does not list: the reader cannot say
+    which of its arguments carry the population, or whether it writes into the container. *)
+
 type gate_census = {
   readings : gate_reading list;  (** Claims whose gate reads their population, in source order. *)
   gated_sites : int;  (** Every completed [gated_*] claim the reader compared. *)
   unread : (string * int) list;  (** [gated_*] applications it could not complete: callee, line. *)
+  unlisted : unlisted_call list;
+      (** Compared claims that reach an unlisted collection-module function, in source order. *)
 }
 
 let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
@@ -707,21 +731,6 @@ let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
 (** [Verdict.gated ~when_ ~on label b]: its population is what the quantifiers its boolean reduces
     to range over ({!quantifiers}). *)
 let gated_boolean = "gated"
-
-(** The collection-module functions that quantify over their collection, which a [gated] boolean is
-    read through: true or false of every element, or of none. *)
-let quantifiers =
-  [
-    "for_all";
-    "for_alli";
-    "for_all2";
-    "for_all2_exn";
-    "exists";
-    "existsi";
-    "exists2";
-    "exists2_exn";
-    "is_empty";
-  ]
 
 (* The arguments a quantifier ranges over: in [Base]'s order the first positional argument, the
    first two for a pairwise one; in [Stdlib]'s, where the predicate comes first ([List.for_all f
@@ -812,108 +821,157 @@ let complete arguments =
   List.exists arguments ~f:(function Ppxlib.Asttypes.Labelled "when_", _, _ -> true | _ -> false)
   && List.count arguments ~f:(function Ppxlib.Asttypes.Nolabel, _, _ -> true | _ -> false) >= 2
 
-(** Which arguments of a collection-module function the population is built from, by the function's
-    name and the library's argument order.
+(** Which arguments of a collection-module function the population is built from, by the role the
+    function plays in {!collection_functions}. *)
+type builds =
+  | Every_argument
+      (** Every positional argument, the labeled [~key], what [~f] returns, and the data labels:
+          [map], [Map.of_alist_exn (module String) rows], [append], [zip], [Set.add s x], [cons]
+          build the population from whatever they are handed, the collection and the elements put
+          into it alike. *)
+  | Collection
+      (** A selector. In [Base]'s order its first positional argument, the collection, and the data
+          labels; its later positional arguments are a key, an index or a count, which select the
+          population as an [if] condition steers one, so a gate on them is a gate on what was
+          selected, not on what was found. In [Stdlib]'s order the collection may come last
+          ([List.assoc k l], [List.mem x l]), so there every positional argument, [~key] and [~f] as
+          for {!Every_argument} -- the loud direction. *)
+  | Collection_and_callback
+      (** A selector whose [~f] returns what it puts in or finds ([Map.update m k ~f],
+          [List.find_map xs ~f]), unlike a [find] predicate. *)
+  | After_count
+      (** [init n ~f], [Stdlib.List.init n f]: what its callback returns (labeled [~f], or
+          positional after the count) and the data labels, not the count. *)
+  | Filled_value
+      (** [make n x], [create ~len x]: the positional arguments after the first, the value filled
+          in, and the data labels, not the count. *)
+  | Nothing  (** [range a b]: bounds build nothing. *)
 
-    Every positional argument by default: [map], [Map.of_alist_exn (module String) rows], [append],
-    [zip], [Set.add s x], [cons] all build the population from whatever they are handed, the
-    collection and the elements put into it alike. The exception is a selector in [Base]'s order
-    ({!selectors}: [find], [nth], [take], [remove], [update], ...), whose first positional argument
-    is the collection and whose later ones are a key, an index or a count: those select the
-    population, as an [if] condition steers one, and a gate on them is a gate on what was selected,
-    not on what was found. In [Stdlib]'s order the collection may come last ([List.assoc k l],
-    [List.mem x l]), so a [Stdlib]-ordered selector takes every positional argument too -- the loud
-    direction. A generator's count builds nothing: [make] and [create] build from the value they
-    fill in, [init] from what its callback returns (labeled [~f], or positional after the count),
-    and [range] from nothing. An inserting function's labeled [~key] joins the population
-    ([Map.set m ~key ~data]), and so does what a transforming function's [~f] returns
-    ([List.map xs ~f]), or an update-like selector's ([Map.update m k ~f], [find_map]); a selector's
-    key and a [find] predicate do not. A writer's [~f] is written into its container.
+(** Whether a function writes what it is handed into a container it is handed. *)
+type writes =
+  | Never
+  | On_mutable  (** On a mutable collection module ({!mutable_modules}). *)
+  | Only_in of string list
+      (** On these modules alone: [Dynarray.append a b] writes into [a], [Array.append] does not. *)
 
-    The labeled arguments that carry data rather than steer are followed too: [~default] (the
-    fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
-let selectors =
-  [
-    "find";
-    "nth";
-    "get";
-    "take";
-    "drop";
-    "sub";
-    "slice";
-    "split_n";
-    "chunks_of";
-    "mem";
-    "remove";
-    "update";
-    "change";
-  ]
+type collection_function = {
+  builds : builds;
+  quantifies : bool;
+      (** True or false of every element, or of none: what a [gated] boolean is read through. *)
+  writes : writes;
+}
 
-let collection_arguments ~stdlib name arguments =
-  let starts prefix = String.is_prefix name ~prefix in
+(** The closed list of collection-module functions this reader knows (the ratchet scans test
+    sources, so it enumerates what [Base], [Core] and [Stdlib] give the {!collection_modules}). A
+    function is keyed by its name alone: a name plays one role in every collection module that has
+    it ([List.map], [Array.map], [Map.map]), and a module's argument order and mutability are
+    {!gate_module}'s, not the table's. The one name whose writing depends on the module carries
+    {!Only_in}. A collection-module function missing from the table is reported, not guessed: the
+    claim it reaches is refused as unlisted, naming the function to add. *)
+let collection_functions =
+  let group builds ?(quantifies = false) ?(writes = Never) names =
+    String.split_on_chars names ~on:[ ' '; '\n' ]
+    |> List.filter ~f:(Fn.non String.is_empty)
+    |> List.map ~f:(fun name -> (name, { builds; quantifies; writes }))
+  in
+  Map.of_alist_exn
+    (module String)
+    (List.concat
+       [
+         (* Transformations, constructors and conversions: built from everything they are handed. *)
+         group Every_argument
+           {|
+            map mapi map2 map2_exn rev_map rev_mapi rev_map2_exn rev_map_append filter filteri
+            filter_map filter_mapi filter_opt concat concat_map concat_mapi concat_no_order
+            concat_array concat_lines rev_append rev sort stable_sort sort_uniq sorted_copy
+            dedup_and_sort stable_dedup remove_consecutive_duplicates zip zip_exn unzip unzip3
+            combine split partition_tf partitioni_tf partition_map partition_mapi partition
+            partition3_map split_while split_on_chars split_on_char split_lines group groupi
+            sort_and_group of_list of_list_rev of_list_map of_list_mapi of_array of_seq of_char
+            of_char_list of_string to_list to_array to_seq to_seq_keys to_seq_values to_sequence
+            of_sequence to_alist of_alist of_alist_exn of_alist_multi of_alist_reduce
+            of_alist_fold of_alist_or_error of_increasing_sequence of_sorted_array
+            of_sorted_array_unchecked of_list_with_key of_list_with_key_exn of_list_with_key_multi
+            data keys key_set of_key_set elements singleton return cons empty transpose
+            transpose_exn intersperse cartesian_product fold foldi fold_left fold_right fold_left2
+            fold_right2 fold2_exn fold_until fold_result fold_map folding_map folding_mapi reduce
+            reduce_exn reduce_balanced reduce_balanced_exn sum count counti length min_elt max_elt
+            min_elt_exn max_elt_exn last last_exn hd hd_exn tl tl_exn value value_exn value_map
+            value_or_thunk bind join both first_some some some_if merge merge_skewed union
+            union_list inter diff symmetric_diff copy map_keys map_keys_exn filter_keys map_error
+            ok ok_exn ok_or_failwith error get_ok get_error to_option of_option all all_unit
+            try_with call iter iteri iter2 iter2_exn iter_keys equal compare hash is_sorted
+            is_sorted_strictly is_subset subset contains_dup find_a_dup find_all_dups is_some
+            is_none is_ok is_error to_string escaped lowercase uppercase capitalize uncapitalize
+            strip lstrip rstrip trim tr is_prefix is_suffix is_substring starts_with ends_with
+            prefix suffix chop_prefix chop_prefix_exn chop_prefix_if_exists chop_suffix
+            chop_suffix_exn chop_suffix_if_exists drop_prefix drop_suffix substr_index
+            substr_index_exn substr_index_all substr_replace_first substr_replace_all lsplit2
+            lsplit2_exn rsplit2 rsplit2_exn index index_exn index_from rindex rindex_exn lfindi
+            rfindi contains is_valid_utf_8 assoc assoc_opt mem_assoc inverse sexp_of_t t_of_sexp
+            sexp_of_m__t m__t_of_sexp
+          |};
+         (* Quantifiers. *)
+         group Every_argument ~quantifies:true
+           {|
+            for_all for_alli for_all2 for_all2_exn exists existsi exists2 exists2_exn is_empty
+          |};
+         (* Selectors. *)
+         group Collection
+           {|
+            find find_exn find_opt findi find_multi find_and_call find_index find_all nth nth_exn
+            nth_opt get unsafe_get take take_while drop drop_while drop_last drop_last_exn sub
+            subo slice split_n chunks_of mem remove remove_multi choose choose_exn peek peek_exn
+            dequeue dequeue_exn pop pop_exn top top_exn
+          |};
+         group Collection_and_callback {| find_map find_mapi find_map_exn |};
+         group After_count {| init |};
+         group Filled_value {| make create create_float replicate make_matrix |};
+         group Nothing {| range range' clear reset |};
+         (* Writers into a mutable container: what they are handed joins it. *)
+         group Every_argument ~writes:On_mutable
+           {|
+            set add add_exn add_multi add_last add_seq push enqueue enqueue_all enqueue_front
+            enqueue_back replace replace_seq fill blit blito unsafe_blit transfer blit_transfer
+            unsafe_set filter_inplace filteri_inplace filter_keys_inplace filter_map_inplace
+            filter_mapi_inplace map_inplace mapi_inplace merge_into incr decr strict_add
+            strict_add_exn insert_first insert_last insert_before insert_after append_list
+            append_array append_seq append_iter set_int32_le set_int64_le
+          |};
+         group Every_argument ~writes:(Only_in [ "Dynarray" ]) {| append |};
+         group Collection ~writes:On_mutable {| find_or_add findi_or_add |};
+         group Collection_and_callback ~writes:On_mutable {| update change update_and_return |};
+       ])
+
+let collection_function name = Map.find collection_functions name
+
+let collection_arguments ~stdlib function_ arguments =
   let positional =
     List.filter_map arguments ~f:(function
       | Ppxlib.Asttypes.Nolabel, argument -> Some argument
       | _ -> None)
   in
-  let data =
+  let labeled names =
     List.filter_map arguments ~f:(function
       | (Ppxlib.Asttypes.Labelled label | Optional label), argument
-        when List.mem [ "default"; "init"; "data" ] label ~equal:String.equal ->
+        when List.mem names label ~equal:String.equal ->
           Some argument
       | _ -> None)
   in
-  if starts "range" then (* [List.range start stop]: bounds build nothing. *) []
-  else if starts "init" then
-    (* [Array.init n ~f], [Stdlib.Array.init n f]: the elements are what the callback returns
-       ({!population} follows a function in data position into its body); the count, the first
-       positional argument, builds nothing. *)
-    List.drop positional 1
-    @ List.filter_map arguments ~f:(function
-      | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
-      | _ -> None)
-    @ data
-  else if List.exists [ "make"; "create"; "replicate" ] ~f:starts then
-    (* [Array.make n x], [Array.create ~len x]: the value filled in, not the count before it. *)
-    (match positional with _ :: (_ :: _ as values) -> values | values -> values) @ data
-  else if (not stdlib) && List.exists selectors ~f:starts then
-    List.take positional 1
-    (* [Map.update m k ~f], [List.find_map xs ~f]: the callback's result is the population's, a
-       [find] predicate's is not. *)
-    @ (if List.exists [ "update"; "change"; "find_map" ] ~f:starts then
-         List.filter_map arguments ~f:(function
-           | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
-           | _ -> None)
-       else [])
-    @ data
-  else
-    (* An inserting function's labeled key joins the population ([Map.set m ~key ~data]); a
-       selector's selects it, above. *)
-    positional
-    @ List.filter_map arguments ~f:(function
-      | (Ppxlib.Asttypes.Labelled "key" | Optional "key"), key -> Some key
-      (* [List.map xs ~f]: what the callback returns is the population's elements ({!population}
-         follows a function in data position into its body); a selector's [~f] is a predicate. *)
-      | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
-      | _ -> None)
-    @ data
-
-(** The collection-module functions that write into their first positional argument, a mutable
-    container: what they are handed joins it. *)
-let writers =
-  [
-    "set";
-    "add";
-    "push";
-    "enqueue";
-    "replace";
-    "fill";
-    "blit";
-    "update";
-    "change";
-    "transfer";
-    "find_or_add";
-  ]
+  (* The labeled arguments that carry data rather than steer: [~default] (the fallback
+     [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
+  let data = labeled [ "default"; "init"; "data" ] in
+  match (function_.builds, stdlib) with
+  | Nothing, _ -> []
+  | After_count, _ ->
+      (* {!population} follows a function in data position into its body. *)
+      List.drop positional 1 @ labeled [ "f" ] @ data
+  | Filled_value, _ ->
+      (match positional with _ :: (_ :: _ as values) -> values | values -> values) @ data
+  | Collection, false -> List.take positional 1 @ data
+  | Collection_and_callback, false -> List.take positional 1 @ labeled [ "f" ] @ data
+  | (Every_argument | Collection | Collection_and_callback), _ ->
+      positional @ labeled [ "key"; "f" ] @ data
 
 (* A callee under type annotations, [(List.map : ...) f xs], is the callee. *)
 let rec strip_constraints expr =
@@ -928,6 +986,10 @@ let gate_census content =
   (* What is written into a binding after it is made -- [x := e], [Queue.enqueue x e] -- by the
      binding's identity, with the scope it was written in. *)
   let writes = Hashtbl.create (module Int) in
+  (* A call of an unlisted function of a mutable collection module that was handed a binding, by the
+     binding's identity: it may write into it, which the reader cannot follow. *)
+  let unlisted_writes = Hashtbl.create (module Int) in
+  let unlisted = ref [] in
   (* Claims are compared once the walk is over, when every write is known. *)
   let pending = ref [] in
   let partials = ref [] and bound_partials = ref [] and consumed = Hash_set.create (module Int) in
@@ -959,6 +1021,24 @@ let gate_census content =
       val mutable quiet = 0
       val mutable collecting : (string * gate_denotation) list ref option = None
 
+      (* The unlisted collection-module calls the claim being compared reaches. *)
+      val mutable unlisted_sink : (string * int) list ref = ref []
+
+      method note_unlisted callee =
+        let spelled =
+          Option.value_map
+            (Read.longident_of (strip_constraints callee))
+            ~default:"?" ~f:(String.concat ~sep:".")
+        in
+        unlisted_sink := (spelled, callee.pexp_loc.loc_start.pos_lnum) :: !unlisted_sink
+
+      (* What is known to reach a binding besides its definition: what the source writes into it,
+         and any unlisted call it was handed. *)
+      method written identity =
+        List.iter (Hashtbl.find_multi unlisted_writes identity) ~f:(fun call ->
+            unlisted_sink := call :: !unlisted_sink);
+        Hashtbl.find_multi writes identity
+
       method local =
         next_local <- next_local - 1;
         { identity = next_local; definition = None }
@@ -986,6 +1066,7 @@ let gate_census content =
                 {
                   stdlib;
                   mutable_ = List.mem mutable_modules (List.last_exn components) ~equal:String.equal;
+                  family = List.last_exn components;
                 }
           | Some _ -> Other_module
           | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal ->
@@ -1009,6 +1090,7 @@ let gate_census content =
                     stdlib = not (List.mem [ "Base"; "Core" ] head ~equal:String.equal);
                     mutable_ =
                       List.mem mutable_modules (List.last_exn components) ~equal:String.equal;
+                    family = List.last_exn components;
                   }
               else Other_module)
 
@@ -1039,7 +1121,11 @@ let gate_census content =
                     Map.set modules ~key:name
                       ~data:
                         (Collection_module
-                           { stdlib; mutable_ = List.mem mutable_modules name ~equal:String.equal }));
+                           {
+                             stdlib;
+                             mutable_ = List.mem mutable_modules name ~equal:String.equal;
+                             family = name;
+                           }));
             }
         | Some (Local_structure names) ->
             (* Its names shadow whatever they denoted, a [gated_all] of its own included. *)
@@ -1105,7 +1191,7 @@ let gate_census content =
               if denotation.identity <> 0 && not (Hash_set.mem seen denotation.identity) then (
                 Hash_set.add seen denotation.identity;
                 Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
-                List.iter (Hashtbl.find_multi writes denotation.identity) ~f:(fun (written, env) ->
+                List.iter (self#written denotation.identity) ~f:(fun (written, env) ->
                     visit env written)))
         in
         visit env expr;
@@ -1124,8 +1210,8 @@ let gate_census content =
                   if not (Hash_set.mem seen denotation.identity) then (
                     Hash_set.add seen denotation.identity;
                     Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
-                    List.iter (Hashtbl.find_multi writes denotation.identity)
-                      ~f:(fun (written, env) -> visit env written))
+                    List.iter (self#written denotation.identity) ~f:(fun (written, env) ->
+                        visit env written))
               | None -> Hash_set.add found (name, 0))
           | Pexp_constraint (inner, _)
           | Pexp_coerce (inner, _, _)
@@ -1201,8 +1287,17 @@ let gate_census content =
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path env prefix with
-                      | Some (Collection_module { stdlib; _ }) ->
-                          List.iter (collection_arguments ~stdlib name arguments) ~f:(visit env)
+                      | Some (Collection_module { stdlib; _ }) -> (
+                          match collection_function name with
+                          | Some function_ ->
+                              List.iter
+                                (collection_arguments ~stdlib function_ arguments)
+                                ~f:(visit env)
+                          | None ->
+                              (* Reported; its arguments are still followed, so that what the
+                                 refusal says is all the reader could not read. *)
+                              self#note_unlisted callee;
+                              List.iter positional ~f:(visit env))
                       | _ -> ())
                   | _ -> ()))
           | _ -> ()
@@ -1228,8 +1323,8 @@ let gate_census content =
               | Some denotation when not (Hash_set.mem seen denotation.identity) ->
                   Hash_set.add seen denotation.identity;
                   Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
-                  List.iter (Hashtbl.find_multi writes denotation.identity)
-                    ~f:(fun (written, env) -> visit env written)
+                  List.iter (self#written denotation.identity) ~f:(fun (written, env) ->
+                      visit env written)
               | _ -> ())
           | Pexp_constraint (inner, _)
           | Pexp_coerce (inner, _, _)
@@ -1294,8 +1389,10 @@ let gate_census content =
                       match self#module_path env prefix with
                       | Some (Standard_library _) when connective name ->
                           List.iter positional ~f:(visit env)
+                      | Some (Collection_module _) when Option.is_none (collection_function name) ->
+                          self#note_unlisted callee
                       | Some (Collection_module { stdlib; _ })
-                        when List.mem quantifiers name ~equal:String.equal ->
+                        when Option.exists (collection_function name) ~f:(fun f -> f.quantifies) ->
                           List.iter (quantified_arguments ~stdlib name arguments)
                             ~f:(fun collection ->
                               Hash_set.iter (self#population env collection) ~f:(Hash_set.add found));
@@ -1342,12 +1439,9 @@ let gate_census content =
         | ( Pexp_ident { txt = Ppxlib.Longident.Lident ":="; _ },
             [ (Ppxlib.Asttypes.Nolabel, lhs); (Ppxlib.Asttypes.Nolabel, rhs) ] ) ->
             Option.iter (target lhs) ~f:(fun identity -> record identity [ rhs ])
-        | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _
-          when List.exists writers ~f:(fun w ->
-                   String.is_prefix (String.chop_prefix_if_exists name ~prefix:"unsafe_") ~prefix:w)
-          -> (
+        | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _ -> (
             match self#module_path env prefix with
-            | Some (Collection_module { stdlib; mutable_ = true }) ->
+            | Some (Collection_module { stdlib; mutable_; family }) ->
                 let positional =
                   List.filter_map arguments ~f:(function
                     | Ppxlib.Asttypes.Nolabel, argument -> Some argument
@@ -1376,11 +1470,35 @@ let gate_census content =
                 let containers =
                   (if stdlib then positional else List.take positional 1) @ labeled "dst"
                 in
-                List.iter containers ~f:(fun container ->
-                    Option.iter (target container) ~f:(fun identity ->
-                        record identity
-                          (List.filter positional ~f:(fun other -> not (phys_equal other container))
-                          @ labeled "src" @ labeled "f" @ data)))
+                let writes_into =
+                  match collection_function name with
+                  | Some { writes = On_mutable; _ } -> mutable_
+                  | Some { writes = Only_in families; _ } ->
+                      List.mem families family ~equal:String.equal
+                  | Some { writes = Never; _ } -> false
+                  | None ->
+                      (* An unlisted function of a mutable module may write into anything it is
+                         handed; a claim that reaches one of those bindings is refused. *)
+                      if mutable_ then
+                        List.iter
+                          (positional @ labeled "dst")
+                          ~f:(fun container ->
+                            Option.iter (target container) ~f:(fun identity ->
+                                Hashtbl.add_multi unlisted_writes ~key:identity
+                                  ~data:
+                                    ( String.concat ~sep:"."
+                                        (Read.flatten_longident
+                                           (Ppxlib.Longident.Ldot (prefix, name))),
+                                      callee.pexp_loc.loc_start.pos_lnum )));
+                      false
+                in
+                if writes_into then
+                  List.iter containers ~f:(fun container ->
+                      Option.iter (target container) ~f:(fun identity ->
+                          record identity
+                            (List.filter positional ~f:(fun other ->
+                                 not (phys_equal other container))
+                            @ labeled "src" @ labeled "f" @ data)))
             | _ -> ())
         | _ -> ()
 
@@ -1497,6 +1615,7 @@ let gate_census content =
                        Int.incr gated_sites;
                        pending :=
                          (fun () ->
+                           unlisted_sink := [];
                            let reads = self#gate_reads gate_env gate in
                            let built =
                              if String.equal member gated_boolean then
@@ -1508,6 +1627,11 @@ let gate_census content =
                              |> Hash_set.to_list |> List.map ~f:fst
                              |> List.dedup_and_sort ~compare:String.compare
                            in
+                           List.dedup_and_sort !unlisted_sink ~compare:Poly.compare
+                           |> List.iter ~f:(fun (callee, callee_line) ->
+                               unlisted :=
+                                 { claim = form; claim_line = line; callee; callee_line }
+                                 :: !unlisted);
                            if not (List.is_empty shared) then
                              readings :=
                                {
@@ -1544,7 +1668,12 @@ let gate_census content =
   let unread =
     List.sort (!partials @ uncompleted) ~compare:(fun (_, a) (_, b) -> Int.compare a b)
   in
-  { readings = List.rev !readings; gated_sites = !gated_sites; unread }
+  {
+    readings = List.rev !readings;
+    gated_sites = !gated_sites;
+    unread;
+    unlisted = List.rev !unlisted;
+  }
 
 (** {1 A gate folded into the claim's value (gh-ocannl-1310)}
 

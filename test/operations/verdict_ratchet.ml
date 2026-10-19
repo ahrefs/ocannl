@@ -4070,6 +4070,34 @@ let () =
     ( "reads a gated claim nothing binds as Verdict's, its name being Verdict's alone",
       {ocaml|let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
+    (* gh-ocannl-1303: the collection-module functions are a closed table; one it does not list is
+       reported rather than read by a guess. *)
+    ( "names a collection-module function the table does not list instead of guessing",
+      {ocaml|open Base
+let () =
+  let rows = List.permute raw in
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "unlisted List.permute" ] );
+    ( "names an unlisted quantifier-position function of a gated boolean",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:on_gpu ~on:"cc" "a sampled row passes" (List.random_element_exn rows)|ocaml},
+      [ "unlisted List.random_element_exn" ] );
+    ( "names an unlisted function handed a mutable container the population reads",
+      {ocaml|open Base
+let () =
+  let cells = Array.of_list raw in
+  Array.permute cells;
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all cells pass" (Array.to_list cells) ~f:Fn.id|ocaml},
+      [ "unlisted Array.permute" ] );
+    ( "refuses a gate read off the set an in-place filter keeps the population's keys by",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.of_alist_exn (module String) raw in
+  Hashtbl.filter_keys_inplace table ~f:(Set.mem keep);
+  Verdict.gated_all ~when_:(not (Set.is_empty keep)) ~on:"cc" "all kept rows pass"
+    (Hashtbl.data table) ~f:Fn.id|ocaml},
+      [ "keep" ] );
   ]
 
 let gate_control_findings source =
@@ -4077,6 +4105,7 @@ let gate_control_findings source =
   List.map census.Scan.readings ~f:(fun (reading : Scan.gate_reading) ->
       String.concat ~sep:", " reading.reads ^ if reading.ambiguous then " [ambiguous]" else "")
   @ List.map census.Scan.unread ~f:(fun (form, _) -> "unread " ^ form)
+  @ List.map census.Scan.unlisted ~f:(fun (call : Scan.unlisted_call) -> "unlisted " ^ call.callee)
 
 let run_gate_population_controls () =
   List.map gate_population_controls ~f:(fun (label, source, expected) ->
@@ -4106,14 +4135,14 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
 let read_gates ~fail ~source ~census content =
   match Test_utils.Scan_attempt.run (fun () -> census content) with
   | Test_utils.Scan_attempt.Scanned gates -> gates
-  | Unparsed -> { Scan.readings = []; gated_sites = 0; unread = [] }
+  | Unparsed -> { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
   | Raised exn ->
       fail
         (Printf.sprintf
            "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, \
             not of the source, and the source's gated claims went uncompared"
            exn source);
-      { Scan.readings = []; gated_sites = 0; unread = [] }
+      { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
 
 let refuse_unread_gate ~fail ~source (form, line) =
   fail
@@ -4122,6 +4151,15 @@ let refuse_unread_gate ~fail ~source (form, line) =
         gate reads the population. Apply the claim, or a `let`-bound partial application of it, to \
         its label and population directly"
        source line form)
+
+let refuse_unlisted_gate ~fail ~source (call : Scan.unlisted_call) =
+  fail
+    (Printf.sprintf
+       "%s:%d applies `%s` to a population or gate that reaches `%s` (line %d), a \
+        collection-module function Verdict_scan.collection_functions does not list, so the gate \
+        reader cannot say which of its arguments carry the population or whether it writes into \
+        what it is handed. Add the function to that table with the role it plays"
+       source call.claim_line call.claim call.callee call.callee_line)
 
 (* The wiring from a finding to the failure, exercised on a refusing control of each kind: the
    controls above say what the reader finds, this says that a finding refuses the run. *)
@@ -4136,12 +4174,17 @@ let run_gate_refusal_control () =
     "%s:%d applies `%s` in a form the gate reader cannot complete, so it cannot say whether the \
      gate reads the population. Apply the claim, or a `let`-bound partial application of it, to \
      its label and population directly"
+  and unlisted_format =
+    "%s:%d applies `%s` to a population or gate that reaches `%s` (line %d), a collection-module \
+     function Verdict_scan.collection_functions does not list, so the gate reader cannot say which \
+     of its arguments carry the population or whether it writes into what it is handed. Add the \
+     function to that table with the role it plays"
   in
   let fixture label =
     List.find_map_exn gate_population_controls ~f:(fun (found, source, _) ->
         if String.equal found label then Some source else None)
   in
-  let refused_reading = ref false and refused_unread = ref false in
+  let refused_reading = ref false and refused_unread = ref false and refused_unlisted = ref false in
   let census =
     Scan.gate_census (fixture "refuses a gate that tests its own population for emptiness")
   in
@@ -4158,6 +4201,15 @@ let run_gate_refusal_control () =
       (refuse_unread_gate ~source:"fixture.ml" ~fail:(fun _ ->
            refused_unread := true;
            Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unread_format));
+  let census =
+    Scan.gate_census
+      (fixture "names a collection-module function the table does not list instead of guessing")
+  in
+  List.iter census.Scan.unlisted
+    ~f:
+      (refuse_unlisted_gate ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_unlisted := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unlisted_format));
   let raised_format =
     "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, not of \
      the source, and the source's gated claims went uncompared"
@@ -4172,7 +4224,7 @@ let run_gate_refusal_control () =
        "let () = ()"
       : Scan.gate_census);
   ( "refuses a planted gate that reads its population, and a gated claim it cannot read",
-    !refused_reading && !refused_unread && !refused_raise )
+    !refused_reading && !refused_unread && !refused_unlisted && !refused_raise )
 
 (* {1 A gate is a skip, not a disjunct of the claim (gh-ocannl-1310)}
 
@@ -4776,6 +4828,9 @@ let () =
       List.iter gates.Scan.unread ~f:(fun unread ->
           Int.incr gate_offenders;
           refuse_unread_gate ~fail ~source unread);
+      List.iter gates.Scan.unlisted ~f:(fun call ->
+          Int.incr gate_offenders;
+          refuse_unlisted_gate ~fail ~source call);
       let folds = read_folded_gates ~fail ~source ~census:Scan.folded_gate_census content in
       folded_claim_sites := !folded_claim_sites + folds.Scan.folded_claim_sites;
       List.iter folds.Scan.folded ~f:(fun fold ->
