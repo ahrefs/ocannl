@@ -362,7 +362,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.box_muller";
     "Nn_blocks.conv_bn_relu";
     "Nn_blocks.cross_attention";
-    "Nn_blocks.decoder_only_block";
     "Nn_blocks.dropout";
     "Nn_blocks.global_avg_pool2d";
     "Nn_blocks.kaiming";

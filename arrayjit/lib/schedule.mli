@@ -523,6 +523,15 @@ val privatize : accum_prec:(Ops.prec -> Ops.prec) -> target:Tn.t -> over:Indexin
     the serial rendering's accumulator by — so the privatized reduction's width is the policy's, not
     the schedule's (gh-ocannl-1116). *)
 
+val privatize_index_vectors_refusal : Tn.t -> string
+(** The detail of [Privatize]'s v1 refusal of [target]: under the accumulation loop it is accessed
+    at more than one index vector. Unlike [Stage]'s (gh-ocannl-1147), this refusal is not relaxed:
+    the target is written under the loop, so a second accessor at another vector would read a stale
+    target between the tile's init-load and its store-back unless proved disjoint from every cell
+    the loop writes. No tuned workload reaches it (gh-ocannl-1395's census, pinned by
+    [test/operations/privatize_census]), which classifies [Autotune.privatize_extension]'s drops by
+    this text. *)
+
 val split_reduce :
   axis:Indexing.symbol ->
   target:Tn.t ->

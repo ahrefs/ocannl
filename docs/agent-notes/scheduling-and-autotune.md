@@ -444,6 +444,14 @@ files.
   a refused second reader declines every whole-routine seed and the tuner times no sketch for the
   site. Per-reader staging (a tile per distinct vector) is the unbuilt alternative, for when a
   second reader is itself hot.
+- **`Privatize`'s look-alike v1 refusal stays, because nothing reaches it** (gh-ocannl-1395). It
+  scans only its own loop's subtree, where a sketch's perfectly nested accumulation and the
+  privatized preset's self-reading `Set` leave one index vector; two censuses (tuned benchmark
+  cells, the tuning test corpus) never saw it fire. Its target IS written under the loop, so the
+  gh-ocannl-1147 move does not carry over: a second accessor would need proved disjointness or a
+  remap into the tile. The preset drops refused proposals silently;
+  `Autotune.privatize_extension` returns them, and `privatize_census` is the tripwire that says
+  when a workload needs the relaxation.
 - **A per-segment candidate's executed-parity reference is its own segmentation on the default
   preset, not the unscheduled form, wherever the values are inexact** (gh-ocannl-1217). The
   candidate schedules every OTHER segment by the default preset too, so against the unscheduled

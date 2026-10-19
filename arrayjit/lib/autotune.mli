@@ -708,6 +708,24 @@ val extend_with_privatize :
     against a hermetic copy of the segment (proposals violating the op's preconditions are dropped),
     so the result always applies cleanly where the input schedule does. Exposed for tests. *)
 
+type privatize_drop = {
+  pd_target : Ir.Tnode.t;  (** The accumulator the proposal would privatize. *)
+  pd_over : Ir.Indexing.symbol;  (** The serial loop it would privatize over. *)
+  pd_cause : Ir.Schedule_outcome.cause;  (** The refusal that dropped it. *)
+}
+(** A {!extend_with_privatize} proposal the op refused. *)
+
+val privatize_extension :
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Schedule.schedule ->
+  Ir.Low_level.optimized ->
+  Ir.Schedule.schedule * privatize_drop list
+(** {!extend_with_privatize} beside the proposals it dropped, in detection order. The drops never
+    reach a search report, so this is where a census of [Privatize]'s refusals on real segments
+    reads them (gh-ocannl-1395: [test/operations/privatize_census]). Empty when the input schedule
+    itself does not apply. *)
+
 type sr_site = {
   sr_axis : Ir.Indexing.symbol;  (** The reduction loop to split. *)
   sr_target : Ir.Tnode.t;  (** The accumulated node. *)
