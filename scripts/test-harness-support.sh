@@ -244,6 +244,74 @@ if [ "$rc" = 9 ] && grep -qx 'aborted before finish (rc=9) inside leg: zeta leg 
    && ! grep -q 'legs passed\|leg(s) failed' "$TMP/out"; then
   report 0 'an exit inside a leg body still aborts, naming the leg'
 else report 1 'an exit inside a leg body still aborts, naming the leg' "exit $rc; $(cat "$TMP/out")"; fi
+# Leg naming (gh-ocannl-1367), on a probe whose header declares its groups:
+# #odd lists legs 1, 3 and 5, #even 2 and 4, #free none. Each case gates the
+# legs LEGS names, one per line; every gate is checked, selected or not.
+cat >"$TMP/grouped.sh" <<'PROBE'
+#!/usr/bin/env bash
+# Grouped fixture: #odd (1, 3, 5: the odd legs), #even (2,
+# 4) and #free (no numbers).
+. "$SUPPORT"
+harness_args "$@"
+harness_scratch grouped
+while IFS= read -r name; do
+  if harness_leg "$name"; then echo "$name" >>"$RECORD.ran"; report 0 "$name body"; fi
+done <<<"$LEGS"
+finish
+PROBE
+good_legs='1: one #odd
+2: two #even
+3: three #odd
+3b: beside three #odd
+4: four #even
+5: five #odd
+free leg #free'
+grouped() { # LEGS, then probe arguments
+  local legs=$1 rc=0
+  shift
+  rm -f "$RECORD.ran"
+  LEGS=$legs bash "$TMP/grouped.sh" "$@" >"$TMP/out" 2>&1 || rc=$?
+  return "$rc"
+}
+grouped "$good_legs"; rc=$?
+if [ "$rc" = 0 ] && grep -q 'all legs passed (0 skipped)' "$TMP/out" && ! grep -q 'leg naming' "$TMP/out"; then
+  report 0 'naming: declared groups, listed numbers and a suffixed leg pass'
+else report 1 'naming: declared groups, listed numbers and a suffixed leg pass' "exit $rc; $(cat "$TMP/out")"; fi
+naming_case() { # LABEL LEGS EXPECTED-FAIL-LINE [probe arguments]
+  local label=$1 legs=$2 want=$3 rc=0
+  shift 3
+  grouped "$legs" "$@" || rc=$?
+  if [ "$rc" = 1 ] && grep -qxF -- "FAIL  $want" "$TMP/out" \
+     && [ "$(grep -c '^FAIL  leg naming' "$TMP/out")" = 1 ]; then
+    report 0 "naming: $label"
+  else report 1 "naming: $label" "exit $rc; $(cat "$TMP/out")"; fi
+}
+naming_case 'a name that gates two legs fails' "$good_legs
+2: two #even" "leg naming: two legs are named '2: two #even'"
+naming_case 'a leg number that numbers two legs fails' "$good_legs
+3: again #odd" "leg naming: '3: again #odd' numbers leg 3, as '3: three #odd' does"
+naming_case 'a leg closing with no group fails' "$good_legs
+untagged leg" "leg naming: 'untagged leg' does not close with a group its header declares"
+naming_case 'a leg closing with an undeclared group fails' "$good_legs
+stray leg #nope" "leg naming: 'stray leg #nope' does not close with a group its header declares"
+naming_case 'a number its group does not list fails' "$good_legs
+6: six #odd" "leg naming: '6: six #odd' numbers leg 6, which the header does not list under #odd"
+naming_case 'a listed number no leg carries fails' "$(printf '%s\n' "$good_legs" | grep -v '^5: ')" \
+  "leg naming: the header lists leg 5 under #odd, and no leg of #odd numbers it"
+naming_case 'the naming checks every gate, a filtered one too' "$good_legs
+3: again #odd" "leg naming: '3: again #odd' numbers leg 3, as '3: three #odd' does" --only '^1:'
+# --list-legs: every gate printed in order, no body run, the naming checked.
+grouped "$good_legs" --list-legs; rc=$?
+if [ "$rc" = 0 ] && [ "$(sed -n 's/^LEG  //p' "$TMP/out")" = "$good_legs" ] && [ ! -f "$RECORD.ran" ] \
+   && grep -qx 'listed 7 leg(s); no leg ran (0 failure(s) outside the legs, 0 skipped)' "$TMP/out"; then
+  report 0 '--list-legs prints every gate in order and runs no leg body'
+else report 1 '--list-legs prints every gate in order and runs no leg body' "exit $rc; $(cat "$TMP/out")"; fi
+naming_case '--list-legs fails on a naming defect' "$good_legs
+2: two #even" "leg naming: two legs are named '2: two #even'" --list-legs
+grouped "$good_legs" --list-legs --only one; rc=$?
+if [ "$rc" = 2 ] && grep -q -- '--list-legs lists every leg; it takes no --only' "$TMP/out" && [ ! -f "$RECORD.ran" ]; then
+  report 0 '--list-legs refuses --only'
+else report 1 '--list-legs refuses --only' "exit $rc; $(cat "$TMP/out")"; fi
 reason() { echo 'claimed defect'; return 1; }
 wrong_reason() { echo 'unrelated defect'; return 1; }
 wrong_status() { echo 'claimed defect'; return 127; }

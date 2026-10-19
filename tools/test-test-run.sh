@@ -4595,7 +4595,7 @@ else
   fi
 fi
 }
-harness_leg_run '80: a manual dune beside a managed run keeps its live trace #digest' leg_80_live
+harness_leg_run '80b: a manual dune beside a managed run keeps its live trace #digest' leg_80_live
 
 # The guard from leg 26 is not made redundant by the digest: it knows the
 # correct order and refuses without spawning dune. With a fixture that WOULD
@@ -5107,7 +5107,7 @@ lifecycle_cleanup
 leg_40_47_signals() {
 lifecycle_signals || lifecycle_abandoned '40-47 (signals, publication window, legacy lock)'
 }
-harness_leg_run '40-47: run/start lifecycle (signals, publication window, legacy lock) #lifecycle' leg_40_47_signals
+harness_leg_run '40-47b: run/start lifecycle (signals, publication window, legacy lock) #lifecycle' leg_40_47_signals
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)
