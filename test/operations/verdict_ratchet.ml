@@ -4029,6 +4029,12 @@ let () =
   Verdict.gated ~when_:on_gpu ~on:backend_name "every GPU row passes"
     ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id)|ocaml},
       [] );
+    ( "accepts a gated boolean whose condition, not its value, quantifies what the gate reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty modes)) ~on:"cc" "the selected mode passes"
+    (if List.exists modes ~f:is_fast then fast_ok else slow_ok)|ocaml},
+      [] );
     ( "accepts a gated boolean comparing against the invariant its gate reads",
       {ocaml|open Base
 let () =
@@ -4194,6 +4200,12 @@ let agreement_controls =
     ( "the readers agree that a path through another module's Verdict is not Verdict",
       "",
       "Other.Verdict.gated",
+      Unread );
+    ( "the readers agree that a claim name a local structure binds is its own",
+      "open Verdict.Claims\n\
+       module Checks = struct let gated ~when_:_ ~on:_ _ _ = () end\n\
+       open Checks\n",
+      "gated",
       Unread );
     ( "the readers agree that a claim name the source binds is its own",
       "open Verdict.Claims\nlet gated ~when_:_ ~on:_ _ _ = ()\n",
