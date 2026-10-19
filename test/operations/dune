@@ -2196,7 +2196,8 @@
 
 ; gh-ocannl-1351: every render-time typed decline (a `Cause_at` at `Backend_codegen`) has an entry in
 ; the agent note's inventory, classified paired-with-the-oracle or render-only by how its site
-; builds it. The sources are globbed, so a decline added in any arrayjit module is seen.
+; builds it. Its corpus is every checked-in arrayjit/lib source, from Source_inventory over the
+; sandboxed source tree, so a decline added in any arrayjit module is seen.
 
 (executable
  (name render_decline_inventory)
@@ -2210,14 +2211,17 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (glob_files_rec ../../arrayjit/lib/*.ml))
+  (sandbox always)
+  (source_tree ../..))
  (action
   (with-stdout-to
    %{target}
    (run
     %{dep:render_decline_inventory.exe}
-    %{dep:../../docs/agent-notes/scheduling-and-autotune.md}
-    %{deps}))))
+    %{workspace_root}
+    %{dep:render_decline_inventory.exe}
+    %{target}
+    %{dep:ocannl_config}))))
 
 (rule
  (alias runtest-render_decline_inventory)

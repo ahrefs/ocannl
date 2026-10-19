@@ -24,8 +24,20 @@
    [renderer_file] every [Cause_at] is constructed at [Backend_codegen] with the phase spelled out,
    so a render-time decline cannot leave the inventory by naming another phase.
 
-   Sites are read on the parse tree: a pattern ([| Cause_at (Backend_codegen, _) ->]) is not a
-   construction, and a comment or string naming one is not a site. *)
+   The recognised forms, closed. A site is an EXPRESSION [Pexp_construct] whose constructor's last
+   component is [Cause_at], applied to a two-element tuple whose first element is the constant
+   constructor [Backend_codegen] (any qualification). Its cause is keyed only as: (a) a constructor
+   [Illegal_schedule] / [Unsupported] / [Backend_rejected] / [Resource_exceeded] applied to a record
+   literal without [with], whose field [check] / [feature] / [stage] / [resource] respectively is a
+   string literal or a constant constructor -- a literal site; or (b) an application of a function
+   whose path ends [Schedule.<name>_cause] with exactly one argument that is a constructor
+   application, whose last component is the key -- an oracle site. Anything else at
+   [Backend_codegen] is unread and refused, never passed. A pattern ([| Cause_at (Backend_codegen,
+   _) ->]) is not a construction, and a comment or string naming one is not a site.
+
+   The corpus is every checked-in [arrayjit/lib/**.ml], selected from [Test_utils.Source_inventory]
+   over the rule's clean sandbox (so no build output joins it), each parse classified through
+   [Test_utils.Scan_attempt]; the note is read from the same inventory. *)
 
 open Base
 open Stdio
@@ -66,6 +78,9 @@ type problem =
   | Stale of entry
   | Unlabelled_entry of entry
   | Duplicate_entry of string
+  | Unparsed of string
+  | Scanner_raised of string * string
+  | Note_missing of string
 
 let problem_kind = function
   | No_section -> "no-section"
@@ -76,6 +91,9 @@ let problem_kind = function
   | Stale _ -> "stale"
   | Unlabelled_entry _ -> "unlabelled"
   | Duplicate_entry _ -> "duplicate"
+  | Unparsed _ -> "unparsed"
+  | Scanner_raised _ -> "raised"
+  | Note_missing _ -> "note-missing"
 
 let origin_to_string = function Literal -> "a literal" | Oracle via -> "built through " ^ via
 
@@ -106,6 +124,10 @@ let describe = function
       Printf.sprintf "the note's entry `%s` says neither %S nor %S" e.entry_key
         (paired_marker ^ "X`)") render_only_marker
   | Duplicate_entry key -> Printf.sprintf "the note has more than one entry `%s`" key
+  | Unparsed file -> Printf.sprintf "%s: does not parse, so its declines cannot be read" file
+  | Scanner_raised (file, exn) ->
+      Printf.sprintf "%s: parses, but the scan raised %s on it (a scanner defect)" file exn
+  | Note_missing path -> Printf.sprintf "the source tree holds no %s" path
 
 let last_component txt = List.last_exn (Read.flatten_longident txt)
 
@@ -176,7 +198,10 @@ let scan_source ~file content : site list * problem list =
   (List.rev !sites, List.rev !problems)
 
 (* The section's top-level bullets, each its start line and continuation lines joined by single
-   spaces; [None] when the note has no such section. *)
+   spaces; [None] when the note has no such section. The dialect is the notes' own
+   ([Agent_notes_scan]): a bullet opens with ["- "] at column 0, and an INDENTED line continues it,
+   after a blank line too -- that is a second paragraph of the same bullet. An unindented line that
+   is not a marker ends it (prose after the list), and so does a heading, which ends the section. *)
 let section_bullets note =
   let lines = String.split_lines note in
   match
@@ -187,13 +212,15 @@ let section_bullets note =
       let body = List.take_while rest ~f:(fun l -> not (String.is_prefix l ~prefix:"#")) in
       let bullets, current =
         List.fold body ~init:([], None) ~f:(fun (done_, current) line ->
+            let text = String.strip line in
             match String.chop_prefix line ~prefix:"- " with
             | Some start -> (Option.to_list current @ done_, Some [ start ])
-            | None -> (
-                let text = String.strip line in
+            | None when String.is_empty text -> (done_, current)
+            | None when Char.is_whitespace line.[0] -> (
                 match current with
-                | Some parts when not (String.is_empty text) -> (done_, Some (text :: parts))
-                | _ -> (Option.to_list current @ done_, None)))
+                | Some parts -> (done_, Some (text :: parts))
+                | None -> (done_, None))
+            | None -> (Option.to_list current @ done_, None))
       in
       Some
         (List.rev_map
@@ -236,7 +263,13 @@ let agrees site entry =
   | _ -> false
 
 let audit ~sources ~note : site list * entry list * problem list =
-  let scanned = List.map sources ~f:(fun (file, content) -> scan_source ~file content) in
+  let scanned =
+    List.map sources ~f:(fun (file, content) ->
+        match Test_utils.Scan_attempt.run (fun () -> scan_source ~file content) with
+        | Scanned found -> found
+        | Unparsed -> ([], [ Unparsed file ])
+        | Raised exn -> ([], [ Scanner_raised (file, exn) ]))
+  in
   let sites = List.concat_map scanned ~f:fst in
   let scan_problems = List.concat_map scanned ~f:snd in
   match section_bullets note with
@@ -373,18 +406,34 @@ let control_cases =
       ],
       note "",
       [] );
+    ( "a classification in the bullet's second paragraph",
+      [ ("a.ml", literal) ],
+      note "- `k` (`f`): the backend decides it.\n\n  So: render-only, because x.\n",
+      [] );
+    ( "unindented prose after the bullet, which is not part of it",
+      [ ("a.ml", literal) ],
+      note "- `k` (`f`): the backend decides it.\n\nrender-only, because x.\n",
+      [ "unlabelled" ] );
+    ("a source that does not parse", [ ("a.ml", "let f = (") ], note "", [ "unparsed" ]);
     ( "a note without the section",
       [ ("a.ml", literal) ],
       "# N\n## Other\n" ^ k_render,
       [ "no-section" ] );
   ]
 
+let source_dir = "arrayjit/lib/"
+let note_path = "docs/agent-notes/scheduling-and-autotune.md"
+
+(* Binary streams, as the sibling scans keep them: Windows' text mode would end each line "\r\n". *)
 let () =
-  let note_path, sources =
+  Stdlib.set_binary_mode_out Stdlib.stdout true;
+  Stdlib.set_binary_mode_out Stdlib.stderr true;
+  let inventory =
     match Array.to_list Stdlib.Sys.argv with
-    | _ :: note :: deps -> (note, Read.sources_among deps)
+    | _ :: workspace_root :: generated ->
+        Test_utils.Source_inventory.of_dune_sandbox ~workspace_root ~generated
     | _ ->
-        eprintf "usage: render_decline_inventory <agent note> <arrayjit/lib sources...>\n";
+        eprintf "usage: render_decline_inventory <workspace root> <generated files...>\n";
         Stdlib.exit 2
   in
   List.iter control_cases ~f:(fun (label, sources, note, expected) ->
@@ -393,8 +442,22 @@ let () =
       pf "control: %s finds [%s]" label
         (String.concat ~sep:"; " expected)
         (List.equal String.equal found expected));
-  let sources = List.map sources ~f:(fun file -> (file, In_channel.read_all file)) in
-  let sites, entries, problems = audit ~sources ~note:(In_channel.read_all note_path) in
+  let read (file : Test_utils.Source_inventory.file) = In_channel.read_all file.on_disk in
+  let sources =
+    Test_utils.Source_inventory.select inventory ~f:(fun path ->
+        String.is_prefix path ~prefix:source_dir && String.is_suffix path ~suffix:".ml")
+    |> List.map ~f:(fun (file : Test_utils.Source_inventory.file) -> (file.path, read file))
+  in
+  let note_file =
+    List.find (Test_utils.Source_inventory.files inventory) ~f:(fun file ->
+        String.equal file.path note_path)
+  in
+  let sites, entries, problems =
+    audit ~sources ~note:(Option.value_map note_file ~default:"" ~f:read)
+  in
+  let problems =
+    if Option.is_some note_file then problems else Note_missing note_path :: problems
+  in
   eprintf "render_decline_inventory: %d sources, %d sites, %d entries (not part of the golden)\n"
     (List.length sources) (List.length sites) (List.length entries);
   List.iter problems ~f:(fun problem -> eprintf "%s\n" (describe problem));
@@ -402,7 +465,9 @@ let () =
     List.filter problems ~f:(fun pr -> List.mem kinds (problem_kind pr) ~equal:String.equal)
   in
   p_empty "the agent note has the render-time typed declines section" ~over:sources
-    (of_kinds [ "no-section" ]);
+    (of_kinds [ "no-section"; "note-missing" ]);
+  p_empty "every arrayjit/lib source parses, and the scan reads it without raising" ~over:sources
+    (of_kinds [ "unparsed"; "raised" ]);
   p_all "the scan finds render-time typed declines, and every one has an entry classifying it" sites
     ~f:(fun s ->
       not (List.exists problems ~f:(function Unclassified u -> phys_equal u s | _ -> false)));

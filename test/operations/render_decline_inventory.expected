@@ -17,8 +17,12 @@ control: another phase in the renderer finds [off-phase]: true
 control: a phase held in a variable in the renderer finds [off-phase]: true
 control: a pattern naming the phase finds []: true
 control: a comment and a string naming a site finds []: true
+control: a classification in the bullet's second paragraph finds []: true
+control: unindented prose after the bullet, which is not part of it finds [unlabelled]: true
+control: a source that does not parse finds [unparsed]: true
 control: a note without the section finds [no-section]: true
 the agent note has the render-time typed declines section: true
+every arrayjit/lib source parses, and the scan reads it without raising: true
 the scan finds render-time typed declines, and every one has an entry classifying it: true
 every entry's classification is how its site builds the decline: paired iff oracle-built: true
 every entry names a decline some site raises, once, as paired or render-only: true
@@ -28,6 +32,7 @@ some decline is paired with an oracle constructor: true
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control
   [scanner-refusal:93267baf53efdf52a09d9a689b122ee2] render-time typed declines
+  [scanner-refusal:a981180a06d8df6fd4de07659591ded7] arrayjit/lib source parses
   [scanner-refusal:088c4ae45b34730d522c2b57bb9d8963] render-time typed declines
   [scanner-refusal:dd8e45f07b3a48f23ebf2b744ace13cf] every entry's classification
   [scanner-refusal:820965bd005837e9b9226c12de25898a] paired or render-only

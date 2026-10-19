@@ -25,6 +25,7 @@ let raw_entries =
       [
         "[scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control";
         "[scanner-refusal:93267baf53efdf52a09d9a689b122ee2] render-time typed declines";
+        "[scanner-refusal:a981180a06d8df6fd4de07659591ded7] arrayjit/lib source parses";
         "[scanner-refusal:088c4ae45b34730d522c2b57bb9d8963] render-time typed declines";
         "[scanner-refusal:dd8e45f07b3a48f23ebf2b744ace13cf] every entry's classification";
         "[scanner-refusal:820965bd005837e9b9226c12de25898a] paired or render-only";
