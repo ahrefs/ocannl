@@ -612,16 +612,17 @@ let line_break_census content =
       constructor payload, the operand of [!] and of [ref] and both operands of [@] (where the
       source does not bind the operator itself), and the arguments that carry the collection into a
       function of a standard collection module ([List], [Array], [Hashtbl], [Map], [Option],
-      [String], ... — see {!collection_modules}), reached by name, through an alias
-      ([module Rows = List]), and not under a name a local module took over ([module Map = Custom]);
-      an unqualified [List] is [Stdlib]'s until an [open Base] in scope rebinds it. Which arguments
-      carry it is the role {!collection_functions} gives the function by its exact name ({!builds}):
-      every positional one for a transformation, constructor, conversion or quantifier, the
-      collection alone for a [Base]-ordered selector ([find], [nth], [take], [remove], ...), the
-      value filled in for [make]/[create] and not the count, what the callback returns for [init],
-      and nothing for [range], plus the data-bearing labels [~default], [~init], [~data]. A function
-      of a collection module the table does not list is REPORTED ({!unlisted_call}), never read by a
-      guess (gh-ocannl-1303);
+      [String], ... — see {!collection_modules}), reached by name, through a module alias
+      ([module Rows = List]) or a value alias ([let map = List.map in map raw ~f], a renaming
+      followed through any number of [let]s, though not a partial application), and not under a name
+      a local module took over ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an
+      [open Base] in scope rebinds it. Which arguments carry it is the role {!collection_functions}
+      gives the function by its exact name ({!builds}): every positional one for a transformation,
+      constructor, conversion or quantifier, the collection alone for a [Base]-ordered selector
+      ([find], [nth], [take], [remove], ...), the value filled in for [make]/[create] and not the
+      count, what the callback returns for [init], and nothing for [range], plus the data-bearing
+      labels [~default], [~init], [~data]. A function of a collection module the table does not list
+      is REPORTED ({!unlisted_call}), never read by a guess (gh-ocannl-1303);
     - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
     - the POPULATION of a [gated] claim is what its boolean's quantifiers range over, each followed
       as above: the boolean is read through a name into its right-hand side and what the source
@@ -1281,12 +1282,13 @@ let gate_census content =
                       | Ppxlib.Asttypes.Nolabel, argument -> Some argument
                       | _ -> None)
                   in
-                  match (strip_constraints callee).pexp_desc with
+                  let callee, callee_env = self#resolve_callee env callee in
+                  match callee.pexp_desc with
                   | Pexp_ident { txt = Ppxlib.Longident.Lident (("!" | "@" | "ref") as name); _ }
-                    when Option.is_none (Lexical_scope.lookup env name) ->
+                    when Option.is_none (Lexical_scope.lookup callee_env name) ->
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
-                      match self#module_path env prefix with
+                      match self#module_path callee_env prefix with
                       | Some (Collection_module { stdlib; _ }) -> (
                           match collection_function name with
                           | Some function_ ->
@@ -1380,13 +1382,14 @@ let gate_census content =
                       | _ -> None)
                   in
                   let connective name = List.mem [ "not"; "&&"; "||" ] name ~equal:String.equal in
-                  match (strip_constraints callee).pexp_desc with
+                  let callee, callee_env = self#resolve_callee env callee in
+                  match callee.pexp_desc with
                   | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }
                     when (connective name || List.mem [ "!"; "ref" ] name ~equal:String.equal)
-                         && Option.is_none (Lexical_scope.lookup env name) ->
+                         && Option.is_none (Lexical_scope.lookup callee_env name) ->
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
-                      match self#module_path env prefix with
+                      match self#module_path callee_env prefix with
                       | Some (Standard_library _) when connective name ->
                           List.iter positional ~f:(visit env)
                       | Some (Collection_module _) when Option.is_none (collection_function name) ->
@@ -1407,8 +1410,30 @@ let gate_census content =
         visit env expr;
         found
 
-      (* A write into a binding: [x := e], or a writer of a collection module ({!writers}) handed
-         [x] first. *)
+      (* A callee through the [let]s that rename it: [let map = List.map in map raw ~f] calls
+         [List.map], resolved in the scope its definition was written in (gh-ocannl-1303). Only a
+         definition that is itself a name is followed -- a partial application ([let map_raw =
+         List.map raw]) is a value, not a renaming. Constraints are stripped on the way. *)
+      method resolve_callee env callee =
+        let rec go seen env callee =
+          let callee = strip_constraints callee in
+          match callee.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some { identity; definition = Some (rhs, rhs_env) }
+                when (not (Set.mem seen identity))
+                     &&
+                     match (strip_constraints rhs).pexp_desc with
+                     | Pexp_ident _ -> true
+                     | _ -> false ->
+                  go (Set.add seen identity) rhs_env rhs
+              | _ -> (callee, env))
+          | _ -> (callee, env)
+        in
+        go (Set.empty (module Int)) env callee
+
+      (* A write into a binding: [x := e], or a function {!collection_functions} marks as writing,
+         handed [x]. *)
       method record_write env callee arguments =
         (* The binding written into, through any [let alias = rows] renaming on the way: a write
            through an alias is a write into what it names. *)
@@ -1435,12 +1460,13 @@ let gate_census content =
         let record identity written =
           List.iter written ~f:(fun e -> Hashtbl.add_multi writes ~key:identity ~data:(e, env))
         in
-        match ((strip_constraints callee).pexp_desc, arguments) with
+        let callee, callee_env = self#resolve_callee env callee in
+        match (callee.pexp_desc, arguments) with
         | ( Pexp_ident { txt = Ppxlib.Longident.Lident ":="; _ },
             [ (Ppxlib.Asttypes.Nolabel, lhs); (Ppxlib.Asttypes.Nolabel, rhs) ] ) ->
             Option.iter (target lhs) ~f:(fun identity -> record identity [ rhs ])
         | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _ -> (
-            match self#module_path env prefix with
+            match self#module_path callee_env prefix with
             | Some (Collection_module { stdlib; mutable_; family }) ->
                 let positional =
                   List.filter_map arguments ~f:(function

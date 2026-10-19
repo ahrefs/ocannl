@@ -4090,6 +4090,27 @@ let () =
   Array.permute cells;
   Verdict.gated_all ~when_:on_gpu ~on:"cc" "all cells pass" (Array.to_list cells) ~f:Fn.id|ocaml},
       [ "unlisted Array.permute" ] );
+    ( "follows a collection function through a value alias",
+      {ocaml|open Base
+let () =
+  let map = List.map in
+  let rows = map raw ~f:run in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a quantifier of a gated boolean through a value alias",
+      {ocaml|open Base
+let () =
+  let all = List.for_all in
+  Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" (all rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "refuses a gate read off a value pushed through a writer's value alias",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let push = Queue.enqueue in
+  push queue sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
+      [ "sample" ] );
     ( "refuses a gate read off the set an in-place filter keeps the population's keys by",
       {ocaml|open Base
 let () =
