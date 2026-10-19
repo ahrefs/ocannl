@@ -1216,12 +1216,20 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
           else result
         in
         { result with functions = [ span expr.pexp_loc ] }
-    | Pexp_apply (callee, args) when writes_cell scope callee ->
+    | (Pexp_apply (_, _) | Pexp_setfield _ | Pexp_setinstvar _)
+      when match expr.pexp_desc with
+           | Pexp_apply (callee, _) -> writes_cell scope callee
+           | _ -> true ->
         (* The value of a write is [()], and what it writes is stored: so a function whose body is
-           the write stores its argument (review round 3). *)
+           the write stores its argument (review round 3), a field or instance-variable write as
+           much as a cell operator (review round 4). *)
         let written =
-          List.fold args ~init:no_provenance ~f:(fun acc (_, arg) ->
-              join_provenance acc (of_expr arg))
+          match expr.pexp_desc with
+          | Pexp_setfield (_, _, rhs) | Pexp_setinstvar (_, rhs) -> of_expr rhs
+          | Pexp_apply (_, args) ->
+              List.fold args ~init:no_provenance ~f:(fun acc (_, arg) ->
+                  join_provenance acc (of_expr arg))
+          | _ -> no_provenance
         in
         let stored = Set.union written.parameters written.stored in
         if carries_text written then

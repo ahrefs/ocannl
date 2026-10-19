@@ -451,21 +451,27 @@ let require_implementations ~fail implementations =
 (* Each census's failures told apart (gh-ocannl-1292): a source that does not parse is the source's
    to fix, and any other exception is this scan's own defect, which used to be reported as a parse
    failure. Each reader is an argument so the refusal control can plant the defect. *)
-let exports_or_refusal ?(census = Scan.exports_of_source) ~fail ~source contents =
+(* An implementation's value and type exports, read together so that one source's failure is
+   reported once and both censuses skip it (review round 4: the type exports used to be read
+   outside the refusal). *)
+let read_implementation ~source contents =
+  (Scan.exports_of_source ~source contents, Scan.type_exports_of_source ~source contents)
+
+let exports_or_refusal ~census ~fail ~source contents =
   match Test_utils.Scan_attempt.run (fun () -> census ~source contents) with
-  | Scanned exports -> exports
+  | Scanned exports -> Some exports
   | Unparsed where ->
       fail
         (Printf.sprintf "%s does not parse as OCaml, so this scan cannot vouch for it: %s" source
            where);
-      []
+      None
   | Raised exn ->
       fail
         (Printf.sprintf
            "the export census raised %s on %s, which parses -- a defect in the scanner rather than \
             in the source, so the source's exports went uncounted"
            exn source);
-      []
+      None
 
 let type_counts_or_refusal ~census ~fail ~type_exports ~implementations ~interfaces =
   match
@@ -531,7 +537,9 @@ let refusal_control () =
   routed_case "an invalid implementation reaches the export-parser refusal"
     ~format:"%s does not parse as OCaml, so this scan cannot vouch for it: %s"
     ~fragment:"bad.ml does not parse as OCaml" (fun fail ->
-      ignore (exports_or_refusal ~fail ~source:"arrayjit/lib/bad.ml" "let =" : Scan.export list));
+      ignore
+        (exports_or_refusal ~census:read_implementation ~fail ~source:"arrayjit/lib/bad.ml" "let ="
+          : (Scan.export list * Scan.type_export list) option));
   let fragment, raise_planted = planted ~fragment:" on arrayjit/lib/good.ml, which parses" in
   routed_case "a defect of the export census reaches the scanner-defect refusal, not the parse one"
     ~format:
@@ -541,7 +549,7 @@ let refusal_control () =
         (exports_or_refusal
            ~census:(fun ~source:_ _ -> raise_planted ())
            ~fail ~source:"arrayjit/lib/good.ml" "let value = 1"
-          : Scan.export list));
+          : (Scan.export list * Scan.type_export list) option));
   let exports = Scan.exports_of_source ~source:"arrayjit/lib/sample.ml" "let value = 1" in
   routed_case "an invalid consumer reaches the reference-parser refusal"
     ~format:"an OCaml source does not parse, so this scan cannot vouch for it: %s"
@@ -607,10 +615,11 @@ let () =
   in
   let implementations = List.filter sources ~f:(fun (source, _) -> Set.mem implicit source) in
   if not (require_implementations ~fail:Verdict.fail implementations) then Stdlib.exit 1;
-  let exports =
-    List.concat_map implementations ~f:(fun (source, contents) ->
-        exports_or_refusal ~fail:Verdict.fail ~source contents)
+  let readings =
+    List.filter_map implementations ~f:(fun (source, contents) ->
+        exports_or_refusal ~census:read_implementation ~fail:Verdict.fail ~source contents)
   in
+  let exports = List.concat_map readings ~f:fst in
   let references =
     references_or_refusal ~census:Scan.references ~fail:Verdict.fail ~exports ~sources
   in
@@ -642,10 +651,7 @@ let () =
     (Set.length exemptions = List.length exempt_zero_reference_exports);
   Verdict.p_empty "every named dead-export exemption remains necessary"
     ~over:exempt_zero_reference_exports stale;
-  let type_exports =
-    List.concat_map implementations ~f:(fun (source, contents) ->
-        Scan.type_exports_of_source ~source contents)
-  in
+  let type_exports = List.concat_map readings ~f:snd in
   let interface_sources =
     Scan.interfaces_among (List.map arguments ~f:fst)
     |> List.map ~f:(fun source -> (source, In_channel.read_all (Map.find_exn on_disk source)))

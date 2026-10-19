@@ -867,6 +867,12 @@ let store x = cell := x
 let src = (store (Generated.read "w"); !cell)
 let () = p "marker" (String.is_substring src ~substring:"m13")|ocaml},
       "+partial(mutation)" );
+    ( "a helper whose body is a field write stores its argument",
+      {ocaml|let cell = { value = "" }
+let store x = cell.value <- x
+let wrapper z = store z; cell.value
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m14")|ocaml},
+      "+partial(mutation)" );
     (* gh-ocannl-1237: the [Stdlib]-qualified spellings of the cell operators are the same cells. *)
     ( "Stdlib-qualified reference operators are a cell write and read",
       {ocaml|let store x = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r
