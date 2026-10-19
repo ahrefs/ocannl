@@ -5485,7 +5485,11 @@
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  ; The seeded untuned plan model_default and model_explain start from on CUDA and HIP.
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
+  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
  (modules model_load_tiebreak)
  (libraries base stdio ocannl arrayjit.verdict ll_test)
  (preprocess

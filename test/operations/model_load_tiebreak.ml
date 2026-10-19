@@ -487,8 +487,11 @@ let () =
         (ms ex.ex_memory_ms)
         (Option.value_map ex.ex_spilled ~default:"n/a" ~f:Bool.to_string)
         (Sexp.to_string (CM.sexp_of_load_count ex.ex_operand_loads)));
-  p "model_explain lists the default pipeline first"
-    (match explained with (label, _) :: _ -> String.equal label "default" | [] -> false);
+  p "model_explain lists model_default's admitted incumbent first"
+    (match explained with
+    | (label, ex) :: _ ->
+        List.mem [ "default"; "seeded" ] label ~equal:String.equal && ex.Autotune.ex_admitted
+    | [] -> false);
   p_pairwise_distinct "model_explain's labels are distinct" (List.map explained ~f:fst)
     ~equal:String.equal ~to_string:Fn.id;
   p_all "every explained ranking score is at least its bound" explained ~f:(fun (_, ex) ->
@@ -505,6 +508,7 @@ let () =
     | None -> false
   in
   let leaves = List.tl explained |> Option.value ~default:[] in
+
   (* A backend that describes none of its arms (every backend but CUDA: the CPU register tiles,
      Metal's and HIP's fragments) has no operand-load count for any candidate: none is invented. *)
   let caps = Context.codegen_capabilities ctx in

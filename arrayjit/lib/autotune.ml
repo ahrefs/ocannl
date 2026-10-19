@@ -4112,81 +4112,6 @@ let model_family_search ?(on_rejected = fun () -> ()) ?(admit = fun _ -> true)
 
 (** {2 The seeded untuned default (gh-ocannl-1324)} *)
 
-(* gh-ocannl-1254, the #1269 interface: what the model sees of each candidate [model_default] ranks
-   for one computation — the default pipeline and every whole-routine sketch leaf it would score —
-   without choosing. *)
-type explain = {
-  ex_floor_ms : float option;
-  ex_rank_ms : float option;
-  ex_compute_ms : float option;
-  ex_memory_ms : float option;
-  ex_spilled : bool option;
-  ex_operand_loads : CM.load_count;
-}
-
-let model_explain ?name ctx comp bindings =
-  let backend = Context.backend_name ctx in
-  let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
-  let limits = Context.hardware_limits ctx in
-  let caps = Context.codegen_capabilities ctx in
-  let accum_prec = caps.Ir.Backend_intf.accum_prec in
-  let static_indices = Idx.bound_symbols bindings in
-  let peak_flops, peak_memory_bandwidth = envelope ~limits in
-  let opt = Context.lowered_for_decisions ?name ctx comp bindings in
-  let ms = Option.map ~f:(fun s -> s *. 1e3) in
-  let explain segs =
-    let ex_operand_loads =
-      CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
-    in
-    match segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs with
-    | None ->
-        {
-          ex_floor_ms = None;
-          ex_rank_ms = None;
-          ex_compute_ms = None;
-          ex_memory_ms = None;
-          ex_spilled = None;
-          ex_operand_loads;
-        }
-    | Some (bound, legs) ->
-        (* A leg is present on every kernel or on none: its peak is one constant. *)
-        let total leg =
-          List.fold legs ~init:(Some 0.) ~f:(fun acc l -> Option.map2 acc (leg l) ~f:Float.( + ))
-        in
-        {
-          ex_floor_ms = Some (bound *. 1e3);
-          ex_rank_ms = Some (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l) *. 1e3);
-          ex_compute_ms = ms (total (fun l -> l.kl_compute));
-          ex_memory_ms = ms (total (fun l -> l.kl_memory));
-          ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
-          ex_operand_loads;
-        }
-  in
-  let default =
-    Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices (scratch_of opt)
-  in
-  let leaves =
-    match matmul_sketch_tree ~is_gpu ~is_cpu ~limits opt with
-    | Some tree ->
-        Sspace.leaves
-          (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-    | None -> sketch_seed_params ~is_gpu ~is_cpu ~limits opt
-  in
-  (* Exactly the leaves [model_default] can score: a schedule that fails to apply, or whose
-     scheduled form fails validation, is excluded from its ranking too. *)
-  ("default", explain default)
-  :: List.filter_map leaves ~f:(fun p ->
-      match
-        validate_segments_for_model ~limits
-          [
-            Sched.apply_classified ~static_indices
-              (sketch_schedule ~accum_prec ~p opt)
-              (scratch_of opt);
-          ]
-      with
-      | exception Outcome.Cause_at _ -> None
-      | segs -> Some (spec_label (Whole (W_sketch p)), explain segs))
-
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
   sd_sunk : (int * int) list;
@@ -4760,6 +4685,30 @@ let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?
       emit ();
       result
 
+(* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
+   ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
+   incumbent every candidate must strictly beat, and the action taken when none does. [None] where
+   the untuned compile is the plain default (another backend, seeding off). Shared by
+   [model_default] and [model_explain]. *)
+let model_seeding ~backend ~limits =
+  if not (Sched.backend_is_gpu backend) then None
+  else seeded_settings ~backend ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
+
+(* Where the model starts from the seeded plan, the family is restricted to the numerics-preserving
+   candidate set the seeding uses ({!scalar_blocktile}, at a site accumulating at its storage
+   precision), so a model pick never changes a result the seeded plan would not: tensorized forms
+   reround, the conv and coalesced families reorder the reduction. Other leaves are kept out of the
+   ranking, counted as not numerics-preserving, never an error. Metal, the CPU backends and an
+   unseeded CUDA/HIP compile keep the whole family. *)
+let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
+  let preserving =
+    lazy
+      (match detect_matmul_canonical base_opt with
+      | Some (site, _, _) -> accumulates_at_storage ~accum_prec site
+      | None -> true)
+  in
+  fun p -> Option.is_none seeding || (scalar_blocktile p && Lazy.force preserving)
+
 let model_default ?name ?report ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
@@ -4823,11 +4772,7 @@ let model_default ?name ?report ctx comp bindings =
        ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
        incumbent every candidate must strictly beat, and the action taken when none does. [None]
        where the untuned compile is the plain default (another backend, seeding off). *)
-    let seeding_here =
-      lazy
-        (if not is_gpu then None
-         else seeded_settings ~backend ~configured_gate:(fun () -> seeded_default_gate ~limits) ())
-    in
+    let seeding_here = lazy (model_seeding ~backend ~limits) in
     (* Where the model starts from the seeded plan, the family is restricted to the
        numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
        accumulating at its storage precision), so a model pick never changes a result the seeded
@@ -4835,20 +4780,9 @@ let model_default ?name ?report ctx comp bindings =
        reduction. Other leaves are kept out of the ranking, counted as not numerics-preserving
        ([n_excluded]), never an error. Metal, the CPU backends and an unseeded CUDA/HIP compile keep
        the whole family. *)
-    let restricts_numerics = lazy (Option.is_some (Lazy.force seeding_here)) in
-    let preserving_site base_opt =
-      lazy
-        (match detect_matmul_canonical base_opt with
-        | Some (site, _, _) -> accumulates_at_storage ~accum_prec site
-        | None -> true)
-    in
-    let score_sketch ?preserving base_opt p =
-      if
-        Lazy.force restricts_numerics
-        && not
-             (scalar_blocktile p
-             && Lazy.force (Option.value preserving ~default:(preserving_site base_opt)))
-      then (
+    let admits base_opt = model_admits ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt in
+    let score_sketch ?admit base_opt p =
+      if not ((match admit with Some admit -> admit | None -> admits base_opt) p) then (
         Int.incr n_excluded;
         None)
       else
@@ -4872,12 +4806,10 @@ let model_default ?name ?report ctx comp bindings =
          compiler rejections vs genuine no-coverage — st_unscored alone would misclassify rejections
          as cost-model gaps in the phase-6 ledger. *)
       let r0 = !n_rejected and k0 = !n_skipped and e0 = !n_excluded in
-      let preserving = preserving_site base_opt in
       match
         model_family_search
           ~on_rejected:(fun () -> Int.incr n_rejected)
-          ~admit:(fun p ->
-            not (Lazy.force restricts_numerics && not (scalar_blocktile p && Lazy.force preserving)))
+          ~admit:(admits base_opt)
           ~on_excluded:(fun () -> Int.incr n_excluded)
           ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops ~peak_memory_bandwidth
           ~score:score_valid ~incumbent base_opt
@@ -4897,9 +4829,9 @@ let model_default ?name ?report ctx comp bindings =
     (* First leaf strictly under [threshold], in list order — the flat counterpart the
        not-yet-factored conv family goes through. *)
     let best_flat ~threshold base_opt ps =
-      let preserving = preserving_site base_opt in
+      let admit = admits base_opt in
       List.fold ps ~init:(None, threshold) ~f:(fun (best, th) p ->
-          match score_sketch ~preserving base_opt p with
+          match score_sketch ~admit base_opt p with
           | Some sc when Float.(sc < th) -> (Some (p, sc), sc)
           | _ -> (best, th))
       |> fst
@@ -5277,6 +5209,103 @@ let model_default ?name ?report ctx comp bindings =
     in
     emit !choice;
     result
+
+(* gh-ocannl-1254, the #1269 interface: what the model sees of each candidate [model_default] ranks
+   for one computation — its incumbent (the seeded plan where it starts from one, else the default
+   pipeline) and every whole-routine sketch leaf of the program it searches (the seeded plan's split
+   prelude included), each marked with whether the numerics restriction admits it — without
+   choosing. *)
+type explain = {
+  ex_floor_ms : float option;
+  ex_rank_ms : float option;
+  ex_compute_ms : float option;
+  ex_memory_ms : float option;
+  ex_spilled : bool option;
+  ex_operand_loads : CM.load_count;
+  ex_admitted : bool;
+}
+
+let model_explain ?name ctx comp bindings =
+  let backend = Context.backend_name ctx in
+  let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
+  let limits = Context.hardware_limits ctx in
+  let caps = Context.codegen_capabilities ctx in
+  let accum_prec = caps.Ir.Backend_intf.accum_prec in
+  let static_indices = Idx.bound_symbols bindings in
+  let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  let opt = Context.lowered_for_decisions ?name ctx comp bindings in
+  let ms = Option.map ~f:(fun s -> s *. 1e3) in
+  let explain ?(ex_admitted = true) segs =
+    let ex_operand_loads =
+      CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
+    in
+    match segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs with
+    | None ->
+        {
+          ex_floor_ms = None;
+          ex_rank_ms = None;
+          ex_compute_ms = None;
+          ex_memory_ms = None;
+          ex_spilled = None;
+          ex_operand_loads;
+          ex_admitted;
+        }
+    | Some (bound, legs) ->
+        (* A leg is present on every kernel or on none: its peak is one constant. *)
+        let total leg =
+          List.fold legs ~init:(Some 0.) ~f:(fun acc l -> Option.map2 acc (leg l) ~f:Float.( + ))
+        in
+        {
+          ex_floor_ms = Some (bound *. 1e3);
+          ex_rank_ms = Some (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l) *. 1e3);
+          ex_compute_ms = ms (total (fun l -> l.kl_compute));
+          ex_memory_ms = ms (total (fun l -> l.kl_memory));
+          ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
+          ex_operand_loads;
+          ex_admitted;
+        }
+  in
+  (* [model_default]'s incumbent and searched program, as it derives them. *)
+  let seeding = model_seeding ~backend ~limits in
+  let incumbent_label, incumbent =
+    match seeding with
+    | Some (gate, min_serial, sink_enabled) ->
+        ( "seeded",
+          seeded_apply ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial ~sink_enabled
+            (scratch_of opt) )
+    | None ->
+        ( "default",
+          Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
+            (scratch_of opt) )
+  in
+  let base =
+    match seeding with
+    | Some (_, min_serial, _) ->
+        fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
+    | None -> opt
+  in
+  let admits = model_admits ~seeding ~accum_prec base in
+  let leaves =
+    match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base with
+    | Some tree ->
+        Sspace.leaves
+          (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+    | None -> sketch_seed_params ~is_gpu ~is_cpu ~limits base
+  in
+  (* Exactly the leaves [model_default] can score: a schedule that fails to apply, or whose
+     scheduled form fails validation, is excluded from its ranking too. *)
+  (incumbent_label, explain incumbent)
+  :: List.filter_map leaves ~f:(fun p ->
+      match
+        validate_segments_for_model ~limits
+          [
+            Sched.apply_classified ~static_indices
+              (sketch_schedule ~accum_prec ~p base)
+              (scratch_of base);
+          ]
+      with
+      | exception Outcome.Cause_at _ -> None
+      | segs -> Some (spec_label (Whole (W_sketch p)), explain ~ex_admitted:(admits p) segs))
 
 let untuned_compile ?name ctx comp bindings =
   if Lazy.force model_default_enabled then model_default ?name ctx comp bindings

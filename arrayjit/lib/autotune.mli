@@ -1798,41 +1798,6 @@ val model_family_search :
     matmul site. Exposed so a test can drive the walk with stand-in limits and load rules on any
     backend. *)
 
-type explain = {
-  ex_floor_ms : float option;
-      (** The candidate's roofline lower bound ({!Ir.Cost_model.analyze}'s counts), as
-          [mc_model_ms]. *)
-  ex_rank_ms : float option;
-      (** Its ranking score ({!Ir.Cost_model.ranking_seconds}), the quantity {!model_default}
-          minimizes: per kernel the larger of the two legs below, summed. *)
-  ex_compute_ms : float option;  (** The compute leg, summed over the kernels. *)
-  ex_memory_ms : float option;
-      (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
-  ex_spilled : bool option;
-      (** Some kernel's working set exceeds the cache capacity; [None] where the ranking score was
-          not computed (no envelope constants, or an opaque kernel). *)
-  ex_operand_loads : Ir.Cost_model.load_count;
-      (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
-          over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if
-          any kernel is): not a price, the count {!model_default}'s family search breaks exact score
-          ties with (gh-ocannl-1254). *)
-}
-(** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
-
-val model_explain :
-  ?name:string ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  (string * explain) list
-(** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
-    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): ["default"] — the untuned
-    default pipeline — first, then every whole-routine sketch leaf it can score, labeled as
-    {!tune}'s [autotune_log] labels them, in the family search's visiting order. The lowering is
-    {!Context.lowered_for_decisions}', so the context is untouched. Per-fission-segment
-    substitutions and the placement pre-search are not listed. Candidates whose scheduled form fails
-    to apply or validate are omitted, as {!model_default} excludes them. *)
-
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
       (** Per seeded segment, in order: its first unit and the parameters seeded into it. Empty when
@@ -2055,6 +2020,47 @@ val seeded_default :
     compiler does not promote, though NVRTC does. Values stay bitwise the default's.
     [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
     with the seeding disabled too. Reads and writes no schedule cache. *)
+
+type explain = {
+  ex_floor_ms : float option;
+      (** The candidate's roofline lower bound ({!Ir.Cost_model.analyze}'s counts), as
+          [mc_model_ms]. *)
+  ex_rank_ms : float option;
+      (** Its ranking score ({!Ir.Cost_model.ranking_seconds}), the quantity {!model_default}
+          minimizes: per kernel the larger of the two legs below, summed. *)
+  ex_compute_ms : float option;  (** The compute leg, summed over the kernels. *)
+  ex_memory_ms : float option;
+      (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
+  ex_spilled : bool option;
+      (** Some kernel's working set exceeds the cache capacity; [None] where the ranking score was
+          not computed (no envelope constants, or an opaque kernel). *)
+  ex_operand_loads : Ir.Cost_model.load_count;
+      (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
+          over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if
+          any kernel is): not a price, the count {!model_default}'s family search breaks exact score
+          ties with (gh-ocannl-1254). *)
+  ex_admitted : bool;
+      (** Whether {!model_default}'s numerics-preserving restriction (in force where it starts from
+          the seeded plan, CUDA and HIP) admits the candidate to its ranking; the incumbent always
+          is. *)
+}
+(** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
+
+val model_explain :
+  ?name:string ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  (string * explain) list
+(** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
+    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): its incumbent first — ["seeded"]
+    where it starts from the seeded plan (CUDA and HIP under the seeded settings), else ["default"],
+    the untuned default pipeline — then every whole-routine sketch leaf of the program it searches
+    (the seeded plan's split prelude included), labeled as {!tune}'s [autotune_log] labels them, in
+    the family search's visiting order, each with whether the restriction admits it. The lowering is
+    {!Context.lowered_for_decisions}', so the context is untouched. Per-fission-segment
+    substitutions and the placement pre-search are not listed. Candidates whose scheduled form fails
+    to apply or validate are omitted, as {!model_default} excludes them. *)
 
 val untuned_compile :
   ?name:string ->

@@ -1060,6 +1060,9 @@ let codegen_capabilities (module Config : C_syntax_config) =
           | Some emit ->
               Option.is_some (emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d ~a:a_src ~b:b_src)
         in
+        (* Routine logging renders every [Tile_mma] through its scalar fallback, before any hook. *)
+        (not (Utils.debug_log_from_routines ()))
+        &&
         match fragment_target with
         | None -> statement (PPrint.empty, ldd, (d_space :> mma_space), d_layout)
         | Some (t_ld, (t_space, t_layout)) ->

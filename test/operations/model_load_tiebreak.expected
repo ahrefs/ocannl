@@ -39,7 +39,7 @@ backend record: without ldmatrix the pick issues the fewest operand loads among 
 backend record: the tie-break moves no score: both rules' picks score exactly alike: true
 backend record: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
 backend record: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
-model_explain lists the default pipeline first: true
+model_explain lists model_default's admitted incumbent first: true
 model_explain's labels are distinct: true
 every explained ranking score is at least its bound: true
 where the backend describes no mma arm, no candidate gets an operand-load count: true
