@@ -5,6 +5,11 @@
 #include <caml/mlvalues.h>
 #include <signal.h>
 #include <string.h>
+#if defined(__APPLE__)
+#include <sys/resource.h>
+#elif defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 CAMLprim value ocannl_test_raise_sigalrm(value unit) {
   (void)unit;
@@ -49,4 +54,20 @@ CAMLprim value ocannl_test_sigalrm_default_with_siginfo(value unit) {
     return Val_true;
 #endif
   return Val_false;
+}
+
+/* Makes every nap of this process, and of the threads it creates afterwards, oversleep by far, as
+   timer slack on a loaded macOS VM did (GitHub's runner stretched 10 ms naps to about 50 ms): on
+   macOS the process is put in the background band, which is what [taskpolicy -b] does; on Linux the
+   calling thread's timer slack, which threads it creates inherit, becomes 100 ms. Returns whether a
+   throttle was applied. */
+CAMLprim value ocannl_test_throttle_timers(value unit) {
+  (void)unit;
+#if defined(__APPLE__)
+  return Val_bool(setpriority(PRIO_DARWIN_PROCESS, 0, PRIO_DARWIN_BG) == 0);
+#elif defined(__linux__)
+  return Val_bool(prctl(PR_SET_TIMERSLACK, 100000000UL, 0, 0, 0) == 0);
+#else
+  return Val_false;
+#endif
 }

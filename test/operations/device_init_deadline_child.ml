@@ -44,6 +44,8 @@
    stall.
 
    [full-stderr BACKEND]: fd 2 is replaced by a full pipe nobody reads; then a 30 s stall.
+   [full-stderr BACKEND throttled] first throttles the process's timers (every nap oversleeps by
+   far, as on a loaded macOS VM), printing [throttled <whether it applied>].
 
    [fork-in-region BACKEND]: forks from inside an armed region; the child stalls 5 s in a region of
    its own, and the parent prints [fork-child <how it ended>].
@@ -63,6 +65,7 @@ exception Stall_done
 external raise_sigalrm : unit -> unit = "ocannl_test_raise_sigalrm"
 external catch_sigalrm_siginfo : unit -> unit = "ocannl_test_catch_sigalrm_siginfo"
 external sigalrm_default_with_siginfo : unit -> bool = "ocannl_test_sigalrm_default_with_siginfo"
+external throttle_timers : unit -> bool = "ocannl_test_throttle_timers"
 
 let now () = Int64.to_float (Mtime_clock.now_ns ()) /. 1e9
 let say fmt = Printf.ksprintf (fun line -> printf "%s\n%!" line) fmt
@@ -189,7 +192,8 @@ let () =
       guarded_call name (stall_for 5.0);
       Stdlib.Domain.join sender;
       say "survived"
-  | [ "full-stderr"; name ] ->
+  | "full-stderr" :: name :: (([] | [ "throttled" ]) as throttled) ->
+      if not (List.is_empty throttled) then say "throttled %b" (throttle_timers ());
       (* fd 2 becomes a pipe that is full and that nobody reads, so a blocking write to it never
          returns. *)
       let r, w = Unix.pipe () in

@@ -3764,7 +3764,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   hook. "Its own handler" is read from the handler slot alone, never `sa_flags`: macOS keeps a
   caught signal's `SA_SIGINFO` across `exec`, so under GitHub's macOS runner agent every
   descendant reads `SIG_DFL` with `SA_SIGINFO` set, and a flag check silently disarmed the deadline
-  there while bare-metal Macs passed.
+  there while bare-metal Macs passed. Every bound in it is measured on `CLOCK_MONOTONIC`, never
+  counted in naps: on that loaded VM 200 "10 ms" naps took 10 s (`taskpolicy -b`, or the test's
+  in-process throttle, reproduces it on a bare-metal Mac).
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
   dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
   batch's into the run directory and keeps only the five slowest, below) and

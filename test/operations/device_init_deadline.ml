@@ -20,11 +20,13 @@
    the default disposition and an idle timer; an entry point stays guarded after a call that
    returned; a SIGALRM blocked in the thread, or one already pending, does not hide the deadline; a
    SIGALRM from anything else meets the program's own disposition, and a timer the program starts
-   during a region is left in place; overlapping regions on two domains are serialized, so a healthy
-   one's disarm does not leave a wedged one unbounded; a process exec'd under an ancestor that
-   caught SIGALRM with SA_SIGINFO, which on macOS reads the default disposition with that flag still
-   set (GitHub's macOS runner agent is such an ancestor), is armed; and the cc backends are not
-   guarded at all. Last, the diagnostic's tag is the one [tools/test-run.sh]'s digest reads. *)
+   during a region is left in place; the diagnostic's write blocked on a full fd 2 holds the death
+   at most 2 s measured on the clock, even with every nap oversleeping; overlapping regions on two
+   domains are serialized, so a healthy one's disarm does not leave a wedged one unbounded; a
+   process exec'd under an ancestor that caught SIGALRM with SA_SIGINFO, which on macOS reads the
+   default disposition with that flag still set (GitHub's macOS runner agent is such an ancestor),
+   is armed; and the cc backends are not guarded at all. Last, the diagnostic's tag is the one
+   [tools/test-run.sh]'s digest reads. *)
 
 open Base
 open Stdio
@@ -249,6 +251,19 @@ let () =
      backstop alarm firing while the diagnostic's write is blocked"
     (Option.value_map full_stderr ~default:false ~f:(fun (o, capped) ->
          (not capped) && by_sigalrm o
+         && (not (says o "survived"))
+         && within 1.5 10.0 (since o "stall-began")));
+  let full_stderr_throttled =
+    if when_ then
+      Some (run_child_capped ~cap:20.0 ~deadline:"0.5" [ "full-stderr"; "cuda"; "throttled" ])
+    else None
+  in
+  gated ~when_ ~on ~aggregation:`Environment
+    "the backstop's 2 s are measured, not counted in naps: with the process's timers throttled so \
+     every nap oversleeps by far (as on a loaded macOS VM), the full-pipe case still dies by \
+     SIGALRM within 10 s of the stall's start"
+    (Option.value_map full_stderr_throttled ~default:false ~f:(fun (o, capped) ->
+         says o "throttled true" && (not capped) && by_sigalrm o
          && (not (says o "survived"))
          && within 1.5 10.0 (since o "stall-began")));
   let forked = run ~deadline:"0.5" [ "fork-in-region"; "cuda" ] in

@@ -479,16 +479,22 @@ static void ocannl_deadline_die(void) {
   sigset_t alrm;
   struct timespec nap = {0, 10000000};
   int i, done = 0;
+  int64_t until = ocannl_monotonic_ns();
+  if (until >= 0) until += 2000000000;
   pthread_mutex_lock(&ocannl_deadline_write_lock);
   ocannl_deadline_write_requested = 1;
   pthread_cond_signal(&ocannl_deadline_write_go);
   pthread_mutex_unlock(&ocannl_deadline_write_lock);
-  /* At most 2 s, in relative 10 ms naps: no wall-clock wait. */
-  for (i = 0; i < 200 && !done; i++) {
+  /* At most 2 s, measured on the monotonic clock, in relative 10 ms naps: no wall-clock wait. A nap
+     may oversleep by far (timer slack on a loaded macOS VM stretched 200 counted naps to 10 s), so
+     the naps are not what is counted; the count bounds the wait only if the clock cannot be read. */
+  for (i = 0; !done; i++) {
     pthread_mutex_lock(&ocannl_deadline_write_lock);
     done = ocannl_deadline_written;
     pthread_mutex_unlock(&ocannl_deadline_write_lock);
-    if (!done) nanosleep(&nap, NULL);
+    if (done) break;
+    if (until >= 0 ? ocannl_monotonic_ns() >= until : i >= 200) break;
+    nanosleep(&nap, NULL);
   }
   memset(&dfl, 0, sizeof dfl);
   dfl.sa_handler = SIG_DFL;
