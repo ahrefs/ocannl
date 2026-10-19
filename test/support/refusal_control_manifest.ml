@@ -30,7 +30,8 @@ let raw_entries =
         "[scanner-refusal:dd8e45f07b3a48f23ebf2b744ace13cf] every entry's classification";
         "[scanner-refusal:820965bd005837e9b9226c12de25898a] paired or render-only";
         "[scanner-refusal:d5a3d0a93c03dd4c310fea6768cacf86] Backend_codegen";
-        "[scanner-refusal:23003611744f5972c16ba47b74107388] Cause_at";
+        "[scanner-refusal:4f88c489b62274a26eeacde0d502244e] Cause_at";
+        "[scanner-refusal:15a7945bea16c6bb1aa0978c1e19745c] op_legality";
         "[scanner-refusal:b8d04b43e856d40dadc6df2ae5eb1951] an oracle constructor";
       ] );
     ( "atomic_file_rename_scan.ml",

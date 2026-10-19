@@ -19,12 +19,18 @@
    built, not a claim the note can make on its own. Every entry names a decline some site raises, so
    a removed decline cannot leave its entry behind.
 
+   And an oracle site's constructor must be one the oracle can still produce: [X] is constructed (as
+   an expression, not matched) in the body of [op_legality] or of a top-level binding of
+   [oracle_file] that body reaches by name, transitively. Reaching is by unqualified reference, an
+   over-approximation of calling; a constructor built only in a nested module, or only outside
+   [oracle_file], is not reached and the site fails as unconsulted -- loudly, never passed.
+
    A [Backend_codegen] cause the scan cannot key (a variable, a computed check name) fails: a new
    decline has to be written in one of the readable forms, which is what makes it countable. So does
    a [Cause_at] anywhere in the corpus whose phase is not spelled out as a constant constructor (a
-   variable, a constraint, a tuple passed whole): such a site may be a render-time decline the scan
-   cannot see. And in [renderer_file] every [Cause_at] is constructed at [Backend_codegen], so a
-   render-time decline cannot leave the inventory by naming another phase.
+   variable, a constraint): such a site may be a render-time decline the scan cannot see. And in
+   [renderer_file] every [Cause_at] is constructed at [Backend_codegen], so a render-time decline
+   cannot leave the inventory by naming another phase.
 
    An oracle site is read by the NAME [Schedule], which denotes [arrayjit/lib/schedule.ml] only
    while nothing in the corpus rebinds it; so a module of that name bound anywhere in the corpus (a
@@ -41,7 +47,9 @@
    whose path ends [Schedule.<name>_cause] with exactly one argument that is a constructor
    application, whose last component is the key -- an oracle site. Anything else at
    [Backend_codegen] is unread and refused, never passed. A pattern ([| Cause_at (Backend_codegen,
-   _) ->]) is not a construction, and a comment or string naming one is not a site.
+   _) ->]) is not a construction, and a comment or string naming one is not a site. An exception
+   rebinding [Cause_at] under another name ([exception D = Cause_at], at top level or as a [let
+   exception]) would raise sites under a name this list does not read, so it is refused.
 
    The corpus is every checked-in [arrayjit/lib/**.ml], selected from [Test_utils.Source_inventory]
    over the rule's clean sandbox (so no build output joins it), each parse classified through
@@ -55,7 +63,10 @@ module Ast_traverse = Ppxlib.Ast_traverse
 
 let render_phase = "Backend_codegen"
 let renderer_file = "c_syntax.ml"
-let section_heading = "## Render-time typed declines"
+let section_title = "Render-time typed declines"
+let section_heading = "## " ^ section_title
+let oracle_file = "schedule.ml"
+let oracle_entry = "op_legality"
 
 (* The field that names a decline, per cause constructor: a string literal, or a constant
    constructor such as [Resource_exceeded]'s [resource]. *)
@@ -83,6 +94,8 @@ type problem =
   | Off_phase of { file : string; line : int }
   | Opaque_phase of { file : string; line : int }
   | Shadows_oracle of { file : string; line : int }
+  | Rebinds_cause_at of { file : string; line : int }
+  | Unconsulted of site
   | Unclassified of site
   | Disagrees of site * entry
   | Stale of entry
@@ -98,6 +111,8 @@ let problem_kind = function
   | Off_phase _ -> "off-phase"
   | Opaque_phase _ -> "opaque-phase"
   | Shadows_oracle _ -> "shadows-oracle"
+  | Rebinds_cause_at _ -> "rebinds-cause-at"
+  | Unconsulted _ -> "unconsulted"
   | Unclassified _ -> "unclassified"
   | Disagrees _ -> "disagrees"
   | Stale _ -> "stale"
@@ -131,6 +146,16 @@ let describe = function
         "%s:%d: binds a module named %s, so an oracle site's %s.*%s call would no longer name the \
          op-legality oracle"
         file line oracle_module oracle_module cause_suffix
+  | Rebinds_cause_at { file; line } ->
+      Printf.sprintf
+        "%s:%d: rebinds the Cause_at exception under another name, so declines raised through it \
+         would escape the inventory: raise Cause_at itself"
+        file line
+  | Unconsulted s ->
+      Printf.sprintf
+        "%s:%d: the decline `%s` is %s, but no code %s.%s reaches constructs %s: the oracle no \
+         longer produces it, so the pairing is gone"
+        s.file s.line s.key (origin_to_string s.origin) oracle_module oracle_entry s.key
   | Unclassified s ->
       Printf.sprintf
         "%s:%d: the render-time decline `%s` (%s) has no entry in the note's %S section: add one, \
@@ -224,6 +249,14 @@ let scan_source ~file content : site list * problem list =
         | _ -> ());
         super#expression expression
 
+      method! extension_constructor ext =
+        (match ext.pext_kind with
+        | Pext_rebind { txt; _ } when String.equal (last_component txt) "Cause_at" ->
+            problems :=
+              Rebinds_cause_at { file; line = ext.pext_loc.loc_start.pos_lnum } :: !problems
+        | _ -> ());
+        super#extension_constructor ext
+
       method! module_binding mb =
         binds mb.pmb_name;
         super#module_binding mb
@@ -254,7 +287,12 @@ let scan_source ~file content : site list * problem list =
 let section_bullets note =
   let lines = String.split_lines note in
   match
-    List.drop_while lines ~f:(fun l -> not (String.equal (String.rstrip l) section_heading))
+    List.drop_while lines ~f:(fun l ->
+        not
+          (String.is_prefix (String.lstrip l) ~prefix:"## "
+          && Option.equal String.equal
+               (Test_utils.Agent_notes_scan.atx_heading l)
+               (Some section_title)))
   with
   | [] -> None
   | _ :: rest ->
@@ -308,6 +346,53 @@ let entry_of_bullet bullet =
           in
           Some { entry_key = key; classification })
 
+(* The constructors [oracle_entry] can produce: those constructed in its body or in the body of a
+   top-level binding of [oracle_file] it reaches by unqualified name, transitively. *)
+let oracle_reasons (structure : Ppxlib.structure) =
+  let rec bound_name (p : Ppxlib.pattern) =
+    match p.ppat_desc with
+    | Ppat_var { txt; _ } -> Some txt
+    | Ppat_constraint (p, _) -> bound_name p
+    | _ -> None
+  in
+  let bodies = Hashtbl.create (module String) in
+  List.iter structure ~f:(fun (item : Ppxlib.structure_item) ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.iter bindings ~f:(fun (vb : Ppxlib.value_binding) ->
+              Option.iter (bound_name vb.pvb_pat) ~f:(fun name ->
+                  Hashtbl.add_multi bodies ~key:name ~data:vb.pvb_expr))
+      | _ -> ());
+  let refs_and_constructors body =
+    let refs = ref [] and constructors = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          (match e.pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } -> refs := name :: !refs
+          | Pexp_construct ({ txt; _ }, _) -> constructors := last_component txt :: !constructors
+          | _ -> ());
+          super#expression e
+      end
+    in
+    iterator#expression body;
+    (!refs, !constructors)
+  in
+  let reached = Hash_set.create (module String) in
+  let reasons = Hash_set.create (module String) in
+  let rec visit name =
+    if not (Hash_set.mem reached name) then (
+      Hash_set.add reached name;
+      List.iter (Hashtbl.find_multi bodies name) ~f:(fun body ->
+          let refs, constructors = refs_and_constructors body in
+          List.iter constructors ~f:(Hash_set.add reasons);
+          List.iter refs ~f:(fun r -> if Hashtbl.mem bodies r then visit r)))
+  in
+  visit oracle_entry;
+  reasons
+
 let agrees site entry =
   match (site.origin, entry.classification) with
   | Literal, Render_only -> true
@@ -323,7 +408,22 @@ let audit ~sources ~note : site list * entry list * problem list =
         | Raised exn -> ([], [ Scanner_raised (file, exn) ]))
   in
   let sites = List.concat_map scanned ~f:fst in
-  let scan_problems = List.concat_map scanned ~f:snd in
+  let reasons = Hash_set.create (module String) and oracle_raised = ref [] in
+  List.iter sources ~f:(fun (file, content) ->
+      if String.equal (Stdlib.Filename.basename file) oracle_file then
+        match
+          Test_utils.Scan_attempt.run (fun () -> oracle_reasons (Read.structure_of content))
+        with
+        | Scanned found -> Hash_set.iter found ~f:(Hash_set.add reasons)
+        | Unparsed -> (* reported by the site scan above *) ()
+        | Raised exn -> oracle_raised := Scanner_raised (file, exn) :: !oracle_raised);
+  let unconsulted =
+    List.filter_map sites ~f:(fun s ->
+        match s.origin with
+        | Oracle _ when not (Hash_set.mem reasons s.key) -> Some (Unconsulted s)
+        | _ -> None)
+  in
+  let scan_problems = List.concat_map scanned ~f:snd @ List.rev !oracle_raised @ unconsulted in
   match section_bullets note with
   | None -> (sites, [], scan_problems @ [ No_section ])
   | Some bullets ->
@@ -351,7 +451,17 @@ let audit ~sources ~note : site list * entry list * problem list =
       (sites, entries, scan_problems @ site_problems @ entry_problems @ duplicates)
 
 (* Synthetic controls, each a corpus whose findings are known: both readable forms, both
-   classifications, each way the two sides can disagree, and what is not a site. *)
+   classifications, each way the two sides can disagree, and what is not a site. Every snippet but
+   the parse-failure control type-checks (build-and-test.md, Repository scans) as a module of its
+   own opening this prelude, which stands in for [Schedule_outcome]; the [oracle_file] fixture is
+   the module [Schedule], and a corpus is checked in its listed order, the oracle fixture first:
+
+   {v type phase = Transform | Backend_codegen | Backend_compile type resource = Workgroup_memory
+   type cause = | Illegal_schedule of { check : string; detail : string } | Unsupported of { feature
+   : string; detail : string } | Resource_exceeded of { resource : resource; requested : int; limit
+   : int option; detail : string } exception Cause_at of phase * cause module Schedule_outcome =
+   struct type nonrec phase = phase = Transform | Backend_codegen | Backend_compile exception
+   Cause_at = Cause_at end module type S = sig end module M = struct end v} *)
 let control_cases =
   let literal =
     "let f () = raise (Cause_at (Backend_codegen, Illegal_schedule { check = \"k\"; detail = \"d\" \
@@ -361,6 +471,16 @@ let control_cases =
     "let g () = raise (Cause_at (Backend_codegen, Schedule.v_cause ~site:\"s\" (Schedule.Ctor { t \
      = 1 })))"
   in
+  let reason_and_cause =
+    "type reason = Ctor of { t : int }\n\
+     let v_cause ~site:_ (Ctor _) = Unsupported { feature = \"f\"; detail = \"\" }\n"
+  in
+  let oracle_ml =
+    ( oracle_file,
+      reason_and_cause
+      ^ "let violation x = if x then Some (Ctor { t = 1 }) else None\n\
+         let op_legality x = violation x" )
+  in
   let note entries =
     "# N\n## Other\n- `k`: render-only, because elsewhere.\n" ^ section_heading
     ^ "\n- Intro `k` prose.\n" ^ entries ^ "## Next\n- `stray`: paired (`Schedule.stray`).\n"
@@ -369,10 +489,10 @@ let control_cases =
   let ctor_paired = "- `Ctor` (`g`): paired\n  (`Schedule.Ctor`). Prose.\n" in
   [
     ("a literal site with its render-only entry", [ ("a.ml", literal) ], note k_render, []);
-    ("an oracle site with its paired entry", [ ("a.ml", oracle) ], note ctor_paired, []);
+    ("an oracle site with its paired entry", [ ("a.ml", oracle); oracle_ml ], note ctor_paired, []);
     ("a literal site with no entry", [ ("a.ml", literal) ], note "", [ "unclassified" ]);
     ( "an oracle site marked render-only",
-      [ ("a.ml", oracle) ],
+      [ ("a.ml", oracle); oracle_ml ],
       note "- `Ctor`: render-only, because x.\n",
       [ "disagrees" ] );
     ( "a literal site marked paired",
@@ -380,9 +500,20 @@ let control_cases =
       note "- `k`: paired (`Schedule.k`).\n",
       [ "disagrees" ] );
     ( "an oracle site paired with another constructor",
-      [ ("a.ml", oracle) ],
+      [ ("a.ml", oracle); oracle_ml ],
       note "- `Ctor`: paired (`Schedule.Other`).\n",
       [ "disagrees" ] );
+    ( "an oracle site whose constructor op_legality only matches, built where it does not reach",
+      [
+        ("a.ml", oracle);
+        ( oracle_file,
+          reason_and_cause
+          ^ "let unreached () = Ctor { t = 1 }\n\
+             let feature (Ctor _) = \"f\"\n\
+             let op_legality r = feature r" );
+      ],
+      note ctor_paired,
+      [ "unconsulted" ] );
     ("an entry no site raises", [ ("a.ml", literal) ], note (k_render ^ ctor_paired), [ "stale" ]);
     ( "an entry with neither label",
       [ ("a.ml", literal) ],
@@ -421,7 +552,13 @@ let control_cases =
       note "",
       [ "unreadable" ] );
     ( "an unqualified cause function",
-      [ ("a.ml", "let f () = raise (Cause_at (Backend_codegen, v_cause (Ctor 1)))") ],
+      [
+        ( "a.ml",
+          "let v_cause = Schedule.v_cause\n\
+           let f () = raise (Cause_at (Backend_codegen, v_cause ~site:\"s\" (Schedule.Ctor { t = 1 \
+           })))" );
+        oracle_ml;
+      ],
       note "",
       [ "unreadable" ] );
     ( "another phase outside the renderer",
@@ -461,12 +598,26 @@ let control_cases =
       ],
       note "",
       [ "opaque-phase" ] );
-    ( "a phase and cause passed whole",
-      [ ("a.ml", "let f pc = raise (Cause_at pc)") ],
+    ( "Cause_at rebound under another name, at top level",
+      [
+        ( "a.ml",
+          "exception Decline = Schedule_outcome.Cause_at\n\
+           let f () = raise (Decline (Backend_codegen, Illegal_schedule { check = \"t\"; detail = \
+           \"\" }))" );
+      ],
       note "",
-      [ "opaque-phase" ] );
+      [ "rebinds-cause-at" ] );
+    ( "Cause_at rebound under another name, as a let exception",
+      [
+        ( "a.ml",
+          "let f () =\n\
+          \  let exception D = Cause_at in\n\
+          \  raise (D (Backend_codegen, Illegal_schedule { check = \"t\"; detail = \"\" }))" );
+      ],
+      note "",
+      [ "rebinds-cause-at" ] );
     ( "a local module shadowing the oracle",
-      [ ("a.ml", "module Schedule = struct let v_cause _ = assert false end\n" ^ oracle) ],
+      [ ("a.ml", "module Schedule = struct\n" ^ reason_and_cause ^ "end\n" ^ oracle); oracle_ml ],
       note ctor_paired,
       [ "shadows-oracle" ] );
     ( "the oracle's name bound by let module, a functor, a declaration and an unpacked module",
@@ -482,8 +633,10 @@ let control_cases =
     ( "an aliased oracle module",
       [
         ( "a.ml",
-          "module S = Schedule\nlet g () = raise (Cause_at (Backend_codegen, S.v_cause (S.Ctor 1)))"
+          "module S = Schedule\n\
+           let g () = raise (Cause_at (Backend_codegen, S.v_cause ~site:\"s\" (S.Ctor { t = 1 })))"
         );
+        oracle_ml;
       ],
       note "",
       [ "unreadable" ] );
@@ -501,6 +654,10 @@ let control_cases =
     ( "a classification in the bullet's second paragraph",
       [ ("a.ml", literal) ],
       note "- `k` (`f`): the backend decides it.\n\n  So: render-only, because x.\n",
+      [] );
+    ( "the section under an indented heading with a closing run of hashes",
+      [ ("a.ml", literal) ],
+      "# N\n  ## " ^ section_title ^ " ##\n" ^ k_render,
       [] );
     ( "a bullet under an indented next heading, which is outside the section",
       [ ("a.ml", literal) ],
@@ -582,9 +739,13 @@ let () =
     "every Backend_codegen cause is readable, and the renderer raises typed declines only there"
     ~over:sources
     (of_kinds [ "unreadable"; "off-phase" ]);
-  p_empty "every Cause_at spells its phase out, and no source rebinds the oracle's module name"
+  p_empty
+    "every Cause_at spells its phase out under its own name, and no source rebinds the oracle's \
+     module name"
     ~over:sources
-    (of_kinds [ "opaque-phase"; "shadows-oracle" ]);
+    (of_kinds [ "opaque-phase"; "shadows-oracle"; "rebinds-cause-at" ]);
+  p_all "every paired decline's constructor is one op_legality still produces" sites ~f:(fun s ->
+      not (List.exists problems ~f:(function Unconsulted u -> phys_equal u s | _ -> false)));
   p_exists "some decline is paired with an oracle constructor" sites ~f:(fun s ->
       match s.origin with Oracle _ -> true | Literal -> false);
   Test_utils.Refusal_control_manifest.print "render_decline_inventory.ml"

@@ -788,13 +788,15 @@ files.
   oracle's own reason `X` through a `Schedule.*_cause` function, so the oracle refuses the moves
   that produce it and the renderer is the backstop. "render-only, because" says why no op verdict
   can state the fact. `render_decline_inventory` (in `@scans`) parses every `arrayjit/lib` source
-  and this section, and fails on a decline no entry classifies, an entry no site raises, a
-  "paired" entry over a literal site or a "render-only" one over an oracle-built site, a cause it
-  cannot read, a `Cause_at` anywhere whose phase is not a spelled-out constructor, a module
+  and this section, and fails on a decline no entry classifies, an entry no site raises, a "paired"
+  entry over a literal site or a "render-only" one over an oracle-built site, a paired constructor
+  no code `op_legality` reaches in `schedule.ml` (by name, transitively) constructs any more, a
+  cause it cannot read, a `Cause_at` anywhere whose phase is not a spelled-out constructor, a module
   bound under the oracle's name `Schedule` (which would make a `Schedule.*_cause` call name
-  something else), and a `C_syntax` `Cause_at` at any other phase. So a new typed decline lands with
-  its entry here, and a new render-time precondition the oracle can state lands as an oracle
-  constructor raised through its `*_cause` function, the gh-ocannl-1231 pattern above.
+  something else), an exception rebinding `Cause_at` under another name, and a `C_syntax` `Cause_at`
+  at any other phase. So a new typed decline lands with its entry here, and a new render-time
+  precondition the oracle can state lands as an oracle constructor raised through its `*_cause`
+  function, the gh-ocannl-1231 pattern above.
 - `Read_outside_rotor` (`C_syntax.pp_pipelined_rotation`): paired (`Schedule.Read_outside_rotor`).
   A read of a pipelined tile with no rotor value in scope; `pipelined_move_legality` relates the
   renderer's decline to the oracle's violation on the IR it compiled.
