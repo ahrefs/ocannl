@@ -15,14 +15,16 @@
    ([clean_up_build_files_on_startup] and [clean_up_log_files_on_startup], on by default, off in the
    test config, on in the children here). A running process holds a lock that tells a starting one
    it is there; the starting one then removes only the artifacts whose names record an owner that is
-   gone. So the test first runs two children while it holds nothing: one compiles under debug files
-   and exits, and the next one's startup removes the debug source it left. Then the test compiles
-   (taking the lock), writes a log, plants the library of a process that is gone (an OS id no
-   process has), and relaunches itself as a child that compiles the same routine name. The child
-   keeps a library of its own, under a name apart from this process's; its startup spares this
-   process's library, log and (under debug files) debug source -- this process could be between
-   linking that library and loading it, or still writing to that log -- and still removes the
-   library of the process that is gone.
+   gone, and only once they are past the window in which a compile could still need them (the lock
+   reaches across PID namespaces, liveness does not). So the test first runs two children while it
+   holds nothing: one compiles under debug files and exits, and the next one's startup removes the
+   debug source it left. Then the test compiles (taking the lock), writes a log, plants two
+   libraries of a process that is gone (an OS id no process has) -- one back-dated, one fresh -- and
+   relaunches itself as a child that compiles the same routine name. The child keeps a library of
+   its own, under a name apart from this process's; its startup spares this process's library, log
+   and (under debug files) debug source -- this process could be between linking that library and
+   loading it, or still writing to that log -- and the fresh library, and still removes the
+   back-dated one.
 
    The libraries are read through [Test_utils.Generated.kept_libraries], which parses names with the
    backend's own [Utils.parse_kept_library_name], after [Generated.init] emptied this executable's
@@ -137,22 +139,34 @@ let parent () =
     p "this process wrote the long-named routine's debug source"
       (Stdlib.Sys.file_exists (Generated.path long_routine));
   (* A library left by a process that is gone, for the child's startup cleanup to find. *)
-  Generated.plant_kept_library ~pid:departed_pid routine;
+  (* Back-dated past the cleanup's minimum age; a second, fresh one could belong to a running
+     process the liveness test cannot see (another PID namespace sharing the directory), and stays
+     while a sibling holds the lock. *)
+  ignore
+    (Generated.plant_kept_library ~pid:departed_pid
+       ~age:(Utils.temp_library_sweep_min_age +. 3600.)
+       routine
+      : string);
+  let departed_fresh = Generated.plant_kept_library ~run_id:2 ~pid:departed_pid routine in
   p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
   p "the stale library's process is seen as gone" (not (Utils.process_alive departed_pid));
   p "the child process compiled and ran the same routine name"
     (run_child "child" clean_up_on_startup);
   let own = Generated.kept_libraries routine in
-  let every = Generated.kept_libraries ~owner:`Any routine in
-  let others = List.filter every ~f:(fun f -> not (List.mem own f ~equal:String.equal)) in
-  Stdio.eprintf "kept libraries (not part of the golden): %s\n%!" (String.concat ~sep:" " every);
+  let departed = Generated.kept_libraries ~owner:(`Pid departed_pid) routine in
+  let compiled =
+    List.filter (Generated.kept_libraries ~owner:`Any routine) ~f:(fun f ->
+        not (List.mem departed f ~equal:String.equal))
+  in
+  let others = List.filter compiled ~f:(fun f -> not (List.mem own f ~equal:String.equal)) in
+  Stdio.eprintf "kept libraries (not part of the golden): %s\n%!"
+    (String.concat ~sep:" " (compiled @ departed));
   p "this process's library stays in build_files through the child's startup cleanup"
     (List.length own = 1);
   p "the child kept its own library, under a name apart from this process's" (List.length others = 1);
-  p_empty "the child's startup cleanup removed the library of a process no longer running"
-    ~over:every
-    (Generated.kept_libraries ~owner:(`Pid departed_pid) routine);
-  p_all "each kept library holds the routine's symbol" every ~min:2 ~f:(fun path ->
+  p "the child's startup removed a gone process's aged library and kept its fresh one"
+    (List.equal String.equal departed [ departed_fresh ]);
+  p_all "each compiled library holds the routine's symbol" compiled ~min:2 ~f:(fun path ->
       String.is_substring (Stdio.In_channel.read_all path) ~substring:routine);
   p "this process's log stays through the child's startup cleanup" (Stdlib.Sys.file_exists log);
   if debug then

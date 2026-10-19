@@ -333,7 +333,9 @@ configuration.
   time it names a path to write there (`Utils.build_file`, `Utils.diagn_log_file`, so in practice
   every process holds the `log_files` one), for its lifetime, and a starting process tries it
   EXCLUSIVELY without waiting. Held means a sibling runs, and the cleanup then removes only the
-  artifacts whose names record an owner that is gone (`Utils.parse_owned_artifact_name`); the
+  artifacts whose names record an owner that is gone (`Utils.parse_owned_artifact_name`), and only
+  past `Utils.temp_library_sweep_min_age`: the lock reaches across PID namespaces where liveness
+  does not, so the holder may be an owner that merely looks gone. The
   owner-named ones of a RUNNING process stay in either case, and the root is emptied, never
   removed, since a sibling may hold a path inside it it has yet to write. A lock dies with its
   process, which is why it is not a marker file. Two traps: POSIX drops all of a process's locks on

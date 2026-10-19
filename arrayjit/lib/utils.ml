@@ -1990,11 +1990,20 @@ let () =
   (* What the cleanup keeps. [~sibling_running] says that a process sharing the directory holds its
      lock (see [Artifacts_lock]): then the cleanup cannot tell that process's ownerless artifacts --
      debug sources, logs -- from a finished run's, and removes only those whose owner is gone
-     (gh-ocannl-1335). The lock files themselves always stay. *)
-  let keep ~sibling_running fname =
+     (gh-ocannl-1335). Even those only once they are older than [temp_library_sweep_min_age]: the
+     lock is shared across PID namespaces (containers sharing the directory) where liveness is not,
+     so the sibling holding it may be an owner that merely looks gone -- or that reports this
+     process's own id -- and an artifact of its is at risk only between being written and being
+     compiled or loaded, the window the temporary-library sweep's age guard covers. The lock files
+     themselves always stay. *)
+  let keep ~sibling_running ~path fname =
+    let aged () =
+      try Float.(Unix.gettimeofday () - (Unix.stat path).Unix.st_mtime > temp_library_sweep_min_age)
+      with Unix.Unix_error _ -> false
+    in
     String.is_suffix fname ~suffix:Artifacts_lock.suffix
     || owner_running fname
-    || (sibling_running && not (owner_gone fname))
+    || (sibling_running && not (owner_gone fname && aged ()))
   in
   (* Answers whether [dirname] is gone: a directory keeping something stays. The cleanup's own root
      is emptied but kept ([~keep_root]): a concurrent process of the same executable may already
@@ -2010,7 +2019,7 @@ let () =
                 let path = Stdlib.Filename.concat dirname fname in
                 match lstat_kind path with
                 | Some Unix.S_DIR -> remove_dir_if_exists ~sibling_running path && emptied
-                | Some Unix.S_REG when keep ~sibling_running fname -> false
+                | Some Unix.S_REG when keep ~sibling_running ~path fname -> false
                 | Some _ | None -> (
                     (* Regular file, symlink (to file or dir), socket, etc.: unlink the entry, do
                        not follow. *)

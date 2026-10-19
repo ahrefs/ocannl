@@ -14,7 +14,7 @@ the stale library's process is seen as gone: true
 the child process compiled and ran the same routine name: true
 this process's library stays in build_files through the child's startup cleanup: true
 the child kept its own library, under a name apart from this process's: true
-the child's startup cleanup removed the library of a process no longer running: true
-each kept library holds the routine's symbol: true
+the child's startup removed a gone process's aged library and kept its fresh one: true
+each compiled library holds the routine's symbol: true
 this process's log stays through the child's startup cleanup: true
 this process's debug source stays through the child's startup cleanup: true
