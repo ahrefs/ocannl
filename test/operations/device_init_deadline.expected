@@ -1,0 +1,9 @@
+every GPU backend's device discovery stalled past the deadline dies by SIGALRM within it, with the diagnostic naming the backend and the bound: true
+opening a device, and reading the properties or limits, are guarded the same way: true
+with device_init_deadline=0 a stall three times the deadline above runs out and the process exits normally: true
+under the program's own SIGALRM handler no deadline is armed: the stall runs out, the handler never runs and is still installed: true
+the program's own handler and its own 0.3 s timer: the handler runs once, on time, during the stall, and is still installed after it: true
+a pending 1 s timer under the default disposition fires on time during a 3 s stall, killing the process by SIGALRM without the deadline's diagnostic: true
+after a guarded call returns, SIGALRM has its default disposition again, the timer is idle, and the process outlives the deadline: true
+the cc backends' entry points are not guarded: the stall hook never runs: true
+tools/test-run.sh's digest reads the diagnostic's tag as it is written: true

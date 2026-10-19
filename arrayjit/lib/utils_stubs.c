@@ -361,6 +361,146 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
 #endif
 }
 
+/* --- A deadline on GPU device initialization (gh-ocannl-1281) ---
+
+   A faulted GPU leaves its driver wedged: every later process that touches the runtime spins in
+   device initialization and never returns (gh-ocannl-1211's tuf fault). An OCaml-level signal
+   handler cannot bound that, since it runs only at a poll point, which a thread stuck inside a C
+   runtime call never reaches. So the deadline is the kernel's real-time interval timer with a C
+   SIGALRM handler, which needs no cooperation from the OCaml runtime: it writes a diagnostic
+   prepared before arming to fd 2, resets SIGALRM to its default disposition and re-raises it, so
+   the process dies by SIGALRM (status 142 in a shell) and harnesses can classify it.
+
+   Safety for host programs: [arm] refuses -- and touches nothing -- when SIGALRM does not have its
+   default disposition (the program's own handler, or an ignore, stays exactly as it was) or when
+   the real-time timer is already running (an [alarm] or [setitimer] the program set fires exactly
+   when it would have: the timer is not read-and-restored, it is not touched at all). One region
+   is armed at a time process-wide; a concurrent or nested [arm] refuses. [disarm] cancels the
+   timer and restores the saved disposition. A SIGALRM some other process SENDS during the region
+   (si_code SI_USER) is not the deadline: it still kills, as SIGALRM's default action would have,
+   but without the deadline's diagnostic, so that line always means the timer expired. No
+   deadline on Windows, which has no SIGALRM. */
+
+#if !defined(_WIN32)
+#include <sys/time.h>
+
+#define OCANNL_DEADLINE_MSG_MAX 1024
+static char ocannl_deadline_msg[OCANNL_DEADLINE_MSG_MAX];
+static size_t ocannl_deadline_msg_len;
+static struct sigaction ocannl_deadline_saved;
+static int ocannl_deadline_armed; /* accessed through __atomic builtins */
+
+static void ocannl_deadline_write(const char *p, size_t n) {
+  while (n > 0) {
+    ssize_t w = write(2, p, n);
+    if (w < 0) {
+      if (errno == EINTR) continue;
+      return;
+    }
+    p += w;
+    n -= (size_t)w;
+  }
+}
+
+static void ocannl_deadline_handler(int sig, siginfo_t *info, void *uctx) {
+  static const char external_msg[] =
+      "OCANNL: an external SIGALRM arrived during GPU device initialization; dying by it, as "
+      "SIGALRM's default action would (not the device_init_deadline, gh-ocannl-1281)\n";
+  struct sigaction dfl;
+  sigset_t set;
+  (void)uctx;
+  if (info != NULL && info->si_code == SI_USER)
+    ocannl_deadline_write(external_msg, sizeof external_msg - 1);
+  else
+    ocannl_deadline_write(ocannl_deadline_msg, ocannl_deadline_msg_len);
+  memset(&dfl, 0, sizeof dfl);
+  dfl.sa_handler = SIG_DFL;
+  sigemptyset(&dfl.sa_mask);
+  sigaction(sig, &dfl, NULL);
+  sigemptyset(&set);
+  sigaddset(&set, sig);
+  sigprocmask(SIG_UNBLOCK, &set, NULL);
+  raise(sig);
+  /* Not reached: the default action of SIGALRM terminates the process. */
+  _exit(128 + sig);
+}
+#endif
+
+/* Whether this build can arm the deadline at all: the predicate [arm] is compiled under, published
+   so a test gates on it rather than on [arm]'s report of success. */
+CAMLprim value ocannl_device_init_deadline_supported(value unit) {
+  (void)unit;
+#if defined(_WIN32)
+  return Val_false;
+#else
+  return Val_true;
+#endif
+}
+
+/* [ocannl_device_init_deadline_arm seconds message]: true iff the deadline is now armed. */
+CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
+#if defined(_WIN32)
+  (void)v_seconds;
+  (void)v_msg;
+  return Val_false;
+#else
+  double seconds = Double_val(v_seconds);
+  struct sigaction cur, ours;
+  struct itimerval running, deadline;
+  int expected = 0;
+  size_t len;
+  if (!(seconds > 0.0) || seconds > 1e8) return Val_false;
+  if (!__atomic_compare_exchange_n(&ocannl_deadline_armed, &expected, 1, 0, __ATOMIC_SEQ_CST,
+                                   __ATOMIC_SEQ_CST))
+    return Val_false;
+  if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
+      cur.sa_handler != SIG_DFL || getitimer(ITIMER_REAL, &running) != 0 ||
+      running.it_value.tv_sec != 0 || running.it_value.tv_usec != 0) {
+    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
+    return Val_false;
+  }
+  len = caml_string_length(v_msg);
+  if (len > OCANNL_DEADLINE_MSG_MAX) len = OCANNL_DEADLINE_MSG_MAX;
+  memcpy(ocannl_deadline_msg, String_val(v_msg), len);
+  ocannl_deadline_msg_len = len;
+  memset(&ours, 0, sizeof ours);
+  ours.sa_sigaction = ocannl_deadline_handler;
+  sigemptyset(&ours.sa_mask);
+  ours.sa_flags = SA_SIGINFO;
+  if (sigaction(SIGALRM, &ours, &ocannl_deadline_saved) != 0) {
+    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
+    return Val_false;
+  }
+  memset(&deadline, 0, sizeof deadline);
+  deadline.it_value.tv_sec = (time_t)seconds;
+  deadline.it_value.tv_usec = (suseconds_t)((seconds - (double)(time_t)seconds) * 1e6);
+  if (deadline.it_value.tv_sec == 0 && deadline.it_value.tv_usec == 0)
+    deadline.it_value.tv_usec = 1;
+  if (setitimer(ITIMER_REAL, &deadline, NULL) != 0) {
+    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
+    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
+    return Val_false;
+  }
+  return Val_true;
+#endif
+}
+
+/* Cancel the timer [ocannl_device_init_deadline_arm] started and restore the disposition it saved.
+   A no-op when nothing is armed. */
+CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
+  (void)unit;
+#if !defined(_WIN32)
+  if (__atomic_load_n(&ocannl_deadline_armed, __ATOMIC_SEQ_CST)) {
+    struct itimerval off;
+    memset(&off, 0, sizeof off);
+    setitimer(ITIMER_REAL, &off, NULL);
+    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
+    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
+  }
+#endif
+  return Val_unit;
+}
+
 /* --- CPU topology facts (gh-ocannl-530) ---
 
    These stubs report facts only; the pool-restriction policy that consumes them lives in

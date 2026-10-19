@@ -1471,11 +1471,58 @@ let finalize (type dev runner event)
    use. Either failure mode surfaces at [get_device], where [Context.auto]'s fallback catches it per
    call, as with the retired per-call instantiation. *)
 
+(* gh-ocannl-1281: a faulted GPU leaves its driver wedged, and every later process that touches the
+   runtime then spins in device initialization forever (gh-ocannl-1211). The device backends' entry
+   points that reach the driver before any context exists -- discovery ([num_devices]), the
+   per-backend properties and limits ([static_properties], [hardware_limits], each of which
+   enumerates the devices) and opening a device ([get_device]) -- run under
+   {!Utils.with_device_init_deadline} until each has once returned, per ordinal for [get_device]:
+   after that the driver is up and the call is a cache read, and the deadline is never armed across
+   user code. Applied to the three device backends only; the cc backends, which [Raise_backend] also
+   builds, touch no driver. A missing backend's stub is guarded too, harmlessly: it raises at
+   once. *)
+module With_device_init_deadline (Device : Lowered_backend) = struct
+  include Device
+
+  let guarded f = Utils.with_device_init_deadline ~backend_name:Device.name f
+
+  let until_first_success f =
+    let succeeded = Atomic.make false in
+    fun () ->
+      if Atomic.get succeeded then f ()
+      else
+        let result = guarded f in
+        Atomic.set succeeded true;
+        result
+
+  let num_devices = until_first_success Device.num_devices
+  let static_properties = until_first_success Device.static_properties
+  let hardware_limits = until_first_success Device.hardware_limits
+  let opened_ordinals : Set.M(Int).t Atomic.t = Atomic.make (Set.empty (module Int))
+
+  let get_device ~ordinal =
+    if Set.mem (Atomic.get opened_ordinals) ordinal then Device.get_device ~ordinal
+    else
+      let device = guarded (fun () -> Device.get_device ~ordinal) in
+      let rec record () =
+        let seen = Atomic.get opened_ordinals in
+        if not (Atomic.compare_and_set opened_ordinals seen (Set.add seen ordinal)) then record ()
+      in
+      record ();
+      device
+end
+
 module Cc_b : Backend = Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend)
 module Multidev_cc_b : Backend = Make_device_backend_from_lowered (Schedulers.Multidev) (Cc_backend)
-module Cuda_b : Backend = Raise_backend (Cuda_backend_impl.Impl : Lowered_backend)
-module Hip_b : Backend = Raise_backend (Hip_backend_impl.Impl : Lowered_backend)
-module Metal_b : Backend = Raise_backend (Metal_backend_impl.Impl : Lowered_backend)
+
+module Cuda_b : Backend = Raise_backend (With_device_init_deadline (
+  Cuda_backend_impl.Impl : Lowered_backend))
+
+module Hip_b : Backend = Raise_backend (With_device_init_deadline (
+  Hip_backend_impl.Impl : Lowered_backend))
+
+module Metal_b : Backend = Raise_backend (With_device_init_deadline (
+  Metal_backend_impl.Impl : Lowered_backend))
 
 type backend = Cc | Multidev_cc | Cuda | Hip | Metal [@@deriving sexp, equal, enumerate]
 
