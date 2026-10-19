@@ -524,7 +524,7 @@ controls = [
 # that shell, so the hung test outlives the unit. Only the remote per-test cap leg sees it, and
 # only where that leg runs.
 if remote_hang_legs:
-    controls.append(('remote-cap-not-parent', 'sweep',
+    controls.append(('remote-cap-not-parent', 'sweep-supervisor.sh',
         '''    printf 'perl -e %s -- --hold %s %s sh -c %s' "$(sq "$capped_perl")" "$(sq "$3")" "$1" "$(sq "$2")"''',
         '''    printf 'perl -e %s -- --hold %s %s sh -c %s %s' "$(sq "$capped_perl")" "$(sq "$3")" "$1" "$(sq 'sh -c "$0"; exit $?')" "$(sq "$2")"''',
         'remote hung test outlived'))
@@ -544,7 +544,9 @@ for name, target, old, new, oracle in controls:
         shutil.copy2(file, dest / 'test/operations' / file.name)
     for support in ['harness-support.sh', 'process-group.sh']:
         shutil.copy2(harness.parent.parent.parent / 'scripts' / support, dest / 'scripts' / support)
-    file = dest / ('test/operations/' + harness.name if target == 'harness' else 'tools/' + sweep.name)
+    # A target is the harness, the sweep, or one of the helpers it sources, by file name.
+    file = dest / ('test/operations/' + harness.name if target == 'harness'
+                   else 'tools/' + (sweep.name if target == 'sweep' else target))
     text = file.read_text()
     if text.count(old) != 1:
         raise RuntimeError('ambiguous mutation anchor: ' + name)

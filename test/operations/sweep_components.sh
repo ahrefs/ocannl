@@ -130,7 +130,7 @@ LOG
 # one, the kernel's own /proc/locks, which pins the device encoding the fixture table restates.
 tokens_fixture() {
   . "$TOOLS/gpu-tokens.sh"
-  sq() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
+  . "$TOOLS/sweep-supervisor.sh"
   local state=$TMP/slot-state dir fw table gpu_pid cpu_pid past_pid rc out
   dir=$state/rogfix
   mkdir -p "$dir"
@@ -311,7 +311,7 @@ controls_fixture() {
     mkdir -p "$control"
     cp "$TOOLS"/lab-map.sh "$TOOLS"/fleet-registry.sh "$TOOLS"/sweep-fingerprint.sh \
       "$TOOLS"/sweep-unit-state.sh "$TOOLS"/box-jobs.sh "$TOOLS"/kernel-window.sh \
-      "$TOOLS"/gpu-tokens.sh "$control/"
+      "$TOOLS"/gpu-tokens.sh "$TOOLS"/sweep-supervisor.sh "$control/"
     chmod u+w "$control"/*.sh
     case $kind in
       lab)

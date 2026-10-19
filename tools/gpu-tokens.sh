@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The fleet's GPU tokens as a sweep GPU unit meets them (gh-ocannl-1177), sourced by tools/sweep.sh
 # and driven directly by test/operations/sweep_components.sh. The caller provides `sq` (POSIX
-# single-quoting). Sourcing defines functions only; nothing here opens an ssh or writes state the
-# caller did not name.
+# single-quoting) by sourcing tools/sweep-supervisor.sh. Sourcing defines functions only; nothing
+# here opens an ssh or writes state the caller did not name.
 #
 # A fleet box bounds how many batches hold its GPU with GPU TOKENS (lukstafi/ludics-lite#391): the
 # first T of the box's S run-time correctness slot files, each a real flock that an `fleet-worker.sh

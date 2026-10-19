@@ -3537,10 +3537,10 @@ grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
 [ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
 
 # The guard itself: the far-side supervisor's `--hold`, run here against fake inhibitors. The
-# program is the sweep's own, extracted as tools/test-test-run.sh extracts unit_jobs (the sweep
-# cannot be sourced), and asserted to have matched.
+# program is the sweep's own, from the helper the sweep sources (gh-ocannl-1380), asserted to be
+# the one that defines the guard.
 supervisor=$tmp/supervisor.pl
-sed -n "/^capped_perl='/,/^'\$/p" "$sweep" | sed '1s/^capped_perl=.//;$d' >"$supervisor"
+(. "$(cd "$(dirname "$sweep")" && pwd)/sweep-supervisor.sh" && printf '%s' "$capped_perl") >"$supervisor"
 grep -q 'sub hold_sleep' "$supervisor"
 guard_bin=$tmp/guard-bin
 mkdir -p "$guard_bin" "$tmp/guard-empty"

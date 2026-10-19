@@ -564,6 +564,7 @@ tools/per-test-cap.sh parses: true
 tools/promote.sh parses: true
 tools/remote-verify.sh parses: true
 tools/sweep-fingerprint.sh parses: true
+tools/sweep-supervisor.sh parses: true
 tools/sweep-unit-state.sh parses: true
 tools/sweep.sh parses: true
 tools/test-action-durations.sh uses the shared harness contract: true

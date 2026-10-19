@@ -3125,8 +3125,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 - Sweep endpoint and lock-contract helpers live in `tools/lab-map.sh`, registry reads in
   `tools/fleet-registry.sh`, diagnostic normalization in `tools/sweep-fingerprint.sh`, the
-  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990), and the fleet's GPU tokens
-  (a GPU unit's readings and its take) in `tools/gpu-tokens.sh` (gh-ocannl-1177). Their caller-owned
+  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990), the fleet's GPU tokens
+  (a GPU unit's readings and its take) in `tools/gpu-tokens.sh` (gh-ocannl-1177), and the process
+  supervisor every unit leg runs under -- `capped`, `remote_capped`, `capped_perl` and the `sq`
+  quoting its far-side text ships with -- in `tools/sweep-supervisor.sh` (gh-ocannl-1380), so a
+  fixture or a live witness on a GPU box sources the shipped text instead of restating it or
+  cutting it out of `tools/sweep.sh` with sed. Their caller-owned
   variables and callback dependencies are listed at each file's head. `runtest-sweep_components`
   exercises the sourced functions without running a sweep; `bash test/operations/sweep_components.sh
   state` (also `lab`, `fleet`, `fingerprint`, `tokens`) isolates one fixture. The default runs all four plus broken
@@ -3346,7 +3350,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   alive. For a remote unit that means the cap says "coverage lost" while the run still holds the
   GPU and the worktree lock the next sweep must take. Both sides of `tools/sweep.sh` therefore run
   the unit under the same perl supervisor (`capped` locally, `remote_capped` emitting it as far-side
-  shell text): it forks, `setpgrp`s the child, and signals the GROUP on expiry, TERM then KILL, so
+  shell text; both in `tools/sweep-supervisor.sh`): it forks, `setpgrp`s the child, and signals the GROUP on expiry, TERM then KILL, so
   the bound holds whatever `timeout` is on the far side's PATH. Exit 142 (128+SIGALRM) is that
   supervisor's expiry, on either side of the ssh (gh-ocannl-727).
 - A normal sweep is deliberately incremental and records `incremental-pass`, not `pass`: that unit
