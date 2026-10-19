@@ -8362,6 +8362,8 @@
   ../../tools/gpu-tokens.sh
   ; the credential deny-list sweep.sh scrubs from every dune leg (gh-ocannl-1280)
   ../../tools/credential-env.sh
+  ; the process supervisor and quoting every unit leg runs under (gh-ocannl-1380)
+  ../../tools/sweep-supervisor.sh
   sweep_harness.sh
   sweep_remote_fixture.sh
   ../../scripts/harness-support.sh
@@ -8397,6 +8399,7 @@
   ../../tools/box-jobs.sh
   ../../tools/kernel-window.sh
   ../../tools/gpu-tokens.sh
+  ../../tools/sweep-supervisor.sh
   (env_var ProgramFiles)
   (env_var ProgramW6432)
   (env_var "ProgramFiles(x86)")
