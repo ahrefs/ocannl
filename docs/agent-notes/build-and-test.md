@@ -3813,9 +3813,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   resume from suspend, reported a test a minute old as 38109073018720 s old (etime is derived from
   the boot time, which the resume skewed), and the cap ended the run. A test is born where the
   watcher first lists it, less its etime clamped to the time since the previous listing (which
-  did not show it), so a skewed etime moves a birth by at most one poll; the clock stops while
+  did not show it), so a skewed etime moves a birth by at most one poll, and an exec that renames
+  it (a wrapper handing over) does not restart its age, only a new pid or parent does; the clock stops while
   the host sleeps (`CLOCK_UPTIME_RAW` on macOS, `CLOCK_MONOTONIC` on Linux), so a suspend never
-  counts against a test either. Leg 75 serves the watcher a stub `ps` with that etime. (2) **The
+  counts against a test either. Leg 75 serves the watcher a stub `ps` with that etime, and
+  times a test that execs itself under ten names. (2) **The
   device probe**: a batch `run` resolves to hold a GPU backend queries each such backend once,
   through `bin/device_props --ocannl_backend=<b>` from `test/config`. Build and query both run
   inside the fleet slot, as the slot's command (`_probe`, which then execs dune): a measurement

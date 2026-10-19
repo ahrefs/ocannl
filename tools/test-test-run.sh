@@ -156,7 +156,8 @@
 #      test inside the cap, a lifted cap, a slow dune and the slot's long-lived
 #      holder do not (skipped where a $0-renamed fixture dune does not read
 #      back as `dune` in ps); a ps serving a skewed etime (a resume from
-#      suspend, gh-ocannl-1319) neither ends a run nor spares a hung test.
+#      suspend, gh-ocannl-1319) neither ends a run nor spares a hung test, and
+#      a test that execs under new names is still capped.
 #  76. a GPU batch whose device query does not answer is DEVICE UNHEALTHY (69),
 #      the probe being the slot's command ahead of dune and dune never started;
 #      an answer or a fast failure starts dune once; an unread batch asks every
@@ -2182,12 +2183,17 @@ case $REPEAT_TEST_MODE in
   # pid in REPEAT_TEST_ACTION_PID. The parent is perl renamed `dune` -- a
   # shebang script's process name is its interpreter's, and the watcher
   # finds tests as the children of a process named dune ($0 sets the name ps
-  # reads on Linux and macOS; where it does not, leg 75 skips).
+  # reads on Linux and macOS; where it does not, leg 75 skips). With
+  # REPEAT_TEST_ACTION_HOPS it runs that perl script instead, from hop 1: an
+  # action that keeps its pid while exec renames it (gh-ocannl-1319).
   action)
     exec perl -e '$0 = "dune"; my ($pidf, $secs) = @ARGV;
       my $c = fork(); die "fork: $!" unless defined $c;
       if (!$c) { setpgrp(0, 0); open my $f, ">", "$pidf.tmp" or die; print $f "$$\n"; close $f;
-                 rename "$pidf.tmp", $pidf; exec "sleep", $secs; exit 127 }
+                 rename "$pidf.tmp", $pidf;
+                 my $hops = $ENV{REPEAT_TEST_ACTION_HOPS} // "";
+                 my @cmd = $hops ne "" ? ($^X, $hops, 1) : ("sleep", $secs);
+                 exec @cmd; exit 127 }
       $SIG{TERM} = sub { kill "KILL", -$c; exit 143 };
       waitpid($c, 0); print "action done\n"; exit 0' \
       "$REPEAT_TEST_ACTION_PID" "${REPEAT_TEST_ACTION_SECS:-60}"
@@ -5839,6 +5845,32 @@ EOF
         esac
       fi
     done
+  fi
+  # A test that execs keeps its pid and changes its name: a wrapper handing
+  # over to the real program, here a chain of ten 1.2s hops, each renamed. Its
+  # age runs on across the renames, so a 4s cap ends the run long before the
+  # chain would; a watcher restarting the age at each rename never would.
+  if [ -z "$test_cap_detail" ]; then
+    cat >"$TMP/test-cap-hops.pl" <<'EOF'
+my $n = shift;
+$0 = "hop$n";
+select undef, undef, undef, 1.2;
+exit 0 if $n >= 10;
+exec $^X, __FILE__, $n + 1;
+EOF
+    test_cap_n=$((test_cap_n + 1))
+    REPEAT_TEST_ACTION_PID=$TMP/test-cap-action-$test_cap_n.pid
+    REPEAT_TEST_ACTION_HOPS=$TMP/test-cap-hops.pl argv_mode=action \
+      argv_probe test-cap-renamed run --test-cap 4 build @cheap
+    test_cap_action=$(cat "$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+    { [ "$argv_rc" = 142 ] && [ -n "$test_cap_action" ] &&
+      grep -q "^test-run: per-test cap: pid $test_cap_action has run" "$argv_dir/log"; } ||
+      test_cap_detail="renamed: exit $argv_rc (want 142, the test pid ${test_cap_action:-unknown} named): $argv_out $(cat "$argv_dir/log")"
+    case $(pstate "$test_cap_action") in
+      '' | Z) ;;
+      *) [ -n "$test_cap_detail" ] || test_cap_detail="renamed: the test (pid $test_cap_action) survived the run"
+         kill -KILL "$test_cap_action" 2>/dev/null ;;
+    esac
   fi
   if [ -z "$test_cap_detail" ]; then
     : >"$TMP/test-cap-holder.fw"

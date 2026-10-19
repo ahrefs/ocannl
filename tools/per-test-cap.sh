@@ -106,7 +106,9 @@ test_cap_watch='
   # Each test is born where the watcher first sees it, less its ps etime but
   # never more than the time since the previous listing, which did not show it:
   # a skewed etime moves a birth by at most one poll. A pid is the same test
-  # while its parent and name stay and it is in every listing.
+  # while its parent stays and it is in every listing -- not its name, which an
+  # exec (a wrapper handing over to the test) changes, and which must not
+  # restart the test\x27s age.
   my %born;
   my $last = $now->();
   while (getppid() == $resolver) {
@@ -145,7 +147,7 @@ test_cap_watch='
     my %seen;
     for my $p (sort { $a <=> $b } keys %ppid) {
       next unless $dune{ $ppid{$p} };
-      my $id = "$ppid{$p} $comm{$p}";
+      my $id = $ppid{$p};
       if ($born{$p} && $born{$p}[0] eq $id) {
         $seen{$p} = $born{$p};
       } else {
