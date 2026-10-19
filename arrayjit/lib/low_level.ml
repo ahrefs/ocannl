@@ -6825,6 +6825,18 @@ let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
    constants and index symbols no workgroup loop binds -- a scope local or a memory read could carry
    a lane-dependent value ([flag := lane < 32; if flag { ... }]), so either makes it non-uniform.
 
+   gh-ocannl-1334: a site rendered within ONE warp inserts no barrier, but its [ocannl_shfl_xor]
+   calls still need every lane of the warp: a full-mask [__shfl_xor_sync] with a lane missing is
+   undefined on CUDA, and HIP's [__shfl_xor] and Metal's [simd_shuffle_xor] read undefined values
+   from an inactive lane. Those sites answer to WARP uniformity ([wr_warp_uniform]): the same rule
+   with the warp as the span. Both renderings bind the site to the workgroup's [.x] slot, require
+   its extent to be the whole [.x] dimension and a multiple of the warp, so every warp lies within
+   one [.x] row: a workgroup symbol at a slot above 0 (an enclosing workgroup loop always sits above
+   the site's slot 0, and its own launch guard reads its symbol) is the same in every lane of a
+   warp. Only a slot-0 workgroup symbol, a scope local or a memory read can part a warp's lanes. A
+   site failing those rendering preconditions does not shuffle at all, so judging it as if it met
+   them over-approximates only by statements that never render.
+
    Uniformity is decided per loop SYMBOL, not per occurrence: a materializing [Unroll] or a
    [Partition] copies a body with its nested loop symbols, so one symbol can name a copy under
    uniform control and a copy under a lane-dependent guard (staging#1028 review round 2). The
@@ -6837,6 +6849,7 @@ type workgroup_reduce_site = {
   wr_extent : int;
   wr_form : workgroup_reduce_form;
   wr_uniform : bool;
+  wr_warp_uniform : bool;
 }
 
 (* The warp-shuffle rendering's base: ONE accumulation statement at the level itself, no level or
@@ -6853,30 +6866,37 @@ let warp_reduce_cell_statement ~index (stmts : t list) =
 
 let workgroup_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : workgroup_reduce_site list =
   let axes = hardware_axes llc in
+  (* [lane]: the symbols that can differ across a workgroup; [warp_lane]: across one warp's lanes (a
+     slot-0 workgroup symbol in any copy, see the comment above). *)
   let lane s =
     List.exists axes ~f:(fun a ->
         Poly.equal a.ha_kind `Workgroup && Indexing.equal_symbol a.ha_index s)
   in
-  let index_uniform : Indexing.axis_index -> bool = function
+  let warp_lane s =
+    List.exists axes ~f:(fun a ->
+        Poly.equal a.ha_kind `Workgroup && a.ha_slot = 0 && Indexing.equal_symbol a.ha_index s)
+  in
+  let index_uniform ~lane : Indexing.axis_index -> bool = function
     | Fixed_idx _ | Sub_axis -> true
     | Iterator s -> not (lane s)
     | Affine { symbols; _ } -> not (List.exists symbols ~f:(fun (_, s) -> lane s))
     | Concat syms -> not (List.exists syms ~f:lane)
   in
-  let rec uniform_scalar (sc : scalar_t) =
+  let rec uniform_scalar ~lane (sc : scalar_t) =
     match sc with
     | Constant _ | Constant_bits _ -> true
-    | Embed_index idx -> index_uniform idx
-    | Binop (_, (a, _), (b, _)) -> uniform_scalar a && uniform_scalar b
-    | Unop (_, (a, _)) -> uniform_scalar a
-    | Ternop (_, (a, _), (b, _), (c, _)) -> uniform_scalar a && uniform_scalar b && uniform_scalar c
+    | Embed_index idx -> index_uniform ~lane idx
+    | Binop (_, (a, _), (b, _)) -> uniform_scalar ~lane a && uniform_scalar ~lane b
+    | Unop (_, (a, _)) -> uniform_scalar ~lane a
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        uniform_scalar ~lane a && uniform_scalar ~lane b && uniform_scalar ~lane c
     | Local_scope _ | Get_local _ | Get _ | Get_dynamic _ | Get_merge_buffer _ -> false
   in
   let stmts_of body =
     List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
   in
   let sites = ref [] in
-  let rec walk ~uniform llc =
+  let rec walk ~uniform ~warp_uniform llc =
     match llc with
     | For_loop { index; from_; to_; axis; body; _ } -> (
         let extent = to_ - from_ + 1 in
@@ -6897,7 +6917,14 @@ let workgroup_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : workgroup_
         in
         let site wr_form =
           sites :=
-            { wr_index = index; wr_from = from_; wr_extent = extent; wr_form; wr_uniform = uniform }
+            {
+              wr_index = index;
+              wr_from = from_;
+              wr_extent = extent;
+              wr_form;
+              wr_uniform = uniform;
+              wr_warp_uniform = warp_uniform;
+            }
             :: !sites
         in
         match (axis, stmts) with
@@ -6909,24 +6936,35 @@ let workgroup_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : workgroup_
             let lanes_diverge =
               Option.equal Poly.equal (hardware_kind_of_axis axis) (Some `Workgroup)
             in
-            walk ~uniform:(uniform && not lanes_diverge) body)
-    | If { cond = c, _; body } -> walk ~uniform:(uniform && uniform_scalar c) body
+            walk ~uniform:(uniform && not lanes_diverge)
+              ~warp_uniform:(warp_uniform && not (lanes_diverge && warp_lane index))
+              body)
+    | If { cond = c, _; body } ->
+        walk
+          ~uniform:(uniform && uniform_scalar ~lane c)
+          ~warp_uniform:(warp_uniform && uniform_scalar ~lane:warp_lane c)
+          body
     | Seq (a, b) ->
-        walk ~uniform a;
-        walk ~uniform b
-    | Scan_loop { body; _ } -> walk ~uniform body
+        walk ~uniform ~warp_uniform a;
+        walk ~uniform ~warp_uniform b
+    | Scan_loop { body; _ } -> walk ~uniform ~warp_uniform body
     | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
     | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
         ()
   in
-  walk ~uniform:true llc;
-  let divergent =
-    List.filter_map !sites ~f:(fun site -> Option.some_if (not site.wr_uniform) site.wr_index)
+  walk ~uniform:true ~warp_uniform:true llc;
+  let failing judged =
+    List.filter_map !sites ~f:(fun site -> Option.some_if (not (judged site)) site.wr_index)
   in
+  let divergent = failing (fun site -> site.wr_uniform)
+  and warp_divergent = failing (fun site -> site.wr_warp_uniform) in
+  let any_copy syms site = List.mem syms site.wr_index ~equal:Indexing.equal_symbol in
   List.rev_map !sites ~f:(fun site ->
-      if List.mem divergent site.wr_index ~equal:Indexing.equal_symbol then
-        { site with wr_uniform = false }
-      else site)
+      {
+        site with
+        wr_uniform = site.wr_uniform && not (any_copy divergent site);
+        wr_warp_uniform = site.wr_warp_uniform && not (any_copy warp_divergent site);
+      })
 
 (* The lane all-reduce's sites (gh-ocannl-1168), and which of them may stage partials between
    barriers: besides workgroup-uniform control, the site must cover the whole [.x] dimension of a
@@ -6965,41 +7003,51 @@ let lane_all_reduce_sites_of ~axes (sites : workgroup_reduce_site list) : lane_a
 let lane_all_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : lane_all_reduce_site list =
   lane_all_reduce_sites_of ~axes:(hardware_axes llc) (workgroup_reduce_sites ~reassociable llc)
 
-type inserted_barrier_form = Lane_all_reduce_partials | Warp_reduce_partials
+type inserted_collective_form =
+  | Lane_all_reduce_partials
+  | Warp_reduce_partials
+  | Lane_all_reduce_butterfly
+  | Warp_reduce_shuffle
 [@@deriving sexp_of, equal]
 
-type inserted_barrier = {
-  ib_index : Indexing.symbol;
-  ib_extent : int;
-  ib_form : inserted_barrier_form;
-  ib_uniform : bool;
+let inserts_barrier = function
+  | Lane_all_reduce_partials | Warp_reduce_partials -> true
+  | Lane_all_reduce_butterfly | Warp_reduce_shuffle -> false
+
+type inserted_collective = {
+  ic_index : Indexing.symbol;
+  ic_extent : int;
+  ic_form : inserted_collective_form;
+  ic_uniform : bool;
 }
 
-(* gh-ocannl-1238. The statements whose rendering emits a workgroup barrier the IR does not contain:
-   ONE notion, read by [validate_parallel] (which refuses such a barrier under control flow that is
-   not workgroup-uniform, before anything renders) and by the renderer of each form. A backend
-   without warp shuffles ([warp_size <= 0], the C backends) renders neither form with a barrier.
+(* gh-ocannl-1238 / gh-ocannl-1334. The statements whose rendering emits a lane collective the IR
+   does not contain -- a workgroup barrier, or warp shuffles -- ONE notion, read by
+   [validate_parallel] (which refuses such a collective under control flow that is not uniform
+   across the lanes it spans, before anything renders) and by the renderer of each form. A backend
+   without warp shuffles ([warp_size <= 0], the C backends) renders none of them.
 
-   - The lane all-reduce stages partials only past one simdgroup and only where
-   [lar_cross_simdgroup] holds; elsewhere it renders the serial loop in every lane, which needs no
-   barrier. Its admission already asks for uniform control, so the validator refuses none of its
-   entries today: under divergent control this form declines to the serial loop. The entries are
-   listed anyway, each with the walk's own uniformity, so that the validator covers every barrier
-   the renderer inserts rather than only the ones known to be at risk. - The warp-shuffle tree into
-   a cell stages per-warp partials whenever the extent spans more than one warp, and has no
-   barrier-free fallback: binding the index instead would race every lane's read-modify-write of the
-   one cell. So its entries carry the walk's uniformity, and a non-uniform one is a refusal. Listed
-   past one warp whatever else the renderer requires of it (whole warps, a power-of-two count, slot
-   0, the whole [.x] dimension, a wide residency): a site failing those is refused by the renderer
-   anyway, so the list over-approximates only by statements that never render. *)
-let inserted_barriers ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc : t) :
-    inserted_barrier list =
+   - The lane all-reduce shuffles only where its admission holds -- the butterfly within one
+   simdgroup where every lane of the warp reaches the site ([wr_warp_uniform], gh-ocannl-1334), the
+   staged partials past one simdgroup where [lar_cross_simdgroup] holds -- and elsewhere renders the
+   serial loop in every lane, which needs neither a barrier nor a shuffle. Its entries are listed
+   exactly where the admission holds, and the renderer shuffles exactly for a listed entry, so under
+   divergent control this form declines to the serial loop and the validator refuses none of its
+   entries. Each still carries the walk's own uniformity, so that the validator sees every
+   collective the renderer inserts rather than only the ones known to be at risk.
+
+   - The warp-shuffle tree into a cell has neither a barrier-free nor a shuffle-free fallback:
+   binding the index instead would race every lane's read-modify-write of the one cell. So its
+   entries carry the walk's uniformity, and a non-uniform one is a refusal: past one warp the
+   per-warp partials between barriers answer to workgroup uniformity, within one warp the shuffles
+   to warp uniformity. Listed whatever else the renderer requires of it (whole warps, a power-of-two
+   count, slot 0, the whole [.x] dimension, a wide residency): a site failing those is refused by
+   the renderer anyway, so the list over-approximates only by statements that never render. *)
+let inserted_collectives ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc : t) :
+    inserted_collective list =
   if warp_size <= 0 then []
   else
     let sites = workgroup_reduce_sites ~reassociable llc in
-    (* Each lane-form entry pairs a site with the walk's own uniformity, not with
-       [lar_cross_simdgroup]'s use of it: were the admission ever to stage partials without asking,
-       the validator would still see the divergent barrier. *)
     let scope_sites =
       List.filter sites ~f:(fun site ->
           match site.wr_form with Wr_scope_local _ -> true | Wr_cell -> false)
@@ -7008,29 +7056,28 @@ let inserted_barriers ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc : t
       List.filter_map
         (List.zip_exn scope_sites (lane_all_reduce_sites_of ~axes:(hardware_axes llc) sites))
         ~f:(fun (site, lar) ->
-          Option.some_if
-            (lar.lar_cross_simdgroup
+          let entry ic_form ic_uniform =
+            Some { ic_index = lar.lar_index; ic_extent = lar.lar_extent; ic_form; ic_uniform }
+          in
+          if site.wr_from = 0 && lar.lar_extent = warp_size && site.wr_warp_uniform then
+            entry Lane_all_reduce_butterfly site.wr_warp_uniform
+          else if
+            lar.lar_cross_simdgroup
             && lar.lar_extent % warp_size = 0
-            && lar.lar_extent / warp_size > 1)
-            {
-              ib_index = lar.lar_index;
-              ib_extent = lar.lar_extent;
-              ib_form = Lane_all_reduce_partials;
-              ib_uniform = site.wr_uniform;
-            })
+            && lar.lar_extent / warp_size > 1
+          then entry Lane_all_reduce_partials site.wr_uniform
+          else None)
     in
     let cell =
       List.filter_map sites ~f:(fun site ->
           match site.wr_form with
-          | Wr_cell when site.wr_extent > warp_size ->
-              Some
-                {
-                  ib_index = site.wr_index;
-                  ib_extent = site.wr_extent;
-                  ib_form = Warp_reduce_partials;
-                  ib_uniform = site.wr_uniform;
-                }
-          | Wr_cell | Wr_scope_local _ -> None)
+          | Wr_cell ->
+              let ic_form, ic_uniform =
+                if site.wr_extent > warp_size then (Warp_reduce_partials, site.wr_uniform)
+                else (Warp_reduce_shuffle, site.wr_warp_uniform)
+              in
+              Some { ic_index = site.wr_index; ic_extent = site.wr_extent; ic_form; ic_uniform }
+          | Wr_scope_local _ -> None)
     in
     lane @ cell
 
@@ -7039,12 +7086,12 @@ let inserted_barriers ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc : t
     than 3 [Workgroup] slots ([Grid] slots [>= 2] fold onto [.z], see the hardware-axis section
     comment); annotated loops inside [Local_scope] bodies; a kernel containing barriers whose
     same-slot workgroup extents differ (a barrier under divergent control flow is UB) or with a
-    barrier lexically under an [If] guard; a barrier the renderer inserts ({!inserted_barriers}, for
-    a backend whose warp shuffles span [warp_size] lanes; none by default) under control flow that
-    is not workgroup-uniform; and writes to materialized tensor nodes lexically outside all
-    annotated loops (every hardware thread would execute them, racing with the annotated writes —
-    there is no grid-wide synchronization). Cannot prove iteration independence; that is the
-    annotating pass's obligation. *)
+    barrier lexically under an [If] guard; a lane collective the renderer inserts
+    ({!inserted_collectives}, for a backend whose warp shuffles span [warp_size] lanes; none by
+    default) under control flow that is not uniform across the lanes it spans; and writes to
+    materialized tensor nodes lexically outside all annotated loops (every hardware thread would
+    execute them, racing with the annotated writes — there is no grid-wide synchronization). Cannot
+    prove iteration independence; that is the annotating pass's obligation. *)
 let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) plc (llc : t) : unit =
   let axes = hardware_axes llc in
   if not (List.is_empty axes) then (
@@ -7089,28 +7136,44 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) plc (llc
             ()
       in
       no_guarded_barrier llc);
-    (* gh-ocannl-1238: the guarded-barrier rule for the barriers the IR does not contain. An
-       inserted barrier is not held to the rule above -- no [If] at all -- but to uniformity, the
+    (* gh-ocannl-1238 / gh-ocannl-1334: the guarded-barrier rule for the lane collectives the IR
+       does not contain, inserted barriers and warp shuffles alike. An inserted collective is not
+       held to the rule above -- no [If] at all -- but to uniformity over the lanes it spans, the
        question its renderer asks: the lane all-reduce keeps its cross-simdgroup form under a guard
-       on a serial query symbol (gh-ocannl-1168), and a [Workgroup_reduce] reduction under a padding
-       or symbolic-extent guard on a [Grid] or serial symbol has every lane of the workgroup on one
-       side of it. Nor to the extent rule: an inserted barrier sits inside its own loop's rendering,
-       which covers the whole [.x] dimension, never under a guarded sibling workgroup loop. *)
-    List.iter (inserted_barriers ~reassociable ~warp_size llc) ~f:(fun ib ->
-        if not ib.ib_uniform then
+       on a serial query symbol (gh-ocannl-1168), a [Workgroup_reduce] reduction under a padding or
+       symbolic-extent guard on a [Grid] or serial symbol has every lane of the workgroup on one
+       side of it, and a single-warp shuffle under a guard on an enclosing workgroup row (a slot
+       above 0) has every lane of each warp on one side. Nor to the extent rule: an inserted
+       collective sits inside its own loop's rendering, which covers the whole [.x] dimension, never
+       under a guarded sibling workgroup loop. *)
+    List.iter (inserted_collectives ~reassociable ~warp_size llc) ~f:(fun ic ->
+        if not ic.ic_uniform then
+          let renders =
+            match ic.ic_form with
+            | Warp_reduce_partials -> "the multi-warp warp-shuffle reduction into a cell"
+            | Lane_all_reduce_partials -> "the cross-simdgroup lane all-reduce"
+            | Warp_reduce_shuffle -> "the single-warp warp-shuffle reduction into a cell"
+            | Lane_all_reduce_butterfly -> "the single-simdgroup lane butterfly"
+          in
           invalid_arg
-            ("Low_level.validate_parallel: Workgroup_reduce loop "
-           ^ Indexing.symbol_ident ib.ib_index ^ " renders as "
-            ^ (match ib.ib_form with
-              | Warp_reduce_partials -> "the multi-warp warp-shuffle reduction into a cell"
-              | Lane_all_reduce_partials -> "the cross-simdgroup lane all-reduce")
-            ^ Printf.sprintf
-                " (extent %d past %d-lane warps), whose inserted workgroup barrier is under \
-                 control                  flow that is not workgroup-uniform (an enclosing \
-                 workgroup loop, or a guard reading                  a scope local, memory, or a \
-                 workgroup symbol): lanes taking the other side would                  skip the \
-                 barrier the rest wait at"
-                ib.ib_extent warp_size));
+            (Printf.sprintf "Low_level.validate_parallel: Workgroup_reduce loop %s renders as %s "
+               (Indexing.symbol_ident ic.ic_index)
+               renders
+            ^
+            if inserts_barrier ic.ic_form then
+              Printf.sprintf
+                "(extent %d past %d-lane warps), whose inserted workgroup barrier is under control \
+                 flow that is not workgroup-uniform (an enclosing workgroup loop, or a guard \
+                 reading a scope local, memory, or a workgroup symbol): lanes taking the other \
+                 side would skip the barrier the rest wait at"
+                ic.ic_extent warp_size
+            else
+              Printf.sprintf
+                "(extent %d within one %d-lane warp), whose inserted warp shuffles are under \
+                 control flow that is not uniform across a warp (a guard reading a scope local, \
+                 memory, or a slot-0 workgroup symbol): lanes taking the other side would leave \
+                 the rest shuffling with inactive lanes, undefined on every GPU backend"
+                ic.ic_extent warp_size));
     (* Launch dimensions are global to the kernel, so a materialized write must be nested under
        annotated loops covering EVERY active (non-unit) hardware dimension -- a statement covering
        only some of them executes once per hardware index of each uncovered dimension, racing or

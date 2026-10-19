@@ -6892,7 +6892,23 @@ module C_syntax (B : C_syntax_config) = struct
                            Indexing.equal_symbol site.Low_level.lar_index i
                            && site.Low_level.lar_cross_simdgroup)
                   in
-                  if num_warps = 1 || cross_simdgroup () then Some (reg, num_warps) else None
+                  (* Within one simdgroup: every lane of the warp must reach the shuffles
+                     (gh-ocannl-1334), the question [Low_level.inserted_collectives] answers by
+                     listing the butterfly only where it holds -- the listing the validator
+                     reads. *)
+                  let butterfly () =
+                    List.exists
+                      (Low_level.inserted_collectives
+                         ~reassociable:Online_softmax.reassociable_local ~warp_size:B.warp_size
+                         !(ctx.current_kernel_llc)) ~f:(fun ic ->
+                        Indexing.equal_symbol ic.Low_level.ic_index i
+                        && Low_level.equal_inserted_collective_form ic.Low_level.ic_form
+                             Low_level.Lane_all_reduce_butterfly
+                        && ic.Low_level.ic_uniform)
+                  in
+                  if (num_warps = 1 && butterfly ()) || (num_warps > 1 && cross_simdgroup ()) then
+                    Some (reg, num_warps)
+                  else None
               | _ -> None
             in
             Some
@@ -7140,33 +7156,43 @@ module C_syntax (B : C_syntax_config) = struct
             then
               fail
                 "the reduce axis to be the only workgroup axis (the per-warp staging slots are not \
-                 replicated per sibling workgroup thread)";
-            (* gh-ocannl-1238: every lane of the workgroup must reach the two barriers below. The
-               notion of which statements insert a barrier, and whether uniform control reaches
-               them, is [Low_level.inserted_barriers]' -- the one [validate_parallel] refused a
-               divergent entry by before rendering began. Asked again here, so this rendering emits
-               a barrier only where that notion lists it: a site it does not list means the two
-               recognizers drifted apart, and the validator never saw this barrier. *)
-            match
-              List.filter
-                (Low_level.inserted_barriers ~reassociable:Online_softmax.reassociable_local
-                   ~warp_size:warp !(ctx.current_kernel_llc)) ~f:(fun ib ->
-                  Indexing.equal_symbol ib.Low_level.ib_index i
-                  && Low_level.equal_inserted_barrier_form ib.Low_level.ib_form
-                       Low_level.Warp_reduce_partials)
-            with
-            | [] ->
-                invalid_arg
-                  ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
-                 ^ " renders the multi-warp warp-shuffle reduction, but \
-                    Low_level.inserted_barriers does not list it: the validator's notion of which \
-                    statements insert a barrier has drifted from this renderer's")
-            | sites ->
-                if List.exists sites ~f:(fun ib -> not ib.Low_level.ib_uniform) then
-                  fail
-                    "workgroup-uniform enclosing control (no enclosing workgroup loop, and no \
-                     enclosing guard reading a scope local, memory, or a workgroup symbol): lanes \
-                     on the other side of the guard would skip the cross-warp barrier");
+                 replicated per sibling workgroup thread)");
+          (* gh-ocannl-1238 / gh-ocannl-1334: every lane the collectives below span must reach them
+             -- past one warp every lane of the workgroup the two barriers, within one every lane of
+             the warp the shuffles. The notion of which statements insert a lane collective, and
+             whether control uniform across its lanes reaches them, is
+             [Low_level.inserted_collectives]' -- the one [validate_parallel] refused a divergent
+             entry by before rendering began. Asked again here, so this rendering emits a collective
+             only where that notion lists it: a site it does not list means the two recognizers
+             drifted apart, and the validator never saw this collective. *)
+          (let form, what =
+             if num_warps > 1 then (Low_level.Warp_reduce_partials, "multi-warp")
+             else (Low_level.Warp_reduce_shuffle, "single-warp")
+           in
+           match
+             List.filter
+               (Low_level.inserted_collectives ~reassociable:Online_softmax.reassociable_local
+                  ~warp_size:warp !(ctx.current_kernel_llc)) ~f:(fun ic ->
+                 Indexing.equal_symbol ic.Low_level.ic_index i
+                 && Low_level.equal_inserted_collective_form ic.Low_level.ic_form form)
+           with
+           | [] ->
+               invalid_arg
+                 ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i ^ " renders the " ^ what
+                ^ " warp-shuffle reduction, but Low_level.inserted_collectives does not list it: \
+                   the validator's notion of which statements insert a lane collective has drifted \
+                   from this renderer's")
+           | sites ->
+               if List.exists sites ~f:(fun ic -> not ic.Low_level.ic_uniform) then
+                 fail
+                   (if num_warps > 1 then
+                      "workgroup-uniform enclosing control (no enclosing workgroup loop, and no \
+                       enclosing guard reading a scope local, memory, or a workgroup symbol): \
+                       lanes on the other side of the guard would skip the cross-warp barrier"
+                    else
+                      "warp-uniform enclosing control (no enclosing guard reading a scope local, \
+                       memory, or a slot-0 workgroup symbol): lanes on the other side of the guard \
+                       would leave the rest shuffling with inactive lanes"));
           let ident = symbol_ident i in
           let ctyp = B.typ_of_prec prec in
           let cast = "(" ^ String.strip B.loop_index_type ^ ")" in

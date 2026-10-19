@@ -86,10 +86,10 @@ type case = {
 
 (* [?guard] wraps the preamble reduction in an [If]: [`Uniform] on the serial query symbol ([s < s_n
    - 2], so the last two queries contribute nothing), [`Lane_flag] on a scope local a workgroup loop
-   sets lane-dependently ([flag := a < 32]) -- the shape whose lanes would part ways at the
-   cross-simdgroup barriers; [`First_or_flag] on [s < 1 || flag], which a materializing unroll of
-   [s] simplifies away in the first copy only. *)
-let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
+   sets lane-dependently ([flag := a < flag_below], 32 by default) -- the shape whose lanes would
+   part ways at the cross-simdgroup barriers; [`First_or_flag] on [s < 1 || flag], which a
+   materializing unroll of [s] simplifies away in the first copy only. *)
+let dk_nest ?(minted = true) ?guard ?(flag_below = 32) ~name ~e_n ~d_n () =
   let a_dims = [| b_n; s_n; h_n; e_n |]
   and bv_dims = [| b_n; t_n; h_n; e_n |]
   and q_dims = [| b_n; s_n; h_n; d_n |]
@@ -141,7 +141,7 @@ let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
         ( Some a,
           [
             L.declare_local flag;
-            L.loop_n a e_n (LL.Set_local (flag, L.lt (L.embed a) (L.ic 32)));
+            L.loop_n a e_n (LL.Set_local (flag, L.lt (L.embed a) (L.ic flag_below)));
             L.if_ cond reduction;
           ] )
   in
@@ -492,8 +492,8 @@ let validator_admits_at_32 (o : LL.optimized) =
   | exception Invalid_argument _ -> false
 
 let inserted_lane_barriers_uniform (o : LL.optimized) =
-  (match LL.inserted_barriers ~reassociable ~warp_size:32 o.LL.llc with
-    | [ { LL.ib_form = LL.Lane_all_reduce_partials; ib_uniform = true; _ } ] -> true
+  (match LL.inserted_collectives ~reassociable ~warp_size:32 o.LL.llc with
+    | [ { LL.ic_form = LL.Lane_all_reduce_partials; ic_uniform = true; _ } ] -> true
     | _ -> false)
   && validator_admits_at_32 o
 
@@ -530,7 +530,7 @@ let () =
     "lred_guard_flag64: the validator's notion lists no inserted barrier for the site at 32-lane \
      shuffles"
     ~over:(sites scheduled)
-    (LL.inserted_barriers ~reassociable ~warp_size:32 scheduled.LL.llc);
+    (LL.inserted_collectives ~reassociable ~warp_size:32 scheduled.LL.llc);
   p "lred_guard_flag64: the validator admits the serial fallback at 32-lane shuffles"
     (validator_admits_at_32 scheduled);
   ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
@@ -640,3 +640,63 @@ let () =
         (Printf.sprintf "%s: %d bytes of partials, admitted at that limit%s" name bytes
            (if bytes > 0 then " and refused one byte below it" else ""))
         (estimate name = bytes && admits name bytes && (bytes = 0 || not (admits name (bytes - 1)))))
+
+(* gh-ocannl-1334: the single-simdgroup butterfly inserts no barrier, but its shuffles need every
+   lane of the warp. [Low_level.inserted_collectives] lists it only under warp-uniform control, the
+   listing the renderer takes it by; elsewhere every lane loops the reduction itself. *)
+let () =
+  printf "--- leg 12: the butterfly only under warp-uniform control ---\n";
+  let case = dk_nest ~guard:`Uniform ~name:"lred_guard_uniform32" ~e_n:32 ~d_n:32 () in
+  let scheduled = hand_schedule case in
+  p
+    "lred_guard_uniform32: the validator's notion lists the butterfly at 32-lane shuffles, \
+     uniform, and admits it"
+    ((match LL.inserted_collectives ~reassociable ~warp_size:32 scheduled.LL.llc with
+       | [ { LL.ic_form = LL.Lane_all_reduce_butterfly; ic_uniform = true; ic_index; _ } ] ->
+           Ir.Indexing.equal_symbol ic_index case.e_sym
+       | _ -> false)
+    && validator_admits_at_32 scheduled);
+  let got = List.hd_exn (L.execute ~name:case.name scheduled ~seed:case.seed ~read:[ case.k_tn ]) in
+  p_all2 "lred_guard_uniform32: every cell of K holds the serial reference's exact value" got
+    case.expected ~f:Float.equal;
+  (* At one simdgroup the all-reduce is the butterfly. *)
+  let claim = "lred_guard_uniform32: the emitted kernel spells the all-reduce" in
+  if gpu then Generated.assert_emits ~routine:case.name ~contains:all_reduce_marker claim
+  else skipped ~backend:backend_name claim;
+  (* [flag := a < 16] over the 32 lanes: lanes 16.. skip the reduction, and a butterfly there would
+     read their registers as inactive lanes. *)
+  let case =
+    dk_nest ~guard:`Lane_flag ~flag_below:16 ~name:"lred_guard_flag32" ~e_n:32 ~d_n:32 ()
+  in
+  let scheduled = hand_schedule ~extra_lanes:(Option.to_list case.flag_lane) case in
+  p "lred_guard_flag32: the reduction is a lane all-reduce site"
+    (match sites scheduled with
+    | [ site ] -> Ir.Indexing.equal_symbol site.LL.lar_index case.e_sym
+    | _ -> false);
+  p_empty
+    "lred_guard_flag32: the validator's notion lists no lane collective for the site at 32-lane \
+     shuffles"
+    ~over:(sites scheduled)
+    (LL.inserted_collectives ~reassociable ~warp_size:32 scheduled.LL.llc);
+  p "lred_guard_flag32: the validator admits the serial fallback at 32-lane shuffles"
+    (validator_admits_at_32 scheduled);
+  (* The program's meaning follows the lanes' binding: on a GPU lane [d] is the thread whose flag
+     lane [a] set, so lanes below 16 sum the whole reduction and the rest none; where the lanes
+     iterate (cc) the flag holds its last iteration's value, false, and no lane sums. *)
+  let lane_sums d = if gpu && d < 16 then List.range 0 32 else [] in
+  let expected = case.k_with lane_sums in
+  p_exists "lred_guard_flag32: the operands tell the lanes that sum from the lanes that do not"
+    (List.zip_exn (Array.to_list expected) (Array.to_list (case.k_with (fun _ -> List.range 0 32))))
+    ~f:(fun (a, b) -> not (Float.equal a b));
+  let got = List.hd_exn (L.execute ~name:case.name scheduled ~seed:case.seed ~read:[ case.k_tn ]) in
+  p_all2 "lred_guard_flag32: every cell of K holds the per-lane reference's exact value" got
+    expected ~f:Float.equal;
+  let omits = "lred_guard_flag32: the emitted kernel does not spell the all-reduce" in
+  let loops = "lred_guard_flag32: the emitted kernel loops the reduction in every lane" in
+  if not gpu then (
+    skipped ~backend:backend_name omits;
+    skipped ~backend:backend_name loops)
+  else (
+    Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
+    let ident = Ir.Indexing.symbol_ident case.e_sym in
+    p loops (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")))
