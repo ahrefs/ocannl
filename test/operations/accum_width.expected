@@ -59,3 +59,11 @@ a privatized reduction beside a staged-compilation statement keeps per-step narr
 a privatized bf16 reduction widens with the serial rendering (256 + 1 + 1 reaches 258): true
 a privatized non-reduction recurrence keeps per-step narrowing with the serial rendering (256 - 0.5 - 0.5 stays 256): true
 a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 + 1, 0) twice stays 256): true
+a privatized reduction whose cell varies under an inner output loop keeps per-step narrowing with the serial rendering (256 + 1 + 1 stays 256 per cell) and a storage-precision tile: true
+the emitted kernel declares the inner-output leg's privatized tile at bf16 storage (cc's unsigned short, not float): true
+a Privatize applied after a Stage in an earlier apply keeps per-step narrowing with the staged program's serial rendering (256 + 1 + 1 stays 256) and a storage-precision tile: true
+the same Swap, Stage and Privatize in one apply widen with the source's serial rendering (256 + 1 + 1 reaches 258) on an f32 tile: true
+a Privatize over a loop holding two sibling reductions of the target keeps their separate narrowings with the serial rendering (256 + 4 x 0.5 stays 256) and a storage-precision tile: true
+an unrelated non-reduction write of the target before the privatized reduction does not decide its width: the tile widens with the serial rendering (256 + 1 + 1 reaches 258): true
+the shared decision pins an RNG-bearing accumulation to storage and so does a Privatize tile taking it over, while the plain twin widens: true
+the final re-check accepts a privatized tile's transfer and reduction update and refuses a non-reduction recurrence into it: true

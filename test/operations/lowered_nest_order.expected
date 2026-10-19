@@ -1,0 +1,4 @@
+every forward case lowers a contraction nest with output and reduction loops, raw and optimized: true
+forward lowering opens every output loop before any reduction loop, raw and optimized: true
+the predicate refuses the matmul with its reduction loop interchanged above an output loop: true
+backprop lowers a weight gradient's batch reduction loop OUTSIDE its output loops (the order is a forward-lowering property only): true

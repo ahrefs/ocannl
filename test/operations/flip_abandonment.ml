@@ -610,20 +610,18 @@ let () =
       Poly.equal r.Autotune.outcome Autotune.Cache_replay);
   p "under them the warm flip chain still replays the abandonment and ships the same winner"
     (replays_abandonment chain);
-  (* gh-ocannl-1241: the keys of the untuned regime's untimed picks, stated at their defaults. Only
-     [Autotune.model_default] and [Autotune.seeded_default] (gh-ocannl-1324) read them -- they time
-     nothing and never touch the schedule cache -- yet while they were [Search_shaping], stating
-     [model_default_placements=0] changed the identity and the warm chain searched its abandoned
-     flip in full. *)
+  (* gh-ocannl-1241: the keys of the untuned regime's untimed pick, stated at their defaults. Only
+     [Autotune.model_default] reads them -- it times nothing and never touches the schedule cache --
+     yet while they were [Search_shaping], stating [model_default_placements=0] changed the identity
+     and the warm chain searched its abandoned flip in full. (The seeded plan's keys,
+     [gpu_default_*], left this class in gh-ocannl-1388: the search seeds that plan first.) *)
   let model_keys =
     [
       ("model_default_schedule", "false");
       ("model_default_placements", "0");
       ("model_default_geometry_lattice", "false");
-      ("gpu_default_sketch_min_reduction", "32");
-      ("gpu_default_split_reduce_min_serial", "1024");
-      ("gpu_default_reduction_sink", "true");
-      (* gh-ocannl-1253: the ranking score's capacity, at its default (the backend's advisory). *)
+      (* gh-ocannl-1253: the ranking score's capacity and cache bandwidth, at their defaults (the
+         backend's advisories). *)
       ("model_cache_capacity", "");
       ("model_cache_bandwidth", "");
     ]

@@ -30,9 +30,7 @@ module Asgns = Ir.Assignments
 open Verdict.Claims
 
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
-let accum_prec =
-  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
-  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+let accum_prec = Ll_test.backend_accum_prec
 
 (* Zeros compare equal to zeros. A fragment mapping that reads outside the staged block, a kernel
    that never ran, or a reference whose own setup silently collapsed all yield all-zeros, and a

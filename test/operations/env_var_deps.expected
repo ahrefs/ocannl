@@ -60,6 +60,9 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   fp_contract
   fp_finite_math
   fp_reassociate
+  gpu_default_reduction_sink
+  gpu_default_sketch_min_reduction
+  gpu_default_split_reduce_min_serial
   gpu_elide_covered_zeros
   gpu_fission_keep_mapping
   gpu_lane_all_reduce_simdgroups
@@ -194,6 +197,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test hosted_constant_fill: Ir.Schedule.apply
   test/operations/dune, test launch_dim_gate: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits, Ir.Schedule.check_hardware_limits_classified, Ir.Schedule.default_gpu
   test/operations/dune, test launch_predicate_parity: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits_classified, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test lowered_nest_order: Ir.Schedule.apply
   test/operations/dune, test matmul_interchange: Ir.Schedule.apply
   test/operations/dune, test metal_threadgroup_overflow: Ir.Schedule.apply
   test/operations/dune, test mma_tensorization_label: Ir.Schedule.apply

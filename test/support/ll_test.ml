@@ -401,6 +401,17 @@ let rejection_code (o : LL.optimized) tn =
    executions do not observe each other's decisions. *)
 let base_ctx = lazy (Context.auto ())
 
+(** The backend's accumulator residency for a storage precision — the width a [Schedule.Privatize]
+    tile is minted at ({!Ir.Schedule.privatize}'s [~accum_prec], gh-ocannl-1116) — read off the
+    selected backend's {!Context.codegen_capabilities}, so a test asks code generation's own
+    resolution rather than restating it. Lazy, so the backend is selected on first use rather than
+    when the module initializes; each call resolves under the numerics policy current at that call
+    (a [Test_utils.with_policy] around it applies). The one copy of what used to be pasted into
+    every schedule test (gh-ocannl-1151). *)
+let backend_accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Lazy.force base_ctx)) in
+  fun p -> (Lazy.force caps).accum_prec p
+
 (** [link ~name o] compiles the optimized record AS WRITTEN through the [?prelowered] seam,
     returning the advanced context and the compiled routine — so a test can assert on the
     [inputs]/[outputs] the link actually computed, read straight off the routine record, instead of

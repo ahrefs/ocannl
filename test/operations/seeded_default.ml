@@ -23,6 +23,14 @@ open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
+(* gh-ocannl-998: the bitwise claims are about summation order, so every product accumulation is an
+   explicit FMA -- the contraction licence, pinned on here. With the licence off (the default) the
+   update is a plain [acc + a * b], and whether it fuses is the GPU compiler's call, kernel by
+   kernel: on HIP (gfx1102) clang's [-ffast-math] contracted the seeded tiled kernel and the default
+   kernel differently, which is a different rounding, not a different order, and failed the
+   claims. *)
+let () = Unix.putenv "OCANNL_FP_CONTRACT" "true"
+
 let seeds_here =
   String.is_substring backend_name ~substring:"cuda"
   || String.is_substring backend_name ~substring:"hip"

@@ -403,6 +403,17 @@ files.
   maximum-one symbolic axis without an iterator, so runtime zero cannot escape the refusal through
   `Fixed_idx 0`. An unbound extent retains the standing maximum-shape semantics; padded-window
   clamping remains unreachable by construction.
+- **Output loops outside reduction loops is a FORWARD-lowering property only** (gh-ocannl-1151).
+  A forward contraction's product space lists the result's axes first, so its lowered nest opens
+  every loop the written cell mentions before any loop it does not: matmul, a transposed output, a
+  contraction axis in the middle of its operand, a two-axis reduction and a batched matmul all
+  lower that way, raw (`opt.source`) and optimized (`opt.llc`). Backprop does not: a gradient is
+  lowered over its FORWARD op's product space, so a weight gradient `dw[o,i] += dy[b,o] * x[b,i]`
+  iterates its batch reduction OUTERMOST, the shape `Autotune.detect_matmul_canonical`'s interchange
+  exists for (gh-ocannl-1183). Never rely on the order for an arbitrary accumulation; `Privatize`'s
+  tile width relied on it through a rebuilt peel input until gh-ocannl-1151 replaced that with the
+  shared decision (backend-precision-and-simd.md). `test/operations/lowered_nest_order` pins both
+  halves, roles read off each nest's accumulating write, with an interchanged negative control.
 - **A gh-490 extent guard is per-ITERATOR, so an axis with no product iterator gets none**, and
   `Accum_op` reaches that shape from ordinary `%op` code: a maximum-one symbolic axis has an empty
   product space, both sides indexed at `Fixed_idx 0`. Reducing over one bound to zero returned the

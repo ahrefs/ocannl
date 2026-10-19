@@ -21,10 +21,23 @@ module Train = Ocannl.Train
 open Ocannl.Nn_blocks.DSL_modules
 module Tn = Ir.Tnode
 
+(* A zero's sign is printed normalized, and its raw bits go to stderr. The sign of an exact zero is
+   the one thing a backend's own floating-point licence may change here: HIP compiles with clang's
+   [-ffast-math], whose [-fno-signed-zeros] lets it fold the [+0 + x * g] a gradient accumulation
+   opens with once its covering zero is elided ([gpu_elide_covered_zeros]) down to [x * g] -- which
+   is [-0] for [x = -2], [g = +0], where IEEE gives [+0] (observed on gfx1102: the kernel's
+   [__hadd(__float2half(0.0), __hmul(x, z_grad))] stored [-0]). What this test pins is the half
+   emission and the gate's boundary (a closed gate passes zero), which hold under either sign;
+   OCANNL's own signed-zero licence is [fp_finite_math] (gh-ocannl-998), and it is off. *)
 let show ctx label t =
+  let values = Context.get_values ctx t in
+  if Array.exists values ~f:(fun x -> Float.(x = 0.) && Float.ieee_negative x) then
+    Stdio.eprintf "%s holds a negative zero: %s (not part of the golden)\n" label
+      (String.concat ~sep:" " (Array.to_list (Array.map values ~f:(Printf.sprintf "%h"))));
   Stdio.printf "%s:" label;
   Stdio.printf " ";
-  Test_utils.print_floats ~prec:4 (Array.to_list (Context.get_values ctx t));
+  Test_utils.print_floats ~prec:4
+    (Array.to_list (Array.map values ~f:(fun x -> if Float.(x = 0.) then 0. else x)));
   Stdio.printf "\n"
 
 let () =

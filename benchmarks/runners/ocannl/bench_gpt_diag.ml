@@ -68,10 +68,9 @@ let () =
         failwith "BENCH_PROMOTE=0 is forward-only; training diagnostics use the shipped pipeline"
     | _ -> None
   in
-  (* Which accumulations the split-reduce detector proposes on the step, and which rule rejects the
-     rest, as bench_conv_diag's probe of the same name. Only the lowering is needed, so the compile
-     is abandoned once it is in hand: the unscheduled whole-step form need not link. *)
-  if H.env_flag "BENCH_SR_SITES" then (
+  (* The step's lowering alone: the compile is abandoned once it is in hand, so the unscheduled
+     whole-step form need not link. *)
+  let step_lowering () =
     let comp =
       match step_shape with
       | `Forward comp
@@ -90,7 +89,12 @@ let () =
             ~provenance:Ir.Schedule_outcome.User_schedule ctx comp bindings
            : (Context.t * Context.routine, Ir.Schedule_outcome.failure) Result.t)
      with Stdlib.Exit -> ());
-    let opt = Option.value_exn ~here:[%here] !stash in
+    Option.value_exn ~here:[%here] !stash
+  in
+  (* Which accumulations the split-reduce detector proposes on the step, and which rule rejects the
+     rest, as bench_conv_diag's probe of the same name. *)
+  if H.env_flag "BENCH_SR_SITES" then (
+    let opt = step_lowering () in
     let sites = Autotune.split_reduce_sites ~static_indices:[ batch_n ] opt in
     Stdio.printf "split-reduce sites detected: %d\n" (List.length sites);
     (* The serial chain per cell is what [gpu_default_split_reduce_min_serial] compares against; a
@@ -119,6 +123,30 @@ let () =
     Stdio.printf "untuned CUDA split at min_serial=%d: %d site(s)\n" min_serial (List.length split);
     List.iter split ~f:(fun site -> Stdio.printf "  %s\n" (Autotune.split_sites_label [ site ]));
     H.print_split_reduce_verdicts opt;
+    Stdlib.exit 0);
+  (* gh-ocannl-1413: which product accumulations are their segment's matmul site. *)
+  if H.env_flag "BENCH_SITE_CENSUS" then (
+    let opt = step_lowering () in
+    let choice = ref None in
+    H.print_site_census ~limits ~static_indices:[ batch_n ] opt;
+    (* What the untuned seeded default makes of it, on a copy: the census counts sites, this counts
+       the sketches actually seeded. *)
+    (match Autotune.seeded_transform ~on_choice:(fun c -> choice := Some c) ctx bindings with
+    | None -> Stdio.printf "seeded default: inactive here\n"
+    | Some transform ->
+        ignore
+          (transform
+             {
+               opt with
+               traced_store = Hashtbl.copy opt.traced_store;
+               optimize_ctx = Ir.Low_level.copy_optimize_ctx opt.optimize_ctx;
+             }
+            : Ir.Low_level.optimized list));
+    Option.iter !choice ~f:(fun (c : Autotune.seeded_choice) ->
+        Stdio.printf
+          "seeded default: %d segments seeded, %d default segments refined, %d reductions split%s\n"
+          (List.length c.sd_seeded) c.sd_refined (List.length c.sd_split)
+          (if c.sd_fell_back then ", fell back" else ""));
     Stdlib.exit 0);
   let t0 = Unix.gettimeofday () in
   let ctx, routines =

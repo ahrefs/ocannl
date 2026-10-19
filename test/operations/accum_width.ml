@@ -1672,3 +1672,305 @@ let () =
       p claim_priv_gate_add (Float.equal s_add 258.0 && Float.equal p_add 258.0);
       p claim_priv_gate_sub (Float.equal s_sub 256.0 && Float.equal p_sub 256.0);
       p claim_priv_gate_mixed (Float.equal s_mix 256.0 && Float.equal p_mix 256.0))
+
+(* === A Privatize tile judges the program its schedule was applied to (gh-ocannl-1151) === *)
+(* The tile's width is code generation's own decision ([LL.decide_accum_width]), asked of the
+   program [Sched.apply] was handed, at every level code generation asks it
+   ([LL.serial_accum_widths]). Before gh-ocannl-1151 it was asked of a nest rebuilt from the
+   privatized loop's subtree with the loops the cell mentions dropped and the schedule's staging
+   loads classified away — which disagreed with code generation wherever the lowering was not
+   "output loops outside reduction loops", and wherever a staging step had already been applied.
+   All under [Bf16_wide], so the residency widens bf16 on every backend.
+
+   - [k { i { acc[i] += 1 } }]: the cell varies under the inner output loop [i], so code generation
+     never localizes it and the serial rendering narrows per step (256 + 1 + 1 stays 256 per cell).
+     The rebuild dropped [i], peeled [k] and minted a wide tile (258): this leg fails before
+     gh-ocannl-1151.
+   - A [Stage] applied by an EARLIER [apply]: its loads are sibling statements of the reduction in
+     the program the later [Privatize] is handed, so the serial rendering of that program narrows
+     per step and so must the tile (256). The negative control is the same three ops in ONE
+     [apply], judged on the source nest, which code generation widens (258) — so the 256 is the
+     contract and not a tile that never widens.
+   - An RNG-bearing update: the decision pins it to storage ([Skip_accum_pinned]), and so the tile;
+     read structurally, as is every leg's tile precision.
+   - The final re-check: a wide tile's updates must stay bases the decision widens
+     ([Sched.privatized_tile_widens]). *)
+let claim_priv_inner_output =
+  "a privatized reduction whose cell varies under an inner output loop keeps per-step narrowing \
+   with the serial rendering (256 + 1 + 1 stays 256 per cell) and a storage-precision tile"
+
+let claim_priv_inner_output_emitted =
+  "the emitted kernel declares the inner-output leg's privatized tile at bf16 storage (cc's \
+   unsigned short, not float)"
+
+let claim_priv_stage_later =
+  "a Privatize applied after a Stage in an earlier apply keeps per-step narrowing with the staged \
+   program's serial rendering (256 + 1 + 1 stays 256) and a storage-precision tile"
+
+let claim_priv_stage_one_apply =
+  "the same Swap, Stage and Privatize in one apply widen with the source's serial rendering (256 + \
+   1 + 1 reaches 258) on an f32 tile"
+
+let claim_priv_siblings_in_over =
+  "a Privatize over a loop holding two sibling reductions of the target keeps their separate \
+   narrowings with the serial rendering (256 + 4 x 0.5 stays 256) and a storage-precision tile"
+
+let claim_priv_unrelated_write =
+  "an unrelated non-reduction write of the target before the privatized reduction does not decide \
+   its width: the tile widens with the serial rendering (256 + 1 + 1 reaches 258)"
+
+let claim_priv_rng =
+  "the shared decision pins an RNG-bearing accumulation to storage and so does a Privatize tile \
+   taking it over, while the plain twin widens"
+
+let claim_priv_recheck =
+  "the final re-check accepts a privatized tile's transfer and reduction update and refuses a \
+   non-reduction recurrence into it"
+
+let () =
+  let bf16 = Ir.Ops.bfloat16 in
+  let node = Ll_test.node_factory ~prec:bf16 ~first_id:11510 ~dims:[| 2 |] () in
+  let it = Ll_test.iter in
+  let bin op a b = LL.Binop (op, (a, bf16), (b, bf16)) in
+  let pz ~target ~over = Sched.privatize ~accum_prec:Ll_test.backend_accum_prec ~target ~over in
+  (* The precision of each tile-namespace node the program accumulates into: a privatized tile. *)
+  let tile_precs (llc : LL.t) =
+    let precs = ref [] in
+    Ll_test.walk llc ~on_stmt:(function
+      | LL.Set { tn; llsc; _ }
+        when String.equal tn.Tn.namespace "tile" && LL.scalar_touches_tn tn llsc ->
+          precs := Lazy.force tn.Tn.storage_prec :: !precs
+      | _ -> ());
+    List.dedup_and_sort !precs ~compare:Ir.Ops.compare_prec
+  in
+  let only_prec prec llc = List.equal Ir.Ops.equal_prec (tile_precs llc) [ prec ] in
+  let exec ~name ~acc ?(seed = []) o =
+    Ll_test.execute ~name o ~seed:((acc, [| 256.0; 256.0 |]) :: seed) ~read:[ acc ]
+    |> List.hd_exn |> Array.to_list
+  in
+  Test_utils.with_policy
+    (fun pol -> { pol with Numerics.bf16_arithmetic = Numerics.Bf16_wide })
+    (fun () ->
+      (* [k { i { acc[i] += 1 } }]. *)
+      (let acc = node "aw_pi_acc" in
+       Ll_test.materialize acc;
+       let k = Ll_test.sym () and i = Ll_test.sym () in
+       let raw () =
+         Ll_test.loop_n k 2
+           (Ll_test.loop_n i 2
+              (Ll_test.set acc
+                 [| it i |]
+                 (bin Ir.Ops.Add (Ll_test.get acc [| it i |]) (LL.Constant 1.0))))
+       in
+       let serial =
+         exec ~name:"aw_pi_serial" ~acc
+           (Ll_test.optimize ~materialized:[ acc ] ~name:"aw_pi_serial" (raw ()))
+       in
+       let o = Ll_test.optimize ~materialized:[ acc ] ~name:"aw_pi_priv" (raw ()) in
+       let scheduled = Sched.apply [ pz ~target:acc ~over:k ] o in
+       let priv = exec ~name:"aw_pi_priv" ~acc scheduled in
+       Stdio.eprintf
+         "accum_width: inner-output privatize serial %s privatized %s (not part of the golden)\n%!"
+         (String.concat ~sep:"," (List.map serial ~f:Float.to_string))
+         (String.concat ~sep:"," (List.map priv ~f:Float.to_string));
+       p claim_priv_inner_output
+         (List.equal Float.equal serial [ 256.0; 256.0 ]
+         && List.equal Float.equal priv serial
+         && only_prec bf16 scheduled.LL.llc);
+       cc_only claim_priv_inner_output_emitted (fun () ->
+           let src = Generated.read ~ext:".c" "aw_pi_priv" in
+           p claim_priv_inner_output_emitted
+             (List.exists (String.split_lines src) ~f:(fun line ->
+                  (* cc spells bf16 storage [unsigned short]; the residency would be [float]. *)
+                  String.is_prefix (String.lstrip line) ~prefix:"unsigned short acc_aw_pi_acc["))));
+      (* A [Stage] applied by an earlier [apply], against the same ops in one. *)
+      (let seed x = [ (x, [| 1.0; 1.0; 1.0; 1.0 |]) ] in
+       (* Fresh nodes and symbols per build: the analysis cache serves an alpha-equivalent program
+          over the same nodes with the first build's loop symbols. *)
+       let build ~name =
+         let acc = node (name ^ "_acc") and x = node ~dims:[| 2; 2 |] (name ^ "_x") in
+         Ll_test.materialize acc;
+         Ll_test.materialize x;
+         let i = Ll_test.sym () and k = Ll_test.sym () in
+         let raw =
+           Ll_test.loop_n i 2
+             (Ll_test.loop_n k 2
+                (Ll_test.set acc
+                   [| it i |]
+                   (bin Ir.Ops.Add (Ll_test.get acc [| it i |]) (Ll_test.get x [| it i; it k |]))))
+         in
+         let staging =
+           [
+             Sched.Swap { outer = i; inner = k };
+             Sched.Stage
+               {
+                 source = x;
+                 tile_loops = [ i ];
+                 shared = false;
+                 cooperative = None;
+                 hoisted = false;
+                 swizzle = None;
+                 pad_stride = None;
+                 pipeline_depth = 1;
+                 tile_prec = None;
+               };
+           ]
+         in
+         (Ll_test.optimize ~materialized:[ acc; x ] ~name raw, staging, acc, x, k)
+       in
+       let leg ~name ~split =
+         let o, staging, acc, x, k = build ~name in
+         let scheduled =
+           if split then Sched.apply [ pz ~target:acc ~over:k ] (Sched.apply staging o)
+           else Sched.apply (staging @ [ pz ~target:acc ~over:k ]) o
+         in
+         (exec ~name ~acc ~seed:(seed x) scheduled, scheduled.LL.llc)
+       in
+       let later, later_llc = leg ~name:"aw_ps_later" ~split:true in
+       let one, one_llc = leg ~name:"aw_ps_one" ~split:false in
+       let later_serial =
+         let o, staging, acc, x, _ = build ~name:"aw_ps_staged" in
+         exec ~name:"aw_ps_staged" ~acc ~seed:(seed x) (Sched.apply staging o)
+       in
+       Stdio.eprintf
+         "accum_width: staged-then-privatized %s (staged serial %s), one apply %s (not part of the \
+          golden)\n\
+          %!"
+         (String.concat ~sep:"," (List.map later ~f:Float.to_string))
+         (String.concat ~sep:"," (List.map later_serial ~f:Float.to_string))
+         (String.concat ~sep:"," (List.map one ~f:Float.to_string));
+       p claim_priv_stage_later
+         (List.equal Float.equal later [ 256.0; 256.0 ]
+         && List.equal Float.equal later_serial later
+         && only_prec bf16 later_llc);
+       p claim_priv_stage_one_apply
+         (List.equal Float.equal one [ 258.0; 258.0 ] && only_prec Ir.Ops.single one_llc));
+      (* Two sibling reductions inside [over], and an unrelated narrow write before the privatized
+         reduction (local Codex review, before the PR): the width is judged for the write the update
+         descends from, and only one update may share the tile. *)
+      (let acc = node "aw_psib_acc" in
+       Ll_test.materialize acc;
+       let o = Ll_test.sym () and k1 = Ll_test.sym () and k2 = Ll_test.sym () in
+       let cell = [| Ll_test.fixed 0 |] in
+       let add k =
+         Ll_test.loop_n k 2
+           (Ll_test.set acc cell (bin Ir.Ops.Add (Ll_test.get acc cell) (LL.Constant 0.5)))
+       in
+       let raw = Ll_test.loop_n o 2 (LL.unflat_lines [ add k1; add k2 ]) in
+       let serial =
+         exec ~name:"aw_psib_serial" ~acc
+           (Ll_test.optimize ~materialized:[ acc ] ~name:"aw_psib_serial" raw)
+       in
+       let acc2 = node "aw_psib2_acc" in
+       Ll_test.materialize acc2;
+       let o = Ll_test.sym () and k1 = Ll_test.sym () and k2 = Ll_test.sym () in
+       let add k =
+         Ll_test.loop_n k 2
+           (Ll_test.set acc2 cell (bin Ir.Ops.Add (Ll_test.get acc2 cell) (LL.Constant 0.5)))
+       in
+       let raw2 = Ll_test.loop_n o 2 (LL.unflat_lines [ add k1; add k2 ]) in
+       let scheduled =
+         Sched.apply
+           [ pz ~target:acc2 ~over:o ]
+           (Ll_test.optimize ~materialized:[ acc2 ] ~name:"aw_psib_priv" raw2)
+       in
+       let priv = exec ~name:"aw_psib_priv" ~acc:acc2 scheduled in
+       Stdio.eprintf
+         "accum_width: sibling reductions in over serial %s privatized %s (not part of the golden)\n\
+          %!"
+         (String.concat ~sep:"," (List.map serial ~f:Float.to_string))
+         (String.concat ~sep:"," (List.map priv ~f:Float.to_string));
+       p claim_priv_siblings_in_over
+         (List.equal Float.equal serial [ 256.0; 256.0 ]
+         && List.equal Float.equal priv serial
+         && only_prec bf16 scheduled.LL.llc));
+      (let build ~name =
+         let acc = node (name ^ "_acc") in
+         Ll_test.materialize acc;
+         let k0 = Ll_test.sym () and i = Ll_test.sym () and k = Ll_test.sym () in
+         let c0 = [| Ll_test.fixed 0 |] in
+         let raw =
+           LL.unflat_lines
+             [
+               Ll_test.loop_n k0 2
+                 (Ll_test.set acc c0 (bin Ir.Ops.Sub (Ll_test.get acc c0) (LL.Constant 0.5)));
+               Ll_test.loop_n i 2
+                 (Ll_test.loop_n k 2
+                    (Ll_test.set acc
+                       [| it i |]
+                       (bin Ir.Ops.Add (Ll_test.get acc [| it i |]) (LL.Constant 1.0))));
+             ]
+         in
+         (Ll_test.optimize ~materialized:[ acc ] ~name raw, acc, i, k)
+       in
+       let o, acc, _, _ = build ~name:"aw_punrel_serial" in
+       let serial = exec ~name:"aw_punrel_serial" ~acc o in
+       let o, acc, i, k = build ~name:"aw_punrel_priv" in
+       let scheduled =
+         Sched.apply [ Sched.Swap { outer = i; inner = k }; pz ~target:acc ~over:k ] o
+       in
+       let priv = exec ~name:"aw_punrel_priv" ~acc scheduled in
+       Stdio.eprintf
+         "accum_width: unrelated write before the privatized reduction serial %s privatized %s \
+          (not part of the golden)\n\
+          %!"
+         (String.concat ~sep:"," (List.map serial ~f:Float.to_string))
+         (String.concat ~sep:"," (List.map priv ~f:Float.to_string));
+       p claim_priv_unrelated_write
+         (List.equal Float.equal serial [ 258.0; 258.0 ]
+         && List.equal Float.equal priv serial
+         && only_prec Ir.Ops.single scheduled.LL.llc));
+      (* An RNG-bearing update, structurally. *)
+      (let acc = node "aw_pr_acc" in
+       let bits =
+         Ll_test.node_factory ~prec:Ir.Ops.uint4x32 ~first_id:11530 ~dims:[| 2 |] () "aw_pr_bits"
+       in
+       Ll_test.materialize acc;
+       Ll_test.materialize bits;
+       let build ~rng =
+         let k = Ll_test.sym () in
+         let contrib =
+           if rng then
+             LL.Unop
+               (Ir.Ops.Uint4x32_to_prec_uniform1, (Ll_test.get bits [| it k |], Ir.Ops.uint4x32))
+           else Ll_test.get bits [| it k |]
+         in
+         ( k,
+           Ll_test.loop_n k 2
+             (Ll_test.set acc
+                [| Ll_test.fixed 0 |]
+                (bin Ir.Ops.Add (Ll_test.get acc [| Ll_test.fixed 0 |]) contrib)) )
+       in
+       let widths ~rng =
+         let _, raw = build ~rng in
+         List.map
+           (LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:acc raw)
+           ~f:(fun sa -> sa.LL.sa_widens)
+       in
+       let tile ~rng =
+         let k, raw = build ~rng in
+         let o = Ll_test.optimize ~materialized:[ acc; bits ] ~name:"aw_pr" raw in
+         tile_precs (Sched.apply [ pz ~target:acc ~over:k ] o).LL.llc
+       in
+       p claim_priv_rng
+         (List.equal Bool.equal (widths ~rng:true) [ false ]
+         && List.equal Bool.equal (widths ~rng:false) [ true ]
+         && List.equal Ir.Ops.equal_prec (tile ~rng:true) [ bf16 ]
+         && List.equal Ir.Ops.equal_prec (tile ~rng:false) [ Ir.Ops.single ]));
+      (* The final re-check, over a tile's statements. *)
+      let target = node "aw_prc_target" in
+      let tile =
+        Tn.create ~namespace:"tile" (Tn.Specified Ir.Ops.single) ~id:11540 ~label:[ "aw_prc_tile" ]
+          ~unpadded_dims:(lazy [| 2 |])
+          ~padding:(lazy None)
+          ()
+      in
+      let cell = [| Ll_test.fixed 1 |] in
+      let fwd op =
+        LL.Binop (op, (Ll_test.get tile cell, Ir.Ops.single), (LL.Constant 1.0, Ir.Ops.single))
+      in
+      let accepts llc = Sched.privatized_tile_widens ~tile llc in
+      p claim_priv_recheck
+        (accepts (Ll_test.set tile cell (Ll_test.get target cell))
+        && accepts (Ll_test.set tile cell (fwd Ir.Ops.Add))
+        && not (accepts (Ll_test.set tile cell (fwd Ir.Ops.Sub)))))
