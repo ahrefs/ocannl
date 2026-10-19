@@ -3080,13 +3080,13 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   let mem_refused = ref 0 in
                   (* The flavors other later gates withhold, by reason, in first-seen order. *)
                   let withheld = ref [] in
-                  let withhold reason =
+                  let withhold ?(count = 1) reason =
                     withheld :=
                       match List.Assoc.find !withheld reason ~equal:String.equal with
                       | Some n ->
                           List.map !withheld ~f:(fun (r, k) ->
-                              if String.equal r reason then (r, n + 1) else (r, k))
-                      | None -> !withheld @ [ (reason, 1) ]
+                              if String.equal r reason then (r, n + count) else (r, k))
+                      | None -> !withheld @ [ (reason, count) ]
                   in
                   let fits ?copies rows =
                     let ok = shared_fits ?copies rows in
@@ -3153,18 +3153,18 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   in
                   let depth_twins =
                     List.concat_map (whole @ blocked) ~f:(fun p0 ->
-                        let advertised =
-                          not (List.is_empty mma.Ir.Backend_intf.mma_pipeline_depths)
-                        in
+                        (* One twin per advertised depth is withheld. *)
+                        let count = List.length mma.Ir.Backend_intf.mma_pipeline_depths in
+                        let advertised = count > 0 in
                         if masked p0 then (
                           if advertised then
-                            withhold
+                            withhold ~count
                               "pipelined depth twin of a masked (padded) flavor, whose Tensorize \
                                stays on the barrier-bracketed arm";
                           [])
                         else if not async_wide then (
                           if advertised then
-                            withhold
+                            withhold ~count
                               "pipelined depth twin under sub-4-byte operands, which render only \
                                the synchronous copy";
                           [])
