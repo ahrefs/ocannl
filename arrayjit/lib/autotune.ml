@@ -6856,9 +6856,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           in
           (* The split-reduce sites' running composite: each site's block count, swept over the
              sites in [sr_sites]' cost order (heaviest first already), each single's prelude staffed
-             with the other sites' choices, which start from the seeded plan's split. *)
+             with the other sites' choices. It starts empty, not from the seeded plan's split: every
+             segment of a split candidate runs its preset whatever the prelude, so the seeded split
+             would not shrink the backdrop the way the seeded sketches do, and its sites, detected
+             on the pristine lowering, would match the search's only by target and extents. *)
           let same_site a b = Idx.equal_symbol a.sr_axis b.sr_axis in
-          let sr_running, sr_running_ms, _, sr_start, sr_sweep_key =
+          let sr_running, sr_running_ms, _, _, sr_sweep_key =
             sweeper ~equal_key:same_site ~keys:sr_sites
               ~single:(fun s staff b -> Fiss (F_split { sites = [ (s, b) ]; staff }))
               ~describe:(fun s b -> "split site " ^ split_site_label (s, b))
@@ -6884,16 +6887,6 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           else List.iter coarse_single_specs ~f:run_seed;
           List.iter post_sweep_specs ~f:run_seed;
           if staffed && not (List.is_empty sr_specs) then (
-            (* A seeded split site, by its target and extents: the plan detected its sites on the
-               pristine lowering, whose symbols are not the search's. *)
-            sr_start
-              (List.filter_map
-                 (Option.value_map seeded ~default:[] ~f:(fun plan -> plan.sp_split))
-                 ~f:(fun (seeded_site, b) ->
-                   List.find sr_sites ~f:(fun s ->
-                       Ir.Tnode.equal s.sr_target seeded_site.sr_target
-                       && s.sr_red = seeded_site.sr_red && s.sr_out = seeded_site.sr_out)
-                   |> Option.map ~f:(fun s -> (s, b))));
             List.iter sr_sites ~f:(fun s ->
                 match List.filter sr_num_blocks ~f:(fun b -> 2 * b <= s.sr_red) with
                 | [] -> ()
