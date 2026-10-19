@@ -249,13 +249,19 @@ end = struct
      initialization at module init: the "HIP Library Path" banner then goes to the runner's own
      stdout instead of the first [%expect] block (no ppx_expect capture is active yet, so the banner
      cannot corrupt or pollute test output). Failures are swallowed — an unusable driver/GPU
-     surfaces at [get_device], where [Context.auto]'s fallback can catch it. *)
+     surfaces at [get_device], where [Context.auto]'s fallback can catch it. This is the one driver
+     entry that runs before [Backends.With_device_init_deadline] wraps the module, so it takes the
+     same deadline itself (gh-ocannl-1281): a wedged driver would otherwise hang every inline-test
+     runner in [H.init] with no bound. *)
   let () =
     if
       am_running_inline_tests
       && String.equal "hip"
            (String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:""))
-    then try Lazy.force ensure_initialized with _ -> ()
+    then
+      try
+        Utils.with_device_init_deadline ~backend_name:name (fun () -> Lazy.force ensure_initialized)
+      with _ -> ()
 
   let num_devices () =
     Lazy.force ensure_initialized;
