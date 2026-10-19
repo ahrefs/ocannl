@@ -7337,7 +7337,7 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_TF32_MATMULS))
  (modules seeded_default)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -7356,7 +7356,7 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_TF32_MATMULS))
  (modules seeded_refine_blocks)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio unix arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
