@@ -1472,18 +1472,21 @@ let finalize (type dev runner event)
    call, as with the retired per-call instantiation. *)
 
 (* gh-ocannl-1281: a faulted GPU leaves its driver wedged, and every later process that touches the
-   runtime then spins in device initialization forever (gh-ocannl-1211). The device backends' entry
-   points that reach the driver -- discovery ([num_devices]), the per-backend properties and limits
-   ([static_properties], [hardware_limits], each of which enumerates the devices) and opening a
-   device ([get_device]) -- run under {!Utils.with_device_init_deadline} on every call:
-   [num_devices] and [static_properties] query the driver again each time, and a GPU that faults
-   after its first discovery is exactly the wedge this bounds. Where a call is a cache read
-   ([get_device] of an opened ordinal, the memoized limits) the guard costs a few system calls.
-   Applied to the three device backends only; the cc backends, which [Raise_backend] also builds,
-   touch no driver. A missing backend's stub is guarded too, harmlessly: it answers at once. The
-   implementation modules themselves ([Cuda_backend.Impl], ...) are below this boundary: code that
-   drives one directly, as the arrayjit backend tests do, wraps its own device opening in
-   {!Utils.with_device_init_deadline}. *)
+   runtime then spins in device initialization forever (gh-ocannl-1211). The guarded class is every
+   device backend entry point that ASKS the driver about devices or opens one: discovery
+   ([num_devices]), the per-backend properties and limits ([static_properties], [hardware_limits],
+   each of which enumerates the devices), a device's identity ([timing_identity]: attributes, and on
+   HIP the runtime and compiler versions) and opening a device ([get_device]). Each runs under
+   {!Utils.with_device_init_deadline} on every call: [num_devices], [static_properties] and
+   [timing_identity] query the driver again each time, and a GPU that faults after its first
+   discovery is exactly the wedge this bounds; where a call is a cache read the guard costs a few
+   system calls. Outside the class, deliberately: everything that WAITS on device work ([await],
+   [sync], the copies and launches), where a long wait is a legitimate long computation and the
+   harnesses' per-test caps are the bound. Applied to the three device backends only; the cc
+   backends, which [Raise_backend] also builds, touch no driver. A missing backend's stub is guarded
+   too, harmlessly: it answers at once. The implementation modules themselves ([Cuda_backend.Impl],
+   ...) are below this boundary: code that drives one directly, as the arrayjit backend tests do,
+   wraps its own device opening in {!Utils.with_device_init_deadline}. *)
 module With_device_init_deadline (Device : Lowered_backend) = struct
   include Device
 
@@ -1491,6 +1494,7 @@ module With_device_init_deadline (Device : Lowered_backend) = struct
   let num_devices () = guarded Device.num_devices
   let static_properties () = guarded Device.static_properties
   let hardware_limits () = guarded Device.hardware_limits
+  let timing_identity device = guarded (fun () -> Device.timing_identity device)
   let get_device ~ordinal = guarded (fun () -> Device.get_device ~ordinal)
 end
 

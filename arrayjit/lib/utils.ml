@@ -2384,8 +2384,8 @@ let device_init_deadline_tag = "OCANNL device_init_deadline:"
     raising, skip the real one. *)
 let device_init_test_stall : (unit -> unit) option ref = ref None
 
-(** The pieces of {!with_device_init_deadline}: its C stubs ([utils_stubs.c]), the reading of its
-    setting, and the lock that serializes guarded regions. *)
+(** The pieces of {!with_device_init_deadline}: its C stubs ([utils_stubs.c]), its setting, and the
+    lock that serializes guarded regions. *)
 module Device_init_deadline_internals = struct
   external arm : float -> string -> bool = "ocannl_device_init_deadline_arm"
   external disarm : unit -> unit = "ocannl_device_init_deadline_disarm"
@@ -2393,7 +2393,10 @@ module Device_init_deadline_internals = struct
   let region = Stdlib.Mutex.create ()
   let default = 120.0
 
-  let deadline () =
+  (* Read once, at module initialization, while the process has one domain: the configuration reader
+     records every access in a table no two domains may touch at once, and a guarded call can come
+     from any domain, beside any other domain's configuration reads. *)
+  let seconds =
     let setting =
       get_global_arg ~default:(Float.to_string default) ~arg_name:"device_init_deadline"
     in
@@ -2428,9 +2431,7 @@ end
 let with_device_init_deadline ~backend_name f =
   let module Stub = Device_init_deadline_internals in
   let guarded () =
-    (* Read under the lock: the configuration reader records each access in a table no other domain
-       may touch at the same time. *)
-    let seconds = Stub.deadline () in
+    let seconds = Stub.seconds in
     let armed =
       Float.(seconds > 0.)
       && Stub.arm seconds

@@ -402,9 +402,8 @@ static struct sigaction ocannl_deadline_saved;
 static sigset_t ocannl_deadline_saved_mask;
 static int ocannl_deadline_armed; /* accessed through __atomic builtins */
 /* When the timer is due on the monotonic clock, in nanoseconds, recorded BEFORE it is started, and
-   how early a reading may sit and still count as the expiry (clock granularity). Before the timer
-   is started it reads zero, so a zero timer alone is no evidence; a zero timer at or past the due
-   time is, because the timer never fires before its interval has elapsed. */
+   how early a reading may sit and still count as the expiry (clock granularity: at most 1 ms, and
+   at most half the interval, so a signal in the moment before the timer starts never counts). */
 static volatile int64_t ocannl_deadline_due_ns;
 static volatile int64_t ocannl_deadline_slack_ns;
 
@@ -442,21 +441,19 @@ static void ocannl_deadline_handler(int sig, siginfo_t *info, void *uctx) {
       "\nOCANNL: a SIGALRM that was not the device_init_deadline arrived during a GPU device "
       "initialization or query; dying by it, as SIGALRM's default action would (gh-ocannl-1281)\n";
   struct sigaction dfl;
-  struct itimerval left;
   sigset_t set;
   int expired;
   (void)info;
   (void)uctx;
-  /* The deadline is recognized positively, by the timer itself: [arm] starts it with no interval, so
-     it reads zero once it has expired -- and at or past its due time, which tells an expiry from
-     the moment before [setitimer] ran. A SIGALRM raised, queued or sent by anything else (si_code
-     SI_USER, SI_TKILL, SI_QUEUE, ...) arrives with the timer still running, or before it is due. A
-     failed read counts as external, so the deadline's line is never written without evidence. */
+  /* The deadline is recognized positively, by the clock alone (clock_gettime is async-signal-safe;
+     reading the timer back is not): [arm] records when the timer is due BEFORE starting it, and
+     the timer never fires early. A SIGALRM raised, queued or sent by anything else (si_code
+     SI_USER, SI_TKILL, SI_QUEUE, ...) during the region arrives before that time -- one that would
+     arrive later never does, the expiry having killed the process first. A failed clock read
+     counts as external, so the deadline's line is never written without evidence. */
   {
     int64_t now = ocannl_monotonic_ns();
-    expired = getitimer(ITIMER_REAL, &left) == 0 && left.it_value.tv_sec == 0 &&
-              left.it_value.tv_usec == 0 && now >= 0 &&
-              now >= ocannl_deadline_due_ns - ocannl_deadline_slack_ns;
+    expired = now >= 0 && now >= ocannl_deadline_due_ns - ocannl_deadline_slack_ns;
   }
   /* Termination must not wait on the diagnostic: a full blocking pipe on fd 2 (a parent that does
      not drain the child's stderr) would block the write forever. So the default disposition and an
