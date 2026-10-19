@@ -326,11 +326,10 @@ let exempt_quantified_helpers =
     ( "test/operations/seeded_default.ml:a threshold of 0 disables the seeding",
       "a threshold of 0 is the documented off switch, so an empty seed list is the claim; the \
        claims above pin a non-empty one at a positive threshold on the backends that seed" );
-    ( "test/operations/seeded_split_reduce.ml:off CUDA, HIP included, the seeded default splits \
-       nothing",
-      "the untuned split is CUDA-only by design (it measured slower on HIP), so off CUDA an empty \
-       split list is the claim; it is gated there, and on CUDA the claim beside it requires the \
-       bias gradient in the list from the same fixture" );
+    ( "test/operations/seeded_split_reduce.ml:off CUDA and HIP the seeded default splits nothing",
+      "the untuned split runs only where the seeded default does (Autotune.seeded_split_backend), \
+       so elsewhere an empty split list is the claim; it is gated there, and on CUDA and HIP the \
+       claim beside it requires the bias gradient in the list from the same fixture" );
     ( "test/operations/seeded_split_reduce.ml:a threshold above every serial chain splits nothing",
       "the threshold exceeds every reduction's chain in the fixture, the loss sum's included, so \
        nothing qualifies and an empty split list is the claim; the bitwise-gradient claim beside \
@@ -338,10 +337,10 @@ let exempt_quantified_helpers =
     ( "test/operations/seeded_split_reduce.ml:a threshold of 0 disables the split",
       "a threshold of 0 is the documented off switch, so an empty split list is the claim; the \
        claims above pin a non-empty one at a positive threshold on the backends that split" );
-    ( "test/operations/split_reduce_pair.ml:off CUDA the untuned plan splits nothing",
-      "the untuned split is CUDA-only by design, so off CUDA an empty split list is the claim; it \
-       is gated there, and on CUDA the claim beside it requires the bias gradient in the list from \
-       the same fixture" );
+    ( "test/operations/split_reduce_pair.ml:off CUDA and HIP the untuned plan splits nothing",
+      "the untuned split runs only where the seeded default does (Autotune.seeded_split_backend), \
+       so elsewhere an empty split list is the claim; it is gated there, and on CUDA and HIP the \
+       claim beside it requires the bias gradient in the list from the same fixture" );
     ( "test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds",
       "the variance-style self-product is deliberately not recognized as a matmul or conv site, so \
        the sketch seeder yields no seeds of any kind and there is no seed population to quantify \

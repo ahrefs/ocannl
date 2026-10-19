@@ -499,13 +499,11 @@ files.
   gradient would change its result. Losses stayed bitwise identical on f32 (pinned by
   `test/operations/seeded_default`).
 - **The seeded untuned default also splits long, narrow reductions, before segmenting, on CUDA
-  only** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
-  `gpu_default_split_reduce_min_serial`). Measured on gpt2_mini_train b256: CUDA 543 → 391 ms, but
-  HIP (gfx1151, unified memory) 885 → 1256 ms when ungated. The likely cause is gh-ocannl-1348's
-  finding that HIP's compiler does not register-promote such accumulators, so the split's first
-  pass would round-trip its partials cell through device memory on every row; that is unconfirmed
-  (no per-kernel HIP table). HIP keeps the unsplit plan until a HIP-safe first pass lands.
-  It applies the search's split-reduce detection and enabling interchange as a whole-routine
+  and HIP** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
+  `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`).
+  Measured on gpt2_mini_train b256: CUDA 543 → 391 ms. HIP (gfx1151, unified memory) went
+  885 → 1256 ms, so the split was CUDA-only until gh-ocannl-1412 gave its first pass coalesced
+  lanes (the next bullet). It applies the search's split-reduce detection and enabling interchange as a whole-routine
   prelude (`Autotune.split_reduce_prelude`, the `F_split` seeds' own), to every site whose serial
   chain per output cell reaches the threshold. On gpt2_mini_train b256 these are the 26 bias and
   layer-norm parameter gradients and the loss sum, at 32768 rows each. Each split launches
@@ -520,6 +518,26 @@ files.
   default plan and the tuner's own split-reduce candidates do under the default
   `autotune_search=true` (`test/operations/seeded_split_reduce` holds it to an f64 reference). The
   `reproducible` profile pins the key at 0, keeping its sums serial.
+- **A split's first pass runs its block loop outside the cell loops** (gh-ocannl-1412,
+  `sr_block_hoist`, appended to `Autotune.split_reduce_prelude`). `Split_reduce` puts the block
+  loop where the reduction loop was, BELOW the cell loops its pinning rule requires:
+  `for o: for blk: { init; for inner: for s: .. }`. The GPU preset maps the outer loop of that chain
+  to the grid and the inner one to the lanes, so a wavefront's lanes walked the blocks, `chunk`
+  rows apart, each loading its own cache line on every row. The suspected register-promotion cause
+  was wrong: the HIP ISA of a split first pass shows the partials cell localized (one load, a
+  register accumulation, one store). The kernel table showed the real cost instead: on minix
+  (gfx1151, unified memory) the b256 first pass of `l1_ffn_b2.grad`, fused by fission with the
+  `n512.grad` nest it recomputes inline, took 197 ms where the unsplit bias-gradient kernel took 15.
+  Detection now records the cell loops when hoisting the block loop above them is `Op_legal` on the
+  split code (static sites only), and the prelude appends those `Swap`s, so the lanes walk the cell
+  axis as in the elementwise nests that produce the summed rows. Each cell's summation order is
+  unchanged (one block accumulates one partials row in the original order), so the result is
+  bitwise the unhoisted split's (`test/operations/split_reduce_block_hoist`, which also pins the
+  lanes under the device's preset beside a control site without the hoist). Diagnostic runs on
+  minix (b256, same binary, kernel table on): split unhoisted 1285 ms against 939 unsplit; hoisted
+  630 against 945, with that first pass at 4.4 ms and the layer-norm first passes from 4-23 ms down
+  to 0.3-1.1 ms. The plan digest counts each site's hoisted loops (`hoist<n>`), so a search crowned
+  under an unhoisted seed is a different trajectory.
 - **A two-loop reduction band neither of whose loops splits alone is split as a pair**
   (gh-ocannl-1414, `Autotune.coalesce_reduction_pair`, field `sr_coalesce`). At b8 a parameter
   gradient `for b, s, o: g[o] += dy[b,s,o]` has `b` below `sr_red_min`, and `s` fails the split's

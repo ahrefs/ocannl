@@ -237,6 +237,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test schedule_strided_1x1: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_swizzle_matmul: Ir.Schedule.apply
   test/operations/dune, test scratch_value_variance: Ir.Schedule.default_gpu
+  test/operations/dune, test split_reduce_block_hoist: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented
   test/operations/dune, test split_reduce_pair: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented, Ir.Schedule.op_legality
   test/operations/dune, test thread_private_gate: Ir.Schedule.check_hardware_limits_classified, Ir.Schedule.thread_private_bytes
   test/operations/dune, test tile_mma_declines: Ir.Schedule.apply
