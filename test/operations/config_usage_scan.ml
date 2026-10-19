@@ -1228,16 +1228,15 @@ let live workspace_root generated =
     "config usage scan: %d files, %d command-line flags, %d environment assignments, %d standalone \
      environment mentions, %d documentation assignments, %d config-file assignments\n"
     (List.length files) cli_count env_count standalone_env_count markdown_count config_count;
-  if not (Verdict.any_failed ()) then (
-    printf
-      "OK: qualified OCANNL command-line flags and OCANNL_<KEY> environment mentions in source \
-       scripts and OCaml sources name registered keys.\n";
-    printf
-      "OK: inline key=value assignments in scanned Markdown name registered keys or explicit \
-       non-config notation.\n";
-    printf
-      "OK: configuration tokens in Dune actions and checked-in ocannl_config files name registered \
-       keys or counted intentional-invalid controls.\n");
+  Verdict.success_trailer
+    [
+      "qualified OCANNL command-line flags and OCANNL_<KEY> environment mentions in source scripts \
+       and OCaml sources name registered keys.";
+      "inline key=value assignments in scanned Markdown name registered keys or explicit \
+       non-config notation.";
+      "configuration tokens in Dune actions and checked-in ocannl_config files name registered \
+       keys or counted intentional-invalid controls.";
+    ];
   Refusal_manifest.print "config_usage_scan.ml"
 
 let () =

@@ -7576,7 +7576,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules verdict_teardown)
- (libraries base stdio unix arrayjit.verdict fresh_process))
+ (libraries base stdio unix arrayjit.verdict fresh_process test_utils))
 
 ; The uint4x32 FFI stubs read four lanes out of an [int array], a type that carries no length, so
 ; the C helper has to check the arity rather than assume it (gh-ocannl-688). Links arrayjit.ir
