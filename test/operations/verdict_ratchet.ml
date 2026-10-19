@@ -4151,6 +4151,86 @@ let () =
   let ok = match (on_gpu, rows) with _, xs -> List.for_all xs ~f:Fn.id in
   Verdict.gated ~when_:on_gpu ~on:"cc" "all rows pass" ok|ocaml},
       [] );
+    (* Only a write that may run before the claim shapes its population. *)
+    ( "accepts a gate on a value written into the population only after the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  Queue.enqueue queue first;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written after the claim in the loop that repeats it",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  for _ = 1 to 3 do
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+      ~f:positive;
+    Queue.enqueue queue sample
+  done|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written between two calls of the function making the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check () =
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+  in
+  check ();
+  Queue.enqueue queue sample;
+  check ()|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written after the one call of the function making the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check () =
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+  in
+  check ();
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written after a once-called claim inside the loop calling it",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check () =
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+  in
+  while more () do
+    check ();
+    Queue.enqueue queue sample
+  done|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written after the iteration whose callback makes the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  List.iter rows ~f:(fun row ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+        ~f:positive);
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written before a lazy claim is forced",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let verdict =
+    lazy
+      (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+         ~f:positive)
+  in
+  Queue.enqueue queue sample;
+  Lazy.force verdict|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written after an expect test making the claim",
+      {ocaml|open Base
+let queue = Queue.create ()
+let%expect_test "rows" =
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+let () = Queue.enqueue queue sample|ocaml},
+      [ "sample" ] );
     ( "refuses a gate read off the set an in-place filter keeps the population's keys by",
       {ocaml|open Base
 let () =

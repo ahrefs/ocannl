@@ -610,6 +610,14 @@ refuses a gate read off the component a match takes the population from: true
 refuses a gate read off the literal record field a match takes the population from: true
 accepts a backend gate beside a population a match takes from a constructor payload: true
 accepts a backend gate beside a gated boolean a match takes apart from a literal pair: true
+accepts a gate on a value written into the population only after the claim: true
+refuses a gate on a value written after the claim in the loop that repeats it: true
+refuses a gate on a value written between two calls of the function making the claim: true
+accepts a gate on a value written after the one call of the function making the claim: true
+refuses a gate on a value written after a once-called claim inside the loop calling it: true
+accepts a gate on a value written after the iteration whose callback makes the claim: true
+refuses a gate on a value written before a lazy claim is forced: true
+refuses a gate on a value written after an expect test making the claim: true
 refuses a gate read off the set an in-place filter keeps the population's keys by: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 refuses a negated backend gate folded into a claim's value: true

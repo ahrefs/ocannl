@@ -647,7 +647,8 @@ let line_break_census content =
       argument in [Base]'s order and any of them in [Stdlib]'s. A function of a mutable collection
       module the table does not list, handed [x], may write into it: a claim that reaches [x] is
       reported as unlisted. [x] is a name the source binds; a container only an [open] brought in is
-      not tracked.
+      not tracked. Only a write that may run before the claim counts ({!precedes}): one placed after
+      it, in code that cannot run again before it, is not followed.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -985,6 +986,135 @@ let rec strip_constraints expr =
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> strip_constraints inner
   | _ -> expr
 
+(** {2 Which writes may precede a claim (gh-ocannl-1303)}
+
+    A write into a binding the population or the gate reaches is followed only when it may run
+    before the claim is evaluated: [Queue.enqueue queue v] written after the claim, in code that
+    cannot run again before it, cannot have shaped the claim's population, and a gate reading [v] is
+    not refused on its account. Lexical order alone is not the answer -- a write later in a loop
+    body precedes the claim's next iteration, and so does a write in a function called again -- so
+    the reader places both points in the program's control structure, conservatively: every
+    construct whose body may run more than once, or at a time the reader does not know, is a
+    {!frame} of each point inside it.
+
+    - A [while] or [for] loop, and a function handed directly to a function of a collection module
+      other than [Seq] or [Sequence] (a [List.iter] callback), run synchronously, possibly many
+      times: a {!Loop}.
+    - Any other function may run whenever it is called. It is ONCE when it is the right-hand side of
+      a non-recursive local [let] whose name the source spells exactly once, as the callee of a full
+      application outside the function's own body: then its body runs exactly where that call runs,
+      and a point in it is placed at the call. A top-level function is never once, since another
+      module may call it.
+    - [lazy], a binding operator's body, an object or class, a functor's body and an extension's
+      payload ([let%expect_test] included) run at a time the reader does not model: {!Deferred}.
+
+    A write may precede a claim when, at the outermost level where the two are not inside the same
+    call of a once function, (a) both are inside one frame that may repeat (a loop, a function that
+    is not once, a deferred construct), (b) the claim is inside such a frame of its own that may run
+    at any later time (a function that is not once, or a deferred construct) the write is not in, or
+    (c) the write starts before the claim ends. (A write in a function defined before the claim is
+    before it; one in a function defined after it cannot run before it unless the claim runs again,
+    which (a) and (b) cover.) Inside one call of a once function the same question is asked of the
+    two points within it. A claim's own arguments are before its end, so a write there precedes it.
+
+    What this does not model, each erring toward following the write: a function value stored and
+    called later is placed where it is defined; a once function's name passed anywhere but a call is
+    not once. *)
+
+type frame_kind =
+  | Loop
+  | Function of {
+      binding : int option;
+          (** The identity of the non-recursive local [let] whose right-hand side it is. *)
+      positional : int;
+      labelled : string list;
+      erasable : bool;  (** Every optional parameter is followed by a positional one. *)
+    }
+  | Deferred
+
+type frame = { frame_id : int; shape : frame_kind; frame_start : int; frame_stop : int }
+type point = { at_start : int; at_end : int; enclosing : frame list  (** Innermost first. *) }
+
+(* A function's frame, from its parameters. *)
+let function_kind ~binding params body =
+  let parameters =
+    List.filter_map params ~f:(fun param ->
+        match param.pparam_desc with
+        | Pparam_val (label, _, _) -> Some label
+        | Pparam_newtype _ -> None)
+    @ match body with Pfunction_cases _ -> [ Ppxlib.Asttypes.Nolabel ] | Pfunction_body _ -> []
+  in
+  let rec erasable = function
+    | [] -> true
+    | Ppxlib.Asttypes.Optional _ :: rest ->
+        List.exists rest ~f:(function Ppxlib.Asttypes.Nolabel -> true | _ -> false)
+        && erasable rest
+    | _ :: rest -> erasable rest
+  in
+  Function
+    {
+      binding;
+      positional =
+        List.count parameters ~f:(function Ppxlib.Asttypes.Nolabel -> true | _ -> false);
+      labelled =
+        List.filter_map parameters ~f:(function
+          | Ppxlib.Asttypes.Labelled label -> Some label
+          | _ -> None);
+      erasable = erasable parameters;
+    }
+
+(* Whether arguments with these labels apply a function of [kind] fully. *)
+let fully_applies kind labels =
+  match kind with
+  | Function { positional; labelled; erasable; _ } ->
+      erasable
+      && List.count labels ~f:(function Ppxlib.Asttypes.Nolabel -> true | _ -> false)
+         >= positional
+      && List.for_all labelled ~f:(fun label ->
+          List.exists labels ~f:(function
+            | Ppxlib.Asttypes.Labelled given -> String.equal given label
+            | _ -> false))
+  | Loop | Deferred -> false
+
+(* [precedes ~once write claim]: whether [write] may run before [claim] ends, [once] giving the call
+   a once function's frame runs at. *)
+let precedes ~once write claim =
+  (* The levels a point runs at, outermost first: each the point (a call site, at every level but
+     the innermost) with the frames it is inside there, and the once frame it was entered
+     through. *)
+  let rec chain depth point =
+    let rec split inner = function
+      | [] -> (inner, None)
+      | frame :: rest -> (
+          match once frame with
+          | Some call when depth < 64 -> (inner, Some (frame, call))
+          | _ -> split (frame :: inner) rest)
+    in
+    let frames, outer = split [] point.enclosing in
+    match outer with
+    | None -> [ (None, point, frames) ]
+    | Some (frame, call) -> chain (depth + 1) call @ [ (Some frame.frame_id, point, frames) ]
+  in
+  (* A level's frames are those a point is inside below the once frame it was entered through, so
+     every one of them may repeat; all but a loop may also run at any later time. *)
+  let deferred frame = match frame.shape with Loop -> false | Function _ | Deferred -> true in
+  let inside frames frame = List.exists frames ~f:(fun f -> f.frame_id = frame.frame_id) in
+  let rec compare_levels writes claims =
+    match (writes, claims) with
+    | (_, write, write_frames) :: deeper_writes, (_, claim, claim_frames) :: deeper_claims -> (
+        if List.exists write_frames ~f:(inside claim_frames) then true
+        else if List.exists claim_frames ~f:(fun f -> deferred f && not (inside write_frames f))
+        then true
+        else
+          match (deeper_writes, deeper_claims) with
+          | (Some into_write, _, _) :: _, (Some into_claim, _, _) :: _ when into_write = into_claim
+            ->
+              compare_levels deeper_writes deeper_claims
+          | _ -> write.at_start < claim.at_end)
+    | _ -> true
+  in
+  compare_levels (chain 0 write) (chain 0 claim)
+
 let gate_census content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
@@ -996,6 +1126,29 @@ let gate_census content =
      binding's identity: it may write into it, which the reader cannot follow. *)
   let unlisted_writes = Hashtbl.create (module Int) in
   let unlisted = ref [] in
+  (* For {!precedes}: where each local [let]-bound function's name is spelled, by the binding's
+     identity; each application of a name, by the name's position, with its labels and where it
+     runs; the functions handed to a collection-module function, by position; and the local
+     [let]-bound functions, by position, with their binding's identity. *)
+  let references = Hashtbl.create (module Int) in
+  let applications = Hashtbl.create (module Int) in
+  let synchronous = Hash_set.create (module Int) in
+  let function_bindings = Hashtbl.create (module Int) in
+  let next_frame = ref 0 in
+  let once_calls = Hashtbl.create (module Int) in
+  (* The call a once function's frame runs at, if it is once; asked only after the walk. *)
+  let once frame =
+    match frame.shape with
+    | Function { binding = Some identity; _ } ->
+        Hashtbl.find_or_add once_calls frame.frame_id ~default:(fun () ->
+            match Hashtbl.find_multi references identity with
+            | [ spelled ] when spelled < frame.frame_start || spelled >= frame.frame_stop -> (
+                match Hashtbl.find applications spelled with
+                | Some (labels, call) when fully_applies frame.shape labels -> Some call
+                | _ -> None)
+            | _ -> None)
+    | _ -> None
+  in
   (* Claims are compared once the walk is over, when every write is known. *)
   let pending = ref [] in
   let partials = ref [] and bound_partials = ref [] and consumed = Hash_set.create (module Int) in
@@ -1017,6 +1170,18 @@ let gate_census content =
       method! value_binding binding =
         bind binding.pvb_expr;
         super#value_binding binding
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_let (Nonrecursive, bindings, _) ->
+            List.iter bindings ~f:(fun binding ->
+                match (strip_constraints binding.pvb_expr, Read.pattern_name binding.pvb_pat) with
+                | ({ pexp_desc = Pexp_function _; _ } as function_), Some _ ->
+                    Hashtbl.set function_bindings ~key:(position function_)
+                      ~data:(binding.pvb_loc.loc_start.pos_cnum + 1)
+                | _ -> ())
+        | _ -> ());
+        super#expression expr
     end
   in
   binder#structure ast;
@@ -1030,6 +1195,48 @@ let gate_census content =
       (* The unlisted collection-module calls the claim being compared reaches. *)
       val mutable unlisted_sink : (string * int) list ref = ref []
 
+      (* The frames around the node being walked, innermost first, and where the claim being
+         compared is evaluated. *)
+      val mutable stack : frame list = []
+      val mutable claim_point : point option = None
+
+      method point_of expr =
+        {
+          at_start = expr.pexp_loc.loc_start.pos_cnum;
+          at_end = expr.pexp_loc.loc_end.pos_cnum;
+          enclosing = stack;
+        }
+
+      (* Whether something done at [point] may run before the claim being compared. *)
+      method before point =
+        match claim_point with None -> true | Some claim -> precedes ~once point claim
+
+      method framed : 'a. kind:frame_kind -> start:int -> stop:int -> (unit -> 'a) -> 'a =
+        fun ~kind ~start ~stop walk ->
+          if quiet > 0 then walk ()
+          else (
+            Int.incr next_frame;
+            stack <-
+              { frame_id = !next_frame; shape = kind; frame_start = start; frame_stop = stop }
+              :: stack;
+            Exn.protect ~f:walk ~finally:(fun () -> stack <- List.tl_exn stack))
+
+      method! class_structure env structure =
+        self#framed ~kind:Deferred ~start:0 ~stop:0 (fun () -> super#class_structure env structure)
+
+      method! extension env extension =
+        let { Ppxlib.loc; _ } = fst extension in
+        self#framed ~kind:Deferred ~start:loc.loc_start.pos_cnum ~stop:loc.loc_end.pos_cnum
+          (fun () -> super#extension env extension)
+
+      method! module_expr env module_expr =
+        match module_expr.pmod_desc with
+        | Pmod_functor _ ->
+            self#framed ~kind:Deferred ~start:module_expr.pmod_loc.loc_start.pos_cnum
+              ~stop:module_expr.pmod_loc.loc_end.pos_cnum (fun () ->
+                super#module_expr env module_expr)
+        | _ -> super#module_expr env module_expr
+
       method note_unlisted callee =
         let spelled =
           Option.value_map
@@ -1041,9 +1248,10 @@ let gate_census content =
       (* What is known to reach a binding besides its definition: what the source writes into it,
          and any unlisted call it was handed. *)
       method written identity =
-        List.iter (Hashtbl.find_multi unlisted_writes identity) ~f:(fun call ->
-            unlisted_sink := call :: !unlisted_sink);
-        Hashtbl.find_multi writes identity
+        List.iter (Hashtbl.find_multi unlisted_writes identity) ~f:(fun (call, point) ->
+            if self#before point then unlisted_sink := call :: !unlisted_sink);
+        List.filter_map (Hashtbl.find_multi writes identity) ~f:(fun (written, env, point) ->
+            if self#before point then Some (written, env) else None)
 
       method local =
         next_local <- next_local - 1;
@@ -1190,6 +1398,13 @@ let gate_census content =
       method! attribute _ attr = attr
 
       method! ident env ident =
+        (match (quiet, ident.txt) with
+        | 0, Ppxlib.Longident.Lident name -> (
+            match Lexical_scope.lookup env name with
+            | Some { identity; _ } when identity > 0 ->
+                Hashtbl.add_multi references ~key:identity ~data:ident.loc.loc_start.pos_cnum
+            | _ -> ())
+        | _ -> ());
         match (collecting, ident.txt) with
         | Some found, Ppxlib.Longident.Lident name ->
             (* A name no binding of this source gives, one an unmodelled [open] may have brought in,
@@ -1530,7 +1745,8 @@ let gate_census content =
 
       (* A write into a binding: [x := e], or a function {!collection_functions} marks as writing,
          handed [x]. *)
-      method record_write env callee arguments =
+      method record_write env expr callee arguments =
+        let point = self#point_of expr in
         (* The binding written into, through any [let alias = rows] renaming on the way: a write
            through an alias is a write into what it names. *)
         let rec target env expr =
@@ -1554,7 +1770,8 @@ let gate_census content =
         in
         let target = target env in
         let record identity written =
-          List.iter written ~f:(fun e -> Hashtbl.add_multi writes ~key:identity ~data:(e, env))
+          List.iter written ~f:(fun e ->
+              Hashtbl.add_multi writes ~key:identity ~data:(e, env, point))
         in
         let callee, callee_env = self#resolve_callee env callee in
         match (callee.pexp_desc, arguments) with
@@ -1608,10 +1825,11 @@ let gate_census content =
                             Option.iter (target container) ~f:(fun identity ->
                                 Hashtbl.add_multi unlisted_writes ~key:identity
                                   ~data:
-                                    ( String.concat ~sep:"."
-                                        (Read.flatten_longident
-                                           (Ppxlib.Longident.Ldot (prefix, name))),
-                                      callee.pexp_loc.loc_start.pos_lnum )));
+                                    ( ( String.concat ~sep:"."
+                                          (Read.flatten_longident
+                                             (Ppxlib.Longident.Ldot (prefix, name))),
+                                        callee.pexp_loc.loc_start.pos_lnum ),
+                                      point )));
                       false
                 in
                 if writes_into then
@@ -1697,9 +1915,28 @@ let gate_census content =
            match expr.pexp_desc with
            | Pexp_apply (callee, arguments) -> (
                (* [sample |> Queue.enqueue queue] is [Queue.enqueue queue sample]. *)
+               (* What runs where: the application of a name, for {!once}; the functions a
+                  collection-module function is handed, which it calls synchronously. *)
+               (match (strip_constraints callee).pexp_desc with
+               | Pexp_ident { txt = Ppxlib.Longident.Lident _; loc } ->
+                   Hashtbl.set applications ~key:loc.loc_start.pos_cnum
+                     ~data:(List.map arguments ~f:fst, self#point_of expr)
+               | _ -> ());
+               (match (fst (self#resolve_callee env callee)).pexp_desc with
+               | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, _); _ } -> (
+                   match self#module_path env prefix with
+                   | Some (Collection_module { family; _ })
+                     when not (List.mem [ "Seq"; "Sequence" ] family ~equal:String.equal) ->
+                       List.iter arguments ~f:(fun (_, argument) ->
+                           match (strip_constraints argument).pexp_desc with
+                           | Pexp_function _ ->
+                               Hash_set.add synchronous (position (strip_constraints argument))
+                           | _ -> ())
+                   | _ -> ())
+               | _ -> ());
                match self#pipeline callee arguments with
-               | Some (callee, arguments, _) -> self#record_write env callee arguments
-               | None -> self#record_write env callee arguments)
+               | Some (callee, arguments, _) -> self#record_write env expr callee arguments
+               | None -> self#record_write env expr callee arguments)
            | _ -> ());
         (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with
@@ -1735,9 +1972,11 @@ let gate_census content =
                      when complete arguments ->
                        commit marks;
                        Int.incr gated_sites;
+                       let point = self#point_of expr in
                        pending :=
                          (fun () ->
                            unlisted_sink := [];
+                           claim_point <- Some point;
                            let reads = self#gate_reads gate_env gate in
                            let built =
                              if String.equal member gated_boolean then
@@ -1774,7 +2013,21 @@ let gate_census content =
                          commit marks;
                          partials := (form, line) :: !partials)))
            | _ -> ());
-        super#expression env expr
+        let start = expr.pexp_loc.loc_start.pos_cnum and stop = expr.pexp_loc.loc_end.pos_cnum in
+        let walk () = super#expression env expr in
+        match expr.pexp_desc with
+        | Pexp_while _ | Pexp_for _ -> self#framed ~kind:Loop ~start ~stop walk
+        | Pexp_function _ when Hash_set.mem synchronous (position expr) ->
+            self#framed ~kind:Loop ~start ~stop walk
+        | Pexp_function (params, _, body) ->
+            self#framed
+              ~kind:
+                (function_kind
+                   ~binding:(Hashtbl.find function_bindings (position expr))
+                   params body)
+              ~start ~stop walk
+        | Pexp_lazy _ | Pexp_letop _ | Pexp_object _ -> self#framed ~kind:Deferred ~start ~stop walk
+        | _ -> walk ()
     end
   in
   ignore
