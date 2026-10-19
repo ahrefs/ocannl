@@ -86,11 +86,35 @@ test_cap_watch='
     $s = $s * 60 + $_ for split /:/, $t;
     $d * 86400 + $s;
   };
+  # A test is timed on the watcher\x27s own clock (gh-ocannl-1319), never by the
+  # age ps reports: procps derives etime from the boot time, which a suspend and
+  # resume can skew -- minix once read 38109073018720s for a test a minute old
+  # and ended the run. The clock is one that stops while the host sleeps
+  # (CLOCK_UPTIME_RAW on macOS, CLOCK_MONOTONIC on Linux), so a suspend never
+  # counts against a test either; wall time only where Time::HiRes has neither.
+  my $now = sub { time };
+  if (eval { require Time::HiRes; 1 }) {
+    for my $name ("CLOCK_UPTIME_RAW", "CLOCK_MONOTONIC") {
+      my $id = eval { &{"Time::HiRes::$name"}() };
+      next unless defined $id;
+      my $t0 = eval { Time::HiRes::clock_gettime($id) };
+      next unless defined $t0 && $t0 > 0;
+      $now = sub { Time::HiRes::clock_gettime($id) };
+      last;
+    }
+  }
+  # Each test is born where the watcher first sees it, less its ps etime but
+  # never more than the time since the previous listing, which did not show it:
+  # a skewed etime moves a birth by at most one poll. A pid is the same test
+  # while its parent and name stay and it is in every listing.
+  my %born;
+  my $last = $now->();
   while (getppid() == $resolver) {
+    my $t = $now->();
     my @ps = qx{ps -A -o pid= -o ppid= -o etime= -o comm= 2>/dev/null};
     my (%ppid, %etime, %comm, %kids);
     for (@ps) {
-      next unless /^\s*(\d+)\s+(\d+)\s+([\d:-]+)\s+(.*?)\s*$/;
+      next unless /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*?)\s*$/;
       ($ppid{$1}, $etime{$1}, $comm{$1}) = ($2, $3, $4);
       push @{ $kids{$2} }, $1;
     }
@@ -118,9 +142,20 @@ test_cap_watch='
         $dune{$k} = 1 if $comm{$k} =~ m{(?:^|/)dune(?:\.exe)?$} || $parents{$k};
       }
     }
+    my %seen;
     for my $p (sort { $a <=> $b } keys %ppid) {
       next unless $dune{ $ppid{$p} };
-      my $e = $seconds->($etime{$p});
+      my $id = "$ppid{$p} $comm{$p}";
+      if ($born{$p} && $born{$p}[0] eq $id) {
+        $seen{$p} = $born{$p};
+      } else {
+        my $hint = $etime{$p} =~ /^(?:\d+-)?(?:\d+:){1,2}\d+$/ ? $seconds->($etime{$p}) : 0;
+        my $gap = $t - $last;
+        $hint = $gap if $hint > $gap;
+        $hint = 0 if $hint < 0;
+        $seen{$p} = [$id, $t - $hint];
+      }
+      my $e = int($t - $seen{$p}[1]);
       next if $e < $cap;
       my $args = qx{ps -o args= -p $p 2>/dev/null};
       chomp $args;
@@ -140,6 +175,8 @@ test_cap_watch='
       kill "ALRM", $sup if getppid() == $resolver;
       exit 0;
     }
+    %born = %seen;
+    $last = $t;
     sleep $poll;
   }
 '

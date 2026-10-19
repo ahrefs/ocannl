@@ -155,7 +155,8 @@
 #      killed and the worktree idle, blaming a device only on a GPU batch; a
 #      test inside the cap, a lifted cap, a slow dune and the slot's long-lived
 #      holder do not (skipped where a $0-renamed fixture dune does not read
-#      back as `dune` in ps).
+#      back as `dune` in ps); a ps serving a skewed etime (a resume from
+#      suspend, gh-ocannl-1319) neither ends a run nor spares a hung test.
 #  76. a GPU batch whose device query does not answer is DEVICE UNHEALTHY (69),
 #      the probe being the slot's command ahead of dune and dune never started;
 #      an answer or a fast failure starts dune once; an unread batch asks every
@@ -5708,12 +5709,16 @@ harness_leg_run '78: a configuration'\''s backend counts only where a reached st
 # neither a slow dune nor the slot's own long-lived holder, which is no child
 # of dune, is taken for a test (a watcher counting every process group of the
 # run would end both runs). The message blames a device only on a GPU batch,
-# and always names the remedy. A bad value is refused before dune runs. The
-# fixture's dune is perl renamed through $0, which Linux (prctl) and macOS (the
-# argv area BSD ps reads) both show as the process name; the leg skips only
-# where a renamed process does not read back as `dune` (Git Bash, say).
+# and always names the remedy. Tests are timed on the watcher's own clock:
+# a stub ps serving every etime as 1.2 million years, as minix's procps did
+# after a resume (gh-ocannl-1319), neither ends a run nor spares a hung test,
+# and the stub's log shows it served the watcher. A bad value is refused
+# before dune runs. The fixture's dune is perl renamed through $0, which Linux
+# (prctl) and macOS (the argv area BSD ps reads) both show as the process
+# name; the leg skips only where a renamed process does not read back as
+# `dune` (Git Bash, say).
 leg_75() {
-test_cap_label="test cap: a test past --test-cap ends the run as TIMEOUT naming it; a test inside it, a slow dune and the slot's holder do not"
+test_cap_label="test cap: a test past --test-cap ends the run as TIMEOUT naming it; a test inside it, a skewed ps etime, a slow dune and the slot's holder do not"
 perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
 test_cap_named=$!
 sleep 0.3
@@ -5777,6 +5782,64 @@ else
       test_cap_detail="$tag: a passing run left a test-cap record"
     fi
   done
+  # A skewed ps clock (gh-ocannl-1319): after a resume from suspend, minix's
+  # procps reported a test a minute old as 38109073018720s old, and the cap
+  # ended the run. A ps on PATH that serves every etime as that age: a test
+  # inside the cap still passes, a hung one is still capped, and the stub's
+  # log proves the watcher was served the skewed etime.
+  if [ -z "$test_cap_detail" ]; then
+    skew_bin=$TMP/test-cap-skew-bin
+    mkdir -p "$skew_bin"
+    : >"$TMP/test-cap-skew.served"
+    cat >"$skew_bin/ps" <<EOF
+#!/usr/bin/env perl
+# The real ps, with every etime column replaced by 441077234-07:58:40.
+my @cols;
+for (my \$i = 0; \$i < \$#ARGV; \$i++) { push @cols, \$ARGV[\$i + 1] if \$ARGV[\$i] eq "-o" }
+my (\$at) = grep { \$cols[\$_] =~ /^etime=?\$/ } 0 .. \$#cols;
+open my \$ps, "-|", "$(command -v ps)", @ARGV or exit 1;
+while (my \$line = <\$ps>) {
+  if (defined \$at) {
+    chomp \$line;
+    my @f = split " ", \$line, scalar @cols;
+    if (@f == @cols) {
+      \$f[\$at] = "441077234-07:58:40";
+      \$line = join(" ", @f);
+      if (open my \$log, ">>", "$TMP/test-cap-skew.served") { print \$log "\$line\n"; close \$log }
+    }
+    \$line .= "\n";
+  }
+  print \$line;
+}
+close \$ps;
+exit(\$? >> 8);
+EOF
+    chmod +x "$skew_bin/ps"
+    for probe in "skew-inside:4:2:0" "skew-hung:2:60:142"; do
+      [ -z "$test_cap_detail" ] || break
+      IFS=: read -r tag cap_s secs want <<<"$probe"
+      test_cap_n=$((test_cap_n + 1))
+      REPEAT_TEST_ACTION_PID=$TMP/test-cap-action-$test_cap_n.pid
+      : >"$TMP/test-cap-skew.served"
+      PATH=$skew_bin:$PATH REPEAT_TEST_ACTION_SECS=$secs argv_mode=action \
+        argv_probe "test-cap-$tag" run --test-cap "$cap_s" build @cheap
+      test_cap_action=$(cat "$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+      [ "$argv_rc" = "$want" ] || { test_cap_detail="$tag: exit $argv_rc (want $want): $argv_out $(cat "$argv_dir/log")"; break; }
+      grep -q "^ *$test_cap_action .*441077234-07:58:40" "$TMP/test-cap-skew.served" ||
+        { test_cap_detail="$tag: the watcher was never served the test's skewed etime: $(head -c 2000 "$TMP/test-cap-skew.served")"; break; }
+      if [ "$want" = 0 ]; then
+        [ ! -e "$argv_dir/test-cap" ] || test_cap_detail="$tag: a passing run left a test-cap record"
+      else
+        grep -Eq "^test-run: per-test cap: pid $test_cap_action has run [0-9]{1,2}s, past the 2s cap" "$argv_dir/log" ||
+          test_cap_detail="$tag: the log does not name the test at its own age: $(cat "$argv_dir/log")"
+        case $(pstate "$test_cap_action") in
+          '' | Z) ;;
+          *) test_cap_detail="$tag: the test (pid $test_cap_action) survived the run"
+             kill -KILL "$test_cap_action" 2>/dev/null ;;
+        esac
+      fi
+    done
+  fi
   if [ -z "$test_cap_detail" ]; then
     : >"$TMP/test-cap-holder.fw"
     FAKE_FW_CALLS=$TMP/test-cap-holder.fw FAKE_FW_MODE=holder OCANNL_TOOL_FLEET_WORKER=$slot_fake \

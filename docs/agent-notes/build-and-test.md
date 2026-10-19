@@ -3808,7 +3808,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   TERM-ignoring one included (measured on 3.24). A watcher counting every group in the run would
   also time the fleet slot's sleep inhibitor, which lives for the whole batch. The watcher reads
   `ps` (procps or BSD; leg 75 runs wherever a `$0`-renamed process reads back as `dune`, macOS
-  included), and records `test-cap-off` where `ps` cannot list processes (Git Bash). (2) **The
+  included), and records `test-cap-off` where `ps` cannot list processes (Git Bash). It times
+  each test on its OWN clock, not by `ps etime` (gh-ocannl-1319): minix's procps, minutes after a
+  resume from suspend, reported a test a minute old as 38109073018720 s old (etime is derived from
+  the boot time, which the resume skewed), and the cap ended the run. A test is born where the
+  watcher first lists it, less its etime clamped to the time since the previous listing (which
+  did not show it), so a skewed etime moves a birth by at most one poll; the clock stops while
+  the host sleeps (`CLOCK_UPTIME_RAW` on macOS, `CLOCK_MONOTONIC` on Linux), so a suspend never
+  counts against a test either. Leg 75 serves the watcher a stub `ps` with that etime. (2) **The
   device probe**: a batch `run` resolves to hold a GPU backend queries each such backend once,
   through `bin/device_props --ocannl_backend=<b>` from `test/config`. Build and query both run
   inside the fleet slot, as the slot's command (`_probe`, which then execs dune): a measurement
