@@ -253,7 +253,9 @@ struct
      accesses require device-resident nodes). *)
   let vectorize_pragma = []
   let aligned_local_attr = None
-  let vector_bytes = 16
+
+  (* 16-byte packs that only move data: no vector arithmetic, so no register tile and no count. *)
+  let vector_file = { Vector_file.bytes = 16; registers = 0 }
   let vector_style = `Packed_struct
 
   let typ_of_prec = function

@@ -5,7 +5,7 @@
 
     {2 Known Issues with conv2d in Training}
 
-    When attempting to use [Nn_blocks.lenet] with SGD training, a shape inference issue was
+    When attempting to use [Demo_models.lenet] with SGD training, a shape inference issue was
     encountered:
 
     1. {b max_pool2d row variable mismatch}: [max_pool2d] uses [..c..] for channel row variable,
@@ -23,7 +23,7 @@ module IDX = Train.IDX
 open Nn_blocks.DSL_modules
 module Asgns = Ir.Assignments
 
-let lenet = Nn_blocks.lenet
+let lenet = Demo_models.lenet
 let softmax = Nn_blocks.softmax
 
 let () =

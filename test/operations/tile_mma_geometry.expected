@@ -29,9 +29,13 @@ a column extent below one vector has no default and no alternatives: true
 the column cap is the widest four-row tile resident on the register file: true
 the budget is the widest default tile's live-register count: tinyBLAS's 4 x 3 on 16 registers, 4 x 6 on 32: true
 a file that holds no four-row tile has no default: true
+every geometry a narrower vector file proposes passes the fit rules of a wider one: true
+a wider file's default whose vector exceeds a narrower file is refused by it, naming the width: true
 a requested geometry renders register-tiled: true
 the emitted header names the requested geometry and its provenance: true
 the requested-geometry rendering matches the serial twin bitwise: true
+a geometry minted for a narrower vector file renders register-tiled under its own header: true
+the narrower-file rendering matches the serial twin bitwise: true
 an over-budget request is refused by the fit rules: true
 an over-budget request declines to the scalar fallback: true
 the declined routine is labeled scalar-fallback, not tensorized: true

@@ -20,7 +20,14 @@
    a comment or string naming them is not a site. The marker is the one textual part: a comment
    opening with the [marker] text on the site's line or within the [marker_window] lines above it,
    and each marker answers for one site only, so one comment cannot vouch for a neighbour it was not
-   written about. *)
+   written about.
+
+   gh-ocannl-1390 lifts the same rule one level up, to the sketch builder: [Sketch_families]'
+   applicability preconditions refuse typed through its own [refuse] (an [Illegal_schedule] at check
+   ["Autotune.sketch"]) instead of a blanket conversion of every [Invalid_argument] escaping
+   [sketch_schedule], so every untyped raise bound before [sketch_schedule] in
+   [arrayjit/lib/sketch_families.ml] carries the same marker. Each scanned source is named on the
+   command line with its bound and its typed alternative. *)
 
 open Base
 open Stdio
@@ -28,7 +35,6 @@ open Verdict.Claims
 module Read = Test_utils.Config_key_scan
 module Ast_traverse = Ppxlib.Ast_traverse
 
-let bound = "apply_typed"
 let marker = "(* invariant:"
 let marker_window = 4
 let untyped_idents = [ "invalid_arg"; "invalid_argf"; "failwith"; "failwithf"; "failwiths" ]
@@ -76,7 +82,7 @@ let untyped_sites structure =
 
 (* [Ok sites_in_region] when the bound is found, each site paired with whether a marker of its own
    answers for it; markers are consumed nearest-first, in source order. *)
-let classify content =
+let classify ?(bound = "apply_typed") content =
   let structure = Read.structure_of content in
   match binding_line structure bound with
   | None -> Error ("the source binds no " ^ bound)
@@ -100,7 +106,7 @@ let classify content =
              | [] -> (site, false)))
 
 let unmarked content =
-  match classify content with
+  match classify ~bound:"apply_typed" content with
   | Error e -> Error e
   | Ok sites -> Ok (List.filter_map sites ~f:(fun (s, ok) -> Option.some_if (not ok) s))
 
@@ -127,12 +133,41 @@ let control_cases =
     ("a comment naming invalid_arg", "(* invalid_arg \"x\" *)\nlet f () = ()" ^ tail, 0);
   ]
 
+(* The scanned sources, as [(path, bound, typed alternative)] triples from the command line. *)
+let rec triples = function
+  | path :: bound :: typed :: rest ->
+      Option.map (triples rest) ~f:(fun t -> (path, bound, typed) :: t)
+  | [] -> Some []
+  | _ -> None
+
+let scan (source, bound, typed) =
+  let name = Stdlib.Filename.basename source in
+  let content = In_channel.read_all source in
+  match classify ~bound content with
+  | Error e -> fail (source ^ ": " ^ e)
+  | Ok sites ->
+      (* Emptiness passes: a source with no untyped raise before its bound needs no marker. *)
+      p_all
+        (Printf.sprintf "%s: every untyped raise bound before %s carries its own invariant marker"
+           name bound) sites ~f:(fun (site, ok) ->
+          if not ok then
+            eprintf
+              "%s:%d: a bare %s bound before %s: raise a typed refusal with [%s], or mark it (* \
+               invariant: why reaching it is a bug *)\n"
+              source site.line site.what bound typed;
+          ok);
+      let structure = Read.structure_of content in
+      pf "%s binds %s, the typed alternative, before %s" name typed bound
+        (match (binding_line structure typed, binding_line structure bound) with
+        | Some r, Some b -> r < b
+        | _ -> false)
+
 let () =
-  let source =
-    match Array.to_list Stdlib.Sys.argv with
-    | [ _; source ] -> source
-    | _ ->
-        eprintf "usage: schedule_refusal_scan <path to arrayjit/lib/schedule.ml>\n";
+  let sources =
+    match triples (List.tl_exn (Array.to_list Stdlib.Sys.argv)) with
+    | Some (_ :: _ as sources) -> sources
+    | Some [] | None ->
+        eprintf "usage: schedule_refusal_scan (<source.ml> <bound> <typed refusal>)...\n";
         Stdlib.exit 2
   in
   List.iter control_cases ~f:(fun (label, content, expected) ->
@@ -140,20 +175,4 @@ let () =
         (match unmarked content with Ok sites -> List.length sites = expected | Error _ -> false));
   p "control: a source without the bound is refused"
     (Result.is_error (unmarked "let f () = invalid_arg \"x\"\n"));
-  let content = In_channel.read_all source in
-  match classify content with
-  | Error e -> fail (source ^ ": " ^ e)
-  | Ok sites ->
-      p_all "every untyped raise schedule application can reach carries its own invariant marker"
-        sites ~f:(fun (site, ok) ->
-          if not ok then
-            eprintf
-              "%s:%d: a bare %s schedule application can reach: raise a typed refusal with \
-               [refuse], or mark it (* invariant: why reaching it is a bug *)\n"
-              source site.line site.what;
-          ok);
-      let structure = Read.structure_of content in
-      p "schedule.ml binds refuse, the typed alternative, before apply_typed"
-        (match (binding_line structure "refuse", binding_line structure bound) with
-        | Some r, Some b -> r < b
-        | _ -> false)
+  List.iter sources ~f:scan

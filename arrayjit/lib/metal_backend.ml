@@ -392,8 +392,7 @@ module Impl = struct
                     Me.Device.supports_family d Me.Device.GPUFamily.Apple7)
               then Some Metal_mma.capability
               else None);
-           simd_vector_bytes = 0;
-           simd_vector_registers = 0;
+           simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the M4 Max; see the field. *)
@@ -592,7 +591,9 @@ module Impl = struct
     let volatile_serial_accumulation = true
     let vectorize_pragma = []
     let aligned_local_attr = None
-    let vector_bytes = 16
+
+    (* 16-byte packs that only move data: no vector arithmetic, so no register tile and no count. *)
+    let vector_file = { Vector_file.bytes = 16; registers = 0 }
     let vector_style = `Packed_struct
 
     let ident_blacklist =

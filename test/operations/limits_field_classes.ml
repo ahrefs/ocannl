@@ -51,8 +51,7 @@ let full =
     max_workgroup_dims = Some (1024, 1024, 64);
     max_grid_yz = Some 65535;
     mma = Some BI.minimal_mma_capability;
-    simd_vector_bytes = 16;
-    simd_vector_registers = 32;
+    simd_vector = { Ir.Vector_file.bytes = 16; registers = 32 };
     peak_flops = Some 1e13;
     peak_memory_bandwidth = Some 1e12;
     cache_capacity_bytes = Some (1 lsl 30);
@@ -67,7 +66,8 @@ let full =
     codegen_tag = Some "tag";
   }
 
-(* One change per field, each to a value the field cannot already hold in [full]. *)
+(* One change per field, each to a value the field cannot already hold in [full] -- two for the
+   vector file, one per component. *)
 let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
   [
     ("max_bound_pools", fun l -> { l with max_bound_pools = Some 7 });
@@ -77,8 +77,9 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ("max_workgroup_dims", fun l -> { l with max_workgroup_dims = Some (1, 1, 1) });
     ("max_grid_yz", fun l -> { l with max_grid_yz = Some 1 });
     ("mma", fun l -> { l with mma = None });
-    ("simd_vector_bytes", fun l -> { l with simd_vector_bytes = 64 });
-    ("simd_vector_registers", fun l -> { l with simd_vector_registers = 16 });
+    (* Both halves of the vector file (gh-ocannl-1399): each moves the key on its own. *)
+    ("simd_vector", fun l -> { l with simd_vector = { l.simd_vector with bytes = 64 } });
+    ("simd_vector", fun l -> { l with simd_vector = { l.simd_vector with registers = 16 } });
     ("peak_flops", fun l -> { l with peak_flops = Some 1. });
     ("peak_memory_bandwidth", fun l -> { l with peak_memory_bandwidth = Some 1. });
     ("cache_capacity_bytes", fun l -> { l with cache_capacity_bytes = Some 1 });

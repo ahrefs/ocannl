@@ -1425,8 +1425,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `{ base with … }`, overwriting any label of the type and leaving a width field to a non-constant
   base. A constant base is `Ir.Backend_intf.no_hardware_limits` spelled in full (or through
   a module alias every binding of which names `Ir.Backend_intf`, with no module on the path rebound
-  by the file), or a name every binding of which is a constant record or a function returning one. staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
-  keeps the device's register count, so it is a read. Every rule running such a program declares or
+  by the file), or a name every binding of which is a constant record or a function returning one. `{ device_limits with
+  native_fp16_arithmetic = false }` keeps the device's `simd_vector`, so it is a read. Every rule running such a program declares or
   pins the variable, or depends on `(universe)`. A library with inline tests is a program of its
   own: its `(inline_tests (deps …))` and every per-module rule running its runner answer for it. A
   `setenv` whose value reads the variable back through `%{env:…}` pins nothing: `Scan`'s pin walk
@@ -1434,7 +1434,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   SIMD/arch-flag keys move the auto width only through the probe every compiled program runs. A
   test that merely constructs limits and lets codegen read the width inside the library is the
   `Context.compile` route above. Field names match without types, so an unrelated
-  `.simd_vector_bytes` costs a declaration, never a stale pass. The golden lists the derived values,
+  `.simd_vector` costs a declaration, never a stale pass. The golden lists the derived values,
   fields and record type, and each reading stanza; a `Cc_backend` that reads the key outside every
   named value, or whose values no longer reach it, and a lost anchor (module, fields or record type
   not found) are refused rather than deriving no reader.
@@ -1653,8 +1653,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `FAIL: ` -- `pass_fail`'s too (`FAIL: <label>: FAIL (<detail>)`; a bare `FAIL: <label>` reads
   exactly as a `Verdict.fail` message). `tools/mutation-run.sh` lists a run's failed claims by
   those lines' endings (`: false`, `: FAIL`, `: FAIL (…)`) and counts its stdout rows against the
-  golden's, and a label carrying a newline split its claim into a `FAIL: ` head that is no false
-  claim and a tail that is a row the golden lacks. So Verdict renders every claim line, label and detail, through `Verdict.one_line`
+  golden's. A `Verdict.fail` message prints its `FAIL: ` line on BOTH streams, so one ending like a
+  claim is told apart by its stdout row and listed under `failure messages`, never as a claim; and
+  a run's own `FAIL: ` rows (beyond any the golden has) count toward no golden row, so a run cut
+  short after a long failure cannot pass for complete (gh-ocannl-1364). A label carrying a newline
+  split its claim into a `FAIL: ` head that is no false claim and a tail that is a row the golden
+  lacks. So Verdict renders every claim line, label and detail, through `Verdict.one_line`
   (a control character becomes a space), which keeps a computed label on one row; a literal label,
   or a `pf` format, written with a line break is refused by `verdict_ratchet`
   (`Verdict_scan.line_break_census`) -- a blank line before a claim goes in a `printf` of its own.
@@ -1844,16 +1848,23 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - Mutation manifest rows use `tools/mutation-run.sh <module> <patch-file> <@alias>`
   (gh-ocannl-969), in an otherwise idle, isolated worktree. The patch is literal bytes
   `OLD@@@NEW`, with exactly one delimiter, a nonempty OLD occurring exactly once (overlapping
-  occurrences count), and no implicit newline trimming; NEW can be empty. The runner invokes
-  `tools/test-run.sh`, prints its actual verdict and run id, and extracts every complete
+  occurrences count), and no implicit newline trimming; NEW can be empty. The runner first runs
+  the unmutated test once (`baseline: <run>`) and refuses, with nothing mutated, when that
+  baseline is red: a golden not yet promoted after a change to the test read mutants as stopped
+  early (gh-ocannl-1361's worker, twice), and a test red on its own would read every mutant as
+  caught (gh-ocannl-1364). That is one more test run per mutation. It then invokes
+  `tools/test-run.sh` on the mutant, prints its actual verdict and run id, and extracts every complete
   `FAIL: ...: false` line from that run's full log, and every failed `pass_fail`'s
-  `FAIL: ...: FAIL` or `FAIL: ...: FAIL (<detail>)`, preserving order and duplicates. The alias
+  `FAIL: ...: FAIL` or `FAIL: ...: FAIL (<detail>)`, preserving order and duplicates -- apart from
+  `Verdict.fail` messages, whose line the stdout carries too, listed under `failure messages`
+  (gh-ocannl-1364). The alias
   names ONE test (`@<dir>/runtest-<name>`, `slow-<name>`, `train-<name>`) with a golden
   `<dir>/<name>.expected`, refused otherwise, because 1 means "caught" and 0 "survived" only for a
   run that reached its last row (gh-ocannl-1083). The runner snapshots the test's stdout
   candidates (`<name>.exe.output`, `.actual`, `.output` under `${DUNE_BUILD_DIR:-_build}/default`,
   where dune leaves them even when the test exits nonzero) before launch, counts the rows of the
-  one this run rewrote against the golden's (`rows: N printed of M`), and exits 4 in place of 0 or
+  one this run rewrote against the golden's (`rows: N printed of M`; its own `FAIL: ` rows beyond the
+  golden's are no rows of it, `rows not counted: K`, gh-ocannl-1364), and exits 4 in place of 0 or
   1 when the run is no evidence: `STOPPED EARLY` for fewer rows or Verdict's own `STOPPED EARLY`
   line in the log, `NEVER RAN` when no candidate changed (a build failure, or a mutation that left
   the executable byte-identical so dune reused the old result -- a previous run's output is never
@@ -1869,12 +1880,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   skipped -- `Verdict.fail` prefixes EVERY line of a multi-line message, so an "expected/got"
   continuation is skipped too rather than read as a row the golden lacks), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
   teardown, still exits 4. A golden's success trailer is read the same way (`success trailer
-  omitted: K rows`): the scans print their `OK: ` rows under `if not (Verdict.any_failed ())`,
-  most of them behind a blank row of the trailer's own (`printf "\nOK: …"`), so every complete
+  omitted: K rows`): the scans print their `OK: ` rows through `Verdict.success_trailer`, which
+  prints them only while no check has failed, most of them behind a blank row of the trailer's own
+  (`~blank_line:true`), so every complete
   failing run of `verdict_ratchet`, `env_var_deps`, `config_dep_completeness` and the rest is
   that many rows short; the runner matches the run against the golden without its `OK: ` rows,
   with or without the blank row before them, under the same row-for-row and teardown conditions.
-  A new scan that keeps the `OK: ` prefix for its conditional rows inherits this. Residual: a golden ending on its marker section cannot tell a complete
+  A new scan that prints its trailer through `Verdict.success_trailer` inherits this. Residual: a golden ending on its marker section cannot tell a complete
   run from one cut inside the markers (nor one ending on its trailer a failing run from one cut
   before it), and a mutant that silences one refusal while every claim
   passes leaves no teardown, so it reads STOPPED EARLY although the golden caught it -- both want a
@@ -1891,8 +1903,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   manually. It is temporary storage, without a power-loss or reboot recovery guarantee. `tools/test-mutation-run.sh` drives the shipping
   runner and test-run supervisor in isolated fixtures; Ubuntu's shell-harness CI runs it. The
   Verdict text the runner reads it takes from `verdict_teardown.expected`, whose last section is
-  three children's streams, and replays through the runner: a refactor of `verdict.ml` keeps the
+  its children's streams, and replays through the runner: a refactor of `verdict.ml` keeps the
   harness green, while a promotion that changes those transcripts means running the harness.
+  The same holds for what the runner skips of a scan's ending: the `manifest_held`/`manifest_failed` pair ends
+  through the printers every scan shares, `Verdict.success_trailer` and
+  `Refusal_control_manifest.print_section`, and the failing child's run, replayed against the
+  passing child's stdout, must read as caught with one marker and the trailer omitted -- no source
+  grep of either printer, nor of a scan (gh-ocannl-1364).
 - The guarded pairwise claim has the same two label dialects as the scalar claim (gh-ocannl-816):
   `pf_all2` formats a computed label before taking the two arrays, and `pass_fail_all2` preserves
   `pass_fail`'s lazy failure detail while adding the structural empty, floor-shortfall, or
@@ -1922,6 +1939,21 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   inputs that exercise the intended values and gradients above the floor, and report their scales
   alongside the errors; retain saturated or zero cases as separate edge-case coverage. Leg 6's
   scale report is diagnostic, not an enforced lower-bound claim.
+- Executed parity cannot say a routine RAN tensorized (gh-ocannl-1283): a `Tile_mma` that declines
+  at codegen renders the lane-0 scalar fallback, which computes the same values, so only the
+  routine's mma census (`Context.routine.mma`, `Ll_test.execute_with_census`) tells the two apart.
+  `tensorized_census_ratchet` (gh-ocannl-1309) holds it: a `Verdict` claim whose label names
+  tensorization (`tensoriz`, the word `mma`, ...) AND asserts parity (`match…`, `bitwise`,
+  `parity`, `reference`, ...), in a top-level item that executes a routine, is refused unless that
+  item -- or a top-level helper of the file it references -- JUDGES the census
+  (`Ll_test.rendered_tensorized`/`all_tensorized`/`census_agrees_with_capability`/..., a
+  `C_syntax` tensorization comparison, constructor or field). Binding the census and discarding it
+  does not count, and a claim in a check helper is also each executing caller's, which must judge
+  too. The closed lists and the boundary are in `Test_utils.Tensorized_census_scan`'s
+  header; the two that matter when writing a test: the granularity is the top-level item, so one
+  judgment covers every leg in a big `let () =`, and a label whose tensorization word arrives
+  through a function parameter is not read -- name the claim's tensorized leg in its literal text
+  and judge its census beside it.
 
 ## Hand-built IR tests
 

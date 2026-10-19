@@ -284,55 +284,40 @@ let exempt_zero_reference_exports =
        shapes. Utils has no .mli to hide them in. *)
     "Utils.clean_filename";
     "Utils.owned_artifact_name";
-    (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library, where these
-       implicit exports have no caller in the tree. Unlike the entries above, most are not helpers
-       leaked by a missing interface: [Nn_blocks]' architectures and initializers and [Train]'s
-       entry points are the surface lib/ exists to offer, and some -- [normal], [kaiming], [xavier]
-       -- are reached through [Nn_blocks.DSL_modules] re-exports this census does not follow. Which
-       of them an interface should publish, and which it should hide, is gh-ocannl-1010's decision
-       (lib/ has no interfaces); this block is its census. *)
-    "Calibrate.named";
+    (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library. gh-ocannl-1010
+       then gave its recipe modules (Train, Parallel, Calibrate, Mixed_prec, Precision_policy)
+       explicit interfaces, which took them out of this census, and decided that [Nn_blocks] gets
+       none: it is a library of building blocks meant for reuse, with no helper half to hide, so an
+       entry here is a block nothing in the tree calls yet rather than a leaked helper. Some --
+       [normal], [kaiming], [xavier] -- are reached through [Nn_blocks.DSL_modules] re-exports this
+       census does not follow. *)
     "Nn_blocks.avg_pool2d";
-    (* Shared implementation of batch_norm1d/2d, deliberately internal to Nn_blocks; an eventual
-       lib/ interface (gh-ocannl-1010) should hide this state-construction helper. *)
+    (* The state construction batch_norm1d/2d share. Published like every other block: by
+       gh-ocannl-1010's decision Nn_blocks has no interface to hide components in, and this one is
+       usable for a custom normalization over the same running-state semantics. *)
     "Nn_blocks.batch_norm_state";
     "Nn_blocks.box_muller";
-    "Nn_blocks.conv_bn_relu";
     "Nn_blocks.cross_attention";
     "Nn_blocks.dropout";
-    "Nn_blocks.global_avg_pool2d";
     "Nn_blocks.kaiming";
     "Nn_blocks.kaiming_at";
     "Nn_blocks.kaiming_impl";
-    "Nn_blocks.mobile_cnn";
-    "Nn_blocks.multi_head_att_workshop";
     "Nn_blocks.normal";
     "Nn_blocks.normal1";
     "Nn_blocks.normal_at";
     "Nn_blocks.normal_at1";
     "Nn_blocks.reduce_specified_axes";
     "Nn_blocks.set_uint32_id";
-    "Nn_blocks.sokoban_cnn";
-    "Nn_blocks.transformer_decoder";
     "Nn_blocks.transformer_decoder_block";
-    "Nn_blocks.transformer_encoder";
     "Nn_blocks.vgg_block";
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";
-    "Parallel.host_get";
-    "Parallel.schedule";
-    "Train.compile_with_model_gate";
-    "Train.compile_within_budget";
-    "Train.decision_lowering_digest";
-    "Train.dump_cd_file";
-    "Train.ensure_printable";
-    "Train.filter_out_grad_zeroing";
-    "Train.fit_memory_budget";
-    "Train.params_for";
-    "Train.placement_arm_name";
-    "Train.placement_decision_lists";
-    "Train.run_once";
+    (* gh-ocannl-1010 moved the complete demo architectures out of Nn_blocks into Demo_models; these
+       three have no runner in the tree. *)
+    "Demo_models.mobile_cnn";
+    "Demo_models.multi_head_att_workshop";
+    "Demo_models.sokoban_cnn";
     (* gh-ocannl-915: the derived values its triage kept. None of their derivings is removable:
        [C_syntax.compare_mma_rendering] and [compare_peel_site] sort the census summaries inside
        C_syntax itself, and [compare_peel_skip] and [compare_peel_verdict] are what
@@ -353,16 +338,12 @@ let exempt_zero_reference_exports =
    with the type's name would take the entry off this list. *)
 let exempt_unmentioned_types =
   [
-    "Mixed_prec.twin_placement";
     "Ndarray.apply2_as_bigarray";
     "Ndarray.apply_as_bigarray";
     "Ndarray.apply_with_prec";
     "Nn_blocks.position_embedding";
     "Ops.apply_prec";
     "Ops.prec_family";
-    "Parallel.handle";
-    "Parallel.reduction";
-    "Train.placement_arm";
     "Utils.config_source";
     "Utils.env_var_class";
     "Utils.requirement";

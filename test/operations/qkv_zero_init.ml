@@ -44,8 +44,9 @@ let capture ~name out =
    model selector pass); the untuned default pipeline does not. *)
 let fission ?(fold_zeros = true) opt =
   let limits = Ir.Backend_intf.no_hardware_limits in
-  Sched.fission_scheduled ~keep_mapping:(Sched.default_gpu ~limits) ~fold_zeros
-    ~preset:(Sched.default_gpu ~limits)
+  Sched.fission_scheduled
+    ~keep_mapping:(Sched.mapping_probe (Sched.default_gpu ~limits))
+    ~fold_zeros ~preset:(Sched.default_gpu ~limits)
     ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
     ~static_indices:[] opt
 
@@ -450,7 +451,9 @@ let () =
   let outcome q =
     let preset seg = Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q seg in
     match
-      Sched.fission_scheduled ~fold_zeros:true ~keep_mapping:(Sched.default_gpu ~limits) ~preset
+      Sched.fission_scheduled ~fold_zeros:true
+        ~keep_mapping:(Sched.mapping_probe (Sched.default_gpu ~limits))
+        ~preset
         ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
         ~static_indices:[]
         {

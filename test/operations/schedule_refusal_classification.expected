@@ -8,3 +8,10 @@ strict: an untyped transform exception is fatal, its own exception and no cause:
 permissive: the same exception is contained as Unclassified, never as Illegal_schedule: true
 the public Schedule.apply still raises the injected Invalid_argument itself: true
 the fault seam is scoped: it is gone once with_transform_fault returns: true
+the builder's no-conv-site precondition refuses typed, as Illegal_schedule "Autotune.sketch": true
+strict=true: the builder refusal reads as a classified decline carrying the refusal: true
+strict=false: the builder refusal reads as a classified decline carrying the refusal: true
+an injected Invalid_argument escapes the builder untyped: true
+strict: an untyped builder exception is fatal, its own exception and no cause: true
+permissive: the same exception is contained as Unclassified, never as Illegal_schedule: true
+the builder fault seam is scoped: the typed refusal is back once it returns: true

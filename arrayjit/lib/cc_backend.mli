@@ -27,19 +27,21 @@ val pool_parallel_grid : unit -> bool
 
 val vector_bytes_setting : unit -> int
 (** The vector register width in bytes for the explicit SIMD renderings (config [cc_vector_bytes];
-    auto-probed when unset). Exposed for [Schedulers.cpu_mma_limits]'s [simd_vector_bytes]. *)
+    auto-probed when unset). Read by {!vector_file_setting}, and alone wherever only the width
+    matters. *)
 
 val auto_vector_bytes : unit -> int
 (** What {!vector_bytes_setting} answers when [cc_vector_bytes] is unset: the widest vector the
     configured target holds (64 with AVX-512 F/BW/VL, 32 with AVX2, else 16). Exposed for
     [test/operations/bridge_arm_coverage], which forces every width up to this one. *)
 
-val vector_registers_setting : unit -> int
-(** How many vector registers of the {!vector_bytes_setting} width the kernels' target has (config
-    [cc_vector_registers]; auto-probed when unset): the native file's count -- 32 on AArch64 and
-    AVX-512, 16 on other x86 targets, probed under the kernel flags -- divided where the width is
-    wider than a native register; [0] when explicit SIMD is off. Exposed for
-    [Schedulers.cpu_mma_limits]'s [simd_vector_registers], which the register tile's
+val vector_file_setting : unit -> Ir.Vector_file.t
+(** The vector register file of the explicit SIMD renderings, width and count as one value
+    (gh-ocannl-1399): the {!vector_bytes_setting} width, and how many registers of that width the
+    kernels' target has (config [cc_vector_registers]; auto-probed when unset) -- the native file's
+    count, 32 on AArch64 and AVX-512, 16 on other x86 targets, probed under the kernel flags --
+    divided where the width is wider than a native register; [0] registers when explicit SIMD is
+    off. Exposed for [Schedulers.cpu_mma_limits]'s [simd_vector], which the register tile's
     [Register_tile.rn_cap] reads in the seeding, as the renderer does here (gh-ocannl-1285). *)
 
 val effective_pool_width : unit -> int
@@ -71,12 +73,12 @@ val host_capabilities : unit -> (string * string) list
 (** Which kind of host this process runs on, as the kernels see it (gh-ocannl-1371): the CPU model,
     the logical CPU count and pool tag, the ISA the SIMD probes found under the kernel flags
     ([avx2+fma], [avx512f+bw+vl], [neon]), the resolved {!vector_bytes_setting} beside
-    {!auto_vector_bytes}, {!vector_registers_setting} and the native register file, the fp16
-    arithmetic support, and the compiler with the arch and SIMD flags those were resolved under.
-    Read from the same probes and settings the renderer reads, so it cannot disagree with them.
-    [tools/host_caps.exe] prints it as the header line of every CI build job: GitHub's x86 runners
-    come with or without AVX-512, and the auto-probed width changes what the autotune pre-filter
-    keeps. *)
+    {!auto_vector_bytes}, the register count of {!vector_file_setting} and the native register file,
+    the fp16 arithmetic support, and the compiler with the arch and SIMD flags those were resolved
+    under. Read from the same probes and settings the renderer reads, so it cannot disagree with
+    them. [tools/host_caps.exe] prints it as the header line of every CI build job: GitHub's x86
+    runners come with or without AVX-512, and the auto-probed width changes what the autotune
+    pre-filter keeps. *)
 
 val has_native_fp16_arithmetic : unit -> bool
 (** Whether the configured C compiler and target execute [_Float16] arithmetic natively, at twice

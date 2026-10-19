@@ -103,9 +103,7 @@ let () =
      census bracket as the scalar fallback, and the warning at the bottom of the run names it. *)
   let tile =
     Bench_tile.of_args args ~machine:(fun () ->
-        ( limits.Ir.Backend_intf.simd_vector_bytes,
-          limits.Ir.Backend_intf.simd_vector_registers,
-          Ir.Ops.prec_in_bytes cprec ))
+        (limits.Ir.Backend_intf.simd_vector, Ir.Ops.prec_in_bytes cprec))
   in
   (* What the packed variants require of n, in one place: an i/j/k nest to address (extent-1 loops
      are simplified away before the transform runs, leaving nothing to schedule), and extents

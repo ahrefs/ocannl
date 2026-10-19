@@ -621,10 +621,11 @@ let () =
      show"
     (!floor_holes = 0);
   Verdict.p "that floor applies to more than one dune file" (!floors_checked > 1);
-  if not (Verdict.any_failed ()) then
-    printf
-      "\n\
-       OK: every test stanza, inline-test library and exe-running rule in these files declares %s, \
-       apart from the sites exempted above.\n"
-      Scan.config_file;
+  Verdict.success_trailer ~blank_line:true
+    [
+      Printf.sprintf
+        "every test stanza, inline-test library and exe-running rule in these files declares %s, \
+         apart from the sites exempted above."
+        Scan.config_file;
+    ];
   Test_utils.Refusal_control_manifest.print "config_dep_completeness.ml"

@@ -21,7 +21,7 @@ let () =
 
   (* Create a simple transformer model *)
   let transformer_model =
-    Ocannl.Nn_blocks.transformer ~label:[ "test_transformer" ] ~num_encoder_layers
+    Ocannl.Demo_models.transformer ~label:[ "test_transformer" ] ~num_encoder_layers
       ~num_decoder_layers ~num_heads ~d_enc:d_model ~d_dec:d_model ~d_ff ()
   in
 
@@ -73,8 +73,8 @@ let () =
   let module IDX = Ocannl.Train.IDX in
   let train_step_n, bindings = IDX.get_static_symbol IDX.empty in
   let loss, logits =
-    Ocannl.Nn_blocks.transformer_with_loss ~label:[ "transformer_loss" ] ~model:transformer_model ()
-      ~train_step:(Some train_step_n) ~src ~tgt_input ~tgt_target ~mask
+    Ocannl.Demo_models.transformer_with_loss ~label:[ "transformer_loss" ] ~model:transformer_model
+      () ~train_step:(Some train_step_n) ~src ~tgt_input ~tgt_target ~mask
   in
 
   (* Forward pass to check shapes and loss; set [output_cd_file] to true for debugging. *)

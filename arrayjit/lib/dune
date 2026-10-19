@@ -90,6 +90,7 @@
   tnode
   host_inits
   schedule_outcome
+  vector_file
   register_tile
   low_level
   online_softmax

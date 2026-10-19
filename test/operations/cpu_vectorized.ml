@@ -39,7 +39,7 @@ let () = Generated.init ~backend_name
    rendering it exists to exercise. GPU backends report 0 here and keep the factor at 8 — one packed
    128-bit load is 4 f32 lanes, and 8 is what their eligibility rule was written against. *)
 let simd_vector_bytes =
-  (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.simd_vector_bytes
+  (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.simd_vector.bytes
 
 let split_factor = max 8 (simd_vector_bytes / Ir.Ops.prec_in_bytes Ir.Ops.single)
 

@@ -385,7 +385,7 @@ val sketch_seed_params :
     combinations the backend supports at one accumulator width but not the other (gh-ocannl-545:
     CUDA's bf16 has no wmma accumulator of its own); on the C backends: operand-precision uniformity
     (f32/f64), the fused accumulation form, micro-kernel column extent at least one vector of lanes
-    ([limits.simd_vector_bytes]), and transposed-B storage for shapes that read B in place. Builder
+    ([limits.simd_vector]), and transposed-B storage for shapes that read B in place. Builder
     preconditions the schedule builders settle identically for every tile completion — the
     zero-expansion row-axis rule, and the GPU sketches' companion-coverage rule per fusion flavor —
     also pre-filter here, as the family tree's construction-time refutations (gh-ocannl-577): a seed
@@ -689,11 +689,16 @@ val sketch_schedule :
   Ir.Low_level.optimized ->
   Ir.Schedule.schedule
 (** The composed pipeline a seed parameterizes, built against the given lowering (the site is
-    re-detected). Raises [Invalid_argument] when no site is detected or the parameters do not fit
-    the segment. [accum_prec] is the rendering backend's accumulator resolution
+    re-detected). Refuses typed when no site is detected or the parameters do not fit the segment
+    ({!Sketch_families.sketch_schedule}: [Ir.Schedule_outcome.Cause_at (Transform, _)]); any other
+    exception escaping the builder is a builder bug, fatal under [strict_failure_classification]
+    (gh-ocannl-1390). [accum_prec] is the rendering backend's accumulator resolution
     ([(Context.codegen_capabilities ctx).accum_prec]): the scalar pipelines' [Privatize] mints its
     tile at it ({!Ir.Schedule.privatize}, gh-ocannl-1116). Exposed for tests (the pad-composition
     seeding of gh-ocannl-485 is executed directly). *)
+
+val with_sketch_builder_fault : (sketch_params -> unit) -> (unit -> 'a) -> 'a
+(** Test seam: see {!Sketch_families.with_sketch_builder_fault} (gh-ocannl-1390). *)
 
 val extend_with_privatize :
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
@@ -1919,6 +1924,7 @@ val compile_advisory :
   ?name:string ->
   ?on_fallback:(exn -> unit) ->
   ?fallback_if:(unit -> bool) ->
+  ?on_unrecovered:(Ir.Schedule_outcome.classified_cause -> Context.t * Context.routine) ->
   (Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
   Context.t ->
   Ir.Assignments.comp ->
@@ -1930,10 +1936,12 @@ val compile_advisory :
     [on_fallback] is called with the public rendering of the cause when fallback fires.
     [fallback_if] (default: always) is consulted first, for transforms that may themselves have
     degraded to the default pipeline — [false] re-raises the original exception, backtrace included,
-    instead of duplicating a compile that has nothing to fall back to. For advisory transforms only:
-    a failure of the default pipeline itself propagates. [name] names the routine, exactly as
-    {!Context.compile}'s does, and reaches the fallback compile too. See {!model_default}
-    (gh-ocannl-519). *)
+    instead of duplicating a compile that has nothing to fall back to; given [on_unrecovered], that
+    classified cause is handed to it instead of raised — as is a classified failure of the fallback
+    compile itself — so a caller with a fallback of its own acts on a classified rejection alone,
+    never on a fatal failure (gh-ocannl-1390). For advisory transforms only: a failure of the
+    default pipeline itself propagates. [name] names the routine, exactly as {!Context.compile}'s
+    does, and reaches the fallback compile too. See {!model_default} (gh-ocannl-519). *)
 
 val model_default :
   ?name:string ->

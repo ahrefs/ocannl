@@ -20,6 +20,11 @@ let raw_entries =
     ("ll_test_ratchet.ml", []);
     ("refused_action_streams.ml", []);
     ("operand_key_ratchet.ml", []);
+    ( "tensorized_census_ratchet.ml",
+      [
+        "[scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity";
+        "[scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run";
+      ] );
     ("provenance_tag_inventory.ml", []);
     ( "render_decline_inventory.ml",
       [
@@ -1169,29 +1174,15 @@ let doubly_classified =
   List.filter_map direct_evidence ~f:(fun (key, _) ->
       Option.some_if (List.Assoc.mem catalogue_only key ~equal:String.equal) key)
 
-let print source =
-  let source_path =
-    if Stdlib.Sys.file_exists source then source
-    else
-      let basename = Stdlib.Filename.basename source in
-      if Stdlib.Sys.file_exists basename then basename
-      else Stdlib.Filename.concat "test/operations" source
-  in
-  let normalized = String.substr_replace_all source ~pattern:"\\" ~with_:"/" in
-  let source =
-    match String.substr_index normalized ~pattern:"test/operations/" with
-    | Some position -> String.drop_prefix normalized position
-    | None ->
-        let local = "test/operations/" ^ Stdlib.Filename.basename normalized in
-        (* A bare or [./]-prefixed name is this directory's scan whether or not it has a row yet;
-           the bootstrap below must print the key the census derives, not the spelling. *)
-        if
-          List.Assoc.mem entries local ~equal:String.equal
-          || String.equal (Stdlib.Filename.dirname normalized) "."
-        then local
-        else normalized
-  in
-  let diagnostics = Refusal_control_scan.diagnostics (In_channel.read_all source_path) in
+(** The section [print] ends a scan's golden with: its heading, then the marker of each of
+    [diagnostics] that [expected] (the source's registered row) lists and this run exercised -- a
+    claim's once Verdict recorded it passing, a direct failure's once its refusal ran -- and the
+    catalogue-only ones after them. [source] is the key a direct failure's observations are filed
+    under. Exposed apart from [print] so that a control can print a section for diagnostics it
+    extracted itself, through the same printer: [verdict_teardown]'s transcripts, which
+    [tools/test-mutation-run.sh] replays through [tools/mutation-run.sh], are of runs ending here
+    (gh-ocannl-1364). *)
+let print_section ~source ~expected diagnostics =
   let passed_labels = ref (Verdict.passed_labels ()) in
   let catalogued = ref [] in
   let rivals =
@@ -1201,39 +1192,6 @@ let print source =
         | Refusal_control_scan.Claim -> None)
   in
   printf "\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n";
-  (* Bootstrap: a scan with no row, or an empty one, gets its row written out on stderr -- never
-     into the golden, and never into the manifest, so the census claim in env_var_deps still decides
-     whether the row was added. A registered row with no diagnostics to list has nothing to say. *)
-  let registered = List.Assoc.find entries source ~equal:String.equal in
-  let expected = Option.value registered ~default:[] in
-  let row_source =
-    Option.value (String.chop_prefix source ~prefix:"test/operations/") ~default:source
-  in
-  if List.is_empty expected && not (List.is_empty diagnostics && Option.is_some registered) then (
-    eprintf
-      "%s has %s row in Refusal_control_manifest; add this row to `raw_entries` in \
-       test/support/refusal_control_manifest.ml (not part of the golden):\n"
-      source
-      (if Option.is_some registered then "an empty" else "no");
-    eprintf "%s" (row ~source:row_source diagnostics))
-  else
-    (* A stale row -- a diagnostic gained, lost or reworded -- gets the same treatment, again only
-       on stderr: the catalogue still holds the manifest to the extraction, and a marker outside the
-       row prints nothing below, so the census claim in env_var_deps still decides. *)
-    Option.iter
-      (row_difference ~registered:expected
-         ~extracted:(List.map diagnostics ~f:Refusal_control_scan.marker))
-      ~f:(fun difference ->
-        eprint_row_difference ~source:row_source diagnostics difference;
-        match unevidenced_failures ~source ~registered:expected diagnostics with
-        | [] -> ()
-        | keys ->
-            eprintf
-              "  direct failures new to the row with no `raw_direct_evidence` entry, none recorded \
-               through `observe_failure` in this run: unless the scan's separate control run \
-               records it, each needs a hand-written entry naming the control output that observes \
-               it, under the key\n";
-            List.iter keys ~f:(eprintf "    %S\n"));
   diagnostics
   |> List.iter ~f:(fun diagnostic ->
       let marker = Refusal_control_scan.marker diagnostic in
@@ -1267,3 +1225,61 @@ let print source =
     printf
       "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";
     List.iter (List.rev !catalogued) ~f:(printf "  %s\n"))
+
+let print source =
+  let source_path =
+    if Stdlib.Sys.file_exists source then source
+    else
+      let basename = Stdlib.Filename.basename source in
+      if Stdlib.Sys.file_exists basename then basename
+      else Stdlib.Filename.concat "test/operations" source
+  in
+  let normalized = String.substr_replace_all source ~pattern:"\\" ~with_:"/" in
+  let source =
+    match String.substr_index normalized ~pattern:"test/operations/" with
+    | Some position -> String.drop_prefix normalized position
+    | None ->
+        let local = "test/operations/" ^ Stdlib.Filename.basename normalized in
+        (* A bare or [./]-prefixed name is this directory's scan whether or not it has a row yet;
+           the bootstrap below must print the key the census derives, not the spelling. *)
+        if
+          List.Assoc.mem entries local ~equal:String.equal
+          || String.equal (Stdlib.Filename.dirname normalized) "."
+        then local
+        else normalized
+  in
+  let diagnostics = Refusal_control_scan.diagnostics (In_channel.read_all source_path) in
+  (* Bootstrap: a scan with no row, or an empty one, gets its row written out on stderr -- never
+     into the golden, and never into the manifest, so the census claim in env_var_deps still decides
+     whether the row was added. A registered row with no diagnostics to list has nothing to say. *)
+  let registered = List.Assoc.find entries source ~equal:String.equal in
+  let expected = Option.value registered ~default:[] in
+  let row_source =
+    Option.value (String.chop_prefix source ~prefix:"test/operations/") ~default:source
+  in
+  if List.is_empty expected && not (List.is_empty diagnostics && Option.is_some registered) then (
+    eprintf
+      "%s has %s row in Refusal_control_manifest; add this row to `raw_entries` in \
+       test/support/refusal_control_manifest.ml (not part of the golden):\n"
+      source
+      (if Option.is_some registered then "an empty" else "no");
+    eprintf "%s" (row ~source:row_source diagnostics))
+  else
+    (* A stale row -- a diagnostic gained, lost or reworded -- gets the same treatment, again only
+       on stderr: the catalogue still holds the manifest to the extraction, and a marker outside the
+       row prints nothing below, so the census claim in env_var_deps still decides. *)
+    Option.iter
+      (row_difference ~registered:expected
+         ~extracted:(List.map diagnostics ~f:Refusal_control_scan.marker))
+      ~f:(fun difference ->
+        eprint_row_difference ~source:row_source diagnostics difference;
+        match unevidenced_failures ~source ~registered:expected diagnostics with
+        | [] -> ()
+        | keys ->
+            eprintf
+              "  direct failures new to the row with no `raw_direct_evidence` entry, none recorded \
+               through `observe_failure` in this run: unless the scan's separate control run \
+               records it, each needs a hand-written entry naming the control output that observes \
+               it, under the key\n";
+            List.iter keys ~f:(eprintf "    %S\n"));
+  print_section ~source ~expected diagnostics

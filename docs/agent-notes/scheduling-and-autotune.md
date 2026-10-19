@@ -122,13 +122,17 @@ files.
   per layer at s1024; its plain plan walks a whole row per thread), while the fused dV loses -- not
   on its own, but because `keeps_mapping` cut it from dK to keep its lanes (dK 1.03 + dV 2.30 ms,
   against 1.72 ms for the two merged on the plain plan). So `admitted` takes lanes wherever a
-  kernel admits them and has `fission_keep_mapping` probe WITHOUT lanes: no boundary is kept for
-  lanes, so a merge costing a nest only its lanes goes through. That is broader than the evidence
-  (a dK/dV cut): a new nest sharing the value pass's plain chain -- a saved row statistic, say --
-  would now merge with it and cost the forward its lanes (`lane_geometry` declines a kernel mixing
-  lane and plain nests). Gating lanes wholesale was measured and rejected (it threw away the
-  forward win). Measured on gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged.
-  Leg 7 of `gpu_serial_lanes` pins both halves, the training step's own forward included. `cut`
+  kernel admits them and has `fission_keep_mapping` judge merges between nests WITH a lane path
+  on the plain plans (`mapping_probe`'s `mp_lane_trade`): no boundary is kept for lanes between
+  them, so dV joins dK. The evidence is that dK/dV trade only, so a merged kernel that would also
+  hold a loop nest with NO lane path (`Schedule.laneless_nest`: a row statistic sharing the value
+  pass's plain chain) must pass the lane-inclusive probe too -- a segment's statement may keep the
+  mapping it already has there, so a nest the trade already took off its lanes loses nothing more
+  (gh-ocannl-1239; per-nest lanes in a mixed kernel was the costlier alternative: the coverage
+  rule would need a guarded lane slot for the plain nest).
+  Gating lanes wholesale was measured and rejected (it threw away the forward win). Measured on
+  gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged. Leg 7 of `gpu_serial_lanes`
+  pins both halves, the training step's own forward included; leg 8 the row-statistic cut. `cut`
   keeps a boundary only where a merge would cost a nest its lanes, never "dV runs apart": where lanes
   are cheap dK takes them too (the cooperative preamble), on dV's topology, so dQ, dK and dV share
   one lane kernel on Metal and CUDA (leg 7's executed-step claim).
@@ -1121,6 +1125,20 @@ files.
   GPU-only paths only on a GPU sweep: `schedule_refusal_scan` requires every untyped raise bound
   before `apply_typed` to carry its own `(* invariant: ... *)` comment.
   `Schedule.with_transform_fault` injects one for tests (`schedule_refusal_classification`).
+- **The same holds one level up, for the sketch builder and the advisory fallbacks** (gh-ocannl-1390).
+  `sketch_schedule` no longer converts every `Invalid_argument` escaping the builder into
+  `Illegal_schedule "Autotune.sketch"`: a builder precondition (no site of the family's kind, Grid
+  companions that do not align, no coalescible pair) raises `Sketch_families.refuse` — that same
+  cause and census key — at its own site, and `schedule_refusal_scan` holds `sketch_families.ml`
+  to the marker rule up to `sketch_schedule`. The catches around builder and apply calls in the
+  seeding probes (`seeded_ranker`, `seeded_segment_judgment`, the sink probe, the staffed weights)
+  take `Cause_at` only, and `model_default`'s placement pick falls back to the default placements
+  through `compile_advisory ~on_unrecovered`, which hands it the CLASSIFIED cause alone; it used to
+  catch `Invalid_argument`/`User_error` out of the whole compile, which is also what a fatal
+  failure re-raises as. A probe that needs "did not apply" catches `Cause_at`, never
+  `Invalid_argument`. Seams: `Autotune.with_sketch_builder_fault`; `model_default_placements`
+  locates its injected fault by a clean run's op-application count (an elementwise graph: one whose
+  consumers are scalar reductions applies no default-pipeline op on cc).
 ## Placement and dispatchable baselines
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.
@@ -2038,6 +2056,18 @@ files.
   queries the scan index is an ordinary loop symbol: `loop_ranges`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
+- **A scan nest in a GPU sketch's kernel is a companion like any other** (gh-ocannl-1134):
+  `companion_geometry` walks into `Scan_loop` bodies for its coverage demand, as
+  `validate_parallel` does, so a scan's materialized row writes need covering. Where the scan's
+  enclosing loops align with the site's full chain, they take the site's per-position geometry and
+  the scan runs serially per thread. The two-pass attention's scan runs over the score site's column
+  axis, so its chain trims below the site's arity and the family is refuted naming the scan's
+  nodes. Fission makes the cut there: the default schedule-aware `keep_mapping` probe already keeps
+  the scores' kernel apart, and `arity_cuts` does so under the legality rules alone. The walk used
+  to stop at the scan: the witness passed and every seed died at compile, which is how gh-1003's
+  stage-1 tuned arm lost its tensorized scores. A new walker deciding a kernel's write demand must
+  descend into scan bodies too. `test/operations/scan_companion_coverage` executes every seed of
+  both shapes.
 ## Timing identity
 
 - Timed cache evidence uses `Context.timing_identity` separately from conservative construction
