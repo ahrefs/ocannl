@@ -261,14 +261,17 @@ val ranking_seconds :
     Each [Tile_mma] operand is classified from its place — workgroup-shared, per-thread ([Local]) or
     device, and its [optimized.swizzled] layout — by that rule. The count, per execution of the
     statement (the enclosing loop extents over its lane extent), is per lane: an [ldmatrix] operand
-    costs one instruction per 16 bytes it delivers to each lane (an [.x4] form), a gathered one one
-    load per element (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32 32-bit words). It counts
-    each operand tile once per statement, not the per-intrinsic reloads an emission may repeat:
-    twins share the statement shape, which is all a tie between them needs. A statement the backend
-    then declines (extents, the device's floor) renders scalar code whatever the class says. *)
+    costs one instruction per [lane_bytes] it delivers to each lane — 16 for [a], CUDA's emitted
+    [.x4] form, and 8 for [b], its [.x2] form — a gathered one one load per element (fp8 gathers
+    bytes, the 16-bit arms 16-bit halves, f32 32-bit words). It counts each operand tile once per
+    statement, not the per-intrinsic reloads an emission may repeat: twins share the statement
+    shape, which is all a tie between them needs. A statement the backend then declines (extents,
+    the device's floor) renders scalar code whatever the class says. *)
 
 type operand_load =
-  | Ldmatrix  (** A warp-cooperative matrix load ([ldmatrix] on CUDA). *)
+  | Ldmatrix of { lane_bytes : int }
+      (** A warp-cooperative matrix load ([ldmatrix] on CUDA) delivering [lane_bytes] to each lane
+          per instruction. *)
   | Gather of { elt_bytes : int }  (** Per-lane gathers of [elt_bytes]-wide elements. *)
 [@@deriving sexp_of, equal]
 

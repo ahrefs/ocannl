@@ -214,6 +214,18 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
       loads rule swz < loads rule plain);
   all "under a rule without ldmatrix each pair issues equal operand loads" (fun (_, plain, swz) ->
       loads no_ldmatrix swz = loads no_ldmatrix plain);
+  (* The two operands' matrix loads are different forms: [a]'s [.x4] delivers 16 bytes per lane,
+     [b]'s [.x2] 8. On a square tile, so equal operand tiles, a rule loading only [b] that way must
+     cost more than one loading only [a]. *)
+  let only side ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a ~b =
+    let eligible place = Poly.equal place (`Shared, `Swizzled_b128) in
+    match side with `A -> (eligible a, false) | `B -> (false, eligible b)
+  in
+  let square = List.filter twins ~f:(fun (p, _, _) -> p.Autotune.sk_bm = p.Autotune.sk_bn) in
+  claim "on a square swizzled twin, B's narrower matrix loads cost more than A's"
+    (lazy
+      ((not (List.is_empty square))
+      && List.for_all square ~f:(fun (_, _, swz) -> loads (only `B) swz > loads (only `A) swz)));
   (* The family search over the site, under each rule. Every leaf it could score, scored the way it
      scores them, is the population its pick is checked against. *)
   let scored =

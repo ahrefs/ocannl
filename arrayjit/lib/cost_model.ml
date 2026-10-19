@@ -726,7 +726,8 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
    score above ties them; what differs is how many instructions a lane issues to bring the operand
    tiles into registers, which the backend's own load rule decides. *)
 
-type operand_load = Ldmatrix | Gather of { elt_bytes : int } [@@deriving sexp_of, equal]
+type operand_load = Ldmatrix of { lane_bytes : int } | Gather of { elt_bytes : int }
+[@@deriving sexp_of, equal]
 
 let operand_place (opt : Low_level.optimized) (tn : Tn.t) : Backend_intf.mma_operand_place =
   let space =
@@ -743,9 +744,10 @@ let operand_place (opt : Low_level.optimized) (tn : Tn.t) : Backend_intf.mma_ope
   (space, layout)
 
 let operand_load_instructions ~lanes ~elements ~elt_bytes = function
-  (* One [ldmatrix.x4] delivers 16 bytes to each lane; a narrower form still costs an
+  (* One matrix load delivers [lane_bytes] to each lane; a partial one still costs an
      instruction. *)
-  | Ldmatrix -> ((elements * elt_bytes) + (16 * lanes) - 1) / (16 * lanes)
+  | Ldmatrix { lane_bytes } ->
+      ((elements * elt_bytes) + (lane_bytes * lanes) - 1) / (lane_bytes * lanes)
   (* One load per element a lane gathers, whatever its width. *)
   | Gather _ -> (elements + lanes - 1) / lanes
 
@@ -769,12 +771,18 @@ let tile_mma_operand_loads ~operand_loads (opt : Low_level.optimized) =
           operand_loads ~a_prec:(prec a_tn) ~b_prec:(prec b_tn) ~d_prec:(prec d_tn) ~ta ~tb
             ~a:(operand_place opt a_tn) ~b:(operand_place opt b_tn)
         in
-        let classify tn ldm =
-          if ldm then Ldmatrix else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
+        (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
+           [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm. *)
+        let classify tn ldm ~lane_bytes =
+          if ldm then Ldmatrix { lane_bytes }
+          else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
         in
         sites :=
           ( scale / lanes,
-            [ (a_tn, m * k, classify a_tn a_ldm); (b_tn, k * n, classify b_tn b_ldm) ],
+            [
+              (a_tn, m * k, classify a_tn a_ldm ~lane_bytes:16);
+              (b_tn, k * n, classify b_tn b_ldm ~lane_bytes:8);
+            ],
             lanes )
           :: !sites
     | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
