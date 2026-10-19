@@ -629,6 +629,12 @@ type sr_site = {
           {!Ir.Schedule.constructor-Coalesce}, applied after [sr_swaps] and before the split, merges
           into the loop [sr_axis] names (see {!coalesce_reduction_pair}); [None] when [sr_axis] is a
           loop of the lowering. *)
+  sr_block_hoist : Ir.Indexing.symbol list;
+      (** gh-ocannl-1412: the accumulation-cell loops enclosing [sr_axis] once [sr_swaps] and
+          [sr_coalesce] are applied, outermost first. The prelude interchanges the split's block
+          loop above them, so the first pass runs [for block: for cells: ..] and the GPU presets
+          give its lanes the cell axes, contiguous in memory, rather than the blocks, [chunk] rows
+          apart. Empty for a scatter site and where that interchange is not [Op_legal]. *)
 }
 [@@deriving sexp_of]
 (** A reduction-dominated accumulation site eligible for {!Ir.Schedule.constructor-Split_reduce}
@@ -639,8 +645,9 @@ val split_sites_label : ?staff:(sr_site * int) list -> (sr_site * int) list -> s
     the [autotune_log] lines and {!report.best_label}: each entry renders every field of its site —
     the target by debug name and, where that differs, its id ([name#id]), the split axis, [red],
     [out], [cost], the block count, [dyn], the interchange chain pair by pair ([swap:o/i+o/i]) and
-    the coalesced reduction pair ([coalesce:o*i]) — so two sites that differ in any one field never
-    share a label (gh-ocannl-1230). Entries are separated by [','], which no entry contains. *)
+    the coalesced reduction pair ([coalesce:o*i]) and the cell loops the block loop is hoisted above
+    ([hoist:c+c]) — so two sites that differ in any one field never share a label (gh-ocannl-1230).
+    Entries are separated by [','], which no entry contains. *)
 
 val coalesce_reduction_pair :
   ?static_indices:Ir.Indexing.static_symbol list ->
@@ -690,9 +697,10 @@ val split_reduce_sites :
 val split_reduce_prelude : (sr_site * int) list -> Ir.Schedule.schedule
 (** The whole-routine prelude splitting each [(site, num_blocks)]: per site its interchange
     ([sr_swaps]), its coalescing ([sr_coalesce], minting the merged loop under the symbol [sr_axis]
-    names, as detection probed it), then the {!Ir.Schedule.constructor-Split_reduce}. The schedule
-    the search's [F_split] candidates and the untuned CUDA split ({!seeded_split_sites}) both apply.
-    Exposed for tests. *)
+    names, as detection probed it), the {!Ir.Schedule.constructor-Split_reduce}, then the [Swap]s
+    hoisting the split's block loop above the cell loops [sr_block_hoist] names (gh-ocannl-1412).
+    The schedule the search's [F_split] candidates and the untuned split ({!seeded_split_sites})
+    both apply. Exposed for tests. *)
 
 val share_cap : cap:int -> (string * 'a list) list -> 'a list * (string * int) list
 (** gh-ocannl-685: spend a cap round-robin across named categories instead of as a prefix over their
