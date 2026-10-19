@@ -4030,14 +4030,15 @@ let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp 
 
 (* gh-ocannl-1254: a candidate's tile-MMA operand loads under a load rule, counted per intrinsic
    fragment of the tile the device's descriptor advertises for each statement's storage triple. *)
-let model_operand_loads ~(limits : Ir.Backend_intf.hardware_limits) ~operand_loads
-    (opt : LL.optimized) =
+let model_operand_loads ~(limits : Ir.Backend_intf.hardware_limits)
+    ~(capabilities : Ir.Backend_intf.codegen_capabilities) (opt : LL.optimized) =
   let intrinsic_tile ~a_prec ~b_prec ~d_prec =
     Option.bind limits.Ir.Backend_intf.mma ~f:(fun mma ->
         mma_tile_for_precisions_in_scope mma ~scope:Ir.Backend_intf.Mma_per_statement ~a_prec
           ~b_prec ~d_prec)
   in
-  CM.operand_load_count ~intrinsic_tile ~operand_loads opt
+  CM.operand_load_count ~intrinsic_tile ~operand_reloads:capabilities.mma_operand_reloads
+    ~operand_loads:capabilities.mma_operand_loads opt
 
 (* The branch-and-bound walk over the factored matmul family (gh-ocannl-514 phase 4), shared by
    [model_default] and the tests that drive it with stand-in limits and load rules: verdict-carrying
@@ -4054,9 +4055,9 @@ let model_operand_loads ~(limits : Ir.Backend_intf.hardware_limits) ~operand_loa
    leaf with no tile-MMA site has no count and stays out of the comparison (its operands load by
    paths the count does not see), and the incumbent still wins every tie. [None] = no matmul site:
    the caller keeps the flat path (conv seeds, which factor as a follow-up). *)
-let model_family_search ?(on_rejected = fun () -> ()) ~operand_loads ~is_gpu ~is_cpu ~limits
-    ~accum_prec ~static_indices ~peak_flops ~peak_memory_bandwidth ~score ~incumbent
-    (base_opt : LL.optimized) =
+let model_family_search ?(on_rejected = fun () -> ()) ~capabilities ~is_gpu ~is_cpu ~limits
+    ~static_indices ~peak_flops ~peak_memory_bandwidth ~score ~incumbent (base_opt : LL.optimized) =
+  let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
   match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base_opt with
   | None -> None
   | Some tree ->
@@ -4093,7 +4094,7 @@ let model_family_search ?(on_rejected = fun () -> ()) ~operand_loads ~is_gpu ~is
       let tie_break p =
         match applied p with
         | None -> None
-        | Some post -> model_operand_loads ~limits ~operand_loads post
+        | Some post -> model_operand_loads ~limits ~capabilities post
       in
       let best, stats =
         Sspace.search
@@ -4171,7 +4172,7 @@ let model_default ?name ?report ctx comp bindings =
           None
       | post -> score_valid [ post ]
     in
-    let operand_loads = (Context.codegen_capabilities ctx).Ir.Backend_intf.mma_operand_loads in
+    let capabilities = Context.codegen_capabilities ctx in
     (* [model_family_search] with the default as incumbent, logging its ledger. Returns the first
        leaf strictly better than [incumbent] (exact ties broken by operand loads). *)
     let tree_search ~incumbent base_opt =
@@ -4182,8 +4183,8 @@ let model_default ?name ?report ctx comp bindings =
       match
         model_family_search
           ~on_rejected:(fun () -> Int.incr n_rejected)
-          ~operand_loads ~is_gpu ~is_cpu ~limits ~accum_prec ~static_indices ~peak_flops
-          ~peak_memory_bandwidth ~score:score_valid ~incumbent base_opt
+          ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops ~peak_memory_bandwidth
+          ~score:score_valid ~incumbent base_opt
       with
       | None -> None
       | Some (best, stats, fb) ->
@@ -4554,14 +4555,13 @@ let model_explain ?name ctx comp bindings =
   let limits = Context.hardware_limits ctx in
   let caps = Context.codegen_capabilities ctx in
   let accum_prec = caps.Ir.Backend_intf.accum_prec in
-  let operand_loads = caps.Ir.Backend_intf.mma_operand_loads in
   let static_indices = Idx.bound_symbols bindings in
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let opt = Context.lowered_for_decisions ?name ctx comp bindings in
   let ms = Option.map ~f:(fun s -> s *. 1e3) in
   let explain segs =
     let ex_operand_loads =
-      match List.filter_map segs ~f:(model_operand_loads ~limits ~operand_loads) with
+      match List.filter_map segs ~f:(model_operand_loads ~limits ~capabilities:caps) with
       | [] -> None
       | counts -> Some (List.sum (module Int) counts ~f:Fn.id)
     in

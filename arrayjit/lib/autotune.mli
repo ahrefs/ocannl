@@ -1748,37 +1748,21 @@ val model_default :
 
 val model_operand_loads :
   limits:Ir.Backend_intf.hardware_limits ->
-  operand_loads:
-    (a_prec:Ir.Ops.prec ->
-    b_prec:Ir.Ops.prec ->
-    d_prec:Ir.Ops.prec ->
-    ta:bool ->
-    tb:bool ->
-    a:Ir.Backend_intf.mma_operand_place ->
-    b:Ir.Backend_intf.mma_operand_place ->
-    bool * bool) ->
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
   Ir.Low_level.optimized ->
   int option
-(** {!Ir.Cost_model.operand_load_count} with the intrinsic tile [limits]' tile-MMA descriptor
+(** {!Ir.Cost_model.operand_load_count} under [capabilities]' [mma_operand_loads] rule and
+    [mma_operand_reloads] multiplicity, with the intrinsic tile [limits]' tile-MMA descriptor
     advertises per storage triple ({!mma_tile_for_precisions_in_scope}, per-statement scope): the
     count {!model_family_search} breaks exact ties with and {!model_explain} reports
     (gh-ocannl-1254); [None] for code with no [Tile_mma]. *)
 
 val model_family_search :
   ?on_rejected:(unit -> unit) ->
-  operand_loads:
-    (a_prec:Ir.Ops.prec ->
-    b_prec:Ir.Ops.prec ->
-    d_prec:Ir.Ops.prec ->
-    ta:bool ->
-    tb:bool ->
-    a:Ir.Backend_intf.mma_operand_place ->
-    b:Ir.Backend_intf.mma_operand_place ->
-    bool * bool) ->
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
-  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
   static_indices:Ir.Indexing.static_symbol list ->
   peak_flops:float option ->
   peak_memory_bandwidth:float option ->
@@ -1791,11 +1775,11 @@ val model_family_search :
     scheduled form) is strictly below [incumbent], the threshold tightening as leaves improve on it,
     and [bound] the family's schedule-invariant roofline floor under the envelope. Exact ties
     between leaves go to fewer tile-MMA operand load instructions ({!model_operand_loads} under
-    [operand_loads] — {!model_default} passes the backend's [mma_operand_loads] capability;
-    gh-ocannl-1254) between leaves that both have tile-MMA sites, then to the first; a tie never
-    displaces [incumbent]. [on_rejected] is called for each leaf whose schedule fails to apply.
-    [None] for a lowering with no matmul site. Exposed so a test can drive the walk with stand-in
-    limits and load rules on any backend. *)
+    [capabilities] — {!model_default} passes the backend's; gh-ocannl-1254) between leaves that both
+    have tile-MMA sites, then to the first; a tie never displaces [incumbent]. Sketches are
+    scheduled at [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule
+    fails to apply. [None] for a lowering with no matmul site. Exposed so a test can drive the walk
+    with stand-in limits and load rules on any backend. *)
 
 type explain = {
   ex_floor_ms : float option;

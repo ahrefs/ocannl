@@ -12,6 +12,7 @@ stand-in: each pair has equal bytes: true
 stand-in: each pair has exactly equal ranking scores: true
 stand-in: under CUDA's load rule each swizzled twin issues fewer operand loads: true
 stand-in: under a rule without ldmatrix each pair issues equal operand loads: true
+stand-in: the arm's reloads count: a reusing arm issues fewer loads than the record's own: true
 stand-in: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
 stand-in: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
 stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
@@ -22,6 +23,7 @@ backend record: each pair has equal bytes: true
 backend record: each pair has exactly equal ranking scores: true
 backend record: under CUDA's load rule each swizzled twin issues fewer operand loads: true
 backend record: under a rule without ldmatrix each pair issues equal operand loads: true
+backend record: the arm's reloads count: a reusing arm issues fewer loads than the record's own: true
 backend record: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
 backend record: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
 backend record: the tie-break moves no score: both rules' picks score exactly alike: true

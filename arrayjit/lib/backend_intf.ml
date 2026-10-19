@@ -496,6 +496,13 @@ type codegen_capabilities = {
           it reads the decision the kernel makes. Like {!field-mma_arm}, only the arm- and
           operand-level choice: a call the hook declines on extents or the device renders the scalar
           fallback whatever this says. [(false, false)] on a backend without such a load. *)
+  mma_operand_reloads : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool;
+      (** Whether the backend's per-statement mma arm for these storage precisions reloads each
+          operand's intrinsic fragment for every tile of the other operand's free axis ([true]:
+          CUDA's inline-PTX arms, which load both fragments inside their [m x n x k] tile loops)
+          rather than loading each fragment once per reduction step and reusing it across that axis
+          ([false]: CUDA's wmma arms, and the default). How the cost model's operand-load count
+          multiplies a statement's fragments (gh-ocannl-1254). *)
   mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
           tiles, for a [(d, a, b)] storage triple: the backend's
@@ -526,6 +533,7 @@ let no_codegen_capabilities =
     asynchronous_staging_copy = false;
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_operand_loads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
+    mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ -> false);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
@@ -541,10 +549,11 @@ let no_codegen_capabilities =
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
     until it is rendered (warning 9).
 
-    [mma_operand_loads] is not rendered either (gh-ocannl-1254): which operands load through
-    [ldmatrix] is a fixed function of the arm, which the [mma] row below already renders, and of
-    each operand's transposition, space and layout, which are the schedule's own content and so
-    already in its canonical digest. Rendering it would add no discrimination, only re-tunes.
+    [mma_operand_loads] and [mma_operand_reloads] are not rendered either (gh-ocannl-1254): which
+    operands load through [ldmatrix], and how often, is a fixed function of the arm, which the [mma]
+    row below already renders, and of each operand's transposition, space and layout, which are the
+    schedule's own content and so already in its canonical digest. Rendering them would add no
+    discrimination, only re-tunes.
 
     The fields deliberately not rendered are [mma_scope_workgroup_bytes] and
     [lane_all_reduce_workgroup_bytes] (the same argument holds for both): it decides whether a
@@ -563,6 +572,7 @@ let codegen_capabilities_fingerprint
       asynchronous_staging_copy;
       mma_arm;
       mma_operand_loads = _;
+      mma_operand_reloads = _;
       mma_scope_workgroup_bytes = _;
       lane_all_reduce_workgroup_bytes = _;
     } =

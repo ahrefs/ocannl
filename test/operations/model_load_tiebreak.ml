@@ -187,7 +187,7 @@ let rank (limits : BI.hardware_limits) (o : LL.optimized) =
 let score limits segs =
   List.fold segs ~init:(Some 0.) ~f:(fun acc o -> Option.map2 acc (rank limits o) ~f:Float.( + ))
 
-let no_ldmatrix ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
+let no_ldmatrix_rule ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
 
 let schedule p =
   Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p (hermetic base)) (hermetic base)
@@ -200,9 +200,12 @@ let swizzled_twin (p : Autotune.sketch_params) =
 
 (* The claims over one record and its [ldmatrix] rule, each label prefixed by [tag]. [report]
    evaluates a claim, or skips it where the record is not this run's to check. *)
-let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
+let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_capabilities)
+    ~evaluated =
+  let rule = capabilities in
+  let no_ldmatrix = { capabilities with mma_operand_loads = no_ldmatrix_rule } in
   let label s = tag ^ ": " ^ s in
-  let loads rule o = Autotune.model_operand_loads ~limits ~operand_loads:rule o in
+  let loads capabilities o = Autotune.model_operand_loads ~limits ~capabilities o in
   let show_loads = Option.value_map ~default:"no tile-MMA" ~f:Int.to_string in
   let fewer a b = match (a, b) with Some a, Some b -> a < b | _ -> false in
   let claim s b =
@@ -240,6 +243,14 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
   all "under a rule without ldmatrix each pair issues equal operand loads" (fun (_, plain, swz) ->
       Option.is_some (loads no_ldmatrix swz)
       && Option.equal Int.equal (loads no_ldmatrix swz) (loads no_ldmatrix plain));
+  (* How often a fragment loads is the arm's: CUDA's inline-PTX fp8 arm reloads each operand for
+     every tile of the other's free axis, so on a statement spanning several intrinsic tiles a
+     reloading arm issues more loads than one reusing its fragments, as wmma does. *)
+  let reusing =
+    { capabilities with mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ -> false) }
+  in
+  all "the arm's reloads count: a reusing arm issues fewer loads than the record's own"
+    (fun (_, plain, _) -> fewer (loads reusing plain) (loads rule plain));
   (* The family search over the site, under each rule. Every leaf it could score, scored the way it
      scores them, is the population its pick is checked against. *)
   let scored =
@@ -252,8 +263,8 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
     if not evaluated then None
     else
       match
-        Autotune.model_family_search ~operand_loads:rule ~is_gpu:true ~is_cpu:false ~limits
-          ~accum_prec:Fn.id ~static_indices:[] ~peak_flops:limits.peak_flops
+        Autotune.model_family_search ~capabilities:rule ~is_gpu:true ~is_cpu:false ~limits
+          ~static_indices:[] ~peak_flops:limits.peak_flops
           ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score:(score limits)
           ~incumbent:Float.infinity base
       with
@@ -301,8 +312,8 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
         else score limits segs
       in
       match
-        Autotune.model_family_search ~operand_loads:rule ~is_gpu:true ~is_cpu:false ~limits
-          ~accum_prec:Fn.id ~static_indices:[] ~peak_flops:limits.peak_flops
+        Autotune.model_family_search ~capabilities:rule ~is_gpu:true ~is_cpu:false ~limits
+          ~static_indices:[] ~peak_flops:limits.peak_flops
           ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score:staged
           ~incumbent:Float.infinity base
       with
@@ -316,7 +327,14 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
     (lazy (Option.exists (staged_pick no_ldmatrix) ~f:(fun p -> not (swizzled p))))
 
 let () =
-  site_claims ~tag:"stand-in" ~limits:stand_in ~rule:Ir.Cuda_mma.operand_loads ~evaluated:true
+  site_claims ~tag:"stand-in" ~limits:stand_in
+    ~capabilities:
+      {
+        BI.no_codegen_capabilities with
+        mma_operand_loads = Ir.Cuda_mma.operand_loads;
+        mma_operand_reloads = Ir.Cuda_mma.operand_reloads;
+      }
+    ~evaluated:true
 
 (* The backend's own record and rule, where they describe the staged fp8 twins: CUDA from sm_89. *)
 let () =
@@ -329,7 +347,8 @@ let () =
     | None -> false
   in
   site_claims ~tag:"backend record" ~limits
-    ~rule:(Context.codegen_capabilities ctx).BI.mma_operand_loads ~evaluated:staged_fp8
+    ~capabilities:(Context.codegen_capabilities ctx)
+    ~evaluated:staged_fp8
 
 (* [Autotune.model_explain] over the same site as a computation: what [model_default] sees of each
    candidate. On every backend: the default first, then distinct labels, each score at least its

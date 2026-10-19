@@ -170,6 +170,17 @@ let operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a ~b =
   | None -> (false, false)
   | Some arm -> arm_ldmatrix_operands arm ~ta ~tb ~a:(ldmatrix_eligible a) ~b:(ldmatrix_eligible b)
 
+(* The inline-PTX bodies load an [a] and a [b] fragment inside their [__mi x __ni x __ki] loops, so
+   each is reloaded for every tile of the other's free axis; wmma loads its B row of fragments and
+   then each A fragment once per [__ki] step, reusing them across [__mi] / [__ni]. Stated beside the
+   hooks that emit those loops ([Cuda_backend]'s [mma_syntax] bodies and its wmma
+   [k_loop_lines]). *)
+let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
+
+let operand_reloads ~a_prec ~b_prec ~d_prec =
+  Option.value_map ~default:false ~f:arm_reloads_operands
+    (resolve_arm ~a_prec ~b_prec ~d_prec ~scope:Backend_intf.Mma_per_statement)
+
 let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
       {

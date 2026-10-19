@@ -751,7 +751,9 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
   (* One load per element a lane gathers, whatever its width. *)
   | Gather _ -> (elements + lanes - 1) / lanes
 
-let tile_mma_operand_loads ?intrinsic_tile ~operand_loads (opt : Low_level.optimized) =
+let tile_mma_operand_loads ?intrinsic_tile
+    ?(operand_reloads = fun ~a_prec:_ ~b_prec:_ ~d_prec:_ -> false) ~operand_loads
+    (opt : Low_level.optimized) =
   let prec tn = Lazy.force tn.Tn.storage_prec in
   let sites = ref [] in
   let rec go ~scale ~env (c : Low_level.t) =
@@ -778,22 +780,25 @@ let tile_mma_operand_loads ?intrinsic_tile ~operand_loads (opt : Low_level.optim
           if ldm then Ldmatrix { lane_bytes }
           else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
         in
-        (* Per intrinsic tile [(tm, tn, tk)] the emission loads an [a] fragment ([tm x tk]) and a
-           [b] fragment ([tk x tn]) inside its [m/tm x n/tn x k/tk] loop nest, so each operand is
-           reloaded for every tile of the other's free axis. Without a tile that divides the
-           statement, each operand tile counts once. *)
-        let fragments, a_elems, b_elems =
+        (* Per intrinsic tile [(tm, tn, tk)] the emission loads [a] fragments ([tm x tk]) and [b]
+           fragments ([tk x tn]): once per reduction step each, reused across the other's free axis,
+           or — where the arm reloads ([operand_reloads]) — for every tile of that axis too. Without
+           a tile that divides the statement, each operand tile counts once. *)
+        let (a_frags, a_elems), (b_frags, b_elems) =
           match Option.bind intrinsic_tile ~f:(fun f -> f ~a_prec ~b_prec ~d_prec) with
           | Some (tm, tn, tk)
             when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
-              (m / tm * (n / tn) * (k / tk), tm * tk, tk * tn)
-          | Some _ | None -> (1, m * k, k * n)
+              let mt = m / tm and nt = n / tn and kt = k / tk in
+              if operand_reloads ~a_prec ~b_prec ~d_prec then
+                ((mt * nt * kt, tm * tk), (mt * nt * kt, tk * tn))
+              else ((mt * kt, tm * tk), (nt * kt, tk * tn))
+          | Some _ | None -> ((1, m * k), (1, k * n))
         in
         sites :=
           ( scale / lanes,
             [
-              (a_tn, a_elems, fragments, classify a_tn a_ldm ~lane_bytes:16);
-              (b_tn, b_elems, fragments, classify b_tn b_ldm ~lane_bytes:8);
+              (a_tn, a_elems, a_frags, classify a_tn a_ldm ~lane_bytes:16);
+              (b_tn, b_elems, b_frags, classify b_tn b_ldm ~lane_bytes:8);
             ],
             lanes )
           :: !sites
@@ -804,8 +809,8 @@ let tile_mma_operand_loads ?intrinsic_tile ~operand_loads (opt : Low_level.optim
   go ~scale:1 ~env:[] opt.Low_level.llc;
   List.rev !sites
 
-let operand_load_count ?intrinsic_tile ~operand_loads opt =
-  match tile_mma_operand_loads ?intrinsic_tile ~operand_loads opt with
+let operand_load_count ?intrinsic_tile ?operand_reloads ~operand_loads opt =
+  match tile_mma_operand_loads ?intrinsic_tile ?operand_reloads ~operand_loads opt with
   | [] -> None
   | sites ->
       Option.some

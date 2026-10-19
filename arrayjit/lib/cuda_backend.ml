@@ -573,6 +573,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       Cuda_mma.arm_ldmatrix_operands arm ~ta ~tb ~a:(mma_ldm a) ~b:(mma_ldm b)
 
     let mma_operand_loads = Cuda_mma.operand_loads
+    let mma_operand_reloads = Cuda_mma.operand_reloads
 
     (* Shared by statement and scope for the inline-PTX arms: the intrinsic divides the block, the
        device meets the arm's floor, and every operand is plain or shared-swizzled. The 16-bit arms

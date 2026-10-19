@@ -940,6 +940,12 @@ module type C_syntax_config = sig
       {!Backend_intf.codegen_capabilities.mma_operand_loads}, by the cost model's load tie-break
       (gh-ocannl-1254). Backends without that instruction inherit [(false, false)]. *)
 
+  val mma_operand_reloads : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool
+  (** Whether an accepted {!mma_syntax} call for these storage precisions reloads each operand's
+      intrinsic fragment for every tile of the other operand's free axis, rather than reusing it
+      across that axis; published as {!Backend_intf.codegen_capabilities.mma_operand_reloads}
+      (gh-ocannl-1254). State it beside the loops the hook emits. Default [false]. *)
+
   val mma_arm :
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->
@@ -1023,6 +1029,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     asynchronous_staging_copy = Option.is_some Config.async_copy;
     mma_arm = Config.mma_arm;
     mma_operand_loads = Config.mma_operand_loads;
+    mma_operand_reloads = Config.mma_operand_reloads;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
        simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
@@ -2103,6 +2110,7 @@ struct
      == 0] guard. *)
   let mma_syntax = None
   let mma_operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
+  let mma_operand_reloads ~a_prec:_ ~b_prec:_ ~d_prec:_ = false
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
   let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0

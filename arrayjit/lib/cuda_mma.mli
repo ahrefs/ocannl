@@ -106,6 +106,17 @@ val operand_loads :
     reads (gh-ocannl-1254) — both answer with the emission's own rule. [(false, false)] for a triple
     with no arm. *)
 
+val arm_reloads_operands : arm -> bool
+(** Whether the arm's emission reloads each operand's intrinsic fragment for every tile of the other
+    operand's free axis: the inline-PTX bodies load both fragments inside their [m x n x k] tile
+    loops, wmma loads each fragment once per reduction step and reuses it. *)
+
+val operand_reloads : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool
+(** {!arm_reloads_operands} of the per-statement arm ([false] with no arm): the backend's
+    [C_syntax_config.mma_operand_reloads], published as
+    {!Backend_intf.codegen_capabilities.mma_operand_reloads} for the cost model's operand-load count
+    (gh-ocannl-1254). *)
+
 (** {1 Per-arm rendering data} *)
 
 type wmma_info = {

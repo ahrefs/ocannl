@@ -283,6 +283,7 @@ val operand_place : Low_level.optimized -> Tnode.t -> Backend_intf.mma_operand_p
 val operand_load_count :
   ?intrinsic_tile:
     (a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> (int * int * int) option) ->
+  ?operand_reloads:(a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool) ->
   operand_loads:
     (a_prec:Ops.prec ->
     b_prec:Ops.prec ->
@@ -299,9 +300,10 @@ val operand_load_count :
     rather than zero loads: such code still loads its operands, by paths this count does not see.
     [intrinsic_tile] is the backend's tile [(tm, tn, tk)] for a storage triple
     ([Autotune.model_operand_loads] reads it from the device's tile-MMA descriptor): where it
-    divides a statement, each operand is counted per intrinsic fragment, reloaded for every tile of
-    the other operand's free axis, as the inline-PTX arms emit them. Elsewhere each operand tile
-    counts once per statement. *)
+    divides a statement, each operand is counted per intrinsic fragment: once per reduction step,
+    or, where [operand_reloads] (the backend's [mma_operand_reloads], default [false]) says the arm
+    reloads, for every tile of the other operand's free axis too, as CUDA's inline-PTX arms emit
+    them. Elsewhere each operand tile counts once per statement. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 
