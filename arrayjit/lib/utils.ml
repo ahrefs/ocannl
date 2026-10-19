@@ -2384,13 +2384,11 @@ let device_init_deadline_tag = "OCANNL device_init_deadline:"
     raising, skip the real one. *)
 let device_init_test_stall : (unit -> unit) option ref = ref None
 
-(** The pieces of {!with_device_init_deadline}: its C stubs ([utils_stubs.c]), its setting, and the
-    lock that serializes guarded regions. *)
+(** The pieces of {!with_device_init_deadline}: its C stubs ([utils_stubs.c]) and its setting. *)
 module Device_init_deadline_internals = struct
   external arm : float -> string -> bool = "ocannl_device_init_deadline_arm"
   external disarm : unit -> unit = "ocannl_device_init_deadline_disarm"
 
-  let region = Stdlib.Mutex.create ()
   let default = 120.0
 
   (* Read once, at module initialization, while the process has one domain: the configuration reader
@@ -2421,39 +2419,32 @@ end
     have its default disposition (killing by it would have to override the program's own) or on
     Windows.
 
-    Guarded regions are serialized process-wide: the watchdog holds one deadline at a time. A region
-    that waits here is bounded by the one it waits on, whose expiry kills the process. A region
-    entered from inside another on the same thread (the lock reports the relock) runs under the
-    outer deadline.
+    Guarded regions are serialized process-wide, in the stubs: the watchdog holds one deadline at a
+    time, and a region entered while another thread's is armed waits for it, bounded by its
+    deadline. A region entered from inside the same thread's armed one runs under the outer
+    deadline.
 
     A healthy device initializes in well under a second (the harness's device probe, a whole fresh
     process, answers in 0.2-0.6 s), so the default is generous for cold starts on loaded, WSL2 or
     freshly installed boxes. *)
 let with_device_init_deadline ~backend_name f =
   let module Stub = Device_init_deadline_internals in
-  let guarded () =
-    let seconds = Stub.seconds in
-    let armed =
-      Float.(seconds > 0.)
-      && Stub.arm seconds
-           (Printf.sprintf
-              "\n\
-               %s %s device initialization or query did not finish within %gs; the device or \
-               driver is likely wedged. Dying by SIGALRM. The bound is the config key \
-               device_init_deadline (seconds; 0 disables; gh-ocannl-1281).\n"
-              device_init_deadline_tag backend_name seconds)
-    in
-    Exn.protect
-      ~f:(fun () ->
-        Option.iter !device_init_test_stall ~f:(fun stall -> stall ());
-        f ())
-      ~finally:(fun () -> if armed then Stub.disarm ())
+  let seconds = Stub.seconds in
+  let armed =
+    Float.(seconds > 0.)
+    && Stub.arm seconds
+         (Printf.sprintf
+            "\n\
+             %s %s device initialization or query did not finish within %gs; the device or driver \
+             is likely wedged. Dying by SIGALRM. The bound is the config key device_init_deadline \
+             (seconds; 0 disables; gh-ocannl-1281).\n"
+            device_init_deadline_tag backend_name seconds)
   in
-  match Stdlib.Mutex.lock Stub.region with
-  | exception Sys_error _ ->
-      (* Nested on this thread: the outer region's deadline covers it. *)
-      f ()
-  | () -> Exn.protect ~f:guarded ~finally:(fun () -> Stdlib.Mutex.unlock Stub.region)
+  Exn.protect
+    ~f:(fun () ->
+      Option.iter !device_init_test_stall ~f:(fun stall -> stall ());
+      f ())
+    ~finally:(fun () -> if armed then Stub.disarm ())
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;

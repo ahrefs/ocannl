@@ -249,6 +249,11 @@ let () =
          (not capped) && by_sigalrm o
          && (not (says o "survived"))
          && within 1.5 10.0 (since o "stall-began")));
+  let forked = run ~deadline:"0.5" [ "fork-in-region"; "cuda" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "a child forked from inside an armed region gets a deadline of its own: its stall dies by \
+     SIGALRM, and the parent's region returns"
+    (holds forked ~f:(fun o -> says o "fork-child sigalrm" && exited_0 o && says o "survived"));
   let concurrent = run ~deadline:"0.5" [ "concurrent"; "cuda"; "hip" ] in
   gated ~when_ ~on ~aggregation:`Environment
     "guarded regions are serialized: a wedged one entered while a healthy one held the timer is \

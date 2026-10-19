@@ -37,6 +37,9 @@
 
    [full-stderr BACKEND]: fd 2 is replaced by a full pipe nobody reads; then a 30 s stall.
 
+   [fork-in-region BACKEND]: forks from inside an armed region; the child stalls 5 s in a region of
+   its own, and the parent prints [fork-child <how it ended>].
+
    [concurrent FIRST SECOND]: a second domain enters FIRST's guarded [num_devices], whose stall is
    healthy (0.3 s); once that stall has begun, this thread enters SECOND's, whose stall is 5 s.
 
@@ -197,6 +200,39 @@ let () =
       guarded_call name (stall_for 30.0);
       say "survived";
       Unix.close r
+  | [ "fork-in-region"; name ] ->
+      (* Forks from inside an armed region, which the parent then leaves at once. The child, whose
+         watchdog thread did not come along, runs a 5 s stall in a region of its own; the parent
+         reports, after its region, how the child ended. *)
+      let child = ref None in
+      guarded_call name (fun () ->
+          match Unix.fork () with
+          | 0 ->
+              Utils.device_init_test_stall := Some (stall_for 5.0);
+              (try call_entry name "num_devices" with Stall_done -> ());
+              Stdlib.exit 0
+          | pid ->
+              child := Some pid;
+              raise Stall_done);
+      (* Reaped under a 15 s cap: a child stuck on state the fork copied (an OCaml mutex its owner
+         thread took along, gh-ocannl-1281 review round 8) hangs for good, and is reported. *)
+      Option.iter !child ~f:(fun pid ->
+          let started = now () in
+          let rec reap () =
+            match Unix.waitpid [ Unix.WNOHANG ] pid with
+            | 0, _ when Float.(now () -. started > 15.0) ->
+                Unix.kill pid Stdlib.Sys.sigkill;
+                ignore (Unix.waitpid [] pid : int * Unix.process_status);
+                "hung"
+            | 0, _ ->
+                Unix.sleepf 0.05;
+                reap ()
+            | _, Unix.WSIGNALED s when s = Stdlib.Sys.sigalrm -> "sigalrm"
+            | _, Unix.WEXITED n -> "exited-" ^ Int.to_string n
+            | _ -> "other"
+          in
+          say "fork-child %s" (reap ()));
+      say "survived"
   | [ "concurrent"; first; second ] ->
       (* The first region to take the hook is the healthy one: it returns 0.3 s in. This thread
          enters SECOND's region only once that hook has started, i.e. once the other domain holds
