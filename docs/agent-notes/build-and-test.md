@@ -2911,6 +2911,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   $LASTEXITCODE`; `test/operations/ci_matrix.sh` holds both, with mutants.
   `tools/test-ci-failed-rules.sh` (the `promotion` harness group, so current Dune and the floor)
   builds a fixture project red and green.
+- **Each build job prints the host it drew** (gh-ocannl-1371), before building: `tools/host_caps.exe`
+  (run from `test/config`) prints `Cc_backend.host_capabilities` -- CPU, CPU count and pool tag, the
+  ISA the cc probes find under the kernel flags (`avx2+fma`, `avx512f+bw+vl`, `neon`), the resolved
+  `cc_vector_bytes` beside the auto width, the register count, fp16 support, compiler and flags.
+  GitHub's ubuntu runners come with or without AVX-512, and the auto width (64 or 32) changes what
+  the autotune pre-filter keeps (gh-ocannl-1363's flake). The line is repeated above the failure
+  listing. Read it first when a red reproduces on one runner and not another.
 
 ### opam and caches in CI
 

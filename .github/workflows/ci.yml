@@ -475,6 +475,24 @@ jobs:
       run: |
         export PATH="/usr/bin:/mingw64/bin:$PATH"
         /usr/bin/bash tools/test-windows-opam-cache.sh
+    # Which kind of host this job drew (gh-ocannl-1371). GitHub's x86 runners
+    # come with or without AVX-512, and the auto-probed `cc_vector_bytes` (64
+    # or 32) changes what the autotune pre-filter keeps: gh-ocannl-1363's flake
+    # took a post-wave task to trace to that, because nothing in the log said
+    # which kind of host a run had. One line -- the CPU, the ISA the cc
+    # backend's probes find under the kernel flags, the resolved vector width
+    # and register count, the worker pool, the compiler and flags those were
+    # resolved under -- from `Cc_backend.host_capabilities`, the functions the
+    # renderer itself reads. Run from test/config so it resolves under the
+    # configuration every test copies (`dune exec` keeps the working
+    # directory); it also saves the line for the failure listing at the end of
+    # the job. Errors continue: a compile break here is the build step's to
+    # report, with its rule named, and this step only loses its line. The
+    # command is one line that bash and PowerShell read alike.
+    - name: Print the host's capabilities
+      continue-on-error: true
+      working-directory: test/config
+      run: opam exec -- dune exec --root ../.. ./tools/host_caps.exe -- "--save=${{ runner.temp }}/host-caps.txt"
     # On the first ubuntu `main` shard only: one leg answers the question.
     - name: Check non-default module log level and trace semantics
       if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main' && startsWith(matrix.shard, '1/')
@@ -676,8 +694,8 @@ jobs:
         # run still holding the lock when the second arrives -- i.e. minutes of
         # real build, against a step meant to cost seconds.
     # A red job's last output (gh-ocannl-1304): the dune rules that failed,
-    # read from the build steps' log, each also annotated on the run's
-    # summary page. Without it a red log ends with
+    # read from the build steps' log, under the host line saved above, each
+    # also annotated on the run's summary page. Without it a red log ends with
     # whatever test printed last while the failing rule is named thousands of
     # lines up: gh-ocannl-1271's OCaml-5.3 red was blamed on the last test to
     # print for three scheduled runs in a row. Last in the job, so even the
@@ -689,13 +707,13 @@ jobs:
       if: ${{ failure() && runner.os != 'Windows' }}
       shell: bash
       run: |
-        tools/ci-failed-rules.sh --github "$RUNNER_TEMP/dune-build.log"
+        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" "$RUNNER_TEMP/dune-build.log"
         exit 1
     - name: List the failed dune rules (Windows)
       if: ${{ failure() && runner.os == 'Windows' }}
       shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
       run: |
-        tools/ci-failed-rules.sh --github "$RUNNER_TEMP/dune-build.log"
+        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" "$RUNNER_TEMP/dune-build.log"
         exit 1
 
   # Formatting is a gate here, and a job of its own rather than a step of the

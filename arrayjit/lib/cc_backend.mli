@@ -67,6 +67,17 @@ val codegen_tag : unit -> string
     (gh-ocannl-572) and a knob flip re-tunes rather than replaying a winner from another codegen
     regime. *)
 
+val host_capabilities : unit -> (string * string) list
+(** Which kind of host this process runs on, as the kernels see it (gh-ocannl-1371): the CPU model,
+    the logical CPU count and pool tag, the ISA the SIMD probes found under the kernel flags
+    ([avx2+fma], [avx512f+bw+vl], [neon]), the resolved {!vector_bytes_setting} beside
+    {!auto_vector_bytes}, {!vector_registers_setting} and the native register file, the fp16
+    arithmetic support, and the compiler with the arch and SIMD flags those were resolved under.
+    Read from the same probes and settings the renderer reads, so it cannot disagree with them.
+    [tools/host_caps.exe] prints it as the header line of every CI build job: GitHub's x86 runners
+    come with or without AVX-512, and the auto-probed width changes what the autotune pre-filter
+    keeps. *)
+
 val has_native_fp16_arithmetic : unit -> bool
 (** Whether the configured C compiler and target execute [_Float16] arithmetic natively, at twice
     f32's lane count (ARMv8.2-FP16, AVX512-FP16) -- as opposed to lacking the type, or having it
