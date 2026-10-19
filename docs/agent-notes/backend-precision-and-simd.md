@@ -871,7 +871,13 @@ files.
   profile's payload outranks the environment, so each row also names, under
   `ambient_ocannl_shadowed`, the inherited variables its own command line outranks
   (gh-ocannl-1273), and `--cell-flag KEY=VALUE` is the way to set a payload key per cell — the
-  regime gate accepts it as a declared override, never as a leak.
+  regime gate accepts it as a declared override, never as a leak. That stamp is a prediction from
+  the argv and the reference's quoted payload; the runner reports the observation,
+  `ambient_ocannl_resolved` (`Utils.inherited_env_key_sources`: every inherited variable
+  `classify_env_var` calls a key, with where `profile_key_source` resolved it), and
+  `shadowing_check` fails a row whose stamp it contradicts (gh-ocannl-1337). A new way for a
+  source to outrank the environment needs `shadowed_ambient` and `predicted_source` taught it, or
+  every affected cell goes red — which is the point.
 - **The floating-point licences are three keys, applied once on the raw lowering** (gh-ocannl-998):
   `fp_contract` (a float `a * b + c` into one `FMA`), `fp_reassociate` (constant reassociation,
   subtraction re-parenthesizing, the multiplication/division interchanges, integer-power
@@ -1078,7 +1084,7 @@ files.
   typed `Schedule_outcome.Cause_at (Backend_codegen, Illegal_schedule {check =
   "hardware_binding_race"})`, one candidate's decline under the autotuner and `Invalid_argument`
   at the `Context.compile` boundary. `validate_parallel` stays structural (its one backend input
-  is the shuffle width that decides which barriers the renderer inserts, gh-ocannl-1238); the check lives at the binding because a `Workgroup` loop on cc iterates,
+  is the shuffle width that decides which barriers and shuffles the renderer inserts, gh-ocannl-1238/1334); the check lives at the binding because a `Workgroup` loop on cc iterates,
   so the reduction-axis-to-`Workgroup` form `reduction_forms` runs cpu-only is legal there and
   refused where a register binds it. A `Tile_mma` is judged through its `fallback`'s stores with
   its own cooperating `lane` excused (gh-ocannl-960), a `Set_dynamic` by its static slots, a

@@ -81,9 +81,8 @@ type timing_result = { ms : float; contended : bool; unbatched : bool; samples :
 (* A diagnostic stream's switch: a config flag read once per process, which one {!tune} or
    [Train.tune_placements] call can override for its own duration through its argument. The override
    is domain-local, like the phase a timing decision carries (gh-ocannl-1199): a per-call argument
-   must not switch the stream of a search running concurrently in another domain. A call that passes
-   nothing inherits the enclosing call's override, so a [tune_placements] argument reaches the
-   searches it runs. *)
+   must not switch the stream of a search in another domain. A call that passes nothing inherits the
+   enclosing call's override, so a [tune_placements] argument reaches the searches it runs. *)
 type stream_switch = { setting : bool Lazy.t; override : bool option Stdlib.Domain.DLS.key }
 
 let stream_switch setting = { setting; override = Stdlib.Domain.DLS.new_key (fun () -> None) }
@@ -234,6 +233,23 @@ let batch_admission_name = function
   | Refused_contended -> "refused_contended"
   | Refused_unreadable -> "refused_unreadable"
 
+(* gh-ocannl-1360: what each beam-expansion round offered, per beam entry and per unit. See the
+   interface. *)
+type round_unit_moves = { unit_segment : int option; unit_expanded : bool; unit_moves : int }
+
+type round_entry_moves = {
+  entry_digest_tag : string;
+  entry_ms : float;
+  entry_segments_differing : int list option;
+  entry_units : round_unit_moves list;
+}
+
+type round_moves = {
+  round_index : int;
+  round_expansion_rule : string;
+  round_entries : round_entry_moves list;
+}
+
 type report = {
   outcome : outcome;
   candidates_timed : int;
@@ -252,6 +268,7 @@ type report = {
   declines : decline_summary list;
   cache_replay_refusal : Outcome.classified_cause option;
   rounds_run : int;
+  round_moves : round_moves list;
   budget_cut : bool;
   beam_width : int;
   sketch_candidates : int;
@@ -339,6 +356,7 @@ let no_search_report ~timing =
     declines = [];
     cache_replay_refusal = None;
     rounds_run = 0;
+    round_moves = [];
     budget_cut = false;
     beam_width = 0;
     sketch_candidates = 0;
@@ -963,6 +981,46 @@ module Seam = struct
     Exn.protect ~f:body ~finally:(fun () -> set seam previous)
 end
 
+(* gh-ocannl-1352: one search at a time, process-wide. The compile path a search drives was never
+   made safe for two domains at once -- [Tnode]'s uid counter, [Low_level]'s analysis cache and
+   pricing counter, [Context]'s print proxies, a device's constant buffer cache, Base hash tables
+   throughout (the codegen census counters alone are per domain) -- so a second domain's search is
+   refused, loudly and typed, rather than left to race them. The holder is a domain, and the nesting
+   depth is per domain, so a search nested in its own domain's search ([Train.tune_placements]'s
+   arms, a [?report] callback that tunes) proceeds, while one from any other domain is refused for
+   as long as the holder's outermost search runs. *)
+exception Concurrent_search of { holder : int; caller : int }
+
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Concurrent_search { holder; caller } ->
+        Some
+          (Printf.sprintf
+             "Autotune.Concurrent_search: domain %d started a search while domain %d's is running; \
+              searches run one at a time (gh-ocannl-1352)"
+             caller holder)
+    | _ -> None)
+
+let search_holder : int option Stdlib.Atomic.t = Stdlib.Atomic.make None
+let search_depth : int Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> 0)
+
+let exclusive_search f =
+  let depth = Stdlib.Domain.DLS.get search_depth in
+  (if depth = 0 then
+     let self = (Stdlib.Domain.self () :> int) in
+     let rec acquire () =
+       match Stdlib.Atomic.get search_holder with
+       | Some holder -> raise (Concurrent_search { holder; caller = self })
+       | None ->
+           (* [None] is an immediate, so the physical comparison is the value's. *)
+           if not (Stdlib.Atomic.compare_and_set search_holder None (Some self)) then acquire ()
+     in
+     acquire ());
+  Stdlib.Domain.DLS.set search_depth (depth + 1);
+  Exn.protect ~f ~finally:(fun () ->
+      Stdlib.Domain.DLS.set search_depth depth;
+      if depth = 0 then Stdlib.Atomic.set search_holder None)
+
 (* Sibling fault-injection seam to [on_candidate_attempt], at a timing run's pre-dispatch validation
    rather than at a candidate's compile (gh-ocannl-564). Default no-op, no config key selects it.
    Needed because the causes this phase contains — an unsatisfied dependency, an out-of-range
@@ -1100,7 +1158,7 @@ type timing_call = {
 }
 
 (* Trace-only observation of every timing call, per domain (gh-ocannl-1263) -- the treatment
-   [autotune_log] got for concurrent searches: a search running in another domain neither reaches
+   [autotune_log] got for searches in different domains: a search in another domain neither reaches
    nor disturbs this domain's observers. Observers compose, each installation calling the enclosing
    observer first. Observing changes nothing a search measures or ranks. Default a no-op; no
    configuration selects it. A search's own accounting goes through [time_routine]'s per-call
@@ -1803,13 +1861,17 @@ let privatize_proposals (post : LL.optimized) : (Ir.Tnode.t * Idx.symbol) list =
   walk [] post.LL.llc;
   List.rev !proposals
 
-(** The preset schedule extended with a [Privatize] per detected accumulator. Proposals are detected
-    on the preset-scheduled segment and validated one at a time by re-applying the growing schedule;
-    a proposal violating an op precondition is dropped. The exploratory applies run against a
-    hermetic copy of the segment: [Privatize] registers its (fresh) tile in the traced store and
-    placements, and abandoned tiles would otherwise be emitted as dead local declarations when the
-    caller applies the returned schedule to the real segment. *)
-let extend_with_privatize ~accum_prec ~static_indices sched (seg : LL.optimized) : Sched.schedule =
+type privatize_drop = { pd_target : Ir.Tnode.t; pd_over : Idx.symbol; pd_cause : Outcome.cause }
+
+(** The preset schedule extended with a [Privatize] per detected accumulator, beside the proposals
+    it dropped. Proposals are detected on the preset-scheduled segment and validated one at a time
+    by re-applying the growing schedule; a proposal violating an op precondition is dropped, with
+    the refusal that dropped it. The exploratory applies run against a hermetic copy of the segment:
+    [Privatize] registers its (fresh) tile in the traced store and placements, and abandoned tiles
+    would otherwise be emitted as dead local declarations when the caller applies the returned
+    schedule to the real segment. *)
+let privatize_extension ~accum_prec ~static_indices sched (seg : LL.optimized) :
+    Sched.schedule * privatize_drop list =
   let scratch () =
     {
       seg with
@@ -1818,13 +1880,21 @@ let extend_with_privatize ~accum_prec ~static_indices sched (seg : LL.optimized)
     }
   in
   match Sched.apply_classified ~static_indices sched (scratch ()) with
-  | exception Outcome.Cause_at _ -> sched
+  | exception Outcome.Cause_at _ -> (sched, [])
   | post ->
-      List.fold (privatize_proposals post) ~init:sched ~f:(fun acc (target, over) ->
-          let acc' = acc @ [ Sched.privatize ~accum_prec ~target ~over ] in
-          match Sched.apply_classified ~static_indices acc' (scratch ()) with
-          | (_ : LL.optimized) -> acc'
-          | exception Outcome.Cause_at _ -> acc)
+      let sched, drops =
+        List.fold (privatize_proposals post) ~init:(sched, [])
+          ~f:(fun (acc, drops) (target, over) ->
+            let acc' = acc @ [ Sched.privatize ~accum_prec ~target ~over ] in
+            match Sched.apply_classified ~static_indices acc' (scratch ()) with
+            | (_ : LL.optimized) -> (acc', drops)
+            | exception Outcome.Cause_at (_, cause) ->
+                (acc, { pd_target = target; pd_over = over; pd_cause = cause } :: drops))
+      in
+      (sched, List.rev drops)
+
+let extend_with_privatize ~accum_prec ~static_indices sched seg =
+  fst (privatize_extension ~accum_prec ~static_indices sched seg)
 
 (** {2 Split-reduce site detection (gh-ocannl-484 task 3)}
 
@@ -6227,6 +6297,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     declines = decline_summaries declines;
                     cache_replay_refusal = None;
                     rounds_run = 0;
+                    round_moves = [];
                     (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
                     budget_cut = entry.SC.budget_cut;
                     beam_width;
@@ -6609,6 +6680,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         let coarse_single_measured = Hash_set.Poly.create () in
         let coarse_single_refused = Hash_set.Poly.create () in
         let rounds_run = ref 0 in
+        (* [report.round_moves], newest first (gh-ocannl-1360). *)
+        let round_moves = ref [] in
         (* gh-ocannl-1409: set once the search's budget has stopped a candidate or a round. *)
         let budget_cut = ref false in
         let n_sketch_candidates = ref 0
@@ -6744,6 +6817,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             declines = summaries;
             cache_replay_refusal = !cache_replay_refusal;
             rounds_run = !rounds_run;
+            round_moves = List.rev !round_moves;
             budget_cut = !budget_cut;
             beam_width;
             sketch_candidates = !n_sketch_candidates;
@@ -8000,24 +8074,57 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     | Expand_differing, Some head when i > 0 -> segments_differing head elem
                     | _ -> None
                   in
-                  let units =
+                  let expanded (u : unit_gen) =
                     match (round_expansion, differing) with
-                    | _ when i = 0 -> elem.units
-                    | Expand_full, _ | Expand_differing, None -> elem.units
-                    | Expand_head, _ -> []
+                    | _ when i = 0 -> true
+                    | Expand_full, _ | Expand_differing, None -> true
+                    | Expand_head, _ -> false
                     | Expand_differing, Some segs ->
-                        List.filter elem.units ~f:(fun u ->
-                            Option.exists u.u_segment ~f:(List.mem segs ~equal:Int.equal))
+                        Option.exists u.u_segment ~f:(List.mem segs ~equal:Int.equal)
+                  in
+                  (* Per unit, in [elem.units]' order: whether the rule offered it to [menu], and
+                     the round candidates its moves became (gh-ocannl-1360). *)
+                  let per_unit =
+                    List.map elem.units ~f:(fun u ->
+                        if expanded u then
+                          ( u,
+                            true,
+                            List.filter_map
+                              (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
+                              ~f:(fun op -> extend_spec elem u op) )
+                        else (u, false, []))
+                  in
+                  let entry =
+                    {
+                      entry_digest_tag = dshort elem.digest_after;
+                      entry_ms = ms;
+                      entry_segments_differing =
+                        Option.bind head ~f:(fun head -> segments_differing head elem);
+                      entry_units =
+                        List.map per_unit ~f:(fun ((u : unit_gen), unit_expanded, c) ->
+                            {
+                              unit_segment = u.u_segment;
+                              unit_expanded;
+                              unit_moves = List.length c;
+                            });
+                    }
                   in
                   ( elem,
                     ms,
-                    List.length units,
-                    List.concat_map units ~f:(fun u ->
-                        List.filter_map
-                          (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
-                          ~f:(fun op -> extend_spec elem u op)) ))
+                    List.count per_unit ~f:(fun (_, e, _) -> e),
+                    List.concat_map per_unit ~f:(fun (_, _, c) -> c),
+                    entry ))
             in
-            let cands = List.concat_map per_entry ~f:(fun (_, _, _, c) -> c) in
+            let cands = List.concat_map per_entry ~f:(fun (_, _, _, c, _) -> c) in
+            (* Recorded before any candidate is attempted, so a report emitted while the round is in
+               flight -- a fatal failure's, an abandonment's -- already carries it. *)
+            round_moves :=
+              {
+                round_index = !rounds_run;
+                round_expansion_rule = round_expansion_name round_expansion;
+                round_entries = List.map per_entry ~f:(fun (_, _, _, _, e) -> e);
+              }
+              :: !round_moves;
             (* gh-ocannl-1137: what the round expands. The beam is the [beam_width] fastest timed
                candidates, and a near-tie sweep (the gh-ocannl-1166 composite playoff, a block-size
                ladder) can fill it with variants of one schedule; [units differing] counts each
@@ -8026,12 +8133,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                its units the round's [round_expansion] rule offered to the menu (gh-ocannl-1229). *)
             (match per_entry with
             | [] -> ()
-            | (head, _, _, _) :: _ ->
+            | (head, _, _, _, _) :: _ ->
                 logf "round %d: %d candidate(s) from a beam of %d, expansion %s: %s" !rounds_run
                   (List.length cands) (List.length per_entry)
                   (round_expansion_name round_expansion)
                   (String.concat ~sep:"; "
-                     (List.map per_entry ~f:(fun (elem, ms, n_units, c) ->
+                     (List.map per_entry ~f:(fun (elem, ms, n_units, c, _) ->
                           Printf.sprintf
                             "%s %.4f ms, %s units differing, %d of %d units expanded, %d move(s)"
                             (dshort elem.digest_after) ms
@@ -8172,6 +8279,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               declines = decline_summaries declines;
               cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;
+              round_moves = List.rev !round_moves;
               budget_cut = !budget_cut;
               beam_width;
               sketch_candidates = List.length sketch_params;
@@ -8348,6 +8456,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
 let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
     ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
     bindings =
+  exclusive_search @@ fun () ->
   with_streams ?log ?progress (fun () ->
       tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
         ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp

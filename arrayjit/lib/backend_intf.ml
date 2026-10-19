@@ -18,21 +18,39 @@ type buffer_loc = { pool_id : int; offset : int } [@@deriving sexp, compare, equ
 
 type ctx_buffers = buffer_loc Map.M(Tnode).t [@@deriving sexp_of]
 
+type upload_tenant = {
+  tenant : (Tnode.t[@sexp.opaque]);
+  tenant_offset : int;  (** Where the tenant's buffer starts in the arena's pool. *)
+  bump : int;  (** The arena's bump pointer just after the tenant's allocation. *)
+}
+[@@deriving sexp_of]
+(** One allocation in an {!upload_arena}. A tenant is a LOCATION, not a node: sibling upload leaves
+    can each hold the same node, in different arenas or at different offsets of one, so whether a
+    value holds a tenant is decided by {!holds_tenant}, never by the node alone (gh-ocannl-1328). *)
+
 type upload_arena = {
   arena_pool_id : int;
   arena_mode : Tnode.memory_mode option;
       (** The residency hint the arena's slab was allocated with; only nodes with the same hint
           share it. *)
   capacity : int;
-  mutable tenants : ((Tnode.t[@sexp.opaque]) * int) list;
-      (** Newest first: each tenant and the bump pointer just after its allocation. Retirement trims
-          the tail until it reaches a tenant still held by a surviving pool owner. *)
+  mutable tenants : upload_tenant list;
+      (** Newest first. Retirement trims the tail until it reaches a tenant still held by a
+          surviving pool owner. *)
 }
 [@@deriving sexp_of]
 (** A working pool that host uploads and device copies of not-yet-allocated nodes are bump-packed
     into (gh-ocannl-1125), so that loading many parameters with [Context.set_values] before any
     routine links them costs a few pools rather than one each -- Metal publishes the per-routine
     limit as {!field-hardware_limits.max_bound_pools}. *)
+
+(** Whether the buffer map places the tenant's node at the tenant's own location. Holding the node
+    elsewhere -- a sibling leaf's upload of the same node -- is not holding the tenant: that value
+    is no registered owner of the arena's pool, so extending the arena from it would put its upload
+    in a pool another leaf's release frees, and a trim stopping at it would strand the tail. *)
+let holds_tenant (ctx_buffers : ctx_buffers) (a : upload_arena) (t : upload_tenant) =
+  Option.exists (Map.find ctx_buffers t.tenant)
+    ~f:(equal_buffer_loc { pool_id = a.arena_pool_id; offset = t.tenant_offset })
 
 type upload_arenas = {
   mutable arenas : upload_arena list;

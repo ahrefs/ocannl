@@ -115,9 +115,10 @@ for (int32_t i7 = 0; i7 <= 5; ++i7) { if (i7 < i1) { ... } }   // i1: const int3
   binds a **size** in `[0, range]` (inclusive; buffers are sized `range`), while plain static
   indices keep the strict `[0, range)` check. `Train.sequential_loop` skips extent symbols (an
   extent is set once, not iterated).
-- Semantics: elements beyond the bound extent are **undefined** (not computed); reductions and
-  consumers only touch the valid region (their loops are guarded by the same symbol). Read the
-  valid prefix on the host.
+- Semantics: reductions and consumers only touch the valid region (their loops are guarded by the
+  same symbol); read the valid prefix on the host. What a run leaves in the cells beyond the bound
+  extent was settled later (gh-ocannl-928): `docs/shape_inference.md`, "Symbolic extents: cells
+  past a bound extent", owns that contract.
 - Test `test/operations/symbolic_extent_launch.ml`: one compiled cc routine runs at extents
   6/4/1/0 with exact prefix results (the extent=4 total of 4.0, not 6.0, proves the guard), and
   extent=7 is rejected at bind validation.

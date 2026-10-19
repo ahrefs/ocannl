@@ -62,6 +62,14 @@
   (language c)
   (names fp8_soak_stubs)))
 
+; gh-ocannl-1371: the host-capability line every CI build job prints before building (ci.yml says
+; why). Run from test/config so it resolves under the tests' configuration.
+
+(executable
+ (name host_caps)
+ (modules host_caps)
+ (libraries base stdio context))
+
 ; Parse a spec string without writing a program around it: the reading the PPXs give a literal
 ; spec (einsum first, then axis labels), or the parser's error with its hints.
 

@@ -93,10 +93,16 @@ files.
   disqualifies). The renderer and `Schedule.workgroup_memory_bytes` (which counts the slots
   through the `lane_all_reduce_workgroup_bytes` capability) both read it. The same walk finds
   `try_warp_reduce`'s multi-warp tree into a cell, whose two barriers have NO barrier-free fallback
-  (gh-ocannl-1238): `Low_level.inserted_barriers ~warp_size` lists every statement whose rendering
-  inserts a barrier the IR lacks, `validate_parallel ~warp_size` refuses a non-uniform entry before
-  rendering (typed `Illegal_schedule`), and the renderer emits the tree only for a listed uniform
-  entry. Inserted barriers answer to uniformity, the IR's own to the stricter no-`If` rule. The schedule retypes at `k` simdgroups only up to
+  (gh-ocannl-1238): `Low_level.inserted_collectives ~warp_size` lists every statement whose
+  rendering inserts a lane collective the IR lacks, `validate_parallel ~warp_size` refuses a
+  non-uniform entry before rendering (typed `Illegal_schedule`), and the renderer emits the tree
+  only for a listed uniform entry. Inserted collectives answer to uniformity over the lanes they
+  span, the IR's own barriers to the stricter no-`If` rule. The single-warp forms insert no barrier
+  but still shuffle, and a lane missing from a shuffle is undefined on every GPU backend (gh-ocannl-1334):
+  they answer to WARP uniformity, where an enclosing workgroup loop (always above slot 0) and a
+  guard on its symbol are uniform, since both renderings span the whole `.x` dimension in whole
+  warps. The single-warp tree into a cell is refused under divergent control; the butterfly
+  declines to the serial loop. The schedule retypes at `k` simdgroups only up to
   `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`: 4 on
   Metal, where heads of 64 and 128 train 3-31% faster on it, and on CUDA (RTX, 16-63% faster,
   gh-ocannl-1256); 1 until a device measures the barriers paying, HIP included).
@@ -173,6 +179,15 @@ files.
   untuned default keeps the separate zero kernel because an untiled accumulation with its zero
   register-forwarded measured 7% slower on HIP gfx1151 (unified memory), although its emitted
   source differs only in that forwarding.
+- A whole-routine sketch expands its own site's whole-node zero with the site's geometry
+  (`zero_geometry` for matmuls; `conv_zero_geometry` for the GPU conv leg, gh-ocannl-503), which is
+  the nest and geometry the fold above gives the per-cell zero. So where one fission segment holds
+  the whole routine, its sketch candidates compile to their whole-routine twins' digests and dedup
+  (`schedule_conv_gemm`'s `cvu` pins `fiss_sketch_timed = 0` on metal): count the whole-routine
+  candidates before reading a zero per-segment timing count as a regression. The expanded zero's
+  loops follow the output's AXIS order (`Expand_zero`), the site's chain its NEST order; the conv
+  expansion reorders the zero nest through `c_d_syms` before `annotate`, since thread identity
+  across nests is positional.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
@@ -438,6 +453,14 @@ files.
   a refused second reader declines every whole-routine seed and the tuner times no sketch for the
   site. Per-reader staging (a tile per distinct vector) is the unbuilt alternative, for when a
   second reader is itself hot.
+- **`Privatize`'s look-alike v1 refusal stays, because nothing reaches it** (gh-ocannl-1395). It
+  scans only its own loop's subtree, where a sketch's perfectly nested accumulation and the
+  privatized preset's self-reading `Set` leave one index vector; two censuses (tuned benchmark
+  cells, the tuning test corpus) never saw it fire. Its target IS written under the loop, so the
+  gh-ocannl-1147 move does not carry over: a second accessor would need proved disjointness or a
+  remap into the tile. The preset drops refused proposals silently;
+  `Autotune.privatize_extension` returns them, and `privatize_census` is the tripwire that says
+  when a workload needs the relaxation.
 - **A per-segment candidate's executed-parity reference is its own segmentation on the default
   preset, not the unscheduled form, wherever the values are inexact** (gh-ocannl-1217). The
   candidate schedules every OTHER segment by the default preset too, so against the unscheduled
@@ -772,12 +795,72 @@ files.
   a process-wide ref: two domains' searches would otherwise overwrite and observe each other
   (`autotune_seam_domains` pins the isolation). The resource fault-injection callback follows the
   same per-domain rule; its placement constraint is in backend-memory.md.
+- **Searches in different domains take turns; they never overlap** (gh-ocannl-1352). `Autotune.tune`
+  runs inside `Autotune.exclusive_search`, and `Train.tune_placements` takes it for the whole call,
+  so another domain cannot slip a search in between two arms; a search started while another
+  domain holds it raises `Autotune.Concurrent_search` before resolving a setting, calling a seam or
+  emitting a report. The holder is a domain with a per-domain depth, so nesting in the holding
+  domain proceeds. Refused rather than made safe because the compile path's process-wide state
+  (`Tnode.next_uid`, `Low_level.analysis_cache`, `Context`'s print proxies, a device's
+  `constant_buffer_cache`, Base hash tables throughout) was never audited for two domains at once;
+  the per-domain seams, streams and observers serve turn-taking searches. A test that overlaps two
+  searches on purpose blocks one inside its own `on_candidate_attempt` until the other has tried
+  (`autotune_concurrent_refusal`, whose refusal claims fail with the gate removed).
 - Scripted search fixtures opt into `Autotune.with_uncontended_test_windows` (gh-ocannl-1156)
   around `on_candidate_measured`: the measurement callback alone only sees windows the host already
   admitted, so a loaded runner could time nothing and leave cache controls vacuous. The scoped seam
   clears candidate contention only; calibration, invalid readings and unresolved batching keep
   their admission rules. `flip_abandonment` pins production refusal, nesting and failure restoration
   with a majority-stalled window, then asserts search, placement and cache branches without skips.
+## Render-time typed declines
+- This section is the inventory of every render-time typed decline (gh-ocannl-1351): a
+  `Schedule_outcome.Cause_at` constructed at phase `Backend_codegen`, one candidate's decline
+  raised while its code is generated, before any backend compiler runs. Each entry opens with the
+  decline's key in backticks — the literal the cause's record names it by (an `Illegal_schedule`'s
+  `check`, an `Unsupported`'s `feature`), or the oracle constructor it is built from — and is classified against
+  `Schedule.op_legality`. "paired (`Schedule.X`)" means the renderer builds the decline from the
+  oracle's own reason `X` through a `Schedule.*_cause` function, so the oracle refuses the moves
+  that produce it and the renderer is the backstop. "render-only, because" says why no op verdict
+  can state the fact. `render_decline_inventory` (in `@scans`) parses every `arrayjit/lib` source
+  and this section, and fails on a decline no entry classifies, an entry no site raises, a "paired"
+  entry over a literal site or a "render-only" one over an oracle-built site, a paired constructor
+  no code `op_legality` reaches in `schedule.ml` (by name, transitively) constructs any more, a
+  cause it cannot read, a `Cause_at` anywhere whose phase is not a spelled-out constructor, a module
+  bound under the oracle's name `Schedule` (which would make a `Schedule.*_cause` call name
+  something else), an exception rebinding `Cause_at` under another name, and a `C_syntax` `Cause_at`
+  at any other phase. So a new typed decline lands with its entry here, and a new render-time
+  precondition the oracle can state lands as an oracle constructor raised through its `*_cause`
+  function, the gh-ocannl-1231 pattern above.
+- `Read_outside_rotor` (`C_syntax.pp_pipelined_rotation`): paired (`Schedule.Read_outside_rotor`).
+  A read of a pipelined tile with no rotor value in scope; `pipelined_move_legality` relates the
+  renderer's decline to the oracle's violation on the IR it compiled.
+- `Rotor_not_serial` (`C_syntax.compile_proc`): paired (`Schedule.Rotor_not_serial`). The rotor
+  loop retyped, or unrolled in place, so the rotation would freeze at copy 0.
+- `hardware_binding_race` (`C_syntax.refuse_unseparated_thread_write`, asked at `compile_proc` and
+  in `try_warp_reduce`'s decline arm): render-only, because the thread identity it judges is the
+  BACKEND's binding, and `op_legality` takes no backend. Which loops bind a register is
+  `bound_register` (cc binds none: a `Workgroup` loop iterates there, so the same IR is legal on cc
+  and refused on a GPU); which outermost `Grid` loops cc's pool runs as threads is
+  `collect_parallel_grid`, decided while rendering; which `Workgroup_reduce` lanes are deferred to
+  the warp shuffle follows the backend's `warp_size`; and the storage class (`thread_storage`)
+  forces placements at render. The backend-independent shadow of the fact, a hardware retype whose
+  threads the affine queries prove share a written cell, is already `access_legality`'s
+  `Op_illegal`; everything else it answers `Op_unknown`, compile and see. Pairing the rest needs a
+  backend binding descriptor in the oracle's signature.
+- `Low_level.validate_parallel` (`Low_level.validate_parallel_classified`, the first check in
+  `C_syntax.compile_proc`): render-only, because it is a fact about the finished schedule, not
+  about one op. Its coverage rule (a materialized write sits under bound loops of every active
+  slot) and its barrier rules (equal workgroup extents, no barrier under a guard or non-uniform
+  control) are kernel-global, and a legal chain passes through states that break them: retyping
+  one nest of a two-nest kernel leaves the other nest's materialized writes uncovered until the
+  next op retypes it. The search asks it of finished schedules wherever it ranks without compiling
+  (`Autotune.validate_segments_for_model`: model ranking, seeded replay); the renderer's call is
+  the backstop, before a line is emitted.
+- Outside the inventory: the renderer's silent fallbacks (`declinef`, logged under
+  `schedule_log_declines`), where the candidate still renders, of which the fragment scope's
+  lane-0 fallback has its oracle counterpart (`Schedule.fragment_scope_violations`,
+  gh-ocannl-1342, above); and `C_syntax`'s untyped `invalid_arg`s, which are not declines but
+  fatal under `strict_failure_classification`.
 ## Search evidence and tensorization
 - "Seeded" is not "timed". An autotune family can be enumerated in bulk and rejected in bulk at
   candidate compile, and a count of proposals then reads as coverage it does not have — assert on
@@ -1283,11 +1366,13 @@ files.
   (AVX-512) bytes keep different singles through the pre-filter, so a seat picked by attempt
   position passed on ARM and on AVX-512 runners and failed six claims on the AVX2 ones
   (ahrefs/ocannl#1363; the scripted crown at 10.00 ms was the round falling short, not a timing
-  tie). The test now pins `cc_vector_bytes=32` and seats by the property: latest alternate first,
-  one `full` search each, until one's differing segment offers moves; a setup control claims the
-  positional seat fails at that width. Reproduce a CPU-menu difference between boxes with
-  `--ocannl_cc_vector_bytes=<16|32|64>` on the built exe. To see each alternate's moves at once,
-  probe with a beam wide enough to hold them all and read the round line below. `autotune_sketch_placements` runs on the same small menu on CPU backends
+  tie). The test now pins `cc_vector_bytes=32` and seats by the property, read off the report:
+  `Autotune.report.round_moves` (gh-ocannl-1360) records each round's beam entries with their
+  per-unit `unit_expanded`/`unit_moves`, before the round attempts anything, so a probe search
+  with a beam wide enough for every alternate, stopped by raising from `on_candidate_attempt` at
+  the first round candidate, says which alternates offer moves on their differing segment without
+  compiling one; a setup control claims the positional seat offers none at that width. Reproduce a
+  CPU-menu difference between boxes with `--ocannl_cc_vector_bytes=<16|32|64>` on the built exe. `autotune_sketch_placements` runs on the same small menu on CPU backends
   (its claims ask which segments a single sketched, so they need one single per key, not particular
   ones). Before reaching for it elsewhere, count the search's `F_sketch`/`W_sketch` labels in its
   autotune log or progress lines: `autotune_split_reduce`, `autotune_labels` and `flip_abandonment`
@@ -2013,13 +2098,13 @@ files.
   lowering `tune` and `model_default` seed — the whole routine and each coarse and fine fission
   segment — and once per segment of the plan the CUDA/HIP seeded default chooses. Each line names the
   family that claimed the lowering, its site and seed count, then its refusals: the matmul tree's
-  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (`c_zeroed`,
-  the companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
+  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (the
+  companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
   lowering's conv nests whatever family claimed it. The conv gates record their own reasons
   (`Sketch_families.conv_seed_judgment`), so the census cannot drift from the seeder. Use it
-  before citing a seeding gate as evidence: gh-503's trigger ("the decline census shows conv
-  seeds declining on `c_zeroed`") named a stream that could never show it, and its census run
-  found the binding gates were the matmul family claiming the routine first and the companion cap.
+  before citing a seeding gate as evidence: the decline census can never show a seeding refusal,
+  and on real training graphs the binding conv gates are usually the matmul family claiming the
+  whole routine first and the companion cap, not the gate an issue names.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

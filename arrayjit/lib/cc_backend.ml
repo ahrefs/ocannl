@@ -938,6 +938,53 @@ let codegen_tag () =
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
 
+(* gh-ocannl-1371: which kind of host a run had, from the probes and settings the renderer itself
+   reads, so a log can say it without anything restating the probe logic. The ISA is what those
+   probes found under the kernel flags -- the AVX2/FMA stage of [simd_flags], [avx512_target], and
+   [native_vector_file]'s AArch64 answer, which is NEON's register file -- so it names the target
+   the kernels are compiled for, which with the default [-march=native] is the host. *)
+let host_capabilities () =
+  let registers, native_bytes = native_vector_file () in
+  let isa =
+    List.filter_opt
+      [
+        Option.some_if (String.is_substring (simd_flags ()) ~substring:"avx2") "avx2+fma";
+        Option.some_if (avx512_target ()) "avx512f+bw+vl";
+        Option.some_if (registers = 32 && native_bytes = 16) "neon";
+      ]
+  in
+  (* [cpu_model] keeps /proc/cpuinfo's [model name\t: ...] lines whole, as the timing identity wants
+     them; here only the values. *)
+  let cpu =
+    String.split (Lazy.force cpu_model) ~on:';'
+    |> List.map ~f:(fun entry ->
+        match String.lsplit2 entry ~on:':' with
+        | Some (key, value)
+          when String.is_prefix key ~prefix:"model name" || String.is_prefix key ~prefix:"Hardware"
+          ->
+            String.strip value
+        | _ -> String.strip entry)
+    |> String.concat ~sep:"; "
+  in
+  [
+    ("cpu", cpu);
+    ("cpus", Int.to_string (Utils.Cpu_topology.effective_cpu_count ()));
+    ("pool", pool_tag ());
+    ("isa", if List.is_empty isa then "none-probed" else String.concat ~sep:"," isa);
+    ("cc_vector_bytes", Int.to_string (vector_bytes_setting ()));
+    ("auto_vector_bytes", Int.to_string (auto_vector_bytes ()));
+    ("cc_vector_registers", Int.to_string (vector_file_setting ()).registers);
+    ("native_vector_file", Printf.sprintf "%dx%d" registers native_bytes);
+    ( "fp16",
+      match fp16_arithmetic_support () with
+      | `None -> "none"
+      | `Promoted -> "promoted"
+      | `Native -> "native" );
+    ("compiler", compiler_command ());
+    ("arch_flags", arch_flags ());
+    ("simd_flags", simd_flags ());
+  ]
+
 module Tn = Tnode
 
 type library = { lib : (Dl.library[@sexp.opaque]); libname : string } [@@deriving sexp_of]

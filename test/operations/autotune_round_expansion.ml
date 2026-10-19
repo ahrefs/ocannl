@@ -36,16 +36,21 @@
    nothing to move), and which ones offer moves is the menu's, which the cc vector width reshapes:
    at 16 bytes (NEON), 32 (AVX2) and 64 (AVX-512) the pre-filter keeps different singles, and the
    alternate the scripting once seated by position -- the last one timed -- offered moves at 16 and
-   64 bytes but not at 32, so the test failed on exactly the CI runners without AVX-512. So the seat
-   is chosen by that property instead: a [full] search seats the last alternate, and if its
-   differing segment offered no round move, the alternates are tried latest first, one [full] search
-   each, until one does; the other rules then seat the same one. The small menu pins the width to 32
-   bytes, so the menu is the same on every machine and the positional choice fails there: claimed as
-   a setup control, so the selection is exercised on every run. A menu change under which the last
-   alternate offers moves at 32 bytes fails that control, and the remedy is to pin a width where it
-   does not (the small menu's, which the other small-menu tests share); one under which no alternate
-   offers any fails [full: the round extends the near-copy on its differing segment]. Neither is to
-   be weakened.
+   64 bytes but not at 32, so the test failed on exactly the CI runners without AVX-512.
+
+   So the seat is chosen from the report (gh-ocannl-1360): a probe search holds every alternate in a
+   beam wide enough for all of them and stops at round 1's first attempt, after the round has
+   recorded each entry's moves per segment ([Autotune.report.round_moves]) and before it has timed
+   any; the seat is the latest-timed alternate whose differing segment offers moves, and every rule
+   then seats it. The small menu pins the width to 32 bytes, so the menu is the same on every
+   machine and the positional choice offers no move there: claimed off the probe as a setup control,
+   so the selection is exercised on every run. A menu change under which the last alternate offers
+   moves at 32 bytes fails that control, and the remedy is to pin a width where it does not (the
+   small menu's, which the other small-menu tests share); one under which no alternate offers any
+   fails [probe: some alternate offers a round move on the segment it differs in]. Neither is to be
+   weakened. The report's counts are themselves claimed against the round: every unit's [unit_moves]
+   is the number of round attempts naming its entry and segment, and a unit the rule leaves
+   unexpanded is marked so.
 
    Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
    available. *)
@@ -86,6 +91,9 @@ type observed = {
   near_copy : string;  (** The other beam entry's. *)
   differing : int list;  (** The segments where the near-copy differs from the head. *)
   children : child list;  (** Round 1's timed candidates, in attempt order. *)
+  attempts : (string * int) list;
+      (** Every round candidate's parent tag and segment, as the round attempted them, timed or not.
+      *)
   composites : (string * string) list;
       (** Every timed composite's label and digest tag, in attempt order: the recombined composite,
           then its alternates. *)
@@ -94,38 +102,46 @@ type observed = {
 let gain = 1.0
 let loss = 0.05
 
+(* The [n]th timed composite's scripted time: the recombined composite, then its alternates, all
+   slower than it however many play. Without [seat] each alternate is faster than the one before, so
+   the last seats; with it, [seat] is faster than every other. *)
+let composite_ms ?seat ~n label =
+  if n = 0 then 10.
+  else
+    match seat with
+    | None -> 10. +. (1. /. Float.of_int (n + 1))
+    | Some seat when String.equal label seat -> 10.01
+    | Some _ -> 10.5 +. (1. /. Float.of_int (n + 1))
+
 (* One search under [rule] (stated at the config-file level for this search only), seating as the
    beam's near-copy the alternate labelled [seat], or without one the last alternate timed. *)
 let search ?seat rule =
   let report = ref None and composites = ref [] and children = ref [] and measured = ref [] in
+  let attempts = ref [] in
   (* Every timed candidate's digest tag -> (full digest, scripted time). *)
   let timed = Hashtbl.create (module String) in
   (* The two fastest composites: the beam round 1 expands (its singles, presets and baseline are
      scripted far slower). Fixed at the first round candidate. *)
   let beam = ref None in
   let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   Exn.protect
     ~finally:(fun () ->
       Autotune.Seam.set Autotune.on_candidate_measured old_measured;
+      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
       Hashtbl.remove Utils.config_file_args expansion_key)
     ~f:(fun () ->
       Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:rule;
+      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+        Option.iter (round_move label) ~f:(fun move -> attempts := move :: !attempts) );
       ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest _ms ->
         measured := label :: !measured;
         let ms =
           if is_single label then 100.
           else if is_composite label then (
-            (* The recombined composite, then its alternates, all slower than it however many play.
-               Without [seat] each alternate is faster than the one before, so the last seats; with
-               it, [seat] is faster than every other. *)
             let n = List.length !composites in
             composites := (label, Autotune.digest_tag digest) :: !composites;
-            if n = 0 then 10.
-            else
-              match seat with
-              | None -> 10. +. (1. /. Float.of_int (n + 1))
-              | Some seat when String.equal label seat -> 10.01
-              | Some _ -> 10.5 +. (1. /. Float.of_int (n + 1)))
+            composite_ms ?seat ~n label)
           else
             match round_move label with
             | None -> 1000.
@@ -197,6 +213,7 @@ let search ?seat rule =
         near_copy;
         differing;
         children;
+        attempts = List.rev !attempts;
         composites = List.rev !composites;
       }
   | Some _, None -> failwith (rule ^ ": the search timed no round candidate")
@@ -210,50 +227,122 @@ let round_best (o : observed) =
 
 let same_labels a b = List.equal String.equal (labels a) (labels b)
 
-(* Whether a [full] search extended its near-copy on the segment where it differs from the head:
-   what every claim below needs of the seated alternate. *)
-let moves_on_differing (o : observed) =
-  List.exists (from o.near_copy o) ~f:(fun c -> List.mem o.differing c.segment ~equal:Int.equal)
+(* Round 1's record in a report, if the search started that round. *)
+let round1 (r : Autotune.report) =
+  List.find r.Autotune.round_moves ~f:(fun m -> m.Autotune.round_index = 1)
 
-let seated_label (o : observed) =
-  List.find_map o.composites ~f:(fun (label, tag) ->
-      Option.some_if (String.equal tag o.near_copy) label)
+let entry_of (r : Autotune.report) tag =
+  Option.bind (round1 r) ~f:(fun m ->
+      List.find m.Autotune.round_entries ~f:(fun e -> String.equal e.Autotune.entry_digest_tag tag))
 
-(* The seat (see the header): the last alternate if its differing segment offers round moves,
-   otherwise the latest-timed alternate whose does, tried one [full] search each. Returns the
-   positional search, the [full] search at the seat, and the seat to script the other rules with:
-   [None] where the positional search is the one kept, so every rule scripts the same times. *)
-let select_seat () =
-  let positional = search "full" in
-  let tried = seated_label positional in
-  let rec next = function
-    | _ when moves_on_differing positional -> (positional, None)
-    | [] -> (positional, None)
-    | seat :: rest when Option.equal String.equal (Some seat) tried -> next rest
-    | seat :: rest ->
-        let o = search ~seat "full" in
-        if moves_on_differing o then (o, Some seat) else next rest
-  in
-  let full, seat = next (List.rev_map (List.drop positional.composites 1) ~f:fst) in
-  (positional, full, seat)
+(* An entry's units on the segments where it differs from the head, as the round recorded them; none
+   when it does not differ segment by segment. *)
+let differing_units (e : Autotune.round_entry_moves) =
+  match e.entry_segments_differing with
+  | Some segs ->
+      List.filter e.entry_units ~f:(fun u ->
+          Option.exists u.Autotune.unit_segment ~f:(List.mem segs ~equal:Int.equal))
+  | None -> []
+
+(* Whether an entry's menu, as the round recorded it, proposed a move on a segment where the entry
+   differs from the head: what every claim below needs of the seated alternate. *)
+let offers_on_differing e = List.exists (differing_units e) ~f:(fun u -> u.Autotune.unit_moves > 0)
+
+(* The units of [tag]'s entry in round 1 of [r], none when it was not in that round's beam. *)
+let units_of r tag =
+  Option.value_map (entry_of r tag) ~default:[] ~f:(fun e -> e.Autotune.entry_units)
+
+exception Probe_stop
+
+(* Wide enough for the recombined composite and every alternate: the playoff's default width (2) on
+   each of the chain's two keyed segments, plus the composite. Claimed, not assumed. *)
+let probe_beam_width = 5
+
+(* The probe (see the header): a [full] search scripted like the positional one, whose beam holds
+   every alternate, stopped at round 1's first attempt -- after the round recorded its moves, before
+   it compiled any. Returns the report delivered on the way out and the timed composites. *)
+let probe () =
+  let report = ref None and composites = ref [] in
+  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+  Exn.protect
+    ~finally:(fun () ->
+      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
+      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+      Hashtbl.remove Utils.config_file_args expansion_key)
+    ~f:(fun () ->
+      Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:"full";
+      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+        if Option.is_some (round_move label) then raise Probe_stop );
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest _ms ->
+        if is_single label then 100.
+        else if is_composite label then (
+          let n = List.length !composites in
+          composites := (label, Autotune.digest_tag digest) :: !composites;
+          composite_ms ~n label)
+        else 1000. );
+      match
+        Autotune.with_uncontended_test_windows (fun () ->
+            Autotune.tune ~beam_width:probe_beam_width ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
+              ~progress:false
+              ~report:(fun r -> report := Some r)
+              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
+      with
+      | ctx, _ -> Context.release ctx
+      | exception Probe_stop -> ());
+  match !report with
+  | Some report -> (report, List.rev !composites)
+  | None -> failwith "probe: the search delivered no report"
+
+(* Every unit of every entry round 1 recorded, with its entry's tag. *)
+let recorded_units (o : observed) =
+  Option.value_map (round1 o.report) ~default:[] ~f:(fun m ->
+      List.concat_map m.Autotune.round_entries ~f:(fun e ->
+          List.map e.Autotune.entry_units ~f:(fun u -> (o, e.entry_digest_tag, u))))
+
+(* The round attempts naming [parent] and the unit's segment. *)
+let attempts_on (o : observed) parent (u : Autotune.round_unit_moves) =
+  List.count o.attempts ~f:(fun (p, segment) ->
+      String.equal p parent && Option.equal Int.equal u.unit_segment (Some segment))
 
 let () =
-  let positional, full, seat = select_seat () in
+  let probe_report, probe_composites = probe () in
+  let alternates = List.drop probe_composites 1 in
+  let offers (_, tag) = Option.exists (entry_of probe_report tag) ~f:offers_on_differing in
+  (* The latest-timed alternate whose differing segment offers moves. *)
+  let seat = Option.map (List.find (List.rev alternates) ~f:offers) ~f:fst in
+  Stdio.eprintf "probe (not part of the golden): %d alternate(s), seating %s\n%!"
+    (List.length alternates)
+    (Option.value seat ~default:"none");
+  let full = search ?seat "full" in
   let differing = search ?seat "differing" in
   let head = search ?seat "head" in
   (* The beam's near-copy is a playoff alternate, so the claims below can fail only where each
      segment offers alternates to its best single. *)
   Fissioned_chain.menu_claim full.measured;
+  (* The probe the seat is chosen from. *)
+  p "probe: round 1 recorded the recombined composite as its head"
+    (match (round1 probe_report, probe_composites) with
+    | Some { Autotune.round_entries = e :: _; _ }, (_, tag) :: _ ->
+        String.equal e.Autotune.entry_digest_tag tag
+    | _ -> false);
+  p_all "probe: its beam holds every alternate" alternates ~f:(fun (_, tag) ->
+      Option.is_some (entry_of probe_report tag));
+  p "probe: some alternate offers a round move on the segment it differs in" (Option.is_some seat);
+  (* The control: at the pinned width, the alternate seated by position offers no move on its
+     differing segment, so the selection above is exercised on every machine. *)
+  p_none "setup: the last alternate, seated by position, offers no round move where it differs"
+    (Option.value_map (List.last alternates) ~default:[] ~f:(fun (_, tag) ->
+         Option.value_map (entry_of probe_report tag) ~default:[] ~f:differing_units))
+    ~f:(fun u -> u.Autotune.unit_moves > 0);
   (* The setup the rule is about, read off the [full] search. *)
   p_all "setup: every rule ran its round" [ full; differing; head ] ~f:(fun o ->
       o.report.Autotune.rounds_run = 1);
   p_all "setup: every rule entered round 1 with the same beam" [ differing; head ] ~f:(fun o ->
       String.equal o.head full.head && String.equal o.near_copy full.near_copy);
-  (* The control: at the pinned width, seating by position seats an alternate the claims cannot use,
-     so the selection above is exercised on every machine. *)
-  p_none "setup: the last alternate, seated by position, is extended only on segments it shares"
-    (from positional.near_copy positional) ~f:(fun c ->
-      List.mem positional.differing c.segment ~equal:Int.equal);
+  p "setup: the seated alternate is the near-copy"
+    (List.exists full.composites ~f:(fun (label, tag) ->
+         Option.exists seat ~f:(String.equal label) && String.equal tag full.near_copy));
   p "setup: the near-copy differs from the head in exactly one segment"
     (match full.differing with [ i ] -> i >= 0 | _ -> false);
   p_all "full: every round candidate extends a beam entry" full.children ~f:(fun c ->
@@ -263,6 +352,36 @@ let () =
       not (List.mem full.differing c.segment ~equal:Int.equal));
   p_exists "full: the round extends the near-copy on its differing segment"
     (from full.near_copy full) ~f:(fun c -> List.mem full.differing c.segment ~equal:Int.equal);
+  (* The report's record of the round (gh-ocannl-1360), against what the round did. *)
+  p_all "report: every unit's move count is the round's attempts on it"
+    (List.concat_map [ full; differing; head ] ~f:recorded_units)
+    ~f:(fun (o, parent, u) -> u.Autotune.unit_moves = attempts_on o parent u);
+  p_all "report: the round attempted nothing the units do not count" [ full; differing; head ]
+    ~f:(fun o ->
+      List.length o.attempts
+      = List.sum (module Int) (recorded_units o) ~f:(fun (_, _, u) -> u.Autotune.unit_moves));
+  p_all "report: round 1 is recorded under its rule, over the beam it extended"
+    [ ("full", full); ("differing", differing); ("head", head) ]
+    ~f:(fun (rule, o) ->
+      match round1 o.report with
+      | Some m ->
+          String.equal m.Autotune.round_expansion_rule rule
+          && List.equal String.equal
+               (List.map m.round_entries ~f:(fun e -> e.Autotune.entry_digest_tag))
+               [ o.head; o.near_copy ]
+      | None -> false);
+  p "report: the near-copy's differing segments are the ones its digest differs in"
+    (Option.exists (entry_of full.report full.near_copy) ~f:(fun e ->
+         Option.equal (List.equal Int.equal) e.Autotune.entry_segments_differing
+           (Some full.differing)));
+  p "report: full's near-copy offers a move on its differing segment"
+    (Option.exists (entry_of full.report full.near_copy) ~f:offers_on_differing);
+  p_all "report: differing expands the near-copy on its differing segment alone"
+    (units_of differing.report differing.near_copy) ~f:(fun u ->
+      Bool.equal u.Autotune.unit_expanded
+        (Option.exists u.unit_segment ~f:(List.mem differing.differing ~equal:Int.equal)));
+  p_none "report: head expands no unit of the near-copy" (units_of head.report head.near_copy)
+    ~f:(fun u -> u.Autotune.unit_expanded);
   (* [differing]: the head in full, the near-copy on its differing segment only. *)
   p_exists "differing: the round extends the head" (from differing.head differing) ~f:(fun _ ->
       true);

@@ -442,6 +442,12 @@ files.
   `can_skip_accumulation` drops the neutral-element init, and skipping the write would leave the
   target holding whatever preceded it rather than zero -- soundness would have to couple the guard
   to the accumulation-elision decision, for a symbol that can only take the values 0 and 1.
+- **Past a bound extent, only the accumulation BODY is guarded**: `loop_accum`'s `needs_init` fill
+  and every `Fetch` iterate the materialized maximum. `docs/shape_inference.md` ("Symbolic extents:
+  cells past a bound extent", gh-ocannl-928) makes the first unspecified and the second a promise;
+  keep `Fetch` unguarded even if the init fill is ever guarded, because `zero_grads` clearing the
+  whole buffer is what keeps gradient accumulation across different extents exact
+  (`test/operations/symbolic_extent_backward.ml`, gh-ocannl-929).
 - A lowering-time reader of `Indexing.variable_ref` must force a dims lazy (or otherwise finish
   inference) FIRST: forcing dims is what runs `Shape.finish_inference` and fills row-var-bound refs
   (`..d..` captures such as layer norm's `/. dim d`). "Inference is already forced by now" is not an

@@ -1,0 +1,4 @@
+control: c[0] += c[1] is proposed once and dropped for its two index vectors: true
+control: its one-vector twin c[0] += tick k is privatized: true
+corpus: no privatized-preset proposal is refused for two index vectors: true
+corpus: no sketch seed's Privatize is refused for two index vectors: true
