@@ -5983,6 +5983,10 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The configuration Ll_test.tensorized_capability reads beside the backend: the staged leg's
+  ; census claim is gated on the advertised f32 capability (gh-ocannl-1316).
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)

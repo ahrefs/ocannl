@@ -147,10 +147,14 @@ let () =
   p_all2 "padded packed matmul matches the serial twin bitwise" got want ~f:Float.equal;
   let src = Generated.read "pad_packed" in
   let has s = String.is_substring src ~substring:s in
+  (* Which way the [Tile_mma] went is the census's to say (gh-ocannl-1316): the register tiling on
+     the C backends, every statement of it; on GPU backends the schedule stops short of [Tensorize],
+     so no [Tile_mma] is emitted at all. (The decline text this used to rule out goes to stderr,
+     never into the source.) *)
+  let census = Ll_test.renderings routine.Context.mma in
   p "padded 33x65x70 runs the register-tiled micro-kernel"
-    (if on_cpu then
-       has "Tile_mma register tiling" && not (has "Tile_mma renders the lane-0 scalar fallback")
-     else not (has "tmma_"));
+    (if on_cpu then Ll_test.all_rendered ~what:"pad_packed" Ir.C_syntax.Mma_register_tiled census
+     else Ll_test.none_emitted ~what:"pad_packed" census);
   (* The zero-filled fringe of the staged tiles: the load nests keep Where-form edge guards
      (rendered as conditional expressions storing 0 past the source extents), and the masked
      store-back writes only the valid rows. *)

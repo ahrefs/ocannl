@@ -330,37 +330,44 @@ let () =
         ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
       claim_tensorized
         (tag ^ ": the packed+tensorized conv's routine is labeled tensorized")
-        (rendered_tensorized census))
+        (rendered_tensorized census);
+      Some census)
     else (
       skipped (tag ^ ": packed+tensorized conv matches the reorder-only twin bitwise");
       skipped (tag ^ ": packed+tensorized conv matches the natural form within tolerance");
-      skipped (tag ^ ": the packed+tensorized conv's routine is labeled tensorized"))
+      skipped (tag ^ ": the packed+tensorized conv's routine is labeled tensorized");
+      None)
   in
-  pipeline_leg "cvg" make_conv_s1v;
+  let cvg_census = pipeline_leg "cvg" make_conv_s1v in
   (* The padded pipeline leg: the packing Stage's tile loads iterate the padded buffer (its edge
      guards compare against the padded dims, [Tn.dims]), so the halo values participate in the
      packed tile exactly as in the natural form — staging padded convs is sound. *)
-  pipeline_leg "cvp" make_conv_s1p;
+  ignore (pipeline_leg "cvp" make_conv_s1p : Ir.C_syntax.mma_summary option);
   (* A strided row used to pack a dilated tile ([Stage] packed by index range), which [Tensorize]'s
      unit-coefficient discipline rejected. The compacting Stage (gh-ocannl-502) packs the strided
      window densely — source reads keep the stride, tile store/read use coefficient 1 — so the
      packed+tensorized stride-2 pipeline now runs, matching its serial twins like the unit-stride
      legs — and the seeding wave proposes it (asserted above, executed below). *)
-  pipeline_leg "cvg2" make_conv_s2v;
-  if on_cpu then (
-    let struct_pin routine =
-      let src = Generated.read routine in
-      let has s = String.is_substring src ~substring:s in
-      has "Tile_mma register tiling" && has "fragment_" && has "tile_"
-    in
-    p "conv pipeline structure: im2col packs, register tiling, resident fragment"
-      (struct_pin "cvg_gemm");
-    p "cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row"
-      (struct_pin "cvg2_gemm"))
-  else (
-    skipped "conv pipeline structure: im2col packs, register tiling, resident fragment";
-    skipped
-      "cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row");
+  let cvg2_census = pipeline_leg "cvg2" make_conv_s2v in
+  (match (cvg_census, cvg2_census) with
+  | Some cvg_census, Some cvg2_census ->
+      (* Every statement rendering the register tiling is the census's to say (gh-ocannl-1316); the
+         im2col tiles and the resident fragment are the source's own names. *)
+      let struct_pin routine census =
+        let src = Generated.read routine in
+        let has s = String.is_substring src ~substring:s in
+        Ll_test.all_rendered ~what:routine Ir.C_syntax.Mma_register_tiled
+          (Ll_test.renderings census)
+        && has "fragment_" && has "tile_"
+      in
+      p "conv pipeline structure: im2col packs, register tiling, resident fragment"
+        (struct_pin "cvg_gemm" cvg_census);
+      p "cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row"
+        (struct_pin "cvg2_gemm" cvg2_census)
+  | _ ->
+      skipped "conv pipeline structure: im2col packs, register tiling, resident fragment";
+      skipped
+        "cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row");
   (* v1 fence: hoisted (host-side) packing does not compact — a strided tile part is rejected loudly
      rather than silently packing a dilated tile. *)
   (let x, _kern, y = make_conv_s2v "cvg2_h" in

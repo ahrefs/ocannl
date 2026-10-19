@@ -80,14 +80,16 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 (* One context lineage per leg: a tensor's initialization code is consumed by the first computation
    that embeds it, so the second compile of a leg must inherit the context that already holds the
    shared operands' values. *)
-let run ?ctx ~name ~transform comp =
+let run_census ?ctx ~name ~transform comp =
   let ctx = match ctx with Some ctx -> ctx | None -> Context.auto () in
   let ctx, routine =
     Context.compile
       ~lowered_transform:(fun o -> [ transform o ])
       ctx (named name comp) Ir.Indexing.Empty
   in
-  Context.run ctx routine
+  (Context.run ctx routine, Ll_test.renderings routine.Context.mma)
+
+let run ?ctx ~name ~transform comp = fst (run_census ?ctx ~name ~transform comp)
 
 (* The innermost loop of the first top-level nest. *)
 let rec innermost_loop (llc : LL.t) : Ir.Indexing.symbol option =
@@ -169,18 +171,23 @@ let () =
       let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:mj () in
       Sched.apply [ tz ] opt
     in
-    let ctx_mma = run ~ctx:ctx_twin ~name:"nz_mma" ~transform [%cd d_mma =+ ma * mb ~logic:"@"] in
+    let ctx_mma, census =
+      run_census ~ctx:ctx_twin ~name:"nz_mma" ~transform [%cd d_mma =+ ma * mb ~logic:"@"]
+    in
     let got = Context.get_values ctx_mma d_mma.Tensor.value in
     p_all2 "register-tiled Tile_mma preserves negative zero (bitwise vs the serial twin)" got want
       ~f:bitwise;
     let src = Generated.read "nz_mma" in
     let has s = String.is_substring src ~substring:s in
+    (* That the statement rendered the register tiling is the census's to say (gh-ocannl-1316); its
+       geometry and the splat's spelling are the text's own subject. *)
     p "register tiling renders a bit-preserving A splat"
-      (has "Tile_mma register tiling" && has "full blocks 4x16 of 4x16"
-     (* An initializer of repeated copies of one bound scalar — no arithmetic, so no bit pattern is
-        altered. Both arithmetic spellings are pinned out by name: [(vtyp){0} + x] normalizes a
-        negative zero, and [x - (vtyp){0}] quiets a signaling NaN. *)
-     && has "tmma_as_0__, tmma_as_0__"
+      (Ll_test.all_rendered ~what:"nz_mma" Ir.C_syntax.Mma_register_tiled census
+      && has "full blocks 4x16 of 4x16"
+      (* An initializer of repeated copies of one bound scalar — no arithmetic, so no bit pattern is
+         altered. Both arithmetic spellings are pinned out by name: [(vtyp){0} + x] normalizes a
+         negative zero, and [x - (vtyp){0}] quiets a signaling NaN. *)
+      && has "tmma_as_0__, tmma_as_0__"
       && (not (has "){0} + "))
       && not (has " - (ocannl_vec")))
   else (
