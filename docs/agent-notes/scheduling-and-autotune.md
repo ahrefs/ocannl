@@ -784,6 +784,55 @@ files.
   clears candidate contention only; calibration, invalid readings and unresolved batching keep
   their admission rules. `flip_abandonment` pins production refusal, nesting and failure restoration
   with a majority-stalled window, then asserts search, placement and cache branches without skips.
+## Render-time typed declines
+- This section is the inventory of every render-time typed decline (gh-ocannl-1351): a
+  `Schedule_outcome.Cause_at` constructed at phase `Backend_codegen`, one candidate's decline
+  raised while its code is generated, before any backend compiler runs. Each entry opens with the
+  decline's key in backticks — the literal the cause's record names it by (an `Illegal_schedule`'s
+  `check`, an `Unsupported`'s `feature`), or the oracle constructor it is built from — and is classified against
+  `Schedule.op_legality`. "paired (`Schedule.X`)" means the renderer builds the decline from the
+  oracle's own reason `X` through a `Schedule.*_cause` function, so the oracle refuses the moves
+  that produce it and the renderer is the backstop. "render-only, because" says why no op verdict
+  can state the fact. `render_decline_inventory` (in `@scans`) parses every `arrayjit/lib` source
+  and this section, and fails on a decline no entry classifies, an entry no site raises, a "paired"
+  entry over a literal site or a "render-only" one over an oracle-built site, a paired constructor
+  no code `op_legality` reaches in `schedule.ml` (by name, transitively) constructs any more, a
+  cause it cannot read, a `Cause_at` anywhere whose phase is not a spelled-out constructor, a module
+  bound under the oracle's name `Schedule` (which would make a `Schedule.*_cause` call name
+  something else), an exception rebinding `Cause_at` under another name, and a `C_syntax` `Cause_at`
+  at any other phase. So a new typed decline lands with its entry here, and a new render-time
+  precondition the oracle can state lands as an oracle constructor raised through its `*_cause`
+  function, the gh-ocannl-1231 pattern above.
+- `Read_outside_rotor` (`C_syntax.pp_pipelined_rotation`): paired (`Schedule.Read_outside_rotor`).
+  A read of a pipelined tile with no rotor value in scope; `pipelined_move_legality` relates the
+  renderer's decline to the oracle's violation on the IR it compiled.
+- `Rotor_not_serial` (`C_syntax.compile_proc`): paired (`Schedule.Rotor_not_serial`). The rotor
+  loop retyped, or unrolled in place, so the rotation would freeze at copy 0.
+- `hardware_binding_race` (`C_syntax.refuse_unseparated_thread_write`, asked at `compile_proc` and
+  in `try_warp_reduce`'s decline arm): render-only, because the thread identity it judges is the
+  BACKEND's binding, and `op_legality` takes no backend. Which loops bind a register is
+  `bound_register` (cc binds none: a `Workgroup` loop iterates there, so the same IR is legal on cc
+  and refused on a GPU); which outermost `Grid` loops cc's pool runs as threads is
+  `collect_parallel_grid`, decided while rendering; which `Workgroup_reduce` lanes are deferred to
+  the warp shuffle follows the backend's `warp_size`; and the storage class (`thread_storage`)
+  forces placements at render. The backend-independent shadow of the fact, a hardware retype whose
+  threads the affine queries prove share a written cell, is already `access_legality`'s
+  `Op_illegal`; everything else it answers `Op_unknown`, compile and see. Pairing the rest needs a
+  backend binding descriptor in the oracle's signature.
+- `Low_level.validate_parallel` (`Low_level.validate_parallel_classified`, the first check in
+  `C_syntax.compile_proc`): render-only, because it is a fact about the finished schedule, not
+  about one op. Its coverage rule (a materialized write sits under bound loops of every active
+  slot) and its barrier rules (equal workgroup extents, no barrier under a guard or non-uniform
+  control) are kernel-global, and a legal chain passes through states that break them: retyping
+  one nest of a two-nest kernel leaves the other nest's materialized writes uncovered until the
+  next op retypes it. The search asks it of finished schedules wherever it ranks without compiling
+  (`Autotune.validate_segments_for_model`: model ranking, seeded replay); the renderer's call is
+  the backstop, before a line is emitted.
+- Outside the inventory: the renderer's silent fallbacks (`declinef`, logged under
+  `schedule_log_declines`), where the candidate still renders, of which the fragment scope's
+  lane-0 fallback has its oracle counterpart (`Schedule.fragment_scope_violations`,
+  gh-ocannl-1342, above); and `C_syntax`'s untyped `invalid_arg`s, which are not declines but
+  fatal under `strict_failure_classification`.
 ## Search evidence and tensorization
 - "Seeded" is not "timed". An autotune family can be enumerated in bulk and rejected in bulk at
   candidate compile, and a count of proposals then reads as coverage it does not have — assert on
