@@ -626,8 +626,9 @@ let line_break_census content =
       constructor, conversion or quantifier, the collection alone for a [Base]-ordered selector
       ([find], [nth], [take], [remove], ...), the value filled in for [make]/[create] and not the
       count, what the callback returns for [init], and nothing for [range], plus the data-bearing
-      labels [~default], [~init], [~data]. A function of a collection module the table does not list
-      is REPORTED ({!unlisted_call}), never read by a guess (gh-ocannl-1303);
+      labels [~default], [~init], [~data], [~sep], [~with_], [~replacement]. A function of a
+      collection module the table does not list is REPORTED ({!unlisted_call}), never read by a
+      guess (gh-ocannl-1303);
     - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
     - the POPULATION of a [gated] claim is what its boolean's quantifiers range over, each followed
       as above: the boolean is read through a name into its right-hand side and what the source
@@ -637,10 +638,10 @@ let line_break_census content =
       [let module], local [open] or sequence, type constraints, pipelines, and a quantifier's own
       arguments, its predicate's body included (a quantifier nested there ranges over a population
       of its own, the predicate's parameters none); a quantifier is a collection-module function
-      {!collection_functions} marks [quantifies] ([for_all], [exists], [is_empty] and their indexed
-      and pairwise forms), whose collection is its first positional argument in [Base]'s order (the
-      first two for a pairwise one) and every positional argument in [Stdlib]'s; a collection-module
-      function the table does not list is reported here too;
+      {!collection_functions} marks [quantifies] ([for_all], [exists], [is_empty], [mem] and their
+      indexed and pairwise forms), whose collection is its first positional argument in [Base]'s
+      order (the first two for a pairwise one) and every positional argument in [Stdlib]'s; a
+      collection-module function the table does not list is reported here too;
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
       a [let alias = name] renaming: the right-hand side of [x := e] and of [x.field <- e], and what
       a function of a mutable collection module ({!mutable_modules}) that {!collection_functions}
@@ -925,7 +926,7 @@ let collection_functions =
             chop_suffix_exn chop_suffix_if_exists drop_prefix drop_suffix substr_index
             substr_index_exn substr_index_all substr_replace_first substr_replace_all lsplit2
             lsplit2_exn rsplit2 rsplit2_exn index index_exn index_from rindex rindex_exn lfindi
-            rfindi contains is_valid_utf_8 assoc assoc_opt mem_assoc inverse sexp_of_t t_of_sexp
+            rfindi contains is_valid_utf_8 assoc assoc_opt inverse sexp_of_t t_of_sexp
             sexp_of_m__t m__t_of_sexp
           |};
          (* Quantifiers. *)
@@ -938,9 +939,12 @@ let collection_functions =
            {|
             find find_exn find_opt findi find_multi find_and_call find_index find_all nth nth_exn
             nth_opt get unsafe_get take take_while drop drop_while drop_last drop_last_exn sub
-            subo slice split_n chunks_of mem choose choose_exn peek peek_exn
+            subo slice split_n chunks_of choose choose_exn peek peek_exn
             dequeue dequeue_exn pop pop_exn top top_exn
           |};
+         (* Membership: a selector that is true or false of the collection, so a gate closing on the
+            collection hides a failed membership claim. *)
+         group Collection ~quantifies:true {| mem mem_assoc |};
          group Collection_and_callback {| find_map find_mapi find_map_exn |};
          group After_count {| init |};
          group Filled_value {| make create create_float replicate make_matrix |};
@@ -979,8 +983,10 @@ let collection_arguments ~stdlib function_ arguments =
       | _ -> None)
   in
   (* The labeled arguments that carry data rather than steer: [~default] (the fallback
-     [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
-  let data = labeled [ "default"; "init"; "data" ] in
+     [Option.value] returns), [~init] (a fold's seed), [~data] (a stored element), [~sep] (what
+     [intersperse] and [concat] put between elements), [~with_] (what [substr_replace_all] puts in)
+     and [~replacement] (what [tr] maps to). *)
+  let data = labeled [ "default"; "init"; "data"; "sep"; "with_"; "replacement" ] in
   match (function_.builds, stdlib) with
   | Nothing, _ -> []
   | After_count, _ ->

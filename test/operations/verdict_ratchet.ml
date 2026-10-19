@@ -4096,6 +4096,18 @@ let () =
   Verdict.gated_all ~when_:(not (List.is_empty (List.permute flags))) ~on:"cc" "all rows pass" rows
     ~f:Fn.id|ocaml},
       [ "unlisted List.permute" ] );
+    ( "refuses a gate read off the separator interspersed into the population",
+      {ocaml|open Base
+let () =
+  let rows = List.intersperse raw ~sep:sample in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate that closes on the collection a gated membership claim ranges over",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" "the sample is present"
+    (List.mem rows sample ~equal:Int.equal)|ocaml},
+      [ "rows" ] );
     ( "follows a collection function through a value alias",
       {ocaml|open Base
 let () =

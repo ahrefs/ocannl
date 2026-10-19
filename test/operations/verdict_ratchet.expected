@@ -602,6 +602,8 @@ names a collection-module function the table does not list instead of guessing: 
 names an unlisted quantifier-position function of a gated boolean: true
 names an unlisted function handed a mutable container the population reads: true
 names an unlisted function the gate reaches: true
+refuses a gate read off the separator interspersed into the population: true
+refuses a gate that closes on the collection a gated membership claim ranges over: true
 follows a collection function through a value alias: true
 follows a collection function a local open of List brings in: true
 accepts a gate beside a helper bound inside an open of List under a listed name: true
