@@ -605,6 +605,8 @@ follows a collection function through a value alias: true
 follows a quantifier of a gated boolean through a value alias: true
 refuses a gate read off a value pushed through a writer's value alias: true
 follows a Verdict alias a local module exports through an open of it: true
+follows a Verdict alias a local module exports past a later open of a same-named value: true
+accepts a gate beside an alias a local module exports past its own recursive List: true
 accepts a backend gate beside a population a match takes apart from a literal pair: true
 refuses a gate read off the component a match takes the population from: true
 refuses a gate read off the literal record field a match takes the population from: true
@@ -616,6 +618,10 @@ refuses a gate on a value written between two calls of the function making the c
 accepts a gate on a value written after the one call of the function making the claim: true
 refuses a gate on a value written after a once-called claim inside the loop calling it: true
 accepts a gate on a value written after the iteration whose callback makes the claim: true
+accepts a gate on a value written after an aliased iteration whose module is later shadowed: true
+accepts a gate on a value written after a claim in a for loop's bound: true
+accepts a gate on a value written after a claim in a binding operator's operand: true
+refuses a gate on a value written after a binding operator whose body makes the claim: true
 refuses a gate on a value written before a claim a collection stores is called: true
 refuses a gate on a value written before a claim a Stdlib collection stores is called: true
 refuses a gate on a value written before a lazy claim is forced: true

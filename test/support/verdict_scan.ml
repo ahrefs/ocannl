@@ -997,11 +997,11 @@ let rec strip_constraints expr =
     construct whose body may run more than once, or at a time the reader does not know, is a
     {!frame} of each point inside it.
 
-    - A [while] or [for] loop, and a function handed directly to a function of a collection module
-      other than [Seq] or [Sequence] in a position that module calls before it returns (a
-      [List.iter] callback: {!calls_back}), run synchronously, possibly many times: a {!Loop}. A
-      function handed in any other position ([List.singleton (fun () -> ...)]) may be stored and
-      called later, like any other function value.
+    - A [while] loop, a [for] loop's body (not its bounds), and a function handed directly to a
+      function of a collection module other than [Seq] or [Sequence] in a position that module calls
+      before it returns (a [List.iter] callback: {!calls_back}), run synchronously, possibly many
+      times: a {!Loop}. A function handed in any other position ([List.singleton (fun () -> ...)])
+      may be stored and called later, like any other function value.
     - Any other function may run whenever it is called. It is ONCE when it is the right-hand side of
       a non-recursive local [let] whose name the source spells exactly once, as the callee of a full
       application outside the function's own body: then its body runs exactly where that call runs,
@@ -1226,6 +1226,10 @@ let gate_census content =
       val mutable stack : frame list = []
       val mutable claim_point : point option = None
 
+      (* The bodies of the [for] loops and binding operators being walked, by position: the frame
+         each enters. *)
+      val body_frames : (int, frame_kind) Hashtbl.t = Hashtbl.create (module Int)
+
       method point_of expr =
         {
           at_start = expr.pexp_loc.loc_start.pos_cnum;
@@ -1336,24 +1340,41 @@ let gate_census content =
 
       method! shadowed = Some Other_module
 
-      (* A structure's exports, each with what it denotes at the structure's end: the scope is built
-         up item by item as {!Lexical_scope.scoped} builds it -- bindings, [external]s, modules,
-         opens and includes, an included structure's exports joining its own -- without walking
-         anything, which the main walk does once. *)
+      (* A structure's exports, each with what it denotes where it is declared: the scope is built
+         up item by item as {!Lexical_scope.scoped} builds it -- bindings, [external]s, modules
+         (recursive ones shadowing their names), opens and includes, an included structure's exports
+         joining its own -- without walking anything, which the main walk does once. A later [open]
+         changes the scope but exports nothing, so an export keeps the denotation its declaration
+         gave it; a later declaration of the same name replaces it. *)
       method! module_of env module_expr =
         match module_expr.pmod_desc with
         | Pmod_structure items ->
-            let final, exports =
+            let declared env names =
+              List.map names ~f:(fun name ->
+                  ( name,
+                    Option.value_or_thunk (Lexical_scope.lookup env name) ~default:(fun () ->
+                        self#local) ))
+            in
+            let _, exports =
               List.fold items ~init:(env, []) ~f:(fun (env, exports) item ->
                   match item.pstr_desc with
                   | Pstr_value (rec_flag, bindings) ->
-                      ( self#bind_group env bindings (self#denotations env rec_flag bindings),
+                      let env =
+                        self#bind_group env bindings (self#denotations env rec_flag bindings)
+                      in
+                      ( env,
                         exports
-                        @ Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)) )
+                        @ declared env
+                            (Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)))
+                      )
                   | Pstr_primitive { pval_name = { txt; _ }; _ } ->
-                      (Lexical_scope.bind_values env [ txt ] self#local, exports @ [ txt ])
+                      let env = Lexical_scope.bind_values env [ txt ] self#local in
+                      (env, exports @ declared env [ txt ])
                   | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
                       (self#bind_module env name pmb_expr, exports)
+                  | Pstr_recmodule declarations ->
+                      ( self#forget env (List.filter_map declarations ~f:(fun d -> d.pmb_name.txt)),
+                        exports )
                   | Pstr_open { popen_expr; _ } ->
                       ( self#opened ~top:false ~include_:false env (self#module_of env popen_expr),
                         exports )
@@ -1361,17 +1382,14 @@ let gate_census content =
                       let denotes = self#module_of env pincl_mod in
                       ( self#opened ~top:false ~include_:true env denotes,
                         match denotes with
-                        | Some (Local_structure included) -> exports @ List.map included ~f:fst
+                        | Some (Local_structure included) -> exports @ included
                         | _ -> exports ))
                   | _ -> (env, exports))
             in
             Some
               (Local_structure
-                 (List.dedup_and_sort exports ~compare:String.compare
-                 |> List.map ~f:(fun name ->
-                     ( name,
-                       Option.value_or_thunk (Lexical_scope.lookup final name) ~default:(fun () ->
-                           self#local) ))))
+                 (Map.to_alist
+                    (Map.of_alist_reduce (module String) exports ~f:(fun _ later -> later))))
         | _ -> super#module_of env module_expr
 
       (* An [open Base] rebinds every collection module to [Base]'s, and an [open Stdlib] back to
@@ -1936,7 +1954,17 @@ let gate_census content =
             | None -> None)
         | _ -> None
 
+      (* A [for] loop's bounds and a binding operator's operands are evaluated once, where the
+         expression is: only the body repeats, or is deferred, and it enters its frame before
+         anything in it -- a claim or a write that is the body itself -- is placed. *)
       method! expression env expr =
+        match Hashtbl.find_and_remove body_frames (position expr) with
+        | Some kind ->
+            self#framed ~kind ~start:expr.pexp_loc.loc_start.pos_cnum
+              ~stop:expr.pexp_loc.loc_end.pos_cnum (fun () -> self#visit env expr)
+        | None -> self#visit env expr
+
+      method visit env expr =
         (if quiet = 0 then
            match expr.pexp_desc with
            | Pexp_apply (callee, arguments) -> (
@@ -1948,9 +1976,11 @@ let gate_census content =
                    Hashtbl.set applications ~key:loc.loc_start.pos_cnum
                      ~data:(List.map arguments ~f:fst, self#point_of expr)
                | _ -> ());
-               (match (fst (self#resolve_callee env callee)).pexp_desc with
-               | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
-                   match self#module_path env prefix with
+               (match self#resolve_callee env callee with
+               | ( { pexp_desc = Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }; _ },
+                   callee_env ) -> (
+                   (* The module is the one the alias's definition named, in its own scope. *)
+                   match self#module_path callee_env prefix with
                    | Some (Collection_module { stdlib; family; _ })
                      when not (List.mem [ "Seq"; "Sequence" ] family ~equal:String.equal) ->
                        let positional = ref 0 in
@@ -2047,7 +2077,13 @@ let gate_census content =
         let start = expr.pexp_loc.loc_start.pos_cnum and stop = expr.pexp_loc.loc_end.pos_cnum in
         let walk () = super#expression env expr in
         match expr.pexp_desc with
-        | Pexp_while _ | Pexp_for _ -> self#framed ~kind:Loop ~start ~stop walk
+        | Pexp_for (_, _, _, _, body) ->
+            Hashtbl.set body_frames ~key:(position body) ~data:Loop;
+            walk ()
+        | Pexp_letop { body; _ } ->
+            Hashtbl.set body_frames ~key:(position body) ~data:Deferred;
+            walk ()
+        | Pexp_while _ -> self#framed ~kind:Loop ~start ~stop walk
         | Pexp_function _ when Hash_set.mem synchronous (position expr) ->
             self#framed ~kind:Loop ~start ~stop walk
         | Pexp_function (params, _, body) ->
@@ -2057,7 +2093,7 @@ let gate_census content =
                    ~binding:(Hashtbl.find function_bindings (position expr))
                    params body)
               ~start ~stop walk
-        | Pexp_lazy _ | Pexp_letop _ | Pexp_object _ -> self#framed ~kind:Deferred ~start ~stop walk
+        | Pexp_lazy _ | Pexp_object _ -> self#framed ~kind:Deferred ~start ~stop walk
         | _ -> walk ()
     end
   in

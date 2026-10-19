@@ -4118,6 +4118,32 @@ end
 open Checks
 let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
+    ( "follows a Verdict alias a local module exports past a later open of a same-named value",
+      {ocaml|module Local = struct
+  let gated_all _ = ()
+end
+module Checks = struct
+  let gated_all = Verdict.gated_all
+  open Local
+end
+open Checks
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "accepts a gate beside an alias a local module exports past its own recursive List",
+      {ocaml|open Base
+module M = struct
+  module rec List : sig
+    val map : 'a -> f:'b -> 'a
+  end = struct
+    let map x ~f:_ = x
+  end
+  let map = List.map
+end
+open M
+let () =
+  let rows = map raw ~f:run in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
     ( "accepts a backend gate beside a population a match takes apart from a literal pair",
       {ocaml|open Base
 let () =
@@ -4212,6 +4238,45 @@ let () =
         ~f:positive);
   Queue.enqueue queue sample|ocaml},
       [] );
+    ( "accepts a gate on a value written after an aliased iteration whose module is later shadowed",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let iter = List.iter in
+  let module List = Custom in
+  iter rows ~f:(fun row ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+        ~f:positive);
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "accepts a gate on a value written after a claim in a for loop's bound",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  for _ = 1 to (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive; 3) do
+    Queue.enqueue queue sample
+  done|ocaml},
+      [] );
+    ( "accepts a gate on a value written after a claim in a binding operator's operand",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let _ =
+    let+ x = (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive; source) in
+    x
+  in
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written after a binding operator whose body makes the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let _ =
+    let+ x = source in
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (x :: Queue.to_list queue) ~f:positive
+  in
+  Queue.enqueue queue sample|ocaml},
+      [ "sample" ] );
     ( "refuses a gate on a value written before a claim a collection stores is called",
       {ocaml|open Base
 let () =
