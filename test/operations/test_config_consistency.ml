@@ -357,18 +357,21 @@ let () =
       registry_matches_reference && Set.mem file_keys key && Set.mem code_keys key);
   List.iter payload_keys ~f:(fun (name, keys) ->
       eprintf "Profile payload %s sets %d keys (not part of the golden).\n" name (Set.length keys));
-  if not (Verdict.any_failed ()) then (
-    printf "OK: profile payloads, documented and quoted verbatim: %s.\n"
-      (String.concat ~sep:", " @@ List.map payload_keys ~f:fst);
-    (* Which functions, not how many: the count is a tally every exemption added moves, which
-       census_total_ratchet refuses once it has two digits (gh-ocannl-1332 took it to 17). *)
-    printf
-      "OK: every scanned file spells every config key as a string literal, outside the forwarding \
-       functions %s.\n"
-      (String.concat ~sep:", " @@ Set.to_list exempted_sites);
-    (* Which directories the census came from, so that the globs' reach is reviewable rather than
-       implicit -- by name, since how many files each holds is a tally of the repository rather than
-       a fact about it (gh-ocannl-701). The counts are on stderr, and the floors under them are
-       asserted above. *)
-    printf "OK: scanned %s.\n" (String.concat ~sep:", " (Config_key_scan.scan_roots source_files)));
+  Verdict.success_trailer
+    [
+      Printf.sprintf "profile payloads, documented and quoted verbatim: %s."
+        (String.concat ~sep:", " @@ List.map payload_keys ~f:fst);
+      (* Which functions, not how many: the count is a tally every exemption added moves, which
+         census_total_ratchet refuses once it has two digits (gh-ocannl-1332 took it to 17). *)
+      Printf.sprintf
+        "every scanned file spells every config key as a string literal, outside the forwarding \
+         functions %s."
+        (String.concat ~sep:", " @@ Set.to_list exempted_sites);
+      (* Which directories the census came from, so that the globs' reach is reviewable rather than
+         implicit -- by name, since how many files each holds is a tally of the repository rather
+         than a fact about it (gh-ocannl-701). The counts are on stderr, and the floors under them
+         are asserted above. *)
+      Printf.sprintf "scanned %s."
+        (String.concat ~sep:", " (Config_key_scan.scan_roots source_files));
+    ];
   Test_utils.Refusal_control_manifest.print "test_config_consistency.ml"

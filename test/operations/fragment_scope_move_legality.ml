@@ -32,11 +32,16 @@
    triple: every fixture, compiled anyway as a candidate, renders exactly as many lane-0 scalar
    fallbacks as the oracle finds violations in the IR it was compiled from, and at least one
    tensorized statement besides where it finds none — and computes the serial twin's values bitwise
-   (small integer operands: every partial sum is exact in half). The two bases compile there too,
-   with no move, as the reference point. On HIP the values claim is skipped by a tracked defect
-   (ahrefs/ocannl#1420: its tensorized half fragment scopes, the bases' included, write 2^-23 into
-   some exact-zero cells); the census relation is evaluated there all the same. On the C backends a
-   scope and a bare [Tile_mma] render alike, so there is nothing to relate there. *)
+   (small NONNEGATIVE integer operands: every product and partial sum is exact in half, and every
+   product has one sign). The two bases compile there too, with no move, as the reference point. On
+   the C backends a scope and a bare [Tile_mma] render alike, so there is nothing to relate there.
+
+   Why one sign (gh-ocannl-1420): gfx11's WMMA instruction is not exactly rounded when products
+   cancel — [1*1 + 1*(-1)] comes back as [-2^-24] from the raw builtin, on both accumulator widths,
+   with no rocWMMA and no OCANNL involved ([tools/hip_wmma_sign_probe.hip]). The signed cycles this
+   test first used (shifted down by 2 and by 1) left subnormal residues in every exact-zero cell of
+   HIP's tensorized half results, the bases' included, and per-statement tiles alike; same-sign data
+   is exact on that unit, as on every other backend's. *)
 
 open Base
 open Ocannl
@@ -186,15 +191,17 @@ let reasons =
     (List.map Sched.Variants_of_fragment_scope_violation.descriptions ~f:fst)
 
 let () =
-  let operand ~l ~dims ~modulus ~offset =
+  (* Values [0 .. modulus - 1]: nonnegative, so no two products cancel (the header's "why one
+     sign"), and every 64-term sum stays at most 512, exact in half. *)
+  let operand ~l ~dims ~modulus =
     NTDSL.init ~l ~prec:Ir.Ops.half ~o:(Array.to_list dims)
-      ~f:(Ll_test.cycle ~dims ~modulus ~offset ~stride:1.)
+      ~f:(Ll_test.cycle ~dims ~modulus ~offset:0. ~stride:1.)
       ()
   in
-  let ma = operand ~l:"ma" ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) in
-  let mb = operand ~l:"mb" ~dims:[| n; n |] ~modulus:3 ~offset:(-1.) in
-  let x = operand ~l:"x" ~dims:[| n; 2; 32 |] ~modulus:5 ~offset:(-2.) in
-  let w = operand ~l:"w" ~dims:[| 2; 32; n |] ~modulus:3 ~offset:(-1.) in
+  let ma = operand ~l:"ma" ~dims:[| n; n |] ~modulus:5 in
+  let mb = operand ~l:"mb" ~dims:[| n; n |] ~modulus:3 in
+  let x = operand ~l:"x" ~dims:[| n; 2; 32 |] ~modulus:5 in
+  let w = operand ~l:"w" ~dims:[| 2; 32; n |] ~modulus:3 in
   let half (t : Tensor.t) =
     Tn.update_prec t.Tensor.value Ir.Ops.half;
     t
@@ -395,18 +402,8 @@ let () =
             (List.length vs) mma.scalar_fallbacks mma.statements;
           mma.scalar_fallbacks = List.length vs
           && ((not (List.is_empty vs)) || mma.scalar_fallbacks < mma.statements));
-  (* ahrefs/ocannl#1420: HIP's tensorized half fragment scopes write 2^-23 into some cells whose
-     exact sum is 0 -- the bases with no move applied included (minix, gh-ocannl-1342's PR), so the
-     defect predates the moves this test judges. The values claim is skipped there, loudly and by
-     that reason; the census relation above still holds on HIP and stays evaluated. *)
-  let hip_half_scope_defect = String.is_substring backend_name ~substring:"hip" in
-  if when_ && hip_half_scope_defect then
-    Stdio.eprintf
-      "NOTE (ahrefs/ocannl#1420): HIP tensorized half fragment scopes write 2^-23 into exact-zero \
-       cells; the bitwise values claim is skipped on this backend.\n\
-       %!";
-  gated_all ~aggregation ~when_:(when_ && not hip_half_scope_defect)
-    ~on:backend_name "each compiled fixture computes the serial twin's values bitwise" compiled
+  gated_all ~aggregation ~when_ ~on:backend_name
+    "each compiled fixture computes the serial twin's values bitwise" compiled
     ~f:(fun (_, reference, _, outcome) ->
       match outcome with
       | Error _ -> false

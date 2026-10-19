@@ -1142,6 +1142,18 @@ files.
   a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
   the register-tiled census with the contraction licence off.
 ## SIMD operations and rounding
+- **gfx11's WMMA is exactly rounded only when the products share a sign** (gh-ocannl-1420). The
+  raw `__builtin_amdgcn_wmma_{f32,f16}_16x16x16_f16_w32` returns `-2^-24` for `1*1 + 1*(-1)`, on
+  gfx1151 and gfx1102 alike, at `-O0` and `-O3`, with no rocWMMA and no OCANNL involved. Signed
+  small-integer operands miss in most f32 cells by a few `2^-24` at the products' scale, and the
+  f16 arm, whose rounding absorbs residues that small elsewhere, misses in exactly its exact-zero
+  cells (subnormal multiples of `2^-24`, either sign), in fragment scopes and per-statement tiles
+  alike. Operands of one sign (all nonnegative, or all nonpositive) are exact on both widths, f32
+  sums up to 53760 included. So a HIP tensorized leg that claims bitwise equality with a serial
+  twin needs same-sign operands (`fragment_scope_move_legality` cycles over `[0, modulus)`), and
+  signed data needs a bound, as the bf16 legs carry. `tools/hip_wmma_sign_probe.hip` is the
+  standalone reproducer: its exit status says whether the same-sign rule still holds on a new
+  target or toolkit, and it reports the mixed-sign cases without judging them.
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
   `((vtyp){0} + x)` returns `+0.0` for `x = -0.0` (IEEE `(+0.0) + (-0.0) = +0.0`), so use
