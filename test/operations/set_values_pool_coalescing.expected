@@ -46,6 +46,16 @@ the linear continuation packs geometrically: true
 every sibling reads back its own upload: true
 the linear continuation reads back every upload: true
 releasing the siblings and the continuation leaves no working pools or context owners: true
+a fork's upload survives the release of a sibling holding one of its nodes elsewhere: true
+the fork's earlier uploads survive that release too: true
+releasing both leaves leaves no working pools or context owners (same node, two arenas): true
+after a sibling's release, the next upload takes the room it freed rather than a new pool: true
+every upload of the surviving fork reads back: true
+releasing both leaves leaves no working pools or context owners (trimmed tail): true
+the released leaf's writer ran on its buffer: true
+the survivor's upload reuses the released tail: true
+a merge transfer from the reused location carries the survivor's upload: true
+releasing every leaf leaves no working pools or context owners (reused tail): true
 device copies
 24 uploads took at most 1 + ceil(log2 24) working pools: true
 the uploads' pools hold at most twice the bytes uploaded: true
@@ -93,3 +103,13 @@ the linear continuation packs geometrically: true
 every sibling reads back its own upload: true
 the linear continuation reads back every upload: true
 releasing the siblings and the continuation leaves no working pools or context owners: true
+a fork's upload survives the release of a sibling holding one of its nodes elsewhere: true
+the fork's earlier uploads survive that release too: true
+releasing both leaves leaves no working pools or context owners (same node, two arenas): true
+after a sibling's release, the next upload takes the room it freed rather than a new pool: true
+every upload of the surviving fork reads back: true
+releasing both leaves leaves no working pools or context owners (trimmed tail): true
+the released leaf's writer ran on its buffer: true
+the survivor's upload reuses the released tail: true
+a merge transfer from the reused location carries the survivor's upload: true
+releasing every leaf leaves no working pools or context owners (reused tail): true

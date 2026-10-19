@@ -1,5 +1,5 @@
-(* Regression test for gh-ocannl-1125/1172/1204: transfers of nodes no routine has linked yet share
-   pools.
+(* Regression test for gh-ocannl-1125/1172/1204/1328: transfers of nodes no routine has linked yet
+   share pools.
 
    Loading parameters with [Transfer.put] before the first compile -- restoring a checkpoint into a
    fresh context, or a benchmark injecting fixture weights -- reaches [Backend.init_from_host] for
@@ -352,6 +352,153 @@ struct
       && after.live_working_bytes = before.live_working_bytes
       && AC.unreleased_contexts after = AC.unreleased_contexts before)
 
+  (* gh-ocannl-1328 cases: an arena tenant is held by the value whose map places THAT node at THAT
+     location, not by any value holding the node. [chain tag] uploads three nodes into a fresh root:
+     the first two arenas are exact, the third is twice a node with one node of room left after its
+     [x2]. A fork from the chain's second value that uploads its own [x2] then holds the NODE that
+     ends the third arena, at another location. *)
+  let zeros_of ~debug n = Ir.Ndarray.init_array ~debug Ir.Ops.single ~dims:[| n |] ~padding:None
+
+  let fresh_of ?(n = len) l =
+    TDSL.wrap_param ~l ~o:[ n ] ((zeros_of ~debug:l n) ~f:(fun _ -> 0.)) ()
+
+  let chain tag =
+    let xs = List.init 3 ~f:(fun k -> fresh_of (Printf.sprintf "svpc_%s_x%d" tag k)) in
+    let values_of = List.map xs ~f:(fun x -> x.Tensor.value) in
+    let c2 =
+      List.foldi (List.take xs 2) ~init:(Context.auto ()) ~f:(fun k ctx x ->
+          Transfer.put ctx x.Tensor.value (values k))
+    in
+    (values_of, c2, Transfer.put c2 (List.nth_exn values_of 2) (values 2))
+
+  (* The read-back as a claim's operand: reading a buffer whose pool was freed raises on the slab
+     backends, which is the failure the claim is about, not the case's. *)
+  let reads_back ctx tn k =
+    match Context.get_values ctx tn with
+    | got -> Array.equal Float.equal got (values k)
+    | exception e ->
+        Stdio.eprintf "reading %s raised %s (not part of the golden)\n%!" (Ir.Tnode.debug_name tn)
+          (Exn.to_string e);
+        false
+
+  let releases_everything ~(before : Ir.Alloc_census.t) what =
+    let after = Ir.Alloc_census.snapshot () in
+    p what
+      (after.live_working_pools = before.live_working_pools
+      && after.live_working_bytes = before.live_working_bytes
+      && Ir.Alloc_census.unreleased_contexts after = Ir.Alloc_census.unreleased_contexts before)
+
+  (* The fork [f] fills its own [x2] arena with [z] and continues to [g]. [g] holds the node [x2],
+     but not [c3]'s tenant [x2], so [g]'s upload must not append into [c3]'s arena: it would sit in
+     a pool whose only owner is [c3], and releasing [c3] would free it under [g]. *)
+  let case_same_node_siblings () =
+    let before = Ir.Alloc_census.snapshot () in
+    let xs, c2, c3 = chain "same" in
+    let z = (fresh_of "svpc_same_z").Tensor.value and y = (fresh_of "svpc_same_y").Tensor.value in
+    let f = Transfer.put c2 (List.nth_exn xs 2) (values 12) in
+    let f = Transfer.put f z (values 13) in
+    let g = Transfer.put f y (values 14) in
+    Context.release c3;
+    p "a fork's upload survives the release of a sibling holding one of its nodes elsewhere"
+      (reads_back g y 14);
+    p_alli "the fork's earlier uploads survive that release too"
+      (List.zip_exn (xs @ [ z ]) [ 0; 1; 12; 13 ])
+      ~f:(fun _ (tn, k) -> reads_back g tn k);
+    Context.release g;
+    releases_everything ~before
+      "releasing both leaves leaves no working pools or context owners (same node, two arenas)"
+
+  (* Retirement trims by location as well. [a] continues [c3] linearly, filling [c3]'s arena with
+     its [w]; the fork [b] uploads its own [w] from [c3] into an arena sized by the three arenas it
+     holds tenants of (four nodes) and fills it with [v1..v3]. Releasing [a] must drop [a]'s [w]
+     from the shared arena although [b] holds the node [w] elsewhere: otherwise the trim stops at
+     it, strands the tail, and [b]'s next upload mints a pool instead of taking the reclaimed
+     room. *)
+  let case_trimmed_tail () =
+    let module AC = Ir.Alloc_census in
+    let before = AC.snapshot () in
+    let xs, _, c3 = chain "trim" in
+    let w = (fresh_of "svpc_trim_w").Tensor.value in
+    let vs = List.init 4 ~f:(fun j -> (fresh_of (Printf.sprintf "svpc_trim_v%d" j)).Tensor.value) in
+    let a = Transfer.put c3 w (values 20) in
+    let b = Transfer.put c3 w (values 21) in
+    let b =
+      List.foldi (List.take vs 3) ~init:b ~f:(fun j ctx v -> Transfer.put ctx v (values (22 + j)))
+    in
+    Context.release a;
+    let held = AC.snapshot () in
+    let b = Transfer.put b (List.nth_exn vs 3) (values 25) in
+    let grown = (AC.snapshot ()).live_working_pools - held.live_working_pools in
+    p "after a sibling's release, the next upload takes the room it freed rather than a new pool"
+      (grown = 0);
+    p_alli "every upload of the surviving fork reads back"
+      (List.zip_exn (xs @ [ w ] @ vs) [ 0; 1; 2; 21; 22; 23; 24; 25 ])
+      ~f:(fun _ (tn, k) -> reads_back b tn k);
+    Context.release b;
+    releases_everything ~before
+      "releasing both leaves leaves no working pools or context owners (trimmed tail)"
+
+  (* The ledger half. The execution ledger keys writers by concrete buffer (device and location),
+     and the survivor of a release reuses the released tail at the SAME location, so a writer that
+     ran on the released leaf stays recorded against a location that now holds another node. It
+     cannot mislead a merge transfer: a released location is handed out again only by [upload_slot],
+     whose callers record an external write -- dropping the location's writer and marking it written
+     -- and a ledger writer is always an executed one, so even a stale entry would only report
+     "ready" over a node that, freshly uploaded, is ready. [d] continues [c3] linearly with [m] at
+     its arena's tail; a routine compiled from [d] writes [m] there and runs. The fork [s0] (from
+     [c3], before the release) uploads a node exactly as large as the three arenas it holds tenants
+     of, so its own arena has no room; after [d] and its compile child are released, [s0]'s next
+     upload of [v] lands where [m] was, and a merge transfer of [v] must go ahead and carry [v]'s
+     upload. *)
+  let case_reused_tail_ledger () =
+    let module AC = Ir.Alloc_census in
+    let before = AC.snapshot () in
+    let _, _, c3 = chain "ledger" in
+    let m_t = fresh_of "svpc_ledger_m" and v_t = fresh_of "svpc_ledger_v" in
+    let m = m_t.Tensor.value and v = v_t.Tensor.value in
+    let big = (fresh_of ~n:(4 * len) "svpc_ledger_big").Tensor.value in
+    let out = fresh_of "svpc_ledger_out" in
+    let d = Transfer.put c3 m (values 30) in
+    let s0 = Transfer.put c3 big (Array.init (4 * len) ~f:(fun i -> Float.of_int (i + 1))) in
+    let double = [%cd m_t =+ m_t] in
+    let double =
+      { double with asgns = Ir.Assignments.Block_comment ("svpc_double", double.asgns) }
+    in
+    let written, writer = Context.compile d double Ir.Indexing.Empty in
+    let written = Context.run written writer in
+    p "the released leaf's writer ran on its buffer"
+      (Array.equal Float.equal (Context.get_values written m)
+         (Array.map (values 30) ~f:(( *. ) 2.)));
+    Context.release written;
+    Context.release d;
+    let held = AC.snapshot () in
+    let s = Transfer.put s0 v (values 31) in
+    p "the survivor's upload reuses the released tail"
+      ((AC.snapshot ()).live_working_pools = held.live_working_pools);
+    let consumer = [%cd out =: v_t.merge] in
+    let consumer =
+      { consumer with asgns = Ir.Assignments.Block_comment ("svpc_merge_out", consumer.asgns) }
+    in
+    let dst = Context.auto () in
+    let filled =
+      match Context.copy ~into_merge_buffer:Copy ~src:s ~dst v with
+      | filled -> Ok filled
+      | exception Failure msg -> Error msg
+    in
+    (match filled with
+    | Error msg -> Verdict.fail ("the merge transfer from the reused location refused: " ^ msg)
+    | Ok filled ->
+        let consumed, consume = Context.compile filled consumer Ir.Indexing.Empty in
+        let consumed = Context.run consumed consume in
+        p "a merge transfer from the reused location carries the survivor's upload"
+          (reads_back consumed out.Tensor.value 31);
+        Context.release consumed;
+        Context.release filled);
+    Context.release dst;
+    Context.release s;
+    releases_everything ~before
+      "releasing every leaf leaves no working pools or context owners (reused tail)"
+
   let () =
     List.iter
       [
@@ -360,6 +507,9 @@ struct
         ("shared siblings", case_shared_siblings);
         ("retired tails", case_retired_tails);
         ("sibling sizing", case_sibling_sizing);
+        ("same node siblings", case_same_node_siblings);
+        ("trimmed tail", case_trimmed_tail);
+        ("reused tail ledger", case_reused_tail_ledger);
       ]
       ~f:(fun (label, run) -> Verdict.case label run)
 end
