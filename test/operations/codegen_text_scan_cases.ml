@@ -843,6 +843,17 @@ let () = p "marker" (String.is_substring (store backend_name (Generated.read "w"
       {ocaml|let store x = let n = ref 0 in n := String.length x; x
 let () = p "marker" (String.is_substring (store (Generated.read "w")) ~substring:"m9")|ocaml},
       {|"m9" +partial(mutation)|} );
+    (* A wrapper that hands its own parameter to a storing callee stores it too (review round 1). *)
+    ( "a wrapper forwarding a stored argument keeps the mutation boundary",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let wrapper z = store z ""
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m10")|ocaml},
+      "+partial(mutation)" );
+    ( "a wrapper forwarding a stored and returned argument keeps the mutation boundary",
+      {ocaml|let store x = let n = ref 0 in n := String.length x; x
+let wrapper z = store z
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m11")|ocaml},
+      {|"m11" +partial(mutation)|} );
     (* gh-ocannl-1237: the [Stdlib]-qualified spellings of the cell operators are the same cells. *)
     ( "Stdlib-qualified reference operators are a cell write and read",
       {ocaml|let store x = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r

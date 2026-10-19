@@ -1303,13 +1303,24 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                     else (join_provenance only argument, returned)
                   else (only, returned))
             in
+            (* A supplied argument that names an enclosing parameter is stored in its turn: a
+               wrapper handing its own parameter to this callee stores it too, so applying the
+               wrapper must not discharge the boundary either (review round 1). *)
             let result =
               {
                 result with
                 stored =
-                  List.fold formal_parameters ~init:result.stored
-                    ~f:(fun acc (symbol, destination) ->
-                      if parameter_supplied destination args then Set.remove acc symbol else acc);
+                  Set.union_list
+                    (module String)
+                    [
+                      List.fold formal_parameters ~init:result.stored
+                        ~f:(fun acc (symbol, destination) ->
+                          if parameter_supplied destination args then Set.remove acc symbol else acc);
+                      stored_only.parameters;
+                      stored_only.stored;
+                      stored_returned.parameters;
+                      stored_returned.stored;
+                    ];
               }
             in
             let result =
