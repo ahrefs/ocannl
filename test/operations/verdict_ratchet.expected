@@ -605,6 +605,7 @@ names an unlisted function the gate reaches: true
 follows a collection function through a value alias: true
 follows a collection function a local open of List brings in: true
 accepts a gate beside a helper bound inside an open of List under a listed name: true
+accepts a gate beside a helper an unknown open brings in after an open of List: true
 refuses a gate read off the increment a hash table counter is bumped by: true
 follows a quantifier of a gated boolean through a value alias: true
 refuses a gate read off a value pushed through a writer's value alias: true
@@ -628,6 +629,7 @@ accepts a gate on a value written after a claim in a binding operator's operand:
 refuses a gate on a value written before a partially applied iteration's callback runs: true
 accepts a gate on a value written after a piped iteration whose callback makes the claim: true
 refuses a gate on a value written in an argument evaluated in unspecified order beside the claim: true
+refuses a gate on a value written in a top-level binding beside the claim's: true
 accepts a gate on a value written in the right operand of a conjunction after the claim: true
 refuses a gate on a value written in an operand of a rebound conjunction: true
 accepts a gate on a value a writer stores once its argument making the claim is evaluated: true

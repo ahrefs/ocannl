@@ -4119,6 +4119,16 @@ let () =
   in
   Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [] );
+    ( "accepts a gate beside a helper an unknown open brings in after an open of List",
+      {ocaml|open Base
+let () =
+  let rows =
+    let open List in
+    let open Custom in
+    map raw ~f:Fn.id
+  in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
     ( "refuses a gate read off the increment a hash table counter is bumped by",
       {ocaml|open Base
 let () =
@@ -4327,6 +4337,12 @@ let () =
     (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
      ())
     (Queue.enqueue queue sample)|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written in a top-level binding beside the claim's",
+      {ocaml|open Base
+let queue = Queue.create ()
+let _ = Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+and _ = Queue.enqueue queue sample|ocaml},
       [ "sample" ] );
     ( "accepts a gate on a value written in the right operand of a conjunction after the claim",
       {ocaml|open Base

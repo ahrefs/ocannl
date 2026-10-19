@@ -1269,6 +1269,19 @@ let gate_census content =
         bind binding.pvb_expr;
         super#value_binding binding
 
+      (* A structure's [let ... and ...] evaluates its right-hand sides in an unspecified order, as
+         an expression's does ({!siblings}). *)
+      method! structure_item item =
+        (match item.pstr_desc with
+        | Pstr_value (_, (_ :: _ :: _ as bindings)) ->
+            unordered_operands :=
+              List.map bindings ~f:(fun binding ->
+                  ( binding.pvb_expr.pexp_loc.loc_start.pos_cnum,
+                    binding.pvb_expr.pexp_loc.loc_end.pos_cnum ))
+              :: !unordered_operands
+        | _ -> ());
+        super#structure_item item
+
       method! expression expr =
         (match expr.pexp_desc with
         | Pexp_let (Nonrecursive, bindings, _) ->
@@ -1510,7 +1523,10 @@ let gate_census content =
                                ~data:collection;
                          } );
                  })
-        | _ -> env
+        | Some Other_module | None ->
+            (* A barrier for {!resolve_callee}: an unqualified name may be this module's. *)
+            Lexical_scope.push_frame env
+              (Map.singleton (module String) opened_collection { identity = 0; definition = None })
 
       method! binding_denotes env binding =
         let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
@@ -1878,7 +1894,11 @@ let gate_census content =
                      else
                        match Map.find frame opened_collection with
                        | Some { definition = Some (_, module_env); _ } -> Some (Some module_env)
-                       | _ -> None))
+                       | Some { definition = None; _ } ->
+                           (* An open of a module this reader cannot read: what it brings in is
+                              unknown, so an older collection open no longer decides the name. *)
+                           Some None
+                       | None -> None))
           in
           match callee.pexp_desc with
           | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } when Option.is_some (opened name)
