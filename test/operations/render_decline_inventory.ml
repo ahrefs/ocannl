@@ -20,9 +20,17 @@
    a removed decline cannot leave its entry behind.
 
    A [Backend_codegen] cause the scan cannot key (a variable, a computed check name) fails: a new
-   decline has to be written in one of the readable forms, which is what makes it countable. And in
-   [renderer_file] every [Cause_at] is constructed at [Backend_codegen] with the phase spelled out,
-   so a render-time decline cannot leave the inventory by naming another phase.
+   decline has to be written in one of the readable forms, which is what makes it countable. So does
+   a [Cause_at] anywhere in the corpus whose phase is not spelled out as a constant constructor (a
+   variable, a constraint, a tuple passed whole): such a site may be a render-time decline the scan
+   cannot see. And in [renderer_file] every [Cause_at] is constructed at [Backend_codegen], so a
+   render-time decline cannot leave the inventory by naming another phase.
+
+   An oracle site is read by the NAME [Schedule], which denotes [arrayjit/lib/schedule.ml] only
+   while nothing in the corpus rebinds it; so a module of that name bound anywhere in the corpus (a
+   module binding or declaration, a [let module], a functor parameter, a first-class module unpacked
+   into it) fails, and an alias under another name leaves the call unreadable. The libraries outside
+   the corpus that it opens (Base, Stdio, ...) have no [Schedule] module.
 
    The recognised forms, closed. A site is an EXPRESSION [Pexp_construct] whose constructor's last
    component is [Cause_at], applied to a two-element tuple whose first element is the constant
@@ -73,6 +81,8 @@ type problem =
   | No_section
   | Unreadable of { file : string; line : int }
   | Off_phase of { file : string; line : int }
+  | Opaque_phase of { file : string; line : int }
+  | Shadows_oracle of { file : string; line : int }
   | Unclassified of site
   | Disagrees of site * entry
   | Stale of entry
@@ -86,6 +96,8 @@ let problem_kind = function
   | No_section -> "no-section"
   | Unreadable _ -> "unreadable"
   | Off_phase _ -> "off-phase"
+  | Opaque_phase _ -> "opaque-phase"
+  | Shadows_oracle _ -> "shadows-oracle"
   | Unclassified _ -> "unclassified"
   | Disagrees _ -> "disagrees"
   | Stale _ -> "stale"
@@ -106,9 +118,19 @@ let describe = function
         file line render_phase oracle_module cause_suffix
   | Off_phase { file; line } ->
       Printf.sprintf
-        "%s:%d: a Cause_at in the renderer not constructed at a spelled-out %s phase: a \
-         render-time decline is a %s decline"
+        "%s:%d: a Cause_at in the renderer constructed at a phase other than %s: a render-time \
+         decline is a %s decline"
         file line render_phase render_phase
+  | Opaque_phase { file; line } ->
+      Printf.sprintf
+        "%s:%d: a Cause_at whose phase is not a constant constructor, so the scan cannot tell \
+         whether it is a render-time decline: spell the phase out"
+        file line
+  | Shadows_oracle { file; line } ->
+      Printf.sprintf
+        "%s:%d: binds a module named %s, so an oracle site's %s.*%s call would no longer name the \
+         op-legality oracle"
+        file line oracle_module oracle_module cause_suffix
   | Unclassified s ->
       Printf.sprintf
         "%s:%d: the render-time decline `%s` (%s) has no entry in the note's %S section: add one, \
@@ -168,6 +190,10 @@ let identity (cause : Ppxlib.expression) : (string * origin) option =
 let scan_source ~file content : site list * problem list =
   let sites = ref [] and problems = ref [] in
   let in_renderer = String.equal (Stdlib.Filename.basename file) renderer_file in
+  let binds ({ txt; loc } : string option Ppxlib.loc) =
+    if Option.equal String.equal txt (Some oracle_module) then
+      problems := Shadows_oracle { file; line = loc.loc_start.pos_lnum } :: !problems
+  in
   let iterator =
     object
       inherit Ast_traverse.iter as super
@@ -176,22 +202,43 @@ let scan_source ~file content : site list * problem list =
         let line = expression.pexp_loc.loc_start.pos_lnum in
         (match expression.pexp_desc with
         | Pexp_construct ({ txt; _ }, arg) when String.equal (last_component txt) "Cause_at" -> (
-            let phase, cause =
+            let phase_and_cause =
               match arg with
-              | Some { pexp_desc = Pexp_tuple [ phase; cause ]; _ } -> (
-                  match phase.pexp_desc with
-                  | Pexp_construct ({ txt; _ }, None) -> (Some (last_component txt), Some cause)
-                  | _ -> (None, Some cause))
-              | _ -> (None, None)
+              | Some
+                  {
+                    pexp_desc =
+                      Pexp_tuple [ { pexp_desc = Pexp_construct ({ txt; _ }, None); _ }; cause ];
+                    _;
+                  } ->
+                  Some (last_component txt, cause)
+              | _ -> None
             in
-            match (phase, cause) with
-            | Some p, Some cause when String.equal p render_phase -> (
+            match phase_and_cause with
+            | None -> problems := Opaque_phase { file; line } :: !problems
+            | Some (p, cause) when String.equal p render_phase -> (
                 match identity cause with
                 | Some (key, origin) -> sites := { file; line; key; origin } :: !sites
                 | None -> problems := Unreadable { file; line } :: !problems)
-            | _ -> if in_renderer then problems := Off_phase { file; line } :: !problems)
+            | Some _ -> if in_renderer then problems := Off_phase { file; line } :: !problems)
+        | Pexp_letmodule (name, _, _) -> binds name
         | _ -> ());
         super#expression expression
+
+      method! module_binding mb =
+        binds mb.pmb_name;
+        super#module_binding mb
+
+      method! module_declaration md =
+        binds md.pmd_name;
+        super#module_declaration md
+
+      method! functor_parameter param =
+        (match param with Named (name, _) -> binds name | Unit -> ());
+        super#functor_parameter param
+
+      method! pattern pattern =
+        (match pattern.ppat_desc with Ppat_unpack name -> binds name | _ -> ());
+        super#pattern pattern
     end
   in
   iterator#structure (Read.structure_of content);
@@ -201,7 +248,9 @@ let scan_source ~file content : site list * problem list =
    spaces; [None] when the note has no such section. The dialect is the notes' own
    ([Agent_notes_scan]): a bullet opens with ["- "] at column 0, and an INDENTED line continues it,
    after a blank line too -- that is a second paragraph of the same bullet. An unindented line that
-   is not a marker ends it (prose after the list), and so does a heading, which ends the section. *)
+   is not a marker ends it (prose after the list), and so does a heading, which ends the section: a
+   heading as the notes' own parser reads one ([Agent_notes_scan.atx_heading]), indented up to three
+   spaces too. *)
 let section_bullets note =
   let lines = String.split_lines note in
   match
@@ -209,7 +258,10 @@ let section_bullets note =
   with
   | [] -> None
   | _ :: rest ->
-      let body = List.take_while rest ~f:(fun l -> not (String.is_prefix l ~prefix:"#")) in
+      let body =
+        List.take_while rest ~f:(fun l ->
+            Option.is_none (Test_utils.Agent_notes_scan.atx_heading l))
+      in
       let bullets, current =
         List.fold body ~init:([], None) ~f:(fun (done_, current) line ->
             let text = String.strip line in
@@ -394,7 +446,47 @@ let control_cases =
           "let f p = raise (Cause_at (p, Illegal_schedule { check = \"t\"; detail = \"\" }))" );
       ],
       note "",
-      [ "off-phase" ] );
+      [ "opaque-phase" ] );
+    ( "a phase held in a variable outside the renderer",
+      [
+        ("a.ml", "let f p = raise (Cause_at (p, Illegal_schedule { check = \"t\"; detail = \"\" }))");
+      ],
+      note "",
+      [ "opaque-phase" ] );
+    ( "a constrained phase outside the renderer",
+      [
+        ( "a.ml",
+          "let f () = raise (Cause_at ((Backend_codegen : phase), Illegal_schedule { check = \
+           \"t\"; detail = \"\" }))" );
+      ],
+      note "",
+      [ "opaque-phase" ] );
+    ( "a phase and cause passed whole",
+      [ ("a.ml", "let f pc = raise (Cause_at pc)") ],
+      note "",
+      [ "opaque-phase" ] );
+    ( "a local module shadowing the oracle",
+      [ ("a.ml", "module Schedule = struct let v_cause _ = assert false end\n" ^ oracle) ],
+      note ctor_paired,
+      [ "shadows-oracle" ] );
+    ( "the oracle's name bound by let module, a functor, a declaration and an unpacked module",
+      [
+        ( "a.ml",
+          "let f () = let module Schedule = M in ()\n\
+           module F (Schedule : S) = struct end\n\
+           module type T = sig module Schedule : S end\n\
+           let g (module Schedule : S) = ()" );
+      ],
+      note "",
+      [ "shadows-oracle"; "shadows-oracle"; "shadows-oracle"; "shadows-oracle" ] );
+    ( "an aliased oracle module",
+      [
+        ( "a.ml",
+          "module S = Schedule\nlet g () = raise (Cause_at (Backend_codegen, S.v_cause (S.Ctor 1)))"
+        );
+      ],
+      note "",
+      [ "unreadable" ] );
     ( "a pattern naming the phase",
       [ ("c_syntax.ml", "let f = function Cause_at (Backend_codegen, _) -> () | _ -> ()") ],
       note "",
@@ -409,6 +501,11 @@ let control_cases =
     ( "a classification in the bullet's second paragraph",
       [ ("a.ml", literal) ],
       note "- `k` (`f`): the backend decides it.\n\n  So: render-only, because x.\n",
+      [] );
+    ( "a bullet under an indented next heading, which is outside the section",
+      [ ("a.ml", literal) ],
+      "# N\n" ^ section_heading ^ "\n" ^ k_render
+      ^ "   ## Next\n- `stray`: paired (`Schedule.stray`).\n",
       [] );
     ( "unindented prose after the bullet, which is not part of it",
       [ ("a.ml", literal) ],
@@ -485,6 +582,9 @@ let () =
     "every Backend_codegen cause is readable, and the renderer raises typed declines only there"
     ~over:sources
     (of_kinds [ "unreadable"; "off-phase" ]);
+  p_empty "every Cause_at spells its phase out, and no source rebinds the oracle's module name"
+    ~over:sources
+    (of_kinds [ "opaque-phase"; "shadows-oracle" ]);
   p_exists "some decline is paired with an oracle constructor" sites ~f:(fun s ->
       match s.origin with Oracle _ -> true | Literal -> false);
   Test_utils.Refusal_control_manifest.print "render_decline_inventory.ml"

@@ -790,7 +790,9 @@ files.
   can state the fact. `render_decline_inventory` (in `@scans`) parses every `arrayjit/lib` source
   and this section, and fails on a decline no entry classifies, an entry no site raises, a
   "paired" entry over a literal site or a "render-only" one over an oracle-built site, a cause it
-  cannot read, and a `C_syntax` `Cause_at` at any other phase. So a new typed decline lands with
+  cannot read, a `Cause_at` anywhere whose phase is not a spelled-out constructor, a module
+  bound under the oracle's name `Schedule` (which would make a `Schedule.*_cause` call name
+  something else), and a `C_syntax` `Cause_at` at any other phase. So a new typed decline lands with
   its entry here, and a new render-time precondition the oracle can state lands as an oracle
   constructor raised through its `*_cause` function, the gh-ocannl-1231 pattern above.
 - `Read_outside_rotor` (`C_syntax.pp_pipelined_rotation`): paired (`Schedule.Read_outside_rotor`).
