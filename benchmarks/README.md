@@ -328,7 +328,12 @@ cell is the step: cite the step cell. Each issue's cell:
   `model_default_schedule=true` (the `approximate` and `performance` profiles set it, and their
   untuned cell ships the model's pick, which no candidate reproduces). Each `tune` arm's `timings_contended`
   in the result line counts the refused windows, which is how a cut cell reads apart from a full
-  search.
+  search. A cut search is never cached: its refused windows make its measurement set incomplete
+  (`Autotune.search_measurements_cacheable`), so the tuned cell's replay pass finds nothing to
+  replay, searches (cut) again, and `orchestrate.py`'s provenance gate exits 1 on its search-pass
+  step times. Those times are still usable for the cut's question -- a searching process only
+  inflates its launches, so a cut cell that matches the untuned cell there matches it a fortiori --
+  and the search runs its full compile cost, about 50 min per pass for gpt2_mini_train on rog.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
