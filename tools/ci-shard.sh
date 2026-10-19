@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Which dune targets does one shard of CI's sharded ubuntu `main` suite build?
+# Which dune targets does one shard of one of CI's sharded ubuntu suites build?
+# Two suites are sharded: `main` (the default) and `train`.
 #
-# The suite is `dune build @default @runtest @bin-smoke` (SUITE_ALIASES below,
+# `main` is `dune build @default @runtest @bin-smoke` (SUITE_ALIASES below,
 # the same three ci.yml's unsharded legs name). On the 4-vCPU ubuntu runner it
 # ran 13-26min in that one step, three quarters of it executing
 # test/operations: that one directory holds ~320 of the repository's ~420
@@ -29,21 +30,37 @@
 #     share is `@@dir/all`. A dune file that defines `default` itself breaks
 #     that equation, so the script refuses one.
 #
+# `train` is `dune build @train`, the training-integration tier
+# (test/training/dune says what it is). Its units are the members of every
+# directory's `(alias (name train) (deps ...))` aggregate, one `@@dir/train-<name>`
+# each -- read from the tracked dune files themselves, as S-expressions, since
+# the aggregate is exactly what `@train` builds there and needs no dune to
+# read: ci.yml and test/operations/ci_matrix.sh both run it where no toolchain
+# is installed. The members serialize on the `ocannl_training_test` lock, so a
+# shard's run time is the SUM of its members' and the deal below is what
+# balances it. The reader refuses (exit 2) whatever would make its member list
+# differ from what `@train` builds: an aggregate dep that is not `(alias
+# train-<name>)` of an alias the same file defines, an aggregate with a field
+# beyond name/deps/package, a rule attached to `train` directly, a
+# comment form or an include it does not read.
+#
 # The units are dealt to N shards longest-first onto the least-loaded shard
-# (LPT), by the WEIGHTS table below. Weights are needed, not a nicety: the
+# (LPT), by the suite's weight table below. Weights are needed, not a nicety: the
 # costs are heavy-tailed (three tests carried a third of test/operations'
 # CPU), and an unweighted round-robin by name measured 63/37 between two
 # shards where LPT measures 50/50. A unit the table does not list weighs
 # DEFAULT_WEIGHT. Stale entries degrade only the balance, never the
-# coverage, so they warn rather than fail; refresh the table with `weigh`.
+# coverage, so they warn rather than fail; refresh WEIGHTS with `weigh`, and
+# TRAIN_WEIGHTS as its comment says.
 #
 # Usage:
-#   tools/ci-shard.sh targets K/N     # shard K's dune targets, one per line
-#   tools/ci-shard.sh plan N          # each shard's units and estimated load
-#   tools/ci-shard.sh aliases         # the suite aliases being sharded
-#   tools/ci-shard.sh weigh TRACE     # per-unit CPU seconds from a dune trace
+#   tools/ci-shard.sh targets K/N [SUITE]  # shard K's dune targets, one per line
+#   tools/ci-shard.sh plan N [SUITE]       # each shard's units and estimated load
+#   tools/ci-shard.sh aliases              # the aliases the `main` suite shards
+#   tools/ci-shard.sh weigh TRACE          # per-unit CPU seconds from a dune trace
+# SUITE is `main` (the default) or `train`.
 #
-# `targets` and `plan` run `dune show aliases` and `dune show targets` (as
+# For `main`, `targets` and `plan` run `dune show aliases` and `dune show targets` (as
 # $OCANNL_TOOL_CI_SHARD_DUNE when set, a hook for tools/test-ci-shard.sh), from
 # the repository root. Both print on STDERR and exit 0 even for a directory
 # they do not know,
@@ -51,6 +68,7 @@
 # directory block or a test/operations without its per-test aliases refuses
 # (exit 2) rather than printing a shard that silently covers less -- or more:
 # a shard that reaches a recursive alias runs the other shards' tests too.
+# `train` runs no dune at all.
 #
 # `weigh` reads the trace of a full suite run --
 #   dune build @default @runtest @bin-smoke --trace-file=TRACE
@@ -109,6 +127,24 @@ dead_export_scan 6
 schedule_contraction_nest 6
 '
 
+# Wall-clock seconds of each `train` member, keyed by its unit (the target
+# without `@@`). Wall-clock, not CPU as above: the members serialize on the
+# ocannl_training_test lock and each saturates every core through the cc
+# backend's OpenMP pool, so a shard's run time is the sum of its members' wall
+# times. Measured 2026-10-19 on minix-amd-linux (32 threads, cc) with
+# `tools/test-run.sh fresh @test/training/train-<name>... -j 4`, which prints
+# each member's wall time from the run's dune trace; rerun it on a Linux box
+# to refresh, and check the deal against the two CI shards' dune-step times
+# (`tools/ci-times.sh`). Sub-second members weigh DEFAULT_WEIGHT.
+TRAIN_WEIGHTS='
+test/training/train-fsm_transformer 218
+test/training/train-transformer_names 120
+test/training/train-circles_conv 88
+test/training/train-mlp_bn_names 33
+test/training/train-bigram 20
+test/training/train-mlp_names 6
+'
+
 die() {
   echo "ci-shard.sh: $*" >&2
   exit 2
@@ -158,17 +194,17 @@ alias_listing() {
 
 # The sharding itself: MODE (targets|plan), K, N, then alias_listing's output.
 # (The listing is an argument because the heredoc below is python's stdin.)
+# The sharding itself: MODE (targets|plan), K, N, SUITE (main|train), then
+# alias_listing's output for `main` or the directory list for `train`. (The
+# listing is an argument because the heredoc below is python's stdin.)
 shard() {
-  python3 - "$@" "$SUITE_ALIASES" "$SPLIT_DIR" "$DEFAULT_WEIGHT" "$WEIGHTS" "$root" <<'PY'
+  python3 - "$@" "$SUITE_ALIASES" "$SPLIT_DIR" "$DEFAULT_WEIGHT" "$WEIGHTS" "$TRAIN_WEIGHTS" "$root" <<'PY'
 import re
 import sys
 
-mode, k, n, text, suite, split_dir, default_weight, table, root = sys.argv[1:10]
+mode, k, n, kind, text, suite, split_dir, default_weight, table, train_table, root = sys.argv[1:12]
 k, n, default_weight = int(k), int(n), float(default_weight)
 suite = suite.split()
-listing, _, dirs = text.partition('\n--dirs--\n')
-listing, _, targets = listing.partition('\n--targets--\n')
-dirs = dirs.split()
 
 
 def die(message):
@@ -176,77 +212,203 @@ def die(message):
     sys.exit(2)
 
 
-for line in listing.splitlines():
-    if line.startswith('Error'):
-        die('dune show aliases refused:\n' + listing)
-for line in targets.splitlines():
-    if line.startswith('Error'):
-        die('dune show targets refused:\n' + targets)
+def dune_file(d):
+    return root + '/' + ('' if d == '.' else d + '/') + 'dune'
 
-# One block per directory: a `DIR:` header (dune omits it when asked about a
-# single directory, which this never does), then one alias per line. Anything
-# before the first header is dune's own chatter (a warning shares the stream):
-# passed through, not parsed.
-blocks, current = {}, None
-for line in listing.splitlines():
-    if not line.strip():
-        continue
-    if line.endswith(':') and line[:-1] in dirs:
-        current = blocks.setdefault(line[:-1], set())
-    elif current is None:
-        print(line, file=sys.stderr)
-    else:
-        current.add(line.strip())
-for d in dirs:
-    # `default` is defined in every directory dune sees: its absence means
-    # dune did not report on the directory at all.
-    if 'default' not in blocks.get(d, ()):
-        die('dune show aliases reported nothing for %s:\n%s' % (d, listing))
-if split_dir not in blocks:
-    die('%s holds no tracked dune file' % split_dir)
-split_aliases = blocks[split_dir]
-tests = sorted(a[len('runtest-'):] for a in split_aliases if a.startswith('runtest-'))
-if 'runtest' not in split_aliases or not tests:
-    die('%s lists no runtest-<name> aliases; refusing to shard it' % split_dir)
 
-# A dune file defining `default` itself (the alias stanza's name, an alias or
-# aliases field): comments stripped first, so this prose's own kind is safe.
-explicit = re.compile(r'\(\s*name\s+default\s*\)|\(\s*alias(?:es)?\b[^()]*\bdefault\b')
-for d in dirs:
-    path = root + '/' + ('' if d == '.' else d + '/') + 'dune'
-    code = re.sub(r';[^\n]*', '', open(path).read())
-    if explicit.search(code):
-        die('%s defines the default alias; @@dir/all no longer stands for its '
-            'share of the suite, so teach this script what does' % path)
+def main_units():
+    listing, _, dirs = text.partition('\n--dirs--\n')
+    listing, _, targets = listing.partition('\n--targets--\n')
+    dirs = dirs.split()
+    for line in listing.splitlines():
+        if line.startswith('Error'):
+            die('dune show aliases refused:\n' + listing)
+    for line in targets.splitlines():
+        if line.startswith('Error'):
+            die('dune show targets refused:\n' + targets)
 
-rest = []
-for d in sorted(blocks):
-    prefix = '' if d == '.' else d + '/'
-    for a in suite:
-        # The split directory's runtest and default ARE its per-test aliases.
-        if d == split_dir and a in ('runtest', 'default'):
+    # One block per directory: a `DIR:` header (dune omits it when asked about a
+    # single directory, which this never does), then one alias per line. Anything
+    # before the first header is dune's own chatter (a warning shares the stream):
+    # passed through, not parsed.
+    blocks, current = {}, None
+    for line in listing.splitlines():
+        if not line.strip():
             continue
-        # Implicit default is (alias_rec all): its non-recursive share is all.
-        share = 'all' if a == 'default' else a
-        if a in blocks[d]:
-            if share not in blocks[d]:
-                die('dune lists no %s alias in %s' % (share, d))
-            rest.append('@@' + prefix + share)
-executables = sorted(t[:-len('.exe')] for t in targets.split() if t.endswith('.exe'))
-if not executables:
-    die('dune show targets lists no executables in %s:\n%s' % (split_dir, targets))
-rest += ['%s/%s.exe' % (split_dir, e) for e in executables if e not in tests]
+        if line.endswith(':') and line[:-1] in dirs:
+            current = blocks.setdefault(line[:-1], set())
+        elif current is None:
+            print(line, file=sys.stderr)
+        else:
+            current.add(line.strip())
+    for d in dirs:
+        # `default` is defined in every directory dune sees: its absence means
+        # dune did not report on the directory at all.
+        if 'default' not in blocks.get(d, ()):
+            die('dune show aliases reported nothing for %s:\n%s' % (d, listing))
+    if split_dir not in blocks:
+        die('%s holds no tracked dune file' % split_dir)
+    split_aliases = blocks[split_dir]
+    tests = sorted(a[len('runtest-'):] for a in split_aliases if a.startswith('runtest-'))
+    if 'runtest' not in split_aliases or not tests:
+        die('%s lists no runtest-<name> aliases; refusing to shard it' % split_dir)
 
+    # A dune file defining `default` itself (the alias stanza's name, an alias or
+    # aliases field): comments stripped first, so this prose's own kind is safe.
+    explicit = re.compile(r'\(\s*name\s+default\s*\)|\(\s*alias(?:es)?\b[^()]*\bdefault\b')
+    for d in dirs:
+        path = dune_file(d)
+        code = re.sub(r';[^\n]*', '', open(path).read())
+        if explicit.search(code):
+            die('%s defines the default alias; @@dir/all no longer stands for its '
+                'share of the suite, so teach this script what does' % path)
+
+    rest = []
+    for d in sorted(blocks):
+        prefix = '' if d == '.' else d + '/'
+        for a in suite:
+            # The split directory's runtest and default ARE its per-test aliases.
+            if d == split_dir and a in ('runtest', 'default'):
+                continue
+            # Implicit default is (alias_rec all): its non-recursive share is all.
+            share = 'all' if a == 'default' else a
+            if a in blocks[d]:
+                if share not in blocks[d]:
+                    die('dune lists no %s alias in %s' % (share, d))
+                rest.append('@@' + prefix + share)
+    executables = sorted(t[:-len('.exe')] for t in targets.split() if t.endswith('.exe'))
+    if not executables:
+        die('dune show targets lists no executables in %s:\n%s' % (split_dir, targets))
+    rest += ['%s/%s.exe' % (split_dir, e) for e in executables if e not in tests]
+    units = {'@rest': rest}
+    units.update({t: ['@@%s/runtest-%s' % (split_dir, t)] for t in tests})
+    return units
+
+
+def sexps(path):
+    # A dune file as nested lists of strings: atoms and quoted strings alike
+    # (dune reads `"train"` as `train`), `;` comments dropped.
+    code, i, stack = open(path).read(), 0, [[]]
+    atom = re.compile(r'[^\s()";]+')
+    while i < len(code):
+        c = code[i]
+        if c.isspace():
+            i += 1
+        elif c == ';':
+            j = code.find('\n', i)
+            i = len(code) if j < 0 else j
+        elif code.startswith('#|', i) or code.startswith('#;', i):
+            die('%s uses a %s comment, which this reader does not skip; teach it' % (path, code[i:i + 2]))
+        elif c == '(':
+            stack.append([])
+            i += 1
+        elif c == ')':
+            if len(stack) == 1:
+                die('%s: unbalanced )' % path)
+            done = stack.pop()
+            stack[-1].append(done)
+            i += 1
+        elif c == '"':
+            j, value = i + 1, []
+            while j < len(code) and code[j] != '"':
+                if code[j] == '\\':
+                    j += 1
+                value.append(code[j:j + 1])
+                j += 1
+            if j >= len(code):
+                die('%s: unterminated string' % path)
+            stack[-1].append(''.join(value))
+            i = j + 1
+        else:
+            m = atom.match(code, i)
+            stack[-1].append(m[0])
+            i = m.end()
+    if len(stack) != 1:
+        die('%s: unbalanced (' % path)
+    return stack[0]
+
+
+def train_stanzas(stanzas, d, path, seen):
+    # Record, for directory D, the train-<name> aliases its stanzas define and
+    # its train aggregate's deps; a `subdir` stanza's stanzas belong to D/NAME.
+    defined, aggregates = seen.setdefault(d, (set(), []))
+    for stanza in stanzas:
+        if not (isinstance(stanza, list) and stanza and isinstance(stanza[0], str)):
+            die('%s: a form that is not a stanza' % path)
+        kind_ = stanza[0]
+        fields = [f for f in stanza[1:] if isinstance(f, list) and f and isinstance(f[0], str)]
+        if kind_ == 'subdir':
+            if len(stanza) < 2 or not isinstance(stanza[1], str):
+                die('%s: a subdir stanza without a directory name' % path)
+            sub = stanza[1] if d == '.' else d + '/' + stanza[1]
+            train_stanzas(stanza[2:], sub.removeprefix('./'), path, seen)
+            continue
+        if kind_ in ('include', 'dynamic_include'):
+            die('%s has an %s stanza, whose aliases this reader cannot see; teach it' % (path, kind_))
+        if kind_ == 'alias':
+            names = [f[1:] for f in fields if f[0] == 'name']
+            name = names[0][0] if len(names) == 1 and len(names[0]) == 1 else None
+            if name == 'train':
+                extra = sorted({f[0] for f in fields} - {'name', 'deps', 'package'})
+                if extra:
+                    die('%s: the train aggregate has %s, which may change what @train '
+                        'builds; teach this script' % (path, ', '.join(extra)))
+                aggregates.append([x for f in fields if f[0] == 'deps' for x in f[1:]])
+            elif name is not None and name.startswith('train-'):
+                defined.add(name)
+            continue
+        # A definition is a stanza's OWN alias/aliases field; the same form
+        # inside its deps is a dependency.
+        for f in fields:
+            if f[0] in ('alias', 'aliases'):
+                for a in f[1:]:
+                    if a == 'train':
+                        die('%s attaches a %s stanza to the train alias itself; give it a '
+                            'train-<name> alias in the aggregate' % (path, kind_))
+                    if isinstance(a, str) and a.startswith('train-'):
+                        defined.add(a)
+
+
+def train_units():
+    seen = {}
+    for d in text.split():
+        path = dune_file(d)
+        train_stanzas(sexps(path), d, path, seen)
+    units = {}
+    for d in sorted(seen):
+        defined, aggregates = seen[d]
+        if not aggregates:
+            continue
+        if len(aggregates) > 1:
+            die('%s defines the train alias %d times' % (d, len(aggregates)))
+        if not aggregates[0]:
+            die('%s: the train aggregate has no members' % d)
+        prefix = '' if d == '.' else d + '/'
+        for dep in aggregates[0]:
+            if not (isinstance(dep, list) and len(dep) == 2 and dep[0] == 'alias'
+                    and isinstance(dep[1], str) and dep[1].startswith('train-')):
+                die('%s: the train aggregate depends on %r, not an (alias train-<name>); '
+                    'teach this script' % (d, dep))
+            if dep[1] not in defined:
+                die('%s: the train aggregate names %s, which no stanza there defines' % (d, dep[1]))
+            unit = prefix + dep[1]
+            if unit in units:
+                die('%s: the train aggregate names %s twice' % (d, dep[1]))
+            units[unit] = ['@@' + unit]
+    if not units:
+        die('no tracked dune file defines a train aggregate')
+    return units
+
+
+units = train_units() if kind == 'train' else main_units()
 weights = {}
-for line in table.splitlines():
+for line in (train_table if kind == 'train' else table).splitlines():
     if line.strip():
         name, value = line.split()
         weights[name] = float(value)
-units = {'@rest': rest}
-units.update({t: ['@@%s/runtest-%s' % (split_dir, t)] for t in tests})
 for name in sorted(set(weights) - set(units)):
     print('ci-shard.sh: warning: weight for %s, which is no unit any more; '
-          'refresh WEIGHTS with `weigh`' % name, file=sys.stderr)
+          'refresh the weights' % name, file=sys.stderr)
 
 def weight(u):
     return weights.get(u, default_weight)
@@ -335,19 +497,39 @@ for name, cpu in cost.most_common():
 PY
 }
 
+# The suite argument: `main` when absent, and nothing but the two suites.
+suite_of() {
+  case ${1:-main} in
+    main | train) printf '%s' "${1:-main}" ;;
+    *) die "unknown suite '$1' (main or train)" ;;
+  esac
+}
+
+# What the sharding reads: dune's listing for `main`, the dune directories
+# for `train` (whose files it reads itself).
+units_input() {
+  if [ "$1" = train ]; then
+    dune_dirs
+  else
+    alias_listing
+  fi
+}
+
 case ${1-} in
   targets)
-    [ $# -eq 2 ] || die "usage: tools/ci-shard.sh targets K/N"
+    [ $# -eq 2 ] || [ $# -eq 3 ] || die "usage: tools/ci-shard.sh targets K/N [SUITE]"
     [[ $2 =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] || die "shard must be K/N, got '$2'"
     k=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]}
     [ "$k" -le "$n" ] || die "shard $k of only $n"
-    listing=$(alias_listing)
-    shard targets "$k" "$n" "$listing"
+    suite=$(suite_of "${3-}")
+    input=$(units_input "$suite")
+    shard targets "$k" "$n" "$suite" "$input"
     ;;
   plan)
-    [ $# -eq 2 ] && [[ $2 =~ ^[1-9][0-9]*$ ]] || die "usage: tools/ci-shard.sh plan N"
-    listing=$(alias_listing)
-    shard plan 1 "$2" "$listing"
+    { [ $# -eq 2 ] || [ $# -eq 3 ]; } && [[ $2 =~ ^[1-9][0-9]*$ ]] || die "usage: tools/ci-shard.sh plan N [SUITE]"
+    suite=$(suite_of "${3-}")
+    input=$(units_input "$suite")
+    shard plan 1 "$2" "$suite" "$input"
     ;;
   aliases)
     printf '%s\n' $SUITE_ALIASES

@@ -389,14 +389,14 @@ let aliases_reached_from = Scan.aliases_reached_from
    `<suite>` the suite, an `(alias (name <suite>) (deps …))` stanza listing its members -- so a
    member the list omits is one `dune build @<suite>` skips, silently. Three suites are built this
    way. `slow` is the one gh-ocannl-667 introduced. `train` carries the training integration runs --
-   toy problems by intent, but serialized on the training lock, so on their own entry point (a macOS
-   CI shard, a daily-sweep unit) rather than in `runtest` where they set every full run's wall-clock
-   tail. `runtest` is the same arrangement for the golden-diff rules (gh-ocannl-726): dune generates
-   `runtest-<name>` for `(test)`/`(tests)` stanzas and inline-test libraries only, so an
-   `(executable)` plus a `(rule)` that diffs has to be given one -- and it has to be given it ALONE,
-   since a rule attached to two aliases makes building either build both, which would put the whole
-   directory behind every per-test alias. Aggregating the members here is then the only thing that
-   keeps them in `dune runtest`. *)
+   toy problems by intent, but serialized on the training lock, so on their own entry point (two
+   ubuntu CI shards, a daily-sweep unit) rather than in `runtest` where they set every full run's
+   wall-clock tail. `runtest` is the same arrangement for the golden-diff rules (gh-ocannl-726):
+   dune generates `runtest-<name>` for `(test)`/`(tests)` stanzas and inline-test libraries only, so
+   an `(executable)` plus a `(rule)` that diffs has to be given one -- and it has to be given it
+   ALONE, since a rule attached to two aliases makes building either build both, which would put the
+   whole directory behind every per-test alias. Aggregating the members here is then the only thing
+   that keeps them in `dune runtest`. *)
 let suites = [ "slow"; "train"; "runtest" ]
 let member_of suite alias = String.is_prefix alias ~prefix:(suite ^ "-")
 
