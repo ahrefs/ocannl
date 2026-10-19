@@ -111,8 +111,9 @@ type value = Source | From_verdict of { ambiguous : bool } | From_elsewhere
 (* What a module name denotes. *)
 type module_ =
   | Verdict_library of { ambiguous : bool }
-  | Structure of value Map.M(String).t
-      (** A structure of the source: the claim names it exports, and what each denotes. *)
+  | Structure of { values : value Map.M(String).t; modules : module_ Map.M(String).t }
+      (** A structure of the source: the claim names it exports and what each denotes, and the
+          modules it binds or includes. *)
   | Standard
   | Unknown
 
@@ -123,14 +124,20 @@ let opened_elsewhere = "<opened-elsewhere>"
 let all_members denotes =
   Map.of_alist_exn (module String) (List.map members ~f:(fun name -> (name, denotes)))
 
-let ambiguate = function
+let rec ambiguate = function
   | Verdict_library _ -> Verdict_library { ambiguous = true }
-  | Structure exports ->
+  | Structure { values; modules } ->
       Structure
-        (Map.map exports ~f:(function
-          | From_verdict _ -> From_verdict { ambiguous = true }
-          | other -> other))
+        {
+          values =
+            Map.map values ~f:(function
+              | From_verdict _ -> From_verdict { ambiguous = true }
+              | other -> other);
+          modules = Map.map modules ~f:ambiguate;
+        }
   | (Standard | Unknown) as other -> other
+
+let later_wins earlier later = Map.merge_skewed earlier later ~combine:(fun ~key:_ _ later -> later)
 
 let ownership_of_value = function
   | From_verdict { ambiguous } -> if ambiguous then Ambiguous else Verdicts
@@ -154,53 +161,100 @@ let of_structure ast : t =
       method! shadowed = Some Unknown
       method! attribute _ attr = attr
 
+      (* The head through the module bindings in scope, then each further component through the
+         modules a structure of the source binds: [Verdict.Claims] is [Verdict], [Other.Verdict] is
+         another module, and [M.Verdict] is whatever the structure [M] binds under that name. *)
       method module_path env path =
         let components =
           Option.value ~default:[] (Option.try_with (fun () -> Read.flatten_longident path))
         in
         let head = Lexical_scope.head path in
-        Some
-          (match Map.find env.Lexical_scope.modules head with
-          | Some (Structure _ as structure) when List.length components = 1 -> structure
-          | Some (Structure _) -> Unknown
+        let head_denotes =
+          match Map.find env.Lexical_scope.modules head with
           | Some denotes -> denotes
           | None when String.equal head "Verdict" ->
               Verdict_library { ambiguous = Map.mem env.Lexical_scope.modules opened_elsewhere }
           | None when List.mem standard_libraries head ~equal:String.equal -> Standard
-          | None -> Unknown)
+          | None -> Unknown
+        in
+        Some
+          (List.fold (List.drop components 1) ~init:head_denotes ~f:(fun denotes component ->
+               match denotes with
+               | Structure { modules; _ } ->
+                   Option.value (Map.find modules component) ~default:Unknown
+               | (Verdict_library _ | Standard | Unknown) as denotes -> denotes))
 
-      (* A structure of the source, by the claim names it exports: a value it binds is its own, an
-         include of [Verdict] exports every claim name as [Verdict]'s, an include of an unreadable
-         module as anyone's, each over what came before. Include paths resolve in the scope around
-         the structure. *)
+      (* A structure of the source, by what it exports: a value it binds is its own, a module it
+         binds is what that module denotes, and an include of [Verdict] exports every claim name as
+         [Verdict]'s (of an unreadable module, as anyone's; of a structure, what that exports), each
+         over what came before. Its items resolve in the scope the structure builds up as it goes,
+         its own modules and opens included. *)
       method! module_of env module_expr =
         match module_expr.pmod_desc with
         | Pmod_structure items ->
-            let exports =
+            let _, values, structure_modules =
               List.fold items
-                ~init:(Map.empty (module String))
-                ~f:(fun exports item ->
+                ~init:(env, Map.empty (module String), Map.empty (module String))
+                ~f:(fun (scope, values, structure_modules) item ->
                   let own names =
-                    List.fold names ~init:exports ~f:(fun exports name ->
-                        if member name then Map.set exports ~key:name ~data:Source else exports)
+                    List.fold names ~init:values ~f:(fun values name ->
+                        if member name then Map.set values ~key:name ~data:Source else values)
                   in
-                  let over included =
-                    Map.merge_skewed exports included ~combine:(fun ~key:_ _ later -> later)
+                  let bind_module scope structure_modules name denotes =
+                    let denotes = Option.value denotes ~default:Unknown in
+                    ( {
+                        scope with
+                        Lexical_scope.modules =
+                          Map.set scope.Lexical_scope.modules ~key:name ~data:denotes;
+                      },
+                      Map.set structure_modules ~key:name ~data:denotes )
                   in
                   match item.pstr_desc with
                   | Pstr_value (_, bindings) ->
-                      own (Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)))
-                  | Pstr_primitive { pval_name = { txt; _ }; _ } -> own [ txt ]
-                  | Pstr_include { pincl_mod; _ } -> (
-                      match self#module_of env pincl_mod with
-                      | Some (Verdict_library { ambiguous }) ->
-                          over (all_members (From_verdict { ambiguous }))
-                      | Some (Structure included) -> over included
-                      | Some Standard -> exports
-                      | Some Unknown | None -> over (all_members From_elsewhere))
-                  | _ -> exports)
+                      ( scope,
+                        own (Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat))),
+                        structure_modules )
+                  | Pstr_primitive { pval_name = { txt; _ }; _ } ->
+                      (scope, own [ txt ], structure_modules)
+                  | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+                      let scope, structure_modules =
+                        bind_module scope structure_modules name (self#module_of scope pmb_expr)
+                      in
+                      (scope, values, structure_modules)
+                  | Pstr_recmodule declarations ->
+                      let scope, structure_modules =
+                        List.fold declarations ~init:(scope, structure_modules)
+                          ~f:(fun (scope, structure_modules) declaration ->
+                            match declaration.pmb_name.txt with
+                            | Some name -> bind_module scope structure_modules name None
+                            | None -> (scope, structure_modules))
+                      in
+                      (scope, values, structure_modules)
+                  | Pstr_open { popen_expr; _ } ->
+                      ( self#opened ~top:false ~include_:false scope
+                          (self#module_of scope popen_expr),
+                        values,
+                        structure_modules )
+                  | Pstr_include { pincl_mod; _ } ->
+                      let denotes = self#module_of scope pincl_mod in
+                      let values, structure_modules =
+                        match denotes with
+                        | Some (Verdict_library { ambiguous }) ->
+                            ( later_wins values (all_members (From_verdict { ambiguous })),
+                              structure_modules )
+                        | Some (Structure included) ->
+                            ( later_wins values included.values,
+                              later_wins structure_modules included.modules )
+                        | Some Standard -> (values, structure_modules)
+                        | Some Unknown | None ->
+                            (later_wins values (all_members From_elsewhere), structure_modules)
+                      in
+                      ( self#opened ~top:false ~include_:true scope denotes,
+                        values,
+                        structure_modules )
+                  | _ -> (scope, values, structure_modules))
             in
-            Some (Structure exports)
+            Some (Structure { values; modules = structure_modules })
         | _ -> super#module_of env module_expr
 
       (* A module path spelled as a module expression, recorded where it denotes [Verdict]: what a
@@ -220,7 +274,9 @@ let of_structure ast : t =
         match denotes with
         | Some (Verdict_library { ambiguous }) ->
             Lexical_scope.push_frame env (all_members (From_verdict { ambiguous }))
-        | Some (Structure exports) -> Lexical_scope.push_frame env exports
+        | Some (Structure { values; modules }) ->
+            let env = Lexical_scope.push_frame env values in
+            { env with Lexical_scope.modules = later_wins env.Lexical_scope.modules modules }
         | Some Standard -> env
         | Some Unknown | None ->
             let env = Lexical_scope.push_frame env (all_members From_elsewhere) in
@@ -261,8 +317,8 @@ let of_structure ast : t =
             record name
               (match self#module_path env prefix with
               | Some (Verdict_library { ambiguous }) -> if ambiguous then Ambiguous else Verdicts
-              | Some (Structure exports) ->
-                  Option.value_map (Map.find exports name) ~default:Not_verdicts
+              | Some (Structure { values; _ }) ->
+                  Option.value_map (Map.find values name) ~default:Not_verdicts
                     ~f:ownership_of_value
               | Some (Standard | Unknown) | None -> Not_verdicts)
         | _ -> ()

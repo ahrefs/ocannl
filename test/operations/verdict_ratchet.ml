@@ -4201,6 +4201,14 @@ let agreement_controls =
       "",
       "Other.Verdict.gated",
       Unread );
+    ( "the readers agree that a structure including its own Verdict module does not include Verdict",
+      "module C = struct module Verdict = Local_printer include Verdict end\n",
+      "C.gated",
+      Unread );
+    ( "the readers agree that a Verdict module an opened structure binds is not Verdict",
+      "module M = struct module Verdict = Local_printer end\nopen M\n",
+      "Verdict.gated",
+      Unread );
     ( "the readers agree that a claim name a local structure binds is its own",
       "open Verdict.Claims\n\
        module Checks = struct let gated ~when_:_ ~on:_ _ _ = () end\n\

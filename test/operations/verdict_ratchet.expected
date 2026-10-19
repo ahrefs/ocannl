@@ -606,6 +606,8 @@ the readers agree that a claim name past an open of another module is ambiguous:
 the readers agree that an alias of Verdict past an open of another module is ambiguous: true
 the readers agree that a module taking over the name Verdict is not Verdict: true
 the readers agree that a path through another module's Verdict is not Verdict: true
+the readers agree that a structure including its own Verdict module does not include Verdict: true
+the readers agree that a Verdict module an opened structure binds is not Verdict: true
 the readers agree that a claim name a local structure binds is its own: true
 the readers agree that a claim name the source binds is its own: true
 names the qualified remedy for a quantified claim past an open of another module: true

@@ -596,8 +596,10 @@ since moved into the resolver, were re-run against the resolver and replaced in 
 qualifiers, and the line-break rows on bindings, qualifiers, opens and ambiguity). Every run used
 tools/mutation-run.sh on the named module and the focused verdict_ratchet alias, exited 1 on
 exactly the listed false claims, and restored the source byte-for-byte with cmp. The runs came in
-three batches, controls being added between them; each batch's baseline exited 0
-(`20261019T120541Z-43268`, `20261019T121617Z-58901`, `20261019T122119Z-22070`).
+four batches, controls being added between them; each batch's baseline exited 0
+(`20261019T120541Z-43268`, `20261019T121617Z-58901`, `20261019T122119Z-22070`,
+`20261019T123158Z-40198`). The two rows marked "local review" answer the pre-PR codex review, which
+found that a structure's own `Verdict` module was resolved outside the structure.
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
@@ -617,6 +619,8 @@ three batches, controls being added between them; each batch's baseline exited 0
 | `gated` is a gated form | `verdict_scan.ml`: `gated` dropped from the forms the claim resolver completes | Failed: `refuses a population gate behind a partially applied gated boolean wrapper`; `names a gated boolean claim it cannot complete instead of counting it clean`; the other gated-boolean refusals; every agreement control that reads a claim | `20261019T121326Z-84164` |
 | A gated claim is told ambiguous where the resolver says so | `verdict_scan.ml`: every reached claim marked certain | Failed: refuses a gate on a population name an unmodelled open brings in; the three ambiguous agreement controls | `20261019T121719Z-97540` |
 | A gated name nothing binds is Verdict's | `verdict_scan.ml`: a free gated name not read | Failed: `reads a gated claim nothing binds as Verdict's, its name being Verdict's alone` | `20261019T121353Z-5453` |
+| A structure's items resolve in the scope it builds up, its own modules included (local review) | `verdict_callee.ml`: a structure's includes resolved in the scope around it | Failed: `the readers agree that a structure including its own Verdict module does not include Verdict` | `20261019T123212Z-49565` |
+| An open of a structure brings in the modules it binds (local review) | `verdict_callee.ml`: an open of a structure brings its values alone | Failed: `the readers agree that a Verdict module an opened structure binds is not Verdict` | `20261019T123229Z-57983` |
 | The ambiguity remedy is named in the refusal | `verdict_ratchet.ml`: the remedy never added | Failed: names the qualified remedy for a quantified claim past an open of another module | `20261019T121413Z-15477` |
 
 The shipped shape, re-seeded into the corpus: in `test/operations/placement_store.ml`, run 8's gate
