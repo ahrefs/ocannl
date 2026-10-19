@@ -831,28 +831,31 @@ module type C_syntax_config = sig
   (** Lines emitted verbatim before a [Vectorized]-typed loop's [for] statement (gh-ocannl-164),
       e.g. guarded [#pragma clang loop vectorize(enable)] / [#pragma GCC ivdep]. An empty list
       renders the loop as a plain serial [for] — the legal fallback, mirroring
-      [hardware_index = None]. Used when explicit vector emission ([vector_bytes]) is disabled or
-      the loop body is ineligible for it. *)
+      [hardware_index = None]. Used when explicit vector emission ([vector_file.bytes]) is disabled
+      or the loop body is ineligible for it. *)
 
-  val vector_bytes : int
-  (** Vector register width in bytes for explicit SIMD rendering of [Vectorized] loops via GCC/Clang
-      vector extensions (the [Vectorized] codegen follow-up of gh-ocannl-164 /
-      docs/proposals/watch-ocannl-README-md-347818d3.md): eligible loop bodies emit vector-typed
-      loads, arithmetic and stores in [lanes = vector_bytes / element size] chunks plus a serial
-      remainder loop, instead of relying on the compiler's auto-vectorizer (which e.g. cannot
+  val vector_file : Vector_file.t
+  (** The vector register file of the explicit-SIMD renderings, its width and its register count as
+      one value (gh-ocannl-1399), so that a backend overriding the width cannot inherit a count of
+      [0] and silently lose the register tile.
+
+      The width ([vector_file.bytes]): vector register width in bytes for explicit SIMD rendering of
+      [Vectorized] loops via GCC/Clang vector extensions (the [Vectorized] codegen follow-up of
+      gh-ocannl-164 / docs/proposals/watch-ocannl-README-md-347818d3.md): eligible loop bodies emit
+      vector-typed loads, arithmetic and stores in [lanes = bytes / element size] chunks plus a
+      serial remainder loop, instead of relying on the compiler's auto-vectorizer (which e.g. cannot
       reassociate strict-FP reductions — the [Vectorized] retype carries that permission, like
       [Swap]). A recognized accumulation body renders as independent accumulator chains with a
       horizontal reduce at loop exit (gh-ocannl-468; [`Vec_extensions] only). [0] disables explicit
-      emission ([vectorize_pragma] fallback). *)
+      emission ([vectorize_pragma] fallback).
 
-  val vector_registers : int
-  (** How many vector registers the [vector_bytes] file has (gh-ocannl-1285): what the
-      register-tiled [Tile_mma]'s column cap {!Register_tile.rn_cap} fits to, the same count the
-      backend reports as [hardware_limits.simd_vector_registers] so the seeding and this renderer
-      agree. [0] where [vector_bytes] is [0]. *)
+      The count ([vector_file.registers], gh-ocannl-1285): what the register-tiled [Tile_mma]'s
+      column cap {!Register_tile.rn_cap} fits to, the same file the backend reports as
+      [hardware_limits.simd_vector] so the seeding and this renderer agree. [0] where the width is
+      [0], and on the [`Packed_struct] backends, which render no register tile. *)
 
   val vector_style : [ `Vec_extensions | `Packed_struct ]
-  (** How eligible [Vectorized] loops emit explicit vector code when [vector_bytes > 0].
+  (** How eligible [Vectorized] loops emit explicit vector code when [vector_file.bytes > 0].
       [`Vec_extensions] (CPU): GCC/Clang [vector_size] types, unaligned [__builtin_memcpy]
       loads/stores, vector-infix arithmetic. [`Packed_struct] (GPU, gh-ocannl-463; llm.c's
       [Packed128], llmc/cuda_utils.cuh): the backend's [vec_typ_of_prec] aggregate is loaded and
@@ -2168,8 +2171,7 @@ struct
   let async_copy = None
   let parallel_grid_syntax = `None
   let parallel_grid_chunks = 1
-  let vector_bytes = 0
-  let vector_registers = 0
+  let vector_file = Vector_file.none
   let vector_style = `Vec_extensions
   let shared_decl_prefix = None
   let restrict_keyword = Some "restrict"
@@ -3282,7 +3284,7 @@ module C_syntax (B : C_syntax_config) = struct
      {!Backend_intf.simd_lanes_for} for why the width degrades per loop instead of being one number
      per machine, and for what the floor protects. *)
   let vec_lanes_for ~prec ~extent =
-    simd_lanes_for ~vector_bytes:B.vector_bytes ~elt_bytes:(Ops.prec_in_bytes prec) ~extent
+    simd_lanes_for ~vector_bytes:B.vector_file.bytes ~elt_bytes:(Ops.prec_in_bytes prec) ~extent
 
   (* The [`Packed_struct] rendering's own gate (gh-ocannl-1295). It does no vector arithmetic: it
      moves whole [vector_bytes] packs and computes every lane as a scalar, so the SIMD-arithmetic
@@ -3292,7 +3294,7 @@ module C_syntax (B : C_syntax_config) = struct
      float precision that is the storage precision of every store target, as [lane_expr] requires of
      every load. A storage/compute seam (Metal's fp8, stored as a byte and computed in f32) declines
      here rather than reinterpreting a byte buffer as a [float4_t]. *)
-  let packed_lanes prec = B.vector_bytes / Ops.prec_in_bytes prec
+  let packed_lanes prec = B.vector_file.bytes / Ops.prec_in_bytes prec
 
   let packed_prec_ok ~store_precs prec =
     (match prec with
@@ -5418,8 +5420,8 @@ module C_syntax (B : C_syntax_config) = struct
            — is the schedule's to carry ([Tile_mma.tile], gh-ocannl-619) and otherwise the
            renderer's [Register_tile.default]: RM = 4; RN up to 3 vector columns on 16-register
            files (AVX2, SSE), 6 on 32-register files (NEON, AVX-512) — [Register_tile.rn_cap] over
-           the backend's [vector_registers], tinyBLAS's budget. The rows and columns the full passes
-           do not cover are narrower register tiles of the same form (gh-ocannl-620,
+           the backend's [vector_file.registers], tinyBLAS's budget. The rows and columns the full
+           passes do not cover are narrower register tiles of the same form (gh-ocannl-620,
            [Register_tile.coverage]): a band of [m mod RM] rows, and a column tail of the leftover
            columns as whole vectors plus one PARTIAL vector — zeros past its width on load, only its
            width stored — so no edge is ever scalar code. (A scalar column cost about a vector slot
@@ -5459,8 +5461,8 @@ module C_syntax (B : C_syntax_config) = struct
           in
           let* () =
             no_test
-              ~reason:(Printf.sprintf "vector_bytes = %d < 8" B.vector_bytes)
-              (B.vector_bytes < 8)
+              ~reason:(Printf.sprintf "vector_bytes = %d < 8" B.vector_file.bytes)
+              (B.vector_file.bytes < 8)
           in
           let* () =
             no_test ~reason:"debug_log_from_routines (logged runs stay serial and deterministic)"
@@ -5544,15 +5546,15 @@ module C_syntax (B : C_syntax_config) = struct
              file renders (gh-ocannl-575, gh-ocannl-621), by operand reuse alone now that the
              columns [bw = rn * lanes] does not cover are a narrower vector tile rather than scalar
              code (gh-ocannl-620); the register-pressure cap stays keyed on the MACHINE's register
-             file ([vector_registers], gh-ocannl-1285), since stepping down does not shrink it. The
-             model and the fit rules a request must pass live in [Register_tile], where the sketch
-             seeding consults the same functions to propose the alternatives it times. *)
+             file ([vector_file.registers], gh-ocannl-1285), since stepping down does not shrink it.
+             The model and the fit rules a request must pass live in [Register_tile], where the
+             sketch seeding consults the same functions to propose the alternatives it times. *)
           let elt_bytes = Ops.prec_in_bytes prec in
-          let vector_bytes = B.vector_bytes and vector_registers = B.vector_registers in
+          let file = B.vector_file in
           let* { Register_tile.rm; rn; lanes } =
             match tile with
             | Some t -> (
-                match Register_tile.check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t with
+                match Register_tile.check ~file ~elt_bytes ~m ~n t with
                 | Ok () -> Some t
                 | Error why ->
                     (declinef ctx)
@@ -5560,20 +5562,20 @@ module C_syntax (B : C_syntax_config) = struct
                       (Register_tile.to_string t) why (describe ());
                     None)
             | None -> (
-                match Register_tile.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
+                match Register_tile.default ~file ~elt_bytes ~m ~n with
                 | Some t -> Some t
-                | None when Register_tile.rn_cap ~vector_registers < 1 ->
+                | None when Register_tile.rn_cap ~vector_registers:file.registers < 1 ->
                     (declinef ctx)
                       "Tile_mma register tiling declined (a %d-register vector file holds no \
                        register tile): %s"
-                      vector_registers (describe ());
+                      file.registers (describe ());
                     None
                 | None ->
                     (declinef ctx)
                       "Tile_mma register tiling declined (n = %d below the vector width (lanes = \
                        %d)): %s"
                       n
-                      (vector_bytes / max 1 elt_bytes)
+                      (file.bytes / max 1 elt_bytes)
                       (describe ());
                     None)
           in
@@ -6353,7 +6355,7 @@ module C_syntax (B : C_syntax_config) = struct
   and try_vectorize ctx ({ i; from_; to_; body; _ } as loop) () : PPrint.document option =
     let open PPrint in
     try
-      if B.vector_bytes < 8 || from_ <> 0 || Utils.debug_log_from_routines () then
+      if B.vector_file.bytes < 8 || from_ <> 0 || Utils.debug_log_from_routines () then
         raise Vectorization_declined;
       let extent = to_ + 1 in
       let stmts = nonempty_stmts body in
@@ -6577,7 +6579,7 @@ module C_syntax (B : C_syntax_config) = struct
       (match B.vector_style with
       | `Vec_extensions -> ()
       | `Packed_struct -> raise Vectorization_declined);
-      if B.vector_bytes < 8 || from_ <> 0 || Utils.debug_log_from_routines () then
+      if B.vector_file.bytes < 8 || from_ <> 0 || Utils.debug_log_from_routines () then
         raise Vectorization_declined;
       (* Two accumulator targets: a memory cell (the ordinary form), or the scope LOCAL of a widened
          reduction (gh-ocannl-639: the loop sits inside the accumulator's [Local_scope], its update
@@ -6635,8 +6637,8 @@ module C_syntax (B : C_syntax_config) = struct
          {!Backend_intf.simd_reduce_lanes_for}. *)
       let lanes =
         match
-          simd_reduce_lanes_for ~vector_bytes:B.vector_bytes ~elt_bytes:(Ops.prec_in_bytes prec)
-            ~extent
+          simd_reduce_lanes_for ~vector_bytes:B.vector_file.bytes
+            ~elt_bytes:(Ops.prec_in_bytes prec) ~extent
         with
         | Some l -> l
         | None -> raise Vectorization_declined

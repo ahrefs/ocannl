@@ -62,7 +62,7 @@ let is_single = Fissioned_chain.is_single
 let is_composite = Fissioned_chain.is_composite
 
 (* The small menu (see the header), for every search here: stated before the first search. It pins
-   the cc vector width too ([Fissioned_chain.vector_bytes]). *)
+   the cc vector file too ([Fissioned_chain.vector_file]). *)
 let () = Fissioned_chain.small_menu ()
 let expansion_key = "autotune_round_expansion"
 

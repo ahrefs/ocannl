@@ -1309,10 +1309,8 @@ let () =
      relationship, not a restated number. *)
   let default_coverage ~m ~n =
     let limits = Context.hardware_limits (Context.auto ()) in
-    let vector_bytes = limits.Ir.Backend_intf.simd_vector_bytes in
-    let vector_registers = limits.Ir.Backend_intf.simd_vector_registers in
     RT.coverage ~m ~n
-      (Option.value_exn (RT.default ~vector_bytes ~vector_registers ~elt_bytes:4 ~m ~n))
+      (Option.value_exn (RT.default ~file:limits.Ir.Backend_intf.simd_vector ~elt_bytes:4 ~m ~n))
   in
   let full_blocks ~m ~n (cov : RT.coverage) =
     Printf.sprintf "full blocks %dx%d of %dx%d" cov.m_full cov.n_full m n

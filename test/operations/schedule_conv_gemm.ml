@@ -122,6 +122,12 @@ let advertised_tile_divides ~m ~n ~k =
 
 (* Deterministic operands so sibling graphs compute identical values (forward code is consumed by
    compilation, so each leg builds its own graph). *)
+(* The device's vector file at a pinned 16-byte width, its register count kept: the C-backend legs
+   below seed under it so their seed counts do not follow the host's width. Stated as a whole
+   [simd_vector], width and count, so neither is left to a default (gh-ocannl-1399). *)
+let narrowed_to_16 (device : Ir.Backend_intf.hardware_limits) =
+  { device with simd_vector = { device.simd_vector with bytes = 16 } }
+
 let make_x tag =
   NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 11; 11; 4 ]
     ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
@@ -172,7 +178,7 @@ let () =
     let ctx = Context.auto () in
     (* Pin the vector width so the C-backend seed-count assertion is backend-independent (the check
        always passes is_cpu; only [limits] would otherwise vary per device). *)
-    let limits = { (Context.hardware_limits ctx) with Ir.Backend_intf.simd_vector_bytes = 16 } in
+    let limits = narrowed_to_16 (Context.hardware_limits ctx) in
     let transform (opt : LL.optimized) =
       site := Autotune.detect_conv opt.LL.llc;
       n_seeds := List.length (Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits opt);
@@ -420,9 +426,7 @@ let () =
      form. The conv-alone graph carries its own [Zero_out], so the proposals are the serial pipeline
      and its Grid twin (whose zero expansion adopts the same geometry). === *)
   if on_cpu then (
-    let limits =
-      { (Context.hardware_limits (Context.auto ())) with Ir.Backend_intf.simd_vector_bytes = 16 }
-    in
+    let limits = narrowed_to_16 (Context.hardware_limits (Context.auto ())) in
     let seeds = ref [] in
     (let _, _, y = make_conv_s2v "cvs2_p" in
      let transform (opt : LL.optimized) =
@@ -1012,9 +1016,7 @@ let () =
     (x, kern, y)
   in
   if on_cpu then (
-    let limits =
-      { (Context.hardware_limits (Context.auto ())) with Ir.Backend_intf.simd_vector_bytes = 16 }
-    in
+    let limits = narrowed_to_16 (Context.hardware_limits (Context.auto ())) in
     let want12 =
       let _, _, y = make_conv_s2_r12 "cvs2b_r" in
       run_plain "cvs2b_ref" y
