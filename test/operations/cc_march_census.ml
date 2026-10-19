@@ -351,10 +351,10 @@ let build (emit_dir : string) =
   Utils.settings.output_debug_files_in_build_directory <- true;
   let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
   Generated.init ~backend_name;
-  (* The width this child's renderer reads, which is what its register-tile geometries are ranked
-     and fit against: the seeds below are computed from the same number, never restated. *)
-  let vector_bytes = Cc_backend.vector_bytes_setting () in
-  let vector_registers = Cc_backend.vector_registers_setting () in
+  (* The vector file this child's renderer reads, width and register count, which is what its
+     register-tile geometries are ranked and fit against: the seeds below are computed from the same
+     value, never restated. *)
+  let file = Cc_backend.vector_file_setting () in
   let nodes = ref [] in
   let mk =
     let next = ref 8100 in
@@ -530,8 +530,7 @@ let build (emit_dir : string) =
     let comp = comp_prec Ir.Ops.bfloat16 in
     let lanes =
       Option.map
-        (Ir.Register_tile.default ~vector_bytes ~vector_registers
-           ~elt_bytes:(Ir.Ops.prec_in_bytes comp) ~m:mma_m ~n:mma_n)
+        (Ir.Register_tile.default ~file ~elt_bytes:(Ir.Ops.prec_in_bytes comp) ~m:mma_m ~n:mma_n)
         ~f:(fun t -> t.Ir.Register_tile.lanes)
     in
     match
@@ -572,9 +571,7 @@ let build (emit_dir : string) =
   let default_rows ~prec ~what ~anchors =
     let elt_bytes = Ir.Ops.prec_in_bytes (comp_prec prec) in
     let geometry =
-      Option.map
-        (Ir.Register_tile.default ~vector_bytes ~vector_registers ~elt_bytes ~m:mma_m ~n:mma_n)
-        ~f:(fun tile ->
+      Option.map (Ir.Register_tile.default ~file ~elt_bytes ~m:mma_m ~n:mma_n) ~f:(fun tile ->
           {
             site = "n192";
             tile;
@@ -640,14 +637,11 @@ let build (emit_dir : string) =
         let elt_bytes = Ir.Ops.prec_in_bytes (comp_prec prec) in
         List.concat_map sites ~f:(fun (site, n) ->
             let requests =
-              (match
-                 Ir.Register_tile.default ~vector_bytes ~vector_registers ~elt_bytes ~m:mma_m ~n
-               with
+              (match Ir.Register_tile.default ~file ~elt_bytes ~m:mma_m ~n with
                 | Some t -> [ (None, t) ]
                 | None -> [])
-              @ List.map
-                  (Ir.Register_tile.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m:mma_m
-                     ~n) ~f:(fun t -> (Some t, t))
+              @ List.map (Ir.Register_tile.alternatives ~file ~elt_bytes ~m:mma_m ~n) ~f:(fun t ->
+                  (Some t, t))
             in
             List.map requests ~f:(fun (tile, (g : Ir.Register_tile.t)) ->
                 let seeded = Option.is_some tile in

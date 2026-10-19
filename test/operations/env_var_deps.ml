@@ -1022,12 +1022,12 @@ let pipeline_module = [ "Ir"; "Schedule" ]
    [width_limits_type_home], gives the labels that mark a limits update. A program reads the width
    when its own modules, or a program-local library it links, name such a value
    (`Context.Cc_backend.vector_bytes_setting`, under an alias or an `open` too), project such a
-   field off a record (`limits.simd_vector_bytes`, or a record pattern), or update a limits record
-   leaving such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits
-   with simd_vector_bytes = 16 }` keeps the device's register count, which the width scales --
-   staging#1094's worked case). Every rule running it declares or pins [width_key]'s variable; a
-   library with inline tests answers for itself, through its `(inline_tests (deps …))` and each
-   per-module rule running its runner.
+   field off a record (`limits.simd_vector`, or a record pattern), or update a limits record leaving
+   such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits with
+   native_fp16_arithmetic = false }` keeps the device's vector file; staging#1094's worked case
+   pinned the width alone and kept the device's register count, which the width scales). Every rule
+   running it declares or pins [width_key]'s variable; a library with inline tests answers for
+   itself, through its `(inline_tests (deps …))` and each per-module rule running its runner.
 
    Asked for is the width key alone. The auto width also follows the SIMD and arch flags and the
    compiler the probe runs through, but those reach it only through the auto probe, as they reach

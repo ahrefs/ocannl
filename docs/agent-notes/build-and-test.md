@@ -1417,8 +1417,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `{ base with … }`, overwriting any label of the type and leaving a width field to a non-constant
   base. A constant base is `Ir.Backend_intf.no_hardware_limits` spelled in full (or through
   a module alias every binding of which names `Ir.Backend_intf`, with no module on the path rebound
-  by the file), or a name every binding of which is a constant record or a function returning one. staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
-  keeps the device's register count, so it is a read. Every rule running such a program declares or
+  by the file), or a name every binding of which is a constant record or a function returning one. `{ device_limits with
+  native_fp16_arithmetic = false }` keeps the device's `simd_vector`, so it is a read. Every rule running such a program declares or
   pins the variable, or depends on `(universe)`. A library with inline tests is a program of its
   own: its `(inline_tests (deps …))` and every per-module rule running its runner answer for it. A
   `setenv` whose value reads the variable back through `%{env:…}` pins nothing: `Scan`'s pin walk
@@ -1426,7 +1426,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   SIMD/arch-flag keys move the auto width only through the probe every compiled program runs. A
   test that merely constructs limits and lets codegen read the width inside the library is the
   `Context.compile` route above. Field names match without types, so an unrelated
-  `.simd_vector_bytes` costs a declaration, never a stale pass. The golden lists the derived values,
+  `.simd_vector` costs a declaration, never a stale pass. The golden lists the derived values,
   fields and record type, and each reading stanza; a `Cc_backend` that reads the key outside every
   named value, or whose values no longer reach it, and a lost anchor (module, fields or record type
   not found) are refused rather than deriving no reader.

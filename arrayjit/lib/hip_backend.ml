@@ -1575,8 +1575,7 @@ end = struct
               device qualifies: limits are min-over-devices, so code compiled once must be valid
               wherever it links. Precision combinations are decided per call by [mma_syntax]. *)
            mma = (if mma_supported () then Some Hip_mma.capability else None);
-           simd_vector_bytes = 0;
-           simd_vector_registers = 0;
+           simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured false on gfx1151; see the field. *)

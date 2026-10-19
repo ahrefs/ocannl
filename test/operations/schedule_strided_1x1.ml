@@ -380,7 +380,14 @@ type probed = {
    seeds — exactly as the tuner's two flavors see them. *)
 let probe ~tag s =
   let seed_limits =
-    if on_cpu then [ device_limits; { device_limits with Ir.Backend_intf.simd_vector_bytes = 16 } ]
+    if on_cpu then
+      [
+        device_limits;
+        {
+          device_limits with
+          Ir.Backend_intf.simd_vector = { device_limits.simd_vector with bytes = 16 };
+        };
+      ]
     else [ device_limits ]
   in
   let is_gpu = not on_cpu and is_cpu = on_cpu in

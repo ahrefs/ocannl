@@ -384,7 +384,7 @@ val sketch_seed_params :
     combinations the backend supports at one accumulator width but not the other (gh-ocannl-545:
     CUDA's bf16 has no wmma accumulator of its own); on the C backends: operand-precision uniformity
     (f32/f64), the fused accumulation form, micro-kernel column extent at least one vector of lanes
-    ([limits.simd_vector_bytes]), and transposed-B storage for shapes that read B in place. Builder
+    ([limits.simd_vector]), and transposed-B storage for shapes that read B in place. Builder
     preconditions the schedule builders settle identically for every tile completion — the
     zero-expansion row-axis rule, and the GPU sketches' companion-coverage rule per fusion flavor —
     also pre-filter here, as the family tree's construction-time refutations (gh-ocannl-577): a seed

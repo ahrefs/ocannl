@@ -9,7 +9,9 @@
     [tile]), the renderer honours or declines ([C_syntax.try_register_tile]), and the sketch seeding
     proposes alternatives of ({!alternatives}), so the tuner picks by timing. This module is a leaf
     — below [Low_level], which stores the geometry on its [Tile_mma] statement — so the ranking
-    model and the fit rules live in one place both the emission and the seeding consult. *)
+    model and the fit rules live in one place both the emission and the seeding consult. Every entry
+    point that reads both the vector width and the register count takes them as one {!Vector_file.t}
+    (gh-ocannl-1399), so no caller can pass a width with a count of [0] by omission. *)
 
 open Base
 
@@ -63,9 +65,9 @@ val rn_cap : vector_registers:int -> int
 (** The default model's [rn] ceiling: the largest [rn] whose {!rm_cap}-row pass fits
     [vector_registers] by {!resident_floor} -- 6 on 32-register files, 3 on 16, [0] when not even
     one column fits. Keyed on the register COUNT, which the hardware limits carry
-    ([Backend_intf.hardware_limits.simd_vector_registers]), not on the vector width: a 16-byte file
-    is 32 registers on NEON and 16 on SSE, and keying on the width gave SSE NEON's 4 x 6, which
-    spills there (gh-ocannl-1285). The A/B behind keeping 6 on 32 registers, where the model's
+    ([Backend_intf.hardware_limits.simd_vector]), not on the vector width: a 16-byte file is 32
+    registers on NEON and 16 on SSE, and keying on the width gave SSE NEON's 4 x 6, which spills
+    there (gh-ocannl-1285). The A/B behind keeping 6 on 32 registers, where the model's
     {!live_registers} reads 34 (gh-ocannl-1285, AVX-512 Zen 5 and NEON M-series): at tail-free sites
     (f32 n = 96, 192, 384, where 4 x 6 is the default with no tie involved) 4 x 6 won 75 of 100
     serial pairs against 4 x 5 and 4 x 4 on AVX-512, 67 of 100 on NEON. *)
@@ -87,8 +89,7 @@ type coverage = { m_full : int; n_full : int; tail_widths : int list }
 
 val coverage : m:int -> n:int -> t -> coverage
 
-val default :
-  vector_bytes:int -> vector_registers:int -> elt_bytes:int -> m:int -> n:int -> t option
+val default : file:Vector_file.t -> elt_bytes:int -> m:int -> n:int -> t option
 (** The renderer's own choice for an [m x n] site when the schedule carries no geometry:
     [rm = min 4 m], and [(lanes, rn)] ranked over the widths the file renders (the ladder, narrowed
     to those [n] can fill) and [rn <= rn_cap] by a ranking model in vector-issue slots per unit of
@@ -107,21 +108,13 @@ val default :
     smaller one holds fewer {!live_registers} (gh-ocannl-1180). [None] when even the narrowest width
     exceeds [n] (or [m], [n] < 1). *)
 
-val check :
-  vector_bytes:int ->
-  vector_registers:int ->
-  elt_bytes:int ->
-  m:int ->
-  n:int ->
-  t ->
-  (unit, string) Result.t
+val check : file:Vector_file.t -> elt_bytes:int -> m:int -> n:int -> t -> (unit, string) Result.t
 (** Whether the renderer can honour [t] on an [m x n] site: [lanes] is a width the file renders and
     [n] fills, the register file holds some {!rm_cap}-row tile at all, [rm <= m], [rn * lanes <= n],
     and {!live_registers} within {!budget}. The [Error] names the violated rule — it becomes the
     decline diagnostic. *)
 
-val alternatives :
-  vector_bytes:int -> vector_registers:int -> elt_bytes:int -> m:int -> n:int -> t list
+val alternatives : file:Vector_file.t -> elt_bytes:int -> m:int -> n:int -> t list
 (** The geometries the sketch seeding proposes beside the renderer's {!default}, for the tuner to
     time: at the widest width [n] fills and the default's [rm], the largest tail-free [rn >= 2] (the
     width divides [n] exactly, so the site is one tile body: what a tail-bearing default's second,
@@ -136,8 +129,7 @@ val alternatives :
     (where the tied tile is the budget cap), three below, one on the common shapes, none where the
     width divides the extent. *)
 
-val rm_twin :
-  vector_bytes:int -> vector_registers:int -> elt_bytes:int -> m:int -> n:int -> t option
+val rm_twin : file:Vector_file.t -> elt_bytes:int -> m:int -> n:int -> t option
 (** The two-row twin of {!default} (gh-ocannl-947), which the sketch seeding proposes beside
     {!alternatives} only under the [autotune_register_tile_rm_twin] config key (off by default): on
     a site whose default takes {!rm_cap} rows, [rm = 2] at the default's [lanes] with the largest

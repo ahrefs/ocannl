@@ -79,7 +79,8 @@ let cost ~n ~rm ~lanes ~rn =
   let ceil_div a b = (a + b - 1) / b in
   (ceil_div n lanes * (rm + 1)) + (rm * ceil_div n (rn * lanes))
 
-let default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
+let default ~(file : Vector_file.t) ~elt_bytes ~m ~n =
+  let { Vector_file.bytes = vector_bytes; registers = vector_registers } = file in
   if m < 1 || n < 1 then None
   else
     let rm = default_rm ~m in
@@ -114,7 +115,8 @@ let default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
             | c -> c)
         | c -> c)
 
-let check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t =
+let check ~(file : Vector_file.t) ~elt_bytes ~m ~n t =
+  let { Vector_file.bytes = vector_bytes; registers = vector_registers } = file in
   let ladder = ladder_for ~vector_bytes ~elt_bytes ~n in
   let full_ladder = simd_lane_ladder ~vector_bytes ~elt_bytes in
   if t.rm < 1 || t.rn < 1 || t.lanes < 1 then
@@ -142,11 +144,9 @@ let check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t =
          (live_registers t) (budget ~vector_registers) vector_registers)
   else Ok ()
 
-let alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
-  match
-    ( default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n,
-      ladder_for ~vector_bytes ~elt_bytes ~n )
-  with
+let alternatives ~(file : Vector_file.t) ~elt_bytes ~m ~n =
+  let { Vector_file.bytes = vector_bytes; registers = vector_registers } = file in
+  match (default ~file ~elt_bytes ~m ~n, ladder_for ~vector_bytes ~elt_bytes ~n) with
   | None, _ | _, [] -> []
   | Some dflt, lanes :: _ ->
       let rm = default_rm ~m in
@@ -190,22 +190,20 @@ let alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
       in
       List.map rns ~f:(fun rn -> { rm; rn; lanes })
       |> List.filter ~f:(fun t -> not (equal t dflt))
-      |> List.filter ~f:(fun t ->
-          Result.is_ok (check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t))
+      |> List.filter ~f:(fun t -> Result.is_ok (check ~file ~elt_bytes ~m ~n t))
 
 (* Two rows, at the default's width, with every vector column the budget affords beside them: the
    least register pressure and the most A-reuse a two-row tile has, which is the question a timing
    answers and the model cannot (at rm = 2 each B vector is reloaded twice as often, so the model
    ranks it below the four-row default everywhere). *)
-let rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n =
-  match default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
+let rm_twin ~(file : Vector_file.t) ~elt_bytes ~m ~n =
+  let vector_registers = file.registers in
+  match default ~file ~elt_bytes ~m ~n with
   | Some dflt when dflt.rm = rm_cap ->
       let rm = 2 in
       let rn = min (rn_budget_cap ~vector_registers ~rm) (n / dflt.lanes) in
       let t = { rm; rn; lanes = dflt.lanes } in
       (* Distinct from the default and from every alternative by construction: those all take the
          default's four rows. *)
-      if rn >= 1 && Result.is_ok (check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t) then
-        Some t
-      else None
+      if rn >= 1 && Result.is_ok (check ~file ~elt_bytes ~m ~n t) then Some t else None
   | _ -> None

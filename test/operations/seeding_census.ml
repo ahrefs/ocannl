@@ -48,9 +48,13 @@ let gpu_limits = mma_limits ()
 let f16_only_limits = mma_limits ~formats:[ Ir.Backend_intf.(Mma_f16, Mma_f16, Mma_f32) ] ()
 
 let cpu_limits =
-  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 16; simd_vector_registers = 16 }
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    simd_vector = { Ir.Vector_file.bytes = 16; registers = 16 };
+  }
 
-let narrow_cpu_limits = { cpu_limits with Ir.Backend_intf.simd_vector_bytes = 4 }
+let narrow_cpu_limits =
+  { cpu_limits with Ir.Backend_intf.simd_vector = { Ir.Vector_file.bytes = 4; registers = 16 } }
 
 (* The census lines on stderr for reading, outside the golden. *)
 let show ~where c = List.iter (Autotune.seeding_census_lines ~where c) ~f:(Stdio.eprintf "%s\n")

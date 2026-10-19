@@ -71,6 +71,9 @@ let nonzero name (a : float array) =
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
+(* A vector register file, its width and its register count together (gh-ocannl-1399). *)
+let vf bytes registers = { Ir.Vector_file.bytes; registers }
+
 (* === The model === *)
 let () =
   let shapes =
@@ -97,29 +100,31 @@ let () =
   in
   Stdio.printf "model: vector_bytes vector_registers elt_bytes m n -> default | alternatives\n";
   List.iter shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
-      let dflt = RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n in
-      let alts = RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n in
+      let dflt = RT.default ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n in
+      let alts = RT.alternatives ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n in
       Stdio.printf "  %2d %2d %d %3d %4d -> %s | %s\n" vector_bytes vector_registers elt_bytes m n
         (Option.value_map dflt ~default:"none" ~f:RT.to_string)
         (if List.is_empty alts then "none"
          else String.concat ~sep:", " (List.map alts ~f:RT.to_string)));
   let accepted t (vector_bytes, vector_registers, elt_bytes, m, n) =
-    Result.is_ok (RT.check ~vector_bytes ~vector_registers ~elt_bytes ~m ~n t)
+    Result.is_ok (RT.check ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n t)
   in
   p_all "the default geometry passes the fit rules on every shape" shapes ~f:(fun shape ->
       let vector_bytes, vector_registers, elt_bytes, m, n = shape in
-      match RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
+      match RT.default ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n with
       | Some t -> accepted t shape
       | None -> false);
   p_all "no alternative repeats the default" shapes
     ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
-      let dflt = RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n in
-      List.for_all (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) ~f:(fun t ->
-          not (Option.equal RT.equal (Some t) dflt)));
+      let dflt = RT.default ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n in
+      List.for_all
+        (RT.alternatives ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n)
+        ~f:(fun t -> not (Option.equal RT.equal (Some t) dflt)));
   p_all "every alternative passes the fit rules" shapes ~f:(fun shape ->
       let vector_bytes, vector_registers, elt_bytes, m, n = shape in
-      List.for_all (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) ~f:(fun t ->
-          accepted t shape));
+      List.for_all
+        (RT.alternatives ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n)
+        ~f:(fun t -> accepted t shape));
   (* Pass counts at one width: what the price ranks by, so "ties the default" is "takes as many
      passes". *)
   let passes ~n (t : RT.t) = (n + RT.width t - 1) / RT.width t in
@@ -127,8 +132,12 @@ let () =
     "every alternative is the largest tail-free width, the register-budget cap with a tail of at \
      most one vector, or the largest tile tying a tail-bearing default"
     shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
-      let dflt = Option.value_exn (RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) in
-      List.for_all (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n) ~f:(fun t ->
+      let dflt =
+        Option.value_exn (RT.default ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n)
+      in
+      List.for_all
+        (RT.alternatives ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n)
+        ~f:(fun t ->
           (* The cap: the largest [rn] the budget admits beside [rm] rows, or the column extent. *)
           let cap = min ((RT.budget ~vector_registers - t.rm) / (t.rm + 1)) (n / t.lanes) in
           let tail_free rn = n % (rn * t.lanes) = 0 in
@@ -152,12 +161,12 @@ let () =
   in
   p_all "a tail-bearing default takes the fewest vector columns its pass count admits" tie_sites
     ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
-      match RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
+      match RT.default ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n with
       | None -> true
       | Some d -> n % RT.width d = 0 || d.rn = 1 || passes ~n { d with rn = d.rn - 1 } > passes ~n d);
   p_all "the largest tile tying a tail-bearing default is seeded" tie_sites
     ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
-      match RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
+      match RT.default ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n with
       | None -> true
       | Some d ->
           let top = { d with rn = min (RT.rn_cap ~vector_registers) (n / d.lanes) } in
@@ -166,7 +175,7 @@ let () =
           || top.rn = d.rn
           || passes ~n top = passes ~n d
              && List.mem
-                  (RT.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n)
+                  (RT.alternatives ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n)
                   top ~equal:RT.equal);
   (* The ranking's own structure, not a restated pick: every candidate's vector columns cost the
      same [1 + 1/rm] whatever its [rn], so at ONE width the row count scales the columns' term and
@@ -182,8 +191,7 @@ let () =
   p_all "at a single-width file the row count never changes the chosen columns" sites
     ~f:(fun (elt_bytes, m, n) ->
       let cols m =
-        Option.map (RT.default ~vector_bytes:16 ~vector_registers:32 ~elt_bytes ~m ~n) ~f:(fun t ->
-            (t.rn, t.lanes))
+        Option.map (RT.default ~file:(vf 16 32) ~elt_bytes ~m ~n) ~f:(fun t -> (t.rn, t.lanes))
       in
       Option.equal (fun (a, b) (c, d) -> a = c && b = d) (cols m) (cols 64));
   (* The two-row twin (gh-ocannl-947), proposed only under [autotune_register_tile_rm_twin]. *)
@@ -191,13 +199,13 @@ let () =
     (String.concat ~sep:", "
        (List.map shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
             Option.value_map
-              (RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n)
+              (RT.rm_twin ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n)
               ~default:"none" ~f:RT.to_string)));
   p_all "the rm twin takes two rows at the default's width exactly where the default takes four"
     shapes ~f:(fun (vector_bytes, vector_registers, elt_bytes, m, n) ->
       match
-        ( RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m ~n,
-          RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n )
+        ( RT.default ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n,
+          RT.rm_twin ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n )
       with
       | Some d, Some t -> d.rm = RT.rm_cap && t.rm = 2 && t.lanes = d.lanes
       | Some d, None -> d.rm < RT.rm_cap
@@ -205,7 +213,7 @@ let () =
   p_all "the rm twin passes the fit rules, and one more vector column would not" shapes
     ~f:(fun shape ->
       let vector_bytes, vector_registers, elt_bytes, m, n = shape in
-      match RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n with
+      match RT.rm_twin ~file:(vf vector_bytes vector_registers) ~elt_bytes ~m ~n with
       | None -> true
       | Some t -> accepted t shape && not (accepted { t with rn = t.rn + 1 } shape));
   let dividing = RT.coverage ~m:64 ~n:64 { rm = 4; rn = 2; lanes = 8 } in
@@ -220,9 +228,8 @@ let () =
     (let cov = RT.coverage ~m:64 ~n:512 { rm = 4; rn = 6; lanes = 8 } in
      cov.n_full = 480 && List.equal Int.equal cov.tail_widths [ 8; 8; 8; 8 ]);
   p "a column extent below one vector has no default and no alternatives"
-    (Option.is_none (RT.default ~vector_bytes:32 ~vector_registers:16 ~elt_bytes:4 ~m:64 ~n:7)
-    && List.is_empty (RT.alternatives ~vector_bytes:32 ~vector_registers:16 ~elt_bytes:4 ~m:64 ~n:7)
-    );
+    (Option.is_none (RT.default ~file:(vf 32 16) ~elt_bytes:4 ~m:64 ~n:7)
+    && List.is_empty (RT.alternatives ~file:(vf 32 16) ~elt_bytes:4 ~m:64 ~n:7));
   (* The column cap is fitted to the register COUNT by the resident floor (gh-ocannl-1285): the
      widest four-row tile keeps every operand resident and one more column would not. *)
   p_all "the column cap is the widest four-row tile resident on the register file"
@@ -236,7 +243,7 @@ let () =
     (RT.budget ~vector_registers:16 = RT.live_registers { rm = 4; rn = 3; lanes = 8 }
     && RT.budget ~vector_registers:32 = RT.live_registers { rm = 4; rn = 6; lanes = 4 });
   p "a file that holds no four-row tile has no default"
-    (Option.is_none (RT.default ~vector_bytes:16 ~vector_registers:4 ~elt_bytes:4 ~m:64 ~n:512))
+    (Option.is_none (RT.default ~file:(vf 16 4) ~elt_bytes:4 ~m:64 ~n:512))
 
 (* === The emission === *)
 let n = 64
@@ -318,9 +325,8 @@ let () =
       ~f:skipped
   else begin
     let limits = Context.hardware_limits (Context.auto ()) in
-    let vector_bytes = limits.Ir.Backend_intf.simd_vector_bytes in
-    let vector_registers = limits.Ir.Backend_intf.simd_vector_registers in
-    let ladder = RT.simd_lane_ladder ~vector_bytes ~elt_bytes in
+    let file = limits.Ir.Backend_intf.simd_vector in
+    let ladder = RT.simd_lane_ladder ~vector_bytes:file.bytes ~elt_bytes in
     let lanes = List.hd_exn ladder in
     (* Two vector columns: within the budget on every file (4*2 + 4 + 2 = 14 <= 19) and, at 16
        lanes, still no wider than n = 64. *)
@@ -341,10 +347,14 @@ let () =
     (* One vector column past what the budget admits beside four rows, at the narrowest width the
        file renders, so that the budget rule — not the width rule — is the one that fires. *)
     let over_budget =
-      { RT.rm = 4; rn = ((RT.budget ~vector_registers - 4) / 5) + 1; lanes = List.last_exn ladder }
+      {
+        RT.rm = 4;
+        rn = ((RT.budget ~vector_registers:file.registers - 4) / 5) + 1;
+        lanes = List.last_exn ladder;
+      }
     in
     p "an over-budget request is refused by the fit rules"
-      (match RT.check ~vector_bytes ~vector_registers ~elt_bytes ~m:n ~n over_budget with
+      (match RT.check ~file ~elt_bytes ~m:n ~n over_budget with
       | Error why -> String.is_substring why ~substring:"budget"
       | Ok () -> false);
     let got_ob, census_ob =
@@ -361,7 +371,7 @@ let () =
     in
     p "an over-width request declines to the scalar fallback" (scalar_fallback census_ow);
     (* The relationship: the unrequested rendering IS [Register_tile.default] of the site. *)
-    let dflt = Option.value_exn (RT.default ~vector_bytes ~vector_registers ~elt_bytes ~m:n ~n) in
+    let dflt = Option.value_exn (RT.default ~file ~elt_bytes ~m:n ~n) in
     let _, census_d = compile_run ~name:"tmg_default" ~leg:(Tensorized None) dflt_t in
     let src_d = Generated.read "tmg_default" in
     p "the unrequested rendering carries the model's default geometry"
@@ -371,7 +381,7 @@ let () =
     (* The two-row twin of this site's default (gh-ocannl-947): the widest two-row tile the file's
        budget admits: 2x10 of 4 lanes on NEON and 2x5 of 8 on AVX2, each with a 24-column tail at n
        = 64, and 2x4 of 16 on AVX-512, where the column extent caps it tail-free. *)
-    let twin = Option.value_exn (RT.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m:n ~n) in
+    let twin = Option.value_exn (RT.rm_twin ~file ~elt_bytes ~m:n ~n) in
     let%op twin_t = ma * mb in
     let got_tw, census_tw = compile_run ~name:"tmg_rm_twin" ~leg:(Tensorized (Some twin)) twin_t in
     let src_tw = Generated.read "tmg_rm_twin" in
@@ -409,7 +419,7 @@ let () =
     let limits = Context.hardware_limits (Context.auto ()) in
     let lanes =
       List.hd_exn
-        (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes ~elt_bytes)
+        (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes ~elt_bytes)
     in
     (* A 16-column width at the file's widest f32 lanes -- [4x1] of 16, [4x2] of 8, [4x4] of 4 --
        capped at the widest four-row tile the register file holds: a 16-register file at 4 lanes
@@ -422,7 +432,7 @@ let () =
         RT.rm = 4;
         rn =
           min (16 / lanes)
-            (RT.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector_registers);
+            (RT.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector.registers);
         lanes;
       }
     in
@@ -558,25 +568,25 @@ let () =
      site of the gh-575 sweep. Enumerated on the pre-schedule lowering, so it holds on every
      backend. *)
   let synthetic =
-    { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 16; simd_vector_registers = 32 }
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      simd_vector = { Ir.Vector_file.bytes = 16; registers = 32 };
+    }
   in
-  let vector_registers = synthetic.simd_vector_registers in
+  let file = synthetic.simd_vector in
   let tiles = whole_tiles ~limits:synthetic in
   Stdio.printf "seeds: whole-triple bm0 tiles on 16-byte vectors at %dx%dx%d: %s\n" m nn k
     (String.concat ~sep:", " (List.map tiles ~f:(Option.value_map ~default:"auto" ~f:RT.to_string)));
   p "the whole-triple seeds carry one auto geometry then exactly the model's alternatives"
     (List.equal (Option.equal RT.equal) tiles
-       (None
-       :: List.map
-            (RT.alternatives ~vector_bytes:16 ~vector_registers ~elt_bytes ~m ~n:nn)
-            ~f:Option.some));
+       (None :: List.map (RT.alternatives ~file ~elt_bytes ~m ~n:nn) ~f:Option.some));
   p_exists "the site offers at least one alternative to time" tiles ~f:Option.is_some;
   (* A register file too small for any four-row tile is refused at the seeding, through the
      capability judgment the family tree refutes its tensorized branch with, rather than seeded and
      declined at the renderer (gh-ocannl-1285). *)
   let refutation registers =
     Autotune.tensorized_capability_refutation ~is_gpu:false ~is_cpu:true
-      ~limits:{ synthetic with simd_vector_registers = registers }
+      ~limits:{ synthetic with simd_vector = { file with registers } }
       ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single
   in
   p "a register file holding no four-row tile withholds the tensorized family"
@@ -588,9 +598,8 @@ let () =
   Stdio.printf "seeds with the rm twin gate on: %s\n"
     (String.concat ~sep:", " (List.map gated ~f:(Option.value_map ~default:"auto" ~f:RT.to_string)));
   p "the gate adds exactly the model's two-row twin after the alternatives"
-    (List.equal (Option.equal RT.equal) gated
-       (tiles @ [ RT.rm_twin ~vector_bytes:16 ~vector_registers ~elt_bytes ~m ~n:nn ])
-    && Option.is_some (RT.rm_twin ~vector_bytes:16 ~vector_registers ~elt_bytes ~m ~n:nn));
+    (List.equal (Option.equal RT.equal) gated (tiles @ [ RT.rm_twin ~file ~elt_bytes ~m ~n:nn ])
+    && Option.is_some (RT.rm_twin ~file ~elt_bytes ~m ~n:nn));
   if not on_cpu then
     skipped "a seeded alternative instantiates through the sketch and renders its geometry"
   else begin
