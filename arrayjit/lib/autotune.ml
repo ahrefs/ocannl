@@ -1804,7 +1804,24 @@ let extend_with_privatize ~accum_prec ~static_indices sched (seg : LL.optimized)
     records the chain and the [F_split] prelude replays it before the split. Every [Swap] is
     confirmed [Op_legal] on the code it is applied to — [Swap]'s reassociation license covers the
     accumulation it reorders, but it is checked per site, not assumed — and the [Split_reduce] is
-    re-probed on the interchanged code, so a returned site is still seedable exactly as proposed. *)
+    re-probed on the interchanged code, so a returned site is still seedable exactly as proposed.
+
+    {3 The coalesced reduction pair (gh-ocannl-1414)}
+
+    A reduction over two loops can be splittable on neither. Backprop lowers a small-batch parameter
+    gradient as [for b, s, o: g[o] += dy[b,s,o]] with [b = 8]: [b] is below [sr_red_min], and
+    splitting [s] fails because [b], a reduction loop, encloses it and pins no component of the
+    cell. Where no single loop of a site splits, its two outermost reduction loops are tried
+    together: the cell loops below the outer one are hoisted as above, the pair is merged by a
+    [Coalesce] ({!coalesce_reduction_pair}), and the split is re-probed on the merged loop. The site
+    records the pair; the prelude replays the interchange, then the coalescing, then the split. The
+    mechanism knows nothing about batches: an attention out projection's [(h, e)] contraction over a
+    small output is the same two-loop band. Where the coalescing declines -- an operand read along
+    one loop of the pair only, such as the positional table [wpe[s, o]] inlined into the first
+    layers' residual stream, has no flattened address -- the pair is interchanged instead, one more
+    [Swap] in the chain, and the inner loop is split with the outer one running inside each block. A
+    site that one loop already splits keeps that split, so every site detected before is proposed
+    unchanged. *)
 
 type sr_site = {
   sr_axis : Idx.symbol;  (** The reduction loop to split: the largest-extent legal candidate. *)
@@ -1822,6 +1839,10 @@ type sr_site = {
       (** The enabling interchange (gh-ocannl-537), as [(outer, inner)] pairs applied {e in order}
           before the [Split_reduce]: each hoists an accumulation-cell loop outside [sr_axis]. Empty
           when the site is splittable as lowered. *)
+  sr_coalesce : (Idx.symbol * Idx.symbol) option;
+      (** The reduction pair [(outer, inner)] that a [Coalesce], applied after [sr_swaps] and before
+          the split, merges into the loop [sr_axis] names (gh-ocannl-1414,
+          {!coalesce_reduction_pair}). [None] when [sr_axis] is a loop of the lowering. *)
 }
 [@@deriving sexp_of]
 
@@ -1868,15 +1889,34 @@ let sr_hoist_swaps ~path ~axis ~needed : (Idx.symbol * Idx.symbol) list option =
               done);
           Some (List.rev !swaps))
 
+(* A copy whose traced store and optimize context a probe may extend freely. *)
+let sr_hermetic (o : LL.optimized) =
+  {
+    o with
+    LL.traced_store = Hashtbl.copy o.LL.traced_store;
+    LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+  }
+
+(* gh-ocannl-1414: the reduction pair [(outer, inner)] of [opt] merged into one loop, as the merged
+   loop's fresh symbol and the coalesced code (on a hermetic copy), or [None] where [Sched.Coalesce]
+   declines -- the pair is not a perfect nest of two [Serial] loops, or some access does not read it
+   as two adjacent plain iterators over unpadded axes. The op's own recognizer decides, as for the
+   split. *)
+let coalesce_reduction_pair ?(static_indices = []) (opt : LL.optimized) ~outer ~inner :
+    (Idx.symbol * LL.optimized) option =
+  let op, merged = Sched.coalesce ~outer ~inner in
+  match Sched.op_legality opt op with
+  | Sched.Op_illegal _ | Sched.Op_unknown _ -> None
+  | Sched.Op_legal -> (
+      match Sched.apply_classified ~static_indices [ op ] (sr_hermetic opt) with
+      | coalesced -> Some (merged, coalesced)
+      | exception Outcome.Cause_at _ -> None)
+
 let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site list =
   let acc = ref [] in
-  let hermetic (o : LL.optimized) =
-    {
-      o with
-      LL.traced_store = Hashtbl.copy o.LL.traced_store;
-      LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
-    }
-  in
+  let hermetic = sr_hermetic in
+  (* Each loop's body, by its index: a site's split runs this body inside its block loop. *)
+  let loop_body = Hashtbl.create (module Idx.Symbol) in
   (* The interchanged code, once every [Swap] of the chain is confirmed [Op_legal] against the code
      it is applied to ({!Sched.schedule_legality} walks the chain exactly as application will —
      [Swap]'s reassociation license covers accumulations, but each site is checked, not assumed).
@@ -1916,10 +1956,10 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
            pins no component), so outer/larger candidates dominate. *)
         |> List.sort ~compare:(fun (_, a, _) (_, b, _) -> Int.compare b a)
       in
-      let legal =
+      let single =
         List.find_map candidates ~f:(fun (s, n, _) ->
             match splittable opt ~axis:s ~tn with
-            | `Legal -> Some (s, n, [])
+            | `Legal -> Some (s, n, [], None)
             | `No -> None
             | `Hoist needed -> (
                 (* gh-537: hoist and re-probe. Both the interchange and the split are settled on the
@@ -1931,11 +1971,83 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
                     | None -> None
                     | Some swapped -> (
                         match splittable swapped ~axis:s ~tn with
-                        | `Legal -> Some (s, n, swaps)
+                        | `Legal -> Some (s, n, swaps, None)
                         | `No | `Hoist _ -> None))))
       in
-      Option.iter legal ~f:(fun (s, n, swaps) ->
-          if not (List.exists !acc ~f:(fun site -> Idx.equal_symbol site.sr_axis s)) then
+      (* gh-ocannl-1414: no single loop splits, so try the two outermost reduction loops together,
+         after hoisting the cell loops below the outer one, which leaves the pair adjacent: merged
+         into one loop, or, where the coalescing declines, interchanged so that the inner loop leads
+         and the outer one runs inside its split. Each step is settled on the code it acts on: the
+         interchange and the coalescing by their own probes, the split on the loop it splits. *)
+      let pair () =
+        let mentioned s = Array.exists idcs ~f:(Idx.axis_index_mentions_symbol s) in
+        match List.filter enclosing ~f:(fun (s, _, _) -> not (mentioned s)) with
+        | (outer, p, ty) :: (inner, q, ty') :: _
+          when LL.equal_axis_type ty LL.Serial && LL.equal_axis_type ty' LL.Serial -> (
+            let below = List.drop_while path ~f:(fun s -> not (Idx.equal_symbol s outer)) in
+            match sr_hoist_swaps ~path ~axis:outer ~needed:(List.filter below ~f:mentioned) with
+            | None -> None
+            | Some swaps -> (
+                let merged () =
+                  if p * q < sr_red_min then None
+                  else
+                    match apply_swaps swaps with
+                    | None -> None
+                    | Some swapped -> (
+                        match coalesce_reduction_pair ~static_indices swapped ~outer ~inner with
+                        | None -> None
+                        | Some (merged, coalesced) -> (
+                            match splittable coalesced ~axis:merged ~tn with
+                            | `Legal -> Some (merged, p * q, swaps, Some (outer, inner))
+                            | `No | `Hoist _ -> None))
+                in
+                (* A broadcast operand read along only one loop of the pair -- a positional table
+                   [wpe[s, o]] inlined into a residual stream -- has no flattened address, but the
+                   interchange needs none. *)
+                let interchanged () =
+                  if q < sr_red_min then None
+                  else
+                    let swaps = swaps @ [ (outer, inner) ] in
+                    match apply_swaps swaps with
+                    | None -> None
+                    | Some swapped -> (
+                        match splittable swapped ~axis:inner ~tn with
+                        | `Legal -> Some (inner, q, swaps, None)
+                        | `No | `Hoist _ -> None)
+                in
+                match merged () with Some _ as site -> site | None -> interchanged ()))
+        | _ -> None
+      in
+      let legal = match single with Some _ -> single | None -> pair () in
+      (* The split redirects only its target to partials: every other write under the loops it
+         rewrites would keep running once per block, and the block loop is the one the presets
+         parallelize, so blocks would race on it (or, kept serial, a non-additive write would see
+         its iterations reordered). So a site whose outermost rewritten loop -- the outer loop of a
+         pair, else the split loop -- encloses a write of any other node is declined. Lowering gives
+         each assignment its own nest, so only hand-built or fused code meets this. *)
+      let legal =
+        Option.filter legal ~f:(fun (s, _, _, coalesce) ->
+            let outermost = match coalesce with Some (o, _) -> o | None -> s in
+            match Hashtbl.find loop_body outermost with
+            | None -> false
+            | Some body -> Set.for_all (Sched.written_nodes body) ~f:(Ir.Tnode.equal tn))
+      in
+      (* The loops a site's prelude rewrites: its split loop, and the pair a coalescing merges into
+         it. Two accumulations in one nest find the same loops; a site sharing any with a site
+         already taken would replay a rewrite of loops the first prelude has removed (two
+         coalescings of one pair mint two merged symbols, so comparing the split loops alone would
+         keep both). For two uncoalesced sites this is the split loop's identity, as before. *)
+      let rewritten s coalesce =
+        s :: (match coalesce with Some (o, i) -> [ o; i ] | None -> [])
+      in
+      Option.iter legal ~f:(fun (s, n, swaps, coalesce) ->
+          let mine = rewritten s coalesce in
+          if
+            not
+              (List.exists !acc ~f:(fun site ->
+                   List.exists (rewritten site.sr_axis site.sr_coalesce) ~f:(fun x ->
+                       List.mem mine x ~equal:Idx.equal_symbol)))
+          then
             acc :=
               {
                 sr_axis = s;
@@ -1945,6 +2057,7 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
                 sr_cost = List.fold enclosing ~init:1 ~f:(fun c (_, n, _) -> c * max 1 n);
                 sr_dynamic = dynamic;
                 sr_swaps = swaps;
+                sr_coalesce = coalesce;
               }
               :: !acc)
   in
@@ -1955,6 +2068,7 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
         walk enclosing b
     | LL.If { body; _ } -> walk enclosing body
     | LL.For_loop { index; from_; to_; body; axis; _ } ->
+        Hashtbl.set loop_body ~key:index ~data:body;
         walk (enclosing @ [ (index, to_ - from_ + 1, axis) ]) body
     | LL.Set { tn; idcs; llsc; _ } ->
         (* rmw accumulation: the value re-reads the written node ([op_legality] then enforces the
@@ -1972,13 +2086,18 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
   List.stable_sort (List.rev !acc) ~compare:(fun a b -> Int.compare b.sr_cost a.sr_cost)
 
 (* The whole-routine prelude splitting [sites], each at its block count: per site, the gh-537
-   enabling interchange (empty for a site splittable as lowered), then the split itself. Sites are
-   distinct statements, so their preludes compose. Shared by the search's [F_split] seeds and the
-   untuned plan's split ({!seeded_split_sites}, gh-ocannl-1325). *)
+   enabling interchange (empty for a site splittable as lowered), the gh-ocannl-1414 coalescing of
+   its reduction pair (re-minting the merged loop under the symbol detection probed), then the split
+   itself. Sites are distinct statements, so their preludes compose. Shared by the search's
+   [F_split] seeds and the untuned plan's split ({!seeded_split_sites}, gh-ocannl-1325). *)
 let split_reduce_prelude (sites : (sr_site * int) list) : Sched.schedule =
   List.concat_map sites ~f:(fun (s, num_blocks) ->
       let op, _, _, _ = Sched.split_reduce ~axis:s.sr_axis ~target:s.sr_target ~num_blocks in
-      List.map s.sr_swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner }) @ [ op ])
+      List.map s.sr_swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner })
+      @ (match s.sr_coalesce with
+        | None -> []
+        | Some (outer, inner) -> [ Sched.Coalesce { outer; inner; merged = s.sr_axis } ])
+      @ [ op ])
 
 (** {2 Analytic cost-model scoring (gh-ocannl-491, the selection half)}
 
@@ -2560,7 +2679,7 @@ let fiss_sketch_label ~fine entries =
    entries' separator. *)
 let split_site_label (s, num_blocks) =
   let name = Ir.Tnode.debug_name s.sr_target and id = Ir.Tnode.id s.sr_target in
-  Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s"
+  Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s%s"
     (if String.equal name id then name else name ^ "#" ^ id)
     (Idx.symbol_ident s.sr_axis) s.sr_red s.sr_out s.sr_cost num_blocks
     (if s.sr_dynamic then " dyn" else "")
@@ -2571,6 +2690,9 @@ let split_site_label (s, num_blocks) =
         ^ String.concat ~sep:"+"
             (List.map swaps ~f:(fun (outer, inner) ->
                  Idx.symbol_ident outer ^ "/" ^ Idx.symbol_ident inner)))
+    (match s.sr_coalesce with
+    | None -> ""
+    | Some (outer, inner) -> " coalesce:" ^ Idx.symbol_ident outer ^ "*" ^ Idx.symbol_ident inner)
 
 let split_sites_label sites =
   Printf.sprintf "F_split[%s]" (String.concat ~sep:"," (List.map sites ~f:split_site_label))
@@ -4223,7 +4345,7 @@ let seeded_split_backend backend = String.is_substring backend ~substring:"cuda"
 let seeded_split_min_serial () =
   let raw =
     String.strip
-      (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"4096")
+      (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"1024")
   in
   match Int.of_string_opt raw with
   | Some n when n >= 0 -> n
@@ -4244,15 +4366,25 @@ let seeded_split_threads = 32768
    output cell (the accumulation's trip count over its cell count) is at least [min_serial], each at
    the block count of the search's menu ([32; 128; 512], at most half the split loop) that comes
    closest to {!seeded_split_threads} first-pass threads without exceeding it, else the smallest. A
-   scatter site ([Set_dynamic]) is left to the search. *)
+   scatter site ([Set_dynamic]) is left to the search.
+
+   The block count also stays within the square root of the chain (gh-ocannl-1414): the combine
+   reads one partial per block, so beyond it the combine's serial chain outgrows the first pass's. A
+   1024-row chain into one cell would otherwise take 512 blocks of 2 rows each; it takes 32 of 32.
+   The cap binds the fallback too: a chain shorter than 32 * 32, reachable only below the default
+   threshold, is not split. Every split of gh-ocannl-1325's b256 measurement chains 32768 rows and
+   keeps its count. *)
 let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized) :
     (sr_site * int) list =
   if min_serial <= 0 || not (seeded_split_backend backend) then []
   else
     List.filter_map (split_reduce_sites ~static_indices opt) ~f:(fun s ->
-        if s.sr_dynamic || s.sr_cost / s.sr_out < min_serial then None
+        let chain = s.sr_cost / s.sr_out in
+        if s.sr_dynamic || chain < min_serial then None
         else
-          let fitting = List.filter [ 512; 128; 32 ] ~f:(fun b -> 2 * b <= s.sr_red) in
+          let fitting =
+            List.filter [ 512; 128; 32 ] ~f:(fun b -> 2 * b <= s.sr_red && b * b <= chain)
+          in
           match List.find fitting ~f:(fun b -> s.sr_out * b <= seeded_split_threads) with
           | Some b -> Some (s, b)
           | None -> Option.map (List.last fitting) ~f:(fun b -> (s, b)))
@@ -6221,9 +6353,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           List.iter (List.drop sr_ranked max_split_reduce_sites) ~f:(fun s ->
               let detail =
                 Printf.sprintf
-                  "site %s red%d out%d cost%d%s evicted by autotune_split_reduce_max_sites=%d"
+                  "site %s red%d out%d cost%d%s%s evicted by autotune_split_reduce_max_sites=%d"
                   (Ir.Tnode.debug_name s.sr_target) s.sr_red s.sr_out s.sr_cost
                   (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n)
+                  (if Option.is_some s.sr_coalesce then " coalesced" else "")
                   max_split_reduce_sites
               in
               logf "split_reduce: %s" detail;
