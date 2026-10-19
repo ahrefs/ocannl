@@ -16,3 +16,7 @@ model_default with placement levels returns a routine with correct values: true
 selection ran (scored the default pipeline and the placement leaves): true
 the placement pick fired and the label carries it: true
 the pick materializes y: true
+a clean run's op applications are counted, and the pick fires there: true
+the count is stable across clean runs: true
+the injected transform bug fired: true
+an untyped transform exception in the picked compile propagates, never retried from the default placements: true

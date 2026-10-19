@@ -1121,6 +1121,20 @@ files.
   GPU-only paths only on a GPU sweep: `schedule_refusal_scan` requires every untyped raise bound
   before `apply_typed` to carry its own `(* invariant: ... *)` comment.
   `Schedule.with_transform_fault` injects one for tests (`schedule_refusal_classification`).
+- **The same holds one level up, for the sketch builder and the advisory fallbacks** (gh-ocannl-1390).
+  `sketch_schedule` no longer converts every `Invalid_argument` escaping the builder into
+  `Illegal_schedule "Autotune.sketch"`: a builder precondition (no site of the family's kind, Grid
+  companions that do not align, no coalescible pair) raises `Sketch_families.refuse` — that same
+  cause and census key — at its own site, and `schedule_refusal_scan` holds `sketch_families.ml`
+  to the marker rule up to `sketch_schedule`. The catches around builder and apply calls in the
+  seeding probes (`seeded_ranker`, `seeded_segment_judgment`, the sink probe, the staffed weights)
+  take `Cause_at` only, and `model_default`'s placement pick falls back to the default placements
+  through `compile_advisory ~on_unrecovered`, which hands it the CLASSIFIED cause alone; it used to
+  catch `Invalid_argument`/`User_error` out of the whole compile, which is also what a fatal
+  failure re-raises as. A probe that needs "did not apply" catches `Cause_at`, never
+  `Invalid_argument`. Seams: `Autotune.with_sketch_builder_fault`; `model_default_placements`
+  locates its injected fault by a clean run's op-application count (an elementwise graph: one whose
+  consumers are scalar reductions applies no default-pipeline op on cc).
 ## Placement and dispatchable baselines
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.

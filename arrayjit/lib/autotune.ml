@@ -4206,24 +4206,36 @@ let model_default_enabled =
 let geometry_lattice_enabled =
   lazy (Utils.get_global_flag ~default:false ~arg_name:"model_default_geometry_lattice")
 
-let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp bindings =
+let compile_advisory ?name ?on_fallback ?fallback_if ?on_unrecovered lowered_transform ctx comp
+    bindings =
   match
     Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp bindings
   with
   | Ok result -> result
   | Error (Outcome.Fatal _ as failure) -> Outcome.raise_failure failure
-  | Error (Outcome.Classified classified as failure) ->
+  | Error (Outcome.Classified classified as failure)
+    when not (Option.value_map fallback_if ~default:true ~f:(fun f -> f ())) -> (
       (* [fallback_if] is what keeps the retry from duplicating a genuine failure: a transform that
          already degraded to the default pipeline has nothing to fall back TO, so recompiling would
          just repeat the same failing compile (and, on a resource failure, aggravate it) before
          raising the same exception. Such callers say [false] here and the original exception
-         propagates through the public exception contract. *)
-      if not (Option.value_map fallback_if ~default:true ~f:(fun f -> f ())) then
-        Outcome.raise_failure failure;
+         propagates through the public exception contract -- or, given [on_unrecovered], the
+         classified cause goes to the caller, which may know a fallback of its own (gh-ocannl-1390:
+         [model_default]'s placement pick). A fatal failure never reaches it. *)
+      match on_unrecovered with
+      | Some f -> f classified
+      | None -> Outcome.raise_failure failure)
+  | Error (Outcome.Classified classified) -> (
       (* Typed compiler rejection is the advisory fallback boundary. Fatal failures are propagated
          above without paying for a second compile. *)
       Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
-      Context.compile ?name ctx comp bindings
+      (* [Context.compile], spelled out so that a classified failure of the fallback itself also
+         reaches [on_unrecovered]: there is then nothing left to fall back to here either. *)
+      match Context.compile_outcome ?name ~provenance:Outcome.User_schedule ctx comp bindings with
+      | Ok result -> result
+      | Error (Outcome.Classified classified) when Option.is_some on_unrecovered ->
+          (Option.value_exn on_unrecovered) classified
+      | Error failure -> Outcome.raise_failure failure)
 
 (* gh-ocannl-1254: a candidate's tile-MMA operand loads under the backend's own description of its
    arms: their load rule and fragment structure. *)
@@ -4648,19 +4660,22 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
 
 (* gh-ocannl-1253, the [auto] gate's test: the seeded sketch's ranking score strictly below the
    preset's, on the segment alone, under the gate's capacity and cache bandwidth. Either failing to
-   apply or to score keeps the preset. *)
+   build, to apply or to score keeps the preset. Only a typed refusal fails: any other exception is
+   a builder or transform bug and propagates (gh-ocannl-1390). *)
 let seeded_ranker ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth p pre =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let rank sched =
-    match Sched.apply_classified ~static_indices sched (scratch_of pre) with
-    | exception (Outcome.Cause_at _ | Invalid_argument _) -> None
+    match Sched.apply_classified ~static_indices (sched ()) (scratch_of pre) with
+    | exception Outcome.Cause_at _ -> None
     | post ->
         Option.map
           (segments_ranking ~capacity ~cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
              [ post ])
           ~f:fst
   in
-  match (rank (sketch_schedule ~accum_prec ~p pre), rank (seeded_preset ~limits pre)) with
+  match
+    (rank (fun () -> sketch_schedule ~accum_prec ~p pre), rank (fun () -> seeded_preset ~limits pre))
+  with
   | Some sketch, Some plain -> Float.(sketch < plain)
   | _ -> false
 
@@ -4700,16 +4715,13 @@ let seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_be
           ]
       with
       | _ -> Ok p
-      | exception ((Outcome.Cause_at _ | Invalid_argument _) as exn) ->
+      | exception Outcome.Cause_at (_, cause) ->
+          (* Typed refusals only (gh-ocannl-1390): an untyped exception from the builder or the
+             transforms is a bug, not this segment's decline. *)
           logf "seeded_default: %s declined on a segment; keeping the preset"
             (sketch_params_label p);
-          let detail =
-            match exn with
-            | Outcome.Cause_at (_, cause) -> Outcome.detail_of_cause cause
-            | Invalid_argument detail -> detail
-            | _ -> ""
-          in
-          Error (sketch_params_label p ^ " declined on the segment: " ^ detail))
+          Error
+            (sketch_params_label p ^ " declined on the segment: " ^ Outcome.detail_of_cause cause))
 
 let seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre =
   Result.ok (seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre)
@@ -4780,7 +4792,7 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
                 [ Sched.apply_classified ~static_indices sched (scratch_of pre) ]
             with
             | _ -> Some n_swaps
-            | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+            | exception Outcome.Cause_at _ ->
                 logf "seeded_default: the reduction sink declined on a segment; keeping the preset";
                 None))
   in
@@ -5481,44 +5493,50 @@ let model_default ?name ?report ctx comp bindings =
     (* With the model on the default pipeline (no sketch strictly improved on it, or the pick failed
        validation above), the compile that just failed IS the fallback: retrying it would duplicate
        an expensive failure and delay the honest error, so the exception propagates instead. *)
-    let compile_from base_ctx =
-      compile_advisory ?name ~on_fallback
+    let compile_from ?on_unrecovered base_ctx =
+      compile_advisory ?name ~on_fallback ?on_unrecovered
         ~fallback_if:(fun () -> !applied_pick)
         transforms base_ctx comp bindings
     in
     let result =
       match placement_pick with
       | None -> compile_from ctx
-      | Some (mat, inl, fp) -> (
+      | Some (mat, inl, fp) ->
           (* Every reading gets its call, empty or not — the historical context lineage of this
              path, kept as is; skipping would change only context identity, not the decisions. *)
           let ctx' = Context.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
-          match compile_from ctx' with
-          | result ->
-              (* The emitted label carries the placement decision: the in-compile selection only
-                 names the pipeline it chose under those placements. *)
-              let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
-              choice :=
-                {
-                  !choice with
-                  mc_label =
-                    Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
-                      (names fp) !choice.mc_label;
-                };
-              result
-          | exception ((Utils.User_error _ | Invalid_argument _) as exn) ->
-              (* A classified rejection that [compile_advisory] had nothing to fall back to under
-                 the picked placements ([applied_pick] was false: the pick's win was the placement
-                 move itself, so the failing compile was already the default pipeline — under
-                 [ctx'], not under [ctx]). The pick is advisory, so abandon it and rerun the
-                 ordinary selection from the caller's own placements; fatal failures propagate
-                 above. *)
-              logf
-                "model_default: compiling under the picked placements FAILED (%s); recompiling \
-                 from the default placements"
-                (Exn.to_string exn);
-              applied_pick := false;
-              compile_from ctx)
+          let picked = ref true in
+          (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under the
+             picked placements: [applied_pick] was false (the pick's win was the placement move
+             itself, so the failing compile was already the default pipeline — under [ctx'], not
+             under [ctx]), or its fallback to the default pipeline under [ctx'] failed classified
+             too. The pick is advisory, so abandon it and rerun the ordinary selection from the
+             caller's own placements. Only the classified cause comes here (gh-ocannl-1390): a fatal
+             failure — an untyped exception a transform or the builder raised, under
+             [strict_failure_classification] — propagates, rather than being retried from the
+             default placements as one more decline. *)
+          let on_unrecovered (classified : Outcome.classified_cause) =
+            logf
+              "model_default: compiling under the picked placements FAILED (%s); recompiling \
+               from                the default placements"
+              (Exn.to_string (Outcome.exception_of_cause classified.cause));
+            picked := false;
+            applied_pick := false;
+            compile_from ctx
+          in
+          let result = compile_from ~on_unrecovered ctx' in
+          (if !picked then
+             (* The emitted label carries the placement decision: the in-compile selection only
+                names the pipeline it chose under those placements. *)
+             let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
+             choice :=
+               {
+                 !choice with
+                 mc_label =
+                   Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
+                     (names fp) !choice.mc_label;
+               });
+          result
     in
     emit !choice;
     result
@@ -7729,7 +7747,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                              candidate compile would decline it. *)
                           List.filter_map ps ~f:(fun p ->
                               match sketch_schedule ~accum_prec ~p pre with
-                              | exception (Invalid_argument _ | Outcome.Cause_at _) -> None
+                              | exception Outcome.Cause_at _ -> None
                               | sched -> model_score ~static_indices ~limits pre sched)
                           |> List.min_elt ~compare:Float.compare
                           |> Option.map ~f:(fun s -> Float.of_int (List.length key.key_units) *. s))
