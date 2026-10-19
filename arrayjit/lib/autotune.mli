@@ -1394,6 +1394,26 @@ val envelope_legs :
     scoring a measured kernel against the envelope reads the very constants the model ranks with,
     and can say whose they are (gh-ocannl-1006). *)
 
+val ranking_capacity : limits:Ir.Backend_intf.hardware_limits -> int option * int option
+(** The cache capacity (bytes) and device residency (threads) the ranking score
+    ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253) uses: config [model_cache_capacity] ([none]
+    turns the capacity off) over the backend's advisory [cache_capacity_bytes], and its
+    [max_resident_threads]. Both are [Untimed] readings of the device description: only the untimed
+    choosers and the calibration tools call this, never anything {!tune} reaches. *)
+
+val ranking_cache_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's within-capacity tier, in bytes/s: config [model_cache_bandwidth] ([none]
+    turns it off) over the backend's advisory [cache_bandwidth]. An [Untimed] reading, like
+    {!ranking_capacity}. *)
+
+val ranking_ms :
+  limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized list -> (float * float) option
+(** [(rank, bound)] in milliseconds for scheduled kernels run in sequence: the ranking score
+    {!model_default} minimizes and {!model_score}'s roofline lower bound, under {!envelope_legs}'
+    constants and {!ranking_capacity}. [None] without model coverage. For reports
+    ([benchmarks/runners/ocannl/bench_wgrad.ml], [tools/calibrate_cache_capacity.exe]): a ranking
+    score, not a runtime prediction. *)
+
 val model_prefilter : keep_fraction:float -> ('a * float option) list -> ('a * float option) list
 (** The order-preserving pre-filter over model-scored candidates: keeps every unscored ([None])
     candidate — the no-coverage exemption: never dropped, only measured — plus the best
@@ -1653,8 +1673,11 @@ type model_choice = {
       (** ["default"], or the winning candidate's spec label (matching the [autotune_log] labels).
       *)
   mc_model_ms : float option;
-      (** The winner's roofline lower bound in ms — a ranking score, not a runtime prediction;
-          [None] when selection did not run. *)
+      (** The applied winner's roofline lower bound in ms ({!Ir.Cost_model.analyze}'s counts) — not
+          a runtime prediction; [None] when selection did not run. *)
+  mc_rank_ms : float option;
+      (** The winner's ranking score in ms ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253), the
+          quantity the pick minimizes; at least [mc_model_ms], and [None] exactly when it is. *)
   mc_scored : int;
       (** Model evaluations that produced a score (the default pipeline included; the fissioned flow
           also scores per segment). *)
@@ -1701,9 +1724,13 @@ val model_default :
 (** A drop-in for {!Context.compile} that raises the untuned floor (gh-ocannl-491 task 3): inside
     the compile's own transform seam, the untuned default pipeline and the sketch families
     (whole-routine, and per-fission-segment substitutions when the default fissions) are scored with
-    the roofline model, and the model-argmin schedule is applied — zero measurement, one backend
-    compile. Advisory by construction: a candidate without model coverage is never picked over the
-    default, ties go to the default, and missing envelope constants, a disabled default annotator
+    the cost model's ranking score ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253: the roofline,
+    with operand re-reads requested per block and charged at DRAM bandwidth once the working set
+    exceeds the cache capacity, at the cache bandwidth within it — {!ranking_capacity},
+    {!ranking_cache_bandwidth}), and the argmin schedule is applied — zero measurement, one backend
+    compile. The family search's bound stays the distinct-cell floor, below every ranking score.
+    Advisory by construction: a candidate without model coverage is never picked over the default,
+    ties go to the default, and missing envelope constants, a disabled default annotator
     ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
     validation, or compilation failure fall back to the ordinary default pipeline — the reported
     {!model_choice} then says ["default"]. Fatal failures propagate without retrying. Once the
@@ -1789,6 +1816,27 @@ val seeded_split_sites :
     1256 ms, gfx1151 unified memory) where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the
     unsplit plan; elsewhere the result is empty. Exposed for tests. *)
 
+(** Which segments {!seeded_default} seeds (gh-ocannl-1253). *)
+type seed_gate =
+  | Min_reduction of int
+      (** gh-ocannl-1324's threshold: a site whose {!site_reduction_extent} is at least this; [0]
+          disables the seeding. *)
+  | Ranked of { capacity : int option; cache_rate : float option }
+      (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
+          ({!Ir.Cost_model.ranking_seconds}) puts strictly below the default preset of the same
+          segment, scored alone with this cache capacity (bytes; [None]: no DRAM tier) and cache
+          bandwidth (bytes/s; [None]: re-reads within capacity uncharged) — so it seeds exactly
+          where the cross-block re-reads the sketch removes are priced. The geometry and the
+          numerics-preserving candidate set are {!seeded_params}' either way. *)
+
+val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
+(** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]
+    under {!ranking_capacity}'s capacity and {!ranking_cache_bandwidth}, and [Min_reduction 32] —
+    the threshold's measured default — where nothing calibrates either tier: no advisory (Metal, the
+    C backends) and no [model_cache_capacity] / [model_cache_bandwidth] override. An explicit [none]
+    override is a calibration and keeps [Ranked], even with both tiers off. Raises
+    {!Utils.User_error} on anything else. *)
+
 (** What the seeded plan does with one segment (gh-ocannl-1388). *)
 type seeded_segment =
   | Seeded_preset  (** The default preset, as the default pipeline schedules the segment. *)
@@ -1826,7 +1874,12 @@ val seeded_plan :
   seeded_plan option
 (** The plan {!seeded_default} would compile [opt] under, derived on a hermetic copy; [None] where
     that is the plain default pipeline (another backend, scheduling or fission off, the thresholds
-    at 0, or nothing to split, seed or sink). The optional arguments are {!seeded_default}'s. *)
+    at 0, or nothing to split, seed or sink). The optional arguments are {!seeded_default}'s. One
+    exception (gh-ocannl-1253): this is {!tune}'s candidate, so it reads
+    [gpu_default_sketch_min_reduction=auto] as the fallback threshold 32 rather than ranking — a
+    ranked gate reads the device description's [Untimed] fields, which nothing {!tune} reaches may
+    read until the resolved plan joins the search trajectory's identity. Under [auto], the search's
+    floor is the threshold plan. *)
 
 val seeded_plan_digest : seeded_plan -> string
 (** The plan's identity from its content (split sites by target name, extents and block count; the
@@ -1851,6 +1904,7 @@ val refine_segments :
 
 val seeded_transform :
   ?min_reduction:int ->
+  ?seed_gate:seed_gate ->
   ?min_serial:int ->
   ?reduction_sink:bool ->
   ?on_choice:(seeded_choice -> unit) ->
@@ -1868,6 +1922,7 @@ val seeded_transform :
 val seeded_default :
   ?name:string ->
   ?min_reduction:int ->
+  ?seed_gate:seed_gate ->
   ?min_serial:int ->
   ?reduction_sink:bool ->
   ?report:(seeded_choice -> unit) ->
@@ -1886,13 +1941,14 @@ val seeded_default :
     weight gradient, attention's score product cut away from the row maximum's initialization (a
     moved boundary). Such a replacement can change the launch count; every segment outside those
     runs is exactly the default's. On CUDA and HIP only, with automatic scheduling active and
-    fission on; [min_reduction] (default: config [gpu_default_sketch_min_reduction], 32; 0 disables)
-    is the threshold. Every seeded segment is probed alone first (the sketch must apply and pass
-    {!Ir.Low_level.validate_parallel}); a segment that fails keeps the preset, and a classified
-    failure of the whole seeded compile recompiles the default pipeline ({!compile_advisory}). The
-    scalar blocktile pipeline keeps each output's summation order, and only sites whose accumulator
-    is at their storage precision are seeded, so the seeded sketches leave the routine's results
-    bitwise the default's.
+    fission on; [seed_gate] (default: {!seeded_default_gate}, config
+    [gpu_default_sketch_min_reduction], 32) decides which segments seed, and [min_reduction] is
+    [~seed_gate:(Min_reduction n)] (passing both is an [Invalid_argument]). Every seeded segment is
+    probed alone first (the sketch must apply and pass {!Ir.Low_level.validate_parallel}); a segment
+    that fails keeps the preset, and a classified failure of the whole seeded compile recompiles the
+    default pipeline ({!compile_advisory}). The scalar blocktile pipeline keeps each output's
+    summation order, and only sites whose accumulator is at their storage precision are seeded, so
+    the seeded sketches leave the routine's results bitwise the default's.
 
     Before segmenting (on CUDA), the reductions {!seeded_split_sites} admits at [min_serial]
     (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split

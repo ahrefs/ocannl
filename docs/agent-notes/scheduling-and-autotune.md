@@ -590,6 +590,19 @@ files.
   searched without this floor. `seeded_plan_digest` names the plan from its content alone (split
   sites by target name and extents, not by node id or symbol), for the trajectory identity
   gh-ocannl-1253 adds once an untimed input steers the plan.
+- **`gpu_default_sketch_min_reduction=auto` replaces the threshold by the ranking score**
+  (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks strictly
+  below the same segment's preset, scored alone under the device's capacity and cache bandwidth —
+  so it seeds where the cross-block re-reads the sketch removes cost more than its staging adds;
+  without the cache tier, never within capacity, where under the distinct-cell roofline a staged
+  sketch only adds traffic. Geometry and the numerics-preserving candidate set are
+  `seeded_params`' either way, and a device publishing neither constant falls back to 32. The
+  search's seeded-plan candidate (`seeded_plan`, previous bullet) reads `auto` as 32
+  (`seeded_search_gate`, `no_ranker`): a ranked gate reads `Untimed` fields, which nothing `tune`
+  reaches may read until the resolved plan's digest joins the trajectory identity — so under
+  `auto` the search's floor is the threshold plan, not the shipped one, until that follow-up.
+  Its census claim (`test/operations/seeded_default`) pins capacity 0, no cache tier, against
+  threshold 32 and is CUDA/HIP only; on cc the seeded default is off altogether.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only

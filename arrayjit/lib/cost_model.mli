@@ -148,6 +148,94 @@ val roofline_seconds :
     raising either constant never increases the bound. A lower bound only up to the model's
     upper-bound byte/op counts — rank with it, do not predict. *)
 
+(** {2 The ranking score (gh-ocannl-1253)}
+
+    {!analyze} charges distinct cells under a perfect cache: that is what makes it a lower bound,
+    and what scores an untiled contraction exactly at its roofline floor however often its operands
+    are re-read from DRAM — the branch-and-bound over the tiling families then fathoms every sketch.
+    The ranking score is the second, separate quantity the untimed choosers rank by
+    ([Autotune.model_default], the [auto] seeding gate of [Autotune.seeded_default]). The bound is
+    unchanged and keeps serving pruning, pre-filtering, the agreement check and calibration rows;
+    putting a cache model into it would raise [BOUND VIOLATION] whenever a kernel hits in cache.
+
+    Contract:
+    - Global reads are REQUESTED per block: the cells one block touches — its [Grid] loops standing
+      still, {!Affine.fiber_cardinality} over the remaining loop box, capped by the node — times the
+      number of blocks (the product of the enclosing [Grid] extents). An untiled weight gradient
+      under a [Grid] row and a [wg]-thread [Workgroup] requests [M·N·K·elt·(1 + 1/wg)]; a [bm × bn]
+      blocktile [M·N·K·elt·(1/bm + 1/bn)]. Reuse within a block is free (it is what the block's
+      shared tiles and L1 are for); reuse across blocks is what is priced. Global means neither
+      [Local] nor workgroup-shared ({!global_in}): staged tiles and thread-private scratch keep
+      their distinct-cell charge. Per node, the requested bytes are never below {!analyze}'s
+      distinct read bytes.
+    - Two tiers (the wave decision of 2026-10-18 on the measured HIP boxes, where cache-served
+      re-reads ran at 1.5–2.8 TB/s against 235–261 GB/s from DRAM). Past capacity — the working set,
+      per-block bytes times the blocks resident at once ([max_resident_threads] over the kernel's
+      launch block, {!Low_level.launch_dims}, at most the blocks; all blocks when no residency is
+      given), the largest over the kernel's launch nests, exceeding [cache_capacity_bytes] — the
+      requested bytes are charged at the DRAM bandwidth ([peak_memory_bandwidth]). Within it (or
+      with no capacity), they are charged at [cache_bandwidth] beside the distinct bytes at DRAM
+      bandwidth, whichever leg is longer; with no cache bandwidth either, the memory leg is
+      {!analyze}'s distinct bytes at DRAM bandwidth, exactly the roofline. A cache bandwidth below
+      the DRAM one is read as the DRAM one.
+    - Never below the bound: every memory leg is at least the distinct bytes at DRAM bandwidth, so
+      {!ranking_seconds} is at least {!roofline_seconds} over {!analyze}'s counts — and therefore at
+      least any roofline over {!completion_floor}. Monotone: raising the capacity or the cache
+      bandwidth never raises the score.
+
+    Writes, op counts and the opacity flag are {!analyze}'s. *)
+
+type reuse = {
+  ru_requested : (Tnode.t * int) list;
+      (** Per global node read, in first-access order: the bytes its reads request under per-block
+          caching — blocks times per-block cells times byte width, summed over its read accesses,
+          NOT capped by the node's size (re-reads are the point). *)
+  ru_working_set_bytes : int;
+      (** The largest over the kernel's launch nests of per-block global read bytes times resident
+          blocks. *)
+}
+[@@deriving sexp_of]
+
+val global_in : Low_level.optimized -> Tnode.t -> bool
+(** Whether a node lives in global memory under the specialization's placements: neither [Local]
+    (thread-private scratch, {!Tnode.Placements.is_local_peek}) nor a workgroup-shared tile. *)
+
+val reuse_traffic : ?max_resident_threads:int -> is_global:(Tnode.t -> bool) -> Low_level.t -> reuse
+(** The per-block read charge and working set of one kernel (see the section contract). *)
+
+val requested_bytes : summary -> reuse -> int
+(** {!total_bytes} with each global node's read bytes raised to its requested bytes: all the traffic
+    a kernel moves through the memory hierarchy when every cross-block re-read is a request. Never
+    below {!total_bytes}. *)
+
+val spills : ?cache_capacity_bytes:int -> reuse -> bool
+(** Whether the working set exceeds the capacity ([false] without one). *)
+
+val ranking_seconds_of :
+  ?peak_flops:float ->
+  ?peak_memory_bandwidth:float ->
+  ?cache_capacity_bytes:int ->
+  ?cache_bandwidth:float ->
+  summary ->
+  reuse option ->
+  float option
+(** The ranking score of one kernel from its extractions: the larger of the compute leg and the
+    two-tier memory leg (section contract; [None] for the reuse means no per-block charge, the
+    roofline). Bandwidths in bytes/s. [None] when neither peak is given. *)
+
+val ranking_seconds :
+  ?peak_flops:float ->
+  ?peak_memory_bandwidth:float ->
+  ?cache_capacity_bytes:int ->
+  ?cache_bandwidth:float ->
+  ?max_resident_threads:int ->
+  is_global:(Tnode.t -> bool) ->
+  Low_level.t ->
+  float option
+(** {!ranking_seconds_of} over {!analyze} and, when a capacity or a cache bandwidth is given,
+    {!reuse_traffic}. A ranking score, not a runtime prediction — and, unlike {!roofline_seconds},
+    not a lower bound either. *)
+
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 
     The cost model's account of what a node costs to recompute at ONE read site — the flops and

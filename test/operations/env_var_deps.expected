@@ -52,6 +52,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   check_half_prec_constants_cutoff
   cpu_schedule_min_parallel
   debug_log_from_routines
+  debug_log_to_stream_files
   default_prec
   enable_device_only
   exit_stream_teardown_timeout
@@ -62,6 +63,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   gpu_default_reduction_sink
   gpu_default_sketch_min_reduction
   gpu_default_split_reduce_min_serial
+  gpu_elide_covered_zeros
   gpu_fission_keep_mapping
   gpu_lane_all_reduce_simdgroups
   gpu_lane_preamble_reduction
@@ -79,12 +81,15 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   log_config_sourcing
   log_level
   memory_budget
+  model_cache_bandwidth
+  model_cache_capacity
   model_default_schedule
   model_peak_flops
   model_peak_memory_bandwidth
   narrow_compute_f32
   no_config_file
   output_prec_in_ll_files
+  prefer_backend_uniformity
   profile
   schedule_fission
   schedule_log_launches
@@ -175,6 +180,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test bench_mma_writes: Ir.Schedule.apply
   test/operations/dune, test clamped_window_pool: Ir.Schedule.apply
   test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test cost_model_reuse: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test cpu_parallel: Ir.Schedule.apply
   test/operations/dune, test cpu_simd_reduction: Ir.Schedule.apply
   test/operations/dune, test cpu_vectorized: Ir.Schedule.apply
@@ -243,12 +249,14 @@ Programs reading the cc vector width, every rule running which declares or pins 
   bin/dune, executable narrow_gebp_bench: narrow_gebp_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
   bin/dune, executable schedule_bench: schedule_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
   test/operations/dune, executable autotune_fission_sketch: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, executable limits_field_classes: limits_field_classes.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
   test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector_bytes`
   test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
+  test/operations/dune, test schedule_cache_device: schedule_cache_device.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
   test/operations/dune, test schedule_conv_gemm: schedule_conv_gemm.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
   test/operations/dune, test schedule_mma_matmul: schedule_mma_matmul.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
   test/operations/dune, test schedule_strided_1x1: schedule_strided_1x1.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
@@ -343,6 +351,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-gh1133_summary
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
+  test/operations/dune                     @runtest-limits_field_classes
   test/operations/dune                     @runtest-ll_test_ratchet
   test/operations/dune                     @runtest-log_index_width_narrow
   test/operations/dune                     @runtest-log_index_width_wide

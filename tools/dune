@@ -69,3 +69,11 @@
  (name einsum_check)
  (modules einsum_check)
  (libraries base stdio einsum_parser))
+
+; gh-ocannl-1253: the ranking score's cache-capacity calibration -- a working-set sweep of the
+; untiled weight-gradient contraction, next to calibrate_bandwidth.
+
+(executable
+ (name calibrate_cache_capacity)
+ (modules calibrate_cache_capacity)
+ (libraries base stdio utils ir context ocannl))

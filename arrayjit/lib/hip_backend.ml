@@ -1560,6 +1560,10 @@ end = struct
                H.Device.get_attributes (H.Device.get ~ordinal))
          in
          let min_over f = Array.map attrs ~f |> Array.min_elt ~compare:Int.compare in
+         let all_integrated =
+           (not (Array.is_empty attrs))
+           && Array.for_all attrs ~f:(fun (a : H.Device.attributes) -> a.integrated)
+         in
          {
            Backend_intf.max_threads_per_workgroup =
              min_over (fun (a : H.Device.attributes) -> a.max_threads_per_block);
@@ -1663,6 +1667,21 @@ end = struct
               Per-device queries remain calibration follow-up work. *)
            peak_flops = Some 1.0e13;
            peak_memory_bandwidth = Some 6.0e12;
+           (* gh-ocannl-1253: the ranking score's two tiers and residency, read only by the untimed
+              choosers (Untimed, outside the schedule-cache key). Residency is queried --
+              multiprocessors times resident threads per multiprocessor, minimum over devices. The
+              capacity and the cache bandwidth are per class, from benchmarks/gh1253_cells.sh
+              (2026-10-18, d818474a): on a discrete part (tuf, RX 7700S, gfx1102) the requested rate
+              of the untiled weight gradient falls to DRAM between working sets of 1.5 and 3.0 GB
+              across two runs, on a 1.3 TB/s cache plateau against 261 GB/s DRAM; on a unified one
+              (minix, gfx1151) it never reaches DRAM up to the 10.8 GB swept, at 1.7 TB/s against
+              235 GB/s -- so an integrated part has no capacity (no DRAM tier), rather than an
+              invented one. Mixed machines take the discrete class. *)
+           cache_capacity_bytes = (if all_integrated then None else Some (2 * 1024 * 1024 * 1024));
+           cache_bandwidth = Some (if all_integrated then 1.7e12 else 1.3e12);
+           max_resident_threads =
+             min_over (fun (a : H.Device.attributes) ->
+                 a.multiprocessor_count * a.max_threads_per_multiprocessor);
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

@@ -1,8 +1,13 @@
 Optional arguments accepted by lib/ entry points. `implemented` means the bound value has a
 non-discard use; `unimplemented` must therefore be visible to callers as an underscore label.
 
+  lib/calibrate.ml:fit_capacity ?dram_rate -- implemented
   lib/calibrate.ml:stream ?elems -- implemented
   lib/calibrate.ml:stream ?repeats -- implemented
+  lib/calibrate.ml:working_set ?ks -- implemented
+  lib/calibrate.ml:working_set ?m -- implemented
+  lib/calibrate.ml:working_set ?n -- implemented
+  lib/calibrate.ml:working_set ?repeats -- implemented
   lib/mixed_prec.ml:Loss_scaler.create ?backoff_factor -- implemented
   lib/mixed_prec.ml:Loss_scaler.create ?growth_factor -- implemented
   lib/mixed_prec.ml:Loss_scaler.create ?growth_interval -- implemented

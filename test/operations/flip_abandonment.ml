@@ -620,6 +620,10 @@ let () =
       ("model_default_schedule", "false");
       ("model_default_placements", "0");
       ("model_default_geometry_lattice", "false");
+      (* gh-ocannl-1253: the ranking score's capacity and cache bandwidth, at their defaults (the
+         backend's advisories). *)
+      ("model_cache_capacity", "");
+      ("model_cache_bandwidth", "");
     ]
   in
   p "they are exactly the Untimed_model class" (same_keys model_keys Utils.Untimed_model);

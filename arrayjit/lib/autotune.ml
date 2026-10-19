@@ -2176,6 +2176,94 @@ let summaries_roofline ~peak_flops ~peak_memory_bandwidth (summaries : CM.summar
              ~bytes:(CM.total_bytes s) ())
         |> Option.map ~f:(fun (a, b) -> a +. b))
 
+(* gh-ocannl-1253: the ranking score's cache capacity — config [model_cache_capacity] (bytes;
+   [none]: no capacity, so no DRAM tier) beats the backend's advisory [cache_capacity_bytes], and
+   its cache bandwidth — config [model_cache_bandwidth] (bytes/s; [none]: re-reads within capacity
+   uncharged) beats the advisory [cache_bandwidth]. Like those fields, [Untimed] readings: only the
+   untimed choosers below call [ranking_capacity] / [ranking_cache_bandwidth], and nothing [tune]
+   reaches does ([test/operations/limits_field_classes]). *)
+let cache_capacity_override =
+  lazy
+    (let raw = String.strip (Utils.get_global_arg ~arg_name:"model_cache_capacity" ~default:"") in
+     match String.lowercase raw with
+     | "" -> `Advisory
+     | "none" -> `Off
+     | _ -> (
+         match Float.of_string raw with
+         | f when Float.is_finite f && Float.(f >= 0.) && Float.(f < of_int Int.max_value) ->
+             `Value (Int.of_float f)
+         | _ | (exception _) ->
+             raise
+             @@ Utils.User_error
+                  ("Autotune: ocannl_model_cache_capacity should be a non-negative byte count, or \
+                    none; found: " ^ raw)))
+
+let cache_bandwidth_override =
+  lazy
+    (let raw = String.strip (Utils.get_global_arg ~arg_name:"model_cache_bandwidth" ~default:"") in
+     match String.lowercase raw with
+     | "" -> `Advisory
+     | "none" -> `Off
+     | _ -> (
+         match Float.of_string raw with
+         | f when Float.is_finite f && Float.(f > 0.) -> `Value f
+         | _ | (exception _) ->
+             raise
+             @@ Utils.User_error
+                  ("Autotune: ocannl_model_cache_bandwidth should be a positive rate in bytes/s, \
+                    or none; found: " ^ raw)))
+
+let resolve override advisory =
+  match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
+
+let ranking_capacity ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  (resolve cache_capacity_override u.cache_capacity, u.resident_threads)
+
+let ranking_cache_bandwidth ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve cache_bandwidth_override u.cache_rate
+
+(* The ranking score summed over a candidate's kernels, beside the roofline lower bound of the same
+   kernels ([summaries_roofline]'s): [(rank, bound)], [rank >= bound] by
+   {!Ir.Cost_model.ranking_seconds_of}' contract. [None] exactly where [summaries_roofline] is. Read
+   by the untimed choosers only — [model_default] and the [auto] seeding gate. An explicit
+   [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
+let segments_ranking ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
+    (segs : LL.optimized list) : (float * float) option =
+  (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
+     the configuration it overrides, a malformed override of it included. *)
+  let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
+  let cache_capacity_bytes =
+    match capacity with Some c -> c | None -> fst (ranking_capacity ~limits)
+  in
+  let cache_bandwidth =
+    match cache_bandwidth with Some cb -> cb | None -> ranking_cache_bandwidth ~limits
+  in
+  let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
+  match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
+  | None -> None
+  | Some bound ->
+      let rank =
+        List.fold summaries ~init:0. ~f:(fun acc (o, s) ->
+            let reuse =
+              match (cache_capacity_bytes, cache_bandwidth) with
+              | None, None -> None
+              | _ ->
+                  Some (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
+            in
+            acc
+            +. Option.value ~default:0.
+                 (CM.ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
+                    ?cache_bandwidth s reuse))
+      in
+      Some (rank, bound)
+
+let ranking_ms ~limits segs =
+  let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  Option.map (segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits segs)
+    ~f:(fun (rank, bound) -> (rank *. 1e3, bound *. 1e3))
+
 let model_score ~static_indices ~limits (opt : LL.optimized) (sched : Sched.schedule) : float option
     =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
@@ -3873,9 +3961,13 @@ type model_choice = {
       (** ["default"] or the winning candidate's spec label (matching {!tune}'s [autotune_log]
           labels). *)
   mc_model_ms : float option;
-      (** The winner's roofline lower bound in ms — a ranking score, not a runtime prediction;
-          [None] when selection did not run (no envelope constants, automatic scheduling disabled,
-          or the default itself had no model coverage). *)
+      (** The winner's roofline lower bound in ms — not a runtime prediction; [None] when selection
+          did not run (no envelope constants, automatic scheduling disabled, or the default itself
+          had no model coverage). *)
+  mc_rank_ms : float option;
+      (** The winner's ranking score in ms ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253), the
+          quantity the pick minimized; at least [mc_model_ms]. [None] exactly when [mc_model_ms] is.
+      *)
   mc_scored : int;
       (** Model evaluations that produced a score (the default pipeline included; the fissioned flow
           also scores per segment). *)
@@ -3922,7 +4014,14 @@ let model_default ?name ?report ctx comp bindings =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let emit r = Option.iter report ~f:(fun f -> f r) in
   let no_selection =
-    { mc_label = "default"; mc_model_ms = None; mc_scored = 0; mc_skipped = 0; mc_rejected = 0 }
+    {
+      mc_label = "default";
+      mc_model_ms = None;
+      mc_rank_ms = None;
+      mc_scored = 0;
+      mc_skipped = 0;
+      mc_rejected = 0;
+    }
   in
   if
     (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
@@ -3940,14 +4039,16 @@ let model_default ?name ?report ctx comp bindings =
        pre-search (config [model_default_placements]) scores hermetic lowerings before any compile
        runs, and its work accumulates into the same reported totals as the in-compile selection. *)
     let n_scored = ref 0 and n_skipped = ref 0 and n_rejected = ref 0 in
+    (* Candidates rank by the ranking score (gh-ocannl-1253), which charges operand re-reads once
+       the working set leaves the cache — under [analyze]'s distinct-cell roofline an untiled
+       contraction scores at the family's floor and no sketch can win. The family search's bound
+       below stays [completion_floor]'s roofline: the ranking score is never below [analyze]'s, so
+       it is never below the bound, and fathoming stays sound. *)
     let score opts =
-      match
-        summaries_roofline ~peak_flops ~peak_memory_bandwidth
-          (List.map opts ~f:(fun o -> CM.analyze o.LL.llc))
-      with
-      | Some s ->
+      match segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits opts with
+      | Some (rank, _bound) ->
           Int.incr n_scored;
-          Some s
+          Some rank
       | None ->
           Int.incr n_skipped;
           None
@@ -4156,7 +4257,8 @@ let model_default ?name ?report ctx comp bindings =
       choice :=
         {
           mc_label = label;
-          mc_model_ms = Option.map model_s ~f:(fun s -> s *. 1e3);
+          mc_model_ms = None;
+          mc_rank_ms = Option.map model_s ~f:(fun s -> s *. 1e3);
           mc_scored = !n_scored;
           mc_skipped = !n_skipped;
           mc_rejected = !n_rejected;
@@ -4174,7 +4276,19 @@ let model_default ?name ?report ctx comp bindings =
       in
       match apply_action () with
       | segs ->
-          logf "model_default: chose %s (model %s; %d scored, %d without coverage, %d unbuildable)"
+          (* The lower bound of what is applied, beside the rank the pick minimized. *)
+          (if Option.is_some model_s then
+             let bound =
+               summaries_roofline ~peak_flops ~peak_memory_bandwidth
+                 (List.map segs ~f:(fun o -> CM.analyze o.LL.llc))
+             in
+             choice :=
+               {
+                 !choice with
+                 mc_model_ms = Option.map bound ~f:(fun s -> s *. 1e3);
+                 mc_rank_ms = Option.bind bound ~f:(fun _ -> !choice.mc_rank_ms);
+               });
+          logf "model_default: chose %s (rank %s; %d scored, %d without coverage, %d unbuildable)"
             label
             (match model_s with Some s -> Printf.sprintf "%.6f ms" (s *. 1e3) | None -> "n/a")
             !n_scored !n_skipped !n_rejected;
@@ -4197,7 +4311,7 @@ let model_default ?name ?report ctx comp bindings =
     let on_fallback exn =
       logf "model_default: compiling the pick %s FAILED (%s); recompiling the default pipeline"
         !choice.mc_label (Exn.to_string exn);
-      choice := { !choice with mc_label = "default"; mc_model_ms = None }
+      choice := { !choice with mc_label = "default"; mc_model_ms = None; mc_rank_ms = None }
     in
     (* gh-ocannl-514, the placement levels of the untuned regime (config [model_default_placements]
        = N > 0): before the compile, branch-and-bound over the top-N ranked flip candidates of the
@@ -4365,17 +4479,51 @@ let site_reduction_extent (site : matmul_site) =
 let seeded_default_backend backend =
   String.is_substring backend ~substring:"cuda" || String.is_substring backend ~substring:"hip"
 
-let seeded_default_min_reduction () =
+type seed_gate =
+  | Min_reduction of int
+  | Ranked of { capacity : int option; cache_rate : float option }
+
+(* The threshold [auto] falls back to where the device publishes no capacity (gh-ocannl-1253):
+   gh-ocannl-1324's measured value. *)
+let seed_gate_fallback = 32
+
+(* The configured gate, unresolved: [`Auto] or a threshold. *)
+let seed_gate_setting () =
   let raw =
     String.strip (Utils.get_global_arg ~arg_name:"gpu_default_sketch_min_reduction" ~default:"32")
   in
-  match Int.of_string_opt raw with
-  | Some n when n >= 0 -> n
+  match (String.lowercase raw, Int.of_string_opt raw) with
+  | "auto", _ -> `Auto
+  | _, Some n when n >= 0 -> `Threshold n
   | _ ->
       raise
       @@ Utils.User_error
-           ("Autotune: ocannl_gpu_default_sketch_min_reduction should be a non-negative integer (0 \
-             disables the seeded default); found: " ^ raw)
+           ("Autotune: ocannl_gpu_default_sketch_min_reduction should be auto or a non-negative \
+             integer (0 disables the seeded default); found: " ^ raw)
+
+(* The gate {!tune}'s seeded-plan candidate uses (gh-ocannl-1388): [auto] reads as the fallback
+   threshold there, because a ranked gate reads the device description's [Untimed] fields, which
+   must not reach anything [tune] does until the resolved plan joins the search trajectory's
+   identity (the follow-up to gh-ocannl-1253's first PR). Reads no capacity, by construction. *)
+let seeded_search_gate () =
+  match seed_gate_setting () with
+  | `Auto -> Min_reduction seed_gate_fallback
+  | `Threshold n -> Min_reduction n
+
+let seeded_default_gate ~limits =
+  match seed_gate_setting () with
+  | `Threshold n -> Min_reduction n
+  | `Auto -> (
+      (* The fallback is for a device nothing has calibrated -- no advisory and no override. An
+         explicit [none] override is a calibration too (no DRAM tier, or uncharged re-reads): its
+         ranking stands, even when both tiers resolve to [None]. *)
+      let stated = function `Advisory -> false | `Off | `Value _ -> true in
+      let explicit =
+        stated (Lazy.force cache_capacity_override) || stated (Lazy.force cache_bandwidth_override)
+      in
+      match (fst (ranking_capacity ~limits), ranking_cache_bandwidth ~limits) with
+      | None, None when not explicit -> Min_reduction seed_gate_fallback
+      | capacity, cache_rate -> Ranked { capacity; cache_rate })
 
 (* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
    then the 4x4 register tile at a smaller block, then the 2x2 register tiles, which put four times
@@ -4570,10 +4718,17 @@ let no_seeded_choice =
 (* The resolved thresholds, or [None] where the untuned compile is the plain default. The backend
    first: the thresholds are CUDA/HIP settings, so a malformed value must not break a compile on a
    backend that ignores them. *)
-let seeded_settings ?min_reduction ?min_serial ?reduction_sink:sink_override ~backend () =
-  let min_reduction () =
-    match min_reduction with Some n -> n | None -> seeded_default_min_reduction ()
+let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_override ~backend
+    ~configured_gate () =
+  let gate () =
+    match (seed_gate, min_reduction) with
+    | Some _, Some _ ->
+        invalid_arg "Autotune.seeded_transform: pass ~min_reduction or ~seed_gate, not both"
+    | Some g, None -> g
+    | None, Some n -> Min_reduction n
+    | None, None -> configured_gate ()
   in
+  let gate_off () = match gate () with Min_reduction n -> n <= 0 | Ranked _ -> false in
   (* Resolved on CUDA only: the threshold is a CUDA setting, so a malformed value must not break a
      HIP compile that ignores it. *)
   let min_serial () =
@@ -4585,11 +4740,11 @@ let seeded_settings ?min_reduction ?min_serial ?reduction_sink:sink_override ~ba
   in
   if
     (not (seeded_default_backend backend))
-    || (min_reduction () <= 0 && min_serial () <= 0 && not (sink_enabled ()))
+    || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
-  else Some (min_reduction (), min_serial (), sink_enabled ())
+  else Some (gate (), min_serial (), sink_enabled ())
 
 (* The split reductions first, whole-routine and before any segmentation, as the search's [F_split]
    seeds apply them: the partials edge each split mints is what fission cuts the two passes apart
@@ -4615,11 +4770,32 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
             (Outcome.detail_of_cause cause);
           (opt, []))
 
+(* gh-ocannl-1253, the [auto] gate's test: the seeded sketch's ranking score strictly below the
+   preset's, on the segment alone, under the gate's capacity and cache bandwidth. Either failing to
+   apply or to score keeps the preset. Only the untuned compile's transform builds it: the search's
+   seeded-plan candidate passes [no_ranker], its gate never being [Ranked]. *)
+let seeded_ranker ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth p pre =
+  let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  let rank sched =
+    match Sched.apply_classified ~static_indices sched (scratch_of pre) with
+    | exception (Outcome.Cause_at _ | Invalid_argument _) -> None
+    | post ->
+        Option.map
+          (segments_ranking ~capacity ~cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
+             [ post ])
+          ~f:fst
+  in
+  match (rank (sketch_schedule ~accum_prec ~p pre), rank (seeded_preset ~limits pre)) with
+  | Some sketch, Some plain -> Float.(sketch < plain)
+  | _ -> false
+
+let no_ranker ~capacity:_ ~cache_bandwidth:_ _ _ = false
+
 (* What the seeded plan does with each segment of the (split) routine: the segmentation and one
    decision per segment, plus how many default segments were refined, or [None] where the plan is
    the default segments (nothing seeds or sinks, or the segmentation is refused). Hermetic: every
    probe runs on a copy. *)
-let seeded_decisions ~limits ~accum_prec ~static_indices ~min_reduction ~sink_enabled
+let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~sink_enabled
     (opt : LL.optimized) =
   let preset = seeded_preset ~limits in
   let zero_sched tns = Sched.zero_expansion ~limits tns in
@@ -4632,14 +4808,22 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~min_reduction ~sink_en
      preset rather than costing the routine its other seeds. *)
   let decided = Hashtbl.create (module String) in
   let seed_of kind pre =
-    match kind with
-    | `Zeros | `Solo -> None
-    | `Normal when min_reduction <= 0 -> None
-    | `Normal ->
+    match (kind, gate) with
+    | (`Zeros | `Solo), _ -> None
+    | `Normal, Min_reduction n when n <= 0 -> None
+    | `Normal, _ ->
         Hashtbl.find_or_add decided
           (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
           ~default:(fun () ->
-            match seeded_params ~limits ~accum_prec ~min_reduction pre with
+            let candidate =
+              match gate with
+              | Min_reduction min_reduction -> seeded_params ~limits ~accum_prec ~min_reduction pre
+              | Ranked { capacity; cache_rate } -> (
+                  match seeded_params ~limits ~accum_prec ~min_reduction:1 pre with
+                  | Some p when ranked_below ~capacity ~cache_bandwidth:cache_rate p pre -> Some p
+                  | Some _ | None -> None)
+            in
+            match candidate with
             | None -> None
             | Some p -> (
                 match
@@ -4748,32 +4932,43 @@ let seeded_plan_choice (plan : seeded_plan) =
       }
 
 (* The plan on [opt], the routine [split] was applied to. *)
-let seeded_plan_on ~limits ~accum_prec ~static_indices ~min_reduction ~sink_enabled ~split opt =
-  match seeded_decisions ~limits ~accum_prec ~static_indices ~min_reduction ~sink_enabled opt with
+let seeded_plan_on ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~sink_enabled ~split opt
+    =
+  match
+    seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~sink_enabled opt
+  with
   | None -> { sp_split = split; sp_segments = None; sp_refined = 0 }
   | Some (segmentation, segs, refined) ->
       { sp_split = split; sp_segments = Some (segmentation, segs); sp_refined = refined }
 
 let seeded_plan ?min_reduction ?min_serial ?reduction_sink ~backend ~limits ~accum_prec
     ~static_indices (opt : LL.optimized) =
-  match seeded_settings ?min_reduction ?min_serial ?reduction_sink ~backend () with
+  match
+    seeded_settings ?min_reduction ?min_serial ?reduction_sink ~backend
+      ~configured_gate:seeded_search_gate ()
+  with
   | None -> None
-  | Some (min_reduction, min_serial, sink_enabled) -> (
+  | Some (gate, min_serial, sink_enabled) -> (
       (* Hermetic, prelude included: deriving the plan must leave the caller's lowering as it
          was. *)
       let opt, split = seeded_split ~backend ~min_serial ~static_indices (scratch_of opt) in
       match
-        seeded_plan_on ~limits ~accum_prec ~static_indices ~min_reduction ~sink_enabled ~split opt
+        seeded_plan_on ~limits ~accum_prec ~static_indices ~gate ~ranked_below:no_ranker
+          ~sink_enabled ~split opt
       with
       | { sp_split = []; sp_segments = None; _ } -> None
       | plan -> Some plan)
 
-let seeded_transform ?min_reduction ?min_serial ?reduction_sink
+let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink
     ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
   let backend = Context.backend_name ctx in
-  match seeded_settings ?min_reduction ?min_serial ?reduction_sink ~backend () with
+  match
+    seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink ~backend
+      ~configured_gate:(fun () -> seeded_default_gate ~limits:(Context.hardware_limits ctx))
+      ()
+  with
   | None -> None
-  | Some (min_reduction, min_serial, sink_enabled) ->
+  | Some (gate, min_serial, sink_enabled) ->
       let limits = Context.hardware_limits ctx in
       let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
       let static_indices = Idx.bound_symbols bindings in
@@ -4782,8 +4977,9 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink
           let opt, split = seeded_split ~backend ~min_serial ~static_indices opt in
           on_choice (seeded_plan_choice { sp_split = split; sp_segments = None; sp_refined = 0 });
           let plan =
-            seeded_plan_on ~limits ~accum_prec ~static_indices ~min_reduction ~sink_enabled ~split
-              opt
+            seeded_plan_on ~limits ~accum_prec ~static_indices ~gate
+              ~ranked_below:(seeded_ranker ~limits ~accum_prec ~static_indices)
+              ~sink_enabled ~split opt
           in
           let (_, tuples), applied =
             seeded_replay ~limits ~accum_prec ~static_indices plan.sp_segments opt
@@ -4802,11 +4998,12 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink
             on_choice choice);
           List.map tuples ~f:(fun (_, _, _, post) -> post))
 
-let seeded_default ?name ?min_reduction ?min_serial ?reduction_sink ?report ctx comp bindings =
+let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?report ctx comp
+    bindings =
   let choice = ref no_seeded_choice in
   let emit () = Option.iter report ~f:(fun f -> f !choice) in
   match
-    seeded_transform ?min_reduction ?min_serial ?reduction_sink
+    seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink
       ~on_choice:(fun c -> choice := c)
       ctx bindings
   with
@@ -5168,8 +5365,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
        (gh-ocannl-1241). A key renders only when its resolved value is not its default, as this
        device resolves the default (gh-ocannl-1272): stating a key at its default must not cost a
        warm chain its records. Hence computed here, once [limits] is known: the cache key the
-       trajectory is stored under hashes the whole limits record, so two processes sharing a record
-       resolve every [auto] alike. *)
+       trajectory is stored under hashes the limits record's [Key]-class projection, so two
+       processes sharing it resolve every [auto] alike -- an [auto] resolved from an [Untimed] field
+       would break that, which is why no search reads one (gh-ocannl-1253). *)
     let search_shape =
       Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
         search beam_width rounds repeats keep_fraction max_split_reduce_sites

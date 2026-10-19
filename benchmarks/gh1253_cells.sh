@@ -1,0 +1,133 @@
+#!/bin/bash
+# gh-ocannl-1253 measurement driver: the cost model's ranking-score capacity, calibrated and checked
+# on one box, so the PR's predicted-vs-measured table quotes invocations rather than restating them.
+#
+# Usage (from the checkout under test): benchmarks/gh1253_cells.sh BACKEND OUT [CAP]
+#
+#   BACKEND  cuda | hip -- pinned on every command line; no ambient OCANNL_* variable or config
+#            file reaches a cell (see below).
+#   OUT      results directory, created, and refused unless empty: OUT/driver.log records what this
+#            script prints, each cell writes OUT/<cell>.out and OUT/<cell>.err.
+#   CAP      wall cap in seconds per cell (default 900); a capped cell counts as failed.
+#
+# Cells, all on explicitly initialized standalone inputs (host arrays built in the runner: no
+# recorded workload file is read, so the box gate's workload check has nothing to check):
+#   bandwidth          tools/calibrate_bandwidth.exe: the STREAM kernels, rows into
+#                      OUT/calibration.tsv; its fitted model_peak_memory_bandwidth is passed to every
+#                      later cell, so the model's milliseconds are this box's rather than the
+#                      backend's class ceiling.
+#   calibrate          tools/calibrate_cache_capacity.exe: the untiled weight-gradient contraction
+#                      (256 x 1024 output) swept over reduction extents 256..65536 on the plain
+#                      default pipeline, split against the calibrated DRAM bandwidth; prints the
+#                      fitted model_cache_capacity (none when no point reaches DRAM) and
+#                      model_cache_bandwidth (the below-capacity plateau), passed to the wgrad
+#                      cells.
+#   wgrad_b<B>_untiled bench_wgrad at batch B in {8, 256} (gpt2_mini_train's l*_ffn_w2 gradient)
+#                      with seeding, the split and the reduction sink off -- the plain default
+#                      plan, whose
+#                      `wgrad-model: plan=default` rows predict it.
+#   wgrad_b<B>_seeded  the same with the seeded default at threshold 32 -- the seeded plan, whose
+#                      `wgrad-model: plan=seeded` rows predict it; the cell fails rather than
+#                      time a plan that seeded nothing or fell back (BENCH_WGRAD_REQUIRE_SEEDED).
+# Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
+# environment cannot swap the measured plans for tuned or model-picked ones.
+# The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
+
+set -euo pipefail
+
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "usage: $0 BACKEND OUT [CAP]" >&2
+  exit 2
+fi
+backend=$1
+out=$2
+cap=${3:-900}
+case "$backend" in
+cuda | hip) ;;
+*)
+  echo "$0: BACKEND must be cuda or hip, got $backend" >&2
+  exit 2
+  ;;
+esac
+if [[ -e "$out" ]] && [[ -n "$(ls -A "$out" 2>/dev/null)" ]]; then
+  echo "$0: $out exists and is not empty" >&2
+  exit 2
+fi
+mkdir -p "$out"
+out=$(cd "$out" && pwd) # absolute: the cells run from the checkout's root
+exec > >(tee -a "$out/driver.log") 2>&1
+
+# No ambient configuration reaches a cell: every OCANNL_* variable is dropped and the checkout's
+# config file is not read, so each cell runs the defaults plus exactly the flags written below
+# (an inherited OCANNL_SCHEDULE_FISSION=false, say, would make the seeded arm decline silently).
+while IFS= read -r var; do unset "$var"; done < <(compgen -e | grep '^OCANNL_' || true)
+export OCANNL_NO_CONFIG_FILE=true
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+echo "gh1253_cells: revision $(git rev-parse HEAD) backend $backend host $(hostname) at $(date -u +%FT%TZ)"
+git status --porcelain --untracked-files=no | sed 's/^/  dirty: /'
+
+dune build tools/calibrate_bandwidth.exe tools/calibrate_cache_capacity.exe \
+  benchmarks/runners/ocannl/bench_wgrad.exe
+bandwidth=$root/_build/default/tools/calibrate_bandwidth.exe
+calibrate=$root/_build/default/tools/calibrate_cache_capacity.exe
+wgrad=$root/_build/default/benchmarks/runners/ocannl/bench_wgrad.exe
+
+failed=0
+last_ok=false
+cell() {
+  local name=$1
+  shift
+  echo "== cell $name: $*"
+  if perl -e 'alarm shift; exec @ARGV' "$cap" "$@" >"$out/$name.out" 2>"$out/$name.err"; then
+    echo "   ok"
+    last_ok=true
+  else
+    echo "   FAILED (exit $?)"
+    failed=$((failed + 1))
+    last_ok=false
+  fi
+  cat "$out/$name.out"
+}
+
+# A fitted constant read back from a cell's config-pasteable line -- only from a cell that
+# succeeded: a fit its own tool rejected (a non-monotone split exits 1 after printing it) must not
+# reach the later cells. Empty otherwise; the failure is already counted.
+fitted() { if $last_ok; then sed -n "s/^$1=//p" "$2" | tail -1; fi; }
+
+cell bandwidth "$bandwidth" "--ocannl_backend=$backend" \
+  "--ocannl_autotune_calibration_file=$out/calibration.tsv"
+model=()
+bw=$(fitted model_peak_memory_bandwidth "$out/bandwidth.out")
+if [[ -n "$bw" ]]; then model+=("--ocannl_model_peak_memory_bandwidth=$bw"); fi
+echo "   model flags after bandwidth: ${model[*]:-none}"
+cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
+capacity=$(fitted model_cache_capacity "$out/calibrate.out")
+if [[ -n "$capacity" ]]; then
+  model+=("--ocannl_model_cache_capacity=$capacity")
+elif $last_ok; then
+  # The sweep never reached DRAM: the capacity is only known to exceed every swept working set,
+  # which covers the wgrad cells' (the same contraction, at most the same extent). No DRAM tier is
+  # then the reading for them -- not the backend's advisory, which the sweep contradicts.
+  model+=("--ocannl_model_cache_capacity=none")
+fi
+cache_bw=$(fitted model_cache_bandwidth "$out/calibrate.out")
+if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
+echo "   model flags for the wgrad cells: ${model[*]:-none}"
+for batch in 8 256; do
+  dims="$batch,128,256,1024"
+  cell "wgrad_b${batch}_untiled" env BENCH_TUNE=0 BENCH_WGRAD_REQUIRE_SEEDED=0 BENCH_WGRAD_DIMS="$dims" \
+    BENCH_REPEATS=20 "$wgrad" \
+    "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
+    --ocannl_gpu_default_sketch_min_reduction=0 --ocannl_gpu_default_split_reduce_min_serial=0 \
+    --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
+  cell "wgrad_b${batch}_seeded" env BENCH_TUNE=0 BENCH_WGRAD_REQUIRE_SEEDED=1 BENCH_WGRAD_DIMS="$dims" \
+    BENCH_REPEATS=20 "$wgrad" \
+    "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
+    --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${model[@]+"${model[@]}"}
+done
+
+echo "gh1253_cells: $failed failed cell(s)"
+exit $((failed > 0 ? 1 : 0))

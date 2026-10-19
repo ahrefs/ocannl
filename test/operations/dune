@@ -109,6 +109,7 @@
   (alias runtest-env_spelling_gate)
   (alias runtest-test_config_consistency)
   (alias runtest-digest_completeness)
+  (alias runtest-limits_field_classes)
   (alias runtest-config_dep_completeness)
   (alias runtest-refused_action_streams)
   (alias runtest-refused_action_scan_cases)
@@ -279,6 +280,7 @@
   (alias runtest-bandwidth_calibration)
   (alias runtest-autotune_routine_name)
   (alias runtest-cost_model_selection)
+  (alias runtest-limits_field_classes)
   (alias runtest-model_default_fallback)
   (alias runtest-placement_surface)
   (alias runtest-flip_bound_pruning)
@@ -3179,6 +3181,8 @@
   digest_completeness.ml
   config_scan_lexing.expected
   digest_completeness.expected
+  limits_field_classes.ml
+  limits_field_classes.expected
   env_var_deps.ml
   env_var_deps_control.expected
   env_var_deps.expected
@@ -3239,6 +3243,8 @@
    dead_export_scan.expected,dead_export_scan_control.expected
    digest_completeness.ml
    config_scan_lexing.expected,digest_completeness.expected
+   limits_field_classes.ml
+   limits_field_classes.expected
    env_var_deps.ml
    env_var_deps_control.expected,env_var_deps.expected
    refused_action_streams.ml
@@ -4662,7 +4668,8 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules schedule_cache_device)
  (libraries base ocannl stdio arrayjit.verdict test_utils)
  (preprocess
@@ -6187,7 +6194,9 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH))
  (action
   (with-stdout-to
    %{target}
@@ -6272,7 +6281,9 @@
     %{dep:cost_model_selection.exe}
     "--ocannl_backend=cc"
     "--ocannl_model_peak_flops=1e12"
-    "--ocannl_model_peak_memory_bandwidth=1e6"))))
+    "--ocannl_model_peak_memory_bandwidth=1e6"
+    "--ocannl_model_cache_capacity=1048576"
+    "--ocannl_model_cache_bandwidth=none"))))
 
 (rule
  (alias runtest-cost_model_selection)
@@ -6306,7 +6317,9 @@
     %{dep:model_default_fallback.exe}
     "--ocannl_backend=cc"
     "--ocannl_model_peak_flops=1e12"
-    "--ocannl_model_peak_memory_bandwidth=1e6"))))
+    "--ocannl_model_peak_memory_bandwidth=1e6"
+    "--ocannl_model_cache_capacity=none"
+    "--ocannl_model_cache_bandwidth=none"))))
 
 (rule
  (alias runtest-model_default_fallback)
@@ -6946,7 +6959,9 @@
     "--ocannl_model_default_schedule=true"
     "--ocannl_model_default_placements=2"
     "--ocannl_model_peak_flops=1e9"
-    "--ocannl_model_peak_memory_bandwidth=1e12"))))
+    "--ocannl_model_peak_memory_bandwidth=1e12"
+    "--ocannl_model_cache_capacity=none"
+    "--ocannl_model_cache_bandwidth=none"))))
 
 (rule
  (alias runtest-model_default_placements)
@@ -9120,6 +9135,115 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1253: the ranking score's per-block read charge, on hand-built IR scheduled under a
+; GPU-shaped limits record; the envelope, capacity and residency are passed explicitly.
+
+(test
+ ; ocannl-backend: none -- hand-built IR is optimized, scheduled and scored, never linked or executed.
+ (name cost_model_reuse)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (modules cost_model_reuse)
+ (libraries base stdio ocannl arrayjit.verdict ll_test))
+
+; gh-ocannl-1253: every hardware_limits field has a cache-identity class; the cache key hashes the
+; Key-class projection, byte-identical to the pre-classification record; no Untimed field is read
+; outside its readers. The globs are the library and tool sources the Untimed fields could leak
+; into.
+
+(executable
+ (name limits_field_classes)
+ (modules limits_field_classes)
+ (libraries
+  base
+  stdio
+  ppxlib
+  arrayjit.ir
+  arrayjit.utils
+  test_utils
+  arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links no backend: it compares synthetic limits records and reads the
+ ; globbed sources as text.
+ (target limits_field_classes.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_BUFFER_ALIASING)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_DEBUG_LOG_TO_STREAM_FILES)
+  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PREFER_BACKEND_UNIFORMITY)
+  (glob_files_rec ../../arrayjit/lib/*.ml)
+  (glob_files_rec ../../tensor/*.ml)
+  (glob_files_rec ../../lib/*.ml)
+  (glob_files_rec ../../bin/*.ml)
+  (glob_files_rec ../../tools/*.ml)
+  (glob_files_rec ../../benchmarks/runners/ocannl/*.ml))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:limits_field_classes.exe} %{deps}))))
+
+(rule
+ (alias runtest-limits_field_classes)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff limits_field_classes.expected limits_field_classes.actual)))
+
+; gh-ocannl-1253: the cache-capacity fit on synthetic sweeps, and a toy working-set sweep on the
+; configured backend (structural claims only). The sweep schedules through the default pipeline, so
+; the stanza declares that pipeline's whole key class (Utils.config_key_classification's
+; default-pipeline Search_shaping row) beside the model keys it reads.
+
+(test
+ (name capacity_calibration)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS))
+ (modules capacity_calibration)
+ (libraries base ocannl arrayjit.verdict))
 
 ; gh-ocannl-1388: the autotuner seeds the seeded untuned plan first, so a search cut to its first
 ; candidate (every later window refused through the measurement seam) crowns the step the untuned

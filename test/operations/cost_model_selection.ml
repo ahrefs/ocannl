@@ -201,3 +201,61 @@ let () =
     (not (String.equal r.Autotune.mc_label "default"));
   p_all2 "the picked schedule computes correct values" got expected ~f:(fun a b ->
       Float.(abs (a - b) < 1e-2))
+
+let () =
+  (* --- The ranking score past and below capacity (gh-ocannl-1253) ---
+
+     A dense layer's weight gradient, [w.grad[o,i] += dy[b,s,o] * x[b,s,i]], as backprop lowers it,
+     at two sizes under ONE cache capacity (the rule's [--ocannl_model_cache_capacity]): the large
+     one's working set exceeds it, so its re-reads are charged and a reuse-tiled sketch ranks below
+     the default; the small one's fits, so the scores are the distinct-cell roofline, on which the
+     default wins here, and the pick stays the default. Both claims have teeth, checked by hand at
+     these sizes: with the charge off ([none]) the large leg picks the default too, and at a quarter
+     of the capacity (2^18) the small leg picks a sketch too -- the working sets sit in (2^18, 2^20]
+     and (2^20, 2^22) bytes. *)
+  let leg ~tag (nb, ns, no, ni) =
+    let cyc n m stride = Array.init n ~f:(fun c -> Float.of_int (1 + (c % m)) *. stride) in
+    let w =
+      Operation.init ~l:(tag ^ "_w") ~prec:Ir.Ops.single ~i:[ ni ] ~o:[ no ]
+        ~f:(Ll_test.weighted ~weights:[| 1; 3 |] ~modulus:5 ~offset:0.125 ~stride:0.125)
+        ~grad_spec:Tensor.Require_grad ()
+    in
+    let x =
+      NTDSL.ndarray
+        (cyc (nb * ns * ni) 5 0.125)
+        ~label:[ tag ^ "_x" ]
+        ~batch_dims:[ nb; ns ] ~output_dims:[ ni ] ()
+    in
+    let dy =
+      NTDSL.ndarray
+        (cyc (nb * ns * no) 7 0.25)
+        ~label:[ tag ^ "_dy" ]
+        ~batch_dims:[ nb; ns ] ~output_dims:[ no ] ()
+    in
+    let%op y = w * x in
+    let%op loss = (y *. dy) ++ "... => 0" in
+    let wgrad = (Option.value_exn ~here:[%here] w.Tensor.diff).Tensor.grad in
+    Train.set_materialized wgrad;
+    let comp = named (tag ^ "_wgrad") (Train.grad_update loss) in
+    let choice = ref None in
+    let ctx = Context.auto () in
+    let _ctx, _routine =
+      Autotune.model_default ~report:(fun r -> choice := Some r) ctx comp Ir.Indexing.Empty
+    in
+    let r = Option.value_exn ~here:[%here] !choice in
+    Stdio.eprintf "%s: picked %s, rank %s ms, bound %s ms (not part of the golden)\n" tag
+      r.Autotune.mc_label
+      (Option.value_map r.Autotune.mc_rank_ms ~default:"n/a" ~f:Float.to_string)
+      (Option.value_map r.Autotune.mc_model_ms ~default:"n/a" ~f:Float.to_string);
+    r
+  in
+  let large = leg ~tag:"rk_large" (16, 32, 64, 128) in
+  let small = leg ~tag:"rk_small" (4, 32, 64, 128) in
+  p "past capacity the weight gradient's pick is a sketch, not the default"
+    (not (String.equal large.Autotune.mc_label "default"));
+  p "below capacity the weight gradient's pick stays the default"
+    (String.equal small.Autotune.mc_label "default");
+  p "the pick's rank is at least its bound"
+    (match (large.Autotune.mc_rank_ms, large.Autotune.mc_model_ms) with
+    | Some r, Some b -> Float.(r >= b)
+    | _ -> false)

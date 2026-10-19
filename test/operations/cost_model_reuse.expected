@@ -1,0 +1,19 @@
+the default plan is untiled: a Grid over the rows and a workgroup over the columns: true
+untiled: the operands' requested bytes are at least M*N*K*elt: true
+untiled: the operands' requested bytes are at most M*N*K*elt*(1 + 1/wg): true
+every scalar blocktile requests exactly M*N*K*elt*(1/bm + 1/bn) of its operands: true
+the untiled plan's working set is positive: true
+with no capacity the score is analyze's roofline: true
+at capacity (working set = capacity) the score is analyze's roofline: true
+past capacity the untiled score exceeds analyze's roofline: true
+raising the capacity never raises the score, with or without a cache tier, on every plan: true
+past capacity some scalar blocktile ranks strictly below the untiled plan: true
+with no capacity no scalar blocktile ranks strictly below the untiled plan: true
+the bound is at most analyze's roofline is at most the score, on every leaf: true
+within capacity, the cache tier charges the untiled plan above analyze's roofline: true
+within capacity, the cache tier charges less than the DRAM tier past it: true
+within capacity, some scalar blocktile ranks strictly below the untiled plan: true
+raising the cache bandwidth never raises the score, on every plan: true
+a cache bandwidth below DRAM's is read as DRAM's: true
+a 32-thread nest launched alone keeps resident / 32 of its blocks: true
+beside a 256-thread sibling, it keeps only resident / 256 (the launch block's): true

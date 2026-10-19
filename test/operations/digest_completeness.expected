@@ -130,6 +130,10 @@ untimed-model -- it steers Autotune.model_default -- whether the recipes' untune
   model_default_placements
   model_default_schedule
 
+untimed-model -- they are the cache capacity and cache bandwidth of the analytic model's ranking score (gh-ocannl-1253), which only the untimed choosers read (Autotune.model_default's pick, and the auto seeding gate of Autotune.seeded_default) -- like the backends' advisory cache_capacity_bytes and cache_bandwidth they override, Untimed fields of the device description and outside the cache key for the same reason: a stored winner is a measured schedule, which they change neither the compilation nor the speed of. Autotune.tune reads neither: its bound pruning and keep-fraction ranking read the distinct-cell roofline, and its seeded-plan candidate reads auto as the fallback threshold
+  model_cache_bandwidth
+  model_cache_capacity
+
 execution-neutral -- startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter follows
   detach_c_stderr
   log_config_sourcing

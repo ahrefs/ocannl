@@ -1,0 +1,10 @@
+a clean step fits a monotone capacity between the last cached and first spilled working set: true
+a launch-bound point below the fastest one does not break the fit: true
+the recorded tuf sweep fits a capacity between 1.08 GB and 2.16 GB, against its DRAM rate: true
+the recorded tuf sweep's cache bandwidth is its cached plateau, 1.1 to 2.2 TB/s: true
+the recorded minix sweep never reaches DRAM: the capacity is at least its largest working set: true
+without a DRAM reference, the minix sweep's 1.7x contrast fits nothing: true
+rates that do not split by working set fit a capacity flagged non-monotone: true
+a sweep entirely below the DRAM reference is all spilled: true
+one timed point fits nothing: true
+every swept extent is timed and requests at least its operands' distinct bytes: true

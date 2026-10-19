@@ -9,13 +9,24 @@
    batch 256). BENCH_TUNE=1 times the tuned schedule (Autotune.tune, no disk cache) instead of the
    untuned default, which goes through Bench_harness.compile_default (Autotune.untuned_compile) and
    so honours the model_default_schedule and gpu_default_sketch_min_reduction settings.
-   BENCH_REPEATS is the number of timed runs, min taken (default 20).
+   BENCH_REPEATS is the number of timed runs, min taken (default 20). BENCH_WGRAD_REQUIRE_SEEDED=1
+   compiles the untuned arm through Autotune.seeded_default and exits 1, timing nothing, when it
+   seeds no segment or falls back to the default.
 
    Prints one [wgrad:] line -- the arm, the dims, the w.grad nest's lowered loop extents, the
    min-of-repeats synced time of the whole routine, and for a tuned arm the search's crowned label
    and counters -- then the shipped kernels' isolated times ([Bench_harness.time_shipped_segments]),
    where the [w: wg_w.grad] row is the weight gradient's. Inputs are small positive dyadics, so the
-   gradient's checksum is exact whatever the schedule and must agree across arms. *)
+   gradient's checksum is exact whatever the schedule and must agree across arms.
+
+   Before timing, [wgrad-model:] lines give the cost model's view (gh-ocannl-1253), per kernel of
+   two plans compiled for the purpose: [plan=default], the plain default pipeline (untiled), and
+   [plan=seeded], the seeded untuned default's ([Autotune.seeded_transform]; absent where it does
+   not apply). Each kernel row names the global nodes it writes, as the shipped-kernel rows do, with
+   its ranking score ([rank_ms], the score [Autotune.model_default] minimizes, under the capacity in
+   force) and its distinct-cell roofline ([bound_ms]); a [capacity=] line names the capacity and
+   residency. Predicted against measured for the weight gradient's row is the calibration evidence
+   for [model_cache_capacity]. *)
 
 open Base
 open Ocannl
@@ -33,6 +44,9 @@ let () =
     | _ -> failwith "BENCH_WGRAD_DIMS must be b,s,o,i"
   in
   let tune = Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_TUNE") (Some "1") in
+  let require_seeded =
+    Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_WGRAD_REQUIRE_SEEDED") (Some "1")
+  in
   let repeats =
     Option.value_map (Stdlib.Sys.getenv_opt "BENCH_REPEATS") ~default:20 ~f:Int.of_string
   in
@@ -84,6 +98,43 @@ let () =
       ~provenance:Ir.Schedule_outcome.User_schedule ctx comp Ir.Indexing.Empty
   in
   let backend = Context.backend_name ctx in
+  (* The cost model's predictions per kernel of the default and the seeded plans
+     (gh-ocannl-1253). *)
+  let limits = Context.hardware_limits ctx in
+  let capacity, resident = Autotune.ranking_capacity ~limits in
+  let opt_int = Option.value_map ~default:"none" ~f:Int.to_string in
+  Stdio.printf "wgrad-model: capacity=%s resident_threads=%s cache_bandwidth=%s\n"
+    (opt_int capacity) (opt_int resident)
+    (Option.value_map
+       (Autotune.ranking_cache_bandwidth ~limits)
+       ~default:"none" ~f:(Printf.sprintf "%.6g"));
+  let written (o : Ir.Low_level.optimized) =
+    List.filter_map (Ir.Cost_model.analyze o.Ir.Low_level.llc).Ir.Cost_model.per_node
+      ~f:(fun (tn, fp) ->
+        if fp.Ir.Cost_model.fp_write_bytes > 0 && Ir.Cost_model.global_in o tn then
+          Some (Ir.Tnode.debug_name tn)
+        else None)
+    |> String.concat ~sep:","
+  in
+  let predict plan transform =
+    match
+      Context.compile_outcome ~lowered_transform:transform
+        ~provenance:Ir.Schedule_outcome.User_schedule ctx comp Ir.Indexing.Empty
+    with
+    | Error _ -> Stdio.printf "wgrad-model: plan=%s did not compile\n" plan
+    | Ok (plan_ctx, plan_routine) ->
+        Context.release plan_ctx;
+        (* The shipped kernels, after codegen's own rewrites of the list (GPU zero elision). *)
+        List.iter plan_routine.Context.segments ~f:(fun o ->
+            match Autotune.ranking_ms ~limits [ o ] with
+            | Some (rank, bound) ->
+                Stdio.printf "wgrad-model: plan=%s kernel=[%s] rank_ms=%.4f bound_ms=%.4f\n" plan
+                  (written o) rank bound
+            | None -> Stdio.printf "wgrad-model: plan=%s kernel=[%s] no coverage\n" plan (written o))
+  in
+  predict "default"
+    (Ir.Schedule.maybe_default_schedules ~backend_name:backend ~limits ~static_indices:[]);
+  Option.iter (Autotune.seeded_transform ctx Ir.Indexing.Empty) ~f:(predict "seeded");
   let report = ref None in
   let t0 = Unix.gettimeofday () in
   let ctx, routine =
@@ -91,6 +142,24 @@ let () =
       Autotune.tune ~search:true ~cache_dir:""
         ~report:(fun r -> report := Some r)
         ctx comp Ir.Indexing.Empty
+    else if require_seeded then (
+      (* The seeded arm of a calibration (benchmarks/gh1253_cells.sh): compile through the seeded
+         default itself and refuse to time a fallback under the seeded name -- the seeding is
+         advisory, and a declined or recompiled plan is the default's. *)
+      let choice = ref None in
+      let result =
+        Autotune.seeded_default ~report:(fun c -> choice := Some c) ctx comp Ir.Indexing.Empty
+      in
+      (match !choice with
+      | Some c when (not (List.is_empty c.Autotune.sd_seeded)) && not c.Autotune.sd_fell_back ->
+          Stdio.printf "wgrad: seeded %d segment(s)\n%!" (List.length c.Autotune.sd_seeded)
+      | _ ->
+          Stdio.eprintf
+            "wgrad: BENCH_WGRAD_REQUIRE_SEEDED=1 but the seeded default seeded nothing or fell \
+             back to the default; refusing to time it as the seeded plan\n\
+             %!";
+          Stdlib.exit 1);
+      result)
     else H.compile_default ctx comp Ir.Indexing.Empty
   in
   let compile_s = Unix.gettimeofday () -. t0 in
@@ -118,7 +187,7 @@ let () =
   Stdio.printf
     "wgrad: backend=%s arm=%s dims=%d,%d,%d,%d loops=[%s] compile_s=%.2f ms=%.4f checksum=%h%s\n%!"
     backend
-    (if tune then "tuned" else "default")
+    (if tune then "tuned" else if require_seeded then "seeded" else "default")
     nb ns no ni
     (String.concat ~sep:"," (List.map !loops ~f:Int.to_string))
     compile_s !best checksum tuned;
