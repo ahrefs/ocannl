@@ -1090,6 +1090,14 @@ type report = {
           refusal: it ends the call as a [Pre_search_failure] under strict failure classification.
       *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
+  budget_cut : bool;
+      (** The crown comes from a search that stopped proposing candidates because its wall-clock
+          budget (config [autotune_budget_seconds], gh-ocannl-1409) ran out: this call's own search,
+          whose candidates timed are then a prefix of its menu plus the untuned floors (exempt from
+          the budget), or for a {!Cache_replay} the search that stored the entry, as the entry's
+          [budget_cut] records -- like [best_ms], a fact about the crown rather than about this
+          call. [outcome] stays {!Searched} for a cut search -- it completed and shipped its crown
+          -- so this is the field telling a cut search from a full one. *)
   beam_width : int;
       (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how
           many of the fastest candidates each round expands, and the admitted-timing depth an
@@ -2839,7 +2847,42 @@ val tune :
     constant pool per such candidate — measured on [cc] at 1 -> 109 constant pools over 181
     candidates, against working pools held within 2-6. Bounding it needs an eviction rule inside the
     shared constant cache, which is gh-ocannl-565's subject; pinned as far as it can be by
-    [test/operations/autotune_candidate_release]. *)
+    [test/operations/autotune_candidate_release].
+
+    Budget (gh-ocannl-1409, config [autotune_budget_seconds], default none): a search whose
+    wall-clock time since the call started has reached the budget attempts no further candidate --
+    checked as each attempt and each beam round starts, so the candidate in flight completes -- and
+    crowns its incumbent as a completed search does; the untuned floors (the seeded untuned plan and
+    the default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
+    slower than what the caller ships untuned. Where the cut left the untuned default unmeasured --
+    no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no seeded
+    plan), or its windows were refused -- the call ships the untuned default compile, stores nothing
+    and reports as a search that timed nothing ({!budget_floor_unmeasured}). The report's
+    [budget_cut] says the budget stopped something. A cut search with clean timings stores its crown
+    marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with a budget replays
+    it, and one without a budget searches in full and overwrites it. The budget's value is part of
+    the search trajectory's identity, so a cut search's [best_steps] serve early stopping only under
+    the same budget. *)
+
+val budget_setting : unit -> float option
+(** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
+    the setting is a positive number, [None] (no budget) otherwise. *)
+
+val budget_floor_unmeasured :
+  budget_cut:bool -> auto_sched:bool -> baseline_dispatched:bool -> floor_measured:bool -> bool
+(** gh-ocannl-1409: whether a search its budget cut ships the untuned default compile, stores
+    nothing and reports as a search that timed nothing, rather than crowning what it reached: the
+    budget cut it ([budget_cut]), it measured neither untuned floor ([floor_measured]: the default
+    seed's time, the baseline's when automatic scheduling is off, or the seeded plan's), and the
+    untuned default is a form a timed candidate could be slower than -- a scheduled pipeline
+    ([auto_sched]) or a dispatched serial baseline ([baseline_dispatched]), not the undispatched
+    serial form of a GPU with automatic scheduling off. *)
+
+val budget_elapsed : (float -> float) Seam.t
+(** Test seam (gh-ocannl-1409): maps the call's real elapsed seconds to the seconds a budget check
+    reads. A test substitutes a virtual clock -- the attempts so far, say -- to place a cut at a
+    chosen candidate, which a wall clock cannot. The default is the identity and no configuration
+    selects it. *)
 
 val on_candidate_callback :
   ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) Seam.t

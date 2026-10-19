@@ -169,6 +169,7 @@ let known_config_keys =
       "autotune_composite_playoff_margin";
       "autotune_staffed_singles";
       "autotune_round_expansion";
+      "autotune_budget_seconds";
       "autotune_log";
       "autotune_progress";
       "autotune_log_seeding";
@@ -409,6 +410,14 @@ let config_key_classification : (config_key_class * string * string list) list =
         "model_peak_memory_bandwidth";
         "strict_failure_classification";
       ] );
+    ( Search_shaping,
+      "a wall-clock budget on the search (gh-ocannl-1409): it decides how many candidates are \
+       attempted before the search crowns its incumbent, never what a crowned schedule means or \
+       how fast it runs. The crown of a search it cut is stored marked as cut \
+       (Schedule_cache.entry's budget_cut), so only a call that also has a budget replays it -- an \
+       incomplete measurement set must not become every later call's answer, the rule that keeps a \
+       contended search out of the cache",
+      [ "autotune_budget_seconds" ] );
     ( Keyed "timing",
       "it picks the OBJECTIVE a candidate is timed against -- the latency of a lone dispatch, or \
        what the kernel sustains under queue depth -- and the two crown different candidates, \
@@ -629,6 +638,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_composite_playoff_margin", (Float_number, "0.005"));
     ("autotune_staffed_singles", (Flag, "false"));
     ("autotune_round_expansion", (Keyword, "differing"));
+    ("autotune_budget_seconds", (Positive_float_or_unset, ""));
     ("autotune_keep_fraction", (Float_number, "1."));
     ("autotune_bound_pruning", (Flag, "false"));
     ("autotune_calibration_file", (Text, ""));

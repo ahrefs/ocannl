@@ -249,6 +249,7 @@ type report = {
   declines : decline_summary list;
   cache_replay_refusal : Outcome.classified_cause option;
   rounds_run : int;
+  budget_cut : bool;
   beam_width : int;
   sketch_candidates : int;
   epilogue_sketch_candidates : int;
@@ -334,6 +335,7 @@ let no_search_report ~timing =
     declines = [];
     cache_replay_refusal = None;
     rounds_run = 0;
+    budget_cut = false;
     beam_width = 0;
     sketch_candidates = 0;
     epilogue_sketch_candidates = 0;
@@ -535,6 +537,32 @@ let default_staffed_singles = false
 
 let staffed_singles_setting () =
   Utils.get_global_flag ~default:default_staffed_singles ~arg_name:"autotune_staffed_singles"
+
+(* gh-ocannl-1409: the wall-clock budget of one search, in seconds, or [None] for none. Read per
+   call, like the other search settings, so a test can state it for one search. Only a positive
+   number sets it ([Utils.Positive_float_or_unset], which is how the trajectory identity spells it):
+   empty, zero, negative and unparsable text all mean no budget. *)
+let budget_setting () =
+  match
+    Float.of_string_opt
+      (String.strip (Utils.get_global_arg ~arg_name:"autotune_budget_seconds" ~default:""))
+  with
+  | Some b when Float.(b > 0.) -> Some b
+  | Some _ | None -> None
+
+(* gh-ocannl-1409: whether a search its budget cut must ship the untuned default rather than its
+   crown. A cut search crowns nothing slower than the untuned default because it measured that
+   default: the floors (the seeded plan, the default seed) are exempt from the budget. Where neither
+   was measured -- no candidate reproduces the default (automatic scheduling with
+   [schedule_fission=false] and no seeded plan, where [default_seed_label] is [None]), or the
+   floor's windows were refused, the dispatched serial baseline's included when it is the default
+   (automatic scheduling off) -- the cut crown has no such reference, and the serial baseline can be
+   all it timed. Such a search ships the untuned default and stores nothing, reporting as one that
+   timed nothing. Except where the default is an undispatched serial form (a GPU with automatic
+   scheduling off, gh-ocannl-532), which no timed candidate can be slower than. A policy seam like
+   {!search_measurements_cacheable}, so the cases are pinned without manufacturing each regime. *)
+let budget_floor_unmeasured ~budget_cut ~auto_sched ~baseline_dispatched ~floor_measured =
+  budget_cut && (auto_sched || baseline_dispatched) && not floor_measured
 
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
    winner tests first ([nothing_timed]). *)
@@ -5574,6 +5602,12 @@ let untuned_compile ?name ctx comp bindings =
    [Train.tune_placements] exists for. *)
 let on_candidate_attempt : (string -> unit) Seam.t = Seam.make (fun _label -> ())
 
+(* gh-ocannl-1409: the elapsed seconds a budget check reads, given the call's real elapsed seconds.
+   A wall clock cannot place a cut at a chosen candidate, and a test of what a cut search attempts,
+   crowns and stores needs exactly that: it substitutes a virtual clock (the attempts so far, say).
+   Not a production seam: default the identity, and no config key selects it. *)
+let budget_elapsed : (float -> float) Seam.t = Seam.make Fn.id
+
 (* gh-ocannl-1138: the running composite a staffed sweep starts from. Called once per search that
    sweeps, with the coarse keys and their seeded parameters, and the starting composite derived from
    the seeded untuned plan; its result is where the sweep starts. On cc no seeded plan exists, so
@@ -5663,6 +5697,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
            @@ Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"8"))
   in
   let staffed_singles = staffed_singles_setting () in
+  let budget = budget_setting () in
   let playoff_width =
     max 0
       (int_setting ~default:default_playoff_width
@@ -5744,17 +5779,18 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
     Exn.protect ~f ~finally:(fun () -> acc := !acc +. seconds_since c)
   in
   progress_line "search_start"
-    (Printf.sprintf "backend=%s device=%d search=%b beam=%d rounds=%d" backend device search
-       beam_width rounds);
+    (Printf.sprintf "backend=%s device=%d search=%b beam=%d rounds=%d budget_s=%s" backend device
+       search beam_width rounds
+       (Option.value_map budget ~default:"none" ~f:(Printf.sprintf "%g")));
   (* Every report goes through here, exactly once per call on every path (gh-ocannl-550), so this is
      where a search's closing progress line is written: before the callback, which may raise. *)
   let emit_report (r : report) =
     progress_line "search_done"
       (Printf.sprintf
-         "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d failed=%d rounds=%d %s \
-          best_ms=%s best=%S"
+         "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d failed=%d rounds=%d \
+          budget_cut=%b %s best_ms=%s best=%S"
          (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
-         r.timings_unbatched r.candidates_failed r.rounds_run (progress_costs ())
+         r.timings_unbatched r.candidates_failed r.rounds_run r.budget_cut (progress_costs ())
          (progress_ms r.best_ms) r.best_label);
     Option.iter report ~f:(fun f -> f r)
   in
@@ -6158,7 +6194,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           when String.equal entry.SC.source_digest base_digest
                && String.equal entry.SC.numerics (SC.numerics_tag ())
                && Option.value_map entry.SC.codegen ~default:true ~f:(String.equal codegen_tag)
-               && Option.value_map entry.SC.objective ~default:true ~f:(String.equal objective) -> (
+               && Option.value_map entry.SC.objective ~default:true ~f:(String.equal objective)
+               (* gh-ocannl-1409: a budget-cut crown answers only a call that has a budget too. *)
+               && (Option.is_some budget || not entry.SC.budget_cut) -> (
             let spec =
               match entry.SC.segments with
               (* A fissioned entry with a non-empty [saved] is a split-reduce winner: [saved] is the
@@ -6228,6 +6266,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     declines = decline_summaries declines;
                     cache_replay_refusal = None;
                     rounds_run = 0;
+                    (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
+                    budget_cut = entry.SC.budget_cut;
                     beam_width;
                     sketch_candidates = 0;
                     epilogue_sketch_candidates = 0;
@@ -6303,6 +6343,14 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 cache_replay_refusal := Some classified;
                 None
             | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
+        | Some entry when entry.SC.budget_cut && String.equal entry.SC.source_digest base_digest ->
+            (* Reached only without a budget (the arm above takes it with one): the entry is the
+               best of a prefix of the menu, and this call was not asked to stop early. Its search's
+               store overwrites the entry, so the next budgeted call replays a full crown. *)
+            logf
+              "cache entry is the crown of a budget-cut search and this call has no budget: \
+               searching in full (gh-ocannl-1409)";
+            None
         | _ -> None
       else None
     in
@@ -6600,6 +6648,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         let coarse_single_measured = Hash_set.Poly.create () in
         let coarse_single_refused = Hash_set.Poly.create () in
         let rounds_run = ref 0 in
+        (* gh-ocannl-1409: set once the search's budget has stopped a candidate or a round. *)
+        let budget_cut = ref false in
         let n_sketch_candidates = ref 0
         and n_epilogue_sketch_candidates = ref 0
         and n_fiss_sketch_candidates = ref 0
@@ -6732,6 +6782,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             declines = summaries;
             cache_replay_refusal = !cache_replay_refusal;
             rounds_run = !rounds_run;
+            budget_cut = !budget_cut;
             beam_width;
             sketch_candidates = !n_sketch_candidates;
             epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
@@ -7193,20 +7244,59 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 | None -> ())
             | Some _ | None -> ()
           in
+          (* gh-ocannl-1409: the search's wall-clock budget, measured from the start of the call and
+             checked as each attempt (and each beam round) starts, so a candidate in flight is never
+             cut short: its compile and timing complete and it is ranked. Once the budget is spent,
+             nothing more is compiled -- the seeds left, the composites, the playoff and the rounds
+             are skipped where they would have been attempted, which costs no compile -- and the
+             search crowns its incumbent exactly as a completed one does. The untuned floors are
+             exempt ([floor]): the seeded untuned plan (gh-ocannl-1388) and the default-pipeline
+             seed, so a cut search has measured what the caller ships without tuning and crowns
+             nothing slower. A skipped spec leaves [last_attempt] at [`Other]: the staffed sweep
+             must neither retry it bare nor rank a stale dedup time for it. *)
+          let budget_spent = ref false in
+          let budget_allows ~what ~floor =
+            match budget with
+            | None -> true
+            | Some b ->
+                (if not !budget_spent then
+                   let elapsed = Seam.get budget_elapsed (seconds_since progress_clock) in
+                   if Float.(elapsed >= b) then (
+                     budget_spent := true;
+                     logf "budget of %gs spent (%.1f s elapsed, %d timed): crowning the incumbent" b
+                       elapsed !n_timed;
+                     progress_line "budget_spent"
+                       (Printf.sprintf "budget_s=%g timed=%d %s" b !n_timed (progress_costs ()))));
+                if (not !budget_spent) || floor then true
+                else (
+                  if not !budget_cut then
+                    logf "budget spent: skipping %s and every later non-floor candidate" what;
+                  budget_cut := true;
+                  false)
+          in
+          let budget_floor spec =
+            match spec with
+            | Fiss (F_seeded _) -> true
+            | _ -> Option.exists default_candidate_label ~f:(String.equal (spec_label spec))
+          in
           (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
              leaves the candidate it was in, and the costs of everything before it. Counted before
              the attempt too, so a fatal candidate -- which writes [search_done] from inside itself
              and raises -- is in the closing record's [attempts]. *)
           let try_spec spec =
             check_abandon ();
-            Int.incr progress_attempts;
-            Int.incr progress_tried;
-            (* Guarded here, not only inside [progress_line]: its arguments render a label and read
-               the best-so-far table on every attempt of a search that prints nothing. *)
-            if progress_enabled () then
-              progress_line "candidate"
-                (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
-            try_spec spec
+            if not (budget_allows ~what:(spec_label spec) ~floor:(budget_floor spec)) then (
+              last_attempt := `Other;
+              None)
+            else (
+              Int.incr progress_attempts;
+              Int.incr progress_tried;
+              (* Guarded here, not only inside [progress_line]: its arguments render a label and
+                 read the best-so-far table on every attempt of a search that prints nothing. *)
+              if progress_enabled () then
+                progress_line "candidate"
+                  (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
+              try_spec spec)
           in
           (* The search's seeds for one lowering: the family seeds, then the coalesced layout's
              branch beside them (gh-ocannl-1165) — prepared hermetically from the same lowering, its
@@ -7903,7 +7993,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              not enter it at all). *)
           let best = ref (List.hd !beam) in
           let continue_ = ref true in
-          while !continue_ && !rounds_run < rounds do
+          while
+            !continue_ && !rounds_run < rounds
+            && budget_allows ~what:(Printf.sprintf "round %d" (!rounds_run + 1)) ~floor:false
+          do
             Int.incr rounds_run;
             let head = Option.map (List.hd !beam) ~f:fst in
             let per_entry =
@@ -8016,8 +8109,17 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              nothing to cache: a stored entry would pin future processes to a never-timed
              schedule. *)
           let nothing_timed = Float.is_inf best_ms in
+          (* gh-ocannl-1409: see [budget_floor_unmeasured]. *)
+          let floor_unmeasured =
+            budget_floor_unmeasured ~budget_cut:!budget_cut ~auto_sched ~baseline_dispatched
+              ~floor_measured:(Option.is_some (default_ms ()) || Option.is_some (seeded_ms ()))
+          in
           (if use_cache then
-             if
+             if floor_unmeasured then
+               logf
+                 "the budget cut the search before it measured the untuned default: storing no \
+                  cache entry (gh-ocannl-1409)"
+             else if
                not
                  (search_measurements_cacheable ~nothing_timed
                     ~timings_contended:!n_timings_contended)
@@ -8058,6 +8160,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                    best_steps =
                      Some
                        { SC.search_shape = Lazy.force search_shape; steps = List.rev !best_steps };
+                   budget_cut = !budget_cut;
                  });
           (* Diagnostic control (config [autotune_log], or [tune]'s [?log]): compile and time the
              UNTUNED default pipeline in this very process, on the search context — discriminates a
@@ -8106,6 +8209,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               declines = decline_summaries declines;
               cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;
+              budget_cut = !budget_cut;
               beam_width;
               sketch_candidates = List.length sketch_params;
               epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);
@@ -8145,7 +8249,13 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             }
           in
           let result =
-            if nothing_timed then (
+            if floor_unmeasured && not nothing_timed then (
+              logf
+                "the budget cut the search before it measured the untuned default: shipping the \
+                 untuned default compile (gh-ocannl-1409)";
+              release_all_candidates ();
+              untuned_default_or_raise ())
+            else if nothing_timed then (
               (* Returning the incumbent here would hand the caller the very serial routine this
                  search refused to dispatch (gh-ocannl-532) — slower than not tuning at all, and on
                  GPU unbounded. The untuned compile is the honest fallback: the same code the caller
@@ -8199,6 +8309,25 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     (Outcome.detail_of_cause classified.cause);
                   untuned_default_or_raise ()
               | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+          in
+          (* The report describes the routine returned (Codex P1 on PR #1234): a caller ranking arms
+             by [best_ms] must not credit this one with a candidate it discarded, and the untuned
+             default it ships was never timed -- the nothing-timed report's shape. *)
+          let completed_report =
+            if floor_unmeasured && not nothing_timed then
+              {
+                completed_report with
+                best_ms = Float.infinity;
+                best_label = "";
+                best_tensorized = false;
+                best_tensorization = None;
+                best_mma_statements = 0;
+                best_mma_scalar_fallbacks = 0;
+                best_schedule = [];
+                fissioned = false;
+                best_steps = [];
+              }
+            else completed_report
           in
           (result, completed_report)
         in

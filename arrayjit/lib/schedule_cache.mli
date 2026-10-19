@@ -360,6 +360,12 @@ type entry = {
           against the incumbent's timed record, so without it an incumbent that replayed would leave
           every flip to run its full search. Absent for entries written before the field, which
           replay as "no record". *)
+  budget_cut : bool; [@sexp.bool]
+      (** The storing search was cut by its wall-clock budget ([autotune_budget_seconds],
+          gh-ocannl-1409): [saved] is the best of the candidates it reached, not of its menu.
+          [Autotune.tune] replays such an entry only for a call that has a budget too; a call
+          without one searches in full and overwrites it. Serialized only when set ([@sexp.bool]),
+          so entries written before the field read as uncut, which they are. *)
 }
 [@@deriving sexp]
 

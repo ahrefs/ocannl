@@ -334,6 +334,14 @@ cell is the step: cite the step cell. Each issue's cell:
   step times. Those times are still usable for the cut's question -- a searching process only
   inflates its launches, so a cut cell that matches the untuned cell there matches it a fortiori --
   and the search runs its full compile cost, about 50 min per pass for gpt2_mini_train on rog.
+  To bound a cell's search instead, set the config key `autotune_budget_seconds`
+  (`OCANNL_AUTOTUNE_BUDGET_SECONDS=S`, gh-ocannl-1409): once S seconds have passed since a
+  search started, it compiles nothing more beyond the untuned floors and crowns its incumbent. It
+  stores that crown, marked as cut, when its timings were clean, so the tuned cell's replay pass
+  under the same setting replays it. The result line says so: the arm's `budget_cut` is true on the
+  search pass and on the replay. Each placement arm is its own search, so a two-arm search pass
+  takes about twice S, plus the overrun: the candidate in flight, the floors, the winner's compile,
+  and the base compile, which comes before the first check.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
