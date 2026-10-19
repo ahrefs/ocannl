@@ -15,6 +15,22 @@ split-reduce: the coalesced, split, default-scheduled reduction computes the pla
 stage: the load nest's read of the coalesced source stays flattened: true
 privatize: the transfers' accesses of the coalesced target stay flattened: true
 stage+privatize: the coalesced, packed reduction computes the plain one's values bitwise: true
+contraction: Coalesce of the contraction pair is Op_legal: true
+contraction: the merged k loop spans the whole contraction: true
+contraction: the accumulator's index is untouched by the coalescing: true
+contraction: both operands are staged through their flattened address: true
+contraction: every staged read spans the merged extent on its flattened axis: true
+contraction: the unrelated second reader keeps reading the activation axis by axis: true
+contraction: the coalesced, padded, staged and privatized contraction computes the plain one's values bitwise: true
+contraction: the second reader's values are untouched: true
+contraction hje: Coalesce declines: true
+contraction hje: the oracle proves it illegal: true
+contraction per_head: Coalesce declines: true
+contraction per_head: the oracle proves it illegal: true
+contraction padded: Coalesce declines: true
+contraction padded: the oracle proves it illegal: true
+contraction split-reduce: the split of the merged k is Op_legal: true
+contraction split-reduce: the coalesced, split, default-scheduled contraction computes the plain one's values bitwise: true
 fuse-epilogue: the uncoalesced reduction's tail fuses: true
 fuse-epilogue: the relocation declines the coalesced accumulation nest's flattened site: true
 fuse-epilogue: the witness names the flattened site as the reason: true
