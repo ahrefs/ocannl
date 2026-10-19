@@ -4359,7 +4359,7 @@
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules accum_width)
- (libraries base ocannl stdio pprint arrayjit.verdict ll_test test_utils)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5460,6 +5460,25 @@
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules pipelined_move_legality)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name fragment_scope_move_legality)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules fragment_scope_move_legality)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

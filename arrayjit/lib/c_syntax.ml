@@ -2917,6 +2917,13 @@ module C_syntax (B : C_syntax_config) = struct
         (** Marked local accumulator tiles and the one currently being rendered by a backend
             fragment scope. Outside such a scope they retain ordinary local-array semantics. *)
     rendered_simdgroup_fragments : Set.M(Tn).t ref;
+        (** The marked fragments some recognized scope rendered through a backend hook, as intrinsic
+            fragments: their local arrays are not declared, unless the fragment is also in
+            [unscoped_simdgroup_fragments]. *)
+    unscoped_simdgroup_fragments : Set.M(Tn).t ref;
+        (** The marked fragments a [Tile_mma] rendered into outside a recognized scope, as the local
+            array (gh-ocannl-1342: e.g. the trailing copy of a scope a materializing [Unroll] of an
+            enclosing loop duplicated, beside a first copy rendered by the hook). *)
     current_swizzled : Low_level.swizzle_kind Map.M(Tn).t ref;
         (** Set by [compile_proc]: nodes stored XOR-swizzled ([Schedule.Stage ~swizzle], see
             {!Low_level.optimized.swizzled}). Scalar element accesses go through [pp_tn_offset]
@@ -4467,8 +4474,12 @@ module C_syntax (B : C_syntax_config) = struct
      lane { if lane==0 { fragment <- target } }; for k_o { ... Tile_mma(d=fragment) ... }; lane { if
      lane==0 { target <- fragment } }.
 
-     The marker on [optimized] makes this structural, not a proof over arbitrary user IR. A backend
-     hook may replace the region; declining leaves the ordinary local-array rendering untouched. *)
+     The marker on [optimized] makes this structural, not a proof over arbitrary user IR. The
+     structure is [Low_level.fragment_region]'s, which [Schedule.op_legality] also reads
+     (gh-ocannl-1342: [Schedule.fragment_scope_violations] refuses the moves that leave a marked
+     fragment's [Tile_mma] outside every scope recognized here, along the route [pp_ll] takes to
+     this function). A backend hook may replace the region; declining leaves the ordinary
+     local-array rendering untouched. *)
   let render_mma_fragment_scope ctx ~render (c : Low_level.t) : PPrint.document option =
     let open Low_level in
     let open PPrint in
@@ -5287,11 +5298,14 @@ module C_syntax (B : C_syntax_config) = struct
               Tn.equal d_tn fragment
           | None -> false
         in
-        if Set.mem !(ctx.current_simdgroup_fragments) d_tn && not fragment_is_active then
+        if Set.mem !(ctx.current_simdgroup_fragments) d_tn && not fragment_is_active then (
+          (* [Schedule.op_legality] refuses the moves that leave such a statement (gh-ocannl-1342,
+             [Schedule.fragment_scope_violations]); this is the backstop for IR that bypassed it. *)
+          ctx.unscoped_simdgroup_fragments := Set.add !(ctx.unscoped_simdgroup_fragments) d_tn;
           (declinef ctx)
             "marked simdgroup fragment %s rendered outside its recognized fragment scope; falling \
              back from the intended persistent intrinsic path"
-            (Tn.debug_name d_tn);
+            (Tn.debug_name d_tn));
         (* [ld] is the statement's recorded leading-dimension stride for this operand
            ([Tile_mma.ldd]/[lda]/[ldb]) — the minor dim of the tnode's last axis in the plain case,
            a larger stride when interior batch axes sit between the tile roles (gh-ocannl-528). *)
@@ -7665,6 +7679,7 @@ module C_syntax (B : C_syntax_config) = struct
         current_deferred_lanes = ref [];
         current_simdgroup_fragments = ref simdgroup_fragments;
         rendered_simdgroup_fragments = ref (Set.empty (module Tn));
+        unscoped_simdgroup_fragments = ref (Set.empty (module Tn));
         current_swizzled = ref swizzled;
         widest_vector_bytes = ref 0;
         current_pipelined = ref pipelined;
@@ -8066,7 +8081,9 @@ module C_syntax (B : C_syntax_config) = struct
                (* Privatized to a pool-parallel [Grid] loop: declared per chunk inside that loop's
                   body instead (see [parallel_grid_loop]). *)
                && (not (Set.mem grid_privatized tn))
-               && not (Set.mem !(ctx.rendered_simdgroup_fragments) tn)
+               && not
+                    (Set.mem !(ctx.rendered_simdgroup_fragments) tn
+                    && not (Set.mem !(ctx.unscoped_simdgroup_fragments) tn))
              then
                let is_shared = Set.mem workgroup_shared tn in
                if is_shared then
