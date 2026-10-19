@@ -543,6 +543,11 @@ let raw_entries =
         "[scanner-refusal:d3576c4f9152f9f5a8f7b5bd17bc7e39] no program's modules";
         "[scanner-refusal:435bce2f838f426728b540ba5f6c905f] marker between stanzas";
         "[scanner-refusal:3956653315998753df29070b7b38ae6c] entry point renamed";
+        "[scanner-refusal:eb27e7f56b8d3460a37076b391593d9e] configuration table pins";
+        "[scanner-refusal:3e7db051804a1b6bfe7150f9c30c7ebc] the auto-probe's spelling";
+        "[scanner-refusal:22825750e1b48f737f60249e27047e28] empty string which";
+        "[scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's";
+        "[scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );

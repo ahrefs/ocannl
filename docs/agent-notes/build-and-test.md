@@ -1437,11 +1437,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `Autotune.tune` or a value of the framework library (`lib/`) that reaches it, transitively
   (`Train.tune_placements`, `Calibrate.stream`; the golden lists them), with a run the backend rule
   says can select cc or multidev_cc. Each either pins the width -- its initialization states
-  `cc_vector_bytes` (`Config_key_scan.stating_reach`: a literal that flows to `config_file_args`
-  or `putenv`, directly or through a support value such as `Fissioned_chain.small_menu_envelope`;
-  a statement inside a function the initializer never calls pins nothing), or every cc-capable rule
-  running it `setenv`s the variable -- or its program stanza carries `; cc-vector-width:
-  independent -- <reason>`. The reason has to be TRUE: a claim on what a search seeds, keeps or
+  `cc_vector_bytes` (`Config_key_scan.stating_reach`: a WRITE carrying the literal, a `Hashtbl.set`
+  into `config_file_args` or a `putenv`, directly or by handing it to a local writer, or a call of
+  a support value that does, such as `Fissioned_chain.small_menu_envelope`, followed by what the
+  reference resolves to; a read of the table, a statement inside a function the initializer never
+  calls, and a literal value of `-1` or `""` pin nothing), or every cc-capable rule running it
+  `setenv`s the variable to a non-negative integer -- or its program stanza carries
+  `; cc-vector-width: independent -- <reason>`. The reason has to be TRUE: a claim on what a search seeds, keeps or
   crowns pins instead. A marker on a pinned program, a stale one, a second one and one on a rule
   are refused. A test pruning any cc search with an envelope gets the pin from
   `small_menu_envelope`, which states the vector file beside the envelope. The local proxy for both

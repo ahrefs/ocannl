@@ -227,6 +227,11 @@ the marker's sentinel outside a comment is refused: true
 a marker on a rule, which names no program's modules, is refused: true
 a marker between stanzas is refused rather than attributed: true
 an entry point renamed away is refused as a lost anchor, not read as no search: true
+a helper that only reads the configuration table pins nothing: true
+nor does a statement of `-1`, the auto-probe's spelling: true
+nor a `setenv` of `-1` or of the empty string, which reads as unset: true
+a call through another module's or a local module's namesake of the helper pins nothing: true
+while one through an alias of the helper's module does: true
 
 Synthetic controls: ambient gates derive identity from the program actually run.
 a renamed direct-utils universe test and its resolved runner are gates: true
@@ -481,6 +486,11 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:d3576c4f9152f9f5a8f7b5bd17bc7e39] no program's modules
   [scanner-refusal:435bce2f838f426728b540ba5f6c905f] marker between stanzas
   [scanner-refusal:3956653315998753df29070b7b38ae6c] entry point renamed
+  [scanner-refusal:eb27e7f56b8d3460a37076b391593d9e] configuration table pins
+  [scanner-refusal:3e7db051804a1b6bfe7150f9c30c7ebc] the auto-probe's spelling
+  [scanner-refusal:22825750e1b48f737f60249e27047e28] empty string which
+  [scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's
+  [scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does
   [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks
   [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):

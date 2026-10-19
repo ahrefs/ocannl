@@ -616,12 +616,16 @@ let generated_init_calls_in_source content =
     source in the tree. *)
 let could_call_generated_init content = String.is_substring content ~substring:generated_module
 
-(** Which requested paths an OCaml source names under the scanner's lexical module model.
+(** Every site where an OCaml source names one of the requested paths under the scanner's lexical
+    module model: the path as the source SPELLS it -- [F.small_menu] under
+    [module F = Fissioned_chain] -- beside the requested path it resolves to, so a caller can follow
+    one particular reference (gh-ocannl-1368's width-pinning helpers).
 
-    Used only for schedule-pipeline configuration-key derivation (gh-ocannl-1149). Lifecycle
-    membership instead uses {!Lifecycle_scan}'s resolution-free Dune contract (gh-ocannl-798). This
-    source pass remains an approximation rather than a typed OCaml environment. *)
-let module_references_in_source content ~paths =
+    Used for env_var_deps' derivations: the schedule pipeline's configuration keys (gh-ocannl-1149)
+    and the programs starting an autotune search (gh-ocannl-1368). Lifecycle membership instead uses
+    {!Lifecycle_scan}'s resolution-free Dune contract (gh-ocannl-798). This source pass remains an
+    approximation rather than a typed OCaml environment. *)
+let module_reference_sites content ~paths =
   let structure = structure_of content in
   let rec starts_with components path =
     match (components, path) with
@@ -920,15 +924,20 @@ let module_references_in_source content ~paths =
         (match flatten_module_path lid with
         | Some components ->
             List.iter paths ~f:(fun path ->
-                let spelling = String.concat ~sep:"." path in
-                if matches components path && not (List.mem !found spelling ~equal:String.equal)
-                then found := spelling :: !found)
+                if matches components path then
+                  found := (components, String.concat ~sep:"." path) :: !found)
         | None -> ());
         super#longident lid
     end
   in
   walk#structure structure;
   List.rev !found
+
+(** Which requested paths an OCaml source names: {!module_reference_sites}, by requested path. *)
+let module_references_in_source content ~paths =
+  List.fold (module_reference_sites content ~paths) ~init:[] ~f:(fun found (_, spelling) ->
+      if List.mem found spelling ~equal:String.equal then found else spelling :: found)
+  |> List.rev
 
 type label_use = { key : string option; offset : int }
 (** Every place the [arg_name] label names a configuration key, and what it names it with. [key] is
@@ -1526,22 +1535,44 @@ type stating = {
     -- and whether initializing the module does (gh-ocannl-1368: which programs pin the cc vector
     width for every search they run).
 
-    A value states a literal when its body spells the literal and reaches a [sinks] value -- a path
-    whose last component is one of [sinks], [config_file_args] or [putenv] for a configuration key
-    -- through itself or the module's other top-level values it names: [Fissioned_chain.small_menu]
-    spells ["cc_vector_bytes"] in a list its local [state] writes into [Utils.config_file_args]. A
-    literal in an [~arg_name] argument is a READ and never counts, nor does one in a value that
-    reaches no sink -- a format string, a table of names. A value also states when it names one of
-    [external_states]' paths, which is how a caller follows a helper of another module.
+    A statement is a WRITE that carries the literal in its arguments: an application of one of
+    [table_writes] ([Hashtbl.set], ...) to one of [tables] ([Utils.config_file_args]), or of one of
+    [env_writes] ([Unix.putenv]). A value also states the literal when it hands it to a top-level
+    value of the same module that writes whatever it is given -- [Fissioned_chain.small_menu] passes
+    ["cc_vector_bytes"] in a list to its local [state], whose body is a [Hashtbl.set] on the table
+    -- when it names a value that states it, and when it names one of [external_states]' paths,
+    which is how a caller follows a helper of another module. A literal outside a write's arguments
+    is not a statement: a [Hashtbl.mem] on the table, an [~arg_name] read, a format string, a table
+    of names (Codex P2, round 1 of staging#1263).
 
-    Flow-insensitive, and an over-read where it errs: a value that sets the key and later unsets it
-    states it, and a closure the initializer builds without calling counts as called. Nested modules
-    and functor bodies are not walked; a pin there is not seen, which costs the program a marker
-    rather than passing it unpinned. *)
-let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals ~sinks content =
+    A write whose value is a string literal [pins] rejects states nothing -- ["-1"] and [""] leave
+    the cc width on its auto-probe -- and neither does a [(literal, value)] pair whose value is one;
+    a computed value is trusted.
+
+    Flow-insensitive within a value, and an over-read where it errs: a value that sets the key and
+    later unsets it states it, and a closure the initializer builds without calling counts as
+    called. A literal reaching a write through a local binding, or nested modules and functor
+    bodies, are not followed; a pin there is not seen, which costs the program a marker rather than
+    passing it unpinned. *)
+let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals ~tables
+    ~table_writes ~env_writes ~pins content =
   let structure = structure_of content in
-  let direct_of expr =
-    let literal = ref false and sink = ref false and names = ref [] in
+  let ident_path expr =
+    match expr.pexp_desc with Pexp_ident { txt; _ } -> flatten_module_path txt | _ -> None
+  in
+  let ends_in names expr =
+    Option.exists (ident_path expr) ~f:(fun path ->
+        List.mem names (List.last_exn path) ~equal:String.equal)
+  in
+  let is_literal expr =
+    Option.exists (string_literal expr) ~f:(fun s -> List.mem literals s ~equal:String.equal)
+  in
+  let unpinning value = Option.exists (string_literal value) ~f:(Fn.non pins) in
+  let positional (lbl, _) = match lbl with Asttypes.Nolabel -> true | _ -> false in
+  (* Whether an argument list carries a literal a write could state: anywhere in it, except under an
+     [~arg_name] argument, and except a key paired with a literal value [pins] rejects. *)
+  let carries args =
+    let found = ref false in
     let iterator =
       object (self)
         inherit Ast_traverse.iter as super
@@ -1552,20 +1583,59 @@ let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals 
               self#expression fn;
               List.iter args ~f:(fun (lbl, arg) ->
                   if not (is_our_label lbl) then self#expression arg)
+          | Pexp_tuple [ key; value ] when is_literal key ->
+              if not (unpinning value) then found := true;
+              self#expression value
           | _ ->
-              (match expr.pexp_desc with
-              | Pexp_ident { txt; _ } ->
-                  Option.iter (flatten_module_path txt) ~f:(fun path ->
-                      if List.mem sinks (List.last_exn path) ~equal:String.equal then sink := true;
-                      names := path :: !names)
-              | _ ->
-                  Option.iter (string_literal expr) ~f:(fun s ->
-                      if List.mem literals s ~equal:String.equal then literal := true));
+              if is_literal expr then found := true;
+              super#expression expr
+      end
+    in
+    List.iter args ~f:(fun (lbl, arg) -> if not (is_our_label lbl) then iterator#expression arg);
+    !found
+  in
+  (* A write, and the value it sets: its [~data], or else its last positional argument. *)
+  let write_value fn args =
+    if
+      ends_in table_writes fn
+      && List.exists args ~f:(fun ((_, arg) as a) -> positional a && ends_in tables arg)
+      || ends_in env_writes fn
+    then
+      Some
+        (match
+           List.find args ~f:(fun (lbl, _) ->
+               match lbl with Asttypes.Labelled "data" -> true | _ -> false)
+         with
+        | Some (_, value) -> Some value
+        | None -> Option.map (List.last (List.filter args ~f:positional)) ~f:snd)
+    else None
+  in
+  let direct_of expr =
+    let writes = ref false and states = ref false and calls = ref [] and names = ref [] in
+    let iterator =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          match expr.pexp_desc with
+          | Pexp_apply (fn, args) ->
+              (match write_value fn args with
+              | Some value ->
+                  writes := true;
+                  if carries args && not (Option.exists value ~f:unpinning) then states := true
+              | None ->
+                  if carries args then
+                    Option.iter (ident_path fn) ~f:(fun p -> calls := p :: !calls));
+              self#expression fn;
+              List.iter args ~f:(fun (lbl, arg) ->
+                  if not (is_our_label lbl) then self#expression arg)
+          | _ ->
+              Option.iter (ident_path expr) ~f:(fun path -> names := path :: !names);
               super#expression expr
       end
     in
     iterator#expression expr;
-    (!literal, !sink, !names)
+    (!writes, !states, !calls, !names)
   in
   let is_function expr = match expr.pexp_desc with Pexp_function _ -> true | _ -> false in
   let named =
@@ -1601,11 +1671,12 @@ let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals 
   let names_any set names =
     List.exists names ~f:(function [ name ] -> Set.mem set name && local name | _ -> false)
   in
-  let sinking = fixpoint (fun set (_, sink, names) -> sink || names_any set names) in
-  let states_with set (literal, sink, names) =
-    (literal && (sink || names_any sinking names))
-    || names_any set names
-    || List.exists names ~f:(fun path -> List.length path >= 2 && external_states path)
+  (* The values that write whatever they are handed: a write in their body, or a call of one. *)
+  let writing = fixpoint (fun set (writes, _, _, names) -> writes || names_any set names) in
+  let states_with set (_, states, calls, names) =
+    states || names_any writing calls || names_any set names
+    || List.exists names ~f:(fun path ->
+        (match path with [ name ] -> not (local name) | _ -> true) && external_states path)
   in
   let stating = fixpoint states_with in
   {

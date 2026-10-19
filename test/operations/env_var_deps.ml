@@ -1070,9 +1070,26 @@ let width_marker_sentinel = "cc-vector-width:"
 let width_marker_declaration = "independent"
 let width_cc_backends = [ "cc"; "multidev_cc" ]
 
-(* What makes a literal a statement rather than a mention: the configuration-file table a program
-   states a key into, and the environment a child process inherits. *)
-let width_pin_sinks = [ "config_file_args"; "putenv" ]
+(* What makes a literal a statement rather than a mention: a write into the configuration-file table
+   a program states a key into, or into the environment a child process inherits
+   ([Sources.stating_reach]; a read of either states nothing, Codex P2 round 1). *)
+let width_pin_tables = [ "config_file_args" ]
+let width_pin_table_writes = [ "set"; "add"; "add_exn"; "replace" ]
+let width_pin_env_writes = [ "putenv" ]
+
+(* Which values pin the width: `Cc_backend.vector_bytes_setting` takes a non-negative integer and
+   sends anything else that parses to the host's auto-probe -- [-1] is the auto spelling -- and an
+   empty variable reads as unset. So a statement, or a `(setenv …)`, of any other literal pins
+   nothing (Codex P2, round 1). A deliberately independent restatement of that function's guard: the
+   scan reads no compiled library behavior. *)
+let width_pins value =
+  match Int.of_string_opt (String.strip value) with Some n -> n >= 0 | None -> false
+
+let width_stating_reach ?external_states content =
+  Sources.stating_reach ?external_states
+    ~literals:[ width_key; Utils.env_var_name width_key ]
+    ~tables:width_pin_tables ~table_writes:width_pin_table_writes ~env_writes:width_pin_env_writes
+    ~pins:width_pins content
 
 (* A value named by its module and its name. *)
 let compare_names (m, v) (m', v') =
@@ -1674,47 +1691,39 @@ let main () =
             let m =
               String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
             in
-            List.map
-              (Sources.stating_reach ~literals:width_literals ~sinks:width_pin_sinks content)
-                .stating_values ~f:(fun v -> (m, v)))
+            List.map (width_stating_reach content).stating_values ~f:(fun v -> (m, v)))
   in
-  let width_pin_helper_of path =
-    List.find width_pin_helpers ~f:(fun (m, v) ->
-        match List.drop path (List.length path - 2) with
-        | [ m'; v' ] -> String.equal m m' && String.equal v v'
-        | _ -> false)
-  in
-  (* Per source: whether initializing it pins the width, and through which helper if not by
-     itself. *)
+  let width_pin_helper_paths = List.map width_pin_helpers ~f:(fun (m, v) -> [ m; v ]) in
+  (* Per source: whether initializing it pins the width, and through which helper if not by itself.
+     A helper is followed by what the reference RESOLVES to under the source's aliases, opens and
+     shadowing ([Sources.module_reference_sites]), never by its last two components: a
+     `Vendor.Fissioned_chain.small_menu` or a local `module Fissioned_chain = …` is not the support
+     value (Codex P2, round 1). *)
   let width_pins_at_init =
     List.filter_map source_files ~f:(fun (path, on_disk) ->
         let content = In_channel.read_all on_disk in
-        let helpers_named () =
-          List.filter_map (Sources.value_paths_in_source content) ~f:width_pin_helper_of
-          |> List.dedup_and_sort ~compare:compare_names
-        in
         if
           not
             (could_state content
             || List.exists width_pin_helpers ~f:(fun (_, v) ->
                 String.is_substring content ~substring:v))
         then None
-        else if
-          (Sources.stating_reach ~literals:width_literals ~sinks:width_pin_sinks
-             ~external_states:(fun p -> Option.is_some (width_pin_helper_of p))
-             content)
-            .states_at_init
-        then
-          Some
-            ( String.lowercase path,
-              match helpers_named () with
-              | [] -> "states it at initialization"
-              | helpers ->
-                  "calls "
-                  ^ String.concat ~sep:", "
-                      (List.map helpers ~f:(fun (m, v) -> Printf.sprintf "`%s.%s`" m v))
-                  ^ " at initialization" )
-        else None)
+        else
+          let sites = Sources.module_reference_sites content ~paths:width_pin_helper_paths in
+          let resolves spelled =
+            List.exists sites ~f:(fun (components, _) -> List.equal String.equal components spelled)
+          in
+          if (width_stating_reach ~external_states:resolves content).states_at_init then
+            Some
+              ( String.lowercase path,
+                match List.dedup_and_sort (List.map sites ~f:snd) ~compare:String.compare with
+                | [] -> "states it at initialization"
+                | helpers ->
+                    "calls "
+                    ^ String.concat ~sep:", "
+                        (List.map helpers ~f:(fun helper -> Printf.sprintf "`%s`" helper))
+                    ^ " at initialization" )
+          else None)
     |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
   in
   let search_table = ref [] in
@@ -3176,8 +3185,24 @@ let main () =
                        in
                        let var = Utils.env_var_name width_key in
                        let cc_runs = List.filter run_stanzas ~f:(fun (r, _) -> runs_cc r) in
+                       (* The pin set names the variable a `setenv` fixes, not the value it fixes it
+                          to, and `""` or `-1` leaves the width on the host's probe: every `setenv`
+                          of it in the run's stanza has to set a width (Codex P2, round 1). *)
+                       let sets_a_width runner =
+                         let rec values = function
+                           | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest)
+                             when String.equal (String.uppercase name) var ->
+                               value :: List.concat_map rest ~f:values
+                           | Sexp.List items -> List.concat_map items ~f:values
+                           | Sexp.Atom _ -> []
+                         in
+                         List.for_all (values runner) ~f:(function
+                           | Sexp.Atom value -> width_pins value
+                           | Sexp.List _ -> false)
+                       in
                        let unpinned_runs =
-                         List.filter cc_runs ~f:(fun (_, pins) -> not (Set.mem pins var))
+                         List.filter cc_runs ~f:(fun (r, pins) ->
+                             not (Set.mem pins var && sets_a_width r))
                        in
                        let markers = width_markers_of stanza in
                        if not (List.is_empty searches || List.is_empty cc_runs) then (
@@ -6823,8 +6848,9 @@ let search_helper_stub =
     "let state settings =\n\
     \  List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)\n\
      let small () = state [ (%S, \"32\") ]\n\
-     let report () = Printf.printf \"%s=%%d\\n\" 16\n"
-    width_key width_key
+     let report () = Printf.printf \"%s=%%d\\n\" 16\n\
+     let peek () = Hashtbl.mem Utils.config_file_args %S\n"
+    width_key width_key width_key
 
 (* How the probe's stanza answers. *)
 let search_subject ?(marker = "") ?(action = "") ?(backend = `Selects) ?(rule_marker = "")
@@ -6899,6 +6925,12 @@ let search_control () =
        let () = Autotune.tune ()\n"
       width_key
   in
+  let tune = "let () = Autotune.tune ()\n" in
+  let auto_value =
+    Printf.sprintf "let () = Hashtbl.set Utils.config_file_args ~key:%S ~data:\"-1\"\n%s" width_key
+      tune
+  in
+  let setenv value = Printf.sprintf "\n (action (setenv %s %s (run %%{test})))" var value in
   let read =
     Printf.sprintf
       "let width () = Utils.get_global_arg ~arg_name:%S ~default:\"-1\"\n\
@@ -6948,6 +6980,19 @@ let search_control () =
           (run ~marker ~preamble:(marker ^ "\n\n") ~probe:named ()) );
       ( "anchor",
         refused ~why:"lost an anchor" (run ~home:"let tuned () = ()\n" ~marker ~probe:named ()) );
+      (* Codex P2, round 1 of staging#1263: a read is no write, an auto value pins nothing, and a
+         helper is the one its reference resolves to. *)
+      ("peek", refused (run ~probe:"let () = ignore (Menu.peek ())\nlet () = Autotune.tune ()\n" ()));
+      ("auto_value", refused (run ~probe:auto_value ()));
+      ("setenv_auto", refused (run ~action:(setenv "-1") ~probe:named ()));
+      ("setenv_empty", refused (run ~action:(setenv "\"\"") ~probe:named ()));
+      ("vendor", refused (run ~probe:("let () = Vendor.Menu.small ()\n" ^ tune) ()));
+      ( "shadowed",
+        refused
+          (run
+             ~probe:("module Menu = struct let small () = () end\nlet () = Menu.small ()\n" ^ tune)
+             ()) );
+      ("aliased", passed (run ~probe:("module M = Menu\nlet () = M.small ()\n" ^ tune) ()));
     ]
   in
   List.iter arms ~f:(fun (label, (result, ok)) -> if not ok then report label result);
@@ -6985,6 +7030,14 @@ let search_control () =
   Verdict.p "a marker between stanzas is refused rather than attributed" (ok "between");
   Verdict.p "an entry point renamed away is refused as a lost anchor, not read as no search"
     (ok "anchor");
+  Verdict.p "a helper that only reads the configuration table pins nothing" (ok "peek");
+  Verdict.p "nor does a statement of `-1`, the auto-probe's spelling" (ok "auto_value");
+  Verdict.p "nor a `setenv` of `-1` or of the empty string, which reads as unset"
+    (ok "setenv_auto" && ok "setenv_empty");
+  Verdict.p
+    "a call through another module's or a local module's namesake of the helper pins nothing"
+    (ok "vendor" && ok "shadowed");
+  Verdict.p "while one through an alias of the helper's module does" (ok "aliased");
   try remove_tree root with Unix.Unix_error _ -> ()
 
 let malformed_tree_control () =
