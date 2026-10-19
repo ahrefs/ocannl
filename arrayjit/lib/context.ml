@@ -47,7 +47,11 @@ type execution_ledger = {
       (** The routine whose execution most recently wrote each concrete ordinary buffer. Unlike the
           immutable compile frontier, this follows re-execution order without conflating sibling
           contexts that allocate distinct buffers for the same tnode. External writes remove their
-          buffer. *)
+          buffer. Entries outlive a {!release}, and a released upload leaf's arena tail is handed to
+          a survivor at the same location (gh-ocannl-1328); such an entry cannot mislead: only
+          [upload_slot] re-issues a location, and both of its callers ([from_host], [copy]) record
+          an external write over it, and every writer here is executed ([run] adds both,
+          [rollback_execution] removes both), so it could only ever report "ready". *)
   merge_buffer_readers : (int * int) list Hashtbl.M(Int).t;
       (** [(consumer routine id, owning context id)] by synthetic merge-transfer id, one entry per
           release unit that keeps the consumer live (an upload fork adds one, see [derive]).

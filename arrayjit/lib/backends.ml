@@ -495,7 +495,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   (* gh-ocannl-1125: absent host-upload and device-copy nodes share bump-packed arenas. Upload
      siblings retain their common pools independently (gh-ocannl-1173). Only a value holding an
-     arena's last tenant may extend it, so branches cannot overlap allocations.
+     arena's last tenant may extend it, so branches cannot overlap allocations -- holding it at its
+     location ([Backend_intf.holds_tenant], gh-ocannl-1328): a sibling holding the same node
+     elsewhere is no owner of this pool, and its upload would be freed under it.
 
      First fit, among arenas of the same residency hint that this value may extend. The first arena
      of a residency hint this value holds a tenant of is sized exactly to its node, so a lone upload
@@ -519,18 +521,19 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     let same_mode (a : Backend_intf.upload_arena) =
       [%equal: Tn.memory_mode option] a.arena_mode mode
     in
+    let holds_tenant = Backend_intf.holds_tenant ctx.ctx_buffers in
     let fits (a : Backend_intf.upload_arena) =
-      let last_tenant, used = List.hd_exn a.tenants in
-      same_mode a
-      && align_up used + size_in_bytes <= a.capacity
-      && Map.mem ctx.ctx_buffers last_tenant
+      let last = List.hd_exn a.tenants in
+      same_mode a && align_up last.bump + size_in_bytes <= a.capacity && holds_tenant a last
     in
     match List.find arenas.arenas ~f:fits with
     | Some a ->
         let before = a.tenants in
-        let _, used = List.hd_exn before in
-        let offset = align_up used in
-        let appended = (tn, offset + size_in_bytes) :: before in
+        let offset = align_up (List.hd_exn before).bump in
+        let appended =
+          { Backend_intf.tenant = tn; tenant_offset = offset; bump = offset + size_in_bytes }
+          :: before
+        in
         a.tenants <- appended;
         let release () = if phys_equal a.tenants appended then a.tenants <- before in
         ({ pool_id = a.arena_pool_id; offset }, release)
@@ -539,11 +542,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* gh-ocannl-1204: only the arenas this value holds a tenant of. A sibling's arenas are
            shared lineage state but can never be extended from here, so counting them doubled each
            simultaneously held fork's arena over the last. *)
-        let holds (a : Backend_intf.upload_arena) =
-          List.exists a.tenants ~f:(fun (tenant, _) ->
-              Option.exists (Map.find ctx.ctx_buffers tenant)
-                ~f:(fun (loc : Backend_intf.buffer_loc) -> loc.pool_id = a.arena_pool_id))
-        in
+        let holds (a : Backend_intf.upload_arena) = List.exists a.tenants ~f:(holds_tenant a) in
         let minted =
           List.sum
             (module Int)
@@ -566,7 +565,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             arena_pool_id = pool_id;
             arena_mode = mode;
             capacity;
-            tenants = [ (tn, size_in_bytes) ];
+            tenants = [ { tenant = tn; tenant_offset = 0; bump = size_in_bytes } ];
           }
         in
         arenas.arenas <- a :: arenas.arenas;
@@ -1438,8 +1437,8 @@ let finalize (type dev runner event)
                     List.iter ctx.upload_arenas.arenas ~f:(fun a ->
                         if a.arena_pool_id = pool_id then
                           a.tenants <-
-                            List.drop_while a.tenants ~f:(fun (tn, _) ->
-                                not (List.exists remaining ~f:(fun tip -> Map.mem !tip tn)))))
+                            List.drop_while a.tenants ~f:(fun t ->
+                                not (List.exists remaining ~f:(fun tip -> holds_tenant !tip a t)))))
                   else (
                     Resource_fault_injection.hit Finalize_before_free;
                     free_and_forget_pool ctx.device ~free_pool pool_id;

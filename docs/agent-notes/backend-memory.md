@@ -179,7 +179,13 @@ files.
   decrement twice. Within a lifecycle only a value holding an
   arena's latest tenant extends it, so two sibling uploads cannot reuse the same tail. The arena's
   tenant history is trimmed against surviving owner maps on retirement, allowing the survivor to
-  reuse a released tail instead of stranding one pool per fork. A failed upload into an existing arena rolls
+  reuse a released tail instead of stranding one pool per fork. A tenant is a LOCATION: "holds" is
+  `Backend_intf.holds_tenant` (the node at the tenant's own pool and offset) in `fits`, the doubling's
+  sizing and the trim alike; asking `Map.mem` of the node let a fork holding the same node elsewhere
+  append into a pool only its sibling owned, freed under it at the sibling's release (gh-ocannl-1328).
+  A reused tail keeps its `Buffer_key`, so the execution ledger may hold a released leaf's writer for
+  it; harmless, because only `upload_slot` re-issues a location and its callers record an external
+  write over it, and a ledger writer is always executed. A failed upload into an existing arena rolls
   its bump back and frees nothing; `finalize` removes an arena only when its last owner frees the
   slab. Release only the latest value in each linear upload chain. Guard: `test/operations/set_values_pool_coalescing.ml`, plus the arena leg of
   `resource_fault_injection`. Device copies share the same allocator and await inside its unwind
