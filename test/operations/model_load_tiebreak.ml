@@ -277,10 +277,9 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   in
   all "the arm's reloads count: a reusing arm issues fewer loads than the record's own"
     (fun (_, plain, _) -> fewer (loads reusing plain) (loads rule plain));
-  (* A staged twin's accumulator is a persistent fragment (gh-ocannl-1063), whose scope the renderer
-     leaves for per-statement emission where the scope's arm declines: the count describes such a
-     statement only where both scopes' arms describe it alike (CUDA's fp8 arm), and otherwise counts
-     nothing. A rule whose reloads differ by scope tells the cases apart. *)
+  (* A staged twin's accumulator is a persistent fragment (gh-ocannl-1063): the hook's update-only
+     call in the fragment scope when the hook accepts it there, a statement of its own otherwise.
+     With reloads that differ by scope, the count shows which scope it read. *)
   let per_statement_reloads =
     {
       capabilities with
@@ -293,6 +292,24 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   in
   let per_statement (o : LL.optimized) =
     { o with LL.simdgroup_fragments = Set.empty (module Ir.Tnode) }
+  in
+  let accepting ~fragment =
+    {
+      per_statement_reloads with
+      mma_accepts =
+        (fun ~d_prec:_
+          ~a_prec:_
+          ~b_prec:_
+          ~ta:_
+          ~tb:_
+          ~m:_
+          ~n:_
+          ~k:_
+          ~d:(_, (d_space, _))
+          ~a:_
+          ~b:_
+        -> match d_space with `Fragment -> fragment | `Device | `Shared | `Thread -> true);
+    }
   in
   let declining =
     {
@@ -308,14 +325,18 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
       && CM.equal_load_count
            (Autotune.model_operand_loads ~capabilities:declining swz)
            CM.Undescribed);
-  all "a marked statement counts where both scopes' arms agree, as unmarked" (fun (_, plain, _) ->
-      (not (Set.is_empty plain.LL.simdgroup_fragments))
-      && Option.is_some (loads rule plain)
-      && Option.equal Int.equal (loads rule plain) (loads rule (per_statement plain)));
-  all "a marked statement whose scopes' arms differ has no count; unmarked it has one"
+  all "a marked statement the hook accepts as a fragment update is counted in the fragment scope"
     (fun (_, plain, _) ->
-      Option.is_none (loads per_statement_reloads plain)
-      && Option.is_some (loads per_statement_reloads (per_statement plain)));
+      (not (Set.is_empty plain.LL.simdgroup_fragments))
+      && fewer
+           (loads (accepting ~fragment:true) plain)
+           (loads (accepting ~fragment:true) (per_statement plain)));
+  all "a marked statement the hook declines as a fragment update is counted per statement"
+    (fun (_, plain, _) ->
+      Option.is_some (loads (accepting ~fragment:false) plain)
+      && Option.equal Int.equal
+           (loads (accepting ~fragment:false) plain)
+           (loads (accepting ~fragment:false) (per_statement plain)));
   (* The family search over the site, under each rule. Every leaf it could score, scored the way it
      scores them, is the population its pick is checked against. *)
   let scored =

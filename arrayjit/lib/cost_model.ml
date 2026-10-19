@@ -769,31 +769,30 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
           max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
         in
         let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
-        (* The emission scope. An unmarked statement renders on its own. A schedule-marked fragment
-           accumulator asks for the persistent fragment scope, but the renderer falls back to per
-           statement where the scope's arm declines its operands — a decision this walk does not
-           restate — so a marked statement is described only where both scopes' arms describe it
-           alike, and otherwise has no count. *)
-        let describe scope =
-          ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:(operand_place opt a_tn)
-              ~b:(operand_place opt b_tn),
-            operand_fragments ~a_prec ~b_prec ~d_prec ~scope )
-        in
-        (* A statement the hook would decline renders scalar or register-tiled code: nothing the arm
-           description says applies to it. *)
-        let accepted =
-          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k
-            ~d:(ldd, operand_place opt d_tn)
+        (* The emission scope and acceptance, both the backend hook's own decisions: a statement
+           whose accumulator the schedule marked a persistent fragment renders as an update-only
+           call in the fragment scope when the hook accepts it there, and otherwise — like every
+           unmarked statement — on its own, if the hook accepts it with its destination's real
+           place. A statement it declines both ways renders scalar or register-tiled code: nothing
+           the arm description says applies to it. *)
+        let accepts d_place =
+          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d:(ldd, d_place)
             ~a:(lda, operand_place opt a_tn)
             ~b:(ldb, operand_place opt b_tn)
         in
+        let d_space, d_layout = operand_place opt d_tn in
+        let scope =
+          if Set.mem opt.Low_level.simdgroup_fragments d_tn && accepts (`Fragment, d_layout) then
+            Some Backend_intf.Mma_fragment_scope
+          else if accepts ((d_space :> [ `Device | `Shared | `Thread | `Fragment ]), d_layout) then
+            Some Backend_intf.Mma_per_statement
+          else None
+        in
         let description =
-          let statement = describe Backend_intf.Mma_per_statement in
-          if not accepted then None
-          else if not (Set.mem opt.Low_level.simdgroup_fragments d_tn) then Some statement
-          else
-            let fragment = describe Backend_intf.Mma_fragment_scope in
-            Option.some_if (Poly.equal statement fragment) statement
+          Option.map scope ~f:(fun scope ->
+              ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:(operand_place opt a_tn)
+                  ~b:(operand_place opt b_tn),
+                operand_fragments ~a_prec ~b_prec ~d_prec ~scope ))
         in
         (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
            [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm. *)

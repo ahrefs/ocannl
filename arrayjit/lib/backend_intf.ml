@@ -455,6 +455,11 @@ type mma_operand_place = [ `Device | `Shared | `Thread ] * [ `Plain | `Swizzled_
     per-thread array) and its physical layout ([`Swizzled_b128] for a [Low_level.Swizzle_b128]
     staged tile). What {!field-codegen_capabilities.mma_operand_loads} decides the load path by. *)
 
+type mma_destination_place =
+  [ `Device | `Shared | `Thread | `Fragment ] * [ `Plain | `Swizzled_b128 ]
+(** A tile-MMA destination's place: an input operand's ({!mma_operand_place}), or [`Fragment] for an
+    update-only statement against the persistent accumulator a fragment scope declared. *)
+
 type mma_fragments = {
   mf_tile : int * int * int;
       (** The intrinsic tile [(tm, tn, tk)] the arm emits: an [a] fragment is [tm x tk], a [b]
@@ -518,16 +523,17 @@ type codegen_capabilities = {
     m:int ->
     n:int ->
     k:int ->
-    d:int * mma_operand_place ->
+    d:int * mma_destination_place ->
     a:int * mma_operand_place ->
     b:int * mma_operand_place ->
     bool;
-      (** Whether the backend's per-statement mma hook accepts a statement with these storage
-          precisions, orientations, extents and, per operand, leading dimension and place — asked of
-          the hook itself (a C backend's [C_syntax_config.mma_syntax], which decides acceptance
-          without the operand addresses), so it holds every condition the emission checks: layouts,
-          spaces, strides, extents, the device's floor (gh-ocannl-1254). [false] on a backend
-          without the hook. *)
+      (** Whether the backend's mma hook accepts a statement with these storage precisions,
+          orientations, extents and, per operand, leading dimension and place — asked of the hook
+          itself (a C backend's [C_syntax_config.mma_syntax], which decides acceptance without the
+          operand addresses), so it holds every condition the emission checks: layouts, spaces,
+          strides, extents, the device's floor (gh-ocannl-1254). A [`Fragment] destination asks
+          about the update-only statement inside a fragment scope, whose operands that scope accepts
+          exactly. [false] on a backend without the hook. *)
   mma_operand_fragments :
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->

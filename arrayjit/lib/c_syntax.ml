@@ -1056,7 +1056,13 @@ let codegen_capabilities (module Config : C_syntax_config) =
         | Some emit ->
             Option.is_some
               (emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k
-                 ~d:(PPrint.empty, ldd, (d_space :> mma_space), d_layout)
+                 ~d:
+                   ( PPrint.empty,
+                     ldd,
+                     (match d_space with
+                     | `Fragment -> `Fragment "__mma_probe"
+                     | (`Device | `Shared | `Thread) as space -> (space :> mma_space)),
+                     d_layout )
                  ~a:(lda, (a_space :> mma_space), a_layout)
                  ~b:(ldb, (b_space :> mma_space), b_layout)));
     mma_operand_fragments = Config.mma_operand_fragments;

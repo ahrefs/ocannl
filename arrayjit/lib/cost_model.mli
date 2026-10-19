@@ -266,12 +266,11 @@ val ranking_seconds :
     one one load per element (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32 32-bit words) —
     counted per intrinsic fragment of the arm's own tile, with the reloads its loop nest repeats
     ({!Backend_intf.mma_fragments}), since ties fall between geometries too. Only a backend that
-    describes its arms counts at all (CUDA). An unmarked statement renders per statement; one whose
-    accumulator the schedule marked in [optimized.simdgroup_fragments] asks for the persistent
-    fragment scope, which the renderer leaves for per-statement emission where the scope's arm
-    declines the operands, so it is described only where both scopes' arms describe it alike (the
-    fp8 and uniform-bf16 inline-PTX arms), and otherwise has no count. A statement the device's
-    floor declines renders scalar code whatever the class says. *)
+    describes its arms counts at all (CUDA). A statement whose accumulator the schedule marked in
+    [optimized.simdgroup_fragments] is counted in the fragment scope where the backend's hook
+    accepts it there as an update-only call, and every other statement per statement where the hook
+    accepts it with its destination's own place ([mma_accepts], the hook itself); a statement the
+    hook declines both ways has no count. *)
 
 type operand_load =
   | Ldmatrix of { lane_bytes : int }
@@ -309,7 +308,7 @@ val operand_load_count :
     m:int ->
     n:int ->
     k:int ->
-    d:int * Backend_intf.mma_operand_place ->
+    d:int * Backend_intf.mma_destination_place ->
     a:int * Backend_intf.mma_operand_place ->
     b:int * Backend_intf.mma_operand_place ->
     bool) ->

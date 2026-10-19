@@ -128,13 +128,12 @@ files.
   cost-model copy of it: `mma_operand_loads` (which operands use `ldmatrix`; CUDA's
   `Cuda_mma.operand_loads`, which the census reads too) and `mma_operand_fragments` (the arm's own
   tile, not the descriptor's, and whether its loop nest reloads each operand per tile of the
-  other's free axis: inline-PTX yes, wmma no), both per emission scope. A statement whose
-  accumulator `optimized.simdgroup_fragments` marks is counted only where both scopes' arms
-  describe it alike, since the renderer falls back from a declining fragment scope, and a statement
-  counts only where `mma_accepts` — the backend's own `mma_syntax` hook, probed without addresses —
-  accepts it. A backend that describes no
-  arm (CPU register tiles, Metal, HIP) and code with no `Tile_mma` get no count (`None`), and a
-  keyless leaf neither wins nor loses a tie: each review round of staging#1216 that restated an
+  other's free axis: inline-PTX yes, wmma no), both per emission scope; and `mma_accepts`, the
+  backend's own `mma_syntax` hook probed without addresses, decides both whether a statement counts
+  at all and in which scope (a fragment-marked statement where the hook accepts its update-only
+  call, else per statement with the destination's real place, as the renderer falls back). A
+  backend that describes no arm (CPU register tiles, Metal, HIP) gets `Undescribed`, code with no
+  `Tile_mma` `No_tile_mma` (`Cost_model.load_count`), and a keyless leaf neither wins nor loses a tie: each review round of staging#1216 that restated an
   emission detail in the cost model found the next arm it got wrong. `Schedule_space.search
   ~tie_break` lets a tied keyed leaf displace a keyed best, never the incumbent, and enters a
   subtree bounded at the threshold only under a keyed best. `Autotune.model_family_search` is the
