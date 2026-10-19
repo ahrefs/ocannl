@@ -627,6 +627,53 @@ val peel_accum_nest :
     levels under a different guard verdict and render the same localized kernel. Codegen passes a
     reporter that accumulates the per-routine peel census; the schedule mints pass none. *)
 
+(** Why {!decide_accum_width} declined a base {!peel_accum_nest} reached. *)
+type accum_skip =
+  | Skip_debug_logging
+      (** [debug_log_from_routines]: the per-step [Set] form is kept so the trace survives (a
+          [Local_scope] body renders with [log_set_locals:false]). *)
+  | Skip_dead_level  (** The level being decided is dead ([to_ < from_]). *)
+  | Skip_accum_pinned
+      (** The base is an update mentioning an RNG conversion ({!mentions_rng_conversion}): it
+          renders at storage precision, so localizing it would change the draw rather than move it
+          (gh-ocannl-517, gh-ocannl-682). *)
+
+(** How the accumulator of one reduction level is held: {!decide_accum_width}'s answer. *)
+type accum_decision =
+  | Accum_not_a_nest of peel_refusal
+      (** {!peel_accum_nest} reached no accumulation base under the level. *)
+  | Accum_base of {
+      tn : Tnode.t;
+      idcs : Indexing.axis_index array;
+      base : [ `Update of scalar_t | `Scope of scope_id * t list ];
+      debug : string;
+      rebuild : t -> t;  (** {!peel_accum_nest}'s rebuild of the peeled levels. *)
+      report : peel_report option;  (** What the peel reported (always given on this arm). *)
+      pinned : accum_skip option;
+          (** [None]: the serial rendering localizes the accumulator at this level, at the backend's
+              accumulator residency. [Some]: every rendering of the level keeps the storage cell's
+              width, for this reason. *)
+    }
+
+val decide_accum_width :
+  extra_level:(Indexing.symbol -> axis_type -> bool) ->
+  loop_bounds:(Indexing.symbol * (int * int)) list ->
+  index:Indexing.symbol ->
+  from_:int ->
+  to_:int ->
+  t ->
+  accum_decision
+(** The accumulator-width decision of the reduction level binding [index] over [from_..to_] with
+    body [t] — {!peel_accum_nest} over the body, then the declines the serial rendering applies to
+    the base it reaches ({!accum_skip}). The ONE owner of that decision (gh-ocannl-1151): code
+    generation asks it at every level that can localize ([C_syntax.decide_accum_width], whose
+    warp-shuffle, SIMD-grid and localizing-serial renderings all consume the answer, gh-ocannl-754),
+    and [Schedule.Privatize] asks it of the program it was handed to choose its tile's width.
+    [extra_level] is the serialized-slot predicate: a hardware-annotated loop the backend renders
+    serially (no hardware index for its slot) is a peelable level like any other — code generation
+    passes its own ([C_syntax.serialized_hardware]); [loop_bounds] is {!loop_bounds} of the
+    enclosing program, as for {!peel_accum_nest}. Pure but for the routine-logging flag it reads. *)
+
 val zero_initializer_target : t -> Tnode.t option
 (** A whole-node zero, or its unconditional covering positive-zero [Expand_zero] loop nest. *)
 

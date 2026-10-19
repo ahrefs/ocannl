@@ -6656,6 +6656,57 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
   Option.iter report ~f:(fun f -> f rep);
   result
 
+(* gh-ocannl-1151: the accumulator-width decision of one reduction level, extracted from
+   [C_syntax.decide_accum_width] (gh-ocannl-754) so that code generation and [Schedule.Privatize]
+   ask ONE question. Before, the schedule side re-derived a subset of it ([peel_accum_nest] over a
+   rebuilt nest plus {!accum_base_widens}) and drifted: no dead-level decline, no serialized
+   hardware level. *)
+type accum_skip = Skip_debug_logging | Skip_dead_level | Skip_accum_pinned
+
+type accum_decision =
+  | Accum_not_a_nest of peel_refusal
+  | Accum_base of {
+      tn : Tn.t;
+      idcs : Indexing.axis_index array;
+      base : [ `Update of scalar_t | `Scope of scope_id * t list ];
+      debug : string;
+      rebuild : t -> t;
+      report : peel_report option;
+      pinned : accum_skip option;
+    }
+
+let decide_accum_width ~extra_level ~loop_bounds ~index ~from_ ~to_ body =
+  let report = ref None in
+  match
+    peel_accum_nest ~extra_level
+      ~report:(fun r -> report := Some r)
+      ~loop_bounds ~free_of:[ index ] body
+  with
+  | None ->
+      Accum_not_a_nest
+        (match !report with
+        | Some { refusal = Some refusal; _ } -> refusal
+        | _ ->
+            (* [peel_accum_nest] reports exactly once, and a [None] result carries a refusal; this
+               arm exists only so a census cannot invent a verdict. *)
+            Refused_not_a_nest)
+  | Some (tn, idcs, base, debug, rebuild) ->
+      (* The declines, in the order the serial rendering has always applied them: routine logging
+         keeps the traceable per-step [Set] form; a dead level performs no accesses (the peel's own
+         refusal covers the levels BELOW this one, whose bounds it sees, and this is the same
+         refusal for the level being decided); an update mentioning an RNG conversion renders at
+         storage precision, so localizing it would change the draw, not move it (gh-ocannl-517,
+         gh-ocannl-682). *)
+      let pinned =
+        if Utils.debug_log_from_routines () then Some Skip_debug_logging
+        else if to_ < from_ then Some Skip_dead_level
+        else
+          match base with
+          | `Update llsc when mentions_rng_conversion llsc -> Some Skip_accum_pinned
+          | `Update _ | `Scope _ -> None
+      in
+      Accum_base { tn; idcs; base; debug; rebuild; report = !report; pinned }
+
 (* gh-ocannl-1168 / gh-ocannl-1238. The [Workgroup_reduce] sites the renderer owns the communication
    of, and whether workgroup-uniform control reaches each: the lane all-reduce into a reassociable
    scope local ([C_syntax.try_lane_all_reduce]) and the warp-shuffle tree into a cell
