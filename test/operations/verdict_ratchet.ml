@@ -4136,6 +4136,23 @@ let () =
   Hashtbl.incr table "rows" ~by:sample;
   Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all counts pass" (Hashtbl.data table) ~f:positive|ocaml},
       [ "sample" ] );
+    ( "refuses a gate read off the key removed from the hash table the population reads",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.remove table sample;
+  Verdict.gated_all ~when_:(String.is_empty sample) ~on:"cc" "all counts pass" (Hashtbl.data table)
+    ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the value a mutable field of a matched record is set to",
+      {ocaml|open Base
+type probe = { mutable found : int list }
+let () =
+  let probe = { found = raw } in
+  probe.found <- filtered;
+  let rows = match probe with { found } -> found in
+  Verdict.gated_all ~when_:(not (List.is_empty filtered)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "filtered" ] );
     ( "follows a quantifier of a gated boolean through a value alias",
       {ocaml|open Base
 let () =

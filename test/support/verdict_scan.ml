@@ -642,9 +642,9 @@ let line_break_census content =
       first two for a pairwise one) and every positional argument in [Stdlib]'s; a collection-module
       function the table does not list is reported here too;
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
-      a [let alias = name] renaming: the right-hand side of [x := e], and what a function of a
-      mutable collection module ({!mutable_modules}) that {!collection_functions} marks as writing
-      ({!writes}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data],
+      a [let alias = name] renaming: the right-hand side of [x := e] and of [x.field <- e], and what
+      a function of a mutable collection module ({!mutable_modules}) that {!collection_functions}
+      marks as writing ({!writes}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data],
       [Hashtbl.filter_keys_inplace x ~f], ...) is handed with [x], where [x] is the first positional
       argument in [Base]'s order and any of them in [Stdlib]'s. A function of a mutable collection
       module the table does not list, handed [x], may write into it: a claim that reaches [x] is
@@ -933,7 +933,7 @@ let collection_functions =
            {|
             find find_exn find_opt findi find_multi find_and_call find_index find_all nth nth_exn
             nth_opt get unsafe_get take take_while drop drop_while drop_last drop_last_exn sub
-            subo slice split_n chunks_of mem remove remove_multi choose choose_exn peek peek_exn
+            subo slice split_n chunks_of mem choose choose_exn peek peek_exn
             dequeue dequeue_exn pop pop_exn top top_exn
           |};
          group Collection_and_callback {| find_map find_mapi find_map_exn |};
@@ -952,6 +952,9 @@ let collection_functions =
           |};
          group Every_argument ~writes:(Only_in [ "Dynarray" ]) {| append |};
          group Collection ~writes:On_mutable {| find_or_add findi_or_add |};
+         (* A removal selects its population, and on a mutable container it writes: what is left
+            depends on the key removed. *)
+         group Collection ~writes:On_mutable {| remove remove_multi |};
          group Collection_and_callback ~writes:On_mutable {| update change update_and_return |};
        ])
 
@@ -2193,6 +2196,12 @@ let gate_census content =
                match self#pipeline callee arguments with
                | Some (callee, arguments, _) -> self#record_write env expr callee arguments
                | None -> self#record_write env expr callee arguments)
+           | Pexp_setfield (record, _, value) ->
+               (* [probe.found <- v] writes [v] into [probe], as [probe := v] would: its value is no
+                  longer its definition alone ({!literal}). *)
+               self#record_write env expr
+                 (Ppxlib.Ast_builder.Default.evar ~loc:expr.pexp_loc ":=")
+                 [ (Ppxlib.Asttypes.Nolabel, record); (Ppxlib.Asttypes.Nolabel, value) ]
            | _ -> ());
         (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with

@@ -607,6 +607,8 @@ follows a collection function a local open of List brings in: true
 accepts a gate beside a helper bound inside an open of List under a listed name: true
 accepts a gate beside a helper an unknown open brings in after an open of List: true
 refuses a gate read off the increment a hash table counter is bumped by: true
+refuses a gate read off the key removed from the hash table the population reads: true
+refuses a gate read off the value a mutable field of a matched record is set to: true
 follows a quantifier of a gated boolean through a value alias: true
 refuses a gate read off a value pushed through a writer's value alias: true
 follows a Verdict alias a local module exports through an open of it: true
