@@ -367,7 +367,17 @@ let () =
           && ((not (List.is_empty vs)) || mma.scalar_fallbacks < mma.statements));
   gated_all ~aggregation ~when_ ~on:backend_name
     "each compiled fixture computes the serial twin's values bitwise" compiled
-    ~f:(fun (_, reference, _, outcome) ->
+    ~f:(fun (label, reference, _, outcome) ->
       match outcome with
       | Error _ -> false
-      | Ok (got, _) -> Array.for_all2_exn got reference ~f:Float.equal)
+      | Ok (got, _) ->
+          let mismatches =
+            List.filter_mapi (Array.to_list got) ~f:(fun i g ->
+                if Float.equal g reference.(i) then None else Some (i, g, reference.(i)))
+          in
+          (match mismatches with
+          | [] -> ()
+          | (i, g, r) :: _ ->
+              Stdio.eprintf "%s: %d of %d cells differ; first at %d: %g vs the twin's %g\n%!" label
+                (List.length mismatches) (Array.length got) i g r);
+          List.is_empty mismatches)
