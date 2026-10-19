@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #if !defined(_WIN32)
 #include <errno.h>
@@ -74,6 +75,23 @@ CAMLprim value ocannl_process_alive(value v_pid) {
 #endif
 }
 
+/* Where the C runtime's [stderr] is a modifiable lvalue, so the two stubs below can replace the
+   stream (glibc, Darwin). One spelling for both, and published through
+   [ocannl_c_stderr_replaceable] so a test can gate on the very predicate the stubs use rather than
+   on their own report of success, which a regression could turn into a silent skip. */
+#if defined(__GLIBC__) || defined(__APPLE__)
+#define OCANNL_C_STDERR_REPLACEABLE 1
+#endif
+
+CAMLprim value ocannl_c_stderr_replaceable(value unit) {
+  (void)unit;
+#ifdef OCANNL_C_STDERR_REPLACEABLE
+  return Val_true;
+#else
+  return Val_false;
+#endif
+}
+
 /* Give the C runtime's [stderr] its own file descriptor, duplicated from the process's real
    stderr at startup, so that a later redirection of fd 2 does not capture what foreign C
    libraries print (gh-ocannl-1031).
@@ -98,7 +116,7 @@ CAMLprim value ocannl_process_alive(value v_pid) {
    stub reports that it did nothing. */
 CAMLprim value ocannl_detach_c_stderr(value unit) {
   (void)unit;
-#if defined(__GLIBC__) || defined(__APPLE__)
+#ifdef OCANNL_C_STDERR_REPLACEABLE
   {
     static int detached = 0;
     int fd;
@@ -128,6 +146,214 @@ CAMLprim value ocannl_detach_c_stderr(value unit) {
     setvbuf(replacement, NULL, _IONBF, 0);
     stderr = replacement;
     detached = 1;
+    return Val_true;
+  }
+#else
+  return Val_false;
+#endif
+}
+
+/* Collapse the ROCm runtime's per-event `Signal 0x... time stamps may be invalid.` lines on the C
+   runtime's [stderr] into a count (gh-ocannl-1370).
+
+   [ocannl_detach_c_stderr] keeps that chatter out of a ppx_expect golden, but it still reaches the
+   process's real stderr -- 268,172 lines for one autotuning test on an assertions-enabled ROCr
+   (gfx1151; a discrete card writes valid timestamps and prints none) -- and Dune truncates a long
+   action output from the middle, so the test's own diagnostics (SKIPPED lines, per-claim output,
+   a `cold search` line) were the part that went missing. No switch reaches the print (see
+   [ocannl_detach_c_stderr]), so the C stream itself is replaced by one that writes through to the
+   same descriptor and recognizes exactly that line:
+
+   - the FIRST such line is written verbatim, followed by one note saying that later ones are
+     counted, so the message and the fact of collapsing are both on the log even if the process
+     dies before it exits;
+   - every later one is counted, and an exit-time destructor reports the count in one line;
+   - every other byte is written through at once, in order, unbuffered like the stream it
+     replaces. Only a partial line that is still a prefix of the recognized one is held back, and
+     only until its newline (or the exit summary) decides it.
+
+   The replacement wraps whatever descriptor the C stream wrote to: the detached one, or fd 2 when
+   [detach_c_stderr] is off -- in which case it keeps following fd 2, as that setting promises.
+   Its FILE has no descriptor of its own, so [fileno(stderr)] reads -1 afterwards; nothing in the
+   ROCm stack writes to [fileno(stderr)] directly, and the stream is installed only by the HIP
+   backend, on opening a device (see [Utils.c_stderr_noise_collapsed]). A cookie stream cannot be
+   wide-oriented, so a C stream already wide-oriented is not replaced; an [fclose(stderr)] reports
+   the count at the close. Writes through the FILE are serialized by its
+   lock, which is what makes the filter state safe from the runtime's own threads. */
+
+#ifdef OCANNL_C_STDERR_REPLACEABLE
+#define OCANNL_NOISE_HOLD 256
+
+static const char ocannl_noise_head[] = "Signal 0x";
+static const char ocannl_noise_tail[] = " time stamps may be invalid.\n";
+
+static struct {
+  int installed;
+  int fd;
+  int passthrough;  /* the current line is known not to be the recognized one */
+  int summarized;   /* the exit summary is out: later lines are written through, uncounted */
+  size_t held_len;
+  char held[OCANNL_NOISE_HOLD];
+  unsigned long seen;
+  FILE *stream;
+} ocannl_noise;
+
+enum { NOISE_NO, NOISE_PREFIX, NOISE_FULL };
+
+/* Whether [s] (a line start, [n] bytes, no newline before its last byte) is the recognized line,
+   a prefix of it, or neither. */
+static int ocannl_noise_match(const char *s, size_t n) {
+  size_t head = sizeof ocannl_noise_head - 1, tail = sizeof ocannl_noise_tail - 1;
+  size_t i = 0, j = 0, hex;
+  for (; i < n && i < head; i++)
+    if (s[i] != ocannl_noise_head[i]) return NOISE_NO;
+  if (i < head) return NOISE_PREFIX;
+  hex = i;
+  while (i < n && ((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f') ||
+                   (s[i] >= 'A' && s[i] <= 'F')))
+    i++;
+  if (i == n) return NOISE_PREFIX;
+  if (i == hex) return NOISE_NO;
+  for (; i < n && j < tail; i++, j++)
+    if (s[i] != ocannl_noise_tail[j]) return NOISE_NO;
+  if (j < tail) return NOISE_PREFIX;
+  return i == n ? NOISE_FULL : NOISE_NO;
+}
+
+static void ocannl_noise_write_all(const char *p, size_t n) {
+  while (n > 0) {
+    ssize_t w = write(ocannl_noise.fd, p, n);
+    if (w < 0) {
+      if (errno == EINTR) continue;
+      return; /* Like the stream it replaces: a write error loses the bytes, not the process. */
+    }
+    p += w;
+    n -= (size_t)w;
+  }
+}
+
+static void ocannl_noise_puts(const char *s) { ocannl_noise_write_all(s, strlen(s)); }
+
+static void ocannl_noise_filter(const char *buf, size_t n) {
+  size_t i = 0;
+  while (i < n) {
+    if (ocannl_noise.passthrough) {
+      const char *nl = memchr(buf + i, '\n', n - i);
+      size_t end = nl ? (size_t)(nl - buf) + 1 : n;
+      ocannl_noise_write_all(buf + i, end - i);
+      if (nl) ocannl_noise.passthrough = 0;
+      i = end;
+    } else {
+      char c = buf[i++];
+      int m;
+      ocannl_noise.held[ocannl_noise.held_len++] = c;
+      m = ocannl_noise_match(ocannl_noise.held, ocannl_noise.held_len);
+      if (m == NOISE_FULL && !ocannl_noise.summarized) {
+        if (ocannl_noise.seen++ == 0) {
+          ocannl_noise_write_all(ocannl_noise.held, ocannl_noise.held_len);
+          ocannl_noise_puts(
+              "OCANNL: further `Signal 0x... time stamps may be invalid.` lines from the ROCm "
+              "runtime are counted, not printed; the count is reported at exit "
+              "(collapse_foreign_stderr_noise=false prints each, gh-ocannl-1370)\n");
+        }
+        ocannl_noise.held_len = 0;
+      } else if (m != NOISE_PREFIX || ocannl_noise.held_len == OCANNL_NOISE_HOLD) {
+        ocannl_noise_write_all(ocannl_noise.held, ocannl_noise.held_len);
+        ocannl_noise.held_len = 0;
+        ocannl_noise.passthrough = (c != '\n');
+      }
+    }
+  }
+}
+
+/* Write out a held prefix and the count, and stop collapsing: anything written afterwards passes
+   through, uncounted. The caller holds the stream's lock. */
+static void ocannl_noise_finish(void) {
+  char line[256];
+  if (ocannl_noise.held_len > 0) {
+    ocannl_noise_write_all(ocannl_noise.held, ocannl_noise.held_len);
+    ocannl_noise.held_len = 0;
+    ocannl_noise.passthrough = 1;
+  }
+  if (ocannl_noise.seen > 1 && !ocannl_noise.summarized) {
+    snprintf(line, sizeof line,
+             "OCANNL: collapsed %lu further `Signal 0x... time stamps may be invalid.` lines from "
+             "the ROCm runtime (gh-ocannl-1370)\n",
+             ocannl_noise.seen - 1);
+    ocannl_noise_puts(line);
+  }
+  ocannl_noise.summarized = 1;
+}
+
+/* After every [atexit] handler -- among them OCANNL's own exit teardown of the HIP streams, which
+   is when ROCclr prints most of these -- since glibc runs the executable's destructors from
+   [_dl_fini], the earliest-registered exit handler. The shared libraries' own destructors run after
+   the executable's, so a line one of them prints is written through, uncounted, rather than lost.
+   A stream some code has [fclose]d is not touched: its close callback already summarized and
+   cleared [installed], and its FILE is gone. */
+__attribute__((destructor)) static void ocannl_noise_summary(void) {
+  if (!ocannl_noise.installed) return;
+  flockfile(ocannl_noise.stream);
+  ocannl_noise_finish();
+  funlockfile(ocannl_noise.stream);
+}
+
+/* [fclose(stderr)] is valid foreign code (daemonizing, silencing C diagnostics). The descriptor is
+   not closed -- the replaced FILE owns it -- but the count is reported now, since the exit hook
+   must not reach the freed FILE. Called by the C library with the stream's lock held. */
+static int ocannl_noise_cookie_close(void *cookie) {
+  (void)cookie;
+  ocannl_noise_finish();
+  ocannl_noise.installed = 0;
+  ocannl_noise.stream = NULL;
+  return 0;
+}
+
+#if defined(__GLIBC__)
+static ssize_t ocannl_noise_cookie_write(void *cookie, const char *buf, size_t n) {
+  (void)cookie;
+  ocannl_noise_filter(buf, n);
+  return (ssize_t)n;
+}
+#else
+static int ocannl_noise_cookie_write(void *cookie, const char *buf, int n) {
+  (void)cookie;
+  if (n > 0) ocannl_noise_filter(buf, (size_t)n);
+  return n;
+}
+#endif
+#endif
+
+CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
+  (void)unit;
+#ifdef OCANNL_C_STDERR_REPLACEABLE
+  {
+    FILE *replacement;
+    int fd;
+    if (ocannl_noise.installed) return Val_true;
+    /* A cookie stream is byte-oriented only (glibc gives it no wide-character buffer), so a C
+       stream some code has already made wide-oriented is left alone rather than replaced by one
+       that would make its next [fwprintf] fail. An unoriented stream is the normal case: the first
+       write orients it, and ROCr's own [fprintf] makes it byte-oriented either way. */
+    if (fwide(stderr, 0) > 0) return Val_false;
+    fflush(stderr);
+    fd = fileno(stderr);
+    if (fd < 0) return Val_false;
+#if defined(__GLIBC__)
+    {
+      cookie_io_functions_t io = {NULL, ocannl_noise_cookie_write, NULL, ocannl_noise_cookie_close};
+      replacement = fopencookie(NULL, "w", io);
+    }
+#else
+    replacement = funopen(NULL, NULL, ocannl_noise_cookie_write, NULL, ocannl_noise_cookie_close);
+#endif
+    if (replacement == NULL) return Val_false;
+    setvbuf(replacement, NULL, _IONBF, 0);
+    ocannl_noise.fd = fd;
+    ocannl_noise.stream = replacement;
+    ocannl_noise.installed = 1;
+    /* The replaced FILE stays open: it owns [fd], which the replacement now writes to. */
+    stderr = replacement;
     return Val_true;
   }
 #else

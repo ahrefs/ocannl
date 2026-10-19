@@ -1,0 +1,9 @@
+both children exit normally: true
+with collapsing off, the C stream is left as it was: true
+with collapsing off, every write reaches stderr verbatim and in order: true
+with collapsing off, every recognized line is printed: true
+with collapsing on, the C stream is replaced: true
+with collapsing on, every other write reaches stderr verbatim and in order, and only the first recognized line survives: true
+with collapsing on, a note follows the first recognized line: true
+with collapsing on, the exit summary is the last line and counts every later recognized line: true
+with collapsing on, closing the C stream reports the count and the process still exits cleanly: true

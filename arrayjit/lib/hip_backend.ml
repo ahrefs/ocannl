@@ -471,6 +471,11 @@ end = struct
         Int.of_string_opt @@ Utils.get_global_arg ~arg_name:"hip_printf_fifo_size" ~default:""
         |> Option.iter ~f:H.Context.(set_limit PRINTF_FIFO_SIZE);
       Hash_set.add initialized_devices ordinal;
+      (* gh-ocannl-1370: an assertions-enabled ROCr prints one [time stamps may be invalid.] per
+         recorded event, and events need a device and its stream, so the C stderr is replaced by the
+         collapsing stream here, once a HIP device is confirmed -- never in a process that probed
+         HIP and fell back to another backend ([Context.auto] with no HIP device). *)
+      ignore (Lazy.force Utils.c_stderr_noise_collapsed : bool);
       (* With one compute stream per device, the runner (HIP stream) is created with the device. *)
       let hip_stream = H.Stream.create ~non_blocking:true () in
       let result = make_device dev hip_stream ~ordinal in
