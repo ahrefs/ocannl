@@ -1706,10 +1706,27 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   since a skip prints `p`'s line and the pair breaks the golden on the host that skips. The rule,
   the remedy (`Verdict.gated`) and what the reader cannot see are in the conventions note. A new
   claim entry point that takes a label and a boolean joins `claim_kinds` in
-  `verdict_provenance.ml`, or the quantifier reader goes blind at its call sites. The refusal
+  `verdict_provenance.ml`, or the quantifier reader goes blind at its call sites; a new
+  `Verdict.Claims` member of any kind joins `Verdict_callee.members`, which `verdict_ratchet` holds
+  equal to the module. The refusal
   reader cannot go blind that way: `refusal_control_scan_cases` holds `refusing_claims` plus
   `non_refusing_claims` (`refusal_control_scan.ml`) equal to the members `Verdict.Claims` binds,
   read from `verdict.ml`, so a new `Claims` member is red until judged in one of them.
+- Whose a claim is -- `Verdict`'s or not -- is ONE resolver's answer (gh-ocannl-1361):
+  `test/support/verdict_callee.ml` walks a source once through `Lexical_scope` and every Verdict
+  reader (the provenance layer, `Verdict_scan.claim_calls` behind the line-break and dialect
+  readers, `gate_census`) looks the callee up by its location. Before it, each reader decided for
+  itself and they drifted: staging#1150 fixed the line-break reader in six rounds, one edge per
+  round, while the provenance layer still read a `module Verdict = Local_printer` as `Verdict`. A
+  claim name that reaches `Verdict` only past an `open` of a module the resolver cannot read (any
+  but `Verdict`, the source's own structures and the standard libraries) is `Ambiguous`, whether
+  unqualified or qualified (`Verdict.p` may be that module's `Verdict`): still read, and its
+  refusal adds the qualify-the-call remedy. The resolver answers LEXICALLY; the provenance layer
+  alone carries a module through a functor application (`Make (Verdict)`), asking the resolver only
+  whether the argument's path denotes `Verdict`. A question about Verdict ownership goes into the
+  resolver, never into one reader, and `verdict_ratchet`'s agreement controls -- one claim each
+  reader would refuse, spelled every way the resolver distinguishes -- fail when the readers
+  disagree.
 - `verdict_ratchet`'s fourth reader is about GATES (gh-ocannl-1289): `Verdict_scan.gate_census`
   refuses a `Verdict` `gated_all`/`gated_alli`/`gated_exists` claim whose `~when_` reads the
   population it quantifies or a collection that population is built from. Such a gate closes when
@@ -1727,9 +1744,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `test/support/verdict_scan.ml` states the exact forms, which arguments of which library
   functions count (selectors, generators, Stdlib order), and the boundary: a population threaded
   through a function parameter, a record field, an unqualified call under `open List` or a
-  destructured `let`, and `Verdict.gated`'s boolean, are not read; a `gated_*` application the
-  reader cannot complete is refused as unread rather than counted clean. Its recognized forms are
-  held equal to the `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
+  destructured `let` is not read; a gated application the reader cannot complete is refused as
+  unread rather than counted clean. `Verdict.gated`'s boolean is read too (gh-ocannl-1361): its
+  population is what the boolean's quantifiers (`for_all`, `exists`, `is_empty`, ... of a
+  collection module) range over, through names, writes, `not`/`&&`/`||` and branches, so
+  `gated ~when_:(not (List.is_empty xs)) label ((not (List.is_empty xs)) && List.for_all xs …)` is
+  refused; a boolean that quantifies nothing has no population. Its recognized forms are held
+  equal to the `gated` and `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
   (`p "…" ((not on_cpu) || ok)`), which prints `true` where it should report a skip, is a
   different shape it does not see. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were

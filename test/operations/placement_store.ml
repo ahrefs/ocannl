@@ -953,16 +953,17 @@ let () =
      every placement store run 8 attempted must be reported refused -- for any reason: on a host
      that refuses the staging file's creation itself (a Windows path beyond MAX_PATH,
      gh-ocannl-1040's rog leg) the injected hook never fires, and [schedule_cache_regime] pins the
-     injected reason, and a clean run must have attempted one. A contended run that attempted none
-     has nothing to show, and says so. *)
+     injected reason -- and the run must have attempted one. The gate is the keyed run being clean,
+     told from its reports and never from the stores the claim judges (gh-ocannl-1115,
+     gh-ocannl-1361): a contended run is skipped whether or not it stored, since a gate that opened
+     on the stores being there would turn a regression that stops attempting them into a skip. *)
   let stores8 = placement_stores persisted8 in
   let clean8 = clean_evidence (arms8 @ flips8) in
   Stdio.eprintf
     "run 8 (not part of the golden): clean %b, %d placement stores, %d refused cache operations\n%!"
     clean8 (List.length stores8)
     (List.count persisted8.io ~f:refused);
-  gated ~aggregation:`Environment
-    ~when_:(persisted8.identity && (clean8 || not (List.is_empty stores8)))
-    ~on:"no timing identity, or a contended run that attempted no placement store"
+  gated ~aggregation:`Environment ~when_:(persisted8.identity && clean8)
+    ~on:"no timing identity, or a contended run"
     "under refused commits, the cold run reports its placement store's refusal"
     ((not (List.is_empty stores8)) && List.for_all stores8 ~f:refused)

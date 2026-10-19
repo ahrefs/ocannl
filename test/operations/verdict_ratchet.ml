@@ -61,6 +61,14 @@
    what the population is built from, by lexical identity, and refuses a shared binding; a gate may
    still read what the population is COMPUTED from, which is how a capability judgment reads.
 
+   gh-ocannl-1361 gives the readers one answer to whose a claim is. [Test_utils.Verdict_callee]
+   resolves every claim name once, and the provenance layer, the line-break and dialect readers and
+   the gate reader look its answer up rather than each deciding for themselves; a name that is
+   [Verdict]'s only past another module's [open] -- qualified or not -- is ambiguous, still read,
+   and its refusal names the remedy of qualifying the call. The agreement controls hold the readers
+   to one answer per spelling. The same issue has the gate reader read [Verdict.gated]'s boolean:
+   its population is what the boolean's quantifiers range over.
+
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
    per mechanism with the control labels and the retained `tools/test-run.sh` run ids, is
@@ -89,6 +97,9 @@ type quantified_claim = {
   claim_line : int;
   quantifiers : quantifier_kind list;
   direct : bool;
+  ambiguous : bool;
+      (** The claim reached [Verdict] only past an [open] of a module [Verdict_callee] cannot read
+          (gh-ocannl-1361): its refusal adds the remedy of qualifying the call. *)
 }
 
 let describe_site = Provenance.describe_site
@@ -127,6 +138,7 @@ let quantified_claims structure =
             helper_site;
             claim_line;
             direct;
+            ambiguous = claim.ambiguous;
             quantifiers =
               List.filter_map keyed ~f:(fun ((h, s, _), kind) ->
                   if String.equal h helper && s.position = helper_site.position then Some kind
@@ -3069,23 +3081,35 @@ let run_manifest_controls ~manifest ~controls =
     (manifest_once_label, Option.is_none repeated);
   ]
 
+(* The remedy a claim that is [Verdict]'s only past an [open] of another module adds
+   (gh-ocannl-1361): that module may export the claim name, or a [Verdict] module of its own, so the
+   call may be its. *)
+let ambiguity_remedy ~ambiguous ~callee =
+  if ambiguous then
+    ". "
+    ^ Option.value_map callee ~default:"Its claim" ~f:(fun callee -> "`" ^ callee ^ "`")
+    ^ " reaches Verdict's only past an open of another module, which may export its own: if the \
+       call is that module's, qualify it"
+  else ""
+
 let quantified_failure source claim =
   let key = quantified_exemption_key ~source claim in
   let quantifiers = List.map claim.quantifiers ~f:quantifier_name |> String.concat ~sep:", " in
+  let qualify = ambiguity_remedy ~ambiguous:claim.ambiguous ~callee:None in
   if claim.direct then
     Printf.sprintf
       "%s:%d claims `%s` over a `%s` written directly in the argument at line %d, which can pass \
        on an empty population -- use the matching `Verdict.p_*` combinator (`p_all`, `p_none`, \
        `p_empty ~over`, `p_all2`), or make non-emptiness part of the claimed value. If emptiness \
-       is the intended passing case, exempt `%s` by name in verdict_ratchet.ml and say why"
-      source claim.claim_line claim.helper quantifiers claim.helper_site.line key
+       is the intended passing case, exempt `%s` by name in verdict_ratchet.ml and say why%s"
+      source claim.claim_line claim.helper quantifiers claim.helper_site.line key qualify
   else
     Printf.sprintf
       "%s:%d sends `%s` from line %d into a Verdict claim, but that binding's `%s` can pass on an \
        empty population -- use the matching `Verdict.p_*` combinator, or make non-emptiness part \
        of the binding's passing result. If emptiness is the intended passing case, exempt `%s` by \
-       name in verdict_ratchet.ml and say why"
-      source claim.claim_line claim.helper claim.helper_site.line quantifiers key
+       name in verdict_ratchet.ml and say why%s"
+      source claim.claim_line claim.helper claim.helper_site.line quantifiers key qualify
 
 (* The two refusal diagnostics, each exercised by re-running this executable on a planted fixture in
    a child process: the fixture is the first control (a bound helper) and the native-claim control
@@ -3472,13 +3496,7 @@ let run_line_break_controls () =
 
 let refuse_line_break ~fail ~source ({ site; ambiguous } : Scan.line_break_site) =
   (* The remedy an ambiguous site adds: the call may be another module's. *)
-  let qualify =
-    if ambiguous then
-      ". `" ^ site.callee
-      ^ "` reaches Verdict's only past a later open of another module, which may export its own: \
-         if the call is that module's, qualify it"
-    else ""
-  in
+  let qualify = ambiguity_remedy ~ambiguous ~callee:(Some site.callee) in
   fail
     (Printf.sprintf
        "%s:%d reports the claim \"%s\" through `%s`, with a line break in its label -- a claim \
@@ -3643,7 +3661,7 @@ let () = Checks.check "all rows pass" rows ~f:Fn.id|ocaml},
     ( "refuses a gate on a population name an unmodelled open brings in",
       {ocaml|open Fixture
 let () = Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
-      [ "rows" ] );
+      [ "rows [ambiguous]" ] );
     ( "accepts a backend gate on the key that selects the population",
       {ocaml|open Base
 let () =
@@ -3966,12 +3984,92 @@ let () =
   let rows = (Stdlib.List.map : (int -> int) -> int list -> int list) run raw in
   Verdict.gated_all ~when_:(raw <> []) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
       [ "raw" ] );
+    (* gh-ocannl-1361: [Verdict.gated]'s boolean, whose population is what its quantifiers range
+       over. *)
+    ( "refuses a gated boolean whose gate tests the population its quantifier ranges over",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty xs)) ~on:"cc" "every x holds"
+    ((not (List.is_empty xs)) && List.for_all xs ~f:Fn.id)|ocaml},
+      [ "xs" ] );
+    ( "refuses a gated boolean bound to a name before the claim",
+      {ocaml|open Base
+let () =
+  let ok = List.for_all rows ~f:Fn.id in
+  Verdict.gated ~when_:(List.length rows > 0) ~on:"cc" "all rows pass" ok|ocaml},
+      [ "rows" ] );
+    ( "refuses a gated boolean whose quantified population is mapped from what the gate reads",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = List.map raw ~f:run in
+  gated ~when_:(not (List.is_empty raw)) ~on:"cc" "no row fails" (not (List.exists rows ~f:failed))|ocaml},
+      [ "raw" ] );
+    ( "refuses a gated boolean whose Stdlib quantifier ranges over the gated population",
+      {ocaml|let () =
+  Verdict.gated ~when_:(rows <> []) ~on:"cc" "all rows pass" (Stdlib.List.for_all Fun.id rows)|ocaml},
+      [ "rows" ] );
+    ( "refuses a gated boolean written into a ref the claim dereferences",
+      {ocaml|open Base
+let () =
+  let ok = ref false in
+  ok := List.for_all rows ~f:Fn.id;
+  Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" !ok|ocaml},
+      [ "rows" ] );
+    ( "refuses a population gate behind a partially applied gated boolean wrapper",
+      {ocaml|open Base
+let () =
+  let check = Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" in
+  check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "refuses a gated boolean whose pairwise existential is Base's exists2_exn",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty xs)) ~on:"cc" "some pair differs"
+    (List.exists2_exn xs ys ~f:( <> ))|ocaml},
+      [ "xs" ] );
+    ( "refuses a gated boolean whose quantifier's predicate quantifies the gated population",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty ys)) ~on:"cc" "every x meets every y"
+    (List.for_all xs ~f:(fun _ -> (not (List.is_empty ys)) && List.for_all ys ~f:pred))|ocaml},
+      [ "ys" ] );
+    ( "does not read a connective the source rebinds as the standard one",
+      {ocaml|open Base
+let not _ = true
+let () =
+  Verdict.gated ~when_:(List.length xs > 0) ~on:"cc" "the probe holds" (not (List.for_all xs ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts a gated boolean over a population a backend gate steers",
+      {ocaml|open Base
+let () =
+  let rows = if on_gpu then run_gpu () else [] in
+  Verdict.gated ~when_:on_gpu ~on:backend_name "every GPU row passes"
+    ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "accepts a gated boolean whose condition, not its value, quantifies what the gate reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty modes)) ~on:"cc" "the selected mode passes"
+    (if List.exists modes ~f:is_fast then fast_ok else slow_ok)|ocaml},
+      [] );
+    ( "accepts a gated boolean comparing against the invariant its gate reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(String.equal backend_name "cuda") ~on:backend_name
+    "the kernel ran on the selected backend" (String.equal ran_on backend_name)|ocaml},
+      [] );
+    ( "names a gated boolean claim it cannot complete instead of counting it clean",
+      {ocaml|let () = List.iter2_exn labels oks ~f:(Verdict.gated ~when_:on_gpu ~on:"cc")|ocaml},
+      [ "unread Verdict.gated" ] );
+    ( "reads a gated claim nothing binds as Verdict's, its name being Verdict's alone",
+      {ocaml|let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
   ]
 
 let gate_control_findings source =
   let census = Scan.gate_census source in
   List.map census.Scan.readings ~f:(fun (reading : Scan.gate_reading) ->
-      String.concat ~sep:", " reading.reads)
+      String.concat ~sep:", " reading.reads ^ if reading.ambiguous then " [ambiguous]" else "")
   @ List.map census.Scan.unread ~f:(fun (form, _) -> "unread " ^ form)
 
 let run_gate_population_controls () =
@@ -3990,9 +4088,10 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
        "%s:%d gates `%s` on `%s`, which reads `%s` -- the population the claim quantifies, or a \
         collection it is built from -- so a regression that empties or changes that population \
         closes the gate and turns the failure into a skip (gh-ocannl-1115). Gate on an invariant \
-        the population does not decide: the backend, an advertised capability, the configuration"
+        the population does not decide: the backend, an advertised capability, the configuration%s"
        source reading.line reading.form reading.gate
-       (String.concat ~sep:"`, `" reading.reads))
+       (String.concat ~sep:"`, `" reading.reads)
+       (ambiguity_remedy ~ambiguous:reading.ambiguous ~callee:(Some reading.form)))
 
 (* The gate reader over one source, its failures told apart (gh-ocannl-1289 review): a source that
    does not parse is reported by the catch-all the other readers share, and an exception from a
@@ -4026,7 +4125,7 @@ let run_gate_refusal_control () =
     "%s:%d gates `%s` on `%s`, which reads `%s` -- the population the claim quantifies, or a \
      collection it is built from -- so a regression that empties or changes that population closes \
      the gate and turns the failure into a skip (gh-ocannl-1115). Gate on an invariant the \
-     population does not decide: the backend, an advertised capability, the configuration"
+     population does not decide: the backend, an advertised capability, the configuration%s"
   and unread_format =
     "%s:%d applies `%s` in a form the gate reader cannot complete, so it cannot say whether the \
      gate reads the population. Apply the claim, or a `let`-bound partial application of it, to \
@@ -4068,6 +4167,162 @@ let run_gate_refusal_control () =
       : Scan.gate_census);
   ( "refuses a planted gate that reads its population, and a gated claim it cannot read",
     !refused_reading && !refused_unread && !refused_raise )
+
+(* {1 One resolver: every reader agrees whose a claim is (gh-ocannl-1361)}
+
+   Whether a callee is [Verdict]'s is decided once, by [Test_utils.Verdict_callee], and every reader
+   looks the answer up. These controls hold the readers to that: one claim that each of the three
+   would refuse -- a [gated] claim with a line break in its label, a population gate, and an
+   unguarded quantifier -- spelled through each form the resolver distinguishes, and every reader
+   must read it, with the same ambiguity, or none may. Before the resolver, the provenance layer
+   read a taken-over [Verdict] as [Verdict] and nothing marked a qualified call past another
+   module's [open] as ambiguous. *)
+type reading = Read | Read_ambiguous | Unread
+
+let agreement_controls =
+  [
+    ("the readers agree on a claim qualified by Verdict", "", "Verdict.gated", Read);
+    ( "the readers agree on a claim an open of Verdict.Claims brings in",
+      "open Verdict.Claims\n",
+      "gated",
+      Read );
+    ( "the readers agree on a claim through a module alias of Verdict",
+      "module V = Verdict\n",
+      "V.gated",
+      Read );
+    ( "the readers agree on a claim a local structure includes from Verdict.Claims",
+      "module C = struct include Verdict.Claims end\n",
+      "C.gated",
+      Read );
+    ( "the readers agree on a claim qualified by Verdict past an open of a standard library",
+      "open Base\n",
+      "Verdict.gated",
+      Read );
+    ( "the readers agree that a Verdict past an open of another module is ambiguous",
+      "open Other\n",
+      "Verdict.gated",
+      Read_ambiguous );
+    ( "the readers agree that a claim name past an open of another module is ambiguous",
+      "open Verdict.Claims\nopen Other\n",
+      "gated",
+      Read_ambiguous );
+    ( "the readers agree that an alias of Verdict past an open of another module is ambiguous",
+      "module V = Verdict\nopen Other\n",
+      "V.gated",
+      Read_ambiguous );
+    ( "the readers agree that a module taking over the name Verdict is not Verdict",
+      "module Verdict = Local_printer\n",
+      "Verdict.gated",
+      Unread );
+    ( "the readers agree that a path through another module's Verdict is not Verdict",
+      "",
+      "Other.Verdict.gated",
+      Unread );
+    ( "the readers agree that a structure including its own Verdict module does not include Verdict",
+      "module C = struct module Verdict = Local_printer include Verdict end\n",
+      "C.gated",
+      Unread );
+    ( "the readers agree that a Verdict module an opened structure binds is not Verdict",
+      "module M = struct module Verdict = Local_printer end\nopen M\n",
+      "Verdict.gated",
+      Unread );
+    ( "the readers agree that a structure's later unreadable include leaves its Verdict names \
+       ambiguous",
+      "module C = struct include Verdict.Claims include Other end\n",
+      "C.gated",
+      Read_ambiguous );
+    ( "the readers agree that a structure's unpacked Verdict module is not Verdict",
+      "module C = struct let (module Verdict : S) = packed include Verdict end\n",
+      "C.gated",
+      Unread );
+    ( "the readers agree that an opened structure including an unreadable module leaves Verdict \
+       ambiguous",
+      "module C = struct include Other end\nopen C\n",
+      "Verdict.gated",
+      Read_ambiguous );
+    ( "the readers agree that a claim name a local structure binds is its own",
+      "open Verdict.Claims\n\
+       module Checks = struct let gated ~when_:_ ~on:_ _ _ = () end\n\
+       open Checks\n",
+      "gated",
+      Unread );
+    ( "the readers agree that a claim name the source binds is its own",
+      "open Verdict.Claims\nlet gated ~when_:_ ~on:_ _ _ = ()\n",
+      "gated",
+      Unread );
+  ]
+
+let agreement_fixture ~prelude ~callee =
+  prelude ^ "let () =\n  " ^ callee
+  ^ " ~when_:(not (List.is_empty rows)) ~on:\"cc\" \"first\\nsecond\" (List.for_all rows ~f:Fn.id)"
+
+let run_agreement_controls () =
+  List.map agreement_controls ~f:(fun (label, prelude, callee, expected) ->
+      let source = agreement_fixture ~prelude ~callee in
+      let reading = function
+        | [] -> Unread
+        | [ false ] -> Read
+        | [ true ] -> Read_ambiguous
+        | _ -> Unread (* More than one finding is no reading this fixture can earn. *)
+      in
+      let views =
+        [
+          ( "quantified",
+            reading
+              (List.map
+                 (quantified_claims (Sources.structure_of source))
+                 ~f:(fun claim -> claim.ambiguous)) );
+          ( "line-break",
+            reading
+              (List.map (Scan.line_break_census source).Scan.broken
+                 ~f:(fun (site : Scan.line_break_site) -> site.ambiguous)) );
+          ( "gate",
+            reading
+              (List.map (Scan.gate_census source).Scan.readings
+                 ~f:(fun (reading : Scan.gate_reading) -> reading.ambiguous)) );
+        ]
+      in
+      let describe = function
+        | Read -> "read"
+        | Read_ambiguous -> "read as ambiguous"
+        | Unread -> "not read"
+      in
+      let ok = List.for_all views ~f:(fun (_, found) -> Poly.equal found expected) in
+      if not ok then
+        eprintf "agreement control %S expected every reader to have %s it; %s\n" label
+          (describe expected)
+          (String.concat ~sep:", "
+             (List.map views ~f:(fun (reader, found) -> reader ^ ": " ^ describe found)));
+      (label, ok))
+
+(* The remedy an ambiguous claim's refusal adds, through the quantified reader's own diagnostic:
+   where the claim is [Verdict]'s only past another module's [open] the refusal names the qualified
+   remedy, and past a standard library's it does not. *)
+let run_ambiguous_remedy_controls () =
+  let remedy prelude =
+    quantified_claims
+      (Sources.structure_of
+         (prelude ^ "let () = Verdict.p \"all rows pass\" (List.for_all rows ~f:Fn.id)"))
+    |> List.map ~f:(quantified_failure "fixture.ml")
+    |> List.map ~f:(fun message -> String.is_substring message ~substring:"qualify it")
+  in
+  [
+    ( "names the qualified remedy for a quantified claim past an open of another module",
+      List.equal Bool.equal (remedy "open Other\n") [ true ] );
+    ( "omits the qualified remedy for a quantified claim past an open of a standard library",
+      List.equal Bool.equal (remedy "open Base\n") [ false ] );
+    (* Control flow choosing between a definite claim function and an ambiguous one fires one claim
+       per alternative; collapsed into one, it stays ambiguous. *)
+    ( "names the qualified remedy when either alternative claim function is ambiguous",
+      List.for_all [ "definite else Verdict.p"; "Verdict.p else definite" ] ~f:(fun branches ->
+          List.equal Bool.equal
+            (quantified_claims
+               (Sources.structure_of
+                  ("let definite = Verdict.p\nopen Other\nlet () = (if c then " ^ branches
+                 ^ ") \"all rows pass\" (List.for_all rows ~f:Fn.id)"))
+            |> List.map ~f:(fun claim -> claim.ambiguous))
+            [ true ]) );
+  ]
 
 let base_dir = Dune.base_dir
 let repo_relative = Dune.repo_relative
@@ -4139,6 +4394,7 @@ let () =
     @ [ run_line_break_refusal_control () ]
     @ run_gate_population_controls ()
     @ [ run_gate_refusal_control () ]
+    @ run_agreement_controls () @ run_ambiguous_remedy_controls ()
   in
   let matrix_rows = run_syntax_matrix () in
   let matrix_results =
@@ -4355,6 +4611,18 @@ let () =
         Test_utils.Refusal_control_scan.claims_members (In_channel.read_all path))
     |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
   in
+  (* The names whose ownership the one resolver decides, held equal to [Verdict.Claims] itself: a
+     member it did not know would be a claim every reader passes over (gh-ocannl-1361). *)
+  let resolved_members = List.sort Test_utils.Verdict_callee.members ~compare:String.compare in
+  let resolves_every_member =
+    List.equal String.equal (List.sort claims_members ~compare:String.compare) resolved_members
+  in
+  if not resolves_every_member then
+    eprintf "Verdict.Claims exports [%s]; Verdict_callee resolves [%s]\n"
+      (String.concat ~sep:"; " claims_members)
+      (String.concat ~sep:"; " resolved_members);
+  Verdict.p "and the claim-name resolver decides every member Verdict.Claims exports"
+    resolves_every_member;
   let unlabelled = [ "fail" ] in
   let exported_label_forms =
     List.filter claims_members ~f:(fun member ->
@@ -4370,27 +4638,30 @@ let () =
   Verdict.p "and it reads the label of every claim form Verdict.Claims exports"
     reads_every_label_form;
   Verdict.p "no gated claim's gate reads the population it quantifies" (!gate_offenders = 0);
-  (* The forms the gate reader recognizes, held equal to the quantified gated forms [Verdict.Claims]
-     exports: a new one the reader did not know would be a claim it never compares. *)
+  (* The forms the gate reader recognizes, held equal to the gated forms [Verdict.Claims] exports --
+     [gated] and the quantified [gated_*]: a new one the reader did not know would be a claim it
+     never compares. *)
+  let recognized_gated_forms =
+    List.sort (Scan.gated_boolean :: Scan.gated_forms) ~compare:String.compare
+  in
   let exported_gated_forms =
     Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
         Test_utils.Refusal_control_scan.claims_members (In_channel.read_all path))
     |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
     |> List.filter ~f:(fun member ->
-        String.is_prefix member ~prefix:"gated_" || String.is_prefix member ~prefix:"<")
+        String.equal member "gated"
+        || String.is_prefix member ~prefix:"gated_"
+        || String.is_prefix member ~prefix:"<")
     |> List.sort ~compare:String.compare
   in
-  if
-    not
-      (List.equal String.equal exported_gated_forms
-         (List.sort Scan.gated_forms ~compare:String.compare))
-  then
+  let recognizes_every_gated_form =
+    List.equal String.equal exported_gated_forms recognized_gated_forms
+  in
+  if not recognizes_every_gated_form then
     eprintf "Verdict.Claims exports the gated forms [%s]; the gate reader recognizes [%s]\n"
       (String.concat ~sep:"; " exported_gated_forms)
-      (String.concat ~sep:"; " Scan.gated_forms);
-  Verdict.p "and it recognizes every quantified gated form Verdict.Claims exports"
-    (List.equal String.equal exported_gated_forms
-       (List.sort Scan.gated_forms ~compare:String.compare));
+      (String.concat ~sep:"; " recognized_gated_forms);
+  Verdict.p "and it recognizes every gated form Verdict.Claims exports" recognizes_every_gated_form;
   Verdict.p "and the gate reader completed gated claims to compare" (!gated_sites > 0);
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"

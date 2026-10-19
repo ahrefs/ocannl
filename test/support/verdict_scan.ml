@@ -334,33 +334,22 @@ type dialect_census = {
 let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
 let skipped_callees = [ "skipped" ]
 
-(* What an [open] binds each claim name to: an identity no [let] and no local can carry ([let]s
-   count up from 1, locals down from -1) -- one for a module denoting [Verdict], one for any
-   other. *)
-let opened_from_verdict = Int.min_value
-let opened_elsewhere = Int.min_value + 1
-
-(** Whose a claim callee is: [Verdict]'s, not [Verdict]'s, or [Ambiguous] -- an unqualified name
-    that reaches an [open Verdict.Claims] only past a later [open] of another module, which may or
-    may not export a function of that name: this scan cannot read what an unmodelled module exports.
-*)
-type ownership = Verdicts | Ambiguous | Not_verdicts
+(** Whose a claim callee is, as {!Verdict_callee} resolves it: [Verdict]'s, [Ambiguous] -- reaching
+    [Verdict] only past an [open] of a module that resolver cannot read, which may export a name or
+    a [Verdict] module of its own -- [Free], or not [Verdict]'s. *)
+type ownership = Verdict_callee.ownership = Verdicts | Ambiguous | Free | Not_verdicts
 
 (* One application whose callee is a path ending in a name of [callees], with a positional argument:
    its last path component, whether that callee is [Verdict]'s (below), and the site its first
    positional argument -- the label -- keys. Shared by {!dialect_census} and {!line_break_census},
    so both key a label one way.
 
-   Whether the callee is [Verdict]'s is resolved through {!Lexical_scope}, never by spelling. A
-   qualified callee is when its module path denotes [Verdict] in scope: [Verdict] unless a [module
-   Verdict = ...] took the name over, an alias of it ([module V = Verdict]), or a submodule of
-   either ([Verdict.Claims]); [Other.Verdict] is not. An unqualified one is when the name it reaches
-   was brought in by an [open] (or [include]) of such a module, as [open Verdict.Claims] brings the
-   claim names in; a name the source binds itself ([let p = Stdio.printf], [let skipped =
-   Verdict.skipped ~backend]), or one no modelled open brings in, is not; and one that reaches such
-   an open only past a later [open] of another module is {!Ambiguous}. *)
+   Whether the callee is [Verdict]'s is {!Verdict_callee}'s answer, the resolver every Verdict
+   reader shares; its header lists what it reads as [Verdict]'s and why a name past an [open] of
+   another module is {!Ambiguous}. *)
 let claim_calls ~callees content =
   let ast = Read.structure_of content in
+  let owners = Verdict_callee.of_structure ast in
   (* A type constraint or coercion does not change which string a label is: [("…" : string)] is the
      literal it wraps. *)
   let rec peel expr =
@@ -417,45 +406,8 @@ let claim_calls ~callees content =
         next_binding <- next_binding - 1;
         (None, next_binding)
 
-      (* A module path denotes [true] when its head is [Verdict] with no binding of that name in
-         scope, or a module name bound to something denoting [Verdict]; a name a binding the scan
-         cannot see into took over ({!shadowed}) denotes [false]. *)
-      method module_path env path =
-        let head = Lexical_scope.head path in
-        match Map.find env.Lexical_scope.modules head with
-        | Some denotes -> Some denotes
-        | None -> Some (String.equal head "Verdict")
-
-      method! shadowed = Some false
-
-      (* Every open pushes a frame for the claim names: Verdict's for a module denoting [Verdict],
-         and for any other module a marker that the name MAY have been rebound there, since this
-         scan cannot read what an unmodelled module exports. {!ownership_of} reads past the
-         markers. *)
-      method! opened ~top:_ ~include_:_ env denotes =
-        let identity =
-          if Option.value denotes ~default:false then opened_from_verdict else opened_elsewhere
-        in
-        Lexical_scope.push_frame env
-          (Map.of_alist_reduce
-             (module String)
-             (List.map callees ~f:(fun name -> (name, (None, identity))))
-             ~f:(fun first _ -> first))
-
-      (* An unqualified claim name's owner, innermost frame first: past any number of opens of other
-         modules, the first binding decides -- an open of [Verdict] makes it [Verdict]'s, or
-         [Ambiguous] when such an open was passed on the way; anything the source binds, or no
-         binding at all, makes it not [Verdict]'s. *)
-      method ownership_of env name =
-        let rec decide passed_open = function
-          | [] -> Not_verdicts
-          | (None, identity) :: outer when identity = opened_elsewhere -> decide true outer
-          | (None, identity) :: _ when identity = opened_from_verdict ->
-              if passed_open then Ambiguous else Verdicts
-          | _ :: _ -> Not_verdicts
-        in
-        decide false
-          (List.filter_map env.Lexical_scope.frames ~f:(fun frame -> Map.find frame name))
+      (* Module paths matter here only to {!Verdict_callee}, which resolves the callee. *)
+      method module_path _ _ = None
 
       (* A name bound to a literal denotes that literal, and so does a name bound to another name
          that does -- [let label = raw] -- through any chain of such renamings, each resolved in the
@@ -500,15 +452,12 @@ let claim_calls ~callees content =
                wraps. *)
             let callee = peel callee in
             match (callee.pexp_desc, Read.longident_of callee, label) with
-            | Pexp_ident { txt = ident; _ }, Some path, Some label ->
+            | Pexp_ident _, Some path, Some label ->
                 let name = List.last_exn path in
                 if List.mem callees name ~equal:String.equal then
                   let verdicts =
-                    match ident with
-                    | Ppxlib.Longident.Ldot (prefix, _) ->
-                        if Option.value (self#module_path env prefix) ~default:false then Verdicts
-                        else Not_verdicts
-                    | _ -> self#ownership_of env name
+                    Option.value_map (Verdict_callee.resolve owners callee) ~default:Not_verdicts
+                      ~f:(fun resolution -> resolution.ownership)
                   in
                   let site =
                     {
@@ -584,37 +533,17 @@ let dialect_census content =
     an unqualified claim name brought in by an [open] this scan does not model (a module that
     re-exports [Verdict.Claims] under another name).
 
-    An unqualified claim name that reaches [open Verdict.Claims] only past a later [open] of another
-    module is {!Ambiguous}: that module may export a function of the name, and this scan cannot read
-    its exports. Such a site is READ, and a line break in its literal label is refused with the
+    A claim name that reaches [Verdict] only past an [open] of a module {!Verdict_callee} cannot
+    read is {!Ambiguous}: that module may export a function of the name, or a [Verdict] module of
+    its own -- [Verdict.p] past an [open Other] is ambiguous as much as an unqualified [p] past one
+    (gh-ocannl-1361). Such a site is READ, and a line break in its literal label is refused with the
     remedy of qualifying the call -- loudly, since the alternative, leaving it unread, is how a
     later [open Ll_test] would silently exempt every claim after it. *)
 
 (** The [Verdict.Claims] members whose first positional argument is a claim label (or the format
     rendering one): every member but [fail], whose argument is a multi-line message. *)
 let labelled_claims =
-  [
-    "claim";
-    "p";
-    "pf";
-    "claimf";
-    "p_all";
-    "p_all2";
-    "pf_all2";
-    "p_none";
-    "p_alli";
-    "p_empty";
-    "p_exists";
-    "p_pairwise_distinct";
-    "skipped";
-    "gated";
-    "gated_all";
-    "gated_alli";
-    "gated_exists";
-    "pass_fail";
-    "pass_fail_all2";
-    "case";
-  ]
+  List.filter Verdict_callee.members ~f:(fun member -> not (String.equal member "fail"))
 
 type line_break_site = { site : dialect_site; ambiguous : bool }
 (** A claim whose literal label carries a line break; [ambiguous] when its callee reaches
@@ -634,7 +563,7 @@ let line_break_census content =
         match ownership with
         | Verdicts -> Some { site; ambiguous = false }
         | Ambiguous -> Some { site; ambiguous = true }
-        | Not_verdicts -> None)
+        | Free | Not_verdicts -> None)
   in
   let broken =
     List.filter sites ~f:(fun { site; _ } ->
@@ -650,44 +579,57 @@ let line_break_census content =
     the gate closes, the skip prints [p]'s passing line, and the golden stays green. That is the
     gh-ocannl-1115 trap, and it shipped twice in one wave through these very forms — a gate asking
     whether the claim's own [results] were non-empty (staging#1049), and one asking whether the
-    [real] seeds [results] was mapped from held a tensorized one (staging#1063). A gate comes from
-    an invariant — the backend, an advertised capability, the configuration — never from the
-    population.
+    [real] seeds [results] was mapped from held a tensorized one (staging#1063).
+    [Verdict.gated ~when_ ~on label b] carries the same trap when [b] quantifies: [placement_store]
+    gated [(not (List.is_empty stores)) && List.for_all stores ~f:refused] on [stores] being
+    non-empty until gh-ocannl-1361. A gate comes from an invariant — the backend, an advertised
+    capability, the configuration — never from the population.
 
     {2 What is read}
 
-    Every application of [gated_all], [gated_alli] or [gated_exists] that carries its [~when_] and
-    both positional arguments: unqualified where no binding of the source gives the name (an open of
-    [Verdict.Claims] is how it arrives), or qualified by a module that denotes [Verdict] -- the name
-    itself, unless a [module Verdict = ...] took it over, or an alias of it ([module V = Verdict]).
-    A file's own [gated_all] is its own. A partial application bound by [let] to a name, under any
-    number of further partial applications, is completed at each application of that name, and
-    [x |> f] and [f @@ x] are read as [f x]; so the
-    [let check = Verdict.gated_all ~when_ ~on in check label xs] wrapper is one site per use. The
-    two sides are then compared by LEXICAL identity, a name plus the binding it resolves to through
-    {!Lexical_scope}, so a shadowed name is a different value; a name no binding of the source gives
-    (a global, or one an unmodelled [open] brought in) is one identity, the same on both sides:
+    Every application of [gated], [gated_all], [gated_alli] or [gated_exists] that carries its
+    [~when_] and both positional arguments, where {!Verdict_callee} -- the resolver every Verdict
+    reader shares -- reads the name as [Verdict]'s, [Ambiguous] (reported as such, with the remedy
+    of qualifying the call) or [Free]: a [gated] name nothing binds is read too, since it exists
+    nowhere but in [Verdict.Claims]. A file's own [gated_all], and another module's, are not
+    [Verdict]'s. A partial application bound by [let] to a name, under any number of further partial
+    applications, is completed at each application of that name, and [x |> f] and [f @@ x] are read
+    as [f x]; so the [let check = Verdict.gated_all ~when_ ~on in check label xs] wrapper is one
+    site per use. The two sides are then compared by LEXICAL identity, a name plus the binding it
+    resolves to through {!Lexical_scope}, so a shadowed name is a different value; a name no binding
+    of the source gives (a global, or one an unmodelled [open] brought in) is one identity, the same
+    on both sides:
 
     - the GATE is every value identifier the [~when_] expression spells, and transitively every one
       spelled by the right-hand side of a [let] it resolves to (function bodies included), or by
       what the source writes into that binding (below), in any position;
-    - the POPULATION is the identifier the quantified argument spells, and the collections it is
-      BUILT from: following a [let]-bound name into its right-hand side, the branches (not the
-      condition) of an [if], the cases of a [match] (the scrutinee only through a name a case
-      pattern binds and the case returns), the body of a function in data position (a
+    - the POPULATION of a [gated_*] claim is the identifier the quantified argument spells, and the
+      collections it is BUILT from: following a [let]-bound name into its right-hand side, the
+      branches (not the condition) of an [if], the cases of a [match] (the scrutinee only through a
+      name a case pattern binds and the case returns), the body of a function in data position (a
       [~default:(fun () -> ...)] thunk), the body and handlers of a [try], the body of a [let],
       [let module], local [open] or sequence, the elements of a list, array or tuple literal or
-      constructor payload, the operand of [!] and of [ref] and both operands of [@], and the
-      arguments that carry the collection into a function of a standard collection module ([List],
-      [Array], [Hashtbl], [Map], [Option], [String], ... — see {!collection_modules}), reached by
-      name, through an alias ([module Rows = List]), and not under a name a local module took over
-      ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an [open Base] in scope
-      rebinds it. Which arguments carry it is {!collection_arguments}': every positional one, except
-      that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
-      collection alone, a [make]/[create] the value it fills in and not its count, an [init] what
-      its callback returns, and a [range] nothing, plus the data-bearing labels [~default], [~init],
-      [~data];
+      constructor payload, the operand of [!] and of [ref] and both operands of [@] (where the
+      source does not bind the operator itself), and the arguments that carry the collection into a
+      function of a standard collection module ([List], [Array], [Hashtbl], [Map], [Option],
+      [String], ... — see {!collection_modules}), reached by name, through an alias
+      ([module Rows = List]), and not under a name a local module took over ([module Map = Custom]);
+      an unqualified [List] is [Stdlib]'s until an [open Base] in scope rebinds it. Which arguments
+      carry it is {!collection_arguments}': every positional one, except that a [Base]-ordered
+      selector ([find], [nth], [take], [remove], ...) contributes its collection alone, a
+      [make]/[create] the value it fills in and not its count, an [init] what its callback returns,
+      and a [range] nothing, plus the data-bearing labels [~default], [~init], [~data];
     - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
+    - the POPULATION of a [gated] claim is what its boolean's quantifiers range over, each followed
+      as above: the boolean is read through a name into its right-hand side and what the source
+      writes into it, [not], [&&] and [||] (bare where the source does not bind them, or qualified
+      by a standard library), [!] and [ref] where unbound too, the branches of an [if] (never the
+      condition), the cases of a [match], the body and handlers of a [try], the body of a [let],
+      [let module], local [open] or sequence, type constraints, pipelines, and a quantifier's own
+      arguments, its predicate's body included (a quantifier nested there ranges over a population
+      of its own, the predicate's parameters none); a quantifier is a {!quantifiers} function of a
+      collection module, whose collection is its first positional argument in [Base]'s order (the
+      first two for a pairwise one) and every positional argument in [Stdlib]'s;
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
       a [let alias = name] renaming: the right-hand side of [x := e], and what a writer of a mutable
       collection module ({!mutable_modules}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... —
@@ -711,11 +653,13 @@ let line_break_census content =
     call; a destructured [let] binds names that are followed no further, and a value reached through
     a module path ([M.rows]) is an identity on neither side. A gate threaded into a wrapper as its
     own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the wrapper's
-    definition, where it is a parameter, and not at its callers. [Verdict.gated]'s boolean is not a
-    population and is out of scope. Each of these is a place a population gate can hide from this
-    reader; none is a place it reports one that is not there.
+    definition, where it is a parameter, and not at its callers. A [gated] boolean that quantifies
+    nothing has no population: its comparisons and other calls are operands this reader does not
+    read, so [gated ~when_:(xs <> []) label (sum xs = want)] passes, and so does a gate folded into
+    a value ([p "…" ((not on_cpu) || ok)]). Each of these is a place a population gate can hide from
+    this reader; none is a place it reports one that is not there.
 
-    A [gated_*] application the reader cannot complete — a partial application no [let] binds, a
+    A gated application the reader cannot complete — a partial application no [let] binds, a
     [let]-bound one that no use the reader resolves completes (reached only through a module path,
     say), or a claim (or a [let]-bound wrapper of one) named as a value, handed to [List.iter] say —
     is reported as unread rather than counted as clean, so the boundary is loud there. *)
@@ -724,7 +668,6 @@ let line_break_census content =
     take arguments in [Stdlib]'s order (the function first, the collection last) rather than
     [Base]'s (the collection first). *)
 type gate_module =
-  | Verdict_module
   | Collection_module of { stdlib : bool; mutable_ : bool }
       (** [mutable_]: its values are mutable containers ({!mutable_modules}). *)
   | Standard_library of { stdlib : bool }
@@ -744,6 +687,9 @@ type gate_denotation = {
 
 type gate_reading = {
   form : string;  (** The callee as written: [gated_all], [Verdict.gated_exists], a wrapper. *)
+  ambiguous : bool;
+      (** The claim reaches [Verdict] only past an [open] of a module {!Verdict_callee} cannot read,
+          which may export a name or a [Verdict] module of its own. *)
   line : int;
   gate : string;  (** The [~when_] expression, printed. *)
   reads : string list;  (** The population bindings the gate reads, by name, sorted. *)
@@ -756,6 +702,47 @@ type gate_census = {
 }
 
 let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
+
+(** [Verdict.gated ~when_ ~on label b]: its population is what the quantifiers its boolean reduces
+    to range over ({!quantifiers}). *)
+let gated_boolean = "gated"
+
+(** The collection-module functions that quantify over their collection, which a [gated] boolean is
+    read through: true or false of every element, or of none. *)
+let quantifiers =
+  [
+    "for_all";
+    "for_alli";
+    "for_all2";
+    "for_all2_exn";
+    "exists";
+    "existsi";
+    "exists2";
+    "exists2_exn";
+    "is_empty";
+  ]
+
+(* The arguments a quantifier ranges over: in [Base]'s order the first positional argument, the
+   first two for a pairwise one; in [Stdlib]'s, where the predicate comes first ([List.for_all f
+   xs]) but a [Base] spelling under no [open Base] reads the same way, every positional one -- the
+   loud direction, as for {!collection_arguments}. *)
+let quantified_arguments ~stdlib name arguments =
+  let positional =
+    List.filter_map arguments ~f:(function Ppxlib.Asttypes.Nolabel, a -> Some a | _ -> None)
+  in
+  if stdlib then positional
+  else List.take positional (if String.is_substring name ~substring:"2" then 2 else 1)
+
+(* What a gated claim the walk reached carries: the callee as written, the [Verdict.Claims] member
+   it completes, whether that member is {!Verdict_callee.Ambiguous}, and every argument handed to it
+   so far, each with the scope it was written in. *)
+type gated_reach = {
+  reached_form : string;
+  member : string;
+  reached_ambiguous : bool;
+  arguments :
+    (Ppxlib.Asttypes.arg_label * expression * (gate_denotation, gate_module) Lexical_scope.env) list;
+}
 
 (** The modules whose functions build a collection from their positional arguments, by the module
     component just before the function's name ([List.map], [Base.List.map], [Stdlib.List.map]). *)
@@ -935,6 +922,7 @@ let rec strip_constraints expr =
 
 let gate_census content =
   let ast = Read.structure_of content in
+  let owners = Verdict_callee.of_structure ast in
   let readings = ref [] and gated_sites = ref 0 in
   (* What is written into a binding after it is made -- [x := e], [Queue.enqueue x e] -- by the
      binding's identity, with the scope it was written in. *)
@@ -974,9 +962,9 @@ let gate_census content =
         next_local <- next_local - 1;
         { identity = next_local; definition = None }
 
-      (* A module denotes [true] when it is [Verdict] or reaches into it ([Verdict.Claims], a
-         [module V = Verdict] alias), [false] when it is anything else; a name some binding the scan
-         cannot see into takes over denotes something else. *)
+      (* What a module path denotes to the population side: a collection module, a standard library,
+         a structure of this source, or another module. Whether a claim is [Verdict]'s is
+         {!Verdict_callee}'s question, not this one. *)
       method module_path env path =
         let components = Read.flatten_longident path in
         let head = Lexical_scope.head path in
@@ -984,7 +972,6 @@ let gate_census content =
         Some
           (match Map.find env.Lexical_scope.modules head with
           | Some denotes when single -> denotes
-          | Some Verdict_module -> Verdict_module
           | Some (Collection_module _ as collection)
             when List.for_all (List.tl_exn components) ~f:(fun c ->
                      List.mem collection_modules c ~equal:String.equal) ->
@@ -1000,7 +987,6 @@ let gate_census content =
                   mutable_ = List.mem mutable_modules (List.last_exn components) ~equal:String.equal;
                 }
           | Some _ -> Other_module
-          | None when String.equal head "Verdict" -> Verdict_module
           | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal ->
               Standard_library { stdlib = false }
           | None when single && List.mem [ "Stdlib"; "Caml" ] head ~equal:String.equal ->
@@ -1209,12 +1195,113 @@ let gate_census content =
                       | _ -> None)
                   in
                   match (strip_constraints callee).pexp_desc with
-                  | Pexp_ident { txt = Ppxlib.Longident.Lident ("!" | "@" | "ref"); _ } ->
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident (("!" | "@" | "ref") as name); _ }
+                    when Option.is_none (Lexical_scope.lookup env name) ->
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path env prefix with
                       | Some (Collection_module { stdlib; _ }) ->
                           List.iter (collection_arguments ~stdlib name arguments) ~f:(visit env)
+                      | _ -> ())
+                  | _ -> ()))
+          | _ -> ()
+        in
+        visit env expr;
+        found
+
+      (* A [gated] boolean's population: the collections the quantifiers it reduces to range over,
+         each followed as {!population} follows one. The boolean is read through a name into its
+         [let] right-hand side and what the source writes into it, [not], [&&] and [||] (bare or
+         qualified by a standard library), [!] and [ref], the branches of an [if] (never the
+         condition), the cases of a [match] and the body and handlers of a [try], the body of a
+         [let], [let module], local [open] or sequence, type constraints, and a pipeline, as an
+         application. A quantifier is a {!quantifiers} function of a collection module, reached as
+         {!population} reaches one. *)
+      method quantified env expr =
+        let seen = Hash_set.create (module Int) in
+        let found = Hash_set.Poly.create () in
+        let rec visit env expr =
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some denotation when not (Hash_set.mem seen denotation.identity) ->
+                  Hash_set.add seen denotation.identity;
+                  Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                  List.iter (Hashtbl.find_multi writes denotation.identity)
+                    ~f:(fun (written, env) -> visit env written)
+              | _ -> ())
+          | Pexp_constraint (inner, _)
+          | Pexp_coerce (inner, _, _)
+          | Pexp_sequence (_, inner)
+          | Pexp_letexception (_, inner)
+          | Pexp_newtype (_, inner) ->
+              visit env inner
+          | Pexp_open ({ popen_expr; _ }, inner) ->
+              visit
+                (self#opened ~top:false ~include_:false env (self#module_of env popen_expr))
+                inner
+          | Pexp_letmodule ({ txt = Some name; _ }, module_expr, inner) ->
+              visit (self#bind_module env name module_expr) inner
+          | Pexp_letmodule ({ txt = None; _ }, _, inner) -> visit env inner
+          | Pexp_ifthenelse (_, yes, no) ->
+              visit env yes;
+              Option.iter no ~f:(visit env)
+          | Pexp_match (scrutinee, cases) ->
+              List.iter cases ~f:(fun case ->
+                  let part = { (self#local) with definition = Some (scrutinee, env) } in
+                  visit
+                    (Lexical_scope.bind_values env
+                       (Lexical_scope.pattern_vars [ case.pc_lhs ])
+                       part)
+                    case.pc_rhs)
+          | Pexp_try (body, cases) ->
+              visit env body;
+              List.iter cases ~f:(fun case ->
+                  visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs)
+          | Pexp_let (rec_flag, bindings, body) ->
+              visit (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
+          | Pexp_function (params, _, body) -> (
+              (* A quantifier's predicate: what its body quantifies. *)
+              let env =
+                List.fold params ~init:env ~f:(fun env param ->
+                    match param.pparam_desc with
+                    | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                    | Pparam_newtype _ -> env)
+              in
+              match body with
+              | Pfunction_body body -> visit env body
+              | Pfunction_cases (cases, _, _) ->
+                  List.iter cases ~f:(fun case ->
+                      visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs))
+          | Pexp_apply (callee, arguments) -> (
+              match self#pipeline callee arguments with
+              | Some (callee, arguments, _) ->
+                  visit env { expr with pexp_desc = Pexp_apply (callee, arguments) }
+              | None -> (
+                  let positional =
+                    List.filter_map arguments ~f:(function
+                      | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                      | _ -> None)
+                  in
+                  let connective name = List.mem [ "not"; "&&"; "||" ] name ~equal:String.equal in
+                  match (strip_constraints callee).pexp_desc with
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }
+                    when (connective name || List.mem [ "!"; "ref" ] name ~equal:String.equal)
+                         && Option.is_none (Lexical_scope.lookup env name) ->
+                      List.iter positional ~f:(visit env)
+                  | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
+                      match self#module_path env prefix with
+                      | Some (Standard_library _) when connective name ->
+                          List.iter positional ~f:(visit env)
+                      | Some (Collection_module { stdlib; _ })
+                        when List.mem quantifiers name ~equal:String.equal ->
+                          List.iter (quantified_arguments ~stdlib name arguments)
+                            ~f:(fun collection ->
+                              Hash_set.iter (self#population env collection) ~f:(Hash_set.add found));
+                          (* A quantifier nested in the predicate ranges over a population of its
+                             own: the arguments are read as booleans too, a function's body
+                             included, though the predicate's own parameters are no population. *)
+                          List.iter arguments ~f:(fun (_, argument) -> visit env argument)
                       | _ -> ())
                   | _ -> ()))
           | _ -> ()
@@ -1308,37 +1395,42 @@ let gate_census content =
             | _ -> Some (f, [ (Ppxlib.Asttypes.Nolabel, x) ], None))
         | _ -> None
 
-      (* The [gated_*] claim an expression reaches, with every argument it has been handed so far,
-         each with the scope it was written in. The nodes it absorbs -- the callee of an
-         application, an application a pipeline rewrites -- are marked [consumed]: read here, they
-         are not read again on their own. *)
+      (* The gated claim an expression reaches, with every argument it has been handed so far, each
+         with the scope it was written in. The nodes it absorbs -- the callee of an application, an
+         application a pipeline rewrites -- are marked [consumed]: read here, they are not read
+         again on their own. Whether a name is [Verdict]'s is {!Verdict_callee}'s answer: what it
+         reads as [Verdict]'s or [Ambiguous], or as [Free] -- a [gated] name exists nowhere but in
+         [Verdict.Claims], so one nothing binds is read too. *)
       method gated env expr ~through ~marks =
+        let verdicts () =
+          match Verdict_callee.resolve owners expr with
+          | Some { member; ownership = (Verdicts | Ambiguous | Free) as ownership; spelled }
+            when List.mem (gated_boolean :: gated_forms) member ~equal:String.equal ->
+              Some
+                {
+                  reached_form = spelled;
+                  member;
+                  reached_ambiguous = Poly.equal ownership Verdict_callee.Ambiguous;
+                  arguments = [];
+                }
+          | _ -> None
+        in
         match expr.pexp_desc with
         | Pexp_constraint (inner, _) -> self#gated env inner ~through ~marks
-        | Pexp_ident { txt; _ } -> (
-            let form () = Option.map (Read.longident_of expr) ~f:(String.concat ~sep:".") in
-            match txt with
-            | Ppxlib.Longident.Lident name -> (
-                (* A local binding of the name comes first: a file's own [gated_all] is not
-                   [Verdict]'s, and a [let check = Verdict.gated_all ...] is followed. *)
-                match Lexical_scope.lookup env name with
-                | Some { identity; definition = Some (rhs, rhs_env) }
-                  when not (Hash_set.mem through identity) ->
-                    Hash_set.add through identity;
-                    (* The binding this use completes, through every renaming on the way. *)
-                    Hash_set.add marks (position rhs);
-                    Option.map (self#gated rhs_env rhs ~through ~marks) ~f:(fun (_, arguments) ->
-                        (name, arguments))
-                | Some _ -> None
-                | None ->
-                    if List.mem gated_forms name ~equal:String.equal then
-                      Option.map (form ()) ~f:(fun form -> (form, []))
-                    else None)
-            | Ppxlib.Longident.Ldot (prefix, name)
-              when List.mem gated_forms name ~equal:String.equal
-                   && Poly.equal (self#module_path env prefix) (Some Verdict_module) ->
-                Option.map (form ()) ~f:(fun form -> (form, []))
-            | _ -> None)
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            (* A local binding of the name comes first: a file's own [gated_all] is not [Verdict]'s,
+               and a [let check = Verdict.gated_all ...] is followed. *)
+            match Lexical_scope.lookup env name with
+            | Some { identity; definition = Some (rhs, rhs_env) }
+              when not (Hash_set.mem through identity) ->
+                Hash_set.add through identity;
+                (* The binding this use completes, through every renaming on the way. *)
+                Hash_set.add marks (position rhs);
+                Option.map (self#gated rhs_env rhs ~through ~marks) ~f:(fun reach ->
+                    { reach with reached_form = name })
+            | Some _ -> None
+            | None -> verdicts ())
+        | Pexp_ident _ -> verdicts ()
         | Pexp_apply (callee, arguments) -> (
             let callee, arguments, absorbed =
               match self#pipeline callee arguments with
@@ -1346,13 +1438,16 @@ let gate_census content =
               | None -> (callee, arguments, None)
             in
             match self#gated env callee ~through ~marks with
-            | Some (form, prior) ->
+            | Some reach ->
                 Option.iter absorbed ~f:(Hash_set.add marks);
                 Hash_set.add marks (position callee);
                 Some
-                  ( form,
-                    prior @ List.map arguments ~f:(fun (label, argument) -> (label, argument, env))
-                  )
+                  {
+                    reach with
+                    arguments =
+                      reach.arguments
+                      @ List.map arguments ~f:(fun (label, argument) -> (label, argument, env));
+                  }
             | None -> None)
         | _ -> None
 
@@ -1373,16 +1468,16 @@ let gate_census content =
                   that name's own uses are. *)
                let marks = Hash_set.create (module Int) in
                match self#gated env expr ~through:(Hash_set.create (module Int)) ~marks with
-               | Some (form, arguments)
+               | Some { reached_form; arguments; _ }
                  when (not (complete arguments)) && not (Hash_set.mem bound (position expr)) ->
                    commit marks;
-                   partials := (form, expr.pexp_loc.loc_start.pos_lnum) :: !partials
+                   partials := (reached_form, expr.pexp_loc.loc_start.pos_lnum) :: !partials
                | _ -> ())
            | Pexp_apply _ -> (
                let marks = Hash_set.create (module Int) in
                match self#gated env expr ~through:(Hash_set.create (module Int)) ~marks with
                | None -> ()
-               | Some (form, arguments) -> (
+               | Some { reached_form = form; member; reached_ambiguous; arguments } -> (
                    let gate =
                      List.find_map arguments ~f:(function
                        | Ppxlib.Asttypes.Labelled "when_", argument, env -> Some (argument, env)
@@ -1402,10 +1497,13 @@ let gate_census content =
                        pending :=
                          (fun () ->
                            let reads = self#gate_reads gate_env gate in
+                           let built =
+                             if String.equal member gated_boolean then
+                               self#quantified population_env population
+                             else self#population population_env population
+                           in
                            let shared =
-                             Hash_set.filter
-                               (self#population population_env population)
-                               ~f:(Hash_set.mem reads)
+                             Hash_set.filter built ~f:(Hash_set.mem reads)
                              |> Hash_set.to_list |> List.map ~f:fst
                              |> List.dedup_and_sort ~compare:String.compare
                            in
@@ -1413,6 +1511,7 @@ let gate_census content =
                              readings :=
                                {
                                  form;
+                                 ambiguous = reached_ambiguous;
                                  line;
                                  gate = Ppxlib.Pprintast.string_of_expression gate;
                                  reads = shared;
