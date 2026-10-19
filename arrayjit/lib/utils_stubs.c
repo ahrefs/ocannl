@@ -364,48 +364,42 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
 /* --- A deadline on GPU device initialization (gh-ocannl-1281) ---
 
    A faulted GPU leaves its driver wedged: every later process that touches the runtime spins in
-   device initialization and never returns (gh-ocannl-1211's tuf fault). An OCaml-level signal
-   handler cannot bound that, since it runs only at a poll point, which a thread stuck inside a C
-   runtime call never reaches. So the deadline is the kernel's real-time interval timer with a C
-   SIGALRM handler, which needs no cooperation from the OCaml runtime: it writes a diagnostic
-   prepared before arming to fd 2, resets SIGALRM to its default disposition and re-raises it, so
-   the process dies by SIGALRM (status 142 in a shell) and harnesses can classify it.
+   device initialization and never returns (gh-ocannl-1211's tuf fault). Nothing on the stuck
+   thread can bound that -- it is inside a C runtime call and reaches no OCaml poll point -- so the
+   bound is a WATCHDOG THREAD of this library's own. [arm] gives it a due time on the monotonic
+   clock; [disarm] takes it back. When a due time passes while still armed, the watchdog writes the
+   diagnostic prepared before arming to fd 2 and kills the process by SIGALRM (status 142 in a
+   shell), so harnesses can classify it.
 
-   Safety for host programs: [arm] refuses -- and touches nothing -- when SIGALRM does not have its
-   default disposition (the program's own handler, or an ignore, stays exactly as it was) or when
-   the real-time timer is already running (an [alarm] or [setitimer] the program set fires exactly
-   when it would have: the timer is not read-and-restored, it is not touched at all). One region
-   is armed at a time process-wide; a concurrent or nested [arm] refuses (the OCaml side
-   serializes guarded regions, so a refusal for that reason only meets a nested region, which the
-   outer deadline covers). The expiry is process-directed and is delivered only to a thread that
-   does not block SIGALRM, so [arm] unblocks it in the calling thread -- the one that runs the
-   initialization -- and [disarm] restores that thread's mask: a process that inherited a blocked
-   SIGALRM, or whose every thread blocks it, would otherwise arm a deadline that never fires. A
-   SIGALRM already PENDING (blocked and raised) refuses the arm, since unblocking would deliver
-   it to the deadline's handler. [disarm] cancels the timer and restores the saved disposition.
+   Being a thread rather than a signal handler is what keeps the host program's own signal state
+   out of it: the real-time timer is never touched (an [alarm] or [setitimer] the program set, or
+   sets meanwhile, fires exactly when it would have), no handler is installed, and no signal mask
+   is changed outside the watchdog itself. A SIGALRM anything else sends during a region meets the
+   program's own disposition, as it always would. The line is written only by the watchdog and
+   only after its own due time passed while armed, so it always means the deadline. [arm] refuses
+   when SIGALRM does not have its default disposition -- a program with its own handler, or an
+   ignore, gets no deadline, since killing by SIGALRM would have to override it -- and on Windows.
+   One region is armed at a time (the OCaml side serializes them); a nested [arm] refuses, and the
+   outer deadline covers the nested region.
 
-   A SIGALRM that is not the timer's expiry -- sent, raised or queued by anything else during the
-   region -- still kills, as SIGALRM's default action would have, but with a line of its own rather
-   than the deadline's, so the deadline's line always means the timer expired. The handler never
-   waits on its diagnostic: a 2 s backstop alarm under the default disposition kills the process if
-   the write to fd 2 blocks. No deadline on Windows, which has no SIGALRM. */
+   The death never waits on the diagnostic: the watchdog polls fd 2 for room (2 s at most) and
+   skips the write if there is none, so a full pipe nobody reads cannot hold it. It then puts
+   SIGALRM's default disposition back, unblocks SIGALRM in its own thread (it blocks every signal
+   otherwise, so it never takes the program's) and raises it there. */
 
 #if !defined(_WIN32)
+#include <poll.h>
 #include <pthread.h>
-#include <sys/time.h>
 #include <time.h>
 
 #define OCANNL_DEADLINE_MSG_MAX 1024
+static pthread_mutex_t ocannl_deadline_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ocannl_deadline_cond = PTHREAD_COND_INITIALIZER;
+static int ocannl_deadline_thread_started; /* under the lock */
+static int ocannl_deadline_armed;          /* under the lock */
+static int64_t ocannl_deadline_due_ns;     /* under the lock; monotonic */
 static char ocannl_deadline_msg[OCANNL_DEADLINE_MSG_MAX];
 static size_t ocannl_deadline_msg_len;
-static struct sigaction ocannl_deadline_saved;
-static sigset_t ocannl_deadline_saved_mask;
-static int ocannl_deadline_armed; /* accessed through __atomic builtins */
-/* When the timer is due on the monotonic clock, in nanoseconds, recorded BEFORE it is started, and
-   how early a reading may sit and still count as the expiry (clock granularity: at most 1 ms, and
-   at most half the interval, so a signal in the moment before the timer starts never counts). */
-static volatile int64_t ocannl_deadline_due_ns;
-static volatile int64_t ocannl_deadline_slack_ns;
 
 static int64_t ocannl_monotonic_ns(void) {
   struct timespec ts;
@@ -413,67 +407,100 @@ static int64_t ocannl_monotonic_ns(void) {
   return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 }
 
-static void ocannl_deadline_write(const char *p, size_t n) {
+/* The process this one forked off is not this one: its watchdog thread did not come along. */
+static void ocannl_deadline_atfork_child(void) {
+  pthread_mutex_t fresh_lock = PTHREAD_MUTEX_INITIALIZER;
+  pthread_cond_t fresh_cond = PTHREAD_COND_INITIALIZER;
+  ocannl_deadline_lock = fresh_lock;
+  ocannl_deadline_cond = fresh_cond;
+  ocannl_deadline_thread_started = 0;
+  ocannl_deadline_armed = 0;
+}
+
+static void ocannl_deadline_die(void) {
+  struct pollfd pfd;
+  struct sigaction dfl;
+  sigset_t alrm;
+  const char *p = ocannl_deadline_msg;
+  size_t n = ocannl_deadline_msg_len;
+  pfd.fd = 2;
+  pfd.events = POLLOUT;
   while (n > 0) {
-    ssize_t w = write(2, p, n);
+    ssize_t w;
+    pfd.revents = 0;
+    if (poll(&pfd, 1, 2000) <= 0 || !(pfd.revents & POLLOUT)) break;
+    w = write(2, p, n);
     if (w < 0) {
       if (errno == EINTR) continue;
-      return;
+      break;
     }
     p += w;
     n -= (size_t)w;
   }
-}
-
-/* Block SIGALRM again in the calling thread if [arm] found it blocked. Only that one signal's bit
-   is put back, so a mask change the initialization made for other signals is kept. */
-static void ocannl_deadline_reblock(void) {
-  sigset_t alrm;
-  if (sigismember(&ocannl_deadline_saved_mask, SIGALRM)) {
-    sigemptyset(&alrm);
-    sigaddset(&alrm, SIGALRM);
-    pthread_sigmask(SIG_BLOCK, &alrm, NULL);
-  }
-}
-
-static void ocannl_deadline_handler(int sig, siginfo_t *info, void *uctx) {
-  static const char external_msg[] =
-      "\nOCANNL: a SIGALRM that was not the device_init_deadline arrived during a GPU device "
-      "initialization or query; dying by it, as SIGALRM's default action would (gh-ocannl-1281)\n";
-  struct sigaction dfl;
-  sigset_t set;
-  int expired;
-  (void)info;
-  (void)uctx;
-  /* The deadline is recognized positively, by the clock alone (clock_gettime is async-signal-safe;
-     reading the timer back is not): [arm] records when the timer is due BEFORE starting it, and
-     the timer never fires early. A SIGALRM raised, queued or sent by anything else (si_code
-     SI_USER, SI_TKILL, SI_QUEUE, ...) during the region arrives before that time -- one that would
-     arrive later never does, the expiry having killed the process first. A failed clock read
-     counts as external, so the deadline's line is never written without evidence. */
-  {
-    int64_t now = ocannl_monotonic_ns();
-    expired = now >= 0 && now >= ocannl_deadline_due_ns - ocannl_deadline_slack_ns;
-  }
-  /* Termination must not wait on the diagnostic: a full blocking pipe on fd 2 (a parent that does
-     not drain the child's stderr) would block the write forever. So the default disposition and an
-     unblocked mask come first, then a 2 s backstop alarm: if the write blocks, that alarm kills the
-     process by SIGALRM all the same. */
   memset(&dfl, 0, sizeof dfl);
   dfl.sa_handler = SIG_DFL;
   sigemptyset(&dfl.sa_mask);
-  sigaction(sig, &dfl, NULL);
-  sigemptyset(&set);
-  sigaddset(&set, sig);
-  sigprocmask(SIG_UNBLOCK, &set, NULL);
-  alarm(2);
-  if (expired)
-    ocannl_deadline_write(ocannl_deadline_msg, ocannl_deadline_msg_len);
-  else
-    ocannl_deadline_write(external_msg, sizeof external_msg - 1);
-  raise(sig);
+  sigaction(SIGALRM, &dfl, NULL);
+  sigemptyset(&alrm);
+  sigaddset(&alrm, SIGALRM);
+  pthread_sigmask(SIG_UNBLOCK, &alrm, NULL);
+  raise(SIGALRM);
   /* Not reached: the default action of SIGALRM terminates the process. */
-  _exit(128 + sig);
+  _exit(128 + SIGALRM);
+}
+
+static void *ocannl_deadline_watchdog(void *arg) {
+  (void)arg;
+  pthread_mutex_lock(&ocannl_deadline_lock);
+  for (;;) {
+    if (!ocannl_deadline_armed) {
+      pthread_cond_wait(&ocannl_deadline_cond, &ocannl_deadline_lock);
+      continue;
+    }
+    {
+      int64_t now = ocannl_monotonic_ns();
+      int64_t left = ocannl_deadline_due_ns - now;
+      struct timespec abs;
+      int64_t step;
+      if (now >= 0 && left <= 0) break; /* Still armed past the due time: the deadline. */
+      /* Waits in steps of at most 100 ms on the realtime clock [pthread_cond_timedwait] takes,
+         re-reading the monotonic one after each, so a wall-clock jump moves no deadline. */
+      step = (now < 0 || left > 100000000) ? 100000000 : left;
+      clock_gettime(CLOCK_REALTIME, &abs);
+      abs.tv_nsec += (long)step;
+      abs.tv_sec += abs.tv_nsec / 1000000000;
+      abs.tv_nsec %= 1000000000;
+      pthread_cond_timedwait(&ocannl_deadline_cond, &ocannl_deadline_lock, &abs);
+    }
+  }
+  pthread_mutex_unlock(&ocannl_deadline_lock);
+  ocannl_deadline_die();
+  return NULL;
+}
+
+/* Under the lock. */
+static int ocannl_deadline_start_thread(void) {
+  static int atfork_registered = 0;
+  pthread_t thread;
+  pthread_attr_t attr;
+  sigset_t all, saved;
+  int rc;
+  if (ocannl_deadline_thread_started) return 1;
+  if (!atfork_registered) {
+    if (pthread_atfork(NULL, NULL, ocannl_deadline_atfork_child) != 0) return 0;
+    atfork_registered = 1;
+  }
+  /* Created with every signal blocked, which it inherits: it must never take the program's. */
+  sigfillset(&all);
+  pthread_sigmask(SIG_SETMASK, &all, &saved);
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  rc = pthread_create(&thread, &attr, ocannl_deadline_watchdog, NULL);
+  pthread_attr_destroy(&attr);
+  pthread_sigmask(SIG_SETMASK, &saved, NULL);
+  if (rc != 0) return 0;
+  ocannl_deadline_thread_started = 1;
+  return 1;
 }
 #endif
 
@@ -496,90 +523,40 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   return Val_false;
 #else
   double seconds = Double_val(v_seconds);
-  struct sigaction cur, ours;
-  struct itimerval running, deadline;
-  sigset_t pending, alrm;
-  int expected = 0;
+  struct sigaction cur;
   size_t len;
+  int64_t now;
+  int armed = 0;
   if (!(seconds > 0.0) || seconds > 1e8) return Val_false;
-  if (!__atomic_compare_exchange_n(&ocannl_deadline_armed, &expected, 1, 0, __ATOMIC_SEQ_CST,
-                                   __ATOMIC_SEQ_CST))
-    return Val_false;
   if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
-      cur.sa_handler != SIG_DFL || getitimer(ITIMER_REAL, &running) != 0 ||
-      running.it_value.tv_sec != 0 || running.it_value.tv_usec != 0 || sigpending(&pending) != 0 ||
-      sigismember(&pending, SIGALRM)) {
-    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
+      cur.sa_handler != SIG_DFL)
     return Val_false;
+  now = ocannl_monotonic_ns();
+  if (now < 0) return Val_false;
+  pthread_mutex_lock(&ocannl_deadline_lock);
+  if (!ocannl_deadline_armed && ocannl_deadline_start_thread()) {
+    len = caml_string_length(v_msg);
+    if (len > OCANNL_DEADLINE_MSG_MAX) len = OCANNL_DEADLINE_MSG_MAX;
+    memcpy(ocannl_deadline_msg, String_val(v_msg), len);
+    ocannl_deadline_msg_len = len;
+    ocannl_deadline_due_ns = now + (int64_t)(seconds * 1e9);
+    ocannl_deadline_armed = 1;
+    armed = 1;
+    pthread_cond_signal(&ocannl_deadline_cond);
   }
-  len = caml_string_length(v_msg);
-  if (len > OCANNL_DEADLINE_MSG_MAX) len = OCANNL_DEADLINE_MSG_MAX;
-  memcpy(ocannl_deadline_msg, String_val(v_msg), len);
-  ocannl_deadline_msg_len = len;
-  memset(&ours, 0, sizeof ours);
-  ours.sa_sigaction = ocannl_deadline_handler;
-  sigemptyset(&ours.sa_mask);
-  ours.sa_flags = SA_SIGINFO;
-  if (sigaction(SIGALRM, &ours, &ocannl_deadline_saved) != 0) {
-    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
-    return Val_false;
-  }
-  memset(&deadline, 0, sizeof deadline);
-  deadline.it_value.tv_sec = (time_t)seconds;
-  deadline.it_value.tv_usec = (suseconds_t)((seconds - (double)(time_t)seconds) * 1e6);
-  if (deadline.it_value.tv_sec == 0 && deadline.it_value.tv_usec == 0)
-    deadline.it_value.tv_usec = 1;
-  sigemptyset(&alrm);
-  sigaddset(&alrm, SIGALRM);
-  if (pthread_sigmask(SIG_UNBLOCK, &alrm, &ocannl_deadline_saved_mask) != 0) {
-    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
-    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
-    return Val_false;
-  }
-  {
-    /* Recorded before the timer starts, so an expiry -- however soon -- finds it in place. */
-    int64_t now = ocannl_monotonic_ns();
-    int64_t interval_ns =
-        (int64_t)deadline.it_value.tv_sec * 1000000000 + (int64_t)deadline.it_value.tv_usec * 1000;
-    if (now < 0) {
-      ocannl_deadline_reblock();
-      sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
-      __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
-      return Val_false;
-    }
-    ocannl_deadline_slack_ns = interval_ns / 2 < 1000000 ? interval_ns / 2 : 1000000;
-    ocannl_deadline_due_ns = now + interval_ns;
-  }
-  if (setitimer(ITIMER_REAL, &deadline, NULL) != 0) {
-    ocannl_deadline_reblock();
-    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
-    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
-    return Val_false;
-  }
-  return Val_true;
+  pthread_mutex_unlock(&ocannl_deadline_lock);
+  return Val_bool(armed);
 #endif
 }
 
-/* Cancel the timer [ocannl_device_init_deadline_arm] started and restore the disposition it saved,
-   and the calling thread's signal mask -- it must be the thread that armed (the OCaml side disarms
-   in the same call). A no-op when nothing is armed. */
+/* Take the deadline [ocannl_device_init_deadline_arm] gave back. A no-op when nothing is armed. */
 CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
   (void)unit;
 #if !defined(_WIN32)
-  if (__atomic_load_n(&ocannl_deadline_armed, __ATOMIC_SEQ_CST)) {
-    struct itimerval off;
-    memset(&off, 0, sizeof off);
-    /* The timer is cancelled while the deadline's handler is still installed, so an expiry in the
-       moment before -- the region having in fact outlived its bound -- is still reported as the
-       deadline, never as a silent default-action death. Then no SIGALRM can be the deadline's any
-       more: the due time moves out of reach, so one that arrives before the disposition goes back
-       reads as external. */
-    setitimer(ITIMER_REAL, &off, NULL);
-    ocannl_deadline_due_ns = INT64_MAX;
-    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
-    ocannl_deadline_reblock();
-    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
-  }
+  pthread_mutex_lock(&ocannl_deadline_lock);
+  ocannl_deadline_armed = 0;
+  pthread_cond_signal(&ocannl_deadline_cond);
+  pthread_mutex_unlock(&ocannl_deadline_lock);
 #endif
   return Val_unit;
 }

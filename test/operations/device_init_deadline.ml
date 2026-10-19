@@ -18,10 +18,11 @@
    pending timer under the default disposition fires on time, unextended, without the diagnostic
    (the negative control: an implementation that armed over it would survive); disarming restores
    the default disposition and an idle timer; an entry point stays guarded after a call that
-   returned; a SIGALRM blocked in the thread still fires the deadline, and one already pending is
-   not armed over; overlapping regions on two domains are serialized, so a healthy one's disarm does
-   not leave a wedged one unbounded; and the cc backends are not guarded at all. Last, the
-   diagnostic's tag is the one [tools/test-run.sh]'s digest reads. *)
+   returned; a SIGALRM blocked in the thread, or one already pending, does not hide the deadline; a
+   SIGALRM from anything else meets the program's own disposition, and a timer the program starts
+   during a region is left in place; overlapping regions on two domains are serialized, so a healthy
+   one's disarm does not leave a wedged one unbounded; and the cc backends are not guarded at all.
+   Last, the diagnostic's tag is the one [tools/test-run.sh]'s digest reads. *)
 
 open Base
 open Stdio
@@ -207,31 +208,36 @@ let () =
     (holds again ~f:(fun o -> says o "first-call returned" && died_by_deadline "metal" o));
   let blocked = run ~deadline:"0.5" [ "blocked"; "cuda" ] in
   gated ~when_ ~on ~aggregation:`Environment
-    "with SIGALRM blocked in the process's only thread, the deadline still fires: the region \
-     unblocks it"
+    "with SIGALRM blocked in the process's only OCaml thread, the deadline still fires"
     (holds blocked ~f:(died_by_deadline "cuda"));
   let blocked_pending = run ~deadline:"0.5" [ "blocked-pending"; "cuda" ] in
   gated ~when_ ~on ~aggregation:`Environment
-    "a blocked SIGALRM already pending is not armed over: the stall runs out, SIGALRM is still \
-     blocked after the region, and nothing is written"
-    (holds blocked_pending ~f:(fun o ->
-         exited_0 o && stalled o && says o "survived" && says o "still-blocked true"
-         && Option.is_none (diagnostic o)
-         && not (List.exists o.stderr_lines ~f:(String.is_substring ~substring:"external SIGALRM"))));
+    "a blocked SIGALRM already pending does not hide the deadline: its diagnostic is written, and \
+     the process dies by SIGALRM"
+    (holds blocked_pending ~f:(died_by_deadline "cuda"));
   let externals =
     List.map [ "kill"; "raise" ] ~f:(fun how ->
         (how, run ~deadline:"60" [ "external"; "cuda"; how ]))
   in
   gated_all ~when_ ~on ~aggregation:`Environment
-    "a SIGALRM sent or raised by anything else during a region kills as the default action would, \
-     with a line of its own and never the deadline's"
+    "a SIGALRM sent or raised by anything else during a region meets the program's own \
+     disposition: the default action kills, and nothing of the deadline's is written"
     externals ~f:(fun (_, o) ->
       holds o ~f:(fun o ->
           by_sigalrm o && stalled o
           && (not (says o "survived"))
-          && Option.is_none (diagnostic o)
-          && List.exists o.stderr_lines
-               ~f:(String.is_substring ~substring:"was not the device_init_deadline")));
+          && not
+               (List.exists o.stderr_lines
+                  ~f:(String.is_substring ~substring:"device_init_deadline"))));
+  let timer_in_region = run ~deadline:"60" [ "timer-in-region"; "cuda" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "a real-time timer the program starts during a region is left in place: it fires on time after \
+     the region, killing by SIGALRM without the deadline's diagnostic"
+    (holds timer_in_region ~f:(fun o ->
+         by_sigalrm o && stalled o
+         && (not (says o "survived"))
+         && within 0.8 2.9 (since o "timer-set")
+         && Option.is_none (diagnostic o)));
   let full_stderr =
     if when_ then Some (run_child_capped ~cap:20.0 ~deadline:"0.5" [ "full-stderr"; "cuda" ])
     else None

@@ -2414,16 +2414,17 @@ end
     [0] or negative disables; 120 when the setting is absent or not a finite number): if [f] has not
     returned by then, the process writes a diagnostic opening with {!device_init_deadline_tag},
     naming the backend and the key, and dies by SIGALRM (status 142), since a wedged driver never
-    returns and nothing in-process can unwind out of it. The deadline is disarmed when [f] returns
-    or raises, so it is never armed across user code, and it is not armed at all when the program
-    has its own SIGALRM disposition or a running real-time timer (both are left untouched), when a
-    SIGALRM is already pending, or on Windows (see [utils_stubs.c]).
+    returns and nothing in-process can unwind out of it. The bound is a watchdog thread of the C
+    stubs ([utils_stubs.c]), not a signal handler or the real-time timer, so the program's own
+    timers, handlers and signal masks are left alone. The deadline is disarmed when [f] returns or
+    raises, so it is never armed across user code, and it is not armed at all when SIGALRM does not
+    have its default disposition (killing by it would have to override the program's own) or on
+    Windows.
 
-    Guarded regions are serialized process-wide: the timer is the process's one real-time timer, so
-    two overlapping regions cannot each have their own, and a region left unarmed because another
-    held the timer would lose its bound the moment the other one finished. A region that waits here
-    is bounded by the one it waits on, whose expiry kills the process. A region entered from inside
-    another on the same thread (the lock reports the relock) runs under the outer deadline.
+    Guarded regions are serialized process-wide: the watchdog holds one deadline at a time. A region
+    that waits here is bounded by the one it waits on, whose expiry kills the process. A region
+    entered from inside another on the same thread (the lock reports the relock) runs under the
+    outer deadline.
 
     A healthy device initializes in well under a second (the harness's device probe, a whole fresh
     process, answers in 0.2-0.6 s), so the default is generous for cold starts on loaded, WSL2 or

@@ -7,9 +7,10 @@ the program's own handler and its own 0.3 s timer: the handler runs once, on tim
 a pending 1 s timer under the default disposition fires on time during a 3 s stall, killing the process by SIGALRM without the deadline's diagnostic: true
 after a guarded call returns, SIGALRM has its default disposition again, the timer is idle, and the process outlives the deadline: true
 a guarded entry point stays guarded after a call that returned: a later stall in it dies by the deadline: true
-with SIGALRM blocked in the process's only thread, the deadline still fires: the region unblocks it: true
-a blocked SIGALRM already pending is not armed over: the stall runs out, SIGALRM is still blocked after the region, and nothing is written: true
-a SIGALRM sent or raised by anything else during a region kills as the default action would, with a line of its own and never the deadline's: true
+with SIGALRM blocked in the process's only OCaml thread, the deadline still fires: true
+a blocked SIGALRM already pending does not hide the deadline: its diagnostic is written, and the process dies by SIGALRM: true
+a SIGALRM sent or raised by anything else during a region meets the program's own disposition: the default action kills, and nothing of the deadline's is written: true
+a real-time timer the program starts during a region is left in place: it fires on time after the region, killing by SIGALRM without the deadline's diagnostic: true
 with fd 2 a full pipe nobody reads, the deadline still kills the process by SIGALRM, its backstop alarm firing while the diagnostic's write is blocked: true
 guarded regions are serialized: a wedged one entered while a healthy one held the timer is still killed by its own deadline after the healthy one returns: true
 the cc backends' entry points are not guarded: the stall hook never runs: true

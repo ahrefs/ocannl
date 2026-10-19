@@ -1106,9 +1106,9 @@
 # and dies by SIGALRM, status 142 (gh-ocannl-1281). A faulted GPU leaves the driver wedged, and
 # every later process then spins in device initialization forever (gh-ocannl-1211); a healthy
 # device initializes in well under a second, so the default is generous for cold starts on loaded,
-# WSL2 or freshly installed boxes. `0` disables it. Not armed when the program has its own SIGALRM
-# handler or a running `alarm`/`setitimer` (both are left untouched), and never on Windows. The cc
-# backends need none.
+# WSL2 or freshly installed boxes. `0` disables it. The bound is a watchdog thread, so the
+# program's own `alarm`/`setitimer` timers and signal masks are left untouched; it is not armed when
+# the program has its own SIGALRM handler, and never on Windows. The cc backends need none.
 #device_init_deadline=120
 
 # If `true` (the default), the HIP backend checks a freshly linked kernel's private (scratch)

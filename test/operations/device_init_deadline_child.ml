@@ -27,7 +27,10 @@
    [blocked BACKEND]: SIGALRM is blocked in the (only) thread first; then a 5 s stall.
 
    [blocked-pending BACKEND]: SIGALRM is blocked and then sent to the process, so it is pending;
-   then a 1.5 s stall, and whether SIGALRM is still blocked afterwards.
+   then a 30 s stall.
+
+   [timer-in-region BACKEND]: the program starts its own 1 s real-time timer from inside a region
+   (printing [timer-set <t>]) that returns 0.2 s later; then it waits 3 s.
 
    [external BACKEND (kill|raise)]: another domain sends the process a SIGALRM 0.3 s into a 5 s
    stall.
@@ -148,9 +151,18 @@ let () =
   | [ "blocked-pending"; name ] ->
       ignore (Unix.sigprocmask Unix.SIG_BLOCK [ Stdlib.Sys.sigalrm ] : int list);
       Unix.kill (Unix.getpid ()) Stdlib.Sys.sigalrm;
-      guarded_call name (stall_for 1.5);
-      let mask = Unix.sigprocmask Unix.SIG_BLOCK [] in
-      say "still-blocked %b" (List.mem mask Stdlib.Sys.sigalrm ~equal:Int.equal);
+      guarded_call name (stall_for 30.0);
+      say "survived"
+  | [ "timer-in-region"; name ] ->
+      (* The program starts its own 1 s timer from inside the region, 0.2 s before the region
+         returns; then it waits 3 s outside. *)
+      guarded_call name (fun () ->
+          say "stall-began %.6f" (now ());
+          say "timer-set %.6f" (now ());
+          start_timer 1.0;
+          Unix.sleepf 0.2;
+          raise Stall_done);
+      Unix.sleepf 3.0;
       say "survived"
   | [ "external"; name; how ] ->
       (* Another domain sends the process a SIGALRM 0.3 s into a 5 s stall under a deadline far
