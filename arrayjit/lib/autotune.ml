@@ -234,6 +234,23 @@ let batch_admission_name = function
   | Refused_contended -> "refused_contended"
   | Refused_unreadable -> "refused_unreadable"
 
+(* gh-ocannl-1360: what each beam-expansion round offered, per beam entry and per unit. See the
+   interface. *)
+type round_unit_moves = { unit_segment : int option; unit_expanded : bool; unit_moves : int }
+
+type round_entry_moves = {
+  entry_digest_tag : string;
+  entry_ms : float;
+  entry_segments_differing : int list option;
+  entry_units : round_unit_moves list;
+}
+
+type round_moves = {
+  round_index : int;
+  round_expansion_rule : string;
+  round_entries : round_entry_moves list;
+}
+
 type report = {
   outcome : outcome;
   candidates_timed : int;
@@ -252,6 +269,7 @@ type report = {
   declines : decline_summary list;
   cache_replay_refusal : Outcome.classified_cause option;
   rounds_run : int;
+  round_moves : round_moves list;
   budget_cut : bool;
   beam_width : int;
   sketch_candidates : int;
@@ -339,6 +357,7 @@ let no_search_report ~timing =
     declines = [];
     cache_replay_refusal = None;
     rounds_run = 0;
+    round_moves = [];
     budget_cut = false;
     beam_width = 0;
     sketch_candidates = 0;
@@ -6227,6 +6246,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     declines = decline_summaries declines;
                     cache_replay_refusal = None;
                     rounds_run = 0;
+                    round_moves = [];
                     (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
                     budget_cut = entry.SC.budget_cut;
                     beam_width;
@@ -6609,6 +6629,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         let coarse_single_measured = Hash_set.Poly.create () in
         let coarse_single_refused = Hash_set.Poly.create () in
         let rounds_run = ref 0 in
+        (* [report.round_moves], newest first (gh-ocannl-1360). *)
+        let round_moves = ref [] in
         (* gh-ocannl-1409: set once the search's budget has stopped a candidate or a round. *)
         let budget_cut = ref false in
         let n_sketch_candidates = ref 0
@@ -6744,6 +6766,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             declines = summaries;
             cache_replay_refusal = !cache_replay_refusal;
             rounds_run = !rounds_run;
+            round_moves = List.rev !round_moves;
             budget_cut = !budget_cut;
             beam_width;
             sketch_candidates = !n_sketch_candidates;
@@ -8000,24 +8023,57 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     | Expand_differing, Some head when i > 0 -> segments_differing head elem
                     | _ -> None
                   in
-                  let units =
+                  let expanded (u : unit_gen) =
                     match (round_expansion, differing) with
-                    | _ when i = 0 -> elem.units
-                    | Expand_full, _ | Expand_differing, None -> elem.units
-                    | Expand_head, _ -> []
+                    | _ when i = 0 -> true
+                    | Expand_full, _ | Expand_differing, None -> true
+                    | Expand_head, _ -> false
                     | Expand_differing, Some segs ->
-                        List.filter elem.units ~f:(fun u ->
-                            Option.exists u.u_segment ~f:(List.mem segs ~equal:Int.equal))
+                        Option.exists u.u_segment ~f:(List.mem segs ~equal:Int.equal)
+                  in
+                  (* Per unit, in [elem.units]' order: whether the rule offered it to [menu], and
+                     the round candidates its moves became (gh-ocannl-1360). *)
+                  let per_unit =
+                    List.map elem.units ~f:(fun u ->
+                        if expanded u then
+                          ( u,
+                            true,
+                            List.filter_map
+                              (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
+                              ~f:(fun op -> extend_spec elem u op) )
+                        else (u, false, []))
+                  in
+                  let entry =
+                    {
+                      entry_digest_tag = dshort elem.digest_after;
+                      entry_ms = ms;
+                      entry_segments_differing =
+                        Option.bind head ~f:(fun head -> segments_differing head elem);
+                      entry_units =
+                        List.map per_unit ~f:(fun ((u : unit_gen), unit_expanded, c) ->
+                            {
+                              unit_segment = u.u_segment;
+                              unit_expanded;
+                              unit_moves = List.length c;
+                            });
+                    }
                   in
                   ( elem,
                     ms,
-                    List.length units,
-                    List.concat_map units ~f:(fun u ->
-                        List.filter_map
-                          (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
-                          ~f:(fun op -> extend_spec elem u op)) ))
+                    List.count per_unit ~f:(fun (_, e, _) -> e),
+                    List.concat_map per_unit ~f:(fun (_, _, c) -> c),
+                    entry ))
             in
-            let cands = List.concat_map per_entry ~f:(fun (_, _, _, c) -> c) in
+            let cands = List.concat_map per_entry ~f:(fun (_, _, _, c, _) -> c) in
+            (* Recorded before any candidate is attempted, so a report emitted while the round is in
+               flight -- a fatal failure's, an abandonment's -- already carries it. *)
+            round_moves :=
+              {
+                round_index = !rounds_run;
+                round_expansion_rule = round_expansion_name round_expansion;
+                round_entries = List.map per_entry ~f:(fun (_, _, _, _, e) -> e);
+              }
+              :: !round_moves;
             (* gh-ocannl-1137: what the round expands. The beam is the [beam_width] fastest timed
                candidates, and a near-tie sweep (the gh-ocannl-1166 composite playoff, a block-size
                ladder) can fill it with variants of one schedule; [units differing] counts each
@@ -8026,12 +8082,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                its units the round's [round_expansion] rule offered to the menu (gh-ocannl-1229). *)
             (match per_entry with
             | [] -> ()
-            | (head, _, _, _) :: _ ->
+            | (head, _, _, _, _) :: _ ->
                 logf "round %d: %d candidate(s) from a beam of %d, expansion %s: %s" !rounds_run
                   (List.length cands) (List.length per_entry)
                   (round_expansion_name round_expansion)
                   (String.concat ~sep:"; "
-                     (List.map per_entry ~f:(fun (elem, ms, n_units, c) ->
+                     (List.map per_entry ~f:(fun (elem, ms, n_units, c, _) ->
                           Printf.sprintf
                             "%s %.4f ms, %s units differing, %d of %d units expanded, %d move(s)"
                             (dshort elem.digest_after) ms
@@ -8172,6 +8228,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               declines = decline_summaries declines;
               cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;
+              round_moves = List.rev !round_moves;
               budget_cut = !budget_cut;
               beam_width;
               sketch_candidates = List.length sketch_params;

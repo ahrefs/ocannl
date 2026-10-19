@@ -1016,6 +1016,49 @@ val batch_settle_name : batch_settle -> string
 val batch_admission_name : batch_admission -> string
 (** Likewise: [admitted], [refused_unbatched], [refused_contended], [refused_unreadable]. *)
 
+type round_unit_moves = {
+  unit_segment : int option;
+      (** [Some i]: the entry's [i]th fission segment, the [i] a round candidate's label names as
+          [+seg<i>]; [None]: a whole-routine entry's one unit. A fissioned entry's zero-fill and
+          solo segments are not units: no move extends them, and they are not listed. *)
+  unit_expanded : bool;
+      (** Whether the rule offered this unit to the action menu. An unexpanded unit cost no legality
+          check and has [unit_moves = 0]; an expanded one with [unit_moves = 0] is a unit whose menu
+          had nothing to propose -- a tensorized or fully register-tiled geometry, say. *)
+  unit_moves : int;
+      (** The round candidates this unit's moves became, each of which the round attempts (one
+          {!on_candidate_attempt} call apiece, whose label names the entry as [from <tag>] and, on a
+          fissioned entry, the unit as [+seg<i>]) unless the search stops first. An attempt can
+          still end before a timing window: bound-pruned, declined, deduplicated by digest. *)
+}
+(** One unit of a beam entry in a beam-expansion round (gh-ocannl-1360): what the round's expansion
+    rule (config [autotune_round_expansion]) did with it. *)
+
+type round_entry_moves = {
+  entry_digest_tag : string;
+      (** {!digest_tag} of the entry's digest: the tag its round candidates' labels name as their
+          parent ([from <tag>]), and the tag of the digest {!on_candidate_measured} saw when the
+          entry was timed. *)
+  entry_ms : float;  (** The time that ranked it into the beam. *)
+  entry_segments_differing : int list option;
+      (** The entry's segments whose schedule differs from the round's head (the first entry), in
+          [unit_segment]'s indexing: [Some []] for the head itself and for an entry identical to it
+          segment by segment; [None] when the two do not segment alike or are whole-routine
+          programs. *)
+  entry_units : round_unit_moves list;  (** Every unit of the entry, in segment order. *)
+}
+(** One beam entry as a round found it. *)
+
+type round_moves = {
+  round_index : int;  (** 1 for the first round, as in [rounds_run]. *)
+  round_expansion_rule : string;  (** [differing], [full] or [head]. *)
+  round_entries : round_entry_moves list;  (** The beam, fastest first: the head, then the rest. *)
+}
+(** One beam-expansion round (gh-ocannl-1360): the per-entry, per-unit move counts the round's
+    [autotune_log] line [round N: ...] summarizes, recorded before the round attempts any of them. A
+    test reads them to choose a beam entry with the moves it needs instead of discovering their
+    absence by failing a claim. *)
+
 type report = {
   outcome : outcome;
       (** What this call did about searching. The counters below say how much work that state got
@@ -1111,6 +1154,11 @@ type report = {
           refusal: it ends the call as a [Pre_search_failure] under strict failure classification.
       *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
+  round_moves : round_moves list;
+      (** Every round this call's search started, in order (gh-ocannl-1360): one record per round
+          counted in [rounds_run], including a round a fatal failure or an abandonment interrupted,
+          whose report carries the record of the round in flight. Empty on cache replay and
+          search-disabled calls, and for [~rounds:0]. *)
   budget_cut : bool;
       (** The crown comes from a search that stopped proposing candidates because its wall-clock
           budget (config [autotune_budget_seconds], gh-ocannl-1409) ran out: this call's own search,

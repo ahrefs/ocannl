@@ -1283,11 +1283,13 @@ files.
   (AVX-512) bytes keep different singles through the pre-filter, so a seat picked by attempt
   position passed on ARM and on AVX-512 runners and failed six claims on the AVX2 ones
   (ahrefs/ocannl#1363; the scripted crown at 10.00 ms was the round falling short, not a timing
-  tie). The test now pins `cc_vector_bytes=32` and seats by the property: latest alternate first,
-  one `full` search each, until one's differing segment offers moves; a setup control claims the
-  positional seat fails at that width. Reproduce a CPU-menu difference between boxes with
-  `--ocannl_cc_vector_bytes=<16|32|64>` on the built exe. To see each alternate's moves at once,
-  probe with a beam wide enough to hold them all and read the round line below. `autotune_sketch_placements` runs on the same small menu on CPU backends
+  tie). The test now pins `cc_vector_bytes=32` and seats by the property, read off the report:
+  `Autotune.report.round_moves` (gh-ocannl-1360) records each round's beam entries with their
+  per-unit `unit_expanded`/`unit_moves`, before the round attempts anything, so a probe search
+  with a beam wide enough for every alternate, stopped by raising from `on_candidate_attempt` at
+  the first round candidate, says which alternates offer moves on their differing segment without
+  compiling one; a setup control claims the positional seat offers none at that width. Reproduce a
+  CPU-menu difference between boxes with `--ocannl_cc_vector_bytes=<16|32|64>` on the built exe. `autotune_sketch_placements` runs on the same small menu on CPU backends
   (its claims ask which segments a single sketched, so they need one single per key, not particular
   ones). Before reaching for it elsewhere, count the search's `F_sketch`/`W_sketch` labels in its
   autotune log or progress lines: `autotune_split_reduce`, `autotune_labels` and `flip_abandonment`
