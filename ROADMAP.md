@@ -348,11 +348,9 @@ benchmark coverage. Release scope does not close or reassign those issues.
 - **Tuning and benchmark evidence**: concrete per-device cache identity (#594), cache-hit benefit
   measurement (#819), completed timing-objective/session-cost studies (#833/#834), bounded
   calibration and failed-candidate cleanup, a census of the shipped training step (#1170), timed
-  allocation peaks (#1006), regime/parity provenance and explicit skipped cells. #998's ablation
-  ([PR #935](https://github.com/lukstafi/ocannl-staging/pull/935)) split the simplifier's
-  floating-point algebra into three licence keys (`fp_contract`, `fp_reassociate`,
-  `fp_finite_math`), applied once on the raw lowering, off by default and on under the
-  `approximate` profile.
+  allocation peaks (#1006), regime/parity provenance and explicit skipped cells. The development
+  `simplify_fp_algebra` selector landed in [PR #935](https://github.com/lukstafi/ocannl-staging/pull/935)
+  for #998's ablation; its default and the production profile policies retain current behavior.
 
 **What the measurements establish:**
 
