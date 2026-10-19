@@ -1718,6 +1718,55 @@ end = struct
     in
     fun () -> { (Lazy.force limits) with Backend_intf.codegen_tag = Some (codegen_tag ()) }
 
+  (* hiprtc's verdict on generated code, classified as CUDA's [classify_failure] classifies nvrtc's
+     (ahrefs/ocannl#1387): [HIPRTC_ERROR_COMPILATION] means the compiler read our HIP C++ and
+     rejected it, before anything was allocated or launched, so it is a typed decline of that kernel
+     at the cc backend's ["compiler"] stage. Left to the common policy it was [Fatal] under
+     [strict_failure_classification] for [Candidate] and [User_schedule] provenance alike, so one
+     rejected kernel ended a tuner search, or the isolated per-kernel table partway (41 of 100
+     kernels on cifar_resnet).
+
+     This status only, for the reason CUDA gives: every other hiprtc status (an option it does not
+     accept, an internal error) is the toolchain's and fails every candidate alike, so it must
+     propagate rather than become a silent "nothing worked". So must a header hiprtc could not open
+     ([hip/hip_fp16.h] without an SDK include path, an incomplete rocWMMA tree), which it reports
+     under this very status: [C_syntax.missing_include] reads it off the log. The gh-ocannl-1313
+     frame-size refusal also arrives as [HIPRTC_ERROR_COMPILATION] and so lands here too, inside the
+     reserve band [compiler_frame_limit_bytes] leaves; it is reported as the compiler's rejection
+     rather than as a [Resource_exceeded] with numbers parsed out of a log. HIP driver errors stay
+     unclassified: no HIP fault has been characterized the way CUDA's are. *)
+  let classify_failure phase exn =
+    match exn with
+    | Hiprtc.Hiprtc_error { status; message } -> (
+        let status =
+          match Hiprtc.sexp_of_result status with
+          | Sexp.Atom atom -> atom
+          | sexp -> Sexp.to_string sexp
+        in
+        let claim = C_syntax.codegen_bug_claim ~artifact:"the generated .hip file" in
+        match status with
+        | "HIPRTC_ERROR_COMPILATION" when not (C_syntax.missing_include message) ->
+            Some
+              {
+                Schedule_outcome.phase;
+                cause =
+                  Schedule_outcome.Backend_rejected
+                    {
+                      backend = name;
+                      stage = "compiler";
+                      severity = Schedule_outcome.Compiler_bug;
+                      detail =
+                        [%string
+                          "OCANNL hip backend: generated code failed to compile (%{status}).\n\
+                           %{claim}\n\
+                           hiprtc output:\n\
+                           %{message}"];
+                    };
+                execution_effect = Schedule_outcome.No_device_writes;
+              }
+        | _ -> None)
+    | _ -> None
+
   let get_debug_info (device : device) =
     let tot, unr, unf = H.Stream.total_unreleased_unfinished_delimited_events device.runner in
     let i2s = [%sexp_of: int] in

@@ -1981,6 +1981,19 @@ let codegen_bug_claim_prefix = "This is a bug in OCANNL. Please file an issue wi
     issue should carry). One line, so {!attribute_routine_name_failure} removes exactly it. *)
 let codegen_bug_claim ~artifact = codegen_bug_claim_prefix ^ artifact
 
+(** [missing_include report] is whether a failed compile's [report] says a header could not be
+    opened. Every backend reports that under the same status as a rejection of the generated code
+    (nvrtc's and hiprtc's [*_ERROR_COMPILATION], a non-zero cc exit, Metal's [program_source]
+    diagnostic), but it is the toolchain's fault — a missing or incomplete SDK, rocWMMA or system
+    header tree — and fails every kernel alike. So the backends that type a compile rejection as a
+    decline ({!Schedule_outcome.Backend_rejected} at stage ["compiler"]) leave such a failure
+    untyped: declining it would turn a broken installation into a silent "nothing compiled"
+    (ahrefs/ocannl#1387). The phrasings: clang's (cc, hiprtc, Metal) ["'x.h' file not found"], gcc's
+    ["x.h: No such file or directory"], nvrtc's ["cannot open source file \"x.h\""]. *)
+let missing_include report =
+  List.exists [ "file not found"; "No such file or directory"; "cannot open source file" ]
+    ~f:(fun substring -> String.is_substring report ~substring)
+
 (** [attribute_routine_name_failure ~routine_names exn backtrace] re-raises a failed compile's
     exception: as a [Utils.User_error] naming the routine when {!routine_name_in_diagnostics}
     attributes the failure to a routine's name, unchanged otherwise. [routine_names] pairs each

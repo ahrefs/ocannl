@@ -1542,6 +1542,25 @@ module Impl = struct
        probe. *)
     lazy (Metal_math_api_runtime.get ())
 
+  (* Whether a failed [newLibraryWithSource:] reported a diagnostic the compiler attached to the
+     source, as ["program_source:LINE:COL: error: ..."]: the compiler read the generated code and
+     rejected it, so the failure is that code's. *)
+  let compiler_diagnosed_error msg =
+    let prefix = "program_source:" in
+    let n = String.length msg in
+    let rec digits i = if i < n && Char.is_digit msg.[i] then digits (i + 1) else i in
+    let diagnosed_at start =
+      let after_line = digits start in
+      after_line > start && after_line < n
+      && Char.equal msg.[after_line] ':'
+      &&
+      let after_col = digits (after_line + 1) in
+      after_col > after_line + 1
+      && String.is_prefix (String.drop_prefix msg after_col) ~prefix:": error:"
+    in
+    List.exists (String.substr_index_all msg ~may_overlap:false ~pattern:prefix) ~f:(fun i ->
+        diagnosed_at (i + String.length prefix))
+
   let%diagn_sexp compile_metal_source ~name ~routine_names ~source ~device =
     let options = Me.CompileOptions.init () in
     let math_api = Lazy.force runtime_math_api in
@@ -1564,26 +1583,68 @@ module Impl = struct
       | Enable_logging -> Me.CompileOptions.set_enable_logging options true);
     [%log "metal options", (Compiler_options.render_metal option_state : string)];
 
-    if Utils.settings.output_debug_files_in_build_directory then (
-      let metal_file = Utils.build_file (name ^ ".metal") in
-      Stdio.Out_channel.write_all metal_file ~data:source;
-      [%log "Wrote metal source to file:", metal_file]);
-
+    let metal_file =
+      if Utils.settings.output_debug_files_in_build_directory then (
+        let metal_file = Utils.build_file (name ^ ".metal") in
+        Stdio.Out_channel.write_all metal_file ~data:source;
+        [%log "Wrote metal source to file:", metal_file];
+        Some metal_file)
+      else None
+    in
     try Me.Library.on_device device ~source options
     with Failure msg ->
-      let error_msg =
-        Printf.sprintf "Metal compilation failed for %s:\n%s\nmetal options: %s\nSource:\n%s" name
-          msg
-          (Compiler_options.render_metal option_state)
-          source
+      let options_rendered = Compiler_options.render_metal option_state in
+      let exn =
+        if compiler_diagnosed_error msg && not (C_syntax.missing_include msg) then
+          (* The compiler rejected the generated source: a typed decline of this kernel, as the cc
+             backend raises at its compiler call and CUDA's [classify_failure] answers for
+             [NVRTC_ERROR_COMPILATION] (ahrefs/ocannl#1387). Untyped, it was [Fatal] under
+             [strict_failure_classification] and [User_schedule] provenance, so one rejected kernel
+             ended a tuner search or the whole isolated per-kernel table. The detail carries the
+             compiler's report, not the source: a declined candidate is counted and logged, and
+             several of them must not each print a whole kernel. *)
+          let source_note =
+            match metal_file with
+            | Some file -> "the generated .metal file at " ^ file
+            | None ->
+                "the generated .metal file (rerun with \
+                 --ocannl_output_debug_files_in_build_directory=true to write it)"
+          in
+          Schedule_outcome.Cause_at
+            ( Schedule_outcome.Backend_compile,
+              Schedule_outcome.Backend_rejected
+                {
+                  backend = Device_config.name;
+                  stage = "compiler";
+                  severity = Schedule_outcome.Compiler_bug;
+                  detail =
+                    Printf.sprintf
+                      "OCANNL metal backend: generated code for %s failed to compile.\n\
+                       %s\n\
+                       metal options: %s\n\
+                       Compiler output:\n\
+                       %s"
+                      name
+                      (C_syntax.codegen_bug_claim ~artifact:source_note)
+                      options_rendered msg;
+                } )
+        else
+          (* No compiler diagnostic, or a header the compiler could not open: nothing establishes
+             that the failure is this kernel's rather than the environment's (an unavailable
+             language version or system header fails every kernel alike), so it keeps propagating
+             untyped. *)
+          let error_msg =
+            Printf.sprintf "Metal compilation failed for %s:\n%s\nmetal options: %s\nSource:\n%s"
+              name msg options_rendered source
+          in
+          Stdio.prerr_endline error_msg;
+          Failure error_msg
       in
-      Stdio.prerr_endline error_msg;
       (* Metal compiles here, at link time, so the failure never crosses [Compile_driver]'s
-         attribution; this is the same check (gh-ocannl-707). Attributed on [msg] alone: [error_msg]
-         embeds the source, where every routine's declaration appears. *)
+         attribution; this is the same check (gh-ocannl-707). Attributed on [msg] alone: the untyped
+         [error_msg] embeds the source, where every routine's declaration appears. *)
       let backtrace = Stdlib.Printexc.get_callstack 16 in
-      C_syntax.attribute_routine_name_failure ~report:msg ~routine_names (Failure error_msg)
-        backtrace
+      C_syntax.attribute_routine_name_failure ~report:msg ~routine_names exn backtrace
 
   module Compile = C_syntax.Compile_driver (C_syntax_config)
 
