@@ -6,6 +6,14 @@
 ; directory; the source is shared, and its header says why the dependency is the world
 ; rather than 112 key names.
 
+; gh-ocannl-1149: this directory checks in a configuration of its own, so the shared one that
+; carries the ambient environment (see test/config/dune) is not what its tests read. They depend
+; on the record of the environment itself instead, which `config_dep_completeness` asks of every
+; rule here that reads a configuration.
+
+(copy_files
+ (files ../../config/ocannl_ambient))
+
 (copy_files
  (files ../../config/env_spelling_gate.ml))
 
@@ -52,6 +60,7 @@
 (alias
  (name runtest)
  (deps
+  (alias runtest-env_spelling_gate)
   (alias runtest-stdout_clean)
   (alias runtest-default_stderr)
   (alias runtest-bootstrap_precedence)))
@@ -85,7 +94,9 @@
  ; the startup banner and the unknown-key warning go to, neither of which names a backend.
  (target stdout_clean.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)
@@ -103,8 +114,6 @@
 (rule
  (alias runtest-stdout_clean)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff stdout_clean.expected stdout_clean.actual)))
 
@@ -130,6 +139,7 @@
  (target default_stderr.raw)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)
@@ -149,7 +159,9 @@
  ; the startup banner and the unknown-key warning go to, neither of which names a backend.
  (target default_stderr.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)
@@ -169,8 +181,6 @@
 (rule
  (alias runtest-default_stderr)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff default_stderr.expected default_stderr.actual)))
 
@@ -181,6 +191,7 @@
  (target bootstrap_precedence.raw)
  (deps
   ocannl_config
+  ocannl_ambient
   bootstrap_conflict/ocannl_config
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
@@ -204,7 +215,9 @@
  ; ocannl-backend: none -- validates the captured startup trace, no backend linked.
  (target bootstrap_precedence.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)
@@ -227,7 +240,5 @@
 (rule
  (alias runtest-bootstrap_precedence)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff bootstrap_precedence.expected bootstrap_precedence.actual)))

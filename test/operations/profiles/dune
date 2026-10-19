@@ -6,6 +6,14 @@
 ; directory; the source is shared, and its header says why the dependency is the world
 ; rather than 112 key names.
 
+; gh-ocannl-1149: this directory checks in a configuration of its own, so the shared one that
+; carries the ambient environment (see test/config/dune) is not what its tests read. They depend
+; on the record of the environment itself instead, which `config_dep_completeness` asks of every
+; rule here that reads a configuration.
+
+(copy_files
+ (files ../../config/ocannl_ambient))
+
 (copy_files
  (files ../../config/env_spelling_gate.ml))
 
@@ -52,6 +60,7 @@
 (alias
  (name runtest)
  (deps
+  (alias runtest-env_spelling_gate)
   (alias runtest-from_config_file)
   (alias runtest-from_cmdline)
   (alias runtest-from_cmdline_approximate)
@@ -94,7 +103,9 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_config_file.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -120,8 +131,6 @@
 (rule
  (alias runtest-from_config_file)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_config_file.expected from_config_file.actual)))
 
@@ -130,7 +139,9 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_cmdline.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -156,8 +167,6 @@
 (rule
  (alias runtest-from_cmdline)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_cmdline.expected from_cmdline.actual)))
 
@@ -172,7 +181,9 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_cmdline_approximate.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -198,8 +209,6 @@
 (rule
  (alias runtest-from_cmdline_approximate)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_cmdline_approximate.expected from_cmdline_approximate.actual)))
 
@@ -208,7 +217,9 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_env.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -234,8 +245,6 @@
 (rule
  (alias runtest-from_env)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_env.expected from_env.actual)))
 
@@ -249,7 +258,9 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target host_profile_flag.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -275,8 +286,6 @@
 (rule
  (alias runtest-host_profile_flag)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff host_profile_flag.expected host_profile_flag.actual)))
 
@@ -288,7 +297,9 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target explicit_beats_profile.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -317,8 +328,6 @@
 (rule
  (alias runtest-explicit_beats_profile)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff explicit_beats_profile.expected explicit_beats_profile.actual)))
 
@@ -332,7 +341,9 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target empty_cmdline_falls_through.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -358,8 +369,6 @@
 (rule
  (alias runtest-empty_cmdline_falls_through)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    empty_cmdline_falls_through.expected

@@ -1,0 +1,19 @@
+two sibling loops, each with its own symbol: optimize accepts it: true
+a static index read under a loop that does not bind it: optimize accepts it: true
+a scan and a sibling loop with distinct symbols: optimize accepts it: true
+sibling loops sharing a binder: optimize refuses it through the binder lint: true
+sibling loops sharing a binder: the refusal names the symbol and the defect: true
+a loop shadowing its enclosing loop's binder: optimize refuses it through the binder lint: true
+a loop shadowing its enclosing loop's binder: the refusal names the symbol and the defect: true
+a scan rebinding a sibling loop's symbol: optimize refuses it through the binder lint: true
+a scan rebinding a sibling loop's symbol: the refusal names the symbol and the defect: true
+a loop binding a static index: optimize refuses it through the binder lint: true
+a loop binding a static index: the refusal names the symbol and the defect: true
+a Set index naming an unbound symbol: optimize refuses it through the binder lint: true
+a Set index naming an unbound symbol: the refusal names the symbol and the defect: true
+an Affine read index naming an unbound symbol: optimize refuses it through the binder lint: true
+an Affine read index naming an unbound symbol: the refusal names the symbol and the defect: true
+an Embed_index naming an unbound symbol: optimize refuses it through the binder lint: true
+an Embed_index naming an unbound symbol: the refusal names the symbol and the defect: true
+a symbol read after the loop that bound it: optimize refuses it through the binder lint: true
+a symbol read after the loop that bound it: the refusal names the symbol and the defect: true

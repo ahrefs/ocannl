@@ -493,6 +493,43 @@ let backend_override ~reads_config sexp =
    (Codex review on PR #1027). *)
 let config_dirs = [ "test/config"; "arrayjit/test" ]
 
+(* gh-ocannl-1149: where test/config/dune writes the shared configuration with the ambient
+   environment appended as comments, which is what every test directory copies. It resolves the same
+   backend as test/config's -- the same keys, read from the same environment -- so a copy of it is
+   not a foreign configuration, and the rule writing it sets no backend past the configuration as
+   long as it has exactly the shape {!ambient_augmentation} reads: anything else it might write is
+   judged as any other generated configuration. *)
+let ambient_config_dir = "test/config/ambient"
+
+(** Whether [sexp], in [dir], is the rule writing {!ambient_config_dir}'s configuration as
+    test/config's followed by the ambient record and nothing else. *)
+let ambient_augmentation ~dir sexp =
+  String.equal dir ambient_config_dir
+  && Option.equal String.equal (Scan.head sexp) (Some "rule")
+  && (match Scan.field sexp "target" with
+    | Some [ Sexp.Atom target ] -> String.equal target Scan.config_file
+    | _ -> false)
+  && Option.is_none (Scan.field sexp "targets")
+  &&
+  match Scan.field sexp "action" with
+  | Some
+      [
+        Sexp.List
+          [
+            Sexp.Atom "with-stdout-to";
+            Sexp.Atom "%{target}";
+            Sexp.List
+              [
+                Sexp.Atom "progn";
+                Sexp.List [ Sexp.Atom "cat"; Sexp.Atom config ];
+                Sexp.List [ Sexp.Atom "cat"; Sexp.Atom record ];
+              ];
+          ];
+      ] ->
+      String.equal config ("../" ^ Scan.config_file)
+      && String.equal record ("../" ^ Scan.ambient_file)
+  | _ -> false
+
 (** What a [copy_files] stanza copies, as a target pattern here and the glob it reads: its short
     form's path, or its long form's [(files …)]. The copy keeps the basename, so a file need is
     followed past it to the original producer anyway; this is what a GLOB in the copy's directory
@@ -654,13 +691,17 @@ let views_of ~dir ~named ~reads_config ~unmarked sexp =
       source_like = List.exists produced ~f:source_like || List.exists copies ~f:source_named;
       needs = List.dedup_and_sort (deps @ file_needs ~dir sexp) ~compare:Poly.compare;
       inexact;
-      overrides = backend_override ~reads_config sexp;
+      overrides =
+        (if ambient_augmentation ~dir sexp then None else backend_override ~reads_config sexp);
       foreign_config =
         List.find_map copied ~f:(function
           | Glob_need { under; pattern } when Scan.glob_could_match pattern ~name:Scan.config_file
             -> (
               match under with
-              | Some (src, _) when List.mem config_dirs src ~equal:String.equal -> None
+              | Some (src, _)
+                when List.mem config_dirs src ~equal:String.equal
+                     || String.equal src ambient_config_dir ->
+                  None
               | Some (src, _) -> Some (Printf.sprintf "a copy of the ocannl_config in %s" src)
               | None -> Some "a copy of an ocannl_config from a directory this cannot name")
           | _ -> None);

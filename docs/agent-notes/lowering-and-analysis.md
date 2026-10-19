@@ -74,7 +74,8 @@ files.
   `scalar_t` construct there and nowhere else (the matches are exhaustive, so the build breaks);
   a new digest-relevant *fact* is a `Canonical_render.policy` field if it is an identity choice, or
   a consumer's own preamble/companion section if only one of them consults it. The walk owns what
-  the two agree on: loop-binder tokens `b<n>`, first-occurrence local-scope alpha, comment
+  the two agree on: loop-binder tokens `b<n>` (in scope for the loop body only — a reference after
+  the exit reaches `emit_free_sym`, gh-ocannl-1403), first-occurrence local-scope alpha, comment
   skipping, `mark_incomplete` on opaque statements. Golden + seam test:
   `test/operations/canonical_render.ml`.
 - Why a bespoke renderer rather than `to_doc` / `sexp_of_t`: (1) the digests must be
@@ -383,8 +384,14 @@ files.
   SIBLING loops mints a symbol per loop. `loop_over_padding_region`'s margin strips broke it
   (gh-ocannl-1384), which kept every padded conv's step out of the schedule cache;
   `test/operations/padded_conv_cache` pins the walk and the tuned replay, and `Autotune.tune` now
-  warns on stderr whenever an incomplete canonical form declines the cache. `test/operations/test_block_tensor.ml`'s
-  gradient fixtures are the regression coverage to keep in mind when changing concat lowering or
+  warns on stderr whenever an incomplete canonical form declines the cache. Since gh-ocannl-1402
+  `Low_level.validate_loop_binders` refuses it loudly at `optimize`'s entry (one binder per symbol
+  per routine, no free symbol; `test/operations/loop_binder_lint`), so hand-built IR mints a symbol
+  per loop too. The lint is entry-only on purpose: past `optimize`, schedule rewrites emit sibling
+  nests sharing symbols by design (the staging transfer nests in `schedule.ml`), so post-optimize
+  consumers such as `Schedule.aligned_chains` must still tolerate a shared binder —
+  `aligned_chains_shared_symbol` builds that shape by renaming the optimized code.
+  `test/operations/test_block_tensor.ml`'s gradient fixtures are the regression coverage to keep in mind when changing concat lowering or
   the virtualizer's symbol ownership, alongside the hand-built
   `test/operations/virtual_shared_loop.ml` (`ll_test`), which is still the way to reach shapes the
   DSL does not emit.

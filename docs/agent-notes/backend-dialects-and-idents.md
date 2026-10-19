@@ -395,7 +395,21 @@ configuration.
   and `AMD_DIRECT_DISPATCH=0` change nothing, `=1` makes it worse — which is why the answer lives
   at the stream seam instead (`Utils.c_stderr_detached`, gh-ocannl-1031). A 30-line pure-HIP
   program reproduces it in one line per recorded event, with none when no event is recorded; reach
-  for that shape before suspecting OCANNL's event discipline.
+  for that shape before suspecting OCANNL's event discipline. It is an APU symptom: on gfx1151
+  (minix) one autotuning test prints 268,172 (Dune kept ~2,000 of them), while the discrete card on tuf, with the identical
+  package, writes valid timestamps and prints none. Detaching kept it out of goldens but not off the
+  run log, where Dune truncates a long action output from the middle and the test's own SKIPPED
+  lines went with it, so since gh-ocannl-1370 the HIP backend, when `get_device` opens a device (before its stream), also forces
+  `Utils.c_stderr_noise_collapsed` (`collapse_foreign_stderr_noise`, default true): the C stream
+  becomes a cookie stream (`fopencookie`/`funopen`) over the same descriptor that writes the first
+  such line, one note, and a count from an exit-time destructor, and writes every other byte
+  through at once. The destructor runs from `_dl_fini`, after every `atexit` handler including the
+  stream teardown below, which is when ROCclr prints most of them, but before the shared libraries'
+  own destructors: a line printed there is written through, uncounted. `fileno(stderr)` reads -1 once it
+  is installed, and a cookie stream cannot be wide-oriented, so an already wide-oriented C stderr
+  is left alone; an `fclose(stderr)` reports the count at the close (the close callback), so the
+  destructor never touches a freed FILE. Only the HIP backend installs it, and only on opening a
+  device, so a process that probed HIP and fell back keeps its C stream.
 - `Warning: Resource leak detected by SharedSignalPool, 77 Signals leaked.` on a hip run exit is
   the per-device HIP stream never being destroyed, not leaked events: the same pure-HIP probe
   reports exactly 77 whatever the iteration count when it skips `hipStreamDestroy`, and a count
@@ -409,5 +423,8 @@ configuration.
   synchronizes unboundedly) only once idle, so hung devices cannot hold the process. `at_exit`
   runs on an uncaught exception too, which is why the bound, not an exit-status test, does that
   job. A reappearing 77 means the teardown was skipped: `0` in the config, or a busy stream at exit
-  (stderr says `still busy`). CUDA stays without it: the driver reports nothing and cudajit
+  (stderr says `still busy`) -- or an instantiated graph outlived the process: a routine whose
+  segments `sequence_segments` graph-captured (`gpu_graph_capture`, default true) leaves its cached
+  `hipGraphExec`s undestroyed, and `seeded_default` on minix prints the 77 with capture on and not
+  with `--ocannl_gpu_graph_capture=false` (measured for gh-ocannl-1370). CUDA stays without it: the driver reports nothing and cudajit
   (0.8.0) exposes no eager `Stream.destroy`. `test/operations/exit_stream_teardown` pins both.

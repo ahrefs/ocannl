@@ -49,10 +49,10 @@ Quantified bindings exempted because emptiness is their passing meaning:
   test/operations/reduction_sink.ml:with the seeding off nothing is seeded -- the fixture compiles at threshold 0, the documented off switch of the seeding, so that every change is the sink's; an empty seed list is the claim, and seeded_default pins a non-empty one at a positive threshold
   test/operations/reduction_sink.ml:reduction_sink:false sinks nothing -- ~reduction_sink:false is the off switch, so an empty sunk list is the claim; the claims above pin a non-empty one with the sink on, and the bitwise claim beside it witnesses the routine's non-empty output
   test/operations/seeded_default.ml:a threshold of 0 disables the seeding -- a threshold of 0 is the documented off switch, so an empty seed list is the claim; the claims above pin a non-empty one at a positive threshold on the backends that seed
-  test/operations/seeded_split_reduce.ml:off CUDA, HIP included, the seeded default splits nothing -- the untuned split is CUDA-only by design (it measured slower on HIP), so off CUDA an empty split list is the claim; it is gated there, and on CUDA the claim beside it requires the bias gradient in the list from the same fixture
+  test/operations/seeded_split_reduce.ml:off CUDA and HIP the seeded default splits nothing -- the untuned split runs only where the seeded default does (Autotune.seeded_split_backend), so elsewhere an empty split list is the claim; it is gated there, and on CUDA and HIP the claim beside it requires the bias gradient in the list from the same fixture
   test/operations/seeded_split_reduce.ml:a threshold above every serial chain splits nothing -- the threshold exceeds every reduction's chain in the fixture, the loss sum's included, so nothing qualifies and an empty split list is the claim; the bitwise-gradient claim beside it witnesses the routine's non-empty output
   test/operations/seeded_split_reduce.ml:a threshold of 0 disables the split -- a threshold of 0 is the documented off switch, so an empty split list is the claim; the claims above pin a non-empty one at a positive threshold on the backends that split
-  test/operations/split_reduce_pair.ml:off CUDA the untuned plan splits nothing -- the untuned split is CUDA-only by design, so off CUDA an empty split list is the claim; it is gated there, and on CUDA the claim beside it requires the bias gradient in the list from the same fixture
+  test/operations/split_reduce_pair.ml:off CUDA and HIP the untuned plan splits nothing -- the untuned split runs only where the seeded default does (Autotune.seeded_split_backend), so elsewhere an empty split list is the claim; it is gated there, and on CUDA and HIP the claim beside it requires the bias gradient in the list from the same fixture
   test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds -- the variance-style self-product is deliberately not recognized as a matmul or conv site, so the sketch seeder yields no seeds of any kind and there is no seed population to quantify the mma subset over
   test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds -- the same site, on the GPU seeder
   test/operations/conv_detection_boundary.ml:refused -- a refused conv site is deliberately recognized by no family, so both seeders yield no seeds of any kind and there is no seed population to quantify over; the claim beside it pins the refusal's reason on the lowered maps, which are non-empty
@@ -584,7 +584,41 @@ refuses a gate read off a value piped into a writer: true
 refuses a gate read off a value an unsafe setter writes: true
 follows a population through Result: true
 follows a collection call under a type annotation: true
+refuses a gated boolean whose gate tests the population its quantifier ranges over: true
+refuses a gated boolean bound to a name before the claim: true
+refuses a gated boolean whose quantified population is mapped from what the gate reads: true
+refuses a gated boolean whose Stdlib quantifier ranges over the gated population: true
+refuses a gated boolean written into a ref the claim dereferences: true
+refuses a population gate behind a partially applied gated boolean wrapper: true
+refuses a gated boolean whose pairwise existential is Base's exists2_exn: true
+refuses a gated boolean whose quantifier's predicate quantifies the gated population: true
+does not read a connective the source rebinds as the standard one: true
+accepts a gated boolean over a population a backend gate steers: true
+accepts a gated boolean whose condition, not its value, quantifies what the gate reads: true
+accepts a gated boolean comparing against the invariant its gate reads: true
+names a gated boolean claim it cannot complete instead of counting it clean: true
+reads a gated claim nothing binds as Verdict's, its name being Verdict's alone: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
+the readers agree on a claim qualified by Verdict: true
+the readers agree on a claim an open of Verdict.Claims brings in: true
+the readers agree on a claim through a module alias of Verdict: true
+the readers agree on a claim a local structure includes from Verdict.Claims: true
+the readers agree on a claim qualified by Verdict past an open of a standard library: true
+the readers agree that a Verdict past an open of another module is ambiguous: true
+the readers agree that a claim name past an open of another module is ambiguous: true
+the readers agree that an alias of Verdict past an open of another module is ambiguous: true
+the readers agree that a module taking over the name Verdict is not Verdict: true
+the readers agree that a path through another module's Verdict is not Verdict: true
+the readers agree that a structure including its own Verdict module does not include Verdict: true
+the readers agree that a Verdict module an opened structure binds is not Verdict: true
+the readers agree that a structure's later unreadable include leaves its Verdict names ambiguous: true
+the readers agree that a structure's unpacked Verdict module is not Verdict: true
+the readers agree that an opened structure including an unreadable module leaves Verdict ambiguous: true
+the readers agree that a claim name a local structure binds is its own: true
+the readers agree that a claim name the source binds is its own: true
+names the qualified remedy for a quantified claim past an open of another module: true
+omits the qualified remedy for a quantified claim past an open of a standard library: true
+names the qualified remedy when either alternative claim function is ambiguous: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true
 synthetic control labels are pairwise distinct: true
@@ -653,9 +687,10 @@ no claim label is reported through both pass_fail and skipped: true
 and the dialect reader found both skipped and pass_fail claims to pair: true
 no claim label literal carries a line break: true
 and the line-break reader read the labels of Verdict claims: true
+and the claim-name resolver decides every member Verdict.Claims exports: true
 and it reads the label of every claim form Verdict.Claims exports: true
 no gated claim's gate reads the population it quantifies: true
-and it recognizes every quantified gated form Verdict.Claims exports: true
+and it recognizes every gated form Verdict.Claims exports: true
 and the gate reader completed gated claims to compare: true
 the scan found every literal planted for it: true
 every exemption on this check's lists is still earned: true
@@ -673,7 +708,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal
   [scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim
   [scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim
-  [scanner-refusal:b743906541a11550a0513ec369b96184] which reads
+  [scanner-refusal:b58d64bebca3825149316fa29084d773] which reads
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
   [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict
@@ -682,9 +717,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail
   [scanner-refusal:df1860b788314bd677ee963aff3f8186] label literal carries
   [scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-break reader read
+  [scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims
   [scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims
   [scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies
-  [scanner-refusal:567b8c220b002e1bb52a75940f43f392] Verdict.Claims
+  [scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims
   [scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated
   [scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted
   [scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on

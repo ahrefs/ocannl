@@ -1179,6 +1179,18 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
     remove temp_log;
     (* A compiler can exit non-zero after writing part of its output. *)
     if library_owned then remove libname;
+    (* A header the compiler could not open is the toolchain's fault, and fails every kernel alike:
+       it propagates untyped rather than as a decline of this kernel (ahrefs/ocannl#1387). The
+       trivial-kernel probe below includes no header, so it cannot see this case. *)
+    if C_syntax.missing_include compiler_output then
+      failwith
+        (Printf.sprintf
+           "OCANNL cc backend: the compiler could not open a header (exit code %d); check the C \
+            compiler installation.\n\
+            Compilation command: %s\n\
+            Compiler output:\n\
+            %s"
+           _rc _cmdline compiler_output);
     (* gh-ocannl-1350: before blaming the generated code, ask whether this toolchain configuration
        compiles anything at all. *)
     match toolchain_fault () with

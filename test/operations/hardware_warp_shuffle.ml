@@ -406,22 +406,25 @@ let () =
   List.iter [ u; acc ] ~f:L.materialize;
   L.virtualize flag_node;
   let flag = LL.get_scope flag_node and i = L.sym () in
-  let tree reduce =
+  let tree ~i reduce =
     L.loop_n ~axis:reduce i n (L.set_at acc f0 (L.add (L.get acc [| f0 |]) (L.get u [| it i |])))
   in
-  let kernel ?(also_unguarded = false) ~lanes ~reduce () =
+  (* [tree_i] is the trees' symbol: [i] itself in the annotated kernel, whose point is that the
+     tree's lanes are the flag loop's; a fresh one in the serial twin handed to [optimize], whose
+     loop-binder lint refuses a symbol two loops bind (gh-ocannl-1402). *)
+  let kernel ?(also_unguarded = false) ?(tree_i = i) ~lanes ~reduce () =
     LL.unflat_lines
       ([
          L.declare_local flag;
          L.loop_n ~axis:lanes i n (LL.Set_local (flag, L.lt (L.embed i) (L.ic 32)));
        ]
-      @ (if also_unguarded then [ tree reduce ] else [])
-      @ [ L.if_ (LL.Get_local flag) (tree reduce) ])
+      @ (if also_unguarded then [ tree ~i:tree_i reduce ] else [])
+      @ [ L.if_ (LL.Get_local flag) (tree ~i:tree_i reduce) ])
   in
   let name = "wshfl_flag_guard" in
   let o =
     L.optimize_scoped ~materialized:[ u; acc ] ~name
-      ~raw:(kernel ~lanes:LL.Serial ~reduce:LL.Serial ())
+      ~raw:(kernel ~tree_i:(L.sym ()) ~lanes:LL.Serial ~reduce:LL.Serial ())
       (kernel ~lanes:LL.Workgroup ~reduce:LL.Workgroup_reduce ())
   in
   p

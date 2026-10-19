@@ -1,0 +1,11 @@
+the bias gradient is a split-reduce site: true
+the site records one cell loop to hoist the block loop above: true
+hoisted: the first pass's outermost loop is its block loop: true
+hoisted: the cell loop runs directly inside it: true
+control: the cell loop stays outermost: true
+control: the block loop runs inside it: true
+hoisted: the first pass's lanes walk the cell axis, not the blocks: true
+control: the unhoisted first pass's lanes walk the blocks, not the cell axis: true
+the bias gradient is not trivially zero: true
+the hoisted split's gradient is within the f32 tolerance of the f64 reference: true
+the hoisted split computes bitwise the unhoisted split's gradient: true

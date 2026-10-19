@@ -171,10 +171,12 @@ let raw_entries =
     ( "config_dep_completeness.ml",
       [
         "[scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] arguments the rule's";
+        "[scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient";
         "[scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads";
         "[scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan";
         "[scanner-refusal:6d151bed80a45201e61d096c2c38d210] which has no";
         "[scanner-refusal:5509acc7fac8ff0412e3631b49c06dc7] change directory without";
+        "[scanner-refusal:cb948484fece727200c2dc74529ab671] the ambient environment";
         "[scanner-refusal:e11f1dd0ebe8035f6b6bb919c904e611] this check cannot";
         "[scanner-refusal:e20c1b4ad3881b8147939aef02357ab2] classification for and";
         "[scanner-refusal:332abda7feebdaa6c1c10670865ea5c6] does not declare";
@@ -492,6 +494,8 @@ let raw_entries =
          dependencies";
         "[scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted";
         "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
+        "[scanner-refusal:1980131e56fcd4b8e4810ba218228fe7] whose rule depends";
+        "[scanner-refusal:a6af1a4eabd80e213ebd285160652900] argument stays ungated";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );
@@ -566,7 +570,7 @@ let raw_entries =
         "[scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal";
         "[scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim";
         "[scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim";
-        "[scanner-refusal:b743906541a11550a0513ec369b96184] which reads";
+        "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
@@ -581,9 +585,10 @@ let raw_entries =
         "[scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail";
         "[scanner-refusal:df1860b788314bd677ee963aff3f8186] label literal carries";
         "[scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-break reader read";
+        "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
-        "[scanner-refusal:567b8c220b002e1bb52a75940f43f392] Verdict.Claims";
+        "[scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
         "[scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted";
         "[scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on";
@@ -668,6 +673,10 @@ let raw_direct_evidence =
     ( "config_dep_completeness.ml:332abda7feebdaa6c1c10670865ea5c6",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:328553bf93b184a97ab7d44d97c369a4",
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
+    ( "config_dep_completeness.ml:3e9cd231a7db9663f3ceba5ab3891105",
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
+    ( "config_dep_completeness.ml:cb948484fece727200c2dc74529ab671",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "digest_completeness.ml:7cab0a5763f4811f331a4aab327c6784",
       "digest_completeness refuses the malformed tree, exiting 1: true" );

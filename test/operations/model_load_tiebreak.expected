@@ -1,0 +1,48 @@
+without a tie-break the first of the tied leaves wins: true
+with a tie-break the tied leaf with the smallest key wins, the first among equal keys: true
+a tie never displaces the incumbent: true
+keys are computed only for leaves that tie: true
+each best leaf's key is computed once: true
+a keyless leaf listed first keeps a tie against keyed leaves: true
+a keyless leaf listed later never displaces a keyed best: true
+without a tie-break a subtree bounded at the threshold is fathomed: true
+with a tie-break a subtree bounded at the threshold is entered, and its tie wins: true
+under a keyless best leaf a subtree bounded at the threshold is fathomed unscored: true
+an undescribed kernel makes a candidate's count unknown: true
+kernels without tile-MMA sites add nothing to the counted ones: true
+a candidate with no tile-MMA site anywhere has nothing to count: true
+stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
+stand-in: each pair has equal bytes: true
+stand-in: each pair has exactly equal ranking scores: true
+stand-in: under CUDA's load rule each swizzled twin issues fewer operand loads: true
+stand-in: under a rule without ldmatrix each pair issues equal operand loads: true
+stand-in: the arm's reloads count: a reusing arm issues fewer loads than the record's own: true
+stand-in: an element-swizzled twin has no count: true
+stand-in: a statement the hook declines has no count: true
+stand-in: a marked statement the hook accepts as a fragment update is counted in the fragment scope: true
+stand-in: a marked statement the hook declines as a fragment update is counted per statement: true
+stand-in: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
+stand-in: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
+stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
+stand-in: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
+stand-in: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
+backend record: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
+backend record: each pair has equal bytes: true
+backend record: each pair has exactly equal ranking scores: true
+backend record: under CUDA's load rule each swizzled twin issues fewer operand loads: true
+backend record: under a rule without ldmatrix each pair issues equal operand loads: true
+backend record: the arm's reloads count: a reusing arm issues fewer loads than the record's own: true
+backend record: an element-swizzled twin has no count: true
+backend record: a statement the hook declines has no count: true
+backend record: a marked statement the hook accepts as a fragment update is counted in the fragment scope: true
+backend record: a marked statement the hook declines as a fragment update is counted per statement: true
+backend record: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
+backend record: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
+backend record: the tie-break moves no score: both rules' picks score exactly alike: true
+backend record: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
+backend record: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
+model_explain lists model_default's admitted incumbent first: true
+model_explain's labels are distinct: true
+every explained ranking score is at least its bound: true
+where the backend describes no mma arm, no candidate gets an operand-load count: true
+model_explain shows two candidates tied exactly on the ranking score with different operand loads: true

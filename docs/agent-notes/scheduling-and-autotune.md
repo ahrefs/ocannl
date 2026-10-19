@@ -499,13 +499,11 @@ files.
   gradient would change its result. Losses stayed bitwise identical on f32 (pinned by
   `test/operations/seeded_default`).
 - **The seeded untuned default also splits long, narrow reductions, before segmenting, on CUDA
-  only** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
-  `gpu_default_split_reduce_min_serial`). Measured on gpt2_mini_train b256: CUDA 543 → 391 ms, but
-  HIP (gfx1151, unified memory) 885 → 1256 ms when ungated. The likely cause is gh-ocannl-1348's
-  finding that HIP's compiler does not register-promote such accumulators, so the split's first
-  pass would round-trip its partials cell through device memory on every row; that is unconfirmed
-  (no per-kernel HIP table). HIP keeps the unsplit plan until a HIP-safe first pass lands.
-  It applies the search's split-reduce detection and enabling interchange as a whole-routine
+  and HIP** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
+  `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`).
+  Measured on gpt2_mini_train b256: CUDA 543 → 391 ms. HIP (gfx1151, unified memory) went
+  885 → 1256 ms, so the split was CUDA-only until gh-ocannl-1412 gave its first pass coalesced
+  lanes (the next bullet). It applies the search's split-reduce detection and enabling interchange as a whole-routine
   prelude (`Autotune.split_reduce_prelude`, the `F_split` seeds' own), to every site whose serial
   chain per output cell reaches the threshold. On gpt2_mini_train b256 these are the 26 bias and
   layer-norm parameter gradients and the loss sum, at 32768 rows each. Each split launches
@@ -520,6 +518,26 @@ files.
   default plan and the tuner's own split-reduce candidates do under the default
   `autotune_search=true` (`test/operations/seeded_split_reduce` holds it to an f64 reference). The
   `reproducible` profile pins the key at 0, keeping its sums serial.
+- **A split's first pass runs its block loop outside the cell loops** (gh-ocannl-1412,
+  `sr_block_hoist`, appended to `Autotune.split_reduce_prelude`). `Split_reduce` puts the block
+  loop where the reduction loop was, BELOW the cell loops its pinning rule requires:
+  `for o: for blk: { init; for inner: for s: .. }`. The GPU preset maps the outer loop of that chain
+  to the grid and the inner one to the lanes, so a wavefront's lanes walked the blocks, `chunk`
+  rows apart, each loading its own cache line on every row. The suspected register-promotion cause
+  was wrong: the HIP ISA of a split first pass shows the partials cell localized (one load, a
+  register accumulation, one store). The kernel table showed the real cost instead: on minix
+  (gfx1151, unified memory) the b256 first pass of `l1_ffn_b2.grad`, fused by fission with the
+  `n512.grad` nest it recomputes inline, took 197 ms where the unsplit bias-gradient kernel took 15.
+  Detection now records the cell loops when hoisting the block loop above them is `Op_legal` on the
+  split code (static sites only), and the prelude appends those `Swap`s, so the lanes walk the cell
+  axis as in the elementwise nests that produce the summed rows. Each cell's summation order is
+  unchanged (one block accumulates one partials row in the original order), so the result is
+  bitwise the unhoisted split's (`test/operations/split_reduce_block_hoist`, which also pins the
+  lanes under the device's preset beside a control site without the hoist). Diagnostic runs on
+  minix (b256, same binary, kernel table on): split unhoisted 1285 ms against 939 unsplit; hoisted
+  630 against 945, with that first pass at 4.4 ms and the layer-norm first passes from 4-23 ms down
+  to 0.3-1.1 ms. The plan digest counts each site's hoisted loops (`hoist<n>`), so a search crowned
+  under an unhoisted seed is a different trajectory.
 - **A two-loop reduction band neither of whose loops splits alone is split as a pair**
   (gh-ocannl-1414, `Autotune.coalesce_reduction_pair`, field `sr_coalesce`). At b8 a parameter
   gradient `for b, s, o: g[o] += dy[b,s,o]` has `b` below `sr_red_min`, and `s` fails the split's
@@ -697,6 +715,14 @@ files.
   renderer precondition in a test, do surgery on the applied `optimized` (re-point `pt_rotor`)
   rather than retyping loops — a retyped anchor trips `Low_level.validate_parallel` first and never
   reaches the check under test.
+- The same holds one step later, for generated code the backend's COMPILER rejects: every backend
+  types it as `Backend_rejected` at stage `"compiler"` (cc and Metal raise `Cause_at` at the compile
+  call, CUDA and HIP answer `NVRTC_`/`HIPRTC_ERROR_COMPILATION` in `classify_failure`), so it is a
+  decline of that candidate or kernel. Only the compile status is typed: an environment fault fails
+  every candidate alike and must stay loud, which is why Metal types a failure only when its report
+  carries a `program_source:L:C: error:` diagnostic, and why every backend leaves a header the
+  compiler could not open untyped (`C_syntax.missing_include`) although its toolchain reports it
+  under that same status (`compile_failure_declines`, ahrefs/ocannl#1387).
 - The two pipelined-tile facts are also stated upstream, over the applied IR, as
   `Schedule.pipeline_violation` (gh-ocannl-1231): `op_legality` refuses any op leaving one — a
   `Split` or materializing `Unroll` of the rotor (its binder vanishes, so the reads fall outside),
@@ -709,6 +735,19 @@ files.
   oracle's reasons from the type (ppx_variants_conv) and fails until the fixtures exercise every
   one, and on GPU backends it relates each renderer decline to the oracle's violations of the
   very IR it was compiled from, in both directions.
+- The simdgroup fragment scope has the same treatment, with one difference (gh-ocannl-1342). The
+  renderer maps a marked fragment's lane-0 load, reduction and store-back to persistent intrinsics
+  only when `Low_level.fragment_region` (shared with the cost model) matches: exactly one
+  `Tile_mma` between the transfers, the bracket at the HEAD of the statement sequence `pp_ll` tries
+  (a recognized scope's trailing statements render one by one). Any other `Tile_mma` into the
+  fragment silently takes the lane-0 scalar fallback, timed 2-3x slower: a materializing `Unroll`
+  of a loop inside the scope (k_o, or a Base contraction axis around it) replicates the tile, one
+  of a loop around the scope leaves a second scope trailing the first, and a `Vectorized` retype of
+  the transfers' copy loop (a GPU menu move) unbrackets it. `op_legality` refuses an op that leaves
+  MORE `fragment_scope_violations` than it found, not any IR with one, because the fallback still
+  renders; `fragment_scope_move_legality` relates each reason to the census's fallback count on a
+  GPU. A trailing scope beside a hook-rendered first copy used to omit the fragment's local-array
+  declaration (an untyped Metal compile failure); `unscoped_simdgroup_fragments` now keeps it.
 - Autotune fault injection keyed by ATTEMPT INDEX (`Autotune.on_candidate_attempt`) is
   backend-dependent and silently vacuous: how many attempts precede an arm's first *timed* candidate
   varies. On Metal a small matmul's materialize-all arm has a baseline binding no hardware dimension
@@ -1140,6 +1179,45 @@ files.
   moved 2.474 -> 2.427 ms (replicate means) with the spread narrowed 16x. Before reading a per-key
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
+- **Staffed singles time a key's sketches inside the running composite** (gh-ocannl-1138, config
+  `autotune_staffed_singles`, **default off: measured, not yet worth it**). With the seeded-rule start
+  (below) on the gh-ocannl-1109 cell (gpt2_mini, approximate, rog/CUDA, one pair) the first 1% gain came at
+  12 s of a search instead of 455 s, but the best came within 5% of final only at 55%/75% of the two
+  placement arms' timings (bare: 96%), at +29% search compile time, crown and step p50 unchanged,
+  against the plan's bar of under half. The pre-sweep seeds (presets, whole-routine sketches) still
+  come first and late keys still lower the best; flip the default only on a re-measurement that
+  clears it (entry_version bump with it). The coarse keys are swept one at a time, each single's `staff` holding
+  the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
+  before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its
+  sweep, heaviest key first (segment count times its best sketch's roofline score, logged as
+  `staffed: segment <tag> weighs <w>`; unscored keys last, in enumeration order). Only times within
+  one key's sweep are comparable, so per-key minima stay valid but a cross-key comparison does not; the composite's own choice is swept first, at its known time and
+  without a compile. **The start is the seeded plan's decision RULE, not its recorded decisions**:
+  `seeded_params` applied to each key's own segment. The recorded `Seeded_sketch` digests were taken
+  on the split routine under the untuned segmentation without the search's zero fold, so they equal
+  no key's digest: at `381bbc93` the composite started empty on gpt2_mini/CUDA, its best sat at the
+  seeded floor (3.70 ms) until two late keys left on presets were swept, and it came within 5% of its
+  final best only at 77% of its timings (bare search: 96%; ABBA, crowns and step p50 unchanged).
+  A refused (not contended) staffed single is retried bare once (`fiss_sketch_backdrop_fallbacks`),
+  until a staffed single of the key is admitted (the staff is then known compatible, so later
+  refusals are the seeds' own). A key's incumbent is its own choice as timed in the sweep, or the
+  running composite whole (for a key with no choice, the key on its preset): a single joins only by
+  beating it. A key whose staffed singles ALL decline cannot join that
+  staff (the composite holding both is the refused code), so its fastest bare single, the composite
+  of that key alone, replaces the running composite when faster as a whole routine. The last key's
+  winning window IS the coarse composite, so `fs_composite` is set from it at admission (and stays
+  `Timed` if a bare replacement later shrinks the composite; the split flags likewise), and the
+  playoff skips a key whose sweep ran inside the incumbent.
+  The fine segmentation (GPU, gh-ocannl-574) keeps its own composite: a fine key the finer cuts left
+  unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded rule's,
+  and only the new keys are swept (`test/operations/autotune_staffed_fine`, skipped off GPU).
+  The split-reduce sites keep one more (`F_split`'s `staff`, the other sites' block counts, starting
+  empty): staffing a site's prelude with the others' splits forms the multi-site composite during
+  the seeds, but every segment of a split candidate still runs its preset, so the split singles'
+  backdrop does not shrink the way a sketch single's does, and the seeded plan's split is no start
+  worth its approximate site matching.
+  `test/operations/autotune_staffed_singles` scripts an additive landscape and seeds the start through
+  the `Autotune.on_staffed_start` seam, which only a seeded plan fills in production.
 - **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**
   (gh-ocannl-1137; a capped correctness-grade probe on a shared rog box, CUDA, approximate profile).
   A round is adopted only when its best beats the incumbent by `min_progress` (1%); a sub-1% best is
@@ -1793,6 +1871,29 @@ files.
   so a new entry field reaches every planted entry through one default. `schedule_cache_regime`
   pins the record itself: committed and admitted I/O, the regime, lock, read and commit refusals,
   keyless calls, and nesting.
+- **A claim that rests on a recording retries the recording, then skips with a reason** (gh-ocannl-1086).
+  A recording run whose evidence is unclean records nothing by design, and every "the replay
+  ships the recorded X" claim written as `(not stored) || X` then passes vacuously — about half
+  the runs on a loaded box, with no trace. `placement_store` re-runs each recording (run 1, run 6,
+  the cross-process recorder) in a FRESH directory, up to three attempts (the same directory would
+  replay the first attempt's clean searches), and gates the dependent claims through
+  `Verdict.gated ~aggregation:`Environment` on why no entry exists, so the sweep counts the skip.
+  The test's "clean" predicate is `Train.tune_placements`' own recording rule — uncontended, no
+  terminal failure, a finite best — under which an abandoned flip is a measured loser, not spoiled
+  evidence; a stricter test-side copy (requiring every report `Searched`/`Cache_replay`) disagrees
+  with the recorder exactly when a flip is abandoned.
+- **A timing lineage's schedule does not compile into a caller lineage that lowers differently**
+  (gh-ocannl-1386). With `?timing_ctx` deciding a node materialized that the caller leaves
+  virtual, `Autotune.tune` rebases the timing lineage's base lowering onto the caller's placements
+  for the cache replay and the winner compile (`compile_candidate`'s `rebase`). A whole-routine
+  winner then emits code reading an undeclared buffer — on cc a classified decline, so the untuned
+  default ships; on Metal an unclassified `Failure`, fatal under strict classification — and a
+  FISSIONED winner raises `Tnode.Placements.promote_local_to_device: … is virtual`, fatal too, so
+  the arm (or the placement store's replayed search) dies. On cc which kind wins is timing noise,
+  which made `placement_store`'s timing-context warm replay flake on CI. The test pins around it
+  (its own directory, fissioned candidates ranked last through `Autotune.on_candidate_measured`;
+  on Metal its run-6 claims are counted skips); pinning fissioned candidates FIRST for the warm run
+  reproduces the CI failure deterministically.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

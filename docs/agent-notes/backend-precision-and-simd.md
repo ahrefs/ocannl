@@ -727,14 +727,17 @@ files.
   fp8's `ldmatrix.b16` eligibility remains one-sided: A row-major and B transposed.
   Other shared-swizzled orientations gather bytes through the b128 XOR address map,
   so the row-major staged twin uses `ldmatrix` for A and gathers for B. A gather-only
-  statement is tensorized but has no `ldmatrix`; CUDA's `mma_ldmatrix_operands` drives
-  both load emission and `mma_uses_ldmatrix` for the census, rather than inferring the
-  instruction from the layout. `schedule_ldmatrix_matmul` pins both gather-only orientations.
+  statement is tensorized but has no `ldmatrix`; `Cuda_mma.arm_ldmatrix_operands` drives
+  load emission, the census and the `mma_operand_loads` capability the cost model reads
+  (gh-ocannl-1254), rather than any of them inferring the instruction from the layout.
+  `schedule_ldmatrix_matmul` pins both gather-only orientations; `mma_operand_loads` pins the
+  capability against the emitted forms.
   Timed (gh-ocannl-1190, sm_120, 16x32x32 tile, 128 k_o blocks): in the resident scope the
   swizzled fp8 twin is 12.2% faster than the plain one (paired ratio 0.8775, every replicate
   under 0.883), unlike the neutral bf16 twin of gh-481. `tune` times both twins, so it needs no
-  change. `model_default` does: its cost model cannot see the swizzle map, so the twins tie, and
-  its first-strictly-better rule keeps plain. Re-time a layout change with
+  change. `model_default`'s cost model cannot see the swizzle map, so the twins tie; since
+  gh-ocannl-1254 its family search breaks exact ties by operand loads, so the swizzled twin wins
+  that tie (training-and-performance.md owns the tie-break). Re-time a layout change with
   the CUDA-only `@benchmarks/runners/ocannl/mma-register-scope-probe` alias, which exports both
   layouts and runs `mma_register_scope_probe_build.sh` plainly and under both
   `--negative-control=a|b` (the swizzled arm with its ldmatrix A, resp. B gather, XOR dropped),
@@ -821,12 +824,12 @@ files.
   arm-blind fingerprint fails it), and gh-ocannl-663's width uniformity read off the arm table
   (every uniform-storage arm accumulates at `accum_prec`; skipped where there are no arms).
 - **One maintainer-approved exception to the numerics-gate rule** (the next bullet, and AGENTS.md's
-  config-profiles rule): **the untuned CUDA split** (gh-ocannl-1325,
+  config-profiles rule): **the untuned GPU split** (gh-ocannl-1325, CUDA and HIP since gh-ocannl-1412,
   `gpu_default_split_reduce_min_serial`). It reassociates the long, narrow reductions of a training
   step (bias and layer-norm parameter gradients, the loss sum) into a deterministic tree over
   blocks chosen from the routine alone, and ships ON by default in the exact regime rather than
   in the `approximate` payload: within ~2.4e-6 relative on gpt2_mini_train b256's losses, for
-  543 → 391 ms on CUDA. gh-ocannl-1414 lowered the default threshold to 1024 (the wave coordinator
+  543 → 391 ms on CUDA; on HIP (minix, b256) within ~2.2e-6 relative as well. gh-ocannl-1414 lowered the default threshold to 1024 (the wave coordinator
   approved it on the measurement), which extends it to the batch-8 and long-sequence steps' 1024-row
   reductions: within ~1.1e-6 relative on their losses, for 15.2 → 12.6 ms at b8. The `reproducible` profile pins it at 0. The precedent the decision rests
   on: the default GPU plan's cooperative all-reduces (gh-ocannl-1124) and, under the default

@@ -31,6 +31,11 @@ open Base
 
 let config_file = "ocannl_config"
 
+(** The record of the ambient environment [test/config/dune] writes (gh-ocannl-1149): a rule that
+    reads a configuration checked in beside it, rather than the shared one that carries this record,
+    depends on it directly. *)
+let ambient_file = "ocannl_ambient"
+
 (* Dune runs a scanning rule from the rule's own directory inside the build tree and hands it paths
    relative to that directory. [%{workspace_root}] arrives as the way back out ("../.."), so the
    number of its components says how many of the working directory's trailing components name the
@@ -289,11 +294,10 @@ let path_bearing_forms = [ "file"; "glob_files"; "glob_files_rec"; "source_tree"
     chdirs out of the stanza's subtree may legitimately name a common parent (Codex P2, rounds 9 to
     11 of PR #343). Where the files exist, and hence which directory wins, is the caller's
     knowledge. *)
-let declared_config_paths args =
+let declared_config_paths ?(name = config_file) args =
   let rec collect sexp =
     match sexp with
-    | Sexp.Atom atom ->
-        if String.equal (Stdlib.Filename.basename atom) config_file then [ atom ] else []
+    | Sexp.Atom atom -> if String.equal (Stdlib.Filename.basename atom) name then [ atom ] else []
     | Sexp.List (Sexp.Atom head :: rest)
       when String.is_prefix head ~prefix:":" || List.mem file_dep_forms head ~equal:String.equal ->
         List.concat_map rest ~f:collect
@@ -302,6 +306,19 @@ let declared_config_paths args =
   match args with
   | None -> []
   | Some args -> List.concat_map args ~f:collect |> List.dedup_and_sort ~compare:String.compare
+
+(** Whether [args] — ONE dependency field's arguments — include [(universe)], directly or inside a
+    [(:name …)] binding: the dependency dune reruns a rule for on every invocation, so no cached
+    result of it can outlive a change of the environment. *)
+let depends_on_universe args =
+  let rec found sexp =
+    match sexp with
+    | Sexp.List [ Sexp.Atom "universe" ] -> true
+    | Sexp.List (Sexp.Atom head :: rest) when String.is_prefix head ~prefix:":" ->
+        List.exists rest ~f:found
+    | Sexp.List _ | Sexp.Atom _ -> false
+  in
+  match args with None -> false | Some args -> List.exists args ~f:found
 
 (** The one spelling OCANNL reads the backend under (gh-ocannl-652 dropped the lowercase form). *)
 let backend_env_var = "OCANNL_BACKEND"
@@ -831,6 +848,9 @@ type site = {
       (** whether the deps depend on any config file at all; WHICH one had to be named is
           {!declared_config_paths}, since only the caller knows where configs exist *)
   declared_config_paths : string list;
+  declared_ambient_paths : string list;
+      (** the [ocannl_ambient] files the same deps depend on, as written (gh-ocannl-1149) *)
+  depends_on_universe : bool;  (** whether the same deps include [(universe)] (gh-ocannl-1149) *)
   declares_backend : bool;
       (** whether THE DEPS THIS SITE RUNS UNDER declare [(env_var OCANNL_BACKEND)] — read from the
           same field as {!declares_config}, and for the same reason. A stanza can carry dependency
@@ -1318,6 +1338,8 @@ let sites_of_stanza subdir stanza =
         name;
         declares_config = not (List.is_empty (declared_config_paths deps_field));
         declared_config_paths = declared_config_paths deps_field;
+        declared_ambient_paths = declared_config_paths ~name:ambient_file deps_field;
+        depends_on_universe = depends_on_universe deps_field;
         declares_backend = declares_env_var deps_field backend_env_var;
         path_rewritten;
         executables;
@@ -1464,6 +1486,19 @@ let config_copy_dirs content =
         when List.exists (atoms stanza) ~f:(fun atom ->
                  glob_could_match (Stdlib.Filename.basename atom) ~name:config_file) ->
           [ subdir ]
+      | _ -> [])
+
+(** The sources this dune file's [(copy_files …)] stanzas could copy a file called [name] from: the
+    directory each copies into, relative to the dune file's own as in {!config_copy_dirs}, with the
+    source as written, relative to that directory. A wildcard source is reported as written, so a
+    caller comparing sources sees it match nothing. *)
+let copy_sources content ~name =
+  walk "" (stanzas content) ~f:(fun subdir stanza ->
+      match head stanza with
+      | Some ("copy_files" | "copy_files#") ->
+          List.filter_map (atoms stanza) ~f:(fun atom ->
+              if glob_could_match (Stdlib.Filename.basename atom) ~name then Some (subdir, atom)
+              else None)
       | _ -> [])
 
 (** {1 The backend marker (gh-ocannl-659)}
