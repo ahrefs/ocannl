@@ -382,10 +382,13 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
    initialization -- and [disarm] restores that thread's mask: a process that inherited a blocked
    SIGALRM, or whose every thread blocks it, would otherwise arm a deadline that never fires. A
    SIGALRM already PENDING (blocked and raised) refuses the arm, since unblocking would deliver
-   it to the deadline's handler. [disarm] cancels the timer and restores the saved disposition. A SIGALRM some other process SENDS during the region
-   (si_code SI_USER) is not the deadline: it still kills, as SIGALRM's default action would have,
-   but without the deadline's diagnostic, so that line always means the timer expired. No
-   deadline on Windows, which has no SIGALRM. */
+   it to the deadline's handler. [disarm] cancels the timer and restores the saved disposition.
+
+   A SIGALRM that is not the timer's expiry -- sent, raised or queued by anything else during the
+   region -- still kills, as SIGALRM's default action would have, but with a line of its own rather
+   than the deadline's, so the deadline's line always means the timer expired. The handler never
+   waits on its diagnostic: a 2 s backstop alarm under the default disposition kills the process if
+   the write to fd 2 blocks. No deadline on Windows, which has no SIGALRM. */
 
 #if !defined(_WIN32)
 #include <pthread.h>
@@ -397,6 +400,8 @@ static size_t ocannl_deadline_msg_len;
 static struct sigaction ocannl_deadline_saved;
 static sigset_t ocannl_deadline_saved_mask;
 static int ocannl_deadline_armed; /* accessed through __atomic builtins */
+/* Set once the timer has been started: before that, a zero timer is no evidence of expiry. */
+static volatile sig_atomic_t ocannl_deadline_started;
 
 static void ocannl_deadline_write(const char *p, size_t n) {
   while (n > 0) {
@@ -423,15 +428,24 @@ static void ocannl_deadline_reblock(void) {
 
 static void ocannl_deadline_handler(int sig, siginfo_t *info, void *uctx) {
   static const char external_msg[] =
-      "OCANNL: an external SIGALRM arrived during GPU device initialization; dying by it, as "
-      "SIGALRM's default action would (not the device_init_deadline, gh-ocannl-1281)\n";
+      "\nOCANNL: a SIGALRM that was not the device_init_deadline arrived during a GPU device "
+      "initialization or query; dying by it, as SIGALRM's default action would (gh-ocannl-1281)\n";
   struct sigaction dfl;
+  struct itimerval left;
   sigset_t set;
+  int expired;
+  (void)info;
   (void)uctx;
-  if (info != NULL && info->si_code == SI_USER)
-    ocannl_deadline_write(external_msg, sizeof external_msg - 1);
-  else
-    ocannl_deadline_write(ocannl_deadline_msg, ocannl_deadline_msg_len);
+  /* The deadline is recognized positively, by the timer itself: [arm] starts it with no interval, so
+     it reads zero exactly when it has expired. A SIGALRM raised, queued or sent by anything else
+     (si_code SI_USER, SI_TKILL, SI_QUEUE, ...) arrives with the timer still running. A failed read
+     counts as external, so the deadline's line is never written without evidence. */
+  expired = ocannl_deadline_started && getitimer(ITIMER_REAL, &left) == 0 &&
+            left.it_value.tv_sec == 0 && left.it_value.tv_usec == 0;
+  /* Termination must not wait on the diagnostic: a full blocking pipe on fd 2 (a parent that does
+     not drain the child's stderr) would block the write forever. So the default disposition and an
+     unblocked mask come first, then a 2 s backstop alarm: if the write blocks, that alarm kills the
+     process by SIGALRM all the same. */
   memset(&dfl, 0, sizeof dfl);
   dfl.sa_handler = SIG_DFL;
   sigemptyset(&dfl.sa_mask);
@@ -439,6 +453,11 @@ static void ocannl_deadline_handler(int sig, siginfo_t *info, void *uctx) {
   sigemptyset(&set);
   sigaddset(&set, sig);
   sigprocmask(SIG_UNBLOCK, &set, NULL);
+  alarm(2);
+  if (expired)
+    ocannl_deadline_write(ocannl_deadline_msg, ocannl_deadline_msg_len);
+  else
+    ocannl_deadline_write(external_msg, sizeof external_msg - 1);
   raise(sig);
   /* Not reached: the default action of SIGALRM terminates the process. */
   _exit(128 + sig);
@@ -510,6 +529,7 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
     return Val_false;
   }
+  ocannl_deadline_started = 1;
   return Val_true;
 #endif
 }
@@ -523,9 +543,13 @@ CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
   if (__atomic_load_n(&ocannl_deadline_armed, __ATOMIC_SEQ_CST)) {
     struct itimerval off;
     memset(&off, 0, sizeof off);
+    /* The disposition goes back first: a SIGALRM sent after this point meets the program's own
+       disposition, never the deadline's handler with the timer already cancelled -- which would
+       read as an expiry. A timer expiring in the window left kills by the default action. */
+    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
+    ocannl_deadline_started = 0;
     setitimer(ITIMER_REAL, &off, NULL);
     ocannl_deadline_reblock();
-    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
   }
 #endif

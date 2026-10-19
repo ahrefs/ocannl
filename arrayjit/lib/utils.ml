@@ -2427,8 +2427,10 @@ end
     freshly installed boxes. *)
 let with_device_init_deadline ~backend_name f =
   let module Stub = Device_init_deadline_internals in
-  let seconds = Stub.deadline () in
   let guarded () =
+    (* Read under the lock: the configuration reader records each access in a table no other domain
+       may touch at the same time. *)
+    let seconds = Stub.deadline () in
     let armed =
       Float.(seconds > 0.)
       && Stub.arm seconds

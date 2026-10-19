@@ -62,6 +62,42 @@ let run_child ~deadline args =
     stderr_lines = String.split_lines (String.filter err ~f:(fun c -> not (Char.equal c '\r')));
   }
 
+(* [run_child] for a child that may hang for good (the negative control of the full-stderr case): it
+   is reaped by polling and SIGKILLed past [cap] seconds. Its stderr is not read: the case replaces
+   it. *)
+let run_child_capped ~cap ~deadline args =
+  let out = Stdlib.Filename.temp_file "ocannl-child-" ".out" in
+  Exn.protect
+    ~finally:(fun () -> Stdlib.Sys.remove out)
+    ~f:(fun () ->
+      let fd = Unix.openfile out [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+      let argv =
+        Array.of_list (child_exe :: ("--ocannl_device_init_deadline=" ^ deadline) :: args)
+      in
+      let pid = Unix.create_process child_exe argv Unix.stdin fd Unix.stderr in
+      Unix.close fd;
+      let started = now () in
+      let rec reap () =
+        match Unix.waitpid [ Unix.WNOHANG ] pid with
+        | 0, _ when Float.(now () -. started > cap) ->
+            Unix.kill pid Stdlib.Sys.sigkill;
+            (snd (Unix.waitpid [] pid), true)
+        | 0, _ ->
+            Unix.sleepf 0.05;
+            reap ()
+        | _, status -> (status, false)
+        | exception Unix.Unix_error (Unix.EINTR, _, _) -> reap ()
+      in
+      let status, capped = reap () in
+      let ended = now () in
+      let text = In_channel.read_all out in
+      eprintf "child %s (deadline %s) %s%s (not part of the golden):\n%s\n%!"
+        (String.concat ~sep:" " args) deadline
+        (Fresh_process.describe_status status)
+        (if capped then ", SIGKILLed at the cap" else "")
+        (Fresh_process.prefixed text);
+      ({ status; ended; stdout_lines = String.split_lines text; stderr_lines = [] }, capped))
+
 let field o key =
   List.find_map o.stdout_lines ~f:(fun l -> String.chop_prefix l ~prefix:(key ^ " "))
 
@@ -176,6 +212,31 @@ let () =
          exited_0 o && stalled o && says o "survived" && says o "still-blocked true"
          && Option.is_none (diagnostic o)
          && not (List.exists o.stderr_lines ~f:(String.is_substring ~substring:"external SIGALRM"))));
+  let externals =
+    List.map [ "kill"; "raise" ] ~f:(fun how ->
+        (how, run ~deadline:"60" [ "external"; "cuda"; how ]))
+  in
+  gated_all ~when_ ~on ~aggregation:`Environment
+    "a SIGALRM sent or raised by anything else during a region kills as the default action would, \
+     with a line of its own and never the deadline's"
+    externals ~f:(fun (_, o) ->
+      holds o ~f:(fun o ->
+          by_sigalrm o && stalled o
+          && (not (says o "survived"))
+          && Option.is_none (diagnostic o)
+          && List.exists o.stderr_lines
+               ~f:(String.is_substring ~substring:"was not the device_init_deadline")));
+  let full_stderr =
+    if when_ then Some (run_child_capped ~cap:20.0 ~deadline:"0.5" [ "full-stderr"; "cuda" ])
+    else None
+  in
+  gated ~when_ ~on ~aggregation:`Environment
+    "with fd 2 a full pipe nobody reads, the deadline still kills the process by SIGALRM, its \
+     backstop alarm firing while the diagnostic's write is blocked"
+    (Option.value_map full_stderr ~default:false ~f:(fun (o, capped) ->
+         (not capped) && by_sigalrm o
+         && (not (says o "survived"))
+         && within 1.5 10.0 (since o "stall-began")));
   let concurrent = run ~deadline:"0.5" [ "concurrent"; "cuda"; "hip" ] in
   gated ~when_ ~on ~aggregation:`Environment
     "guarded regions are serialized: a wedged one entered while a healthy one held the timer is \

@@ -29,6 +29,11 @@
    [blocked-pending BACKEND]: SIGALRM is blocked and then sent to the process, so it is pending;
    then a 1.5 s stall, and whether SIGALRM is still blocked afterwards.
 
+   [external BACKEND (kill|raise)]: another domain sends the process a SIGALRM 0.3 s into a 5 s
+   stall.
+
+   [full-stderr BACKEND]: fd 2 is replaced by a full pipe nobody reads; then a 30 s stall.
+
    [concurrent FIRST SECOND]: a second domain enters FIRST's guarded [num_devices], whose stall is
    healthy (0.3 s); 0.1 s later this thread enters SECOND's, whose stall is 5 s.
 
@@ -40,6 +45,8 @@ open Stdio
 module Backends = Context.Backends
 
 exception Stall_done
+
+external raise_sigalrm : unit -> unit = "ocannl_test_raise_sigalrm"
 
 let now () = Int64.to_float (Mtime_clock.now_ns ()) /. 1e9
 let say fmt = Printf.ksprintf (fun line -> printf "%s\n%!" line) fmt
@@ -145,6 +152,39 @@ let () =
       let mask = Unix.sigprocmask Unix.SIG_BLOCK [] in
       say "still-blocked %b" (List.mem mask Stdlib.Sys.sigalrm ~equal:Int.equal);
       say "survived"
+  | [ "external"; name; how ] ->
+      (* Another domain sends the process a SIGALRM 0.3 s into a 5 s stall under a deadline far
+         away: [kill] (si_code SI_USER) or [raise] in that domain's thread (SI_TKILL on Linux). *)
+      let sender =
+        Stdlib.Domain.spawn (fun () ->
+            Unix.sleepf 0.3;
+            match how with
+            | "kill" -> Unix.kill (Unix.getpid ()) Stdlib.Sys.sigalrm
+            | _ -> raise_sigalrm ())
+      in
+      guarded_call name (stall_for 5.0);
+      Stdlib.Domain.join sender;
+      say "survived"
+  | [ "full-stderr"; name ] ->
+      (* fd 2 becomes a pipe that is full and that nobody reads, so a blocking write to it never
+         returns. *)
+      let r, w = Unix.pipe () in
+      Unix.set_nonblock w;
+      let fill chunk =
+        let b = Bytes.make chunk 'x' in
+        try
+          while true do
+            ignore (Unix.write w b 0 chunk : int)
+          done
+        with Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) -> ()
+      in
+      fill 65536;
+      fill 1;
+      Unix.clear_nonblock w;
+      Unix.dup2 w Unix.stderr;
+      guarded_call name (stall_for 30.0);
+      say "survived";
+      Unix.close r
   | [ "concurrent"; first; second ] ->
       (* The first region to take the hook is the healthy one: it returns 0.3 s in, while the
          second, entered 0.1 s after the first, is the wedged one. *)

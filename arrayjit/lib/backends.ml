@@ -1480,7 +1480,10 @@ let finalize (type dev runner event)
    after its first discovery is exactly the wedge this bounds. Where a call is a cache read
    ([get_device] of an opened ordinal, the memoized limits) the guard costs a few system calls.
    Applied to the three device backends only; the cc backends, which [Raise_backend] also builds,
-   touch no driver. A missing backend's stub is guarded too, harmlessly: it answers at once. *)
+   touch no driver. A missing backend's stub is guarded too, harmlessly: it answers at once. The
+   implementation modules themselves ([Cuda_backend.Impl], ...) are below this boundary: code that
+   drives one directly, as the arrayjit backend tests do, wraps its own device opening in
+   {!Utils.with_device_init_deadline}. *)
 module With_device_init_deadline (Device : Lowered_backend) = struct
   include Device
 
