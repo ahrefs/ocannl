@@ -492,6 +492,8 @@ let raw_entries =
          dependencies";
         "[scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted";
         "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
+        "[scanner-refusal:1980131e56fcd4b8e4810ba218228fe7] whose rule depends";
+        "[scanner-refusal:a6af1a4eabd80e213ebd285160652900] argument stays ungated";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );

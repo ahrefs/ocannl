@@ -1448,7 +1448,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   per-test aliases depend on the gate explicitly, while dune's GENERATED `runtest-<name>` aliases do
   not — a targeted run of a `(test)` stanza can be served stale under a rejected spelling — and
   `env_var_deps` checks that every alias with test actions in a directory carries that directory's
-  gate.
+  gate. A golden pair carries it on the rule making the diffed output, `(deps (alias
+  runtest-env_spelling_gate) …)`, not on the diff's alias rule (gh-ocannl-1378): the gate still runs
+  before the test, a cached output is never re-run for it (an alias dependency adds no digest; the
+  gate's `(universe)` reruns only the gate), and `dune rules` shows a file rule's alias
+  dependencies where it never shows an alias rule's, so `tools/test-run.sh affected` lists every
+  pair when the gate changes. `env_var_deps` follows that route: an alias whose rule reads an
+  output of a gate-dependent rule is gated. A rule that runs and diffs in one alias action (the
+  `slow-`/`train-` shape) keeps the dependency on itself.
 - Deleting a file target out from under dune is not a way to force it to re-run: `dune build
   <that target>` afterwards exits 0 having produced nothing (observed on dune 3.23.1 with
   `test/operations/<name>.exe.output`), and `-f/--force` does not rescue it — `--force` only
@@ -2175,7 +2182,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   registers a target and plain `dune build` (@all) runs the training that the `(test)` stanza only
   ran under `runtest` — and `no-infer` also drops the dependency `diff` would have inferred on its
   golden, so the golden goes in `deps` by hand. And the new `runtest-<name>` alias is a build entry
-  point, so the directory needs a `runtest-env_spelling_gate` rule for it to depend on and an
+  point, so the directory needs a `runtest-env_spelling_gate` rule for its output rule to depend on
+  and an
   `(alias (name runtest) (deps (alias runtest-<name>)))` stanza, both of which `env_var_deps`
   checks.
 - Splitting a golden per backend is a decision about WHAT the golden holds, not a formatting choice,

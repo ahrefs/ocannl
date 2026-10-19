@@ -37,10 +37,11 @@
    `ocannl_backend=cuda dune build @test/training/slow-cifar_conv` is the same entry point with the
    same hole. A gate "reaches" an alias when building the alias builds the gate: the gate's own
    alias, a rule whose `deps` name it (which runs the gate BEFORE the rule, so a rejected spelling
-   fails before the slow run rather than beside it), or an `(alias (name …) (deps …))` stanza
-   aggregating either. That last shape is what keeps `dune build @slow` the whole suite, and the
-   check here is also what keeps the aggregation whole: a `slow-<name>` rule the `slow` alias does
-   not list is one `@slow` skips, silently.
+   fails before the slow run rather than beside it), a rule reading an output whose rule's `deps`
+   name it (a per-test golden pair, gh-ocannl-1378), or an `(alias (name …) (deps …))` stanza
+   aggregating any of these. That last shape is what keeps `dune build @slow` the whole suite, and
+   the check here is also what keeps the aggregation whole: a `slow-<name>` rule the `slow` alias
+   does not list is one `@slow` skips, silently.
 
    {2 Gates the build does not see}
 
@@ -382,27 +383,6 @@ let entry_points stanzas =
   List.concat_map stanzas ~f:(fun s -> aliases_of s @ Option.to_list (alias_stanza_name s))
   |> List.dedup_and_sort ~compare:String.compare
 
-(* The aliases `dune build @<alias>` runs a gate for: those a gate attaches to, closed under what
-   building an alias builds -- the `deps` of every rule attached to it and of the `(alias …)` stanza
-   defining it. A slow rule whose `deps` name the gate's alias is gated as much as one the gate sits
-   beside, and runs it first. *)
-let gated_aliases ?(subdir = "") ?programs stanzas =
-  let rec close gated =
-    let next =
-      List.fold stanzas ~init:gated ~f:(fun gated stanza ->
-          if
-            is_gate ~subdir ?programs ~stanzas stanza
-            || List.exists (alias_deps stanza) ~f:(Set.mem gated)
-          then
-            List.fold
-              (aliases_of stanza @ Option.to_list (alias_stanza_name stanza))
-              ~init:gated ~f:Set.add
-          else gated)
-    in
-    if Set.equal next gated then gated else close next
-  in
-  close (Set.empty (module String))
-
 let aliases_reached_from = Scan.aliases_reached_from
 
 (* The suite a per-test alias belongs to, by the naming convention: `<suite>-<name>` is one test and
@@ -728,6 +708,69 @@ let targets_of stanza =
 let rec mentions_atom text = function
   | Sexp.Atom a -> String.equal a text
   | Sexp.List items -> List.exists items ~f:(mentions_atom text)
+
+let rec mentions_atom_where ~f = function
+  | Sexp.Atom a -> f a
+  | Sexp.List items -> List.exists items ~f:(mentions_atom_where ~f)
+
+(* Whether an action makes dune build a file [f] accepts before running: a `%{dep:…}` anywhere, or
+   an operand of `diff`/`diff?` where dune infers the dependency -- not under `no-infer`, which
+   drops the inference, and not under `chdir`, where a plain name is relative to another directory.
+   A plain atom elsewhere is an argument, not a dependency (Codex P2, local review of
+   gh-ocannl-1378). *)
+let rec action_reads ~inferred ~f = function
+  | Sexp.Atom a -> String.is_prefix a ~prefix:"%{dep:" && f a
+  | Sexp.List (Sexp.Atom "no-infer" :: rest) ->
+      List.exists rest ~f:(action_reads ~inferred:false ~f)
+  | Sexp.List (Sexp.Atom "chdir" :: _ :: rest) ->
+      List.exists rest ~f:(action_reads ~inferred:false ~f)
+  | Sexp.List (Sexp.Atom ("diff" | "diff?") :: args) ->
+      List.exists args ~f:(function
+        | Sexp.Atom a when inferred -> f a
+        | arg -> action_reads ~inferred ~f arg)
+  | Sexp.List items -> List.exists items ~f:(action_reads ~inferred ~f)
+
+(* The aliases `dune build @<alias>` runs a gate for: those a gate attaches to, closed under what
+   building an alias builds -- the `deps` of every rule attached to it and of the `(alias …)` stanza
+   defining it, and the outputs its rules read. A slow rule whose `deps` name the gate's alias is
+   gated as much as one the gate sits beside, and runs it first. So is a golden-diff alias whose
+   rule reads an output made by a rule whose `deps` name it (gh-ocannl-1378): building the alias
+   builds that output, which builds the gate before the test runs. That is where a per-test golden
+   pair carries its gate, because `dune rules` -- and so `tools/test-run.sh affected` -- shows a
+   file rule's dependencies and never an alias rule's. *)
+let gated_aliases ?(subdir = "") ?programs stanzas =
+  let rec close gated =
+    let gated_outputs =
+      List.concat_map stanzas ~f:(fun stanza ->
+          if List.exists (alias_deps stanza) ~f:(Set.mem gated) then targets_of stanza else [])
+      |> Set.of_list (module String)
+    in
+    let reads_gated_output stanza =
+      let named = named_deps stanza in
+      let gated_file atom = Set.mem gated_outputs (unwrap_pform ~named atom) in
+      let in_deps =
+        Option.exists (Scan.field stanza "deps") ~f:(fun args ->
+            List.exists args ~f:(mentions_atom_where ~f:gated_file))
+      in
+      in_deps
+      || Option.exists (Scan.field stanza "action") ~f:(fun args ->
+          List.exists args ~f:(action_reads ~inferred:true ~f:gated_file))
+    in
+    let next =
+      List.fold stanzas ~init:gated ~f:(fun gated stanza ->
+          if
+            is_gate ~subdir ?programs ~stanzas stanza
+            || List.exists (alias_deps stanza) ~f:(Set.mem gated)
+            || reads_gated_output stanza
+          then
+            List.fold
+              (aliases_of stanza @ Option.to_list (alias_stanza_name stanza))
+              ~init:gated ~f:Set.add
+          else gated)
+    in
+    if Set.equal next gated then gated else close next
+  in
+  close (Set.empty (module String))
 
 (* A target a rule hands straight back to its OWN action is an input it wrote for itself, not a
    verdict anybody diffs. The one shape this covers is the response file a repo-wide scan writes to
@@ -6313,7 +6356,43 @@ let ambient_gate_control () =
     [ "(:include flags.sexp)"; "%{read:flags.sexp}"; "-linkall \\ :standard" ]
     ~f:refuses;
   let reach = gated_aliases [ census; free; unrelated; no_run ] in
-  Verdict.p "universe users alone leave their alias entry points ungated" (Set.is_empty reach)
+  Verdict.p "universe users alone leave their alias entry points ungated" (Set.is_empty reach);
+  (* gh-ocannl-1378: a golden pair carries its gate on the rule making the output, where `dune
+     rules` shows it; the alias diffing that output is gated through it, and only through it. *)
+  let producer ?(gated = true) target =
+    stanza
+      ("(rule (target " ^ target ^ ")"
+      ^ (if gated then " (deps (alias runtest-renamed) ocannl_config)" else " (deps ocannl_config)")
+      ^ " (action (with-stdout-to %{target} (run %{dep:free.exe}))))")
+  in
+  let differ alias actual =
+    stanza ("(rule (alias " ^ alias ^ ") (action (diff " ^ alias ^ ".expected " ^ actual ^ ")))")
+  in
+  let pair_stanzas =
+    [
+      gate;
+      real;
+      producer "x.actual";
+      producer ~gated:false "y.actual";
+      differ "runtest-x" "x.actual";
+      differ "runtest-x_dep" "%{dep:x.actual}";
+      differ "runtest-y" "y.actual";
+      stanza "(rule (alias runtest-x_noinfer) (action (no-infer (diff x.expected x.actual))))";
+      stanza
+        "(rule (alias runtest-x_noinfer_dep) (action (no-infer (diff x.expected %{dep:x.actual}))))";
+      stanza "(rule (alias runtest-x_chdir) (action (chdir sub (diff x.expected x.actual))))";
+      stanza "(rule (alias runtest-x_arg) (action (run %{dep:free.exe} x.actual)))";
+    ]
+  in
+  let reach = gated_aliases pair_stanzas in
+  Verdict.p_all "a diff reading an output whose rule depends on the gate is gated"
+    [ "runtest-x"; "runtest-x_dep"; "runtest-x_noinfer_dep" ]
+    ~f:(Set.mem reach);
+  Verdict.p_none
+    "a diff reading an output whose rule does not depend on the gate, or naming a gated output \
+     under no-infer, under chdir or as a plain argument, stays ungated"
+    [ "runtest-y"; "runtest-x_noinfer"; "runtest-x_chdir"; "runtest-x_arg" ]
+    ~f:(Set.mem reach)
 
 (* gh-ocannl-1207: refusals of the marker grammar and the declaration checks that no control above
    reaches, executed rather than vouched for by a neighbouring control that passes. One dune file

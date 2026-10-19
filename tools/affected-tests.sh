@@ -110,10 +110,12 @@
 #     build input (a script, a config, a golden: what an alias rule's own
 #     `(deps)` name, as `runtest-sweep_harness` names `tools/sweep.sh`).
 #     An alias whose own targets' rules need a printed alias is printed too,
-#     to a fixpoint. Not seen: what an opaque action reads outside its
-#     directory otherwise, and an alias an action itself needs (the ambient
-#     `runtest-env_spelling_gate` most aliases name), which `dune rules` does
-#     not dump in any form it accepts (`@DIR/NAME`, `@@DIR/NAME`).
+#     to a fixpoint: a golden pair's output rule carries the ambient
+#     `runtest-env_spelling_gate` for this reason (gh-ocannl-1378). Not seen:
+#     what an opaque action reads outside its directory otherwise, and an
+#     alias an alias rule's own `(deps)` name (a run-and-diff rule's gate),
+#     which `dune rules` does not dump in any form it accepts (`@DIR/NAME`,
+#     `@@DIR/NAME`).
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,

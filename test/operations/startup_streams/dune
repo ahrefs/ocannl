@@ -52,6 +52,7 @@
 (alias
  (name runtest)
  (deps
+  (alias runtest-env_spelling_gate)
   (alias runtest-stdout_clean)
   (alias runtest-default_stderr)
   (alias runtest-bootstrap_precedence)))
@@ -85,6 +86,7 @@
  ; the startup banner and the unknown-key warning go to, neither of which names a backend.
  (target stdout_clean.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
@@ -103,8 +105,6 @@
 (rule
  (alias runtest-stdout_clean)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff stdout_clean.expected stdout_clean.actual)))
 
@@ -149,6 +149,7 @@
  ; the startup banner and the unknown-key warning go to, neither of which names a backend.
  (target default_stderr.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
@@ -169,8 +170,6 @@
 (rule
  (alias runtest-default_stderr)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff default_stderr.expected default_stderr.actual)))
 
@@ -204,6 +203,7 @@
  ; ocannl-backend: none -- validates the captured startup trace, no backend linked.
  (target bootstrap_precedence.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
@@ -227,7 +227,5 @@
 (rule
  (alias runtest-bootstrap_precedence)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff bootstrap_precedence.expected bootstrap_precedence.actual)))

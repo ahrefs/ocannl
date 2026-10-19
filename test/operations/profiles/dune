@@ -52,6 +52,7 @@
 (alias
  (name runtest)
  (deps
+  (alias runtest-env_spelling_gate)
   (alias runtest-from_config_file)
   (alias runtest-from_cmdline)
   (alias runtest-from_cmdline_approximate)
@@ -94,6 +95,7 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_config_file.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
@@ -120,8 +122,6 @@
 (rule
  (alias runtest-from_config_file)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_config_file.expected from_config_file.actual)))
 
@@ -130,6 +130,7 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_cmdline.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
@@ -156,8 +157,6 @@
 (rule
  (alias runtest-from_cmdline)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_cmdline.expected from_cmdline.actual)))
 
@@ -172,6 +171,7 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_cmdline_approximate.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
@@ -198,8 +198,6 @@
 (rule
  (alias runtest-from_cmdline_approximate)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_cmdline_approximate.expected from_cmdline_approximate.actual)))
 
@@ -208,6 +206,7 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_env.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
@@ -234,8 +233,6 @@
 (rule
  (alias runtest-from_env)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff from_env.expected from_env.actual)))
 
@@ -249,6 +246,7 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target host_profile_flag.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
@@ -275,8 +273,6 @@
 (rule
  (alias runtest-host_profile_flag)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff host_profile_flag.expected host_profile_flag.actual)))
 
@@ -288,6 +284,7 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target explicit_beats_profile.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
@@ -317,8 +314,6 @@
 (rule
  (alias runtest-explicit_beats_profile)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff explicit_beats_profile.expected explicit_beats_profile.actual)))
 
@@ -332,6 +327,7 @@
  ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target empty_cmdline_falls_through.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
@@ -358,8 +354,6 @@
 (rule
  (alias runtest-empty_cmdline_falls_through)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    empty_cmdline_falls_through.expected
