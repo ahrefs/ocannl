@@ -2150,10 +2150,13 @@ digest() {
   # display does not name the signal -- so the line is the evidence, read only
   # at a line's start (a test quoting a child's stderr indents it). A red run
   # carrying it is a wedged device, not a test result; any other code keeps its
-  # own verdict and gets the same lines.
+  # own verdict and gets the same lines. The WHOLE log is searched, unlike the
+  # 10MB tail the rest of the digest reads: the line is the only evidence, and
+  # parallel actions can write far more than that after it. A fixed-string
+  # grep stays cheap at any size; the line-start test is awk's, over its hits.
   local wedged=
   if [ "$rc" != 0 ]; then
-    wedged=$(tail -c 10000000 "$dir/log" 2>/dev/null |
+    wedged=$(LC_ALL=C grep -a -F -- "$device_init_deadline_tag" "$dir/log" 2>/dev/null |
              awk -v tag="$device_init_deadline_tag" 'index($0, tag) == 1' | sort -u | head -n 3)
     [ -z "$wedged" ] || [ "$verdict" != FAIL ] ||
       verdict="WEDGED DEVICE (a GPU device initialization outlived device_init_deadline and died by SIGALRM; not judged)"

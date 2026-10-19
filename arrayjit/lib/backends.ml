@@ -1486,7 +1486,11 @@ let finalize (type dev runner event)
    backends, which [Raise_backend] also builds, touch no driver. A missing backend's stub is guarded
    too, harmlessly: it answers at once. The implementation modules themselves ([Cuda_backend.Impl],
    ...) are below this boundary: code that drives one directly, as the arrayjit backend tests do,
-   wraps its own device opening in {!Utils.with_device_init_deadline}. *)
+   wraps its own device opening in {!Utils.with_device_init_deadline}; and so does a backend's own
+   device discovery reached from outside these entry points, while compiling or linking
+   ([min_compute_capability] on CUDA; [all_rdna_wave32], [hiprtc_target_archs] and the scratch
+   budget on HIP). A region entered from inside another on the same thread runs under the outer
+   one's deadline. *)
 module With_device_init_deadline (Device : Lowered_backend) = struct
   include Device
 

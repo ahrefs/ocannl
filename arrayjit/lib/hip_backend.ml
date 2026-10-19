@@ -305,13 +305,16 @@ end = struct
     || String.is_prefix a.gcn_arch_name ~prefix:"gfx12")
     && a.warp_size = 32
 
+  (* Device discovery a compile can force first: under the device-init deadline like the guarded
+     entry points (gh-ocannl-1281, [Backends.With_device_init_deadline]). *)
   let all_rdna_wave32 =
     lazy
-      (let n = num_devices () in
-       n > 0
-       && Array.for_all
-            (Array.init n ~f:(fun ordinal -> H.Device.get_attributes (H.Device.get ~ordinal)))
-            ~f:tile_mma_eligible)
+      (Utils.with_device_init_deadline ~backend_name:name (fun () ->
+           let n = num_devices () in
+           n > 0
+           && Array.for_all
+                (Array.init n ~f:(fun ordinal -> H.Device.get_attributes (H.Device.get ~ordinal)))
+                ~f:tile_mma_eligible))
 
   (* A directory containing a COMPLETE rocWMMA header tree, if any: [ROCWMMA_PATH] variants, a clone
      under [%LOCALAPPDATA%/rocwmma], or the HIP include tree (rocWMMA installs there on Linux).
@@ -349,9 +352,11 @@ end = struct
      different ordinal. Querying attributes does not switch that current target. The cache uses this
      same set and option selector. *)
   let hiprtc_target_archs () =
-    Array.init (num_devices ()) ~f:(fun ordinal ->
-        (H.Device.get_attributes (H.Device.get ~ordinal)).gcn_arch_name)
-    |> Array.to_list
+    (* Device discovery on every compile: under the device-init deadline (gh-ocannl-1281). *)
+    Utils.with_device_init_deadline ~backend_name:name (fun () ->
+        Array.init (num_devices ()) ~f:(fun ordinal ->
+            (H.Device.get_attributes (H.Device.get ~ordinal)).gcn_arch_name)
+        |> Array.to_list)
 
   let%diagn2_sexp hip_to_code ~name hip_src =
     let name_hip = name ^ ".hip" in
@@ -1255,7 +1260,10 @@ end = struct
                (let attrs = H.Device.get_attributes (H.Device.get ~ordinal) in
                 (attrs, scratch_limit_per_work_item attrs))))
     in
-    fun (device : device) -> Lazy.force (Lazy.force cache).(device.ordinal)
+    fun (device : device) ->
+      (* Discovery a link can force first: under the device-init deadline (gh-ocannl-1281). *)
+      Utils.with_device_init_deadline ~backend_name:name (fun () ->
+          Lazy.force (Lazy.force cache).(device.ordinal))
 
   let validate_scratch_budget ~(device : device) ~name func =
     if Lazy.force hip_scratch_validation then

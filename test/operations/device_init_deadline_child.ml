@@ -35,7 +35,7 @@
    [full-stderr BACKEND]: fd 2 is replaced by a full pipe nobody reads; then a 30 s stall.
 
    [concurrent FIRST SECOND]: a second domain enters FIRST's guarded [num_devices], whose stall is
-   healthy (0.3 s); 0.1 s later this thread enters SECOND's, whose stall is 5 s.
+   healthy (0.3 s); once that stall has begun, this thread enters SECOND's, whose stall is 5 s.
 
    Times are seconds on the monotonic clock, which is system-wide, so the parent can subtract its
    own reading from them. *)
@@ -186,20 +186,24 @@ let () =
       say "survived";
       Unix.close r
   | [ "concurrent"; first; second ] ->
-      (* The first region to take the hook is the healthy one: it returns 0.3 s in, while the
-         second, entered 0.1 s after the first, is the wedged one. *)
-      let calls = Atomic.make 0 in
+      (* The first region to take the hook is the healthy one: it returns 0.3 s in. This thread
+         enters SECOND's region only once that hook has started, i.e. once the other domain holds
+         the region, so SECOND's is the wedged one (5 s) whatever the scheduling. *)
+      let calls = Atomic.make 0 and holding = Atomic.make false in
       Utils.device_init_test_stall :=
         Some
           (fun () ->
             if Atomic.fetch_and_add calls 1 = 0 then (
+              Atomic.set holding true;
               Unix.sleepf 0.3;
               raise Stall_done)
             else stall_for 5.0 ());
       let healthy =
         Stdlib.Domain.spawn (fun () -> try call_entry first "num_devices" with Stall_done -> ())
       in
-      Unix.sleepf 0.1;
+      while not (Atomic.get holding) do
+        Unix.sleepf 0.01
+      done;
       (try call_entry second "num_devices" with Stall_done -> ());
       Stdlib.Domain.join healthy;
       say "survived"

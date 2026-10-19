@@ -2068,6 +2068,12 @@ case $REPEAT_TEST_MODE in
     printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
     printf 'OCANNL device_init_deadline: hip device initialization did not finish within 120s; the device or driver is likely wedged. Dying by SIGALRM.\n' >&2
     exit 1 ;;
+  # ...and the same line followed by more output than the digest's 10MB scan
+  # window: parallel actions can bury it.
+  wedged_long)
+    printf 'OCANNL device_init_deadline: hip device initialization did not finish within 120s; the device or driver is likely wedged. Dying by SIGALRM.\n' >&2
+    perl -e 'my $l = ("y" x 99) . "\n"; print STDERR $l for 1 .. 110000'
+    exit 1 ;;
   wedged_quoted)
     printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
     printf '  child | OCANNL device_init_deadline: hip device initialization did not finish within 1s\n' >&2
@@ -3618,7 +3624,8 @@ fi # leg 36
 
 # Leg 84 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
 # line a GPU backend's device-init deadline writes before its process dies by
-# SIGALRM is WEDGED DEVICE, keeping dune's 1 and quoting the line; the same
+# SIGALRM is WEDGED DEVICE, keeping dune's 1 and quoting the line -- also when
+# 11MB of output follows it, past the digest's 10MB tail; the same
 # line indented (a test quoting a child's stderr) leaves the run an ordinary
 # FAIL.
 if harness_leg '84: a device-init deadline death is WEDGED DEVICE #digest'; then
@@ -3629,6 +3636,13 @@ case $argv_rc:$argv_out in
   1:*"verdict: WEDGED DEVICE ("*"(exit 1)"*"wedged device (the device_init_deadline's own line):"*"  OCANNL device_init_deadline: hip device initialization"*"journalctl -k"*) ;;
   *) wedged_detail="wedged_init: exit $argv_rc (want 1) or verdict/quote missing: $argv_out" ;;
 esac
+if [ -z "$wedged_detail" ]; then
+  argv_mode=wedged_long argv_probe wedged-long run build @cheap
+  case $argv_rc:$argv_out in
+    1:*"verdict: WEDGED DEVICE ("*"  OCANNL device_init_deadline: hip device initialization"*) ;;
+    *) wedged_detail="wedged_long: the line before 11MB of output was missed: exit $argv_rc: $(printf '%s' "$argv_out" | head -c 2000)" ;;
+  esac
+fi
 if [ -z "$wedged_detail" ]; then
   argv_mode=wedged_quoted argv_probe wedged-quoted run build @cheap
   case $argv_rc:$argv_out in
