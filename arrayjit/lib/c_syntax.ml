@@ -139,7 +139,7 @@ type mma_rendering =
           gh-476 sweep must be able to pin which of the two load paths a timing measured. *)
   | Mma_register_tiled
   | Mma_scalar_fallback
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, compare, equal]
 
 let mma_census_enabled =
   let key : bool ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref false) in
@@ -174,7 +174,7 @@ type tensorization =
   | Scalar_fallback
       (** [Tile_mma] statements were emitted and {e every} one of them declined to the lane-0 scalar
           fallback. A timing labeled tensorized in this state measured scalar code. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 
 let tensorization_name = function
   | Not_requested -> "not-requested"
@@ -290,7 +290,7 @@ let with_census f =
 (** Why a site's width decision declined a base the peel reached: {!Low_level.accum_skip}, the
     shared decision's own reasons (gh-ocannl-1151), re-exported for the census. *)
 type peel_skip = Low_level.accum_skip = Skip_debug_logging | Skip_dead_level | Skip_accum_pinned
-[@@deriving sexp, equal, compare]
+[@@deriving sexp_of, equal, compare]
 
 type peel_verdict = {
   levels : int;
@@ -300,7 +300,7 @@ type peel_verdict = {
   guards : Low_level.peel_guard_verdict list;
       (** The verdict of each [If] among them, outermost first. *)
 }
-[@@deriving sexp, equal, compare]
+[@@deriving sexp_of, equal, compare]
 (** What a localizing site DECIDED (gh-ocannl-733). A named record rather than an inline one so a
     consumer can hold one: comparing the verdicts of two compiles is the whole use. *)
 
@@ -318,7 +318,7 @@ type peel_site =
   | Peel_not_attempted of peel_skip
       (** The peel reached a base, and localization was not attempted, for this reason. Every
           rendering of the level then keeps the accumulator at storage width (gh-ocannl-754). *)
-[@@deriving sexp, equal, compare]
+[@@deriving sexp_of, equal, compare]
 
 let peel_census_enabled =
   let key : bool ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref false) in
@@ -469,7 +469,7 @@ type volatility_site =
   | Volatile_rmw_reads of string
       (** A device-memory read-modify-write at an address invariant across an enclosing serial loop,
           whose device reads use expression-level [volatile] pointer casts. *)
-[@@deriving sexp, equal, compare]
+[@@deriving sexp_of, equal]
 
 type volatility_summary = {
   entries : (string * volatility_site) list;

@@ -27,7 +27,7 @@ type settings = {
           in intent from element indexing within a single tensor, though both currently follow it.
       *)
 }
-[@@deriving sexp]
+[@@deriving sexp_of]
 
 let settings =
   {
@@ -2819,8 +2819,8 @@ end
 type requirement =
   | Skip
   | Required
-  | Optional of { callback_if_missing : unit -> unit [@sexp.opaque] [@compare.ignore] }
-[@@deriving compare, sexp]
+  | Optional of { callback_if_missing : unit -> unit [@sexp.opaque] }
+[@@deriving sexp_of]
 
 let default_indent = ref 2
 

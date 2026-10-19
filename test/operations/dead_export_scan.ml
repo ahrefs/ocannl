@@ -50,43 +50,20 @@ module Dune = Test_utils.Dune_stanza_scan
 let exempt_zero_reference_exports =
   [
     "Backend_impl.next_global_device_id";
-    "Backend_intf.compare_hardware_limits";
-    "Backend_intf.compare_mma_capability";
-    "Backend_intf.compare_mma_input_format";
-    "Backend_intf.compare_mma_staged_layout";
-    "Backend_intf.equal_hardware_limits";
-    "Backend_intf.equal_mma_staged_layout";
-    "Backend_intf.hardware_limits_of_sexp";
-    "Backend_intf.mma_capability_of_sexp";
-    "Backend_intf.mma_input_format_of_sexp";
-    "Backend_intf.mma_staged_layout_of_sexp";
     "C_syntax.c_float_literal";
     "C_syntax.c_keywords";
     "C_syntax.c_stdlib_idents";
     "C_syntax.c_stdlib_macros";
-    "C_syntax.compare_mma_rendering";
-    "C_syntax.compare_peel_site";
-    "C_syntax.compare_peel_skip";
-    "C_syntax.compare_peel_verdict";
-    "C_syntax.compare_tensorization";
-    "C_syntax.compare_volatility_site";
     "C_syntax.empty_mma_summary";
     "C_syntax.empty_peel_summary";
     "C_syntax.empty_volatility_summary";
-    "C_syntax.equal_peel_skip";
     "C_syntax.extract_idents";
     "C_syntax.is_f32_tie";
     "C_syntax.log_declines";
     "C_syntax.mma_census_enabled";
-    "C_syntax.mma_rendering_of_sexp";
     "C_syntax.op_syntax_idents";
-    "C_syntax.peel_site_of_sexp";
-    "C_syntax.peel_skip_of_sexp";
-    "C_syntax.peel_verdict_of_sexp";
     "C_syntax.summarize_peel_census";
     "C_syntax.summarize_volatility_census";
-    "C_syntax.tensorization_of_sexp";
-    "C_syntax.volatility_site_of_sexp";
     "Lexer.buffered_token";
     "Lexer.multichar_token";
     "Lexer.single_char_token";
@@ -183,19 +160,9 @@ let exempt_zero_reference_exports =
     "Operation.uniform_at1";
     "Operation.wrap";
     "Ops.bfloat16_to_uint4x32";
-    "Ops.binop_conditionality_of_sexp";
-    "Ops.binop_of_sexp";
     "Ops.byte_to_uint4x32";
     "Ops.c_ptr_to_string";
-    "Ops.compare_binop_conditionality";
-    "Ops.compare_op";
-    "Ops.compare_ternop_conditionality";
-    "Ops.compare_voidptr";
     "Ops.double_to_uint4x32";
-    "Ops.equal_voidptr";
-    "Ops.equal_binop_conditionality";
-    "Ops.equal_op";
-    "Ops.equal_ternop_conditionality";
     "Ops.fp8_to_uint4x32";
     "Ops.half_to_uint4x32";
     "Ops.hum_typ_of_prec";
@@ -203,35 +170,12 @@ let exempt_zero_reference_exports =
     "Ops.interpret_ternop";
     "Ops.is_assign_op";
     "Ops.is_binop_infix";
-    "Ops.op_of_sexp";
     "Ops.precision_to_string";
     "Ops.ptr_to_string_hum";
     "Ops.single_to_uint4x32";
-    "Ops.ternop_conditionality_of_sexp";
-    "Ops.ternop_of_sexp";
     "Ops.uint16_to_uint4x32";
     "Ops.uint32_to_uint4x32";
     "Ops.uint64_to_uint4x32";
-    "Ops.unop_of_sexp";
-    "Ops.vec_unop_of_sexp";
-    "Ppx_cd.args_for";
-    "Ppx_cd.assignment";
-    "Ppx_cd.compare_slots";
-    "Ppx_cd.empty_comp";
-    "Ppx_cd.empty_tns";
-    "Ppx_cd.equal_projections_slot";
-    "Ppx_cd.guess_pun_hint";
-    "Ppx_cd.handle_cases";
-    "Ppx_cd.is_unknown";
-    "Ppx_cd.make_vb";
-    "Ppx_cd.prod_slot_tensor_dims";
-    "Ppx_cd.project_p_dims";
-    "Ppx_cd.project_p_slot";
-    "Ppx_cd.reduce_res_vbs";
-    "Ppx_cd.setup_array";
-    "Ppx_cd.slot_permutation_suffix";
-    "Ppx_cd.slot_to_string";
-    "Ppx_cd.translate";
     "Ppx_extend_dsls.transform_dsl_binding";
     "Ppx_ocannl.rules";
     "Ppx_op.dsl_fn";
@@ -255,14 +199,9 @@ let exempt_zero_reference_exports =
     "Ppx_shared.string_of_pat";
     "Ppx_shared.translate_str";
     "Schedulers.cpu_mma_limits";
-    "Tnode.bounds_state_of_sexp";
     "Tnode.bounds_scan_worthwhile";
     "Tnode.collapse_consecutive";
     "Tnode.current_namespace";
-    "Tnode.compare_memory_mode";
-    "Tnode.delayed_prec_of_sexp";
-    "Tnode.equal_bounds_state";
-    "Tnode.equal_delayed_prec";
     "Tnode.fresh_uid";
     "Tnode.hash_fold_t";
     "Tnode.hash_t";
@@ -271,7 +210,6 @@ let exempt_zero_reference_exports =
     "Tnode.is_alphanum_";
     "Tnode.known_not_materialized";
     "Tnode.log_accessible_headers";
-    "Tnode.memory_mode_of_sexp";
     "Tnode.next_uid";
     "Tnode.prec_of_dalayed";
     "Tnode.scan_host_bounds";
@@ -280,7 +218,6 @@ let exempt_zero_reference_exports =
     "Utils.accessed_global_args";
     "Utils.artifacts_subdir";
     "Utils.captured_log_processors";
-    "Utils.compare_requirement";
     "Utils.config_table_of_lines";
     (* gh-ocannl-604: bootstrap resolution and the sourced values carried from startup to its
        deferred trace are intentionally internal, replacing the old unsourced bootstrap reader.
@@ -334,11 +271,9 @@ let exempt_zero_reference_exports =
     "Utils.performance_profile_payload";
     "Utils.profile_ineligible_keys";
     "Utils.profile_lookup";
-    "Utils.requirement_of_sexp";
     "Utils.reproducible_profile_payload";
     "Utils.same_env_name";
     "Utils.sexp_deep_mem";
-    "Utils.settings_of_sexp";
     "Utils.split_with_seps";
     "Utils.str_nonempty";
     (* Not pre-existing (gh-ocannl-1335). The artifact-naming layer's internals, consumed inside
@@ -402,20 +337,18 @@ let exempt_zero_reference_exports =
        [[@@deriving hash]] over [int Utils.safe_lazy] calls it, and this census does not model the
        [hash] deriving's references. *)
     "Datatypes.hash_fold_safe_lazy";
-    (* Derived for types [Einsum_parser] republishes through [include module type of Einsum_types];
-       no caller compares or parses them. Narrowing the derivings would narrow that interface
-       too. *)
-    "Einsum_types.axis_map_of_sexp";
-    "Einsum_types.axis_spec_of_sexp";
-    "Einsum_types.compare_axis_map";
-    "Einsum_types.compare_axis_spec";
-    "Einsum_types.compare_conv_spec";
-    "Einsum_types.compare_parsed_axis_labels";
-    "Einsum_types.compare_use_padding_spec";
-    "Einsum_types.conv_spec_of_sexp";
-    "Einsum_types.parsed_axis_labels_of_sexp";
-    "Einsum_types.__use_padding_spec_of_sexp__";
-    "Einsum_types.use_padding_spec_of_sexp";
+    (* gh-ocannl-915: the derived values its triage kept. None of their derivings is removable:
+       [C_syntax.compare_mma_rendering] and [compare_peel_site] sort the census summaries inside
+       C_syntax itself, and the rest are required by a sibling type's deriving in the same module --
+       [Backend_intf.equal_mma_staged_layout] by [equal_mma_capability], [compare_peel_skip] and
+       [compare_peel_verdict] by [compare_peel_site], [equal_peel_skip] by [equal_peel_site]. Hiding
+       them is the job of an interface for C_syntax or Backend_intf. *)
+    "Backend_intf.equal_mma_staged_layout";
+    "C_syntax.compare_mma_rendering";
+    "C_syntax.compare_peel_site";
+    "C_syntax.compare_peel_skip";
+    "C_syntax.compare_peel_verdict";
+    "C_syntax.equal_peel_skip";
   ]
 
 (* gh-ocannl-1009: the type census, filled from its first run. Every entry is a live type the

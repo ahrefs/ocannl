@@ -4,11 +4,11 @@
 
 open Base
 
-type use_padding_spec = [ `True | `False | `Unspecified ] [@@deriving compare, sexp]
+type use_padding_spec = [ `True | `False | `Unspecified ] [@@deriving sexp_of]
 (** Use_padding specification for convolutions. *)
 
 type conv_spec = { dilation : string; kernel_label : string; use_padding : use_padding_spec }
-[@@deriving compare, sexp]
+[@@deriving sexp_of]
 (** Convolution component for affine axis specifications. Note: [dilation] is a string because it
     can be an identifier at parse time, and is resolved to an int at runtime. *)
 
@@ -28,7 +28,7 @@ type axis_spec =
   | Concat_spec of string list
       (** Concatenation of multiple axis labels into a single axis. Corresponds to [Row.Concat] in
           shape inference. *)
-[@@deriving compare, sexp]
+[@@deriving sexp_of]
 
 (** An index pointing to any of a shape's axes, including the kind of the axis
     ([Batch, Input, Output]) and the position (which is counted from the end to facilitate
@@ -58,7 +58,7 @@ module AxisKey = struct
   include Comparator.Make (T)
 end
 
-type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
+type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving sexp_of]
 
 type parsed_axis_labels = {
   bcast_batch : string option;
@@ -74,7 +74,7 @@ type parsed_axis_labels = {
   given_beg_output : axis_spec list;
   labels : axis_spec axis_map;
 }
-[@@deriving compare, sexp, fields]
+[@@deriving sexp_of, fields]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent
     whether additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for
     broadcasting). The string can be used to identify a row variable; parsing ["..."] yields the
