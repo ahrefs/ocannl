@@ -1473,10 +1473,25 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
           && Option.exists lhs ~f:(fun (_, w_idcs) -> same_position ~statics_set w_idcs indices)
         in
         if not exempt then Hash_set.add read_seen ptr
-    | Get_dynamic { dyn_value = v, _; _ } ->
-        (* gh-343: [Get_dynamic] is produced after this tracing pass, so this arm is defensive; the
-           dynamic index sub-expression is still traversed for completeness. *)
-        loop v
+    | Get_dynamic { tn = ptr; idcs; dyn_axis = _; dyn_value = v, _ } ->
+        (* gh-343: the pipeline mints [Get_dynamic] after this pass; hand-built IR handed to
+           [optimize] reaches it (test/operations/dynamic_axis_coverage). A gather is a read of its
+           table like a static [Get] (gh-ocannl-1327): it counts for [read_by_other] and the
+           setter's fan-in sink — mirroring the guard's [reads_of_scalar] — and it is a first touch,
+           so a later constant [Set] or [Zero_out] is not taken for the table's first touch. No
+           read-modify-write exemption: the runtime row is not provably the write's cell, as
+           [reads_covered_query] rules for a gather under a static write (gh-ocannl-1244), and the
+           one write that could share it, [Set_dynamic], never reaches this pass. The index is
+           walked first: it is evaluated before the load (a [Local_scope] in it hoists ahead of the
+           statement), so a touch inside it precedes the gather's in program order. *)
+        check_no_concat idcs;
+        loop v;
+        let traced : traced_array = get_node traced_store ptr in
+        if not (Option.exists lhs ~f:(fun (tn, _) -> Tn.equal ptr tn)) then
+          traced.read_by_other <- true;
+        Option.iter reads ~f:(fun (self, _stmt, cur) ->
+            if not (Tn.equal ptr self) then Hash_set.add cur ptr);
+        Hash_set.add read_seen ptr
     | Local_scope { body; _ } ->
         (* The body hoists to statement level, outside any conditional arm of the enclosing
            expression: its reads record into the statement sink unconditionally. *)

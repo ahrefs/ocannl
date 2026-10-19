@@ -2362,7 +2362,10 @@
 ; verdict legs over gathers and scatters, and the issue's gather-under-a-fixed-row-Set executed.
 ; gh-ocannl-1245: a deferred packed uniform spliced into a later routine as a lane-extract gather of
 ; a counter that routine writes first -- reconcile_traced_store's re-check keeps the counter out of
-; read-before-write; executed against a twin with the uniform materialized.
+; read-before-write; executed against a twin with the uniform materialized. gh-ocannl-1327: a
+; gather is a first touch of its table -- a table gathered before a constant Set or a Zero_out stays
+; read-before-write, neither a scalar constexpr nor zero-initialized by code; executed beside a
+; materialized-table twin.
 
 (test
  (name dynamic_axis_coverage)

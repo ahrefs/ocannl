@@ -35,7 +35,10 @@
    committed non-virtual at the read, and [reconcile_traced_store] promotes every
    exemption-dependent writer to read-before-write over the settled placements anyway. Leg 11
    executes the issue's shape, so the table's classification is pinned by the values the gather
-   reads. *)
+   reads.
+
+   gh-ocannl-1327 adds the structural facts pass's side: legs 13-14 gather a table BEFORE the
+   routine writes it, and the gather must count as the table's first touch (see the legs). *)
 
 open Base
 module LL = Ir.Low_level
@@ -336,3 +339,59 @@ let () =
       Float.(v >= 0. && v < 1.));
   pf "%s: the twin with the uniform materialized in B reads the same values" name
     (Ll_test.same got got_mat)
+
+(* Legs 13-14 (gh-ocannl-1327): a gather is a first touch. [trace_node_facts] records each node's
+   first-touch facts in program order — whether a read precedes its first write — and a table
+   gathered BEFORE it is written must read as read before written, exactly as a static read would,
+   or the write that follows is taken for the node's first touch: a constant [Set] makes a scalar
+   table a scalar constexpr (inlined as its constant at every read, the earlier gather included), a
+   [Zero_out] makes any table zero-initialized by code. Each leg gathers a table in the routine's
+   first statement and writes it in the second, so the gather can only read the entry values seeded
+   into the table — never the constant [Set] writes, nor the zeros. The traced facts are asserted
+   directly, and the gather's values executed beside a twin with the table forced materialized. *)
+let first_touch_leg ~name ~dims ~write ~row ~expected =
+  let tbl = node ~dims (name ^ "_tbl") in
+  let idx = node ~dims:[| 1 |] (name ^ "_idx") in
+  let cols = dims.(1) in
+  let out = node ~dims:[| cols |] (name ^ "_out") in
+  Ll_test.materialize idx;
+  Ll_test.materialize out;
+  let e = Ll_test.sym () in
+  let prog =
+    Ll_test.seq
+      (Ll_test.loop_n e cols
+         (Ll_test.set out [| Ll_test.iter e |] (gather ~tbl ~idx (Ll_test.iter e))))
+      (write tbl)
+  in
+  let o = Ll_test.optimize ~materialized:[ idx; out ] ~name prog in
+  let traced = Hashtbl.find_exn o.LL.traced_store tbl in
+  pf "%s: the gather counts as a read of the table by another node" name traced.LL.read_by_other;
+  pf "%s: the table is not a scalar constexpr" name (not traced.LL.is_scalar_constexpr);
+  pf "%s: the table is not zero-initialized by code" name (not traced.LL.zero_initialized_by_code);
+  pf "%s: the table stays read-before-write" name (read_before_write o tbl);
+  pf "%s: the table stays an input of the routine" name (is_input o tbl);
+  let n = Array.length expected in
+  let seed =
+    [
+      (tbl, Array.init (dims.(0) * cols) ~f:entry);
+      (idx, [| Float.of_int row |]);
+      (out, Ll_test.blank n);
+    ]
+  in
+  let got = Ll_test.execute ~name o ~seed ~read:[ out ] in
+  pf "%s: the gather reads the entry values, not the later write" name
+    (Ll_test.same got [ expected ]);
+  let name_mat = name ^ "_mat" in
+  let o_mat = Ll_test.optimize ~materialized:[ idx; out; tbl ] ~name:name_mat prog in
+  let got_mat = Ll_test.execute ~name:name_mat o_mat ~seed ~read:[ out ] in
+  pf "%s: the materialized-table twin reads the same values" name (Ll_test.same got got_mat)
+
+let () =
+  (* Leg 13: a one-cell table gathered, then set to a constant — the scalar-constexpr shape. *)
+  first_touch_leg ~name:"ft_constexpr" ~dims:[| 1; 1 |]
+    ~write:(fun tbl -> Ll_test.set tbl [| Ll_test.fixed 0; Ll_test.fixed 0 |] (Ll_test.c 5.))
+    ~row:0
+    ~expected:[| entry 0 |];
+  (* Leg 14: a [3; 2] table's row 2 (flat cells 4-5) gathered, then the table zeroed. *)
+  first_touch_leg ~name:"ft_zero_out" ~dims:[| 3; 2 |] ~write:Ll_test.zero ~row:2
+    ~expected:[| entry 4; entry 5 |]
