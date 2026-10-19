@@ -11,10 +11,11 @@
 # #344); every other box has as many tokens as slots, where they do not bind. The sweep took none,
 # so a sweep unit could be the third batch. Two answers live here:
 #
-#   RECORD, every remote GPU unit: which slot files are held, by which process, read from the box's
-#     own flock table at the unit's start (`opened`) and after its suite (`closed`), so a launch OOM
-#     can be attributed to contention rather than diagnosed by hand. One JSON line per reading in
-#     the unit's `<log stem>.gpu-tokens` sidecar, in the vocabulary of the fleet's co-tenant records
+#   RECORD, every remote GPU unit: which slot files are held, by which process, as the box's own
+#     `fleet-worker.sh execution slot --holders` reads them (lukstafi/ludics-lite#639; gh-ocannl-1417)
+#     at the unit's start (`opened`) and after its suite (`closed`), so a launch OOM can be
+#     attributed to contention rather than diagnosed by hand. One JSON line per reading in the
+#     unit's `<log stem>.gpu-tokens` sidecar, in the vocabulary of the fleet's co-tenant records
 #     (lukstafi/ludics-lite#566: `box`, `event`, `at`, and `pid`/`user`/`command` per process), so a
 #     reader can line the two up. A `reservations` line beside them carries the fleet registry's
 #     active reservations on the box (`execution list --active`, read before the unit): those name
@@ -26,21 +27,32 @@
 #     batches and the fleet's GPU integration loop (lukstafi/ludics-lite#615) wait for the same two
 #     tokens, so the sweep competes for them like any other batch, neither ahead nor behind.
 #
-# THE READER'S BOUNDARY (a fail-closed allowlist of what it accepts):
+# THE READER'S BOUNDARY (a fail-closed allowlist of what it accepts). The flocks are the fleet's to
+# read -- which slot file is held, by which pid, from the kernel's lock table -- and this reader
+# reads none of them itself:
 #   - the box's fleet name, slots and tokens come only from a line of exactly the form
 #     `EXECUTION SLOT PROBE <box> <slots> <tokens>` (anything after a further space ignored), from the
 #     first fleet-worker.sh candidate that answers `execution slot --probe`; any other answer, or no
 #     candidate, is `status: unread` and nothing is counted;
-#   - a holder is a line of the kernel's flock table (`/proc/locks`, or OCANNL_TOOL_PROC_LOCKS on the
-#     box, the harness's stand-in) of exactly the form `<n>: FLOCK <ADVISORY|MANDATORY> WRITE <pid>
-#     <maj hex>:<min hex>:<inode> ...` whose device and inode are a slot file's
-#     (`$FLEET_SLOT_STATE/<box>/slot.<i>`, its default under $HOME); a blocked waiter (`->`), a
-#     read lock, a POSIX lock and every other line are not holders;
-#   - a holder's kind is `cpu` when its slot is past the tokens (only a `--cpu` batch can hold one
-#     there) or when its argv says `--cpu` before the first `--`, and `gpu` otherwise -- the fleet's
-#     own fail-closed rule, under which an undeclared batch holds the GPU.
-# A box without /proc/locks (macOS) cannot be read, so the local metal unit records nothing, and a
-# token taken and released between two readings is not seen.
+#   - the holders come only from that same fleet-worker.sh's `execution slot --holders`, exiting 0
+#     with nothing but JSON objects, one per line, each naming the probe's box, an `event` of `held`
+#     or `untested`, a positive `slot` and a `kind` of `gpu` or `cpu`; a non-zero exit (a skills
+#     checkout from before ludics-lite#639 exits 2) or any other line is `status: unread`, so a
+#     reading that did not happen never reads as a box with no holders. Each holder is kept with the
+#     fleet's own fields (`slot`, `slots`, `kind`, `pid`, `user`, `command`, `cwd`, `source`,
+#     `unknown`, `event`) as the fleet wrote them;
+#   - a holder HOLDS THE GPU (`gpu: true`, counted in `gpu_holders`) when the fleet lists it `held`
+#     in a slot of kind `gpu`, unless its command says `--cpu` before the first `--`. The fleet's
+#     `kind` is the SLOT's (every slot of a box whose tokens do not bind is `gpu`, and a `--cpu`
+#     batch that fell back into a token slot is listed `gpu`, which is what it holds); a declared CPU
+#     batch holds no device memory, and a launch OOM is what the count attributes, so the batch's
+#     declaration overrides the slot's kind here -- the fleet's own fail-closed rule, under which an
+#     undeclared batch, or one whose command is unknown, holds the GPU. An `untested` slot (its file
+#     could not be opened to test) is kept and not counted: nothing says it is held.
+# Where the lock table names no holder of a held slot (no /proc/locks, as on macOS; a btrfs
+# subvolume; a holder outside the pid namespace), the fleet lists it with `pid` null and says why in
+# `unknown`: it is counted, and reported as `pid ?`. A token taken and released between two
+# readings is not seen.
 
 # How long a unit waits for a token before it is a `skip` (OCANNL_TOOL_SWEEP_TOKEN_WAIT overrides).
 # A worker's cuda batch on rog runs 15-40 minutes, and the daily sweep starts at dawn, when the
@@ -48,55 +60,40 @@
 GPU_TOKEN_WAIT_DEFAULT=1800
 
 # The reader, run on the box with perl (Ubuntu's, which ships JSON::PP): one JSON line on stdout.
-# Arguments: event, the fleet-worker.sh that answered (empty for none), its probe line, the flock
-# table's path and the slot state directory.
+# Arguments: event, the fleet-worker.sh that answered (empty for none), its probe line, and the
+# exit status and output of its `execution slot --holders`.
 gpu_tokens_reader='
   use strict;
   use warnings;
   use JSON::PP ();
   use POSIX ();
-  my ($event, $fw, $probe, $locks, $state) = @ARGV;
+  my ($event, $fw, $probe, $holders_rc, $holders) = @ARGV;
   my %r = (event => $event, at => POSIX::strftime("%Y-%m-%dT%H:%M:%S+00:00", gmtime));
-  my $out = sub { print JSON::PP->new->canonical->encode(\%r), "\n"; exit 0 };
+  my $json = JSON::PP->new->canonical;
+  my $out = sub { print $json->encode(\%r), "\n"; exit 0 };
   my $unread = sub { $r{status} = "unread"; $r{detail} = shift; $out->() };
   $unread->("no fleet-worker.sh answered \x27execution slot --probe\x27") if $fw eq "";
   my ($box, $slots, $tokens) = $probe =~ /^EXECUTION SLOT PROBE (\S+) ([1-9][0-9]*) ([1-9][0-9]*)(?: |$)/;
   $unread->("the probe answered: " . substr($probe, 0, 200)) unless defined $tokens;
   @r{qw(box slots gpu_tokens fleet_worker)} = ($box, 0 + $slots, 0 + $tokens, $fw);
-  open(my $l, "<", $locks) or $unread->("cannot read $locks: $!");
-  my %held;
-  while (my $line = <$l>) {
-    next unless $line =~ /^\d+:\s+FLOCK\s+(?:ADVISORY|MANDATORY)\s+WRITE\s+(\d+)\s+([0-9a-f]+):([0-9a-f]+):(\d+)\s/i;
-    push @{ $held{ hex($2) . ":" . hex($3) . ":" . $4 } }, 0 + $1;
-  }
-  close $l;
+  $unread->("execution slot --holders exited $holders_rc: " . substr($holders, 0, 200))
+    unless $holders_rc eq "0";
   my @holders;
-  for my $i (1 .. $slots) {
-    my @st = stat "$state/$box/slot.$i" or next;
-    my $d = $st[0];
-    # st_dev as glibc encodes it, back into the major:minor the kernel prints.
-    my $key = ((($d >> 8) & 0xfff) | (($d >> 32) & ~0xfff)) . ":" . (($d & 0xff) | (($d >> 12) & ~0xff))
-      . ":" . $st[1];
-    for my $pid (@{ $held{$key} || [] }) {
-      my @argv;
-      if (open(my $c, "<", "/proc/$pid/cmdline")) { local $/; @argv = split /\0/, (<$c> // "") }
-      my $args = qx{ps -o args= -p $pid 2>/dev/null};
-      chomp $args;
-      my $user = qx{ps -o user= -p $pid 2>/dev/null};
-      $user =~ s/\s+//g;
-      @argv = split " ", $args unless @argv;
-      my $cpu = $tokens < $slots && $i > $tokens;
-      for (@argv) { last if $_ eq "--"; $cpu = 1 if $_ eq "--cpu" }
-      my %h = (slot => $i, kind => $cpu ? "cpu" : "gpu", pid => $pid, user => $user,
-        command => substr($args, 0, 300));
-      my $cwd = readlink "/proc/$pid/cwd";
-      $h{cwd} = $cwd if defined $cwd;
-      push @holders, \%h;
-    }
+  for my $line (split /\n/, $holders) {
+    my $h = eval { JSON::PP->new->decode($line) };
+    $unread->("execution slot --holders answered: " . substr($line, 0, 200))
+      unless ref $h eq "HASH" && !ref $h->{box} && ($h->{box} // "") eq $box
+        && !ref $h->{event} && ($h->{event} // "") =~ /\A(?:held|untested)\z/
+        && !ref $h->{slot} && ($h->{slot} // "") =~ /\A[1-9][0-9]*\z/
+        && !ref $h->{kind} && ($h->{kind} // "") =~ /\A(?:gpu|cpu)\z/;
+    my $gpu = $h->{event} eq "held" && $h->{kind} eq "gpu";
+    for (split " ", (ref $h->{command} ? "" : $h->{command} // "")) { last if $_ eq "--"; $gpu = 0 if $_ eq "--cpu" }
+    $h->{gpu} = $gpu ? JSON::PP::true : JSON::PP::false;
+    push @holders, $h;
   }
   $r{status} = "read";
   $r{token_holders} = \@holders;
-  $r{gpu_holders} = scalar grep { $_->{kind} eq "gpu" } @holders;
+  $r{gpu_holders} = scalar grep { $_->{gpu} } @holders;
   $out->();
 '
 
@@ -105,16 +102,17 @@ gpu_tokens_sidecar() { # log -> its readings' file
 }
 
 # The reading as shell text for the box: the fleet-worker.sh candidates (absolute paths on the box)
-# are asked in turn, as tools/fleet-worker-candidates.sh asks them here.
+# are asked in turn, as tools/fleet-worker-candidates.sh asks them here, and the one that answered
+# the probe is asked for the holders. Its stderr goes into the answer the reader checks: a warning
+# there is an answer that is not a list of holders, and reads as `unread`, never as no holders.
 gpu_tokens_cmd() { # event candidate...
   local event=$1 c cands=
   shift
   for c; do cands="$cands $(sq "$c")"; done
   printf 'fw=; probe=; for c in%s; do [ -x "$c" ] || continue; ' "$cands"
   printf 'probe=$("$c" execution slot --probe 2>/dev/null </dev/null) || continue; fw=$c; break; done; '
-  printf 'exec perl -e %s -- %s "$fw" "$probe" "${OCANNL_TOOL_PROC_LOCKS:-/proc/locks}" ' \
-    "$(sq "$gpu_tokens_reader")" "$(sq "$event")"
-  printf '"${FLEET_SLOT_STATE:-$HOME/.local/state/fleet-execution-slots}"'
+  printf 'holders=; hrc=0; [ -z "$fw" ] || { holders=$("$fw" execution slot --holders 2>&1 </dev/null); hrc=$?; }; '
+  printf 'exec perl -e %s -- %s "$fw" "$probe" "$hrc" "$holders"' "$(sq "$gpu_tokens_reader")" "$(sq "$event")"
 }
 
 # Append one reading to a sidecar: the box's answer when it is one JSON object on one line, else an
@@ -173,9 +171,9 @@ gpu_tokens_summary() { # form sidecar
         : "gpu tokens: no other batch held the GPU\n";
     } elsif ($form eq "report") {
       for my $r (grep { $known->($_) && $_->{gpu_holders} > 0 } @r) {
-        my @h = map { sprintf "slot %d pid %d%s%s: %s", $_->{slot}, $_->{pid},
-            $_->{user} ne "" ? " ($_->{user})" : "", defined $_->{cwd} ? " in $_->{cwd}" : "",
-            substr($_->{command}, 0, 120) } grep { $_->{kind} eq "gpu" } @{ $r->{token_holders} };
+        my @h = map { sprintf "slot %d pid %s%s%s: %s", $_->{slot}, $_->{pid} // "?",
+            ($_->{user} // "") ne "" ? " ($_->{user})" : "", defined $_->{cwd} ? " in $_->{cwd}" : "",
+            substr($_->{command} // "(unknown)", 0, 120) } grep { $_->{gpu} } @{ $r->{token_holders} };
         printf "gpu tokens: %d of %d held by other batches at %s on %s -- %s\n", $r->{gpu_holders},
           $r->{gpu_tokens}, $r->{event}, $r->{box}, join("; ", @h);
       }

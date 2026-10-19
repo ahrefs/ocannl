@@ -125,22 +125,29 @@ LOG
 }
 
 # The GPU tokens' reader, summaries and take (tools/gpu-tokens.sh, gh-ocannl-1177), against a box
-# that is this host: slot files under a fixture slot state, real flocks on them held by fixture
-# batches, and a flock table in the kernel's format for those files -- plus, where the host has
-# one, the kernel's own /proc/locks, which pins the device encoding the fixture table restates.
+# that is this host. The reading is the box's own `fleet-worker.sh execution slot --holders`
+# (gh-ocannl-1417), which a fixture fleet-worker.sh answers here with lines in the fleet's format
+# (ludics-lite's holders.py, whose own tests hold that format to the kernel's flock table); the take
+# is real flocks on fixture slot files, held by fixture batches.
 tokens_fixture() {
   . "$TOOLS/gpu-tokens.sh"
   . "$TOOLS/sweep-supervisor.sh"
-  local state=$TMP/slot-state dir fw table gpu_pid cpu_pid past_pid rc out
+  local state=$TMP/slot-state dir fw gpu_pid holder_pid rc
   dir=$state/rogfix
   mkdir -p "$dir"
   fw=$TMP/fleet-worker.sh
-  # The box's fleet-worker.sh: four slots, two tokens; a take is a real flock on the first free
+  # The box's fleet-worker.sh: four slots, two tokens; `--holders` answers FAKE_HOLDERS (a file) and
+  # FAKE_HOLDERS_ERR on stderr, exiting FAKE_HOLDERS_RC; a take is a real flock on the first free
   # token slot, inherited by the command it execs, or the real refusal. FAKE_SLOT picks a refusal.
   cat >"$fw" <<'FW'
 #!/bin/sh
 case $* in
   'execution slot --probe') echo 'EXECUTION SLOT PROBE rogfix 4 2' ;;
+  'execution slot --holders')
+    [ -z "${FAKE_HOLDERS_ERR:-}" ] || echo "$FAKE_HOLDERS_ERR" >&2
+    [ -z "${FAKE_HOLDERS:-}" ] || cat "$FAKE_HOLDERS"
+    exit "${FAKE_HOLDERS_RC:-0}"
+    ;;
   'execution slot --gpu --wait '*)
     case ${FAKE_SLOT:-} in
       measurement) echo 'EXECUTION SLOT REFUSED rogfix: a measurement holds the box exclusively (m-1)'; exit 1 ;;
@@ -170,76 +177,91 @@ case $* in
 esac
 FW
   chmod +x "$fw"
-  # Three batches: a GPU one on the first token, a declared `--cpu` one on the second (a CPU batch
-  # reaches the tokens last, but it can), and an undeclared one on slot 3, past the tokens, where only
-  # a CPU batch can be.
-  holder() { # slot argv0-words...
-    local slot=$1
-    shift
+  holder() { # slot -- a batch holding that slot file's flock until killed; its pid in holder_pid
     perl -e 'use Fcntl ":flock"; my $f = shift; open(my $h, ">>", $f) or die; flock($h, LOCK_EX) or die;
-      open(my $r, ">", "$f.ready") or die; close $r; sleep 60' "$dir/slot.$slot" "$@" &
+      open(my $r, ">", "$f.ready") or die; close $r; sleep 60' "$dir/slot.$1" &
     holder_pid=$!
     local n=0
-    until [ -e "$dir/slot.$slot.ready" ] || [ "$n" -ge 200 ]; do sleep 0.05; n=$((n + 1)); done
-    rm -f "$dir/slot.$slot.ready"
+    until [ -e "$dir/slot.$1.ready" ] || [ "$n" -ge 200 ]; do sleep 0.05; n=$((n + 1)); done
+    rm -f "$dir/slot.$1.ready"
   }
-  holder 1 execution slot --wait 10 -- tests; gpu_pid=$holder_pid
-  holder 2 execution slot --cpu --wait 10 -- tests; cpu_pid=$holder_pid
-  holder 3 execution slot --wait 10 -- tests; past_pid=$holder_pid
-  table=$TMP/locks
-  : >"$table"
-  for entry in "1 $gpu_pid" "2 $cpu_pid" "3 $past_pid"; do
-    set -- $entry
-    perl -e 'my ($f, $pid) = @ARGV; my @st = stat $f or die; my $d = $st[0];
-      printf "1: FLOCK  ADVISORY  WRITE %d %02x:%02x:%d 0 EOF\n", $pid,
-        (($d >> 8) & 0xfff) | (($d >> 32) & ~0xfff), ($d & 0xff) | (($d >> 12) & ~0xff), $st[1]' \
-      "$dir/slot.$1" "$2" >>"$table"
-  done
-  # Lines that are not holders, in the same table: a POSIX lock and a blocked waiter on slot 1.
-  out=$(head -1 "$table")
-  printf '%s\n' "${out/FLOCK/POSIX}" "${out/1: FLOCK/1: -> FLOCK}" >>"$table"
+  # The fleet's holder lines (lukstafi/ludics-lite#639). At `opened`: an undeclared batch on the
+  # first token; a declared `--cpu` batch on the second, which the fleet lists `gpu` (the SLOT's
+  # kind: a CPU batch reaches the tokens last, but it can) and which holds no device memory; and a
+  # batch on slot 3, past the tokens, where the fleet lists `cpu`. At `closed`: a held token whose
+  # holder the lock table did not name (pid null), and a slot file that could not be tested.
+  holders_line() { # event slot kind pid command -- "null" for an unknown pid or command
+    local cmd=null
+    [ "$5" = null ] || cmd="\"$5\""
+    printf '{"box":"rogfix","event":"%s","at":"2026-10-19T00:00:00+00:00","slot":%s,"slots":4,"kind":"%s","pid":%s,"user":"u","command":%s,"cwd":null,"source":"proc-locks","unknown":{}}\n' \
+      "$1" "$2" "$3" "$4" "$cmd"
+  }
+  {
+    holders_line held 1 gpu 101 'python3 -m ludics.fleetworker /fw execution slot --wait 10 -- tests --cpu'
+    holders_line held 2 gpu 102 'python3 -m ludics.fleetworker /fw execution slot --cpu --wait 10 -- tests'
+    holders_line held 3 cpu 103 'python3 -m ludics.fleetworker /fw execution slot --wait 10 -- tests'
+  } >"$TMP/holders-opened"
+  {
+    holders_line held 1 gpu null null
+    holders_line untested 4 cpu null null
+  } >"$TMP/holders-closed"
   reading() { # event [candidate...] -- one reading into $TMP/answer, its status in rc
     local event=$1
     shift
-    OCANNL_TOOL_PROC_LOCKS=${LOCKS-$table} FLEET_SLOT_STATE=$state sh -c "$(gpu_tokens_cmd "$event" "$@")" \
-      >"$TMP/answer" 2>&1
+    sh -c "$(gpu_tokens_cmd "$event" "$@")" >"$TMP/answer" 2>&1
     rc=$?
   }
-  reading opened "$TMP/absent-fleet-worker.sh" "$fw"
+  holders_of() { # -- the answer's holders as slot:kind:gpu:pid words
+    perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
+      print join(" ", @$r{qw(event status box slots gpu_tokens gpu_holders)},
+        map { "$_->{slot}:$_->{kind}:" . ($_->{gpu} ? "gpu" : "nogpu") . ":" . ($_->{pid} // "?") } @{ $r->{token_holders} })' \
+      <"$TMP/answer"
+  }
+  status_of() { perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$r->{status}: ", $r->{detail} // ""' <"$TMP/answer"; }
+  FAKE_HOLDERS=$TMP/holders-opened reading opened "$TMP/absent-fleet-worker.sh" "$fw"
   equal 'tokens: a reading answers in one JSON line' "$rc:$(wc -l <"$TMP/answer" | tr -d ' ')" 0:1
-  out=$(perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
-    print join(" ", @$r{qw(event status box slots gpu_tokens gpu_holders)}, map { "$_->{slot}:$_->{kind}:$_->{pid}" } @{ $r->{token_holders} })' <"$TMP/answer")
-  equal 'tokens: the reader finds the held token and the cpu slot' "$out" "opened read rogfix 4 2 1 1:gpu:$gpu_pid 2:cpu:$cpu_pid 3:cpu:$past_pid"
+  equal "tokens: the reader keeps the fleet's holders and counts the GPU's" "$(holders_of)" \
+    'opened read rogfix 4 2 1 1:gpu:gpu:101 2:gpu:nogpu:102 3:cpu:nogpu:103'
   rm -f "$TMP/unit.gpu-tokens"
   gpu_tokens_append "$TMP/unit.gpu-tokens" opened "$TMP/answer" "$rc"
-  reading closed "$fw"
+  FAKE_HOLDERS=$TMP/holders-closed reading closed "$fw"
+  equal 'tokens: an unnamed holder counts, an untested slot does not' "$(holders_of)" \
+    'closed read rogfix 4 2 1 1:gpu:gpu:? 4:cpu:nogpu:?'
   gpu_tokens_append "$TMP/unit.gpu-tokens" closed "$TMP/answer" "$rc"
   gpu_tokens_append "$TMP/unit.gpu-tokens" refused /dev/null 255
   equal 'tokens: the record field names each reading' "$(gpu_tokens_summary field "$TMP/unit.gpu-tokens")" 'opened=1/2,closed=1/2,refused=?'
   equal 'tokens: the fingerprint says contention' "$(gpu_tokens_summary fingerprint "$TMP/unit.gpu-tokens")" 'gpu tokens: other batches held the GPU'
   equal 'tokens: the take parameters come from the opened reading' "$(gpu_tokens_summary take "$TMP/unit.gpu-tokens")" "$fw rogfix 4 2"
-  gpu_tokens_summary report "$TMP/unit.gpu-tokens" | grep -q "^gpu tokens: 1 of 2 held by other batches at opened on rogfix -- slot 1 pid $gpu_pid"
-  report "$?" 'tokens: the report names the GPU holder'
+  gpu_tokens_summary report "$TMP/unit.gpu-tokens" >"$TMP/report"
+  equal 'tokens: the report names the GPU holders, and only those' "$(cat "$TMP/report")" "$(printf '%s\n' \
+    'gpu tokens: 1 of 2 held by other batches at opened on rogfix -- slot 1 pid 101 (u): python3 -m ludics.fleetworker /fw execution slot --wait 10 -- tests --cpu' \
+    'gpu tokens: 1 of 2 held by other batches at closed on rogfix -- slot 1 pid ? (u): (unknown)')"
   equal 'tokens: no readings is no field' "$(gpu_tokens_summary field "$TMP/none.gpu-tokens")" -
+  : >"$TMP/holders-none"
+  FAKE_HOLDERS=$TMP/holders-none reading opened "$fw"
+  equal 'tokens: a box with no holders reads as none' "$(holders_of)" 'opened read rogfix 4 2 0'
+  # Every answer that is not the fleet's list of holders is `unread`, never a box with no holders.
   reading opened "$TMP/absent-fleet-worker.sh"
-  equal 'tokens: no fleet-worker.sh is an unread reading' "$(perl -MJSON::PP -e 'local $/; print JSON::PP->new->decode(<STDIN>)->{status}' <"$TMP/answer")" unread
+  equal 'tokens: no fleet-worker.sh is an unread reading' "$(status_of)" "unread: no fleet-worker.sh answered 'execution slot --probe'"
+  FAKE_HOLDERS_RC=2 FAKE_HOLDERS_ERR='fleet-worker.sh: execution slot: unknown option --holders' reading opened "$fw"
+  equal 'tokens: a fleet-worker.sh without --holders is unread' "$(status_of)" \
+    'unread: execution slot --holders exited 2: fleet-worker.sh: execution slot: unknown option --holders'
+  FAKE_HOLDERS=$TMP/holders-opened FAKE_HOLDERS_ERR='a warning' reading opened "$fw"
+  equal 'tokens: a line that is not a holder is unread' "$(status_of)" 'unread: execution slot --holders answered: a warning'
+  sed 's/"box":"rogfix"/"box":"elsewhere"/' "$TMP/holders-opened" >"$TMP/holders-elsewhere"
+  FAKE_HOLDERS=$TMP/holders-elsewhere reading opened "$fw"
+  equal "tokens: another box's holder is unread" "$(status_of | cut -c1-44)" 'unread: execution slot --holders answered: {'
+  sed '2s/"kind":"gpu"/"kind":"maybe"/' "$TMP/holders-opened" >"$TMP/holders-kind"
+  FAKE_HOLDERS=$TMP/holders-kind reading opened "$fw"
+  equal 'tokens: a holder of no known kind is unread' "$(status_of | cut -c1-44)" 'unread: execution slot --holders answered: {'
   printf 'not json\n' >"$TMP/garbled"
   rm -f "$TMP/garbled.gpu-tokens"
   gpu_tokens_append "$TMP/garbled.gpu-tokens" opened "$TMP/garbled" 0
   equal 'tokens: an answer that is not a reading is unread' "$(gpu_tokens_summary field "$TMP/garbled.gpu-tokens")" 'opened=?'
   equal 'tokens: unread readings fingerprint as not read' "$(gpu_tokens_summary fingerprint "$TMP/garbled.gpu-tokens")" 'gpu tokens: not read'
-  if [ -r /proc/locks ]; then
-    LOCKS=/proc/locks reading opened "$fw"
-    out=$(perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
-      print join(" ", map { "$_->{slot}:$_->{kind}:$_->{pid}" } @{ $r->{token_holders} })' <"$TMP/answer")
-    equal "tokens: the kernel's own flock table names the same holders" "$out" "1:gpu:$gpu_pid 2:cpu:$cpu_pid 3:cpu:$past_pid"
-  else
-    skip "tokens: the kernel's own flock table names the same holders" 'no /proc/locks on this host'
-  fi
-  kill "$cpu_pid" "$past_pid" 2>/dev/null
-  wait "$cpu_pid" "$past_pid" 2>/dev/null
-  # The take, run as the box runs it: the leg runs inside the free token, its status is its own, and
-  # the slot's lines follow in its output.
+  # The take, run as the box runs it, with a batch on the first token: the leg runs inside the free
+  # one, its status is its own, and the slot's lines follow in its output.
+  holder 1; gpu_pid=$holder_pid
   take() { # wait -- runs a leg that prints and exits 7
     FLEET_SLOT_STATE=$state sh -c "$(gpu_token_take_cmd "$fw" "$1" "$TMP/take" "sh -c 'echo leg ran; exit 7'")" \
       >"$TMP/take.out" 2>&1
@@ -249,7 +271,7 @@ FW
   equal 'tokens: a taken token runs the leg with its own status' "$rc:$(grep -c '^leg ran$' "$TMP/take.out")" 7:1
   grep -qx 'sweep: gpu token: EXECUTION SLOT rogfix: slot 2 of 4, GPU token 2 of 2 held' "$TMP/take.out"
   report "$?" 'tokens: the slot line says which token the leg held'
-  holder 2 execution slot --wait 10 -- tests
+  holder 2
   take 1
   equal 'tokens: no free token in time is 75 and no leg' "$rc:$(grep -c '^leg ran$' "$TMP/take.out")" 75:0
   equal 'tokens: the refusal names its reason' "$(gpu_token_refusal "$TMP/take.out")" 'no GPU token came free within 1s'
@@ -336,11 +358,11 @@ controls_fixture() {
         ;;
       tokens)
         module=gpu-tokens.sh
-        # The inode, not the device: a mutated device formula can land on the same key where the
-        # host's st_dev is small (it did on the macOS runner), the inode cannot.
-        perl -pe 's/\. ":" \. \$st\[1\];/. ":" . (\$st[1] + 1);/' "$TOOLS/$module" >"$control/$module"
-        grep -q 'st\[1\] + 1' "$control/$module" || echo 'tokens mutant did not apply' >&2
-        pattern='FAIL  tokens: the reader finds the held token and the cpu slot'
+        # A reader that takes the fleet's slot kind for the batch's: the declared CPU batch in a
+        # token slot is then counted as holding the GPU.
+        perl -pe 's/\$gpu = 0 if \$_ eq "--cpu"/\$gpu = \$gpu if \$_ eq "--cpu"/' "$TOOLS/$module" >"$control/$module"
+        grep -q 'gpu = \$gpu if' "$control/$module" || echo 'tokens mutant did not apply' >&2
+        pattern="FAIL  tokens: the reader keeps the fleet's holders and counts the GPU's"
         ;;
     esac
     rc=0

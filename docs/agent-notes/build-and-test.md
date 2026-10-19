@@ -3248,11 +3248,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   T of its S correctness-slot files (lukstafi/ludics-lite#391; rog-nv-linux 4 and 2, because three
   concurrent cuda batches ran out of device memory). The sweep took none, so a sweep unit could be
   the third batch. Now every remote GPU unit asks the box's own `fleet-worker.sh execution slot
-  --probe` (the same candidate list as this host's, under the box's home) and reads which slot files
-  are flocked, by whom, from the kernel's flock table: at its start (`opened`), after its suite
-  (`closed`), and when a take is refused (`refused`), one JSON line each in
-  `<log stem>.gpu-tokens` (`box`, `event`, `at`; `slot`, `kind`, `pid`, `user`, `command`, `cwd`
-  per holder -- the vocabulary of the fleet's co-tenant records, lukstafi/ludics-lite#566), beside a
+  --probe` (the same candidate list as this host's, under the box's home) and, from the same
+  script, which slot files are held and by whom: `execution slot --holders` (lukstafi/ludics-lite#639;
+  gh-ocannl-1417), so the fleet owns the one read of the kernel's flock table and the sweep parses
+  none. At its start (`opened`), after its suite (`closed`), and when a take is refused (`refused`),
+  one JSON line each in `<log stem>.gpu-tokens` (`box`, `event`, `at`; per holder the fleet's own
+  line -- `slot`, `kind`, `pid`, `user`, `command`, `cwd`, `source`, `unknown`, the vocabulary of
+  the fleet's co-tenant records, lukstafi/ludics-lite#566 -- plus the sweep's `gpu`), beside a
   `reservations` line with the registry's active reservations on the box (from the per-unit
   `execution list --active` read; a reservation holds no token, so the counts come from the flocks).
   A reading that saw another batch holding the GPU is named on the summary, the record's twelfth
@@ -3265,8 +3267,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   without a token under a `gpu token: WARNING` line, failing open as the registry read does. The
   RTC context and the box check hold no GPU test and take none; workers' batches and the GPU
   integration loop (lukstafi/ludics-lite#615) wait for the same tokens, with no precedence either
-  way. `OCANNL_TOOL_FLEET_WORKER=none` reads and takes nothing. A box without `/proc/locks` (the
-  macOS host) cannot be read, so the local metal unit records `-`; a token taken and released
+  way. `OCANNL_TOOL_FLEET_WORKER=none` reads and takes nothing. The fleet's `kind` is the SLOT's:
+  on a box whose tokens do not bind every slot is `gpu`, so a `--cpu` batch there, or one that fell
+  back into a token slot, is listed `gpu`; the sweep counts a holder as on the GPU (`gpu: true`) only
+  when its command does not declare `--cpu` before the first `--`, as the reader it replaced did --
+  a declared CPU batch holds no device memory, and a launch OOM is what the count attributes. A
+  `--holders` that exits non-zero (a skills checkout from before ludics-lite#639, as tuf's can be)
+  or prints anything but holder lines for the probed box is an `unread` reading, never zero holders.
+  Only remote GPU units read, so the local metal unit records `-`; a token taken and released
   between two readings is not seen.
 - **Each lane runs `benchmarks/check-box.sh --box-only` once** (gh-ocannl-1062), after its first
   unit whose suite ran (`pass`, `incremental-pass` or `fail`; a `timeout` leaves it to the next
