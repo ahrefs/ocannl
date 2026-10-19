@@ -35,12 +35,18 @@
    The lines are comments to the configuration reader, which skips `#` lines: the values reach the
    run through the environment exactly as before, and the copy only records them. Sorted, so the
    order the C library hands the environment over cannot change the digest; escaped, so a value
-   holding a newline cannot end the comment. *)
+   holding a newline cannot end the comment. The record opens with an empty line, so a configuration
+   it is appended to that lacks a final newline keeps its last value intact.
+
+   Written to the file [record] names, never to stdout: `Utils`' own initialization may print to
+   stdout under an ambient tracing setting (`OCANNL_LOG_LEVEL_UTILS` and friends), and that must not
+   become part of every test's configuration. *)
 
 open Base
 
+let record = "ocannl_ambient"
+
 let () =
-  Stdlib.set_binary_mode_out Stdlib.stdout true;
   let tracked =
     Unix.environment () |> Array.to_list
     |> List.filter_map ~f:(fun binding ->
@@ -56,8 +62,12 @@ let () =
                 Some (name, value)))
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
-  Stdio.print_string
-    "# gh-ocannl-1149: the ambient OCANNL environment these tests run under, recorded by\n\
-     # test/config/ocannl_ambient_env.ml so that a change of it reruns every rule depending on this\n\
-     # file. Comments only: the run still reads the values from the environment.\n";
-  List.iter tracked ~f:(fun (name, value) -> Stdio.printf "# %s=%s\n" name (String.escaped value))
+  Stdio.Out_channel.with_file ~binary:true record ~f:(fun out ->
+      Stdio.Out_channel.output_string out
+        "\n\
+         # gh-ocannl-1149: the ambient OCANNL environment these tests run under, recorded by\n\
+         # test/config/ocannl_ambient_env.ml so that a change of it reruns every rule depending on \
+         this\n\
+         # file. Comments only: the run still reads the values from the environment.\n";
+      List.iter tracked ~f:(fun (name, value) ->
+          Stdio.Out_channel.fprintf out "# %s=%s\n" name (String.escaped value)))
