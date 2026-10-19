@@ -976,6 +976,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   sends the group TERM from inside the wait's first probe, against a plain-`sup_alive` control;
   the unshimmed GROUP_TERM leg hit it only under load (one run in 25 at background QoS on a busy
   mac-studio, none in 35 at normal priority).
+- **A short bound that kills a stand-in cannot also be the time it gets to start** (gh-ocannl-1366).
+  The device-probe hang legs (`tools/test-test-run.sh` 76 and 83) ran their never-answering
+  stand-in under a 1 s bound and then read the call and pid it records first thing; on a loaded
+  mac-studio its start alone outlasted the second, the bound KILLed it before it wrote a byte, and
+  the leg failed with an empty record (`the query was not asked once`) while the verdict under test
+  was right. The clock starts at the fork, before `exec`, so no stand-in is fast enough to rule
+  this out. `probe_hang_run` now judges only a run the stand-in started in: one that left no start
+  record is repeated under a bound three times as wide (up to 27 s), with a `note:` line; a
+  stand-in that answers runs under a 30 s bound it never waits out. Leg 76 pins the
+  widening with a stand-in that records nothing on its first run (a marker file, not a delay: the
+  bound is polled, so a delay only races it), which must be judged in the second, at 3 s. A
+  stand-in delayed 1.5 s before recording reproduced the original failure on the base tree; a
+  natural reproduction was not found (mac-studio at load 70, CPU and fresh-exe churn, started it
+  within 0.2 s).
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
