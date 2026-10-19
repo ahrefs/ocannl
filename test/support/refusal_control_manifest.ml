@@ -291,6 +291,10 @@ let raw_entries =
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
         "[scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated";
         "[scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration";
+        "[scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key";
+        "[scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value";
+        "[scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names";
+        "[scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
         "[scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend";
         "[scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker";
@@ -329,6 +333,7 @@ let raw_entries =
         "[scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration";
         "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
+        "[scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width";
         "[scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
@@ -426,6 +431,45 @@ let raw_entries =
         "[scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule";
         "[scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule";
         "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";
+        "[scanner-refusal:ae4c5182763a52487befbd3029c2fd91] stanza declares neither";
+        "[scanner-refusal:d52ce57d79cc2a310f3f2d2d037e9b2e] declaring the variable";
+        "[scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning";
+        "[scanner-refusal:b5b10305ef82fa7d9077db1eceb93561] variable back through";
+        "[scanner-refusal:6ed1faa93fb2465cb3c3a746f850f77c] Context.Cc_backend";
+        "[scanner-refusal:d86762f9ec334387db672f5035ac305e] limits update overwriting";
+        "[scanner-refusal:448ab51835350320d2d9b13f46f2f82e] limits update overwriting";
+        "[scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the";
+        "[scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing";
+        "[scanner-refusal:ec11239fab853f2292b2255dcbe588e9] re_export";
+        "[scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests";
+        "[scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable";
+        "[scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend";
+        "[scanner-refusal:abc9643d1cda7ae5a236d8652b9d56d1] no_hardware_limits";
+        "[scanner-refusal:4fa531ab8ce35f5bfe13706d82823855] Cc_backend";
+        "[scanner-refusal:2f4d8b9f7e61558560479600d35f74ac] than passing vacuously";
+        "[scanner-refusal:7efbc10da3b495bc80f884dd42737612] Cc_backend";
+        "[scanner-refusal:c408a2684ba7b8916375d06fdb3e7330] type's updates recognised";
+        "[scanner-refusal:a966ee873537b3b8c382531ffea8f095] no_hardware_limits";
+        "[scanner-refusal:69ae4cf5f5249bd390b16e305c1f45d7] helper library outside";
+        "[scanner-refusal:2aa043e6a8bd4e45a080d2f62d8af168] Ir.Backend_intf.no_hardware_limits";
+        "[scanner-refusal:d5139f7e86708309a46549017b6c0f68] Cc_backend";
+        "[scanner-refusal:840d9d1ef23497bec8d699caa98d67d6] linked library whose";
+        "[scanner-refusal:0592d760a046f0395065418e9c342a58] is recognised case-insensitively";
+        "[scanner-refusal:7e956ea74253311af8c0a9b9fa543587] Cc_backend";
+        "[scanner-refusal:549301882f72c66accc4981283aad8e2] no_hardware_limits";
+        "[scanner-refusal:10334c2250270979aa32ddc7a10d93e3] library's interface-only module";
+        "[scanner-refusal:9c6ae4964c8b00fe27c0607da0135f80] field filled through";
+        "[scanner-refusal:f9bd0cf9b0592ab82941e27281a7dc4c] let stays unplaced";
+        "[scanner-refusal:b22617ea23d5bd2270d682426b8c2ac5] submodule's value re-exported";
+        "[scanner-refusal:823039faeecddef225db5009f088e3b9] library's default implementation";
+        "[scanner-refusal:e9b61c2f984d21446b37e9e79253a234] defines still carries";
+        "[scanner-refusal:bea334cae6dc5ff82766eb1a3460ce00] Cc_backend";
+        "[scanner-refusal:9030a635de21129bfd2b27cbf880edc3] destructuring top-level let";
+        "[scanner-refusal:284de09cb0fa8165a928b27489ff432b] Backend_intf";
+        "[scanner-refusal:3571dda50442efc2c734e28a3ad9e4f8] Backend_intf.no_hardware_limits";
+        "[scanner-refusal:07de1e1a3e2d7b7fc3b4e521233c0397] Cc_backend";
+        "[scanner-refusal:7bd8773fde8c6bdebc92968b5cfbb687] dune's default module";
+        "[scanner-refusal:4170b6912074554ea1731ee6535d3426] re-exported by include";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
@@ -718,6 +762,21 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:ae1b95995f2c4aa10cdeee699ccb3413",
       "a test naming the pipeline is reported, with the key its value reaches through the module's \
        own calls and the execution-neutral trace key, when its stanza declares neither: true" );
+    ( "env_var_deps.ml:ea9bbac4c8b7dd80c2aba00aaa7c31ff",
+      "a `Cc_backend` reading the width key outside every named value is refused, not read as \
+       having no width readers: true" );
+    ( "env_var_deps.ml:c0d3ae6ca0018d4cbf12e95986af7220",
+      "and one whose values no longer reach the key at all is refused rather than passing \
+       vacuously: true" );
+    ( "env_var_deps.ml:cdf0668c2967d73ed0c8b32a7c794932",
+      "a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not \
+       passed with no readers: true" );
+    ( "env_var_deps.ml:3d0e227333c3757cabc427ac4fb81130",
+      "a linked library whose source the scan was never handed is refused, not read as making no \
+       reads: true" );
+    ( "env_var_deps.ml:77abb7920eac5544c6bf60dd498ec9cf",
+      "a test projecting a width field off a limits record is reported, naming the variable and \
+       the read, when its stanza declares neither: true" );
     ( "test_config_consistency.ml:40f6a4df02a115c327391e051bacd5c6",
       "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:dfd9b6901bf188f6500bcc1284778dcd",
