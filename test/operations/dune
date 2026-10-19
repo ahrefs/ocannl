@@ -7661,8 +7661,10 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
- ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md and the tools scripts as text and links no backend.
- (target agent_notes_structure.actual)
+ ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md, the tools scripts and the test sources as text and links no backend.
+ ; The test sources are read for the agent-note pointers their string literals print (gh-ocannl-1358);
+ ; with them the argument list outgrows Windows' command line, so it goes over as a response file.
+ (targets agent_notes_structure.actual agent_notes_structure.filelist)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
@@ -7670,11 +7672,19 @@
   ../../AGENTS.md
   ../../docs/agent-notes.md
   (glob_files_rec ../../docs/agent-notes/*.md)
-  (glob_files ../../tools/*.sh))
+  (glob_files ../../tools/*.sh)
+  (glob_files_rec ../../test/*.ml))
  (action
-  (with-stdout-to
-   %{target}
-   (run %{dep:agent_notes_structure.exe} %{deps}))))
+  (progn
+   (with-stdout-to
+    agent_notes_structure.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    agent_notes_structure.actual
+    (run
+     %{dep:agent_notes_structure.exe}
+     %{workspace_root}
+     @agent_notes_structure.filelist)))))
 
 (rule
  (alias runtest-agent_notes_structure)
@@ -8349,24 +8359,22 @@
   (diff config_usage_scan_control.expected config_usage_scan_control.actual)))
 
 (rule
- ; ocannl-backend: none -- drives every direct config-usage refusal through injected state, and
- ; resolves the agent-note pointers those refusals print against the notes' headings.
+ ; ocannl-backend: none -- drives every direct config-usage refusal through injected state.
+ ; The agent-note pointers those refusals print are resolved by agent_notes_structure (gh-ocannl-1358).
  (target config_usage_scan_refusal_control.actual)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
   config_usage_scan.ml
-  config_usage_scan_token_grammar.fixture
-  (glob_files ../../docs/agent-notes/*.md))
+  config_usage_scan_token_grammar.fixture)
  (action
   (with-stdout-to
    %{target}
    (run
     %{dep:config_usage_scan.exe}
     --refusal-control
-    %{dep:config_usage_scan_token_grammar.fixture}
-    ../../docs/agent-notes))))
+    %{dep:config_usage_scan_token_grammar.fixture}))))
 
 ; A tool-invented name in a *.sh or *.py source is refused with a hint naming the fix; the same
 ; names in an OCaml source keep the general message. Each <name>.fixture is scanned as <name>.
@@ -9280,6 +9288,16 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; Host-only controls for the benchmark driver's report validator.
+;
+; The three Python controls below hand-list the benchmark modules their scripts import, and run in
+; a copying sandbox (gh-ocannl-1359): unsandboxed, an import of an unlisted module passes whenever
+; another rule happened to copy that module into _build/default/benchmarks (gh1002_kernels went
+; without `box_gate.py` that way, which gh1002_cells.py imports at its top). `(sandbox always)`
+; alone would pick the symlink sandbox, where Python resolves the script back into _build/default
+; and finds the neighbours anyway; `preserve_file_kind` rules that out. `config_dep_completeness`
+; requires the setting of every rule whose program it cannot place, these among them
+; (build-and-test.md#dune-mechanics). Each stays an alias-only action that diffs its own output:
+; a target-producing rule running an opaque command is one `bin_smoke_membership_scan` refuses.
 
 (rule
  ; ocannl-backend: none -- runs Python report controls and launches no OCANNL executable.
@@ -9290,7 +9308,8 @@
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9316,7 +9335,8 @@
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9338,9 +9358,11 @@
   gh1002_kernels.py
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn

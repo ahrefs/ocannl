@@ -67,10 +67,12 @@ let raw_entries =
         "[scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes";
         "[scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets";
         "[scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers";
+        "[scanner-refusal:94abf9ad59c6aa58e4608e31b0c1481a] sources' string literals";
         "[scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported";
         "[scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries";
         "[scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet";
         "[scanner-refusal:ec62d0a7d728c7ab15a2c9b8608c6404] every exemption still";
+        "[scanner-refusal:91d29d400185d4fe574f5deb83d48157] every pointer-fixture exemption";
       ] );
     ( "changelog_unreleased_scan.ml",
       [
@@ -192,6 +194,7 @@ let raw_entries =
         "[scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient";
         "[scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads";
         "[scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan";
+        "[scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics";
         "[scanner-refusal:6d151bed80a45201e61d096c2c38d210] which has no";
         "[scanner-refusal:5509acc7fac8ff0412e3631b49c06dc7] change directory without";
         "[scanner-refusal:cb948484fece727200c2dc74529ab671] the ambient environment";
@@ -243,7 +246,6 @@ let raw_entries =
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
         "[scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";
-        "[scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names";
         "[scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies";
         "[scanner-refusal:98de32226b019b81ff6e88bf4e44c14b] supplies OCaml implementation";
         "[scanner-refusal:05a2eb509694607c615f131c6949c1f1] inventory supplies Markdown";
@@ -688,6 +690,8 @@ let raw_direct_evidence =
     ( "config_dep_completeness.ml:6c29eb9b1db92bba229707a7cd8e1b5b",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:cebf445823df462f70b459a86b20e3d3",
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
+    ( "config_dep_completeness.ml:5e382153a89be91293964b5417659f1a",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:6d151bed80a45201e61d096c2c38d210",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );

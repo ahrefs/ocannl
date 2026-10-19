@@ -10,8 +10,9 @@ that they earn a lookup rather than always-loaded space. The file is far too lon
 it is sectioned by topic: `grep -n '^##'` lists the sections with their line numbers, and AGENTS.md
 points into them by anchor, as `build-and-test.md#<heading-slug>`. Append a new bullet at the end
 of the section it belongs to rather than at the end of the file, and open a section when none fits.
-A renamed heading breaks every pointer to it; `agent_notes_structure` reports the ones in AGENTS.md
-and in the `tools/*.sh` scripts (gh-ocannl-1111).
+A renamed heading breaks every pointer to it; `agent_notes_structure` reports the ones in AGENTS.md,
+in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the OCaml sources under
+`test/`, where scanners print them in their refusals (gh-ocannl-1358).
 
 ## Repository scans
 
@@ -52,8 +53,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   emitted-text matching to the mma census dropped two inventory lines and gave
   `C_syntax.is_tensorized_rendering` its first caller. Neither shows in the diff's file list, so
   the `AGENTS.md` trigger names the edit's effect, as broadly as "touches", rather than its
-  location or an enumeration of the ways an inventory line can move; the scans run in seconds,
-  which is what makes running them on that trigger cheap.
+  location or an enumeration of the ways an inventory line can move. Each review round on
+  lukstafi/ocannl-staging#1097 found another kind of edit that wording missed, so since
+  gh-ocannl-1321 the trigger is explanation rather than gate: `tools/fmt-check.sh`, the format
+  rule's last step before every push, builds `@test/operations/scans` after the formatter, whatever
+  the edit was.
 - `AGENTS.md` stays under 32 KiB, and `test/operations/agents_md_size` holds it there. Claude Code
   truncates an imported instructions file at that size -- silently, from the end, which is where
   the PR, configuration and syntax sections sit -- and the guide crossed the line one review-fix
@@ -72,7 +76,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   bullet, keep one nesting level, keep every index row on one physical line, and give a new file its
   index row the day it appears. It also reads AGENTS.md for its pointers into these files: every
   `<note>.md#<anchor>` there must name a notes file and a heading that file has, since a rule whose
-  pointer lands nowhere has lost its mechanism (gh-ocannl-1044).
+  pointer lands nowhere has lost its mechanism (gh-ocannl-1044). The same holds of the `tools/*.sh`
+  scripts and of every string literal of an OCaml source under `test/`, read as the compiler
+  decodes it, so a refusal continued across source lines is read whole (gh-ocannl-1358). Comments
+  and docstrings there are not read; the scan's own case file is exempt by name, and the exemption
+  goes stale the day that file stops yielding a finding. A scanner that prints a pointer therefore
+  needs no claim of its own resolving it.
 - A scan over a tree that is USUALLY CLEAN needs synthetic negative controls more than one over a
   tree full of findings does, because green-because-intact and green-because-blind are the same
   output. So the rules live in `test/support/agent_notes_scan.ml` as pure functions over strings and
@@ -1134,7 +1143,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `tools/test-run.sh` scrubs at startup and again in `select_dune` after sourcing
   `tools/opam-env.sh`; `tools/promote.sh` and `tools/dune-quiet.sh` after their own opam-env
   fallback; `tools/api-drift.sh` at startup; `tools/ci-shard.sh` in the subshells of its `dune show`
-  calls; `tools/fmt-check.sh` at startup and inside its default `opam exec`; `tools/sweep.sh` starts
+  calls; `tools/fmt-check.sh` at startup and inside each `opam exec` of its default command (the
+  formatter, then the scans); `tools/sweep.sh` starts
   every leg's dune as `opam exec -- sh -c <scrub; exec "$@"> dune ...` (`switch_dune_cmd`), in the
   text the far side of the ssh runs, whose login environment holds that box's own token;
   `tools/machine-verify.sh` passes the text to the far side, which applies it the same way inside
@@ -1213,6 +1223,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   setup-ocaml's switch is local to the checkout: `opam exec` from a scratch directory exits
   50 (no switch) unless the harness first exports `OPAMSWITCH=$(cd <repo> && opam switch show)`.
   Resolve the switch before leaving the checkout, as `test-fmt-check.sh` does (gh-ocannl-1178).
+  The default command then builds `@test/operations/scans` (gh-ocannl-1321) and prints how long
+  it took. Measured on mac-studio: about 1 s when nothing changed, and 50-55 s after a test-source
+  edit, of which `env_var_deps` alone is 47 s (it re-reads every source and dune file), the other
+  scans running beside it in under 8 s each. `OCANNL_TOOL_FMT_CHECK_SCANS=0` skips the step and
+  says so in the verdict line; CI's `fmt` job sets it, since its switch holds no project
+  dependency and the build matrix runs the scans anyway. A command given as arguments runs alone,
+  which is the form `tools/test-fmt-check.sh` drives with a fake switch: the scans build after a
+  clean formatter run only, their failure is the verdict, and any other setting is refused.
   Two files a formatter cannot handle are refused at the site rather than
   discovered in CI:
   a misplaced doc comment (ocamlformat declines the whole file) is a compile error under the root
@@ -1319,7 +1337,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   still passed under it, verified. `(sandbox always preserve_file_kind)` (copy or hardlink) is the
   setting; there dropping any one dep fails the run. Dune also plants an empty `.git` above every
   sandbox, so nothing inside one can read the enclosing checkout's repository: a test of a
-  revision-stamping helper builds a repository of its own.
+  revision-stamping helper builds a repository of its own. `config_dep_completeness` requires the
+  setting of every rule whose program it cannot place — a PATH interpreter handed a workspace file,
+  a shell line (gh-ocannl-1359). Sandboxing `runtest-gh1002_kernels` surfaced the hazard live: it
+  never listed `box_gate.py`, which `gh1002_cells.py` imports at its top, and passed because
+  `kernel_attribution` copied it. Such a rule keeps its alias-only `(no-infer (progn … (diff …)))`
+  form inside the sandbox: dune stages the diffed output out of it, so `dune promote` works as
+  before, while splitting the run into a target-producing rule draws `bin_smoke_membership_scan`'s
+  refusal of any target producer running an opaque command.
 - **The environment reaches a test through its `ocannl_config` dependency** (gh-ocannl-1149). Dune
   reruns a rule for a variable only where the rule declares it, and nothing tied the hand-written
   `(env_var OCANNL_<KEY>)` lists to what the linked pipeline reads: review found one missing key per

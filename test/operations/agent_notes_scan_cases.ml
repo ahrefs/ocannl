@@ -1054,6 +1054,39 @@ let script_cases =
       [ "guide-anchors @ tools/x.sh:3" ] );
   ]
 
+(* gh-ocannl-1358: the OCaml sources under test/ are pointer sources too, through their string
+   literals as the compiler decodes them -- a scanner prints its refusals from those. A finding
+   names the line the literal opens on. Comments and docstrings are not read, and a source that does
+   not parse is refused rather than reported clean. *)
+let source_cases =
+  [
+    ( "a refusal pointing at a heading its note has",
+      {ocaml|let () =
+  failwith "refusing: see docs/agent-notes/a.md#the-widget-seam"
+|ocaml},
+      [] );
+    ( "a refusal pointing at a heading its note lacks",
+      {ocaml|let () =
+  print_endline "ok";
+  failwith "refusing: see docs/agent-notes/a.md#the-sprocket-seam"
+|ocaml},
+      [ "guide-anchors @ test/operations/x.ml:3" ] );
+    ( "a literal continued inside the pointer is read whole",
+      "let () =\n  failwith\n    \"see docs/agent-notes/a.md#the-sprocket-\\\n     seam\"\n",
+      [ "guide-anchors @ test/operations/x.ml:3" ] );
+    ( "and so is a correct pointer continued the same way",
+      "let () =\n  failwith\n    \"see docs/agent-notes/a.md#the-widget-\\\n     seam\"\n",
+      [] );
+    ( "a quoted-string literal is read",
+      "let s = {|a.md#the-sprocket-seam|}\n",
+      [ "guide-anchors @ test/operations/x.ml:1" ] );
+    ("a comment is not read", "(* see docs/agent-notes/a.md#the-sprocket-seam *)\nlet x = 1\n", []);
+    ("a docstring is not read", "(** see a.md#the-sprocket-seam *)\nlet x = 1\n", []);
+    ( "a source that does not parse is refused",
+      "let = \"a.md#the-widget-seam\"\n",
+      [ "guide-anchors @ test/operations/x.ml" ] );
+  ]
+
 (* The LEXICAL layer, tested directly rather than only through the rules above it.
 
    Round 3 was six findings and three of them were here -- code-span pairing, backslash parity, ATX
@@ -1276,6 +1309,14 @@ let () =
           ~index_file:"agent-notes.md" ~index_contents:guide_index ~files:guide_notes ()
       in
       check ("script -- " ^ name) expected (List.map found ~f:render));
+  List.iter source_cases ~f:(fun (name, source, expected) ->
+      let _, found =
+        Notes.check_all
+          ~guides:[ ("AGENTS.md", guide "- A rule (a.md#the-widget-seam).") ]
+          ~sources:[ ("test/operations/x.ml", source) ]
+          ~index_file:"agent-notes.md" ~index_contents:guide_index ~files:guide_notes ()
+      in
+      check ("source -- " ^ name) expected (List.map found ~f:render));
   (* gh-ocannl-706. A finding whose rule [Notes.rules] does not name -- a sixth rule written and not
      added to the list -- used to be dropped where the report is grouped by that list: the rule
      fired and nothing showed it. Put to the rule synthetically, since no fixture here can produce
@@ -1304,6 +1345,7 @@ let () =
     @ List.concat_map citation_cases ~f:(fun (_, _, e) -> e)
     @ List.concat_map guide_cases ~f:(fun (_, _, e) -> e)
     @ List.concat_map script_cases ~f:(fun (_, _, e) -> e)
+    @ List.concat_map source_cases ~f:(fun (_, _, e) -> e)
     |> List.map ~f:rule_of_expectation
     |> List.dedup_and_sort ~compare:String.compare
   in
