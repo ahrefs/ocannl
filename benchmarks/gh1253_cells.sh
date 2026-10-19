@@ -10,8 +10,8 @@
 #            script prints, each cell writes OUT/<cell>.out and OUT/<cell>.err.
 #   CAP      wall cap in seconds per cell (default 900); a capped cell counts as failed.
 #
-# Cells, all on explicitly initialized standalone fixtures (host arrays built in the runner; no
-# safetensors fixture, so no box fixture gate applies):
+# Cells, all on explicitly initialized standalone inputs (host arrays built in the runner: no
+# recorded workload file is read, so the box gate's workload check has nothing to check):
 #   bandwidth          tools/calibrate_bandwidth.exe: the STREAM kernels, rows into
 #                      OUT/calibration.tsv; its fitted model_peak_memory_bandwidth is passed to every
 #                      later cell, so the model's milliseconds are this box's rather than the
