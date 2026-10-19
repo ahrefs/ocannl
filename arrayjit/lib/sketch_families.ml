@@ -817,6 +817,10 @@ type conv_site = {
   c_red : Idx.symbol;  (** The GEMM reduction: the channel symbol read by both operands. *)
   c_nred : int;
   c_d : Ir.Tnode.t;
+  c_d_syms : Idx.symbol list;
+      (** [d]'s write index in axis order: plain distinct iterators, a permutation of [c_outer]'s
+          symbols, [c_row] (at rank-2) and [c_oc] (last). The axis order of [d]'s expanded zero nest
+          ({!Sched.expand_zero}) maps onto the site's chain through it (gh-ocannl-503). *)
   c_a : Ir.Tnode.t;
   c_b : Ir.Tnode.t;
   c_zeroed : bool;
@@ -963,6 +967,7 @@ let detect_conv_procedural (llc : LL.t) : conv_site option =
                                     c_red = red;
                                     c_nred = nred;
                                     c_d = d;
+                                    c_d_syms = d_syms;
                                     c_a = a;
                                     c_b = b;
                                     c_zeroed = List.exists zeroed ~f:(phys_equal d);
@@ -1103,6 +1108,7 @@ let detect_conv_affine (llc : LL.t) : conv_site option =
                                 c_red = red;
                                 c_nred = nred;
                                 c_d = d;
+                                c_d_syms = d_syms;
                                 c_a = a;
                                 c_b = b;
                                 c_zeroed = List.exists zeroed ~f:(fun z -> phys_equal z.A.a_tn d);
@@ -1126,8 +1132,10 @@ let conv_site_equal (x : conv_site) (y : conv_site) =
   && List.equal conv_axis_equal x.c_axes y.c_axes
   && Idx.equal_symbol x.c_row y.c_row && x.c_nrow = y.c_nrow && Idx.equal_symbol x.c_oc y.c_oc
   && x.c_noc = y.c_noc && Idx.equal_symbol x.c_red y.c_red && x.c_nred = y.c_nred
-  && phys_equal x.c_d y.c_d && phys_equal x.c_a y.c_a && phys_equal x.c_b y.c_b
-  && Bool.equal x.c_zeroed y.c_zeroed && Bool.equal x.c_fma y.c_fma
+  && phys_equal x.c_d y.c_d
+  && List.equal Idx.equal_symbol x.c_d_syms y.c_d_syms
+  && phys_equal x.c_a y.c_a && phys_equal x.c_b y.c_b && Bool.equal x.c_zeroed y.c_zeroed
+  && Bool.equal x.c_fma y.c_fma
 
 let detect_conv (llc : LL.t) : conv_site option =
   let site = detect_conv_affine llc in
@@ -2494,15 +2502,40 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     @ reorder_swaps ~current:site.c_loops ~target:loop_syms
     @ [ stage site.c_a [ site.c_row; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
 
+(* The conv-rank generalization of [zero_geometry] (gh-ocannl-503): on a whole-routine lowering
+   ([c_zeroed]) the conv output's whole-node [Zero_out] shares the annotated kernel, where
+   [validate_parallel] rejects a bare whole-node write. Expand it into a per-cell nest, reorder that
+   nest into the site's chain order (the expansion's loops follow [d]'s axis order, [c_d_syms]; the
+   site's chain follows its nest order, which positional thread identity across nests is read in),
+   and give it the geometry [annotate] gives every companion: Grid on the outer output loops, the
+   row-block split, and the column distributed over the [Tensorize] lane width as a [Workgroup] loop
+   — barrier-strength uniformity against the lane loops of [Tensorize] and the cooperative [Stage]s.
+   That is exactly the geometry a GPU fission segment's folded per-cell zero companion takes
+   (gh-ocannl-1175); the renderers' workgroup barrier before every accumulator load of [d] orders
+   the zero against the fragment load, as for the companions ([companion_geometry]). Empty when the
+   site is not zeroed. *)
+let conv_zero_geometry (site : conv_site) ~(site_syms : (Idx.symbol * int) list)
+    ~(annotate : (Idx.symbol * int) list -> Sched.schedule) : Sched.schedule =
+  if not site.c_zeroed then []
+  else
+    let ez, zsyms = Sched.expand_zero ~tn:site.c_d in
+    let by_axis = List.zip_exn site.c_d_syms zsyms in
+    let zchain =
+      List.map site_syms ~f:(fun (s, n) ->
+          (List.Assoc.find_exn by_axis s ~equal:Idx.equal_symbol, n))
+    in
+    (ez :: reorder_swaps ~current:zsyms ~target:(List.map zchain ~f:fst)) @ annotate zchain
+
 (* The GPU staged leg of the implicit-GEMM conv pipeline (gh-ocannl-493): the same loop
    re-association as the CPU route, with the outer output loops [Grid]-typed (one threadgroup per
    outer coordinate, the kernel-window loops serial inside it) and both slices staged through
    cooperative workgroup-shared tiles at the kernel-window anchor (lane-aware [Stage], the lane
    width matching [Tensorize]'s — barrier-strength uniformity). Reusing [Tensorize] inherits the
    accumulator contraction (gh-ocannl-480) unchanged: the [row × oc] fragment stays resident across
-   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. Whole-node
-   [Zero_out] sites are gated off at the seeds. GPU fission expands eligible covering zeros into
-   per-cell companions, which take the same Grid and lane geometry.
+   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. GPU fission
+   expands eligible covering zeros into per-cell companions, which take the same Grid and lane
+   geometry; a whole-routine lowering's whole-node [Zero_out] is expanded here into the same nest
+   with the same geometry ([conv_zero_geometry], gh-ocannl-503).
 
    With [sk_bm > 0] (gh-ocannl-500) the GEMM row is additionally split into [Grid] blocks of [sk_bm]
    rows: one threadgroup per (outer.., row-block) coordinate instead of one per outer coordinate, so
@@ -2550,11 +2583,13 @@ let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     match
       companion_geometry ~site_syms
         ~skip:(if sk_epilogue then conv_tail_loop_syms site opt else [])
-        ~expanded_zeros:[] ~annotate opt
+        ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
+        ~annotate opt
     with
     | Ok ops -> ops
     | Error why -> companion_coverage_unsupported ~tensorized:true why
   in
+  let companions = conv_zero_geometry site ~site_syms ~annotate @ companions in
   let outer_grid =
     List.map site.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
   in
@@ -3019,9 +3054,12 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                         (Ir.Ops.prec_string a_prec) (Ir.Ops.prec_string b_prec)
                         (Ir.Ops.prec_string d_prec))
             | Some (tm_t, tn_t, tk_t) ->
-                (* Whole-node [Zero_out] sites are gated off. Eligible GPU fission zeros are
-                   per-cell companions; [conv_real_stmts] excludes the site's covering zero,
-                   and the pipeline gives all companions aligned Grid and lane geometry. *)
+                (* The site's covering zero is the pipeline's to annotate, whichever form it
+                   arrives in: a GPU fission segment's folded per-cell companion, or — on a
+                   whole-routine lowering ([c_zeroed]) — the whole-node [Zero_out], which
+                   [conv_zero_geometry] expands into that same nest (gh-ocannl-503).
+                   [conv_real_stmts] excludes it either way, and the pipeline gives every
+                   companion aligned Grid and lane geometry. *)
                 (* The intrinsic-tile divisibility is now a PER-BLOCK property (gh-ocannl-500): the
                tensorized micro-kernel row is [sk_bm] (the block), not the whole [c_nrow], so a
                staged block flavor is proposable whenever [sk_bm] — a multiple of the intrinsic row
@@ -3061,15 +3099,11 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                       <= cap
                   | None -> true
                 in
-                (* Every failing conjunct named, for the census: on a whole-routine lowering the
-                   zeroed output and the companion count usually fail together. *)
+                (* Every failing conjunct named, for the census. *)
                 let failing =
                   List.filter_map
                     [
                       (offset_free, lazy conv_offset_witness);
-                      ( not site.c_zeroed,
-                        lazy "the conv output's whole-node Zero_out is in this lowering (c_zeroed)"
-                      );
                       ( n_real <= 2,
                         lazy
                           (Printf.sprintf

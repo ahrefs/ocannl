@@ -8,11 +8,12 @@
 
    The census's seeds ARE [Autotune.sketch_seed_params]' list, and the matmul family's refutations
    are its tree's ([Autotune.matmul_sketch_tree]). Each conv leg names a refusal exactly when it
-   seeds nothing, and the named gate is the one the site's facts imply: [c_zeroed] on the
-   whole-routine lowering, whose conv output is zeroed in the routine; no mma capability; no mma
-   tile for f32 operands; a vector file under 8 bytes. On the tuner's GPU fission segments the zero
-   folds into a per-cell companion, and the GPU leg seeds. With the key on (the dune action passes
-   it), [Autotune.log_seeding] writes exactly the rendered lines, and [Autotune.tune] emits a
+   seeds nothing, and the named gate is the one the site's facts imply: no mma capability; no mma
+   tile for f32 operands; a vector file under 8 bytes. The whole-routine lowering's conv output is
+   zeroed in the routine, and since gh-ocannl-503 the GPU leg seeds it anyway (the pipeline expands
+   the zero with the site's geometry); on the tuner's GPU fission segments the zero folds into a
+   per-cell companion, and the GPU leg seeds there too. With the key on (the dune action passes it),
+   [Autotune.log_seeding] writes exactly the rendered lines, and [Autotune.tune] emits a
    whole-routine census line. *)
 
 open Base
@@ -118,8 +119,8 @@ let () =
   | Some j ->
       p "conv whole-routine: the conv family claims the lowering" true;
       p "conv whole-routine: the site's output is zeroed in the lowering" j.cj_site.c_zeroed;
-      p "conv whole-routine: the GPU leg's refusal names c_zeroed"
-        (mentions (refusal j.cj_gpu) ~sub:"(c_zeroed)");
+      p "conv whole-routine: the GPU leg seeds the zeroed site"
+        (Option.is_none j.cj_gpu.leg_refusal && not (List.is_empty j.cj_gpu.leg_seeds));
       p "conv whole-routine: the CPU leg is refused as not a CPU target"
         (String.equal (refusal j.cj_cpu) "not a CPU target"));
   p_exists "conv whole-routine: the conv nest is listed, marked zeroed" gpu.sc_conv_nests
@@ -138,10 +139,9 @@ let () =
   in
   claim_consistent "conv whole-routine (f16-only tile)" ~is_gpu:true ~limits:f16_only_limits opt
     f16_only;
-  p "no f32 tile: the GPU leg names the missing tile, before the site's own gates"
+  p "no f32 tile: the GPU leg names the missing tile"
     (Option.exists (conv_judgment f16_only) ~f:(fun j ->
-         mentions (refusal j.cj_gpu) ~sub:"advertises no mma tile for operands"
-         && not (mentions (refusal j.cj_gpu) ~sub:"c_zeroed")));
+         mentions (refusal j.cj_gpu) ~sub:"advertises no mma tile for operands"));
   let cpu = census ~where:"conv whole-routine cpu" ~is_gpu:false ~limits:cpu_limits opt in
   claim_consistent "conv whole-routine (CPU)" ~is_gpu:false ~limits:cpu_limits opt cpu;
   p "conv whole-routine: the CPU leg seeds on a 16-byte vector file"
