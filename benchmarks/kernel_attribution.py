@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Per-kernel attribution of a step's time from the step itself (gh-ocannl-1347), stdlib only.
 
-A `kprof` cell of benchmarks/gh1133_cells.sh is one bench_gpt process run under
-`nsys profile --trace=cuda --cuda-graph-trace=node`, with the per-kernel table on
-(`BENCH_KERNEL_TABLE=1`). Its trace holds both instruments, from the same compile:
+A `kprof` cell of benchmarks/gh1133_cells.sh is one bench_gpt process run under a device tracer,
+with the per-kernel table on (`BENCH_KERNEL_TABLE=1`): on CUDA `nsys profile --trace=cuda
+--cuda-graph-trace=node`, exported as CELL_cuda_gpu_trace.csv; on HIP `rocprofv3 --kernel-trace`
+(gh-ocannl-1392), whose CELL_kernel_trace.csv records every dispatch at the HSA queue, graph nodes
+included. Its trace holds both instruments, from the same compile:
 
   in-step   every shipped segment's device duration inside the timed steps, as the step ran it:
-            `<routine>__seg<j>` nodes of the replayed CUDA graph (one instance per step);
+            `<routine>__seg<j>` nodes of the replayed graph (one instance per step);
   isolated  the same segment recompiled as a routine of its own and run 21 times back to back
             after the timed steps: `<routine>__kernel<i>`, i being the kernel table's index (the
             table's min-of-20 is a host wall time with a launch + sync in it; the trace gives the
@@ -33,8 +35,14 @@ slowdowns of kernels adjacent in time move together (gh-ocannl-1391), while a 21
 draws too little for long enough to be capped. ISO therefore flags most of a capped step; OWN flags
 what remains once the step's clock is accounted for.
 
+A HIP cell also states the memory model of the device it ran on -- unified (an integrated part
+sharing host DRAM, minix's gfx1151) or discrete (tuf's gfx1102) -- on a `kprof: memory model` line
+of its .err, which the driver writes from the backend's own device query; a HIP cell without one,
+or whose kernels ran on more than one agent, is refused, since its rows would not say what they
+attribute.
+
 Subcommands:
-  check OUT NAME   validate one cell (OUT/NAME.out, .err, _cuda_gpu_trace.csv); exit 1 with a reason
+  check OUT NAME   validate one cell (OUT/NAME.out, .err, and one trace export); exit 1 with a reason
   report OUT       the attribution table of every kprof cell in OUT, then the cross-cell
                    repeatability of cells that shipped the same kernel list (an A/A when the arms
                    are one binary); exit 1 when a cell is refused
@@ -65,6 +73,9 @@ REPEAT_TOLERANCE = 1.05
 LABEL_WRITES = 3
 
 KPROF_CELL = re.compile(r"(\w+)-(gpt2_mini\w*)-(\w+)-(kprof\d+)\.out")
+# The trace exports a cell may carry, by suffix: (what traced it, its reader).
+EXPORTS = {"_cuda_gpu_trace.csv": "nsys", "_kernel_trace.csv": "rocprofv3"}
+MEMORY_MODEL = re.compile(r"^kprof: memory model (unified|discrete)\b(.*)$")
 SEG = re.compile(r"^(.*)__seg(\d+)$")
 ISOLATED = re.compile(r"^(.*)__kernel(\d+)$")
 
@@ -99,14 +110,46 @@ def table(path):
     return rows
 
 
-def trace(path):
+def memory_model(path):
+    """The cell's `kprof: memory model` statement, (model, detail), or None."""
+    for line in open(path):
+        m = MEMORY_MODEL.match(line.rstrip("\n"))
+        if m:
+            return m.group(1), m.group(2).strip()
+    return None
+
+
+def export(out, stem):
+    """The cell's one trace export: (path, tracer). Refuses none, and two (which would be read as
+    one cell's in-step durations twice over)."""
+    found = [(Path(out) / (stem + suffix), tracer) for suffix, tracer in EXPORTS.items()
+             if (Path(out) / (stem + suffix)).is_file()]
+    if not found:
+        raise Refused("%s has no trace export (%s)" % (stem, " or ".join(stem + s for s in EXPORTS)))
+    if len(found) > 1:
+        raise Refused("%s has two trace exports: %s" % (stem, ", ".join(p.name for p, _ in found)))
+    return found[0]
+
+
+def trace(path, tracer="nsys"):
     """{routine: {j: [in-step durations, in start order]}} and {routine: {i: [isolated durations]}},
-    in ms, from an `nsys stats --report cuda_gpu_trace --format csv` export."""
+    in ms, from an `nsys stats --report cuda_gpu_trace --format csv` export or a `rocprofv3
+    --kernel-trace --output-format csv` one. A rocprofv3 trace whose segments ran on more than one
+    agent is refused: the cell's memory model is one device's."""
     seg, iso = {}, {}
-    rows = []
+    rows, agents = [], set()
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
-            rows.append((float(r["Start (ns)"]), r["Name"], float(r["Duration (ns)"]) / 1e6))
+            if tracer == "nsys":
+                rows.append((float(r["Start (ns)"]), r["Name"], float(r["Duration (ns)"]) / 1e6))
+            else:
+                start, end = int(r["Start_Timestamp"]), int(r["End_Timestamp"])
+                rows.append((start, r["Kernel_Name"], (end - start) / 1e6))
+                if SEG.match(r["Kernel_Name"]) or ISOLATED.match(r["Kernel_Name"]):
+                    agents.add(r["Agent_Id"])
+    if len(agents) > 1:
+        raise Refused("%s: the step's kernels ran on %d agents (%s); the cell states one device's"
+                      " memory model" % (Path(path).name, len(agents), ", ".join(sorted(agents))))
     for _, name, ms in sorted(rows):
         m = SEG.match(name)
         if m:
@@ -132,10 +175,12 @@ def attribute(out, name):
     rec = result_line(out / name)
     stem = name[:-4]
     rows = table(out / (stem + ".err"))
-    csv_path = out / (stem + "_cuda_gpu_trace.csv")
-    if not csv_path.is_file():
-        raise Refused("%s has no trace export" % csv_path.name)
-    seg, iso = trace(csv_path)
+    csv_path, tracer = export(out, stem)
+    model = memory_model(out / (stem + ".err"))
+    if tracer == "rocprofv3" and model is None:
+        raise Refused("%s: a HIP cell states the memory model it ran on, and this one does not"
+                      % name)
+    seg, iso = trace(csv_path, tracer)
     window = 2 * int(rec["timed_steps"])  # the per-step-synced steps, then the queued ones
     mapped = {}
     for routine, kernels in iso.items():
@@ -175,6 +220,7 @@ def attribute(out, name):
             scaled = r["iso_min"] * factor["f"]
             if abs(scaled - r["med"]) >= ABS_FLOOR_MS and abs(scaled / r["med"] - 1) > ISO_TOLERANCE:
                 r["flags"].append("OWN")
+    rec = dict(rec, tracer=tracer, memory_model=model)
     return rec, attributed
 
 
@@ -216,8 +262,8 @@ def render_cell(out, name, rec, rows):
     stem = name[:-4]
     total = sum(r["med"] for r in rows)
     print("\n### Kernel attribution: %s\n" % stem)
-    print("In-step: device time of each shipped segment over the %d timed steps (median, p10..p90)."
-          % (2 * int(rec["timed_steps"])))
+    print("In-step: device time of each shipped segment over the %d timed steps (median, p10..p90;"
+          " traced by %s)." % (2 * int(rec["timed_steps"]), rec["tracer"]))
     print("Isolated: the same segment recompiled alone, device minimum of 20 runs (the kernel"
           " table's host minimum beside it). Only the in-step column attributes step time.\n")
     print("- step p50 %.2f ms; sum of in-step medians %.2f ms; sum of isolated minima %.2f ms"
@@ -243,6 +289,8 @@ def render_cell(out, name, rec, rows):
         print("- OWN (isolated x F off in-step by >%d%%): %d kernels, %.2f ms in-step (%.1f%%)"
               % (round(ISO_TOLERANCE * 100), len(own), sum(r["med"] for r in own),
                  100 * sum(r["med"] for r in own) / total))
+    if rec["memory_model"] is not None:
+        print("- memory model: %s %s" % rec["memory_model"])
     clk = clocks(out, stem)
     if clk:
         print("- SM clock in P0: %d..%d MHz, median %d (%d samples)" % (clk[0], clk[2], clk[1], clk[3]))

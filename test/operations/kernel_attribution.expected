@@ -9,5 +9,10 @@ a cell that shipped other kernels is attributed but compared with none: true
 a step-wide clock factor is ISO but not OWN; a kernel's own deviation beyond it is: true
 the report states the factor, its per-step spread and the OWN share: true
 without enough sizeable kernels there is no factor, and OWN flags nothing: true
+a rocprofv3 kernel trace attributes as the nsys export does: true
+a HIP cell's attribution states its memory model and its tracer: true
+a HIP cell that states no memory model: refused
+a HIP cell whose kernels ran on two agents: refused
+a cell with two trace exports: refused
 an incomplete table, a missing trace or result, a short window, an unmapped segment: refused
 a report with a refused cell, or with no cell, fails: true
