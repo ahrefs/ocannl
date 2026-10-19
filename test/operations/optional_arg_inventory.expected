@@ -121,15 +121,6 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:clip_by_global_norm ?grad_unscale -- implemented
   lib/train.ml:clip_by_global_norm ?label -- implemented
   lib/train.ml:clip_by_global_norm ?params -- implemented
-  lib/train.ml:compile_with_model_gate ?budgeted -- implemented
-  lib/train.ml:compile_within_budget ?budget -- implemented
-  lib/train.ml:compile_within_budget ?budget_report -- implemented
-  lib/train.ml:compile_within_budget ?max_candidates -- implemented
-  lib/train.ml:decision_lowering_digest ?name -- implemented
-  lib/train.ml:decision_lowering_digest ?timing_ctx -- implemented
-  lib/train.ml:fit_memory_budget ?budget -- implemented
-  lib/train.ml:fit_memory_budget ?max_candidates -- implemented
-  lib/train.ml:fit_memory_budget ?name -- implemented
   lib/train.ml:forward_once ?bindings -- implemented
   lib/train.ml:forward_once ?budget -- implemented
   lib/train.ml:forward_once ?budget_report -- implemented
@@ -147,7 +138,6 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:grad_update ?setup_for_parallel -- implemented
   lib/train.ml:init_params ?reinit_all -- implemented
   lib/train.ml:loss_accumulator ?label -- implemented
-  lib/train.ml:params_for ?params -- implemented
   lib/train.ml:placement_outcome_digest ?name -- implemented
   lib/train.ml:placement_outcome_digest ?timing_ctx -- implemented
   lib/train.ml:placement_problem ?name -- implemented

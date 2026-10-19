@@ -347,13 +347,13 @@ let exempt_zero_reference_exports =
        shapes. Utils has no .mli to hide them in. *)
     "Utils.clean_filename";
     "Utils.owned_artifact_name";
-    (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library, where these
-       implicit exports have no caller in the tree. Unlike the entries above, most are not helpers
-       leaked by a missing interface: [Nn_blocks]' architectures and initializers and [Train]'s
-       entry points are the surface lib/ exists to offer, and some -- [normal], [kaiming], [xavier]
-       -- are reached through [Nn_blocks.DSL_modules] re-exports this census does not follow. Which
-       of them an interface should publish, and which it should hide, is gh-ocannl-1010's decision
-       (lib/ has no interfaces); this block is its census. *)
+    (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library. gh-ocannl-1010
+       then gave its recipe modules (Train, Parallel, Calibrate, Mixed_prec, Precision_policy)
+       explicit interfaces, which took them out of this census, and decided that [Nn_blocks] gets
+       none: it is a library of building blocks meant for reuse, with no helper half to hide, so an
+       entry here is a block nothing in the tree calls yet rather than a leaked helper. Some --
+       [normal], [kaiming], [xavier] -- are reached through [Nn_blocks.DSL_modules] re-exports this
+       census does not follow. *)
     "Nn_blocks.avg_pool2d";
     (* Shared implementation of batch_norm1d/2d, deliberately internal to Nn_blocks; an eventual
        lib/ interface (gh-ocannl-1010) should hide this state-construction helper. *)
@@ -383,17 +383,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";
-    "Train.compile_with_model_gate";
-    "Train.compile_within_budget";
-    "Train.decision_lowering_digest";
-    "Train.dump_cd_file";
-    "Train.ensure_printable";
-    "Train.filter_out_grad_zeroing";
-    "Train.fit_memory_budget";
-    "Train.params_for";
-    "Train.placement_arm_name";
-    "Train.placement_decision_lists";
-    "Train.run_once";
     (* gh-ocannl-1085: until then an [include M] credited every value of [M], so these were
        invisible; now a use must spell the value through [M] or through a module including it. Not
        one of them has such a use. [Datatypes.hash_fold_safe_lazy] is live nonetheless: [Row]'s
@@ -430,7 +419,6 @@ let exempt_unmentioned_types =
     "Nn_blocks.position_embedding";
     "Ops.apply_prec";
     "Ops.prec_family";
-    "Train.placement_arm";
     "Utils.config_source";
     "Utils.env_var_class";
     "Utils.requirement";
