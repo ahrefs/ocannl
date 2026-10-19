@@ -23,13 +23,20 @@
    exceeds the stack threshold) followed by row statistics [s] (scratch) and [y = h - s]. The
    matmul's accumulation nest is [Grid]-typed, the statistics stay scratch, and their consumer keeps
    its [Grid]: linking the scratch writer [s[i]] to its reader [y[i, j]] trims the reader's chain to
-   [i], below [cpu_schedule_min_parallel], so the preset keeps the plain analysis there. 2. [chain],
-   through the default pipeline at [min_parallel] 1 (the presets the tuner seeds and times its
-   fissioned candidates with): the issue's three layers [y_k = relu (w_k * y_{k-1})] at 32x32, every
-   [y_k] materialized and only the last product, so the first two products are scratch. Every
-   product's accumulation nest is [Grid]-typed and the scratch products stay scratch. 3.
-   [transposed], same presets: a scratch product its consumer reads transposed cannot be linked to
-   it by the alignment rule, so the preset falls back to the plain analysis -- the consumer keeps
+   [i], below [cpu_schedule_min_parallel], so the preset keeps the plain analysis there.
+
+   1b. [rowstats], under the tuner's presets ([min_parallel] 1): the same shape over a materialized
+   32x32 input. The trim to [i] keeps the kernel eligible, so the scratch statistics' nest is
+   [Grid]-typed beside its consumer -- comparing chain sizes instead of eligibility would fall back
+   and leave it serial.
+
+   2. [chain], through the default pipeline at [min_parallel] 1 (the presets the tuner seeds and
+   times its fissioned candidates with): the issue's three layers [y_k = relu (w_k * y_{k-1})] at
+   32x32, every [y_k] materialized and only the last product, so the first two products are scratch.
+   Every product's accumulation nest is [Grid]-typed and the scratch products stay scratch.
+
+   3. [transposed], same presets: a scratch product its consumer reads transposed cannot be linked
+   to it by the alignment rule, so the preset falls back to the plain analysis -- the consumer keeps
    its [Grid] and the producer stays serial, as before the fix. *)
 open Base
 open Ocannl
@@ -142,6 +149,26 @@ let () =
   p "stats: every Grid loop renders on the pool"
     (grid_loops segments > 0 && pool_rendered src = grid_loops segments);
   p_all2 "stats: values equal the unscheduled compile's, bit for bit" got want ~f:Float.equal
+
+let () =
+  let q = 32 in
+  let xa = matrix ~q ~label:"xa" ~modulus:11 ~offset:0. ~stride:0.125 in
+  let xb = matrix ~q ~label:"xb" ~modulus:7 ~offset:(-3.) ~stride:1. in
+  let%op x = xa + xb in
+  Train.set_materialized x.Tensor.value;
+  let%op s = x ++ "i->o => o" in
+  let%op y = x - s in
+  Train.set_materialized y.Tensor.value;
+  let segments, still_scratch, src, got, want =
+    scheduled_and_serial ~tuner_presets:true ~name:"scratch_rowstats" ~scratch:[ s.Tensor.value ]
+      ~result:y.Tensor.value (Train.forward y)
+  in
+  p_all "rowstats: the statistics are scratch" still_scratch ~f:Fn.id;
+  p "rowstats: the statistics' nest is Grid-typed" (grid_writer segments s.Tensor.value);
+  p "rowstats: their consumer keeps its Grid" (grid_writer segments y.Tensor.value);
+  p "rowstats: every Grid loop renders on the pool"
+    (grid_loops segments > 0 && pool_rendered src = grid_loops segments);
+  p_all2 "rowstats: values equal the unscheduled compile's, bit for bit" got want ~f:Float.equal
 
 let () =
   let q = 32 in

@@ -69,9 +69,11 @@ files.
   node would join too. Separately, `default_cpu` runs `analyze_parallel_chains ~shared_locals:true`:
   a nest writing only scratch takes its chain from those writes (on GPU it runs whole per thread
   over a per-thread copy, so the empty chain is right there; on cc a serial nest runs once, on one
-  core), falling back to the plain analysis when linking it bails OR lowers the largest parallel
-  size (a `y[i, j]` reading `s[i]` is trimmed to `[i]`, which can drop the kernel under
-  `cpu_schedule_min_parallel`; the test's stats leg pins it) -- `C_syntax.parallel_grid_safe`
+  core), falling back to the plain analysis when linking it bails OR costs the kernel its
+  `min_parallel` eligibility (a `y[i, j]` reading `s[i]` is trimmed to `[i]`; compare
+  threshold eligibility, never chain sizes -- the preset retypes only the outermost loop, which a
+  trim keeps, and a size comparison left the scratch nest serial in exactly the case it serves:
+  review round 1; the test's stats and rowstats legs pin both directions) -- `C_syntax.parallel_grid_safe`
   stays the arbiter of whether a loop over a local renders in parallel. Mind the size: at the
   default `stack_threshold_in_bytes` (16 KB) a scratch node holds at most 4096 cells, below the
   default `cpu_schedule_min_parallel`, so the chain change bites in the tuner's `min_parallel:1`

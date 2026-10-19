@@ -7398,18 +7398,21 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   try
     (* Scratch-writing nests take chains too (gh-ocannl-1343). Linking them to their readers can
        bail the kernel, or trim a reader's chain to the prefix it shares with the scratch writer --
-       a [y[i, j]] reading [s[i]] keeps only [i] -- and lower the largest parallel size below what
-       the plain analysis found, possibly below [min_parallel]. In either case the plain analysis
-       (those nests serial, as before) is the result, so the extension never costs the kernel the
-       parallelism it had: alignment keeps at least the outermost loop of every chain it trims, and
-       the outermost loop is all this preset retypes. *)
+       a [y[i, j]] reading [s[i]] keeps only [i]. A trim costs this preset nothing by itself:
+       alignment keeps every trimmed chain's outermost loop, and the outermost loop is all it
+       retypes. What a trim can cost is the threshold: the largest parallel size can drop below
+       [min_parallel] where the plain analysis met it, and then the whole kernel would stay serial.
+       So the plain analysis (scratch-writing nests serial, as before) is the result when the
+       scratch-aware one bails or loses threshold eligibility the plain one has -- never merely
+       because its chains are shorter. *)
     let chains =
       let plain = lazy (analyze_parallel_chains opt) in
       match analyze_parallel_chains ~shared_locals:true opt with
       | exception Bail -> Lazy.force plain
+      | shared when max_parallel_size shared >= min_parallel -> shared
       | shared -> (
           match Lazy.force plain with
-          | plain when max_parallel_size shared < max_parallel_size plain -> plain
+          | plain when max_parallel_size plain >= min_parallel -> plain
           | _ -> shared
           | exception Bail -> shared)
     in
