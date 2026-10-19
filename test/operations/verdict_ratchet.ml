@@ -4257,6 +4257,30 @@ let () = p "the intrinsic renders" ((not (Lazy.force tile)) || census_ok (Contex
       ( "accepts a disjunct that is a library constant, which the test did not compute",
         {ocaml|let () = p "a library is kept where requested" (on_cpu || Kept.always)|ocaml},
         [] );
+      ( "refuses a fold read off any value of Sys",
+        {ocaml|let () = p "the layout is native" (Sys.big_endian || native_layout (Context.auto ()))|ocaml},
+        [ "not (Sys.big_endian)" ] );
+      ( "refuses a gate a later assignment writes into a ref",
+        {ocaml|let gate = ref false
+let () = gate := Sys.win32
+let () = p "the path is portable" (!gate || portable (Context.auto ()))|ocaml},
+        [ "not (!gate)" ] );
+      ( "accepts a ref the test overwrites with its own computation",
+        {ocaml|let () =
+  let ready = ref on_cpu in
+  ready := probe (Context.auto ());
+  p "the probe passes or the census renders" (!ready || census_ok (Context.auto ()))|ocaml},
+        [] );
+      ( "accepts a gated claim whose value repeats its own gate",
+        {ocaml|let () =
+  gated ~when_:on_cpu ~on:backend_name "the census renders tiled"
+    ((not on_cpu) || census_ok (Context.auto ()))|ocaml},
+        [] );
+      ( "accepts a gated_all whose predicate repeats a conjunct of its gate",
+        {ocaml|let () =
+  gated_all ~when_:(on_gpu && is_metal) ~on:backend_name "every row renders the intrinsic" rows
+    ~f:(fun row -> (not is_metal) || row.intrinsic)|ocaml},
+        [] );
       ( "marks a fold past an open of another module ambiguous",
         {ocaml|open Other
 let () = p "the census renders tiled" ((not on_cpu) || census_ok (Context.auto ()))|ocaml},

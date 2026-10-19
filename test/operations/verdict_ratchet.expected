@@ -616,6 +616,11 @@ refuses a gate a match on the backend computes: true
 refuses a host gate folded into a claim's value: true
 refuses a gate read off the settings record: true
 accepts a disjunct that is a library constant, which the test did not compute: true
+refuses a fold read off any value of Sys: true
+refuses a gate a later assignment writes into a ref: true
+accepts a ref the test overwrites with its own computation: true
+accepts a gated claim whose value repeats its own gate: true
+accepts a gated_all whose predicate repeats a conjunct of its gate: true
 marks a fold past an open of another module ambiguous: true
 accepts the gated spelling of the same claim: true
 accepts a skip spelled as a branch: true

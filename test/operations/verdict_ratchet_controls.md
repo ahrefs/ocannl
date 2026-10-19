@@ -645,7 +645,8 @@ fails; the narrower ambiguity mutation in its row replaced them.
 The folded-gate reader (`Verdict_scan.folded_gate_census`) refuses a `Verdict` claim whose value has
 a run-constant disjunct -- a value the configuration fixes, such as `on_cpu` -- beside one the test
 computed. Every run used tools/mutation-run.sh on the named module and the focused verdict_ratchet
-alias, on the reader as first pushed, exited 1 on exactly the listed false claims, and restored the
+alias, on the reader as first pushed (the rows marked review round 1, and the Sys row's rerun, on
+that round's reader), exited 1 on exactly the listed false claims, and restored the
 source byte-for-byte with cmp; the baseline run `20261019T172927Z-24672` exited 0. "The name-gated
 refusals" are the thirteen refusals whose gate is a name (all but the two if refusals and the
 lazy-probe, host and settings ones).
@@ -664,7 +665,11 @@ lazy-probe, host and settings ones).
 | An if splits only where a branch is the passing constant | `verdict_scan.ml`: any branch read as the passing constant | Failed: `accepts an if both of whose branches the test computes`, the then-branch refusal (whose gate then reads negated), and the corpus claim | `20261019T173248Z-45570` |
 | What a configuration reader returns is run-constant | `verdict_scan.ml`: no configuration reader | Failed: every refusal but the host and settings ones, the planted-refusal control, and the corpus claim | `20261019T173306Z-68926` |
 | The settings record is run-constant | `verdict_scan.ml`: `Utils.settings` a library value | Failed: `refuses a gate read off the settings record` | `20261019T173324Z-92785` |
-| A Sys host value is run-constant | `verdict_scan.ml`: no host value | Failed: `refuses a host gate folded into a claim's value` | `20261019T173343Z-21494` |
+| Every value of Sys is run-constant (review round 1) | `verdict_scan.ml`: only `Sys.win32` | Failed: `refuses a fold read off any value of Sys` | `20261019T180005Z-40045` |
+| What the source writes into a ref joins its value (review round 1) | `verdict_scan.ml`: writes not followed | Failed: `refuses a gate a later assignment writes into a ref`; `accepts a ref the test overwrites with its own computation` | `20261019T180022Z-48641` |
+| A ref and a dereference are what they hold (review round 1) | `verdict_scan.ml`: `ref` and `!` read as library calls | Failed: the ref-write refusal | `20261019T180039Z-57189` |
+| A gated claim's gate makes a copy of its own negation unreachable (review round 1) | `verdict_scan.ml`: the gate's disjuncts not discounted | Failed: `accepts a gated claim whose value repeats its own gate`; `accepts a gated_all whose predicate repeats a conjunct of its gate` | `20261019T180056Z-65750` |
+| A Sys host value is run-constant | `verdict_scan.ml`: no value of Sys (rerun on the round-1 reader) | Failed: `refuses a host gate folded into a claim's value`, and the any-value and ref-write refusals | `20261019T175949Z-31538` |
 | A library call over run-constant and constant arguments is run-constant | `verdict_scan.ml`: every library call computed | Failed: every refusal but the host and settings ones, and the planted-refusal control | `20261019T173400Z-33261` |
 | A library call over constants alone is the test's computation | `verdict_scan.ml`: such a call is constant | Failed: the fifteen refusals whose computed disjunct is such a call (a fresh context, and what reads it), and the planted-refusal control | `20261019T173419Z-50437` |
 | A parameter or pattern variable is the test's own | `verdict_scan.ml`: such a name is constant | Failed: the four refusals whose computed disjunct reads a predicate's parameter | `20261019T173437Z-70328` |
