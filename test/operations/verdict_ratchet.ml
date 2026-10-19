@@ -4265,11 +4265,33 @@ let () = p "the intrinsic renders" ((not (Lazy.force tile)) || census_ok (Contex
 let () = gate := Sys.win32
 let () = p "the path is portable" (!gate || portable (Context.auto ()))|ocaml},
         [ "not (!gate)" ] );
-      ( "accepts a ref the test overwrites with its own computation",
+      ( "refuses a ref that ever holds a run-constant, whatever overwrites it",
         {ocaml|let () =
   let ready = ref on_cpu in
   ready := probe (Context.auto ());
   p "the probe passes or the census renders" (!ready || census_ok (Context.auto ()))|ocaml},
+        [ "not (!ready)" ] );
+      ( "refuses a gate assigned over a ref the test initialized",
+        {ocaml|let () =
+  let gate = ref (probe (Context.auto ())) in
+  gate := Sys.win32;
+  p "the path is portable" (!gate || portable (Context.auto ()))|ocaml},
+        [ "not (!gate)" ] );
+      ( "accepts a ref the test alone writes",
+        {ocaml|let () =
+  let ready = ref false in
+  ready := probe (Context.auto ());
+  p "the probe passes or the census renders" (!ready || census_ok (Context.auto ()))|ocaml},
+        [] );
+      ( "refuses a fold spelled as a match on the backend with a passing case",
+        {ocaml|let () =
+  p "the census renders tiled"
+    (match backend_name with "cc" -> census_ok (Context.auto ()) | _ -> true)|ocaml},
+        [ "not (match backend_name with | \"cc\" -> false | _ -> true)" ] );
+      ( "accepts a match on the backend every case of which the test computes",
+        {ocaml|let () =
+  p "the census renders"
+    (match backend_name with "cc" -> tiled (Context.auto ()) | _ -> intrinsic (Context.auto ()))|ocaml},
         [] );
       ( "accepts a gated claim whose value repeats its own gate",
         {ocaml|let () =

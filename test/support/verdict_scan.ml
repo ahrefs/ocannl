@@ -1592,9 +1592,10 @@ let gate_census content =
     constants alone: an application of a function from outside the source to run-constant and
     constant arguments, at least one of them run-constant ([backend_is_cpu backend_name],
     [String.equal backend_name "metal"], [not on_gpu]); an [if] or [match] over such parts; a field,
-    a [lazy], a [ref], a dereference or a constructor of one; a name bound to one by [let], anywhere
-    in the source, joined with everything the source assigns into it with [:=]. A constant is a
-    literal, a constructor of constants, or a library value.
+    a [lazy] or a constructor of one; a name bound to one by [let], anywhere in the source -- or,
+    for a cell the source assigns into with [:=], to a run-constant value in its initializer or in
+    any write, whatever their order. A constant is a literal, a constructor of constants, or a
+    library value.
 
     So [on_cpu], [on_gpu], [is_metal], [seeds_here = Autotune.seeded_default_backend backend_name]
     and a [lazy] hardware probe are gates; a value computed from the program under test -- a census,
@@ -1756,10 +1757,19 @@ let folded_gate_census content =
                     (* A cycle is the test's own computation. *)
                     Hashtbl.set constancy ~key:identity ~data:Varying;
                     let known =
-                      join
-                        (self#constancy rhs_env rhs
-                        :: List.map (Hashtbl.find_multi writes identity) ~f:(fun (written, env) ->
-                            self#constancy env written))
+                      match Hashtbl.find_multi writes identity with
+                      | [] -> self#constancy rhs_env rhs
+                      | written ->
+                          (* A cell the source assigns into holds, somewhere, each value it is
+                             given: one run-constant value makes it a gate wherever it is read --
+                             the order of reads and writes is not followed, in the loud
+                             direction. *)
+                          let held =
+                            self#constancy rhs_env rhs
+                            :: List.map written ~f:(fun (value, env) -> self#constancy env value)
+                          in
+                          if List.mem held Run_constant ~equal:Poly.equal then Run_constant
+                          else join held
                     in
                     Hashtbl.set constancy ~key:identity ~data:known;
                     known)
@@ -1770,9 +1780,6 @@ let folded_gate_census content =
             | Some (_ :: "Sys" :: _) -> Run_constant
             | Some ("settings" :: "Utils" :: _) -> Run_constant
             | _ -> Constant)
-        | Pexp_apply (callee, [ (Nolabel, cell) ]) when self#connective env callee [ "ref"; "!" ] ->
-            (* A ref holds what it is made from and written with; a dereference, what it holds. *)
-            self#constancy env cell
         | Pexp_apply (callee, arguments) -> (
             match self#external_path env callee with
             | Some path when List.mem configuration_readers (List.last_exn path) ~equal:String.equal
@@ -1826,11 +1833,13 @@ let folded_gate_census content =
             | Some { identity; definition = Some (rhs, rhs_env) }
               when not (Hash_set.mem seen identity) -> (
                 Hash_set.add seen identity;
-                (* A name that is one disjunct is reported by its name, which is what a remedy's
-                   [~when_] would spell. *)
-                match again rhs_env polarity rhs with
-                | [ (_, _, same) ] when Bool.equal same polarity -> leaf
-                | parts -> parts)
+                (* A name that is one disjunct, or a gate as a whole, is reported by its name, which
+                   is what a remedy's [~when_] would spell. *)
+                if Poly.equal (self#constancy env expr) Run_constant then leaf
+                else
+                  match again rhs_env polarity rhs with
+                  | [ (_, _, same) ] when Bool.equal same polarity -> leaf
+                  | parts -> parts)
             | _ -> leaf)
         | Pexp_apply (callee, [ (Nolabel, a); (Nolabel, b) ])
           when (polarity && self#connective env callee [ "||"; "or" ])
@@ -1843,6 +1852,32 @@ let folded_gate_census content =
             (condition, env, false) :: again env polarity yes
         | Pexp_ifthenelse (condition, yes, Some no) when is_bool yes polarity ->
             (condition, env, true) :: again env polarity no
+        | Pexp_match (scrutinee, cases)
+          when List.exists cases ~f:(fun case -> is_bool case.pc_rhs polarity) ->
+            (* [match s with A -> x | _ -> true]: [s] reaching a passing case, or a computed branch.
+               The first disjunct is the match with each case returning whether it passes, which is
+               as run-constant as [s] and the guards are. *)
+            let passes case =
+              let value = is_bool case.pc_rhs polarity in
+              {
+                case with
+                pc_rhs =
+                  {
+                    case.pc_rhs with
+                    pexp_desc =
+                      Pexp_construct
+                        ( {
+                            txt = Ppxlib.Longident.Lident (if value then "true" else "false");
+                            loc = case.pc_rhs.pexp_loc;
+                          },
+                          None );
+                  };
+              }
+            in
+            ({ expr with pexp_desc = Pexp_match (scrutinee, List.map cases ~f:passes) }, env, true)
+            :: List.concat_map cases ~f:(fun case ->
+                if is_bool case.pc_rhs polarity then []
+                else again (self#bind_patterns env [ case.pc_lhs ]) polarity case.pc_rhs)
         | _ -> leaf
 
       (* The body a predicate returns, under its parameters: a function written in place, or one a
@@ -1923,7 +1958,7 @@ let folded_gate_census content =
                     (* A gated claim is evaluated only where its [~when_] holds, so a disjunct that
                        makes the gate false -- a copy of the gate's own negation -- is never the one
                        that passes it. *)
-                    let unreachable =
+                    let unreachable () =
                       List.concat_map arguments ~f:(function
                         | Ppxlib.Asttypes.Labelled "when_", gate ->
                             self#disjuncts env false gate ~seen:(Hash_set.create (module Int))
@@ -1932,6 +1967,7 @@ let folded_gate_census content =
                     let values = self#claim_values env slot arguments in
                     pending :=
                       (fun () ->
+                        let unreachable = unreachable () in
                         List.iter values ~f:(fun (value, env) ->
                             let parts =
                               List.filter_map

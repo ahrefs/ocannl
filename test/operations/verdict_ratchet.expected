@@ -618,7 +618,11 @@ refuses a gate read off the settings record: true
 accepts a disjunct that is a library constant, which the test did not compute: true
 refuses a fold read off any value of Sys: true
 refuses a gate a later assignment writes into a ref: true
-accepts a ref the test overwrites with its own computation: true
+refuses a ref that ever holds a run-constant, whatever overwrites it: true
+refuses a gate assigned over a ref the test initialized: true
+accepts a ref the test alone writes: true
+refuses a fold spelled as a match on the backend with a passing case: true
+accepts a match on the backend every case of which the test computes: true
 accepts a gated claim whose value repeats its own gate: true
 accepts a gated_all whose predicate repeats a conjunct of its gate: true
 marks a fold past an open of another module ambiguous: true
