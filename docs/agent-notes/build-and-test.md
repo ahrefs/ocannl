@@ -1751,10 +1751,28 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `gated ~when_:(not (List.is_empty xs)) label ((not (List.is_empty xs)) && List.for_all xs …)` is
   refused; a boolean that quantifies nothing has no population. Its recognized forms are held
   equal to the `gated` and `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
-  (`p "…" ((not on_cpu) || ok)`), which prints `true` where it should report a skip, is a
-  different shape it does not see. Most of its mutation runs exit 4, not 1: the ratchet's trailing
+  (`p "…" ((not on_cpu) || ok)`) is the fifth reader's (below). Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).
+- `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):
+  `p "…" ((not on_cpu) || ok)` prints `true` on a GPU, a pass byte-identical to a CPU run that
+  checked `ok`, so the transcript says the claim held on hardware that never evaluated it.
+  `Verdict_scan.folded_gate_census` splits each `Verdict` claim's value (the boolean, or a
+  quantified claim's `~f` body; `p_none`'s at the opposite polarity) into the disjuncts that alone
+  pass it -- through `||`, `not`, a negated `&&`, a `let`-bound name, and an `if` whose other branch
+  is the passing constant -- and refuses one that is RUN-CONSTANT beside one the test computed. Run-constant
+  is what a configuration reader returns (`get_global_arg`, `getenv`, `Context.backend_name`,
+  `Context.hardware_limits`, `Sys.win32`, `Utils.settings`), and what library calls compute from those and constants
+  alone, through names anywhere in the source: `on_cpu`, `seeds_here`, a `lazy` hardware probe. A
+  value that also reads a parameter, a pattern variable or a computation (`Context.auto ()`) is the
+  test's own, so an implication over a computed antecedent (`(not ran) || finite`) passes, and so
+  does a census computed under the backend. The remedy is `Verdict.gated ~when_` (a `gated_*` form
+  for a quantified claim; a branch with `skipped` for a pairwise one, which has no gated form). Its
+  header in `test/support/verdict_scan.ml` states the boundary: claims through a wrapper or a
+  pipeline, a source function's result, and a fold below a conjunction (`ok && ((not on_metal) ||
+  dialect)`, partly checked everywhere) are not read. The tree's 32 folded sites converted with
+  their goldens unmoved, `gated` printing `p`'s line; the cross-machine sweep's skip coverage now
+  sees what they never checked.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured

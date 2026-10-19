@@ -639,3 +639,63 @@ nothing else (run `20261019T121430Z-23875`). Before the reader learned the boole
 Two mutations are no evidence and are not cited above: dropping every resolver answer from the
 provenance layer, and every ambiguous one, stopped early (exit 4) under the hundreds of claims each
 fails; the narrower ambiguity mutation in its row replaced them.
+
+## gh-ocannl-1310 mutation runs
+
+The folded-gate reader (`Verdict_scan.folded_gate_census`) refuses a `Verdict` claim whose value has
+a run-constant disjunct -- a value the configuration fixes, such as `on_cpu` -- beside one the test
+computed. Every run used tools/mutation-run.sh on the named module and the focused verdict_ratchet
+alias, on the reader as first pushed, exited 1 on exactly the listed false claims, and restored the
+source byte-for-byte with cmp; the baseline run `20261019T172927Z-24672` exited 0. "The name-gated
+refusals" are the thirteen refusals whose gate is a name (all but the two if refusals and the
+lazy-probe, host and settings ones).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A run-constant disjunct beside a computed one refuses the claim | `verdict_scan.ml`: no fold ever recorded | Failed: `refuses a negated backend gate folded into a claim's value`, every other refusal of this section, and the planted-refusal control | `20261019T172956Z-52554` |
+| A claim's value is followed through a name into its right-hand side | `verdict_scan.ml`: the name arm of the disjunct split stops at the name | Failed: `refuses a fold bound to a name before the claim` | `20261019T173016Z-70412` |
+| A name that is one disjunct is reported by its name, as a remedy's `~when_` spells it | `verdict_scan.ml`: the name always expanded | Failed: the name-gated refusals, whose expected gates then read as the expansion | `20261019T173035Z-92126` |
+| `\|\|` splits a claim's value into disjuncts | `verdict_scan.ml`: no disjunction split | Failed: `refuses a backend gate that is itself a disjunct of the claim`; `refuses a gate written after the claim it folds`; every other refusal written with `\|\|`, and the planted-refusal control | `20261019T173055Z-19536` |
+| Under a negation, `&&` splits | `verdict_scan.ml`: no conjunction split | Failed: `refuses a fold behind a negated conjunction`; `refuses a backend gate conjoined into an implication's antecedent`; and the p_none refusal | `20261019T173115Z-40862` |
+| A conjunction does not split at the claim's own polarity | `verdict_scan.ml`: `&&` split at either polarity | Failed: `accepts a gate folded below a conjunction, which the claim checks in part everywhere` | `20261019T173135Z-63683` |
+| `not` swaps the polarity it is read at | `verdict_scan.ml`: `not` keeps the polarity | Failed: the twelve refusals spelled with `not`, whose gates then print negated | `20261019T173154Z-82415` |
+| An if whose else branch is the passing constant is a disjunction | `verdict_scan.ml`: that arm dropped | Failed: `refuses a fold spelled as an if whose else branch passes` | `20261019T173212Z-8967` |
+| An if whose then branch is the passing constant is a disjunction | `verdict_scan.ml`: that arm dropped | Failed: `refuses a fold spelled as an if whose then branch passes` | `20261019T173231Z-29568` |
+| An if splits only where a branch is the passing constant | `verdict_scan.ml`: any branch read as the passing constant | Failed: `accepts an if both of whose branches the test computes`, the then-branch refusal (whose gate then reads negated), and the corpus claim | `20261019T173248Z-45570` |
+| What a configuration reader returns is run-constant | `verdict_scan.ml`: no configuration reader | Failed: every refusal but the host and settings ones, the planted-refusal control, and the corpus claim | `20261019T173306Z-68926` |
+| The settings record is run-constant | `verdict_scan.ml`: `Utils.settings` a library value | Failed: `refuses a gate read off the settings record` | `20261019T173324Z-92785` |
+| A Sys host value is run-constant | `verdict_scan.ml`: no host value | Failed: `refuses a host gate folded into a claim's value` | `20261019T173343Z-21494` |
+| A library call over run-constant and constant arguments is run-constant | `verdict_scan.ml`: every library call computed | Failed: every refusal but the host and settings ones, and the planted-refusal control | `20261019T173400Z-33261` |
+| A library call over constants alone is the test's computation | `verdict_scan.ml`: such a call is constant | Failed: the fifteen refusals whose computed disjunct is such a call (a fresh context, and what reads it), and the planted-refusal control | `20261019T173419Z-50437` |
+| A parameter or pattern variable is the test's own | `verdict_scan.ml`: such a name is constant | Failed: the four refusals whose computed disjunct reads a predicate's parameter | `20261019T173437Z-70328` |
+| A value that reads the test's computation is the test's, though it reads a run-constant too | `verdict_scan.ml`: a run-constant part dominates a computed one | Failed: `accepts a disjunct computed from the program though it read the backend on its way`; `accepts an antecedent that compares the element under test with the backend` | `20261019T174037Z-83383` |
+| A name is run-constant as its right-hand side is | `verdict_scan.ml`: every bound name computed | Failed: every refusal but the host and settings ones, the planted-refusal control, and the corpus claim | `20261019T173456Z-95076` |
+| A lazy value is its body's | `verdict_scan.ml`: `lazy` not read through | Failed: `refuses a gate read off a lazy hardware probe` | `20261019T173514Z-16520` |
+| A field of a run-constant value is run-constant | `verdict_scan.ml`: a field not read through | Failed: the lazy-probe refusal (whose probe reads the limits' `mma` field), the settings refusal, and the corpus claim | `20261019T173533Z-31479` |
+| A match over run-constant parts is run-constant | `verdict_scan.ml`: every match computed | Failed: `refuses a gate a match on the backend computes` | `20261019T173551Z-46815` |
+| A quantified claim's predicate body is read | `verdict_scan.ml`: no function body read | Failed: `refuses a fold in a quantified claim's predicate`; the named-predicate, p_none and conjoined-antecedent refusals | `20261019T173609Z-63764` |
+| A predicate a name is bound to is followed | `verdict_scan.ml`: the name arm reads no body | Failed: `refuses a fold in a predicate a name is bound to` | `20261019T173628Z-83750` |
+| p_none's element passes where its predicate is false | `verdict_scan.ml`: `p_none` read at the positive polarity | Failed: `refuses a fold in p_none's predicate, whose element passes where it is false` | `20261019T173646Z-1643` |
+| A format's boolean is its last positional argument | `verdict_scan.ml`: `pf` read at its second | Failed: `refuses a fold in a computed-label claim` | `20261019T173705Z-12278` |
+| A gated boolean is read | `verdict_scan.ml`: `gated` dropped from the slots | Failed: `refuses a fold in a gated boolean, beside its own gate`, and the corpus claim that the reader judges every Claims member | `20261019T173722Z-23784` |
+| A connective the source rebinds is not split | `verdict_scan.ml`: connectives read by spelling alone | Failed: `does not split a disjunction whose connective the source rebinds` | `20261019T173740Z-42409` |
+| Only Verdict's claims are read | `verdict_scan.ml`: every ownership read | Failed: `does not read a claim name the source binds itself` | `20261019T173759Z-62193` |
+| A fold past an open of another module is ambiguous | `verdict_scan.ml`: every fold certain | Failed: `marks a fold past an open of another module ambiguous` | `20261019T173816Z-75339` |
+| Only a disjunct the test computed makes a run-constant one a fold | `verdict_scan.ml`: any disjunct that is not run-constant does | Failed: `accepts a disjunct that is a library constant, which the test did not compute` | `20261019T173833Z-83725` |
+| A claim about the configuration alone is no fold | `verdict_scan.ml`: no computed disjunct required | Failed: `accepts a claim about the configuration alone`, the library-constant near miss, and the corpus claim | `20261019T173850Z-92043` |
+| A finding refuses the run | `verdict_ratchet.ml`: the fold refusal never fails | Failed: `refuses a planted folded gate, and names a folded-gate reader that raised` | `20261019T173908Z-11432` |
+| A reader that raises on a source that parses refuses the run | `verdict_ratchet.ml`: the raise never fails | Failed: the planted-refusal control | `20261019T173931Z-38938` |
+
+The accepting neighbours no single mutation above turns red are exercised on every run:
+`accepts the gated spelling of the same claim`;
+`accepts a skip spelled as a branch`;
+`accepts an implication whose antecedent the test computed`.
+
+The shipped shape, re-seeded into the corpus: in `test/operations/tile_mma_declines.ml`, one of
+staging#1087's sites restored to its folded spelling (the per-chunk re-pack's declines-to-serial
+claim, `p` over the disjunction with not on_cpu) failed the corpus claim that no claim folds a
+run-constant gate into its value, naming tile_mma_declines.ml:253 and `on_cpu`, and nothing else
+(run `20261019T173949Z-59137`). Before the conversion, a draft of the reader refused the 32 shipped
+sites, and only them (run `20261019T165108Z-75301`); the rebase onto master brought one more
+candidate, `cc_kept_library`'s claim that a library is kept where the configuration requests it,
+which is a claim over the configuration alone and taught the reader the settings record.

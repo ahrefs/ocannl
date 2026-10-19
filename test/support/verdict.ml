@@ -406,10 +406,11 @@ type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
 
     Use it in place of a bare [p name true]: that line is byte-identical to a verified run's, so
     neither the transcript nor a reviewer can tell the claim was never evaluated — which is how a
-    [Tensorize] leg came to "cover" the gh-ocannl-528 interior-batch bug without ever checking it.
-    The other honest form is putting the condition into the label itself ("… (skipped: non-C
-    backend)"), which distinguishes the golden line; only the indistinguishable bare [true] is the
-    one to reject.
+    [Tensorize] leg came to "cover" the gh-ocannl-528 interior-batch bug without ever checking it. A
+    gate folded into the claim's value, [p name ((not gate) || b)], prints that same line where the
+    gate is closed, and [verdict_ratchet] refuses it (gh-ocannl-1310). The other honest form is
+    putting the condition into the label itself ("… (skipped: non-C backend)"), which distinguishes
+    the golden line; only the indistinguishable bare [true] is the one to reject.
 
     [~backend] is the run's backend name, as each test already derives it for its own gating
     ([String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")]). It is passed in

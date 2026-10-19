@@ -69,6 +69,12 @@
    to one answer per spelling. The same issue has the gate reader read [Verdict.gated]'s boolean:
    its population is what the boolean's quantifiers range over.
 
+   gh-ocannl-1310 adds a fifth, about a gate FOLDED INTO THE VALUE: [p "…" ((not on_cpu) || ok)]
+   prints [true] on a GPU -- a pass where the honest report is a skip, and the run's transcript
+   cannot tell it from a CPU run that checked [ok]. [Verdict_scan.folded_gate_census] splits each
+   claim's value into the disjuncts that alone pass it and refuses a run-constant one -- a value the
+   configuration fixes -- beside one the test computed; [Verdict.gated] is the remedy.
+
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
    per mechanism with the control labels and the retained `tools/test-run.sh` run ids, is
@@ -4168,6 +4174,219 @@ let run_gate_refusal_control () =
   ( "refuses a planted gate that reads its population, and a gated claim it cannot read",
     !refused_reading && !refused_unread && !refused_raise )
 
+(* {1 A gate is a skip, not a disjunct of the claim (gh-ocannl-1310)}
+
+   [p "…" ((not on_cpu) || ok)] prints [true] on a GPU: a pass, byte-identical to a CPU run that
+   checked [ok], where the honest report is a skip. The reader is [Verdict_scan.folded_gate_census];
+   its header states what a run-constant gate is and what it does not read. The controls are the
+   gates it must report, each by the [~when_] the remedy would carry ([ [ambiguous] ] marking a
+   claim past an open of another module), and the near misses it must accept: above all an
+   implication whose antecedent the test computed, and a value computed from the program that read
+   the backend on its way, which is how a census reads. *)
+let folded_gate_prelude =
+  {ocaml|open Verdict.Claims
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let on_cpu = Sched.backend_is_cpu backend_name
+let on_gpu = Sched.backend_is_gpu backend_name
+let is_metal = String.equal backend_name "metal"
+|ocaml}
+
+let folded_gate_controls =
+  List.map
+    ~f:(fun (label, body, expected) -> (label, folded_gate_prelude ^ body, expected))
+    [
+      ( "refuses a negated backend gate folded into a claim's value",
+        {ocaml|let () = p "the census renders tiled" ((not on_cpu) || census_ok (Context.auto ()))|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a backend gate that is itself a disjunct of the claim",
+        {ocaml|let () = p "the values agree" (on_gpu || Float.equal got want)|ocaml},
+        [ "not (on_gpu)" ] );
+      ( "refuses a gate written after the claim it folds",
+        {ocaml|let () = p "the census renders tiled" (census_ok (Context.auto ()) || not on_cpu)|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold bound to a name before the claim",
+        {ocaml|let () =
+  let ok = (not on_cpu) || census_ok (Context.auto ()) in
+  p "the census renders tiled" ok|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold spelled as an if whose else branch passes",
+        {ocaml|let () = p "the census renders tiled" (if on_cpu then census_ok (Context.auto ()) else true)|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold spelled as an if whose then branch passes",
+        {ocaml|let () = p "the values agree" (if on_gpu then true else census_ok (Context.auto ()))|ocaml},
+        [ "not (on_gpu)" ] );
+      ( "refuses a fold behind a negated conjunction",
+        {ocaml|let () = p "the census renders tiled" (not (on_cpu && not (census_ok (Context.auto ()))))|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold in a quantified claim's predicate",
+        {ocaml|let () = p_all "every row renders tiled" rows ~f:(fun row -> (not on_cpu) || row.tiled)|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold in a predicate a name is bound to",
+        {ocaml|let () =
+  let tiled row = (not on_cpu) || row.tiled in
+  p_all "every row renders tiled" rows ~f:tiled|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold in p_none's predicate, whose element passes where it is false",
+        {ocaml|let () = p_none "no row falls back" rows ~f:(fun row -> on_cpu && row.fell_back)|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold in a computed-label claim",
+        {ocaml|let () = pf "%s renders tiled" tag ((not on_cpu) || census_ok (Context.auto ()))|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a fold in a gated boolean, beside its own gate",
+        {ocaml|let () =
+  gated ~when_:on_gpu ~on:backend_name "the dialect text is Metal's"
+    ((not is_metal) || dialect_ok (Context.auto ()))|ocaml},
+        [ "is_metal" ] );
+      ( "refuses a gate read off a lazy hardware probe",
+        {ocaml|let tile = lazy (Option.is_some (Context.hardware_limits (Context.auto ())).mma)
+let () = p "the intrinsic renders" ((not (Lazy.force tile)) || census_ok (Context.auto ()))|ocaml},
+        [ "Lazy.force tile" ] );
+      ( "refuses a gate a match on the backend computes",
+        {ocaml|let () =
+  let gpu = match backend_name with "metal" | "cuda" | "hip" -> true | _ -> false in
+  p "the census renders the intrinsic" ((not gpu) || census_ok (Context.auto ()))|ocaml},
+        [ "gpu" ] );
+      ( "refuses a host gate folded into a claim's value",
+        {ocaml|let () = p "the path is portable" (Sys.win32 || portable (Context.auto ()))|ocaml},
+        [ "not (Sys.win32)" ] );
+      ( "refuses a gate read off the settings record",
+        {ocaml|let () =
+  p "the debug source is kept"
+    (Utils.settings.output_debug_files_in_build_directory || kept (Context.auto ()))|ocaml},
+        [ "not (Utils.settings.output_debug_files_in_build_directory)" ] );
+      ( "accepts a disjunct that is a library constant, which the test did not compute",
+        {ocaml|let () = p "a library is kept where requested" (on_cpu || Kept.always)|ocaml},
+        [] );
+      ( "marks a fold past an open of another module ambiguous",
+        {ocaml|open Other
+let () = p "the census renders tiled" ((not on_cpu) || census_ok (Context.auto ()))|ocaml},
+        [ "on_cpu [ambiguous]" ] );
+      ( "accepts the gated spelling of the same claim",
+        {ocaml|let () = gated ~when_:on_cpu ~on:backend_name "the census renders tiled" (census_ok (Context.auto ()))|ocaml},
+        [] );
+      ( "accepts a skip spelled as a branch",
+        {ocaml|let () =
+  if on_cpu then p "the census renders tiled" (census_ok (Context.auto ()))
+  else skipped "the census renders tiled"|ocaml},
+        [] );
+      ( "accepts an implication whose antecedent the test computed",
+        {ocaml|let () =
+  p_alli "losses on good steps are finite" stepped ~f:(fun i ran ->
+      (not ran) || Float.is_finite losses.(i))|ocaml},
+        [] );
+      ( "accepts a disjunct computed from the program though it read the backend on its way",
+        {ocaml|let () =
+  let census = compile_census (Context.auto ()) ~tensorize:on_cpu in
+  p "the census renders tiled or declines" (renders census || declines (Context.auto ()))|ocaml},
+        [] );
+      ( "refuses a backend gate conjoined into an implication's antecedent",
+        {ocaml|let () =
+  p_all "every staged GPU row matches" rows ~f:(fun row -> (not (on_gpu && row.staged)) || row.ok)|ocaml},
+        [ "on_gpu" ] );
+      ( "accepts an antecedent that compares the element under test with the backend",
+        {ocaml|let () =
+  p_all "every row this backend recorded matches" rows ~f:(fun row ->
+      (not (String.equal row.backend backend_name)) || row.ok)|ocaml},
+        [] );
+      ( "does not read a claim name the source binds itself",
+        {ocaml|let () =
+  let p label ok = Stdio.printf "%s\n" (if ok then label else "") in
+  p "the census renders tiled" ((not on_cpu) || census_ok (Context.auto ()))|ocaml},
+        [] );
+      ( "accepts a gate folded below a conjunction, which the claim checks in part everywhere",
+        {ocaml|let () =
+  p "the census agrees and the dialect text is Metal's"
+    (census_ok (Context.auto ()) && ((not is_metal) || dialect_ok (Context.auto ())))|ocaml},
+        [] );
+      ( "accepts a claim about the configuration alone",
+        {ocaml|let () = p "the backend is a CPU or a GPU" (on_cpu || on_gpu)|ocaml},
+        [] );
+      ( "accepts an if both of whose branches the test computes",
+        {ocaml|let () = p "the census renders" (if on_cpu then tiled (Context.auto ()) else intrinsic (Context.auto ()))|ocaml},
+        [] );
+      ( "does not split a disjunction whose connective the source rebinds",
+        {ocaml|let ( || ) a b = a && b
+let () = p "the census renders tiled" ((not on_cpu) || census_ok (Context.auto ()))|ocaml},
+        [] );
+    ]
+
+let folded_gate_findings source =
+  let census = Scan.folded_gate_census source in
+  List.map census.Scan.folded ~f:(fun (fold : Scan.folded_gate) ->
+      fold.when_ ^ if fold.folded_ambiguous then " [ambiguous]" else "")
+
+let run_folded_gate_controls () =
+  List.map folded_gate_controls ~f:(fun (label, source, expected) ->
+      let found = folded_gate_findings source in
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "folded-gate control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found);
+      (label, ok))
+
+let refuse_folded_gate ~fail ~source (fold : Scan.folded_gate) =
+  fail
+    (Printf.sprintf
+       "%s:%d folds a run-constant gate into the value of `%s`: wherever `%s` is false the claim \
+        prints `true`, a pass byte-identical to a run that checked it, where the honest report is \
+        a skip (gh-ocannl-1310). Report it through `Verdict.gated ~when_:(%s) ~on:<what the run \
+        was on>` -- `gated_all`, `gated_alli` or `gated_exists` for a quantified claim -- or a \
+        branch that calls `skipped`%s"
+       source fold.folded_line fold.folded_form fold.when_ fold.when_
+       (ambiguity_remedy ~ambiguous:fold.folded_ambiguous ~callee:(Some fold.folded_form)))
+
+(* The folded-gate reader over one source, its failures told apart as {!read_gates} tells the gate
+   reader's apart. *)
+let read_folded_gates ~fail ~source ~census content =
+  match Test_utils.Scan_attempt.run (fun () -> census content) with
+  | Test_utils.Scan_attempt.Scanned folds -> folds
+  | Unparsed -> { Scan.folded = []; folded_claim_sites = 0 }
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the folded-gate reader raised %s on %s, which parses -- a defect of \
+            Verdict_scan.folded_gate_census, not of the source, and the source's claim values went \
+            unread"
+           exn source);
+      { Scan.folded = []; folded_claim_sites = 0 }
+
+(* The wiring from a finding to the failure, exercised on a refusing control. *)
+let run_folded_gate_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let fold_format =
+    "%s:%d folds a run-constant gate into the value of `%s`: wherever `%s` is false the claim \
+     prints `true`, a pass byte-identical to a run that checked it, where the honest report is a \
+     skip (gh-ocannl-1310). Report it through `Verdict.gated ~when_:(%s) ~on:<what the run was \
+     on>` -- `gated_all`, `gated_alli` or `gated_exists` for a quantified claim -- or a branch \
+     that calls `skipped`%s"
+  and raised_format =
+    "the folded-gate reader raised %s on %s, which parses -- a defect of \
+     Verdict_scan.folded_gate_census, not of the source, and the source's claim values went unread"
+  in
+  let fixture =
+    List.find_map_exn folded_gate_controls ~f:(fun (label, source, _) ->
+        if String.equal label "refuses a negated backend gate folded into a claim's value" then
+          Some source
+        else None)
+  in
+  let refused_fold = ref false and refused_raise = ref false in
+  List.iter (Scan.folded_gate_census fixture).Scan.folded
+    ~f:
+      (refuse_folded_gate ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_fold := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:fold_format));
+  ignore
+    (read_folded_gates ~source:"fixture.ml"
+       ~fail:(fun _ ->
+         refused_raise := true;
+         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+       ~census:(fun _ -> raise Stdlib.Exit)
+       "let () = ()"
+      : Scan.folded_census);
+  ( "refuses a planted folded gate, and names a folded-gate reader that raised",
+    !refused_fold && !refused_raise )
+
 (* {1 One resolver: every reader agrees whose a claim is (gh-ocannl-1361)}
 
    Whether a callee is [Verdict]'s is decided once, by [Test_utils.Verdict_callee], and every reader
@@ -4378,6 +4597,7 @@ let () =
   let dialect_offenders = ref 0 and skipped_sites = ref 0 and pass_fail_sites = ref 0 in
   let line_break_offenders = ref 0 and label_sites = ref 0 in
   let gate_offenders = ref 0 and gated_sites = ref 0 in
+  let folded_offenders = ref 0 and folded_claim_sites = ref 0 in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
         if String.is_suffix relative ~suffix:("/" ^ manifest_file) then
@@ -4394,6 +4614,8 @@ let () =
     @ [ run_line_break_refusal_control () ]
     @ run_gate_population_controls ()
     @ [ run_gate_refusal_control () ]
+    @ run_folded_gate_controls ()
+    @ [ run_folded_gate_refusal_control () ]
     @ run_agreement_controls () @ run_ambiguous_remedy_controls ()
   in
   let matrix_rows = run_syntax_matrix () in
@@ -4445,6 +4667,11 @@ let () =
       List.iter gates.Scan.unread ~f:(fun unread ->
           Int.incr gate_offenders;
           refuse_unread_gate ~fail ~source unread);
+      let folds = read_folded_gates ~fail ~source ~census:Scan.folded_gate_census content in
+      folded_claim_sites := !folded_claim_sites + folds.Scan.folded_claim_sites;
+      List.iter folds.Scan.folded ~f:(fun fold ->
+          Int.incr folded_offenders;
+          refuse_folded_gate ~fail ~source fold);
       skipped_sites := !skipped_sites + dialects.Scan.skipped_sites;
       pass_fail_sites := !pass_fail_sites + dialects.Scan.pass_fail_sites;
       List.iter dialects.Scan.pairings ~f:(fun pairing ->
@@ -4593,6 +4820,7 @@ let () =
     (List.length sources) !literals !applied;
   eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
   eprintf "Verdict claim labels read for line breaks: %d.\n" !label_sites;
+  eprintf "Verdict claim values read for a folded gate: %d.\n" !folded_claim_sites;
   printf "\n";
   (* Stated so that `true` is the passing reading, as every line of a golden should be. *)
   Verdict.p "every test source decides its claims through Verdict" (!offenders = 0);
@@ -4663,6 +4891,24 @@ let () =
       (String.concat ~sep:"; " recognized_gated_forms);
   Verdict.p "and it recognizes every gated form Verdict.Claims exports" recognizes_every_gated_form;
   Verdict.p "and the gate reader completed gated claims to compare" (!gated_sites > 0);
+  Verdict.p "no claim folds a run-constant gate into its value" (!folded_offenders = 0);
+  (* The members whose values the folded-gate reader reads, and those it judges to have none, held
+     equal together to [Verdict.Claims]: a new member in neither would be a claim whose value it
+     never reads. *)
+  let folded_judged =
+    List.map Scan.folded_slots ~f:(fun (member, _, _) -> member) @ Scan.folded_unread_members
+    |> List.sort ~compare:String.compare
+  in
+  let judges_every_member =
+    List.equal String.equal (List.sort claims_members ~compare:String.compare) folded_judged
+  in
+  if not judges_every_member then
+    eprintf "Verdict.Claims exports [%s]; the folded-gate reader judges [%s]\n"
+      (String.concat ~sep:"; " claims_members)
+      (String.concat ~sep:"; " folded_judged);
+  Verdict.p "and the folded-gate reader judges every member Verdict.Claims exports"
+    judges_every_member;
+  Verdict.p "and it read the values of Verdict claims" (!folded_claim_sites > 0);
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"
     (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified);

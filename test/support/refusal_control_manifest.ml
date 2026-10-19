@@ -573,6 +573,8 @@ let raw_entries =
         "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
+        "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
+        "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
@@ -590,6 +592,9 @@ let raw_entries =
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
         "[scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
+        "[scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into";
+        "[scanner-refusal:e9935bd293c26e123652183c000cb7e8] Verdict.Claims";
+        "[scanner-refusal:07f11cb8fe0952beedc14df2223a8f0f] values of Verdict";
         "[scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted";
         "[scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on";
         "[scanner-refusal:bd1c6476261fa5d1b680ca8c0959f3f9] exempted claim-shaped literal";
