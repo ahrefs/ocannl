@@ -185,9 +185,8 @@
 # is emptied on startup; the whole build_files/ directory when the prefix is ".". The
 # directory itself stays, as do the artifacts whose names record a process that is still
 # running (kept libraries, `<kernel>_pid<P>_...`). While another process that writes there
-# is running (it holds the lock file build_files/<prefix>.ocannl-lock), everything else
-# stays too, its debug sources included; only artifacts recording a process that is gone
-# are removed.
+# is running (it holds the lock file build_files/<prefix>.ocannl-lock), nothing is removed:
+# its debug sources are indistinguishable from stale ones.
 #clean_up_build_files_on_startup=true
 
 # If true, the log_files/<prefix>/ subdirectory of this process (see build_files_prefix)

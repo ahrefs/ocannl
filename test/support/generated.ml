@@ -294,11 +294,11 @@ let kept_libraries ?(owner = `This_process) routine =
         match Int.compare p1 p2 with 0 -> Int.compare r1 r2 | c -> c)
     |> List.map ~f:snd
 
-(** [plant_kept_library ?run_id ?age ~pid routine] writes a placeholder under the name of a library
-    the process [pid] kept for [routine]'s compile [run_id] (default 1), last written [age] seconds
-    ago (default 0), and answers its path: a fixture for what a startup cleanup does with a library
-    it finds, without the test naming the artifact directory itself. *)
-let plant_kept_library ?(run_id = 1) ?(age = 0.) ~pid routine =
+(** [plant_kept_library ?run_id ~pid routine] writes a placeholder under the name of a library the
+    process [pid] kept for [routine]'s compile [run_id] (default 1), and answers its path: a fixture
+    for what a startup cleanup does with a library it finds, without the test naming the artifact
+    directory itself. *)
+let plant_kept_library ?(run_id = 1) ~pid routine =
   if Option.is_none !backend then (
     uninitialized ("Generated.plant_kept_library " ^ routine);
     "")
@@ -308,8 +308,6 @@ let plant_kept_library ?(run_id = 1) ?(age = 0.) ~pid routine =
         (Utils.kept_library_name ~pid ~nonce:(Utils.process_nonce ()) ~run_id routine)
     in
     Stdio.Out_channel.write_all path ~data:"planted";
-    let mtime = Unix.gettimeofday () -. age in
-    Unix.utimes path mtime mtime;
     path
 
 (** [assert_emits ~routine ~contains claim] records [claim] as holding exactly when [routine]'s

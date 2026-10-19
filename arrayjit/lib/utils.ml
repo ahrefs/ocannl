@@ -1751,13 +1751,18 @@ let ensure_artifacts_dir base subdir =
 module Artifacts_lock = struct
   let suffix = ".ocannl-lock"
 
-  let open_ base =
+  (* Absolute, so that a process that changes its working directory between writes holds the lock of
+     each directory it writes in, not only the first one's. *)
+  let path base =
     let path =
       match artifacts_subdir () with
       | Some p -> filename_concat base (p ^ suffix)
       | None -> filename_concat base suffix
     in
-    Unix.openfile path [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC ] 0o644
+    if Stdlib.Filename.is_relative path then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) path
+    else path
+
+  let open_ base = Unix.openfile (path base) [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC ] 0o644
 
   (* Best effort: where the lock cannot be taken (a file system without locks) the process goes
      unprotected, as every process did before gh-ocannl-1335. Blocking: a starting sibling holds the
@@ -1768,8 +1773,9 @@ module Artifacts_lock = struct
     let mutex = Stdlib.Mutex.create () in
     let holds : (string, Unix.file_descr option) Hashtbl.t = Hashtbl.create (module String) in
     fun base ->
+      let key = path base in
       Stdlib.Mutex.protect mutex (fun () ->
-          if not (Hashtbl.mem holds base) then
+          if not (Hashtbl.mem holds key) then
             let fd =
               try
                 let fd = open_ base in
@@ -1781,7 +1787,7 @@ module Artifacts_lock = struct
                   None
               with Unix.Unix_error _ -> None
             in
-            Hashtbl.set holds ~key:base ~data:fd)
+            Hashtbl.set holds ~key ~data:fd)
 end
 
 (** The directory generated-code debug files are written to (created if missing):
@@ -1995,33 +2001,13 @@ let () =
   let owner_running fname =
     Option.exists (parse_owned_artifact_name fname) ~f:library_owner_running
   in
-  let owner_gone fname =
-    Option.exists (parse_owned_artifact_name fname) ~f:(fun owner ->
-        not (library_owner_running owner))
-  in
-  (* What the cleanup keeps. [~sibling_running] says that a process sharing the directory holds its
-     lock (see [Artifacts_lock]): then the cleanup cannot tell that process's ownerless artifacts --
-     debug sources, logs -- from a finished run's, and removes only those whose owner is gone
-     (gh-ocannl-1335). Even those only once they are older than [temp_library_sweep_min_age]: the
-     lock is shared across PID namespaces (containers sharing the directory) where liveness is not,
-     so the sibling holding it may be an owner that merely looks gone -- or that reports this
-     process's own id -- and an artifact of its is at risk only between being written and being
-     compiled or loaded, the window the temporary-library sweep's age guard covers. The lock files
-     themselves always stay. *)
-  let keep ~sibling_running ~path fname =
-    let aged () =
-      try Float.(Unix.gettimeofday () - (Unix.stat path).Unix.st_mtime > temp_library_sweep_min_age)
-      with Unix.Unix_error _ -> false
-    in
-    String.is_suffix fname ~suffix:Artifacts_lock.suffix
-    || owner_running fname
-    || (sibling_running && not (owner_gone fname && aged ()))
-  in
+  (* What the cleanup keeps: the lock files, and owner-named artifacts of a running owner. *)
+  let keep fname = String.is_suffix fname ~suffix:Artifacts_lock.suffix || owner_running fname in
   (* Answers whether [dirname] is gone: a directory keeping something stays. The cleanup's own root
      is emptied but kept ([~keep_root]): a concurrent process of the same executable may already
      hold a path inside it that it has yet to write -- a kept library its compiler is about to link
      (gh-ocannl-1247), a debug source -- and removing the directory would fail that write. *)
-  let rec remove_dir_if_exists ?(keep_root = false) ~sibling_running dirname =
+  let rec remove_dir_if_exists ?(keep_root = false) dirname =
     match lstat_kind dirname with
     | None -> true
     | Some Unix.S_DIR -> (
@@ -2030,8 +2016,8 @@ let () =
             Array.fold (Stdlib.Sys.readdir dirname) ~init:true ~f:(fun emptied fname ->
                 let path = Stdlib.Filename.concat dirname fname in
                 match lstat_kind path with
-                | Some Unix.S_DIR -> remove_dir_if_exists ~sibling_running path && emptied
-                | Some Unix.S_REG when keep ~sibling_running ~path fname -> false
+                | Some Unix.S_DIR -> remove_dir_if_exists path && emptied
+                | Some Unix.S_REG when keep fname -> false
                 | Some _ | None -> (
                     (* Regular file, symlink (to file or dir), socket, etc.: unlink the entry, do
                        not follow. *)
@@ -2056,9 +2042,13 @@ let () =
           false)
   in
   (* Empties [root] under the exclusive side of [base]'s artifact lock, taken without waiting. A
-     lock that is held means a running sibling. A lock that cannot be taken at all -- no lock file
-     can be created, or the file system has no locks -- leaves the cleanup as it was before
-     gh-ocannl-1335: owner-named artifacts of running owners stay, everything else goes. *)
+     lock that is held means a running sibling, and then nothing is removed (gh-ocannl-1335): the
+     cleanup cannot tell the sibling's ownerless artifacts -- debug sources, logs -- from a finished
+     run's, and not even an owner-named artifact whose owner looks gone is safe, since the lock
+     reaches across PID namespaces (containers sharing the directory) where liveness does not. The
+     stale ones go at the next startup that finds no sibling. A lock that cannot be taken at all --
+     no lock file can be created, or the file system has no locks -- leaves the cleanup as it was
+     before: owner-named artifacts of running owners stay, everything else goes. *)
   let remove_root ~base root =
     (* Tried whenever [base] is a directory, [root] or not: a root absent now may be created, and
        written into under its lock, by a sibling before the removal below reads it. *)
@@ -2078,9 +2068,11 @@ let () =
                   `Unlockable))
       | Some _ | None -> `Unlockable
     in
-    let sibling_running = match lock with `Held -> true | `Exclusive _ | `Unlockable -> false in
     Exn.protect
-      ~f:(fun () -> ignore (remove_dir_if_exists ~keep_root:true ~sibling_running root : bool))
+      ~f:(fun () ->
+        match lock with
+        | `Held -> ()
+        | `Exclusive _ | `Unlockable -> ignore (remove_dir_if_exists ~keep_root:true root : bool))
       ~finally:(fun () ->
         match lock with
         | `Exclusive fd -> ( try Unix.close fd with Unix.Unix_error _ -> ())

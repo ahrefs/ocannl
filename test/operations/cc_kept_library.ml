@@ -14,17 +14,16 @@
    Processes of one executable share that directory, and each one's startup empties it
    ([clean_up_build_files_on_startup] and [clean_up_log_files_on_startup], on by default, off in the
    test config, on in the children here). A running process holds a lock that tells a starting one
-   it is there; the starting one then removes only the artifacts whose names record an owner that is
-   gone, and only once they are past the window in which a compile could still need them (the lock
-   reaches across PID namespaces, liveness does not). So the test first runs two children while it
-   holds nothing: one compiles under debug files and exits, and the next one's startup removes the
-   debug source it left. Then the test compiles (taking the lock), writes a log, plants two
-   libraries of a process that is gone (an OS id no process has) -- one back-dated, one fresh -- and
-   relaunches itself as a child that compiles the same routine name. The child keeps a library of
-   its own, under a name apart from this process's; its startup spares this process's library, log
-   and (under debug files) debug source -- this process could be between linking that library and
-   loading it, or still writing to that log -- and the fresh library, and still removes the
-   back-dated one.
+   it is there, and then the starting one removes nothing: it cannot tell the running process's
+   ownerless artifacts from a finished run's, nor trust a gone-looking owner (the lock reaches
+   across PID namespaces, liveness does not). So the test first plants the library of a process that
+   is gone (an OS id no process has) and runs two children while it holds nothing: one compiles
+   under debug files and exits, and the next one's startup removes both the debug source it left and
+   the planted library. Then the test compiles (taking the lock), writes a log, plants another gone
+   process's library, and relaunches itself as a child that compiles the same routine name. The
+   child keeps a library of its own, under a name apart from this process's; its startup spares this
+   process's library, log and (under debug files) debug source -- this process could be between
+   linking that library and loading it, or still writing to that log -- and the planted library too.
 
    The libraries are read through [Test_utils.Generated.kept_libraries], which parses names with the
    backend's own [Utils.parse_kept_library_name], after [Generated.init] emptied this executable's
@@ -96,8 +95,10 @@ let clean_up_on_startup =
   [ "--ocannl_clean_up_build_files_on_startup=true"; "--ocannl_clean_up_log_files_on_startup=true" ]
 
 let parent () =
-  (* 1. Nothing of this process is in the directory yet, and it holds no lock there: a finished
-     process's ownerless debug source is stale, and a starting process removes it. *)
+  (* 1. This process has emptied the directory and holds no lock there yet (nothing here has named a
+     path to write): what a finished process left is stale, and a starting process removes it. *)
+  Generated.init ~backend_name:"cc";
+  let departed_before = Generated.plant_kept_library ~pid:departed_pid routine in
   p "a finished process of this executable left a debug source"
     (run_child "stale"
        [
@@ -105,10 +106,10 @@ let parent () =
          "--ocannl_clean_up_build_files_on_startup=false";
        ]);
   p "a process starting while no other runs ran" (run_child "sweep" clean_up_on_startup);
-  p "its startup removed the ownerless debug source the finished process left"
-    (not (Stdlib.Sys.file_exists (Generated.path ~ext:".c" stale_routine)));
+  p_none "its startup removed the finished process's debug source and a gone process's library"
+    [ Generated.path ~ext:".c" stale_routine; departed_before ]
+    ~f:Stdlib.Sys.file_exists;
   (* 2. The kept libraries. *)
-  Generated.init ~backend_name:"cc";
   let backend, values = compile_and_run routine in
   Stdio.printf "backend: %s\n" backend;
   computes_3x_plus_1 "the routine computes 3x + 1 from its kept library" values;
@@ -147,16 +148,9 @@ let parent () =
   if debug then
     p "this process wrote the long-named routine's debug source"
       (Stdlib.Sys.file_exists (Generated.path long_routine));
-  (* A library left by a process that is gone, for the child's startup cleanup to find. *)
-  (* Back-dated past the cleanup's minimum age; a second, fresh one could belong to a running
-     process the liveness test cannot see (another PID namespace sharing the directory), and stays
-     while a sibling holds the lock. *)
-  ignore
-    (Generated.plant_kept_library ~pid:departed_pid
-       ~age:(Utils.temp_library_sweep_min_age +. 3600.)
-       routine
-      : string);
-  let departed_fresh = Generated.plant_kept_library ~run_id:2 ~pid:departed_pid routine in
+  (* A library left by a process that is gone: while this process holds the lock, the child's
+     startup cannot rule out that its owner is running where liveness cannot see. *)
+  let departed_during = Generated.plant_kept_library ~run_id:2 ~pid:departed_pid routine in
   p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
   p "the stale library's process is seen as gone" (not (Utils.process_alive departed_pid));
   p "the child process compiled and ran the same routine name"
@@ -173,8 +167,8 @@ let parent () =
   p "this process's library stays in build_files through the child's startup cleanup"
     (List.length own = 1);
   p "the child kept its own library, under a name apart from this process's" (List.length others = 1);
-  p "the child's startup removed a gone process's aged library and kept its fresh one"
-    (List.equal String.equal departed [ departed_fresh ]);
+  p "the child's startup kept the library naming a gone process too, while this process runs"
+    (List.equal String.equal departed [ departed_during ]);
   p_all "each compiled library holds the routine's symbol" compiled ~min:2 ~f:(fun path ->
       String.is_substring (Stdio.In_channel.read_all path) ~substring:routine);
   p "this process's log stays through the child's startup cleanup" (Stdlib.Sys.file_exists log);

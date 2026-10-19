@@ -332,12 +332,14 @@ configuration.
   ownerless artifacts (debug sources, logs) from a finished run's, so it asks a lock
   (gh-ocannl-1335): a process takes a SHARED `Unix.lockf` on `<base>/<exe>.ocannl-lock` the first
   time it names a path to write there (`Utils.build_file`, `Utils.diagn_log_file`, so in practice
-  every process holds the `log_files` one), for its lifetime, and a starting process tries it
-  EXCLUSIVELY without waiting. Held means a sibling runs, and the cleanup then removes only the
-  artifacts whose names record an owner that is gone (`Utils.parse_owned_artifact_name`), and only
-  past `Utils.temp_library_sweep_min_age`: the lock reaches across PID namespaces where liveness
-  does not, so the holder may be an owner that merely looks gone. The
-  owner-named ones of a RUNNING process stay in either case, and the root is emptied, never
+  every process holds the `log_files` one), for its lifetime -- one per lock file's absolute path,
+  so a process that changes directory holds each directory's -- and a starting process tries it
+  EXCLUSIVELY without waiting. Held means a sibling runs, and the cleanup then removes NOTHING: it
+  cannot tell the sibling's ownerless artifacts from a finished run's, and not even a gone-looking
+  owner-named one is safe, since the lock reaches across PID namespaces where liveness
+  (`Utils.process_alive`) does not; the stale ones go at the next startup that finds no sibling.
+  Without a sibling, the owner-named artifacts of a RUNNING process (`Utils.parse_owned_artifact_name`)
+  still stay, and the root is emptied, never
   removed, since a sibling may hold a path inside it it has yet to write. A lock dies with its
   process, which is why it is not a marker file. Two traps: POSIX drops all of a process's locks on
   a file when ANY descriptor of it closes, so nothing else may open the lock file (it sits beside

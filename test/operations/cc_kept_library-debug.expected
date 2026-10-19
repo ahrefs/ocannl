@@ -1,7 +1,7 @@
 a library is kept: library output or debug files are requested: true
 a finished process of this executable left a debug source: true
 a process starting while no other runs ran: true
-its startup removed the ownerless debug source the finished process left: true
+its startup removed the finished process's debug source and a gone process's library: true
 backend: cc
 the routine computes 3x + 1 from its kept library: true
 a routine with a 240-byte name computes 3x + 1 from its kept library: true
@@ -15,7 +15,7 @@ the stale library's process is seen as gone: true
 the child process compiled and ran the same routine name: true
 this process's library stays in build_files through the child's startup cleanup: true
 the child kept its own library, under a name apart from this process's: true
-the child's startup removed a gone process's aged library and kept its fresh one: true
+the child's startup kept the library naming a gone process too, while this process runs: true
 each compiled library holds the routine's symbol: true
 this process's log stays through the child's startup cleanup: true
 this process's debug source stays through the child's startup cleanup: true
