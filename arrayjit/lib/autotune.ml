@@ -6263,16 +6263,25 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                             Int.incr n_fiss_sketch_timed;
                             if not (List.is_empty staff) then Int.incr n_staffed_timed;
                             if not fine then
-                              match entries with
-                              | [ (key, _) ] -> Hash_set.add coarse_single_measured key
-                              | _ :: _ :: _ -> fs_composite := `Timed
-                              | [] -> ())
+                              match (entries, staff) with
+                              | [ (key, _) ], [] -> Hash_set.add coarse_single_measured key
+                              | [ (key, _) ], _ :: _ ->
+                                  (* A staffed single schedules a composite of the coarse keys
+                                     (gh-ocannl-1138): published here, before the callbacks that can
+                                     cut the search, as an explicit composite's window is. *)
+                                  Hash_set.add coarse_single_measured key;
+                                  fs_composite := `Timed
+                              | _ :: _ :: _, _ -> fs_composite := `Timed
+                              | [], _ -> ())
                         | Fiss (F_split { sites; staff }) -> (
                             Int.incr n_sr_timed;
                             match sites with
                             | _ when not (List.is_empty staff) ->
-                                (* A staffed single: its sweep ranks it, in its own backdrop. *)
-                                ()
+                                (* A staffed single, ranked by its sweep in its own backdrop, splits
+                                   several sites: a multi-site composite's window, published before
+                                   the callbacks as an explicit composite's is. *)
+                                sr_composite_eligible := true;
+                                sr_composite_timed := true
                             | [ (s, b) ] ->
                                 sr_single_results := (s, b, ms) :: !sr_single_results;
                                 sr_composite_eligible :=
@@ -6724,6 +6733,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             in
             let sweep_key (key, ps) =
               let staff = without key !running in
+              let bare = ref [] in
               swept_against := (key, staff) :: !swept_against;
               let current = List.Assoc.find !running ~equal:equal_key key in
               let ps =
@@ -6752,7 +6762,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                                 logf "%s: refused with its staff; retrying it bare"
                                   (spec_label (single key staff p));
                                 (match try_spec (single key [] p) with
-                                | Some r -> admit r
+                                | Some ((_, ms) as r) ->
+                                    admit r;
+                                    bare := (p, ms) :: !bare
                                 | None -> (
                                     match !last_attempt with
                                     | `Declined -> bare_exhausted := key :: !bare_exhausted
@@ -6760,10 +6772,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                                 None
                             | _ -> None)))
               in
-              (* The fastest in this backdrop; a tie keeps the composite's own choice. *)
-              (match List.min_elt results ~compare:(fun (_, a) (_, b) -> Float.compare a b) with
-              | None -> ()
+              let by_time (_, a) (_, b) = Float.compare a b in
+              (match List.min_elt results ~compare:by_time with
               | Some (p, ms) ->
+                  (* The fastest in this backdrop; a tie keeps the composite's own choice. *)
                   let p, ms =
                     match
                       Option.bind current ~f:(fun q ->
@@ -6776,8 +6788,26 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   if not (Option.exists current ~f:(Poly.equal p)) then
                     logf "staffed: %s joins the running composite (%.4f ms)" (describe key p) ms;
                   running := in_key_order ((key, p) :: without key !running);
-                  running_ms := Some ms);
-              results
+                  running_ms := Some ms
+              | None -> (
+                  (* Every staffed single of the key was refused, and some of its bare retries were
+                     admitted (Codex P1 on PR #1215): the key cannot join this staff, since the
+                     composite holding both is exactly the code refused. A bare single IS the
+                     composite of its key alone, a whole routine like the running composite, so the
+                     faster of the two carries on; a running composite never timed as a whole
+                     yields. *)
+                  match List.min_elt !bare ~compare:by_time with
+                  | Some (p, ms)
+                    when Option.value_map !running_ms ~default:true ~f:(fun r -> Float.(ms < r)) ->
+                      logf "staffed: %s replaces the running composite, refused with it (%.4f ms%s)"
+                        (describe key p) ms
+                        (Option.value_map !running_ms ~default:"" ~f:(Printf.sprintf " < %.4f ms"));
+                      running := [ (key, p) ];
+                      running_ms := Some ms
+                  | Some _ | None -> ()));
+              (* What the key's sweep timed in one backdrop: its staffed singles, or failing those
+                 its bare retries. *)
+              if List.is_empty results then List.rev !bare else results
             in
             let start choices = running := in_key_order choices in
             (running, running_ms, swept_against, start, sweep_key)
@@ -6837,16 +6867,33 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             in
             (running, running_ms, swept_against, sweep)
           in
-          (* The seeded plan's sketch for a key, matched by structural digest: a coarse key, or a
-             fine key whose segment the plan's refinement also cut (gh-ocannl-1413). *)
-          let seeded_choice key =
-            match seeded with
-            | Some { sp_segments = Some (_, segs); _ } ->
-                List.find_map segs ~f:(function
-                  | Seeded_sketch { digest; params } when String.equal digest key.key_digest ->
-                      Some (key, params)
-                  | Seeded_sketch _ | Seeded_preset | Seeded_sunk _ -> None)
-            | Some { sp_segments = None; _ } | None -> None
+          (* The seeded plan's choice for a key: its decision rule ({!seeded_params}, probed and
+             validated as {!seeded_decisions} does) applied to the key's own segment. The plan's
+             recorded decisions cannot be matched to the keys: they were taken on the split routine,
+             under the untuned pipeline's segmentation without the search's zero fold, so a recorded
+             digest equals no key's (on gpt2_mini/CUDA the composite started empty), and two keys of
+             one structure but different placements would share a digest's decision (Codex P2 on PR
+             #1215). Where the rule seeds nothing ([gpu_default_sketch_min_reduction=0], another
+             backend) no key has a start. *)
+          let seeded_min_reduction =
+            match seeded_settings ~backend () with
+            | Some (min_reduction, _, _) when min_reduction > 0 -> Some min_reduction
+            | Some _ | None -> None
+          in
+          let seeded_choice ~pre_of key =
+            Option.bind seeded_min_reduction ~f:(fun min_reduction ->
+                Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
+                    Option.bind (seeded_params ~limits ~accum_prec ~min_reduction pre) ~f:(fun p ->
+                        match
+                          validate_segments_for_model ~limits
+                            [
+                              Sched.apply_classified ~static_indices
+                                (sketch_schedule ~accum_prec ~p pre)
+                                (scratch_of pre);
+                            ]
+                        with
+                        | _ -> Some (key, p)
+                        | exception (Outcome.Cause_at _ | Invalid_argument _) -> None)))
           in
           let running, running_ms, swept_against, sweep =
             sketch_sweeper ~plan:coarse_plan ~fine:false ~keys:(List.map fiss_sketch_entries ~f:fst)
@@ -6870,7 +6917,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             sweep ~pre_of:coarse_pre
               ~start:
                 (Seam.get on_staffed_start ~menu:fiss_sketch_entries
-                   (List.filter_map fiss_sketch_entries ~f:(fun (key, _) -> seeded_choice key)))
+                   (List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
+                        seeded_choice ~pre_of:coarse_pre key)))
               fiss_sketch_entries;
             (* The fine segmentation's own composite (gh-ocannl-574), swept over the keys the finer
                cuts made new. A key the cuts left unchanged keeps its digest and first unit, so it
@@ -6882,7 +6930,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   (List.filter_map fine_all_entries ~f:(fun (key, _) ->
                        match List.Assoc.find !running ~equal:equal_seg_key key with
                        | Some p -> Some (key, p)
-                       | None -> seeded_choice key))
+                       | None -> seeded_choice ~pre_of:fine_pre key))
                 fine_new_entries)
           else List.iter coarse_single_specs ~f:run_seed;
           List.iter post_sweep_specs ~f:run_seed;

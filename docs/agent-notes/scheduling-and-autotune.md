@@ -1124,13 +1124,20 @@ files.
   sweep, heaviest key first (segment count times its best sketch's roofline score, logged as
   `staffed: segment <tag> weighs <w>`; unscored keys last, in enumeration order). Only times within
   one key's sweep are comparable, so per-key minima stay valid but a cross-key comparison does not; the composite's own choice is swept first, at its known time and
-  without a compile. The composite starts from the seeded plan's `Seeded_sketch` choices, matched to
-  coarse keys by structural digest only, so its split prelude and sunk segments are not in the staff.
+  without a compile. **The start is the seeded plan's decision RULE, not its recorded decisions**:
+  `seeded_params` applied to each key's own segment. The recorded `Seeded_sketch` digests were taken
+  on the split routine under the untuned segmentation without the search's zero fold, so they equal
+  no key's digest: at `381bbc93` the composite started empty on gpt2_mini/CUDA, its best sat at the
+  seeded floor (3.70 ms) until two late keys left on presets were swept, and it came within 5% of its
+  final best only at 77% of its timings (bare search: 96%; ABBA, crowns and step p50 unchanged).
   A refused (not contended) staffed single is retried bare once (`fiss_sketch_backdrop_fallbacks`),
-  until a key's bare retry is refused too; the last key's winning window IS the coarse composite, so
-  `fs_composite` is set from it, and the playoff skips a key whose sweep ran inside the incumbent.
+  until a key's bare retry is refused too; a key whose staffed singles ALL decline cannot join that
+  staff (the composite holding both is the refused code), so its fastest bare single, the composite
+  of that key alone, replaces the running composite when faster as a whole routine. The last key's
+  winning window IS the coarse composite, so `fs_composite` is set from it at admission, and the
+  playoff skips a key whose sweep ran inside the incumbent.
   The fine segmentation (GPU, gh-ocannl-574) keeps its own composite: a fine key the finer cuts left
-  unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded plan's,
+  unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded rule's,
   and only the new keys are swept (`test/operations/autotune_staffed_fine`, skipped off GPU).
   The split-reduce sites keep one more (`F_split`'s `staff`, the other sites' block counts, starting
   empty): staffing a site's prelude with the others' splits forms the multi-site composite during

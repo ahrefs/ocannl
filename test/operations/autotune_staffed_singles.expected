@@ -31,6 +31,10 @@ refused: the refused staffed single was never timed: true
 refused: the refusal is a contained pre-dispatch decline: true
 refused_all: the first bare retry, refused too, is the only one: true
 refused_all: every staffed single of the key was still attempted: true
+refused_staffed: every refused staffed single was retried bare and timed: true
+refused_staffed: the key's fastest bare retry, the faster routine, replaced the composite: true
+refused_staffed: the crown is that bare single: true
+partial: the cut search's report says the staffed composite was timed: true
 ties: the playoff timed alternates: true
 ties: every composite window is the playoff's: true
 ties: only the first key plays; the last key's sweep ran inside the composite: true

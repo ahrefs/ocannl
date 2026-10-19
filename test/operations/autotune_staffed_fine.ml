@@ -9,7 +9,8 @@
    [z]: coarsely [x] alone and [z] with its row max; finely [x], [z] and [r] apart, so [x]'s key is
    shared and [z]'s is new. The ranking is scripted as in [autotune_staffed_singles]: a per-segment
    candidate measures the sum of its scheduled segments' costs plus a preset's cost for each keyed
-   segment it leaves alone, every other candidate far slower. The claims: every fine single is
+   segment it leaves alone, every other candidate far slower. The claims: the coarse composite
+   starts from the seeded plan's decision rule applied to each key's segment; every fine single is
    staffed with the coarse composite's choice for the shared key, which the script decides; the
    crown is the fine composite, the fine sweep's own window; and the crowned routine computes what
    the untuned compile does, bit for bit (dyadic inputs, exact sums, and no tensor-core rounding of
@@ -56,7 +57,7 @@ let routine_ms label =
 
 let b = 4
 let n = 32
-let k = 16
+let k = 32
 let m = 64
 
 let constant label ~dims ~modulus ~offset ~stride ~batch_dims ~output_dims =
@@ -94,7 +95,7 @@ let values ctx routine (z, r) =
   got
 
 let () =
-  let measured = ref [] and report = ref None in
+  let measured = ref [] and report = ref None and start = ref [] in
   let crowned, untuned =
     if not is_gpu then (([||], [||]), ([||], [||]))
     else
@@ -112,6 +113,14 @@ let () =
                 measured := label :: !measured;
                 routine_ms label)
             @@ fun () ->
+            Autotune.Seam.with_value Autotune.on_staffed_start (fun ~menu:_ seeded ->
+                start :=
+                  List.map seeded ~f:(fun (key, p) ->
+                      Autotune.fiss_sketch_label ~fine:false [ (key, p) ]
+                      |> String.chop_prefix_exn ~prefix:"F_sketch["
+                      |> String.chop_suffix_exn ~suffix:"]");
+                seeded)
+            @@ fun () ->
             let ctx, routine =
               Autotune.with_uncontended_test_windows (fun () ->
                   Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false
@@ -124,8 +133,12 @@ let () =
       (crowned, untuned)
   in
   let measured = List.rev !measured in
-  let fine_singles = List.filter measured ~f:is_fine in
-  let coarse_singles = List.filter measured ~f:(fun l -> is_sketch l && not (is_fine l)) in
+  (* Singles focus on one key; a playoff window (several keys in its focus) is a composite. *)
+  let single l = List.length (fst (parts l)) = 1 in
+  let fine_singles = List.filter measured ~f:(fun l -> is_fine l && single l) in
+  let coarse_singles =
+    List.filter measured ~f:(fun l -> is_sketch l && (not (is_fine l)) && single l)
+  in
   (* The shared key: the one both segmentations' singles focus on. *)
   let focus_keys singles =
     List.dedup_and_sort ~compare:String.compare
@@ -144,11 +157,26 @@ let () =
         | _ -> None)
     |> List.min_elt ~compare:(fun a b -> Float.compare (cost a) (cost b))
   in
+  List.iter (coarse_singles @ fine_singles) ~f:(fun l ->
+      Stdio.eprintf "  timed (not part of the golden): %s\n%!" l);
+  Stdio.eprintf "  start (not part of the golden): %s\n%!" (String.concat ~sep:"; " !start);
   Option.iter !report ~f:(fun r ->
       Stdio.eprintf
         "staffed fine (not part of the golden): %d coarse and %d fine singles, crown %s %.2f ms\n%!"
         (List.length coarse_singles) (List.length fine_singles) r.Autotune.best_label
         r.Autotune.best_ms);
+  (* The seeded plan's decision rule picks a sketch for the GEMMs, whose reductions reach
+     [gpu_default_sketch_min_reduction]: the coarse composite starts from it, and the first coarse
+     window carries it. *)
+  let first_window =
+    Option.value_map (List.hd coarse_singles) ~default:[] ~f:(fun l ->
+        let f, s = parts l in
+        f @ s)
+  in
+  gated_all ~when_:is_gpu ~on:backend_name
+    "fine: the coarse composite starts from the seeded rule's choices, and its first window \
+     carries them"
+    !start ~f:(fun e -> List.mem first_window e ~equal:String.equal);
   gated ~when_:is_gpu ~on:backend_name
     "fine: the finer cuts freed a key the coarse ones share a key with"
     ((not (List.is_empty fine_singles)) && List.length shared = 1);

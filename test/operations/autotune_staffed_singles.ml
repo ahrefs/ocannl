@@ -36,7 +36,9 @@
    [refused] fault-injects a refusal of the first staffed single ([on_candidate_preflight]): it is
    retried bare at once, and that bare twin is timed. [refused_all] refuses every attempt of the
    second key, staffed and bare: the first bare retry is refused too, so the key's later refusals
-   are not retried.
+   are not retried. [refused_staffed] refuses only the second key's staffed attempts: their bare
+   retries are timed, and the composite takes the fastest of them. [partial] cuts a search at its
+   first admitted staffed window: the partial report already says the composite was timed.
 
    [ties] runs the playoff over a staffed search whose singles tie within each key: the last key's
    sweep ran inside the crowned composite already, so only the first key's alternates play.
@@ -409,6 +411,110 @@ let () =
         && List.count ofk ~f:(fun l -> not (is_staffed l)) = 1);
       p "refused_all: every staffed single of the key was still attempted"
         (List.count ofk ~f:is_staffed >= 3)
+
+(* --- refused_staffed: a key whose staffed singles all decline competes as a whole routine --- *)
+
+(* Every staffed attempt of the second key is refused, none of its bare ones, so each is retried
+   bare and timed. The key cannot join the running composite -- the composite holding both is the
+   very code refused -- but a bare single is the composite of its key alone, a whole routine like
+   the running composite, so the faster of the two carries on (Codex P1 on PR #1215). The script
+   makes the second key's bare singles the faster: they replace the composite, by the search's own
+   log line. *)
+let () =
+  let second = ref None in
+  let key_of_label l = key_of (List.hd_exn (focus l)) in
+  let refuse label =
+    is_staffed label
+    &&
+    let k = key_of_label label in
+    if Option.is_none !second then second := Some k;
+    Option.exists !second ~f:(String.equal k)
+  in
+  let cost entry =
+    if Option.exists !second ~f:(String.equal (key_of entry)) then hashed entry /. 10.
+    else hashed entry
+  in
+  let o, lines =
+    with_stderr_captured (fun () ->
+        search ~log:true ~width:0 ~refuse ~tag:"refused_staffed" ~cost ())
+  in
+  let r = o.report in
+  match !second with
+  | Some k ->
+      let bare_of_k =
+        List.filter o.measured ~f:(fun l ->
+            is_single l && (not (is_staffed l)) && String.equal (key_of_label l) k)
+      in
+      p "refused_staffed: every refused staffed single was retried bare and timed"
+        (r.Autotune.fiss_sketch_backdrop_fallbacks = List.length bare_of_k
+        && List.length bare_of_k >= 3);
+      let replaced =
+        List.filter lines ~f:(fun l ->
+            String.is_prefix l ~prefix:"autotune: staffed: segment "
+            && String.is_substring l ~substring:"replaces the running composite")
+      in
+      (match fastest ~cost k o.measured with
+      | Some best ->
+          (* The entry is [<params> @<key>]; the log names the key and [W_sketch[<params>]]. *)
+          let params = String.prefix best (String.rindex_exn best '@' - 1) in
+          p
+            "refused_staffed: the key's fastest bare retry, the faster routine, replaced the \
+             composite"
+            (match replaced with
+            | [ line ] ->
+                String.is_substring line ~substring:("segment " ^ k ^ ": ")
+                && String.is_substring line ~substring:("W_sketch[" ^ params ^ "]")
+            | _ -> false)
+      | None ->
+          p
+            "refused_staffed: the key's fastest bare retry, the faster routine, replaced the \
+             composite"
+            false);
+      p "refused_staffed: the crown is that bare single"
+        (Option.equal String.equal (fastest ~cost k o.measured)
+           (match focus r.Autotune.best_label with
+           | [ e ] when not (is_staffed r.Autotune.best_label) -> Some e
+           | _ -> None))
+  | None -> p "refused_staffed: the second key's staffed singles were refused" false
+
+(* --- partial: a cut search reports the staffed composite it timed --- *)
+
+(* The search is cut at the first admitted staffed window, by a callback raising after admission:
+   the partial report must already say a coarse composite was timed (Codex P2 on PR #1215), as it
+   does for an explicit composite's window. *)
+let () =
+  let report = ref None and staffed_attempt = ref false and injected = ref false in
+  Exn.protect
+    ~finally:(fun () -> Hashtbl.remove Utils.config_file_args staffed_key)
+    ~f:(fun () ->
+      Hashtbl.set Utils.config_file_args ~key:staffed_key ~data:"true";
+      Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
+          routine_ms ~cost label)
+      @@ fun () ->
+      Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
+          staffed_attempt := is_staffed label)
+      @@ fun () ->
+      Autotune.Seam.with_value Autotune.on_candidate_timed (fun _ ~timed_so_far:_ ->
+          if !staffed_attempt then (
+            injected := true;
+            raise Stdlib.Exit))
+      @@ fun () ->
+      match
+        Autotune.with_uncontended_test_windows (fun () ->
+            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false
+              ~progress:false
+              ~report:(fun r -> report := Some r)
+              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
+      with
+      | ctx, _ -> Context.release ctx
+      | exception Stdlib.Exit when !injected -> ());
+  match !report with
+  | Some r when !injected ->
+      p "partial: the cut search's report says the staffed composite was timed"
+        (Poly.equal r.Autotune.fiss_sketch_composite `Timed
+        && r.Autotune.fiss_sketch_staffed_timed = 1
+        && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+  | _ -> p "partial: the cut search's report says the staffed composite was timed" false
 
 (* --- ties: the playoff over a staffed composite --- *)
 
