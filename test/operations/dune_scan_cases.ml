@@ -1644,10 +1644,11 @@ let artifact_reader_cases =
 (* gh-ocannl-1207: config_dep_completeness's own refusals, executed rather than vouched for by the
    cases above, which exercise the reading they rest on in process. The scanner runs as a child over
    a tree built to trip them -- a stanza head and an action head it cannot classify, a binaries
-   mapping, a shell action, a command it cannot read, a test without the config dep, and a test in a
-   directory no config reaches -- and once over no dune file at all. Every exemption is stale in
-   such a tree too. What each child refused is what `raw_direct_evidence` attributes to the two
-   claims. *)
+   mapping, a shell action, a command it cannot read, a test without the config dep, a test in a
+   directory no config reaches, and a rule reading a checked-in config with no record of the ambient
+   environment (gh-ocannl-1149) -- and once over no dune file at all. Every exemption is stale in
+   such a tree too, and the tree has no test/config/dune producing that record. What each child
+   refused is what `raw_direct_evidence` attributes to the two claims. *)
 let refusal_tree =
   [
     ("t/ocannl_config", "");
@@ -1658,6 +1659,7 @@ let refusal_tree =
 (rule (alias runtest-c) (action (run %{env:TOOL=x})))
 (rule (alias runtest-d) (action (frobnicate ./d.exe)))
 (test (name e) (modules e))
+(rule (alias runtest-f) (deps ocannl_config) (action (run ./f.exe)))
 |dune}
     );
     ("unconfigured/dune", "(test (name a) (modules a))\n");

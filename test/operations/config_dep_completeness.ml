@@ -103,6 +103,10 @@ let exempt_sites =
 let base_dir = Scan.base_dir
 let repo_relative = Scan.repo_relative
 
+(* Where the ambient record and the configuration carrying it are produced (gh-ocannl-1149). *)
+let ambient_home = "test/config"
+let ambient_subdir = "ambient"
+
 let () =
   if Array.length Stdlib.Sys.argv < 2 then (
     eprintf "Usage: %s <workspace_root> <dune file or ocannl_config...>\n" Stdlib.Sys.argv.(0);
@@ -146,6 +150,71 @@ let () =
         |> List.map ~f:(fun subdir -> repo_relative [ dir ] subdir))
     |> Set.of_list (module String)
   in
+  (* gh-ocannl-1149: the environment, the one configuration source dune cannot see unless told.
+     `test/config/dune` records the ambient `OCANNL_*` environment in `ocannl_ambient`, under
+     `(universe)`, and appends that record to the shared configuration as
+     `test/config/ambient/ocannl_config`. A copy of THAT file changes whenever the environment does,
+     so a rule depending on it reruns; a configuration checked in beside its tests carries no
+     record, and a rule reading one depends on `ocannl_ambient` itself. Both producers are checked
+     below rather than trusted, since the whole guarantee rests on them. *)
+  let copies name =
+    List.concat_map dune_files ~f:(fun (dune_file, on_disk) ->
+        let dir = Stdlib.Filename.dirname dune_file in
+        Scan.copy_sources (In_channel.read_all on_disk) ~name
+        |> List.map ~f:(fun (subdir, source) ->
+            let into = repo_relative [ dir ] subdir in
+            (into, repo_relative (Scan.split_path into) source)))
+  in
+  let ambient_config_source =
+    String.concat ~sep:"/" [ ambient_home; ambient_subdir; Scan.config_file ]
+  in
+  let ambient_record_source = ambient_home ^ "/" ^ Scan.ambient_file in
+  let copied_from name source =
+    List.filter_map (copies name) ~f:(fun (into, from) ->
+        Option.some_if (String.equal from source) into)
+    |> Set.of_list (module String)
+  in
+  let ambient_config_dirs = copied_from Scan.config_file ambient_config_source in
+  let ambient_record_dirs =
+    Set.add (copied_from Scan.ambient_file ambient_record_source) ambient_home
+  in
+  (let producer =
+     List.find dune_files ~f:(fun (path, _) -> String.equal path (ambient_home ^ "/dune"))
+   in
+   let rules =
+     match producer with
+     | None -> []
+     | Some (_, on_disk) ->
+         Scan.walk ""
+           (Scan.stanzas (In_channel.read_all on_disk))
+           ~f:(fun subdir stanza ->
+             match Scan.head stanza with Some "rule" -> [ (subdir, stanza) ] | _ -> [])
+   in
+   let target_of stanza =
+     match Scan.field stanza "target" with Some [ Sexp.Atom target ] -> Some target | _ -> None
+   in
+   let produces ~subdir ~target ~deps_ok =
+     List.exists rules ~f:(fun (at, stanza) ->
+         String.equal at subdir
+         && Option.equal String.equal (target_of stanza) (Some target)
+         && deps_ok (Scan.field stanza "deps"))
+   in
+   let record_ok =
+     produces ~subdir:"" ~target:Scan.ambient_file ~deps_ok:Scan.depends_on_universe
+   in
+   let config_ok =
+     produces ~subdir:ambient_subdir ~target:Scan.config_file ~deps_ok:(fun deps ->
+         List.mem
+           (Scan.declared_config_paths ~name:Scan.ambient_file deps)
+           ("../" ^ Scan.ambient_file) ~equal:String.equal)
+   in
+   if not (record_ok && config_ok) then
+     fail
+       (Printf.sprintf
+          "%s/dune no longer produces the ambient record its tests depend on: it needs a rule \
+           targeting `%s` that depends on `(universe)`, and one in `(subdir %s …)` targeting `%s` \
+           that depends on `../%s` (gh-ocannl-1149)"
+          ambient_home Scan.ambient_file ambient_subdir Scan.config_file Scan.ambient_file));
   let exemptions = Map.of_alist_exn (module String) exempt_sites in
   let exemptions_used = ref (Set.empty (module String)) in
   let counts = Hashtbl.create (module String) in
@@ -225,6 +294,8 @@ let () =
                  Scan.kind;
                  name;
                  declared_config_paths;
+                 declared_ambient_paths;
+                 depends_on_universe;
                  declares_config = _;
                  (* gh-ocannl-659's business, checked by `env_var_deps`; this test is about the
                     config dep. *)
@@ -247,6 +318,18 @@ let () =
                       String.equal
                         (Stdlib.Filename.dirname (repo_relative [ stanza_dir site ] declared))
                         (if String.is_empty nearest then "." else nearest))
+            in
+            (* Whether a change of the environment reaches this run (gh-ocannl-1149): through the
+               configuration it depends on, when that is a copy carrying the ambient record; through
+               the record itself, depended on beside a configuration checked in; or through
+               `(universe)`, which reruns the rule on every invocation anyway. *)
+            let ambient_covered =
+              depends_on_universe
+              || Option.exists (nearest_config site) ~f:(Set.mem ambient_config_dirs)
+              || List.exists declared_ambient_paths ~f:(fun declared ->
+                  Set.mem ambient_record_dirs
+                    (Stdlib.Filename.dirname
+                       (repo_relative (Scan.split_path (stanza_dir site)) declared)))
             in
             (* An exemption is spent only where the dep is actually absent, so declaring it anyway
                makes the entry stale and the list gets pruned rather than growing quietly. *)
@@ -286,6 +369,18 @@ let () =
                       which %s the process finds cannot be established here. Write the action as a \
                       `run` (with a `chdir` if it needs one), or exempt it by name with the reason"
                      dune_file name Scan.config_file)
+            | true, _, _ when not ambient_covered ->
+                fail
+                  (Printf.sprintf
+                     "%s: the %s %s reads %s/%s, which carries no record of the ambient \
+                      environment, and depends on neither `%s` nor `(universe)` -- so a changed \
+                      OCANNL_* variable serves its previous result. Copy the configuration from \
+                      %s, or add `%s` (copied from %s) to its deps (gh-ocannl-1149)"
+                     dune_file (Scan.kind_name kind) name
+                     (Option.value_map (nearest_config site) ~default:"." ~f:(fun d ->
+                          if String.is_empty d then "." else d))
+                     Scan.config_file Scan.ambient_file ambient_config_source Scan.ambient_file
+                     ambient_home)
             | true, _, _ -> bump (Scan.kind_name kind)
             | false, false, Scan.Unreadable_command ->
                 fail
@@ -494,6 +589,15 @@ let () =
   printf "Actions that execute a program: %s.\n" (String.concat ~sep:", " Scan.program_actions);
   printf "Actions that do not: %s. Anything else fails above.\n"
     (String.concat ~sep:", " Scan.inert_actions);
+  printf
+    "\n\
+     The ambient environment (gh-ocannl-1149) reaches a run through a copy of %s, which every rule \
+     depending on it in these directories reads: %s; or through `%s` itself, depended on beside a \
+     configuration checked in, copied from %s into: %s.\n"
+    ambient_config_source
+    (String.concat ~sep:", " (Set.to_list ambient_config_dirs))
+    Scan.ambient_file ambient_home
+    (String.concat ~sep:", " (Set.to_list (Set.remove ambient_record_dirs ambient_home)));
   printf "\nExempt from the dependency, running an executable that reads no configuration:\n";
   List.iter exempt_sites ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   let count kind = Option.value (Hashtbl.find counts kind) ~default:0 in
