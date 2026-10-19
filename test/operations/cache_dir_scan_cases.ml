@@ -66,10 +66,11 @@ let a () = let cache_dir = compute () in Autotune.tune ~cache_dir f|ocaml},
       {ocaml|let cache_dir = "autotune_cache_safe"
 let () = Autotune.tune ~cache_dir:Other.cache_dir f|ocaml},
       [ "~cache_dir names `Other.cache_dir`" ] );
+    (* A later top-level [module Cache] beside an earlier one is a duplicate definition no source
+       can contain (gh-ocannl-1248), so the shadowing is spelled with [let module]. *)
     ( "an alias shadowed by another module loses its cache identity",
       {ocaml|module Cache = Ir.Schedule_cache
-module Cache = Other
-let () = Cache.store ~dir:"scratch" k v|ocaml},
+let () = let module Cache = Other in Cache.store ~dir:"scratch" k v|ocaml},
       [] );
     ( "a nested alias dies with its scope",
       {ocaml|let () = let module Cache = Ir.Schedule_cache in Cache.store ~dir:"autotune_cache_x" k v
@@ -112,15 +113,21 @@ let f x = match x with cache_dir -> Autotune.tune ~cache_dir f|ocaml},
       [ "~cache_dir names `cache_dir`" ] );
     ( "a for index is unresolved rather than a forwarded function parameter",
       {ocaml|let cache_dir = "autotune_cache_safe"
-let () = for cache_dir = 0 to 1 do Autotune.tune ~cache_dir f done|ocaml},
+let tune_each ~cache_dir:(_ : int) = ()
+let () = for cache_dir = 0 to 1 do tune_each ~cache_dir done|ocaml},
       [ "~cache_dir names `cache_dir`" ] );
-    ( "a recursive alias never borrows the outer literal",
+    (* [let rec cache_dir = cache_dir] would be the direct spelling, and no compiler accepts it: an
+       identifier is never a legal [let rec] right-hand side. A sibling function reaching the
+       recursive binding is. *)
+    ( "a recursive binding never borrows the outer literal",
       {ocaml|let cache_dir = "autotune_cache_safe"
-let f () = let rec cache_dir = cache_dir in Autotune.tune ~cache_dir f|ocaml},
-      [ "~cache_dir names `cache_dir`" ] );
+let f () =
+  let rec go () = Autotune.tune ~cache_dir f and cache_dir = "scratch" in
+  go ()|ocaml},
+      [ "~cache_dir names scratch" ] );
     ( "class constructor parameters are unresolved because instantiations are not censused",
       {ocaml|class runner cache_dir = object method run = Autotune.tune ~cache_dir f end
-let () = new runner "scratch"|ocaml},
+let _ = new runner "scratch"|ocaml},
       [ "~cache_dir names `cache_dir`" ] );
     ( "a literal inside a class remains resolved",
       {ocaml|class runner = let cache_dir = "autotune_cache_class" in object method run = Autotune.tune ~cache_dir f end|ocaml},
@@ -207,7 +214,8 @@ module M = struct module Cache = SC end
 let () = M.Cache.store ~dir:"autotune_cache_m" key value|ocaml},
       [ "~dir names autotune_cache_m" ] );
     ( "exports carry through nested structures and signature constraints",
-      {ocaml|module M : S = struct module N = struct module Cache = Ir.Schedule_cache end end
+      {ocaml|module type S = sig module N : sig module Cache : module type of Ir.Schedule_cache end end
+module M : S = struct module N = struct module Cache = Ir.Schedule_cache end end
 let () = M.N.Cache.store ~dir:"autotune_cache_n" key value|ocaml},
       [ "~dir names autotune_cache_n" ] );
     ( "a structure bound in expression position exports too",
@@ -220,6 +228,38 @@ let () = M.N.Cache.store ~dir:"autotune_cache_n" key value|ocaml},
 module M = struct include N end
 let () = M.Cache.store ~dir:"autotune_cache_i" key value|ocaml},
       [ "~dir names autotune_cache_i" ] );
+    (* A structure whose body INCLUDES a module reaches that module's own contents through its
+       qualified path, so including the cache module makes the structure a cache module
+       (gh-ocannl-1248): its stores are cache writes, whatever else the structure defines. *)
+    ( "a structure including the cache module is the cache module",
+      {ocaml|module Cache = struct include Ir.Schedule_cache end
+let () = Cache.store ~dir:"autotune_cache_inc" key value|ocaml},
+      [ "~dir names autotune_cache_inc" ] );
+    ( "and stays one beside its own definitions",
+      {ocaml|module Cache = struct
+  include Ir.Schedule_cache
+  module Extra = Other
+  let extra = 1
+end
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "through an alias of the cache module, a nested include and a signature constraint",
+      {ocaml|module SC = Ir.Schedule_cache
+module Cache : S = struct include struct include SC end end
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "including Ir makes its Schedule_cache reachable through the structure",
+      {ocaml|module My_ir = struct include Ir end
+let () = My_ir.Schedule_cache.store ~dir:"autotune_cache_ir" key value|ocaml},
+      [ "~dir names autotune_cache_ir" ] );
+    ( "an included module's exports still win over the structure's base",
+      {ocaml|module M = struct include Ir module Schedule_cache = Other end
+let () = M.Schedule_cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "a structure including an unrelated module is not the cache",
+      {ocaml|module Cache = struct include Other end
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
     ( "an open inside a structure is not an export",
       {ocaml|module N = struct module Cache = Other end
 module M = struct module Cache = Ir.Schedule_cache open N end
@@ -258,7 +298,8 @@ open M
 let () = Cache.store ~dir:"scratch" key value|ocaml},
       [] );
     ( "an unreadable signature may hide an unrelated export, so it shadows nothing",
-      {ocaml|module Cache = Ir.Schedule_cache
+      {ocaml|module type S = sig end
+module Cache = Ir.Schedule_cache
 module M : S = struct module Cache = Other end
 open M
 let () = Cache.store ~dir:"scratch" key value|ocaml},
@@ -270,26 +311,39 @@ open M.N
 let () = Cache.store ~dir:"scratch" key value|ocaml},
       [ "~dir names scratch" ] );
     ( "and an unreadable one may hide names at any depth",
-      {ocaml|module Cache = Ir.Schedule_cache
+      {ocaml|module type S = sig module N : sig end end
+module Cache = Ir.Schedule_cache
 module M : S = struct module N = struct module Cache = Other end end
 open M.N
 let () = Cache.store ~dir:"scratch" key value|ocaml},
       [ "~dir names scratch" ] );
-    ( "a name a literal signature substitutes away is not declared",
+    (* A [module X := P] in a signature is a LOCAL substitution: it names [P] for the items after it
+       and declares nothing, nor does it take an earlier declaration of [X] away (checked against
+       [ocamlc]; the arm this replaces read it as a removal, over a snippet no compiler accepts,
+       gh-ocannl-1248). *)
+    ( "a name a literal signature only substitutes is not declared",
       {ocaml|module Cache = Ir.Schedule_cache
-module M : sig module Cache : sig end module Cache := Other end = struct module Cache = Other end
+module M : sig module Cache := Other end = struct module Cache = Other end
 open M
 let () = Cache.store ~dir:"scratch" key value|ocaml},
       [ "~dir names scratch" ] );
+    ( "and a substitution does not take an earlier declaration away",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M : sig module Cache : module type of Other module Cache := Other end = struct module Cache = Other end
+open M
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
     ( "a structure an unreadable signature may hide does not shadow a later open",
-      {ocaml|module N = struct module Cache = Ir.Schedule_cache end
+      {ocaml|module type S = sig end
+module N = struct module Cache = Ir.Schedule_cache end
 module M : S = struct module N = struct module Cache = Other end end
 open M
 open N
 let () = Cache.store ~dir:"scratch" key value|ocaml},
       [ "~dir names scratch" ] );
     ( "a resolver alias an unreadable signature may hide certifies nothing",
-      {ocaml|module A = Autotune
+      {ocaml|module type S = sig end
+module A = Autotune
 module Autotune = Other
 module M : S = struct module Autotune = A end
 open M

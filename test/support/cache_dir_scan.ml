@@ -31,13 +31,14 @@
     or bound by [let module]), each resolved in the structure's own scope where it is bound, the
     last binding of a name winning; opening or including such a structure brings those names into
     scope, as far as a signature constraint lets them through: all of a literal signature's declared
-    names, and none behind a signature the scan cannot read ({!visible}). A functor application,
-    first-class module or recursive module exports nothing the scan reads, and a structure's values
-    are not exported. Unknown opens bring in no names; qualified directory values are unresolved
-    rather than borrowed from a same-named local. The library's [Autotune.resolve_cache_dir]
-    preserves forwarding when its argument is a lexical parameter: it picks that parameter or the
-    separately censused configuration default. Other computations of a directory remain unresolved.
-*)
+    names, and none behind a signature the scan cannot read ({!visible}). A structure that
+    [include]s a module the scan names is that module for its own qualified paths, beside the names
+    it binds itself ([Exports]'s base, gh-ocannl-1248). A functor application, first-class module or
+    recursive module exports nothing the scan reads, and a structure's values are not exported.
+    Unknown opens bring in no names; qualified directory values are unresolved rather than borrowed
+    from a same-named local. The library's [Autotune.resolve_cache_dir] preserves forwarding when
+    its argument is a lexical parameter: it picks that parameter or the separately censused
+    configuration default. Other computations of a directory remain unresolved. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -117,10 +118,17 @@ type module_denotes =
   | Ocannl
   | Autotune
   | Other
-  | Exports of module_denotes Map.M(String).t
-      (** A local [struct]: every module name it binds, with what the last binding of that name
-          denoted where it was made -- the names denoting [Other] included, since opening the
-          structure shadows an outer alias with them. *)
+  | Exports of { base : module_denotes; names : module_denotes Map.M(String).t }
+      (** A local [struct]. [names] is every module name it binds, with what the last binding of
+          that name denoted where it was made -- the names denoting [Other] included, since opening
+          the structure shadows an outer alias with them. [base] is what the last [include] of a
+          module the scan names ([Cache], [Ir], [Ocannl], [Autotune], or another structure's base)
+          made the structure, [Other] without one (gh-ocannl-1248): a qualified path reaches the
+          included module's own contents through the structure, so
+          [struct include Ir.Schedule_cache end] IS a cache module, and its [store] a cache write. A
+          name the structure binds itself still wins over the base, as it does in OCaml; an
+          [include] of a module the scan cannot name leaves the base as it was, the louder of the
+          two readings, since the values it may shadow are not modelled. *)
   | May_be_hidden of module_denotes
       (** An export behind a signature the scan cannot read. A qualified path compiles only where
           the name is visible, so it reaches the denotation inside; an [open] brings it in no more
@@ -132,12 +140,32 @@ let unhide = function May_be_hidden denotes -> denotes | denotes -> denotes
 
 let rec may_hide exports =
   Map.map exports ~f:(fun denotes ->
-      May_be_hidden (match unhide denotes with Exports inner -> Exports (may_hide inner) | d -> d))
+      May_be_hidden
+        (match unhide denotes with
+        | Exports e -> Exports { e with names = may_hide e.names }
+        | d -> d))
+
+(** What a structure's qualified path [name] reaches: a module it binds, else the included module's
+    own member of that name. *)
+let rec member denotes name =
+  match (unhide denotes, name) with
+  | Exports { names; base }, _ -> (
+      match Map.find names name with Some d -> unhide d | None -> member base name)
+  | Ocannl, "Ir" -> Ir
+  | Ir, "Schedule_cache" -> Cache
+  | _ -> Other
+
+(** The module a denotation stands for when its own values are called: a structure is its base. *)
+let rec as_called = function
+  | Exports { base; _ } -> as_called base
+  | May_be_hidden d -> as_called d
+  | d -> d
 
 (** What a structure's exports become under a signature constraint. A literal [sig … end] keeps
-    exactly the module names it declares, net of its [module X := …] substitutions, and narrows a
-    declared structure's own exports by its declared type. A signature the scan cannot read -- a
-    name, a [with], an [include] inside a literal one -- may hide any name, at any depth
+    exactly the module names it declares -- a [module X := …] substitution declares nothing and
+    takes no earlier declaration of [X] away, being local to the signature's later items -- and
+    narrows a declared structure's own exports by its declared type. A signature the scan cannot
+    read -- a name, a [with], an [include] inside a literal one -- may hide any name, at any depth
     ({!May_be_hidden}). Qualified paths resolve the same either way: a missing entry is [Other]. *)
 let rec visible signature exports =
   match signature.pmty_desc with
@@ -148,8 +176,6 @@ let rec visible signature exports =
             match item.psig_desc with
             | Psig_module d -> (Option.to_list (declare d) @ declared, readable)
             | Psig_recmodule ds -> (List.filter_map ds ~f:declare @ declared, readable)
-            | Psig_modsubst { pms_name = { txt = name; _ }; _ } ->
-                (List.Assoc.remove declared name ~equal:String.equal, readable)
             | Psig_include _ -> (declared, false)
             | _ -> (declared, readable))
       in
@@ -158,7 +184,7 @@ let rec visible signature exports =
             List.Assoc.find declared key ~equal:String.equal
             |> Option.map ~f:(fun declared_type ->
                 match unhide data with
-                | Exports inner -> Exports (visible declared_type inner)
+                | Exports e -> Exports { e with names = visible declared_type e.names }
                 | d -> d))
       in
       if readable then kept else overlay (may_hide exports) kept
@@ -176,12 +202,7 @@ let module_path env path =
             | "Ocannl" -> Ocannl
             | "Autotune" -> Autotune
             | _ -> Other))
-    | Ldot (path, name) -> (
-        match (resolve path, name) with
-        | Exports exports, _ -> Option.value_map (Map.find exports name) ~f:unhide ~default:Other
-        | Ocannl, "Ir" -> Ir
-        | Ir, "Schedule_cache" -> Cache
-        | _ -> Other)
+    | Ldot (path, name) -> member (resolve path) name
     | Lapply _ -> Other
   in
   Some (resolve path)
@@ -218,7 +239,9 @@ let read ?(source = "") content =
   let calls_cache_module env callee =
     match callee.pexp_desc with
     | Pexp_ident { txt = Ppxlib.Longident.Ldot (qualifier, _); _ } -> (
-        match module_path env qualifier with Some Cache -> true | _ -> false)
+        match Option.map (module_path env qualifier) ~f:as_called with
+        | Some Cache -> true
+        | _ -> false)
     | _ -> false
   in
   let found = ref [] and defaults = ref [] in
@@ -241,47 +264,58 @@ let read ?(source = "") content =
 
       method! module_of env module_expr =
         match module_expr.pmod_desc with
-        | Pmod_structure items -> Some (Exports (self#exports env items))
+        | Pmod_structure items -> Some (self#exports env items)
         | Pmod_constraint (inner, signature) -> (
             match self#module_of env inner with
-            | Some (Exports exports) -> Some (Exports (visible signature exports))
+            | Some (Exports e) -> Some (Exports { e with names = visible signature e.names })
             | denotes -> denotes)
         | _ -> super#module_of env module_expr
 
       (* A structure's exports, read with the same hooks the walk binds its items through, so a name
          resolves in the structure's own scope as it is spelled. An [open] changes that scope and
-         exports nothing; an [include] exports what it brings in. *)
+         exports nothing; an [include] exports what it brings in, and an include of a module the
+         scan names becomes the structure's base. *)
       method private exports env items =
         let export env exports name =
           Map.set exports ~key:name
             ~data:(Option.value (Map.find env.Lexical_scope.modules name) ~default:Other)
         in
-        let step (env, exports) item =
+        let step (env, (base, exports)) item =
           match item.pstr_desc with
           | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
               let env = self#bind_module env name pmb_expr in
-              (env, export env exports name)
+              (env, (base, export env exports name))
           | Pstr_recmodule declarations ->
               let names = List.filter_map declarations ~f:(fun d -> d.pmb_name.txt) in
               let env = self#forget env names in
-              (env, List.fold names ~init:exports ~f:(export env))
+              (env, (base, List.fold names ~init:exports ~f:(export env)))
           | Pstr_open { popen_expr = m; _ } ->
-              (self#opened ~top:false ~include_:false env (self#module_of env m), exports)
-          | Pstr_include { pincl_mod = m; _ } -> (
+              (self#opened ~top:false ~include_:false env (self#module_of env m), (base, exports))
+          | Pstr_include { pincl_mod = m; _ } ->
               let included = self#module_of env m in
-              ( self#opened ~top:false ~include_:true env included,
-                match included with Some (Exports e) -> overlay exports e | _ -> exports ))
-          | _ -> (env, exports)
+              let base =
+                match Option.map included ~f:as_called with
+                | Some ((Cache | Ir | Ocannl | Autotune) as named) -> named
+                | _ -> base
+              in
+              let exports =
+                match included with Some (Exports e) -> overlay exports e.names | _ -> exports
+              in
+              (self#opened ~top:false ~include_:true env included, (base, exports))
+          | _ -> (env, (base, exports))
         in
-        snd (List.fold items ~init:(env, Map.empty (module String)) ~f:step)
+        let _, (base, names) =
+          List.fold items ~init:(env, (Other, Map.empty (module String))) ~f:step
+        in
+        Exports { base; names }
 
       (* Opening or including a local structure brings its module names into scope, over whatever
          they denoted before, except those a signature may hide. Its values are not modelled, as for
          any other open. *)
       method! opened ~top:_ ~include_:_ env =
         function
-        | Some (Exports exports) ->
-            let certain = Map.filter exports ~f:(function May_be_hidden _ -> false | _ -> true) in
+        | Some (Exports { names; _ }) ->
+            let certain = Map.filter names ~f:(function May_be_hidden _ -> false | _ -> true) in
             { env with modules = overlay env.modules certain }
         | _ -> env
 
@@ -319,7 +353,9 @@ let read ?(source = "") content =
                       String.equal source "arrayjit/lib/autotune.ml"
                       && Poly.equal (Lexical_scope.lookup env "resolve_cache_dir") (Some Resolver)
                   | Pexp_ident { txt = Ldot (path, "resolve_cache_dir"); _ } -> (
-                      match module_path env path with Some Autotune -> true | _ -> false)
+                      match Option.map (module_path env path) ~f:as_called with
+                      | Some Autotune -> true
+                      | _ -> false)
                   | _ -> false
                 in
                 let forwarding =

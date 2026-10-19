@@ -640,7 +640,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   an arm over such a snippet pins the scanner's reading of code no compiler would build, so its
   verdict says nothing about the tree the scan polices. A plain-OCaml snippet goes to a scratch
   file and `ocamlc -stop-after typing -c arm.ml` (`ocamlfind ocamlc -package base …` when it opens
-  a library). A snippet in project syntax (`let%op`, `[%cd …]`, a `[@@deriving …]` whose generated
+  a library). Snippets that call stand-in names (`key`, `Autotune.tune`) check against a stub
+  module compiled first and OPENED at each arm's top, not pasted in: an arm may rebind a stub's
+  name (`module Autotune = Other`), legal over an open and a duplicate definition beside a
+  paste. An unreadable signature `S` an arm constrains by is declared in that arm. Doing this
+  for `cache_dir_scan_cases` (gh-ocannl-1248) found five arms no compiler accepts, one of which
+  pinned a mis-modelled `module X :=` (a local substitution, not a removal). A snippet in project syntax (`let%op`, `[%cd …]`, a `[@@deriving …]` whose generated
   names it references) needs the owning stanza's preprocessors, libraries and DSL scope, which bare
   `ocamlc` lacks — it reports the uninterpreted extension instead of checking the expanded program —
   so check it as a module of a scratch stanza copied from the owning one (`dune build @check`).
