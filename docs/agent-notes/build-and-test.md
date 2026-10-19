@@ -1485,7 +1485,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   per-test aliases depend on the gate explicitly, while dune's GENERATED `runtest-<name>` aliases do
   not — a targeted run of a `(test)` stanza can be served stale under a rejected spelling — and
   `env_var_deps` checks that every alias with test actions in a directory carries that directory's
-  gate.
+  gate. A golden pair carries it on the rule making the diffed output, `(deps (alias
+  runtest-env_spelling_gate) …)`, not on the diff's alias rule (gh-ocannl-1378): the gate still runs
+  before the test, a cached output is never re-run for it (an alias dependency adds no digest; the
+  gate's `(universe)` reruns only the gate), and `dune rules` shows a file rule's alias
+  dependencies where it never shows an alias rule's, so `tools/test-run.sh affected` lists every
+  pair when the gate changes. `env_var_deps` follows that route: an alias whose rule reads an
+  output of a gate-dependent rule is gated. A rule that runs and diffs in one alias action (the
+  `slow-`/`train-` shape) keeps the dependency on itself.
 - Deleting a file target out from under dune is not a way to force it to re-run: `dune build
   <that target>` afterwards exits 0 having produced nothing (observed on dune 3.23.1 with
   `test/operations/<name>.exe.output`), and `-f/--force` does not rescue it — `--force` only
@@ -2212,7 +2219,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   registers a target and plain `dune build` (@all) runs the training that the `(test)` stanza only
   ran under `runtest` — and `no-infer` also drops the dependency `diff` would have inferred on its
   golden, so the golden goes in `deps` by hand. And the new `runtest-<name>` alias is a build entry
-  point, so the directory needs a `runtest-env_spelling_gate` rule for it to depend on and an
+  point, so the directory needs a `runtest-env_spelling_gate` rule for its output rule to depend on
+  and an
   `(alias (name runtest) (deps (alias runtest-<name>)))` stanza, both of which `env_var_deps`
   checks.
 - Splitting a golden per backend is a decision about WHAT the golden holds, not a formatting choice,
@@ -2307,14 +2315,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   disambiguates longer identifiers). Budget the resulting promote as expected work, in its own
   commit, after diff-confirming the delta is rename-only.
 - **Which per-test aliases a change reaches is dune's answer, not a guess**:
-  `tools/test-run.sh affected REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`) prints them,
-  one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh run build`
-  or `fresh`; stderr says what each changed path reached and gives per-directory counts. Run it
-  before the pre-push batch with the merge-base as REV, `$(git merge-base HEAD <base>)`, where
-  `<base>` is the remote-tracking `master` of `lukstafi/ocannl-staging` (`git remote -v` names
-  it: remote names are not the contract). The base branch itself would also count every commit
-  it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases for a
-  69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
+  `tools/test-run.sh affected --since BASE | REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`)
+  prints them, one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh
+  run build` or `fresh`; stderr says what each changed path reached and gives per-directory counts.
+  Run it before the pre-push batch as `--since <base>`, where `<base>` is the remote-tracking
+  `master` of `lukstafi/ocannl-staging` (`git remote -v` names it: remote names are not the
+  contract): it compares the worktree with `git merge-base HEAD <base>` (gh-ocannl-1379). A bare REV
+  that is not an ancestor of HEAD is warned about, since the base branch's tip would also count
+  every commit it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases
+  for a 69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
   workspace` (modules and library edges), `dune describe external-lib-deps` (the ppx-rewriter
   edges and the `tests` stanzas the first omits), `dune show aliases`/`targets`, and `dune
   rules` for each alias's own targets and each generated module file. Those dependencies are how
@@ -2326,7 +2335,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   in its directory but an owned module source, and for a changed non-build input anywhere: a
   doc, script or golden edit lists those ~49 too. Its header states the boundary as an
   allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
-  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3.
+  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3. Two
+  portability points (gh-ocannl-1389): only `dune rules`' stdout is the answer, since on a cold
+  `_build` printing a rule builds the `%{read:…}` file it depends on (`ocannl_backend_extension.txt`)
+  and that action's chatter lands on dune's stderr; and a library edge between two stanzas this
+  build does not compile is skipped, since `external-lib-deps` gives public names while such a
+  stanza may use a local one (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380

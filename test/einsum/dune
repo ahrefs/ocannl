@@ -248,8 +248,6 @@
 (rule
  (alias runtest-inline_permuted_view-c_fwd)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    "inline_permuted_view-c_fwd.ll.expected"
@@ -286,8 +284,6 @@
 (rule
  (alias runtest-test_cse-cse_d_fwd)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff "test_cse-cse_d_fwd.ll.expected" "test_cse-cse_d_fwd.ll.actual")))
 

@@ -50,8 +50,11 @@
 ; that diffs a golden sits on an alias of its own, so that ONE of them can be rerun targeted --
 ; `dune build @test/operations/runtest-verdict_ratchet` -- and a per-test alias is a build entry
 ; point like any other, so the ambient gate has to reach it. It sits on an alias of its own that
-; every such rule DEPENDS on, which runs the gate BEFORE the diff -- the same shape the slow rules
-; use. The name is the one dune >= 3.20 generates for the `env_spelling_gate` `(test)` stanza above:
+; the rule making each diffed output DEPENDS on, which runs the gate BEFORE the test -- the same shape
+; the slow rules use -- and which `dune rules` shows, where an alias rule's own `deps` it never does,
+; so `tools/test-run.sh affected` sees the edge (gh-ocannl-1378). A rule that runs and diffs in one
+; action depends on it directly. The name is the one dune >= 3.20 generates for the
+; `env_spelling_gate` `(test)` stanza above:
 ; a rule may add an action to a generated per-test alias, and this one runs the same gate binary, so
 ; the alias means the same thing whichever dune is building.
 
@@ -384,6 +387,7 @@
  (target "backend-0-0.log.actual")
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (action
@@ -420,8 +424,6 @@
 (rule
  (alias runtest-micrograd_demo_logging)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    "micrograd_demo_logging-%{read:../config/ocannl_backend.txt}-0-0.log.expected"
@@ -646,7 +648,9 @@
  ; ocannl-backend: cc -- the flag under test is the cc backend's; the command line pins both.
  (target online_softmax_fast_math.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -658,8 +662,6 @@
 (rule
  (alias runtest-online_softmax_fast_math)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff online_softmax_fast_math.expected online_softmax_fast_math.actual)))
 
@@ -672,7 +674,9 @@
  ; ocannl-backend: cc -- the licences are backend-independent; the command line pins cc beside them.
  (target online_softmax_fp_licences.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -686,8 +690,6 @@
 (rule
  (alias runtest-online_softmax_fp_licences)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    online_softmax_fp_licences.expected
@@ -709,7 +711,9 @@
  ; ocannl-backend: cc -- the defect is the cc kernel's link line; the command line pins the backend.
  (target fast_math_libmvec.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -722,8 +726,6 @@
 (rule
  (alias runtest-fast_math_libmvec)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff fast_math_libmvec.expected fast_math_libmvec.actual)))
 
@@ -743,7 +745,9 @@
  ; ocannl-backend: cc -- the defect is the cc kernel's dlopen; the command line pins the backend.
  (target cc_dlopen_cause.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -760,8 +764,6 @@
 (rule
  (alias runtest-cc_dlopen_cause)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cc_dlopen_cause.expected cc_dlopen_cause.actual)))
 
@@ -769,7 +771,9 @@
  ; ocannl-backend: cc -- the defect is the cc kernel's dlopen; the command line pins the backend.
  (target cc_dlopen_cause_dll.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -786,8 +790,6 @@
 (rule
  (alias runtest-cc_dlopen_cause_dll)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cc_dlopen_cause_dll.expected cc_dlopen_cause_dll.actual)))
 
@@ -795,7 +797,9 @@
  ; ocannl-backend: cc -- the defect is the cc kernel's dlopen; the command line pins the backend.
  (target cc_dlopen_cause_debug.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -812,8 +816,6 @@
 (rule
  (alias runtest-cc_dlopen_cause_debug)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cc_dlopen_cause_debug.expected cc_dlopen_cause_debug.actual)))
 
@@ -823,7 +825,10 @@
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
  (target cc_post_compile_cause-artifact_missing.actual)
  (package neural_nets_lib)
- (deps ocannl_config cc_post_compile_stub.sh)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
  (action
   (with-stdout-to
    %{target}
@@ -841,8 +846,6 @@
 (rule
  (alias runtest-cc_post_compile_cause-artifact_missing)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_post_compile_cause-artifact_missing.expected
@@ -852,7 +855,10 @@
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
  (target cc_post_compile_cause-artifact_missing_dll.actual)
  (package neural_nets_lib)
- (deps ocannl_config cc_post_compile_stub.sh)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
  (action
   (with-stdout-to
    %{target}
@@ -870,8 +876,6 @@
 (rule
  (alias runtest-cc_post_compile_cause-artifact_missing_dll)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_post_compile_cause-artifact_missing_dll.expected
@@ -881,7 +885,10 @@
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
  (target cc_post_compile_cause-artifact_missing_debug.actual)
  (package neural_nets_lib)
- (deps ocannl_config cc_post_compile_stub.sh)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
  (action
   (with-stdout-to
    %{target}
@@ -899,8 +906,6 @@
 (rule
  (alias runtest-cc_post_compile_cause-artifact_missing_debug)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_post_compile_cause-artifact_missing_debug.expected
@@ -910,7 +915,10 @@
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
  (target cc_post_compile_cause-codesign.actual)
  (package neural_nets_lib)
- (deps ocannl_config cc_post_compile_stub.sh)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
  (action
   (with-stdout-to
    %{target}
@@ -928,8 +936,6 @@
 (rule
  (alias runtest-cc_post_compile_cause-codesign)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_post_compile_cause-codesign.expected
@@ -939,7 +945,10 @@
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
  (target cc_post_compile_cause-codesign_dll.actual)
  (package neural_nets_lib)
- (deps ocannl_config cc_post_compile_stub.sh)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
  (action
   (with-stdout-to
    %{target}
@@ -957,8 +966,6 @@
 (rule
  (alias runtest-cc_post_compile_cause-codesign_dll)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_post_compile_cause-codesign_dll.expected
@@ -968,7 +975,10 @@
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
  (target cc_post_compile_cause-codesign_debug.actual)
  (package neural_nets_lib)
- (deps ocannl_config cc_post_compile_stub.sh)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
  (action
   (with-stdout-to
    %{target}
@@ -986,8 +996,6 @@
 (rule
  (alias runtest-cc_post_compile_cause-codesign_debug)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_post_compile_cause-codesign_debug.expected
@@ -1008,7 +1016,9 @@
  ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
  (target cc_temp_ownership-success.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -1023,8 +1033,6 @@
 (rule
  (alias runtest-cc_temp_ownership-success)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cc_temp_ownership-success.expected cc_temp_ownership-success.actual)))
 
@@ -1032,7 +1040,9 @@
  ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
  (target cc_temp_ownership-success_debug.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -1047,8 +1057,6 @@
 (rule
  (alias runtest-cc_temp_ownership-success_debug)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_temp_ownership-success_debug.expected
@@ -1058,7 +1066,9 @@
  ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
  (target cc_temp_ownership-success_dll.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -1073,8 +1083,6 @@
 (rule
  (alias runtest-cc_temp_ownership-success_dll)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_temp_ownership-success_dll.expected
@@ -1084,7 +1092,9 @@
  ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
  (target cc_temp_ownership-compiler.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -1100,8 +1110,6 @@
 (rule
  (alias runtest-cc_temp_ownership-compiler)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_temp_ownership-compiler.expected
@@ -1111,7 +1119,9 @@
  ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
  (target cc_temp_ownership-compiler_debug.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -1127,8 +1137,6 @@
 (rule
  (alias runtest-cc_temp_ownership-compiler_debug)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_temp_ownership-compiler_debug.expected
@@ -1138,7 +1146,9 @@
  ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
  (target cc_temp_ownership-compiler_dll.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -1154,8 +1164,6 @@
 (rule
  (alias runtest-cc_temp_ownership-compiler_dll)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    cc_temp_ownership-compiler_dll.expected
@@ -1177,6 +1185,7 @@
  (target cc_kept_library.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BUILD_FILES_PREFIX))
  (action
@@ -1193,8 +1202,6 @@
 (rule
  (alias runtest-cc_kept_library)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cc_kept_library.expected cc_kept_library.actual)))
 
@@ -1213,7 +1220,9 @@
  ; ocannl-backend: cc -- the temporary library is the cc compile's; the command line pins the backend.
  (target cc_temp_library_sweep.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -1228,8 +1237,6 @@
 (rule
  (alias runtest-cc_temp_library_sweep)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cc_temp_library_sweep.expected cc_temp_library_sweep.actual)))
 
@@ -1418,6 +1425,7 @@
  (target n3_fwd_with_prec-unoptimized.ll.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (action
@@ -1434,6 +1442,7 @@
  (targets top_down_prec-unoptimized.ll.actual top_down_prec.extension.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ../config/ocannl_backend_extension.txt
   ocannl_config
   (env_var OCANNL_BACKEND))
@@ -1460,6 +1469,7 @@
   zero_out_local_decl.extension.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ../config/ocannl_backend_extension.txt
   ocannl_config
   (env_var OCANNL_BACKEND))
@@ -1486,6 +1496,7 @@
   test_where_precision.extension.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ../config/ocannl_backend_extension.txt
   ocannl_config
   (env_var OCANNL_BACKEND))
@@ -1509,8 +1520,6 @@
 (rule
  (alias runtest-n3_fwd_with_prec-unoptimized)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    "n3_fwd_with_prec-unoptimized.ll.expected"
@@ -1519,8 +1528,6 @@
 (rule
  (alias runtest-top_down_prec-unoptimized)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    "top_down_prec-unoptimized.ll.expected"
@@ -1530,7 +1537,6 @@
  (alias runtest-top_down_prec-extension)
  (package neural_nets_lib)
  (deps
-  (alias runtest-env_spelling_gate)
   ../config/ocannl_backend_extension.txt
   (env_var OCANNL_BACKEND))
  (action
@@ -1541,8 +1547,6 @@
 (rule
  (alias runtest-zero_out_local_decl-unoptimized)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    "zero_out_local_decl-unoptimized.ll.expected"
@@ -1552,7 +1556,6 @@
  (alias runtest-zero_out_local_decl-extension)
  (package neural_nets_lib)
  (deps
-  (alias runtest-env_spelling_gate)
   ../config/ocannl_backend_extension.txt
   (env_var OCANNL_BACKEND))
  (action
@@ -1563,8 +1566,6 @@
 (rule
  (alias runtest-test_where_precision-unoptimized)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    "test_where_precision-unoptimized.ll.expected"
@@ -1574,7 +1575,6 @@
  (alias runtest-test_where_precision-extension)
  (package neural_nets_lib)
  (deps
-  (alias runtest-env_spelling_gate)
   ../config/ocannl_backend_extension.txt
   (env_var OCANNL_BACKEND))
  (action
@@ -2361,7 +2361,9 @@
  ; environment, and the rule copies the cc artifact `build_files/.../c_fwd.c`.
  (target test_log_stmt_format.c.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (no-infer
    (progn
@@ -2379,8 +2381,6 @@
 (rule
  (alias runtest-test_log_stmt_format)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff "test_log_stmt_format.c.expected" "test_log_stmt_format.c.actual")))
 
@@ -2401,7 +2401,9 @@
  ; environment, and the rule copies the cc artifact `build_files/.../d_fwd.c`.
  (target log_index_width_narrow.c.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (no-infer
    (progn
@@ -2420,8 +2422,6 @@
 (rule
  (alias runtest-log_index_width_narrow)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    "log_index_width_narrow.c.expected"
@@ -2432,7 +2432,9 @@
  ; environment, and the rule copies the cc artifact `build_files/.../d_fwd.c`.
  (target log_index_width_wide.c.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (no-infer
    (progn
@@ -2451,8 +2453,6 @@
 (rule
  (alias runtest-log_index_width_wide)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff "log_index_width_wide.c.expected" "log_index_width_wide.c.actual")))
 
@@ -2667,7 +2667,9 @@
  ; ocannl-backend: none -- the subject is a file descriptor of the C runtime; it links no backend
  ; and compiles nothing for one.
  (target foreign_c_stderr.actual)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   ; stderr is NOT ignored here. It carries the three things the golden deliberately cannot: the
   ; foreign line the detached arm lets through (landing on the real stderr is the whole claim), the
@@ -2683,8 +2685,6 @@
 (rule
  (alias runtest-foreign_c_stderr)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff foreign_c_stderr.expected foreign_c_stderr.actual)))
 
@@ -2751,6 +2751,7 @@
  (target exit_stream_teardown.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_EXIT_STREAM_TEARDOWN_TIMEOUT))
@@ -2764,8 +2765,6 @@
 (rule
  (alias runtest-exit_stream_teardown)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff exit_stream_teardown.expected exit_stream_teardown.actual)))
 
@@ -2778,7 +2777,9 @@
  ; ocannl-backend: none -- classifies variable NAMES through Utils (env_var_name, classify_env_var);
  ; it never resolves the backend key's value, and links no backend to resolve it on.
  (target config_var_spellings.actual)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   ; The synthetic keys this fixture sets are, by construction, names no configuration key reads --
   ; so since gh-ocannl-629 each one draws the startup warning that the sibling
@@ -2829,8 +2830,6 @@
 (rule
  (alias runtest-config_var_spellings)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff config_var_spellings.expected config_var_spellings.actual)))
 
@@ -2871,6 +2870,7 @@
  ; it never resolves the backend key's value, and links no backend to resolve it on.
  (target config_var_warnings.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   ; Every name below is one this rule SETS, so the deps are not what makes them arrive. What they
   ; make the rule notice is an ambient one arriving or leaving: since gh-ocannl-629 the environment
@@ -2921,8 +2921,6 @@
 (rule
  (alias runtest-config_var_warnings)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff config_var_warnings.expected config_var_warnings.actual)))
 
@@ -2944,6 +2942,7 @@
  ; it never resolves the backend key's value, and links no backend to resolve it on.
  (target config_var_fatal_spelling.actual)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var ocannl-log_level)
   ; As above: the executable reads these two by name, and an ambient one writes to the stream this
@@ -2969,8 +2968,6 @@
 (rule
  (alias runtest-config_var_fatal_spelling)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff config_var_fatal_spelling.expected config_var_fatal_spelling.actual)))
 
@@ -2989,6 +2986,7 @@
  (target test_config_consistency.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../arrayjit/lib/*.ml)
   (glob_files_rec ../../tensor/*.ml)
@@ -3007,8 +3005,6 @@
 (rule
  (alias runtest-test_config_consistency)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff test_config_consistency.expected test_config_consistency.actual)))
 
@@ -3025,6 +3021,7 @@
  (alias runtest-doc_examples)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (source_tree ../..)
   (sandbox always))
@@ -3045,9 +3042,7 @@
 (rule
  (alias runtest-doc_examples)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate)
-  .doc_examples_checked.objs/byte/doc_examples.cmi)
+ (deps .doc_examples_checked.objs/byte/doc_examples.cmi)
  (action
   (diff doc_examples.expected doc_examples.coverage)))
 
@@ -3148,6 +3143,7 @@
  (target refused_action_streams.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (sandbox always)
   (source_tree ../..))
@@ -3164,8 +3160,6 @@
 (rule
  (alias runtest-refused_action_streams)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff refused_action_streams.expected refused_action_streams.actual)))
 
@@ -3360,6 +3354,7 @@
  (target digest_completeness.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../arrayjit/lib/*.ml)
   (glob_files_rec ../../tensor/*.ml)
@@ -3375,8 +3370,6 @@
 (rule
  (alias runtest-digest_completeness)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff digest_completeness.expected digest_completeness.actual)))
 
@@ -3405,6 +3398,7 @@
  (targets env_var_deps.actual env_var_deps.filelist)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../dune)
   (glob_files_rec ../../arrayjit/lib/*.ml)
@@ -3437,8 +3431,6 @@
 (rule
  (alias runtest-env_var_deps)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff env_var_deps.expected env_var_deps.actual)))
 
@@ -3456,7 +3448,11 @@
  (target env_var_deps_control.actual)
  (package neural_nets_lib)
  ; The deny-list every control tree is handed a copy of (gh-ocannl-1280).
- (deps ocannl_config env_var_deps.ml ../../tools/credential-env.sh)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  env_var_deps.ml
+  ../../tools/credential-env.sh)
  (action
   (with-stdout-to
    %{target}
@@ -3465,8 +3461,6 @@
 (rule
  (alias runtest-env_var_deps_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff env_var_deps_control.expected env_var_deps_control.actual)))
 
@@ -3489,6 +3483,7 @@
  (targets cache_dir_ignores.actual cache_dir_ignores.filelist)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   ../../.gitignore
   ; Every OCaml source in the repository, not a list of the directories that hold them today: a
@@ -3510,8 +3505,6 @@
 (rule
  (alias runtest-cache_dir_ignores)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cache_dir_ignores.expected cache_dir_ignores.actual)))
 
@@ -3519,7 +3512,10 @@
  ; ocannl-backend: none -- runs the scanner's missing-input refusal controls.
  (target cache_dir_ignores_control.actual)
  (package neural_nets_lib)
- (deps ocannl_config cache_dir_ignores.ml)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cache_dir_ignores.ml)
  (action
   (with-stdout-to
    %{target}
@@ -3528,8 +3524,6 @@
 (rule
  (alias runtest-cache_dir_ignores_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cache_dir_ignores_control.expected cache_dir_ignores_control.actual)))
 
@@ -3561,6 +3555,7 @@
   atomic_file_rename_scan.sources)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (:generators
    (glob_files_rec ../../*.mll)
@@ -3595,8 +3590,6 @@
 (rule
  (alias runtest-atomic_file_rename_scan)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff atomic_file_rename_scan.expected atomic_file_rename_scan.actual)))
 
@@ -3604,7 +3597,10 @@
  ; ocannl-backend: none -- runs only synthetic argument-validation refusals in the scanner executable.
  (target atomic_file_rename_scan_control.actual)
  (package neural_nets_lib)
- (deps ocannl_config atomic_file_rename_scan.ml)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  atomic_file_rename_scan.ml)
  (action
   (with-stdout-to
    %{target}
@@ -3613,8 +3609,6 @@
 (rule
  (alias runtest-atomic_file_rename_scan_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    atomic_file_rename_scan_control.expected
@@ -3661,6 +3655,7 @@
  (targets dead_export_scan.actual dead_export_scan.filelist)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   ../../tensor/lexer.ml
   ../../tensor/parser.ml
@@ -3681,8 +3676,6 @@
 (rule
  (alias runtest-dead_export_scan)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff dead_export_scan.expected dead_export_scan.actual)))
 
@@ -3690,7 +3683,10 @@
  ; ocannl-backend: none -- runs the scanner's four synthetic direct-refusal branches.
  (target dead_export_scan_control.actual)
  (package neural_nets_lib)
- (deps ocannl_config dead_export_scan.ml)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  dead_export_scan.ml)
  (action
   (with-stdout-to
    %{target}
@@ -3699,8 +3695,6 @@
 (rule
  (alias runtest-dead_export_scan_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff dead_export_scan_control.expected dead_export_scan_control.actual)))
 
@@ -3720,6 +3714,7 @@
  (target backend_golden_family_scan.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../*.expected)
   (glob_files_rec ../../dune))
@@ -3731,8 +3726,6 @@
 (rule
  (alias runtest-backend_golden_family_scan)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    backend_golden_family_scan.expected
@@ -3753,6 +3746,7 @@
  (target bin_smoke_membership_scan.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../dune))
  (action
@@ -3763,8 +3757,6 @@
 (rule
  (alias runtest-bin_smoke_membership_scan)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff bin_smoke_membership_scan.expected bin_smoke_membership_scan.actual)))
 
@@ -3775,7 +3767,9 @@
  ; ocannl-backend: none -- links no backend and scans an embedded synthetic dune file.
  (target bin_smoke_membership_scan_control.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -3784,8 +3778,6 @@
 (rule
  (alias runtest-bin_smoke_membership_scan_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    bin_smoke_membership_scan_control.expected
@@ -3811,6 +3803,7 @@
  (target optional_arg_inventory.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../lib/*.ml)
   (glob_files_rec ../../lib/*.mli))
@@ -3822,8 +3815,6 @@
 (rule
  (alias runtest-optional_arg_inventory)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff optional_arg_inventory.expected optional_arg_inventory.actual)))
 
@@ -3831,7 +3822,10 @@
  ; ocannl-backend: none -- runs the inventory's synthetic empty-source refusal branch.
  (target optional_arg_inventory_control.actual)
  (package neural_nets_lib)
- (deps ocannl_config optional_arg_inventory.ml)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  optional_arg_inventory.ml)
  (action
   (with-stdout-to
    %{target}
@@ -3840,8 +3834,6 @@
 (rule
  (alias runtest-optional_arg_inventory_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    optional_arg_inventory_control.expected
@@ -3852,6 +3844,7 @@
  (target config_dep_completeness.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../dune)
   (glob_files_rec ../../ocannl_config))
@@ -3863,8 +3856,6 @@
 (rule
  (alias runtest-config_dep_completeness)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff config_dep_completeness.expected config_dep_completeness.actual)))
 
@@ -3885,6 +3876,7 @@
  (target verdict_ratchet.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   verdict_ratchet_controls.md
   (glob_files_rec ../../test/*.ml)
@@ -3897,8 +3889,6 @@
 (rule
  (alias runtest-verdict_ratchet)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff verdict_ratchet.expected verdict_ratchet.actual)))
 
@@ -3956,6 +3946,7 @@
  (targets codegen_text_inventory.actual codegen_text_inventory.filelist)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   %{lib:arrayjit.ir:ir.cmi}
   %{lib:arrayjit.utils:utils.cmi}
@@ -3981,8 +3972,6 @@
 (rule
  (alias runtest-codegen_text_inventory)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff codegen_text_inventory.expected codegen_text_inventory.actual)))
 
@@ -3990,7 +3979,10 @@
  ; ocannl-backend: none -- runs the scanner's synthetic stale-exclusion refusal branch.
  (target codegen_text_inventory_control.actual)
  (package neural_nets_lib)
- (deps ocannl_config codegen_text_inventory.ml)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  codegen_text_inventory.ml)
  (action
   (with-stdout-to
    %{target}
@@ -3999,8 +3991,6 @@
 (rule
  (alias runtest-codegen_text_inventory_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    codegen_text_inventory_control.expected
@@ -6260,7 +6250,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target autotune_bound_pruning.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -6274,8 +6266,6 @@
 (rule
  (alias runtest-autotune_bound_pruning)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff autotune_bound_pruning.expected autotune_bound_pruning.actual)))
 
@@ -6294,6 +6284,7 @@
  (target bandwidth_calibration.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (action
@@ -6306,8 +6297,6 @@
 (rule
  (alias runtest-bandwidth_calibration)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff bandwidth_calibration.expected bandwidth_calibration.actual)))
 
@@ -6326,6 +6315,7 @@
  (target autotune_routine_name.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_MODEL_CACHE_CAPACITY)
@@ -6340,8 +6330,6 @@
 (rule
  (alias runtest-autotune_routine_name)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff autotune_routine_name.expected autotune_routine_name.actual)))
 
@@ -6406,7 +6394,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target cost_model_selection.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -6421,8 +6411,6 @@
 (rule
  (alias runtest-cost_model_selection)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff cost_model_selection.expected cost_model_selection.actual)))
 
@@ -6442,7 +6430,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target model_default_fallback.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -6457,8 +6447,6 @@
 (rule
  (alias runtest-model_default_fallback)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff model_default_fallback.expected model_default_fallback.actual)))
 
@@ -6943,7 +6931,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target placement_surface.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -6956,8 +6946,6 @@
 (rule
  (alias runtest-placement_surface)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff placement_surface.expected placement_surface.actual)))
 
@@ -6977,7 +6965,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target flip_bound_pruning.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -6991,8 +6981,6 @@
 (rule
  (alias runtest-flip_bound_pruning)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff flip_bound_pruning.expected flip_bound_pruning.actual)))
 
@@ -7016,7 +7004,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target flip_abandonment.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -7030,8 +7020,6 @@
 (rule
  (alias runtest-flip_abandonment)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff flip_abandonment.expected flip_abandonment.actual)))
 
@@ -7051,6 +7039,7 @@
  (package neural_nets_lib)
  ; gh-ocannl-1332: the lane-mode read it refuses goes through Ir.Schedule.gpu_serial_lanes.
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_PROFILE))
@@ -7067,8 +7056,6 @@
 (rule
  (alias runtest-config_class_fingerprint)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff config_class_fingerprint.expected config_class_fingerprint.actual)))
 
@@ -7087,7 +7074,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target model_default_placements.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -7104,8 +7093,6 @@
 (rule
  (alias runtest-model_default_placements)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff model_default_placements.expected model_default_placements.actual)))
 
@@ -7307,6 +7294,7 @@
  (target agent_notes_structure.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   ../../AGENTS.md
   ../../docs/agent-notes.md
@@ -7320,8 +7308,6 @@
 (rule
  (alias runtest-agent_notes_structure)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff agent_notes_structure.expected agent_notes_structure.actual)))
 
@@ -7341,6 +7327,7 @@
  (target ocamlformat_ignore_scan.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   ; The scanner enumerates this source tree inside a required clean sandbox. That preserves exact
   ; path boundaries without putting the 37 KB expansion on a spawned command line. The action's
@@ -7367,8 +7354,6 @@
 (rule
  (alias runtest-ocamlformat_ignore_scan)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff ocamlformat_ignore_scan.expected ocamlformat_ignore_scan.actual)))
 
@@ -7840,6 +7825,7 @@
  (target shell_scripts_parse.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../*.sh)
   ; A shell script need not be named `*.sh` -- `tools/run-tests` with a `#!/bin/bash` would have
@@ -7868,8 +7854,6 @@
 (rule
  (alias runtest-shell_scripts_parse)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff shell_scripts_parse.expected shell_scripts_parse.actual)))
 
@@ -7931,6 +7915,7 @@
  (target config_usage_scan.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (sandbox always)
   (source_tree ../..))
@@ -7950,6 +7935,7 @@
  (target config_usage_scan_control.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   config_usage_scan_bogus.fixture
   config_usage_scan_bogus_config.fixture
@@ -7982,16 +7968,12 @@
 (rule
  (alias runtest-config_usage_scan)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff config_usage_scan.expected config_usage_scan.actual)))
 
 (rule
  (alias runtest-config_usage_scan_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff config_usage_scan_control.expected config_usage_scan_control.actual)))
 
@@ -8001,6 +7983,7 @@
  (target config_usage_scan_refusal_control.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   config_usage_scan.ml
   config_usage_scan_token_grammar.fixture
@@ -8023,6 +8006,7 @@
  (target config_usage_scan_script_hint.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   config_usage_scan_tool_invented.sh.fixture
   config_usage_scan_tool_invented.py.fixture
@@ -8055,8 +8039,6 @@
 (rule
  (alias runtest-config_usage_scan_script_hint)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    config_usage_scan_script_hint.expected
@@ -8065,8 +8047,6 @@
 (rule
  (alias runtest-config_usage_scan_refusal_control)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    config_usage_scan_refusal_control.expected
@@ -8094,6 +8074,7 @@
  (targets workflow_job_timeouts.actual workflow_job_timeouts.filelist)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   ; Every file under the workflows directory, with no suffix list here: WHICH of them is a
   ; workflow is one fact, and it lives in the scanner's `is_workflow`, where the controls exercise
@@ -8115,8 +8096,6 @@
 (rule
  (alias runtest-workflow_job_timeouts)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff workflow_job_timeouts.expected workflow_job_timeouts.actual)))
 
@@ -8288,7 +8267,10 @@
  ; ocannl-backend: none -- links no backend: it reads CHANGES.md as text.
  (target changelog_unreleased_scan.actual)
  (package neural_nets_lib)
- (deps ocannl_config ../../CHANGES.md)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  ../../CHANGES.md)
  (action
   (with-stdout-to
    %{target}
@@ -8297,8 +8279,6 @@
 (rule
  (alias runtest-changelog_unreleased_scan)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff changelog_unreleased_scan.expected changelog_unreleased_scan.actual)))
 
@@ -8315,7 +8295,10 @@
  ; ocannl-backend: none -- links no backend: it measures AGENTS.md as bytes.
  (target agents_md_size.actual)
  (package neural_nets_lib)
- (deps ocannl_config ../../AGENTS.md)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  ../../AGENTS.md)
  (action
   (with-stdout-to
    %{target}
@@ -8324,8 +8307,6 @@
 (rule
  (alias runtest-agents_md_size)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff agents_md_size.expected agents_md_size.actual)))
 
@@ -8366,6 +8347,7 @@
  (target ll_test_ratchet.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (sandbox always)
   (source_tree ../..))
@@ -8382,8 +8364,6 @@
 (rule
  (alias runtest-ll_test_ratchet)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff ll_test_ratchet.expected ll_test_ratchet.actual)))
 
@@ -8400,6 +8380,7 @@
  (target operand_key_ratchet.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (sandbox always)
   (source_tree ../..))
@@ -8416,8 +8397,6 @@
 (rule
  (alias runtest-operand_key_ratchet)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
 
@@ -8436,6 +8415,7 @@
  (target census_total_ratchet.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (sandbox always)
   (source_tree ../..))
@@ -8452,8 +8432,6 @@
 (rule
  (alias runtest-census_total_ratchet)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff census_total_ratchet.expected census_total_ratchet.actual)))
 
@@ -8483,6 +8461,7 @@
  (target provenance_tag_inventory.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (sandbox always)
   (source_tree ../..))
@@ -8499,8 +8478,6 @@
 (rule
  (alias runtest-provenance_tag_inventory)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff provenance_tag_inventory.expected provenance_tag_inventory.actual)))
 
@@ -8730,7 +8707,9 @@
  ; ocannl-backend: cc -- the flag under test is the cc backend's; the command line pins both.
  (target online_softmax_block_fast_math.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -8742,8 +8721,6 @@
 (rule
  (alias runtest-online_softmax_block_fast_math)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff
    online_softmax_block_fast_math.expected
@@ -8925,6 +8902,7 @@
  (target qkv_zero_init-approximate.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -8950,8 +8928,6 @@
 (rule
  (alias runtest-qkv_zero_init-approximate)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff qkv_zero_init.expected qkv_zero_init-approximate.actual)))
 
@@ -9113,7 +9089,10 @@
  ; ocannl-backend: none -- runs the editorial reader over a temporary Git history.
  (targets api_drift_history.actual)
  (package neural_nets_lib)
- (deps ocannl_config ../../tools/api_drift.exe)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  ../../tools/api_drift.exe)
  (action
   (with-stdout-to
    api_drift_history.actual
@@ -9122,8 +9101,6 @@
 (rule
  (alias runtest-api_drift_history)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff api_drift_history.expected api_drift_history.actual)))
 
@@ -9274,7 +9251,9 @@
  ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
  (target flip_twins.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -9286,8 +9265,6 @@
 (rule
  (alias runtest-flip_twins)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff flip_twins.expected flip_twins.actual)))
 
@@ -9389,6 +9366,7 @@
  (target limits_field_classes.actual)
  (package neural_nets_lib)
  (deps
+  (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_BIG_MODELS)
@@ -9413,8 +9391,6 @@
 (rule
  (alias runtest-limits_field_classes)
  (package neural_nets_lib)
- (deps
-  (alias runtest-env_spelling_gate))
  (action
   (diff limits_field_classes.expected limits_field_classes.actual)))
 
