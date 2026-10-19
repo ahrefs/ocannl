@@ -2052,6 +2052,18 @@ files.
   queries the scan index is an ordinary loop symbol: `loop_ranges`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
+- **A scan nest in a GPU sketch's kernel is a companion like any other** (gh-ocannl-1134):
+  `companion_geometry` walks into `Scan_loop` bodies for its coverage demand, as
+  `validate_parallel` does, so a scan's materialized row writes need covering. Where the scan's
+  enclosing loops align with the site's full chain, they take the site's per-position geometry and
+  the scan runs serially per thread. The two-pass attention's scan runs over the score site's column
+  axis, so its chain trims below the site's arity and the family is refuted naming the scan's
+  nodes. Fission makes the cut there: the default schedule-aware `keep_mapping` probe already keeps
+  the scores' kernel apart, and `arity_cuts` does so under the legality rules alone. The walk used
+  to stop at the scan: the witness passed and every seed died at compile, which is how gh-1003's
+  stage-1 tuned arm lost its tensorized scores. A new walker deciding a kernel's write demand must
+  descend into scan bodies too. `test/operations/scan_companion_coverage` executes every seed of
+  both shapes.
 ## Timing identity
 
 - Timed cache evidence uses `Context.timing_identity` separately from conservative construction

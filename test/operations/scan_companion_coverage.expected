@@ -1,0 +1,25 @@
+--- leg 1: a scan aligned with the matmul's chain shares its kernel ---
+aligned: the matmul's segment also holds the scan: true
+aligned: the shared segment seeds a tensorized candidate: true
+aligned: every seed of the shared segment passes validate_parallel: true
+--- leg 2: a scan the matmul's chain cannot cover is refuted, then cut ---
+misaligned: the matmul's segment also holds the scan: true
+misaligned: the shared segment seeds nothing: true
+misaligned: the family is refuted on coverage, naming the scan's max_vals: true
+misaligned: the arity_cuts segmentation cuts the scan from the matmul: true
+misaligned: the freed matmul seeds a tensorized candidate: true
+misaligned: every seed of the freed matmul passes validate_parallel: true
+--- leg 3: the two-pass attention's score contraction and its scan ---
+attention: the default GPU segmentation keeps the scan out of the scores' segment: true
+attention: the scores' segment seeds a tensorized candidate: true
+attention: every seed of the scores' segment passes validate_parallel: true
+attention: under the legality rules alone the scores share the scan's segment: true
+attention: that shared segment seeds nothing: true
+attention: the shared segment's family is refuted on companion coverage: true
+attention: the arity_cuts segmentation frees the scores from the scan: true
+attention: the freed scores seed a tensorized candidate: true
+--- leg 4: executed, every seed of the aligned shared segment ---
+aligned, executed: the matmul's segment under the real limits also holds the scan: true
+aligned, executed: every GPU seed of the shared segment computes z and the softmax, tensorized where the tile is advertised: true
+--- leg 5: executed, every seed of the attention's score segment ---
+attention, executed: every GPU seed of the scores' segment gives the untuned output: true

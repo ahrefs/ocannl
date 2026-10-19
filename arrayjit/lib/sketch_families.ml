@@ -1557,7 +1557,8 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
     | LL.Tile_mma { d = tn, _; _ } ->
         Ir.Tnode.Placements.is_materialized_peek plc tn
     | LL.Seq (a, b) -> writes_materialized a || writes_materialized b
-    | LL.For_loop { body; _ } | LL.If { body; _ } -> writes_materialized body
+    | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } ->
+        writes_materialized body
     | _ -> false
   in
   let mentions syms stmt =
@@ -1567,7 +1568,12 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
   (* Only nests that write a MATERIALIZED node need covering — [validate_parallel]'s rule is about
      shared memory, and routine-local scratch is per-thread by construction. Restricting the demand
      this way also keeps the query out of the way of the pipelines it never needed to constrain: a
-     site with nothing to cover neither consults the analysis nor can be failed by it. *)
+     site with nothing to cover neither consults the analysis nor can be failed by it. The walk
+     enters [Scan_loop] bodies, as [validate_parallel]'s does (gh-ocannl-1134): a scan's row writes
+     (the online softmax's max and normalizer) are a companion's writes like any other. Stopping at
+     the scan let a kernel holding one pass this verdict, and then every seed died at compile. An
+     aligned scan nest takes the site's geometry on its enclosing loops and runs serially per
+     thread; a scan over the site's own column axis trims below the site's arity and is refuted. *)
   let needs =
     List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(fun stmt ->
         match stmt with
@@ -1599,7 +1605,7 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
         | LL.Seq (a, b) ->
             go a;
             go b
-        | LL.For_loop { body; _ } | LL.If { body; _ } -> go body
+        | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> go body
         | _ -> ()
       in
       go stmt;

@@ -217,6 +217,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test privatize_census: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test qkv_zero_init: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test reduction_forms: Ir.Schedule.apply
+  test/operations/dune, test scan_companion_coverage: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test scan_loop: Ir.Schedule.apply
   test/operations/dune, test schedule_batch_grid: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits_classified
   test/operations/dune, test schedule_batched_mma: Ir.Schedule.apply
