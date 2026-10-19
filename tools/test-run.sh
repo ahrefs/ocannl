@@ -33,6 +33,8 @@
 #   tools/test-run.sh plan  [--cap N] [--test-cap N] [DUNE ARGS...]   # what `run` would inject and take; runs nothing
 #   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] N [DUNE ARGS...]
 #                                                      # compare N isolated runs
+#   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] --direct N @DIR/KIND-NAME... [-j N]
+#                                                      # build once, replay the tests N times
 #   tools/test-run.sh fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]
 #                                                      # one fresh, timed run of named tests
 #   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]... [--no-first-parent]
@@ -97,6 +99,35 @@
 # `--cache=disabled` alike; `--cache=enabled` stores everything, the test runs
 # too, which restores a test's output instead of re-running it. So `repeat`
 # keeps `--cache=disabled`, which says what it means.
+#
+# `repeat --direct` (gh-ocannl-1377) pays the rebuild once. Its operands are
+# `fresh`'s (per-test aliases and -j N). A build phase -- a clean iteration
+# into the set's own build directory, with a trace -- builds the tests and runs
+# them once; the plan then reads from that trace which processes are each named
+# test's own action (the rule `fresh` times a test by), asks dune for their
+# rules (`dune rules`: the expanded action, its directory, programs, arguments,
+# redirections and variables) and keeps a snapshot of their targets as dune's
+# own run left them. Each iteration then replays those rules in the built tree
+# (tools/replay-rules.sh: in the environment `dune exec --no-build` reports for
+# the build context, plus the per-action TMPDIR and BUILD_PATH_PREFIX_MAP dune
+# adds) and runs dune's `--force` over the aliases, which re-runs their own
+# actions -- the golden diffs, a run-and-diff rule, an inline-test runner --
+# and rebuilds nothing. A pair compares dune's streams and status as above,
+# plus the replayed rules' outputs, statuses and printed stdout (red) and
+# stderr (diagnostic). The first replay is also compared with the snapshot:
+# replays that agree with each other but not with dune's own run are REPLAY
+# DIVERGED (exit 1), a replay that did not reproduce the rules' conditions,
+# never a stable test. Refused before any iteration (exit 2, DIRECT REFUSED or
+# NOT RUN): a rule dune ran in a sandbox, an action outside the replayed forms,
+# a named test none of whose processes ran; a build phase that failed before
+# running a named test is BUILD FAILED with its status. The per-test cap
+# times the replay's processes as it times dune's, and a GPU batch's device
+# probe precedes the build phase and every iteration. What a direct iteration
+# does NOT reproduce, beside a sandbox: dune's own scheduling of the named
+# tests beside each other (a replay runs them one after another, so `--alone`
+# narrows only the build phase and dune's --force), and a fresh build tree (a
+# file a test leaves beside its targets is there for the next iteration, as it
+# would be for a second dune run).
 #
 # `fresh` runs the named per-test aliases once, as `run` does (cap, slot, width,
 # digest), but fresh: dune is given a build directory of the run's own
@@ -236,7 +267,7 @@ normalize_cap() { # [VARIABLE OPTION]: `cap` and `--cap` by default
 }
 
 reject_misplaced_options() {
-  # dune has no `--cap`, `--test-cap` or `--alone`, so any of them among the arguments
+  # dune has no `--cap`, `--test-cap`, `--alone` or `--direct`, so any of them among the arguments
   # FORWARDED to dune is this script's options written on the wrong side of the
   # target -- never something a caller could mean. Left to reach dune it exits 1
   # with `dune: unknown option`, having built nothing; the digest would now
@@ -247,9 +278,9 @@ reject_misplaced_options() {
   for arg do
     case $arg in
       --) return 0 ;;
-      --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=*)
+      --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=* | --direct | --direct=*)
         case $sub in
-          repeat) form='repeat [--cap N] [--test-cap N] [--alone] N [DUNE ARGS...]' ;;
+          repeat) form='repeat [--cap N] [--test-cap N] [--alone] [--direct] N [DUNE ARGS...]' ;;
           fresh) form='fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]' ;;
           bisect) form=$bisect_usage ;;
           *) form="$sub [--cap N] [--test-cap N] [DUNE ARGS...]" ;;
@@ -1497,72 +1528,54 @@ explicit_trace_file() { # dune argv; 0 iff it names a trace file before dune's `
 # path, each segment starting with a letter, digit or `_` -- so no `.` or `..`
 # segment and nothing absolute -- since it names where the test's action runs.
 fresh_argv() { # operands
-  local arg jobs= seen
-  fresh_aliases=() fresh_args=()
+  local arg jobs= seen verb=fresh form='fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]' other='use `run`'
+  if [ "$sub" = repeat ]; then
+    verb="repeat --direct" form='repeat [--cap N] [--test-cap N] [--alone] --direct N @DIR/KIND-NAME... [-j N]'
+    other='repeat it without --direct'
+  fi
+  fresh_aliases=() fresh_args=() fresh_jobs=
   while [ $# -gt 0 ]; do
     arg=$1
     shift
     case $arg in
       -j)
-        [ $# -gt 0 ] || die "fresh: -j needs a width"
+        [ $# -gt 0 ] || die "$verb: -j needs a width"
         jobs=$1
         shift ;;
       -j*) jobs=${arg#-j} ;;
       @*)
         if ! [[ $arg =~ ^@@?([A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*)/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
-          die "fresh: not a per-test alias: $arg
+          die "$verb: not a per-test alias: $arg
   name each test as @DIR/runtest-NAME, @DIR/slow-NAME or @DIR/train-NAME (@@ for DIR alone);
-  an aggregate (@runtest, @DIR/slow, @DIR/scans) or a directory-less alias is not one -- use \`run\`"
+  an aggregate (@runtest, @DIR/slow, @DIR/scans) or a directory-less alias is not one -- $other"
         fi
         for seen in ${fresh_aliases[@]+"${fresh_aliases[@]}"}; do
-          [ "$seen" != "$arg" ] || die "fresh: $arg is named twice"
+          [ "$seen" != "$arg" ] || die "$verb: $arg is named twice"
         done
         fresh_aliases+=("$arg") ;;
       *)
-        die "fresh takes per-test aliases and -j N only, not: $arg
-  usage: tools/test-run.sh fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]
+        die "$verb takes per-test aliases and -j N only, not: $arg
+  usage: tools/test-run.sh $form
   (it passes --force, --cache=disabled and a build directory of its own; see the header)" ;;
     esac
   done
   [ ${#fresh_aliases[@]} -gt 0 ] ||
-    die "fresh: name at least one per-test alias (@DIR/runtest-NAME, @DIR/slow-NAME, @DIR/train-NAME)"
+    die "$verb: name at least one per-test alias (@DIR/runtest-NAME, @DIR/slow-NAME, @DIR/train-NAME)"
   if [ -n "$jobs" ]; then
-    case $jobs in '' | *[!0-9]* | 0*) die "fresh: -j wants a positive width, got: $jobs" ;; esac
+    case $jobs in '' | *[!0-9]* | 0*) die "$verb: -j wants a positive width, got: $jobs" ;; esac
   fi
+  fresh_jobs=$jobs
   fresh_args=(build --force --cache=disabled "${fresh_aliases[@]}")
   [ -z "$jobs" ] || fresh_args+=(-j "$jobs")
 }
 
-# A `fresh` run's per-test times (see the header), in `_resolve` once dune has
-# exited, from the run's own trace: the shipping reader's `--tsv` rows -- the
-# same whitelisted fields its table prints (gh-ocannl-1280), every target of a
-# process included -- bounded like the promotion list, within what is left of
-# the run's cap (a test that ends near the cap is UNTIMED, never a TIMEOUT
-# after dune passed), then attributed to the named aliases. `timings`
-# holds one line per alias, `ALIAS<TAB>ran|not-run<TAB>SECONDS<TAB>PROCS<TAB>EXITS<TAB>HOW`,
-# HOW naming the rule that found its processes (`action`, `program`, `-`);
-# a reader that fails leaves `timings-skipped` with its last diagnostic
-# instead. A trace holding no process at all is the reader's refusal, and
-# means every named test is NOT RUN, not that the times are unreadable.
-fresh_timings() { # <trace file>
-  local tsv=$run_dir/fresh-processes.tsv err=$run_dir/fresh-processes.err why
-  rm -f "$run_dir/timings" "$run_dir/timings.tmp" "$run_dir/timings-skipped"
-  if [ "$cap" -gt 0 ] && [ $((cap - SECONDS - 5)) -lt 1 ]; then
-    echo "the run's cap was nearly spent when dune exited" >"$run_dir/timings-skipped"
-    return 0
-  fi
-  if ! promotion_bounded bash "$runner_root/tools/action-durations.sh" --tsv -n 0 "$1" >"$tsv" 2>"$err" 9>&-; then
-    if grep -q '^action-durations.sh: no process in ' "$err" 2>/dev/null; then
-      : >"$tsv"
-    else
-      why=$(grep . "$err" 2>/dev/null | tail -n 1 | cut -c1-300)
-      [ -n "$why" ] || why="the trace reader failed, or did not finish within its bound"
-      printf '%s\n' "$why" >"$run_dir/timings-skipped"
-      rm -f "$tsv" "$err"
-      return 0
-    fi
-  fi
-  awk -F '\t' '
+# Which processes of a trace are a named test's action: the rule `fresh` times
+# a test by (see the header) and `repeat --direct` replays a test by, one copy
+# for both. Input: the alias list, then tools/action-durations.sh's `--tsv`
+# rows. `mode=timings` prints `fresh`'s per-alias line (fresh_timings);
+# `mode=rows` prints `ALIAS<TAB>ROW` for each row (1-based) that is the
+# alias's action (_direct_plan).
+attribution_awk='
     function ends(s, t) { return length(s) >= length(t) && substr(s, length(s) - length(t) + 1) == t }
     function named(i) { # the alias i: a, rec (a recursive @), p, d (its DIR), base, name
       a = alias[i]; rec = substr(a, 1, 2) != "@@"; p = substr(a, rec ? 2 : 3)
@@ -1617,6 +1630,14 @@ fresh_timings() { # <trace file>
             hits[i] = hits[i] " " j; claimed[j] = 1
           }
       }
+      # `rows` mode, for the plan of repeat --direct: the rows that are each named action.
+      if (mode == "rows") {
+        for (i = 1; i <= n; i++) {
+          nh = split(hits[i], hl, " ")
+          for (q = 1; q <= nh; q++) printf "%s\t%d\n", alias[i], hl[q]
+        }
+        exit 0
+      }
       for (i = 1; i <= n; i++) {
         nh = split(hits[i], hl, " "); total = 0; exits = ""
         for (q = 1; q <= nh; q++) {
@@ -1628,7 +1649,38 @@ fresh_timings() { # <trace file>
         if (!nh) how[i] = "-"
         printf "%s\t%s\t%.2f\t%d\t%s\t%s\n", alias[i], state, total, nh, exits, how[i]
       }
-    }' "$run_dir/fresh-aliases" "$tsv" >"$run_dir/timings.tmp" 2>"$err" &&
+    }'
+
+# A `fresh` run's per-test times (see the header), in `_resolve` once dune has
+# exited, from the run's own trace: the shipping reader's `--tsv` rows -- the
+# same whitelisted fields its table prints (gh-ocannl-1280), every target of a
+# process included -- bounded like the promotion list, within what is left of
+# the run's cap (a test that ends near the cap is UNTIMED, never a TIMEOUT
+# after dune passed), then attributed to the named aliases. `timings`
+# holds one line per alias, `ALIAS<TAB>ran|not-run<TAB>SECONDS<TAB>PROCS<TAB>EXITS<TAB>HOW`,
+# HOW naming the rule that found its processes (`action`, `program`, `-`);
+# a reader that fails leaves `timings-skipped` with its last diagnostic
+# instead. A trace holding no process at all is the reader's refusal, and
+# means every named test is NOT RUN, not that the times are unreadable.
+fresh_timings() { # <trace file>
+  local tsv=$run_dir/fresh-processes.tsv err=$run_dir/fresh-processes.err why
+  rm -f "$run_dir/timings" "$run_dir/timings.tmp" "$run_dir/timings-skipped"
+  if [ "$cap" -gt 0 ] && [ $((cap - SECONDS - 5)) -lt 1 ]; then
+    echo "the run's cap was nearly spent when dune exited" >"$run_dir/timings-skipped"
+    return 0
+  fi
+  if ! promotion_bounded bash "$runner_root/tools/action-durations.sh" --tsv -n 0 "$1" >"$tsv" 2>"$err" 9>&-; then
+    if grep -q '^action-durations.sh: no process in ' "$err" 2>/dev/null; then
+      : >"$tsv"
+    else
+      why=$(grep . "$err" 2>/dev/null | tail -n 1 | cut -c1-300)
+      [ -n "$why" ] || why="the trace reader failed, or did not finish within its bound"
+      printf '%s\n' "$why" >"$run_dir/timings-skipped"
+      rm -f "$tsv" "$err"
+      return 0
+    fi
+  fi
+  awk -F '\t' -v mode=timings "$attribution_awk" "$run_dir/fresh-aliases" "$tsv" >"$run_dir/timings.tmp" 2>"$err" &&
     mv -f "$run_dir/timings.tmp" "$run_dir/timings" || {
       rm -f "$run_dir/timings.tmp"
       printf 'the per-test times could not be recorded: %s\n' \
@@ -2101,6 +2153,8 @@ digest() {
   refusal_src=$dir/log prelude_bytes=$(cat "$dir/prelude" 2>/dev/null)
   case $prelude_bytes in '' | *[!0-9]*) prelude_bytes=0 ;; esac
   [ "$(cat "$dir/mode" 2>/dev/null)" = repeat ] && refusal_src=$dir/iteration-1/stderr prelude_bytes=0
+  # A direct set's first dune is its build phase.
+  [ "$(cat "$dir/direct" 2>/dev/null)" = 1 ] && refusal_src=$dir/build-phase/stderr
   # 142 is the ONLY code the cap produces (the supervisor's SIGALRM exit), so
   # only it may say "timeout" -- the run's cap, or the per-test cap, whose
   # watcher sends the same SIGALRM and leaves its `test-cap` record behind
@@ -2411,11 +2465,13 @@ case $sub in
     # As for `run`: empty is the default, which the resolution phase decides.
     test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
     alone=0
+    direct=0
     while [ $# -gt 0 ]; do
       case $1 in
         --cap) [ $# -ge 2 ] || die "--cap requires a value"; cap=$2; shift 2 ;;
         --test-cap) [ $# -ge 2 ] || die "--test-cap requires a value"; test_cap=$2; shift 2 ;;
         --alone) alone=1; shift ;;
+        --direct) direct=1; shift ;;
         --) shift; break ;;
         *) break ;;
       esac
@@ -2430,6 +2486,14 @@ case $sub in
     repeats=$(( 10#$repeats ))
     [ "$repeats" -ge 2 ] || die "repeat count must be at least 2"
     reject_misplaced_options "$@"
+    if [ "$direct" = 1 ]; then
+      # The operands `fresh` takes (fresh_argv): the replay plans per-test aliases only.
+      fresh_argv "$@"
+      set -- build "${fresh_aliases[@]}"
+      [ -z "$fresh_jobs" ] || set -- "$@" -j "$fresh_jobs"
+      command -v python3 >/dev/null 2>&1 ||
+        die "repeat --direct needs python3 (the trace reader and tools/replay-rules.sh)"
+    fi
     [ $# -gt 0 ] || set -- runtest
     select_dune
     new_run "$@"
@@ -2441,6 +2505,8 @@ case $sub in
     { printf '%s\n' repeat >"$run_dir/mode" &&
       printf '%s\n' "$repeats" >"$run_dir/repeats" &&
       printf '%s\n' "$alone" >"$run_dir/alone" &&
+      printf '%s\n' "$direct" >"$run_dir/direct" &&
+      { [ "$direct" = 0 ] || printf '%s\n' "${fresh_aliases[@]}" >"$run_dir/direct-aliases"; } &&
       ps_token "$$" >"$run_dir/ptoken" &&
       printf '%s\n' "$$" >"$run_dir/pid"; } ||
       die "cannot record repeat metadata in $run_dir"
@@ -2602,97 +2668,117 @@ case $sub in
         die "cannot read the repeat's bounds from $run_dir/bounds"
     fi
     repeat_bounded=
-    i=1
-    while [ "$i" -le "$repeats" ] && [ -z "$repeat_cancelled" ]; do
-      iter=$run_dir/iteration-$i
-      mkdir "$iter" || die "cannot create $iter"
-      # The iteration directory is what a probed iteration's `_probe` owns
-      # (OCANNL_TOOL_TESTRUN_OWN), and a run's own phase reads the tree under
-      # test from its owner's `wt` (gh-ocannl-1225): the run's, recorded again.
-      cp "$run_dir/wt" "$iter/wt" || die "cannot record the tree under test in $iter"
+    repeat_bounded_where=
+    repeat_direct_refused=
+    repeat_direct_rc=
+    # Each step of the set -- an iteration, and for --direct the build phase and the plan --
+    # is one supervised launch of step_cmd into its own directory: its stdout, stderr and exit,
+    # under the per-iteration cap and the coordinator's cancellation, its group reaped before
+    # the shared build tree is reused (repeat_launch). step_rc is its status.
+    repeat_argv=("$@")
+    repeat_isolation=(--force --cache=disabled --build-dir="$repeat_build")
+    [ "$alone" = 0 ] || repeat_isolation+=(-j 1)
+    repeat_dune_cmd() { # <step dir>: dune's argv for a step, into repeat_cmd
+      local iso=("${repeat_isolation[@]}") repeat_arg repeat_separator=0
+      # A direct set reads the build phase's processes from a trace of its own (_direct_plan);
+      # each iteration's names what its dune ran (`dune-processes`).
+      [ "$direct" = 0 ] || iso+=(--trace-file="$1/trace.csexp")
       # Dune's first `--` ends Dune option parsing (`dune exec PROG -- ARGS`).
       # Isolation options belong immediately before it; appending them would
       # silently hand them to PROG and run Dune in its ambient build context.
       repeat_cmd=("$DUNE")
-      repeat_separator=0
-      for repeat_arg in "$@"; do
+      for repeat_arg in ${repeat_argv[@]+"${repeat_argv[@]}"}; do
         if [ "$repeat_separator" = 0 ] && [ "$repeat_arg" = -- ]; then
-          repeat_cmd+=(--force --cache=disabled --build-dir="$repeat_build")
-          [ "$alone" = 0 ] || repeat_cmd+=(-j 1)
+          repeat_cmd+=("${iso[@]}")
           repeat_separator=1
         fi
         repeat_cmd+=("$repeat_arg")
       done
-      if [ "$repeat_separator" = 0 ]; then
-        repeat_cmd+=(--force --cache=disabled --build-dir="$repeat_build")
-        [ "$alone" = 0 ] || repeat_cmd+=(-j 1)
+      [ "$repeat_separator" = 1 ] || repeat_cmd+=("${iso[@]}")
+    }
+    # The step that runs dune: `clean` (a clean build context, then dune -- every iteration
+    # without --direct), `build` (the same for the build phase of a direct set, whose dune is
+    # never exec'd: bash's exec drops the SHLVL and `_` it would otherwise hand dune, and so
+    # every action, which the replay's actions get as a child of this shell would), or `replay`
+    # (the plan's rules replayed into the built tree, then dune's --force re-running the alias
+    # actions) -- beside
+    # the per-test cap's watcher, whose resolver is this `bash -c` and whose supervisor ($PPID)
+    # the step's, and, on a probed batch, after `_probe`, which execs it in its own place once
+    # the device answered. The watcher times what dune starts and, through `test-parents`,
+    # what the replay starts. The shell outlives its children, a signal to the group included:
+    # the supervisor's TERM ends dune and the watcher too, and the trap (run once the
+    # foreground child has exited) reaps the watcher before the shell exits, so no member of
+    # the step's group is left to a parent that may never reap it -- a zombie-only group
+    # without its leader, which reap_repeat_group must refuse, under a PID 1 that does not
+    # reap orphans (Codex review round 1 on PR #1172). A replay that fails a rule (1) still
+    # lets dune diff what it wrote; any other replay failure ends the step with its status.
+    repeat_iter_cmd() { # <step dir> <clean|build|replay>: into step_cmd
+      step_cmd=(/bin/bash -c '
+        dune=$1 build=$2 tcap=$3 watch=$4 kind=$5 rd=$6 pre=$7 replay=$8 plan=$9
+        shift 9
+        if [ "$pre" != replay ]; then "$dune" clean --build-dir="$build" || exit 126; fi
+        [ "$tcap" -gt 0 ] || [ "$pre" != clean ] || exec "$dune" "$@"
+        watcher=
+        trap '\''[ -z "$watcher" ] || { kill "$watcher"; wait "$watcher"; } 2>/dev/null; exit 143'\'' TERM INT HUP
+        if [ "$tcap" -gt 0 ]; then
+          perl -e "$watch" "$tcap" "$$" "$PPID" "$rd" "$kind" </dev/null 9>&- &
+          watcher=$!
+        fi
+        rc=0
+        if [ "$pre" = replay ]; then
+          bash "$replay" run --plan "$plan" --out "$rd" --parents "$rd/test-parents" </dev/null
+          rc=$?
+        fi
+        case $rc in
+          0 | 1)
+            "$dune" "$@"
+            drc=$?
+            [ "$drc" = 0 ] || rc=$drc ;;
+        esac
+        if [ -n "$watcher" ]; then
+          kill "$watcher" 2>/dev/null
+          wait "$watcher" 2>/dev/null
+        fi
+        exit "$rc"' \
+        -- "$DUNE" "$repeat_build" "$repeat_test_cap" "$test_cap_watch" "$repeat_watch_kind" "$1" "$2" \
+        "$runner_root/tools/replay-rules.sh" "$run_dir/plan.json" "${repeat_cmd[@]:1}")
+      if [ -n "$repeat_probe_backends" ]; then
+        # shellcheck disable=SC2086  # the backend list is word-split on purpose
+        step_cmd=(env "OCANNL_TOOL_TESTRUN_OWN=$1" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe
+          "$DUNE" "$repeat_probe_prog" "$repeat_probe_cap" $repeat_probe_backends -- "${step_cmd[@]}")
       fi
-      {
-        printf '%q clean --build-dir=%q && ' "$DUNE" "$repeat_build"
-        printf '%q ' "${repeat_cmd[@]}"
-        echo
-      } >"$iter/cmd" ||
-        die "cannot record iteration $i command"
-      printf 'repeat: iteration %s/%s -- dune%s\n' "$i" "$repeats" \
-        "$([ "$alone" = 1 ] && printf ' (alone, -j 1)' || :)"
-      # A stop can land after the loop condition. Refuse a launch already
-      # known to be cancelled, then recheck immediately after starting the
-      # supervisor to close the unavoidable signal-between-commands window.
-      [ -z "$repeat_cancelled" ] || break
+    }
+    repeat_launch() { # <step dir> <label>: one supervised step; sets step_rc
+      local sdir=$1 label=$2 descendant_fifo descendant_rc
+      # The step directory is what a probed step's `_probe` owns
+      # (OCANNL_TOOL_TESTRUN_OWN), and a run's own phase reads the tree under
+      # test from its owner's `wt` (gh-ocannl-1225): the run's, recorded again.
+      cp "$run_dir/wt" "$sdir/wt" || die "cannot record the tree under test in $sdir"
       # A process-group reap cannot see a Dune action that calls setsid. Give
       # every descendant an inherited FIFO writer as a second containment
       # witness: after the supervisor exits, EOF proves no session-escaped
-      # descendant remains able to mutate this iteration's shared build tree.
+      # descendant remains able to mutate this step's shared build tree.
       # The read/write anchor makes the two one-way opens nonblocking; it is
       # closed before launch and never reaches the child.
-      descendant_fifo=$iter/descendants.fifo
-      mkfifo "$descendant_fifo" || die "cannot create descendant witness for iteration $i"
-      exec 7<>"$descendant_fifo" || die "cannot anchor descendant witness for iteration $i"
-      exec 8<"$descendant_fifo" || die "cannot read descendant witness for iteration $i"
-      exec 6>"$descendant_fifo" || die "cannot write descendant witness for iteration $i"
+      descendant_fifo=$sdir/descendants.fifo
+      mkfifo "$descendant_fifo" || die "cannot create descendant witness for $label"
+      exec 7<>"$descendant_fifo" || die "cannot anchor descendant witness for $label"
+      exec 8<"$descendant_fifo" || die "cannot read descendant witness for $label"
+      exec 6>"$descendant_fifo" || die "cannot write descendant witness for $label"
       exec 7>&-
-      # The iteration: a clean build context, then dune -- beside the per-test cap's watcher,
-      # whose resolver is this `bash -c` and whose supervisor ($PPID) the iteration's -- and, on a
-      # probed batch, after `_probe`, which execs it in its own place once the device answered.
-      # The shell outlives both its children, a signal to the group included: the supervisor's
-      # TERM ends dune and the watcher too, and the trap (run once dune has exited) reaps the
-      # watcher before the shell exits, so no member of the iteration's group is left to a parent
-      # that may never reap it -- a zombie-only group without its leader, which reap_repeat_group
-      # must refuse, under a PID 1 that does not reap orphans (Codex review round 1 on PR #1172).
-      iter_cmd=(/bin/bash -c '
-        dune=$1 build=$2 tcap=$3 watch=$4 kind=$5 rd=$6
-        shift 6
-        "$dune" clean --build-dir="$build" || exit 126
-        [ "$tcap" -gt 0 ] || exec "$dune" "$@"
-        watcher=
-        trap '\''[ -z "$watcher" ] || { kill "$watcher"; wait "$watcher"; } 2>/dev/null; exit 143'\'' TERM INT HUP
-        perl -e "$watch" "$tcap" "$$" "$PPID" "$rd" "$kind" </dev/null 9>&- &
-        watcher=$!
-        "$dune" "$@"
-        rc=$?
-        kill "$watcher" 2>/dev/null
-        wait "$watcher" 2>/dev/null
-        exit "$rc"' \
-        -- "$DUNE" "$repeat_build" "$repeat_test_cap" "$test_cap_watch" "$repeat_watch_kind" "$iter" \
-        "${repeat_cmd[@]:1}")
-      if [ -n "$repeat_probe_backends" ]; then
-        # shellcheck disable=SC2086  # the backend list is word-split on purpose
-        iter_cmd=(env "OCANNL_TOOL_TESTRUN_OWN=$iter" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe
-          "$DUNE" "$repeat_probe_prog" "$repeat_probe_cap" $repeat_probe_backends -- "${iter_cmd[@]}")
-      fi
-      OCANNL_TOOL_TESTRUN_BG=0 OCANNL_TOOL_TESTRUN_RD=$iter \
-        perl -e "$supervisor_perl" -- "$cap" "${iter_cmd[@]}" \
-        >"$iter/stdout" 2>"$iter/stderr" &
+      OCANNL_TOOL_TESTRUN_BG=0 OCANNL_TOOL_TESTRUN_RD=$sdir \
+        perl -e "$supervisor_perl" -- "$cap" "${step_cmd[@]}" \
+        >"$sdir/stdout" 2>"$sdir/stderr" &
       repeat_sup=$!
       exec 6>&-
       [ -z "$repeat_cancelled" ] || kill "-$repeat_cancelled" "$repeat_sup" 2>/dev/null
-      { printf '%s\n' "$repeat_sup" >"$iter/pid" &&
-        ps_token "$repeat_sup" >"$iter/ptoken"; } ||
+      { printf '%s\n' "$repeat_sup" >"$sdir/pid" &&
+        ps_token "$repeat_sup" >"$sdir/ptoken"; } ||
         kill -TERM "$repeat_sup" 2>/dev/null
       while :; do
         wait "$repeat_sup"
-        iter_rc=$?
-        proc_alive "$iter/pid" "$iter/ptoken" || break
+        step_rc=$?
+        proc_alive "$sdir/pid" "$sdir/ptoken" || break
       done
       # The numeric pid is no longer ours once wait/proc_alive prove the
       # supervisor gone. Clear it before the slower orphan-group reap so a
@@ -2700,8 +2786,8 @@ case $sub in
       repeat_sup=
       # SIGKILL can remove the supervisor without reaching the Dune process
       # group it owned. Reap that identity-verified group before recording the
-      # iteration, starting another one, or deleting their shared build tree.
-      reap_repeat_group "$iter"
+      # step, starting another one, or deleting their shared build tree.
+      reap_repeat_group "$sdir"
       # A zero-byte read is EOF. Bash 3.2 returns status 1 for BOTH EOF and a
       # `read -t` timeout, so use the Perl already required by this harness to
       # distinguish them: 0 is EOF, 2 is timeout, 1 is data/error. Anything
@@ -2715,42 +2801,157 @@ case $sub in
       descendant_rc=$?
       exec 8>&-
       [ "$descendant_rc" = 0 ] ||
-        die "iteration $i left a session-escaped descendant; refusing to reuse $repeat_build"
+        die "$label left a session-escaped descendant; refusing to reuse $repeat_build"
       rm -f "$descendant_fifo"
-      printf '%s\n' "$iter_rc" >"$iter/exit" || die "cannot record iteration $i verdict"
+      printf '%s\n' "$step_rc" >"$sdir/exit" || die "cannot record $label verdict"
+    }
+    # A step a bound ended (gh-ocannl-1252): the device probe found the device wedged (69,
+    # nothing ran), or a test outlived the per-test cap (142 with its `test-cap` record), and on
+    # a wedged device every later step would hang the same way. Its records are copied up to the
+    # run, where the digest reads them, as a run's own would be.
+    repeat_bound_of() { # <step dir> <status> <where>: 0 (setting repeat_bounded) iff a bound ended it
+      if { [ "$2" = 69 ] && grep -q ': NO ANSWER within ' "$1/device-probe" 2>/dev/null; } ||
+         { [ "$2" = 142 ] && [ -s "$1/test-cap" ]; }; then
+        repeat_bounded=$2 repeat_bounded_where=$3
+        for record in device-probe test-cap; do
+          [ ! -s "$1/$record" ] || cp "$1/$record" "$run_dir/$record" ||
+            die "cannot copy $3's $record record"
+        done
+        return 0
+      fi
+      return 1
+    }
+
+    # --direct (gh-ocannl-1377): one build, then replays. The build phase is a clean iteration
+    # whose dune writes a trace; the plan reads from it which rules are each named test's own
+    # action (the rule `fresh` times a test by) and asks dune for them (tools/replay-rules.sh,
+    # which refuses what it cannot reproduce: a sandboxed rule, an action form outside its
+    # subset, a test the build phase never ran), then snapshots their targets: dune's own run
+    # of the same rules, the reference the first replay is compared with.
+    if [ "$direct" = 1 ] && [ -z "$repeat_cancelled" ]; then
+      bphase=$run_dir/build-phase
+      mkdir "$bphase" || die "cannot create $bphase"
+      repeat_dune_cmd "$bphase"
+      {
+        printf '%q clean --build-dir=%q && ' "$DUNE" "$repeat_build"
+        printf '%q ' "${repeat_cmd[@]}"
+        echo
+      } >"$bphase/cmd" || die "cannot record the build phase's command"
+      printf 'repeat: build phase -- dune, once, into %s%s\n' "$repeat_build" \
+        "$([ "$alone" = 1 ] && printf ' (alone, -j 1)' || :)"
+      repeat_iter_cmd "$bphase" build
+      repeat_launch "$bphase" "the build phase"
+      build_rc=$step_rc
+      {
+        printf '=== repeat build phase stdout ===\n'
+        cat "$bphase/stdout"
+        printf '=== repeat build phase stderr ===\n'
+        cat "$bphase/stderr"
+        printf '=== repeat build phase exit %s ===\n' "$build_rc"
+      } >>"$run_dir/log" || die "cannot append the build phase to $run_dir/log"
+      printf 'repeat: build phase exit %s; stdout=%s stderr=%s\n' \
+        "$build_rc" "$bphase/stdout" "$bphase/stderr"
+      # An invocation dune's parser refused ran nothing: there is nothing to replay.
+      if [ "$build_rc" = 1 ] && dune_refusal "$bphase/stderr" >/dev/null; then
+        repeat_refused=1 first_nonzero=1
+      elif repeat_bound_of "$bphase" "$build_rc" "the build phase"; then
+        :
+      elif [ -z "$repeat_cancelled" ]; then
+        pdir=$run_dir/plan
+        mkdir "$pdir" || die "cannot create $pdir"
+        step_cmd=("${BASH:-bash}" "$runner_root/tools/test-run.sh" _direct_plan "$run_dir" "$DUNE")
+        { printf '%q ' "${step_cmd[@]}"; echo; } >"$pdir/cmd" || die "cannot record the plan's command"
+        repeat_launch "$pdir" "the replay plan"
+        plan_rc=$step_rc
+        # The trace holds the environment dune ran with; only the plan reads it.
+        rm -f "$bphase/trace.csexp"
+        { cat "$pdir/stdout"; cat "$pdir/stderr"; } | tee -a "$run_dir/log"
+        why=$(sed -n 's/^replay-rules: //p' "$pdir/stderr" | tail -n 1)
+        case $plan_rc in
+          0) ;;
+          3 | 5)
+            repeat_direct_refused="DIRECT REFUSED -- $why; repeat it without --direct"
+            repeat_direct_rc=2 ;;
+          4)
+            if [ "$build_rc" != 0 ]; then
+              repeat_direct_refused="BUILD FAILED -- the build phase exited $build_rc, and ${why#NOT RUN -- } (see $bphase/stderr)"
+              repeat_direct_rc=$build_rc
+            else
+              repeat_direct_refused="$why"
+              repeat_direct_rc=2
+            fi ;;
+          *)
+            [ -n "$repeat_cancelled" ] ||
+              repeat_direct_refused="ERROR -- the replay could not be planned (exit $plan_rc; see $pdir/stderr)"
+            repeat_direct_rc=$plan_rc ;;
+        esac
+      fi
+    fi
+    i=1
+    while [ "$i" -le "$repeats" ] && [ -z "$repeat_cancelled" ] && [ -z "$repeat_refused" ] &&
+          [ -z "$repeat_bounded" ] && [ -z "$repeat_direct_refused" ]; do
+      iter=$run_dir/iteration-$i
+      mkdir "$iter" || die "cannot create $iter"
+      repeat_dune_cmd "$iter"
+      {
+        if [ "$direct" = 1 ]; then
+          printf 'bash %q run --plan %q --out %q; ' "$runner_root/tools/replay-rules.sh" "$run_dir/plan.json" "$iter"
+        else
+          printf '%q clean --build-dir=%q && ' "$DUNE" "$repeat_build"
+        fi
+        printf '%q ' "${repeat_cmd[@]}"
+        echo
+      } >"$iter/cmd" ||
+        die "cannot record iteration $i command"
+      printf 'repeat: iteration %s/%s -- %s%s\n' "$i" "$repeats" \
+        "$([ "$direct" = 1 ] && printf 'replay, then dune --force' || printf dune)" \
+        "$([ "$alone" = 1 ] && printf ' (alone, -j 1)' || :)"
+      # A stop can land after the loop condition. Refuse a launch already
+      # known to be cancelled, then recheck immediately after starting the
+      # supervisor to close the unavoidable signal-between-commands window.
+      [ -z "$repeat_cancelled" ] || break
+      if [ "$direct" = 1 ]; then repeat_iter_cmd "$iter" replay; else repeat_iter_cmd "$iter" clean; fi
+      repeat_launch "$iter" "iteration $i"
+      iter_rc=$step_rc
+      if [ "$direct" = 1 ]; then
+        # What the iteration's dune ran itself, its program and action per process (the
+        # whitelisted fields; the trace itself, which holds the environment, is not kept):
+        # the alias actions it re-ran, and no compile -- it rebuilt nothing.
+        if [ -f "$iter/trace.csexp" ]; then
+          bash "$runner_root/tools/action-durations.sh" --tsv -n 0 "$iter/trace.csexp" 2>/dev/null |
+            cut -f3,4 >"$iter/dune-processes"
+          rm -f "$iter/trace.csexp"
+        fi
+      fi
       [ "$first_nonzero" != 0 ] || [ "$iter_rc" = 0 ] || first_nonzero=$iter_rc
       {
         printf '=== repeat iteration %s/%s stdout ===\n' "$i" "$repeats"
         cat "$iter/stdout"
         printf '=== repeat iteration %s/%s stderr ===\n' "$i" "$repeats"
         cat "$iter/stderr"
+        if [ "$direct" = 1 ]; then
+          printf '=== repeat iteration %s/%s replayed rules ===\n' "$i" "$repeats"
+          cat "$iter/statuses" 2>/dev/null
+          cat "$iter/replay-stderr" 2>/dev/null
+        fi
         printf '=== repeat iteration %s/%s exit %s ===\n' "$i" "$repeats" "$iter_rc"
       } >>"$run_dir/log" || die "cannot append iteration $i to $run_dir/log"
-      printf 'repeat: iteration %s/%s exit %s; stdout=%s stderr=%s\n' \
-        "$i" "$repeats" "$iter_rc" "$iter/stdout" "$iter/stderr"
+      printf 'repeat: iteration %s/%s exit %s; %sstdout=%s stderr=%s\n' \
+        "$i" "$repeats" "$iter_rc" "$([ "$direct" = 1 ] && printf 'outputs=%s ' "$iter/outputs" || :)" \
+        "$iter/stdout" "$iter/stderr"
       completed=$i
       # An invocation dune's parser refused ran nothing, so there is nothing
       # whose stability the remaining iterations could measure: stop after the
       # first, and let the verdict below say so rather than reporting N
       # identical refusals as IDENTICAL. Only the first iteration can decide
-      # this -- every iteration runs the same argv.
-      if [ "$i" = 1 ] && [ "$iter_rc" = 1 ] && dune_refusal "$iter/stderr" >/dev/null; then
+      # this -- every iteration runs the same argv (a direct set's build phase
+      # decided it already).
+      if [ "$direct" = 0 ] && [ "$i" = 1 ] && [ "$iter_rc" = 1 ] && dune_refusal "$iter/stderr" >/dev/null; then
         repeat_refused=1
         break
       fi
-      # Nor after a bound ended the iteration (gh-ocannl-1252): the device probe found the device
-      # wedged (69, nothing ran), or a test outlived the per-test cap (142 with its `test-cap`
-      # record), and on a wedged device every later iteration would hang the same way. Its records
-      # are copied up to the run, where the digest reads them, as a run's own would be.
-      if { [ "$iter_rc" = 69 ] && grep -q ': NO ANSWER within ' "$iter/device-probe" 2>/dev/null; } ||
-         { [ "$iter_rc" = 142 ] && [ -s "$iter/test-cap" ]; }; then
-        repeat_bounded=$iter_rc
-        for record in device-probe test-cap; do
-          [ ! -s "$iter/$record" ] || cp "$iter/$record" "$run_dir/$record" ||
-            die "cannot copy iteration $i's $record record"
-        done
-        break
-      fi
+      # Nor after a bound ended the iteration (repeat_bound_of).
+      repeat_bound_of "$iter" "$iter_rc" "iteration $i" && break
       [ -z "$repeat_cancelled" ] || break
       i=$(( i + 1 ))
     done
@@ -2767,6 +2968,22 @@ case $sub in
     differing=0
     stderr_only=0
     identical=0
+    # What a pair compares: a difference in a red record makes it `differing`, in a diagnostic
+    # one alone `stderr-only`. A direct iteration's records add the replayed rules' outputs,
+    # their statuses and what they printed (tools/replay-rules.sh) to dune's own streams.
+    red_records=(stdout exit)
+    diag_records=(stderr)
+    if [ "$direct" = 1 ]; then
+      red_records+=(outputs statuses replay-stdout)
+      diag_records+=(replay-stderr)
+    fi
+    same_record() { # <left> <right>: 0 iff equal (two absent records are equal)
+      [ -e "$1" ] || [ -e "$2" ] || return 0
+      cmp -s "$1" "$2"
+    }
+    diff_record() { # <left> <right> <out> <what>
+      diff -u -N "$1" "$2" >"$3" || [ $? -eq 1 ] || die "cannot diff $4"
+    }
     i=1
     while [ "$i" -lt "$completed" ]; do
       j=$(( i + 1 ))
@@ -2774,40 +2991,47 @@ case $sub in
         left=$run_dir/iteration-$i
         right=$run_dir/iteration-$j
         pair=$i-$j
-        stdout_same=0; stderr_same=0; exit_same=0
-        cmp -s "$left/stdout" "$right/stdout" && stdout_same=1
-        cmp -s "$left/stderr" "$right/stderr" && stderr_same=1
-        cmp -s "$left/exit" "$right/exit" && exit_same=1
-        if [ "$stdout_same" = 1 ] && [ "$stderr_same" = 1 ] && [ "$exit_same" = 1 ]; then
+        red_moved=() diag_moved=()
+        for record in "${red_records[@]}"; do
+          same_record "$left/$record" "$right/$record" || red_moved+=("$record")
+        done
+        for record in "${diag_records[@]}"; do
+          same_record "$left/$record" "$right/$record" || diag_moved+=("$record")
+        done
+        if [ ${#red_moved[@]} = 0 ] && [ ${#diag_moved[@]} = 0 ]; then
           pair_result=identical
           identical=$(( identical + 1 ))
-        elif [ "$stdout_same" = 1 ] && [ "$exit_same" = 1 ]; then
+        elif [ ${#red_moved[@]} = 0 ]; then
           pair_result=stderr-only
           stderr_only=$(( stderr_only + 1 ))
-          diff -u "$left/stderr" "$right/stderr" >"$run_dir/diffs/$pair.stderr" ||
-            [ $? -eq 1 ] || die "cannot diff stderr for iterations $i and $j"
         else
           pair_result=differing
           differing=$(( differing + 1 ))
-          if [ "$stdout_same" = 0 ]; then
-            diff -u "$left/stdout" "$right/stdout" >"$run_dir/diffs/$pair.stdout" ||
-              [ $? -eq 1 ] || die "cannot diff stdout for iterations $i and $j"
-          fi
-          if [ "$stderr_same" = 0 ]; then
-            diff -u "$left/stderr" "$right/stderr" >"$run_dir/diffs/$pair.stderr" ||
-              [ $? -eq 1 ] || die "cannot diff stderr for iterations $i and $j"
-          fi
-          if [ "$exit_same" = 0 ]; then
-            diff -u "$left/exit" "$right/exit" >"$run_dir/diffs/$pair.exit" ||
-              [ $? -eq 1 ] || die "cannot diff exits for iterations $i and $j"
-          fi
         fi
+        for record in ${red_moved[@]+"${red_moved[@]}"} ${diag_moved[@]+"${diag_moved[@]}"}; do
+          diff_record "$left/$record" "$right/$record" "$run_dir/diffs/$pair.$record" \
+            "$record for iterations $i and $j"
+        done
         printf 'repeat: pair %s/%s: %s\n' "$i" "$j" "$pair_result" |
           tee -a "$run_dir/log"
         j=$(( j + 1 ))
       done
       i=$(( i + 1 ))
     done
+    # The replay's fidelity witness: dune's own run of the replayed rules (the build phase's
+    # snapshot) against the first replay. Replays that agree with each other but not with
+    # dune are a replay that does not reproduce the rule's conditions, never a stable test.
+    replay_witness=
+    if [ "$direct" = 1 ] && [ "$completed" -ge 1 ] && [ -f "$run_dir/build-phase/outputs" ]; then
+      if same_record "$run_dir/build-phase/outputs" "$run_dir/iteration-1/outputs"; then
+        replay_witness=identical
+      else
+        replay_witness=differing
+        diff_record "$run_dir/build-phase/outputs" "$run_dir/iteration-1/outputs" \
+          "$run_dir/diffs/build-1.outputs" "the build phase's outputs and iteration 1's"
+      fi
+      printf "repeat: dune's own run vs replay 1: %s\n" "$replay_witness" | tee -a "$run_dir/log"
+    fi
 
     if [ -n "$repeat_cancelled" ]; then
       repeat_result="CANCELLED -- completed $completed of $repeats iterations"
@@ -2817,16 +3041,27 @@ case $sub in
     elif [ -n "$repeat_refused" ]; then
       repeat_result="INVOCATION REFUSED -- dune rejected the arguments; nothing ran, so nothing was repeated"
       final_rc=$first_nonzero
+    elif [ -n "$repeat_direct_refused" ]; then
+      repeat_result=$repeat_direct_refused
+      final_rc=$repeat_direct_rc
     # A bound's verdict outranks every comparison, and its code the first red: the set did not
     # finish, and the box needs attention before it is run again.
     elif [ "$repeat_bounded" = 69 ]; then
-      repeat_result="DEVICE UNHEALTHY -- iteration $completed's device probe got no answer, and the set stopped there ($completed of $repeats iterations started)"
+      repeat_result="DEVICE UNHEALTHY -- $repeat_bounded_where's device probe got no answer, and the set stopped there ($completed of $repeats iterations started)"
       final_rc=69
     elif [ "$repeat_bounded" = 142 ]; then
-      repeat_result="TIMEOUT -- in iteration $completed a test outlived the per-test cap ($(sed -n 's/^command //p' "$run_dir/test-cap")), and the set stopped there ($completed of $repeats iterations started)"
+      repeat_result="TIMEOUT -- in $repeat_bounded_where a test outlived the per-test cap ($(sed -n 's/^command //p' "$run_dir/test-cap")), and the set stopped there ($completed of $repeats iterations started)"
       final_rc=142
     elif [ "$differing" -gt 0 ]; then
-      repeat_result="DIFFERING -- stdout or exit status moved across $differing pair(s)"
+      if [ "$direct" = 1 ]; then
+        repeat_result="DIFFERING -- stdout, exit status or a replayed rule's output moved across $differing pair(s)"
+      else
+        repeat_result="DIFFERING -- stdout or exit status moved across $differing pair(s)"
+      fi
+      final_rc=$first_nonzero
+      [ "$final_rc" != 0 ] || final_rc=1
+    elif [ "$replay_witness" = differing ]; then
+      repeat_result="REPLAY DIVERGED -- every replay agreed, but not with dune's own run of the same rules ($run_dir/diffs/build-1.outputs): the replay did not reproduce the rules' conditions; repeat it without --direct"
       final_rc=$first_nonzero
       [ "$final_rc" != 0 ] || final_rc=1
     elif [ "$stderr_only" -gt 0 ]; then
@@ -2834,12 +3069,15 @@ case $sub in
       final_rc=$first_nonzero
     else
       repeat_result="IDENTICAL -- stdout, stderr and exit status matched across all $identical pair(s)"
+      [ "$direct" = 0 ] || repeat_result="IDENTICAL -- the replayed outputs, stdout, stderr and exit status matched across all $identical pair(s), and dune's own run"
       final_rc=$first_nonzero
     fi
     printf 'repeat result: %s\n' "$repeat_result" | tee -a "$run_dir/log"
     if [ -n "$repeat_refused" ]; then
+      refused_stderr=$run_dir/iteration-1/stderr
+      [ "$direct" = 0 ] || refused_stderr=$run_dir/build-phase/stderr
       { echo "dune said:"
-        dune_refusal "$run_dir/iteration-1/stderr" | sed 's/^/  /'
+        dune_refusal "$refused_stderr" | sed 's/^/  /'
         echo "fix the command line and run again -- no test was built or judged" \
              "(dune's own status was $final_rc; this script exits 2, its usage code)"
       } | tee -a "$run_dir/log"
@@ -3025,6 +3263,35 @@ case $sub in
     [ -z "$promotions_recordable" ] || record_promotions
     [ "$mode" != fresh ] || [ -z "${trace_file:-}" ] || fresh_timings "$trace_file"
     exit "$rc"
+    ;;
+  _direct_plan)
+    # A direct repeat's plan (gh-ocannl-1377), and not a command for callers: a step the
+    # coordinator supervises like an iteration, after the build phase. It reads the build
+    # phase's processes from its trace (tools/action-durations.sh --tsv --dirs: the whitelisted
+    # fields, plus each process's directory), keeps those that are a named test's action by
+    # the rule `fresh` times a test by (attribution_awk, rows mode), and has
+    # tools/replay-rules.sh ask dune for their rules (`plan.json`; its exit 3/4/5 refusals pass
+    # through) and snapshot their targets as dune's own run left them (`build-phase/outputs`).
+    [ $# -eq 2 ] && [ -n "${OCANNL_TOOL_TESTRUN_RD:-}" ] ||
+      die "_direct_plan is a step of repeat --direct, not a command"
+    run_dir=$1 DUNE=$2
+    pdir=$OCANNL_TOOL_TESTRUN_RD
+    if ! bash "$runner_root/tools/action-durations.sh" --tsv --dirs -n 0 "$run_dir/build-phase/trace.csexp" \
+         >"$pdir/rows-dirs.tsv" 2>"$pdir/rows.err"; then
+      grep -q '^action-durations.sh: no process in ' "$pdir/rows.err" ||
+        { cat "$pdir/rows.err" >&2; echo "test-run: the build phase's trace could not be read" >&2; exit 126; }
+      : >"$pdir/rows-dirs.tsv"
+    fi
+    cut -f2- "$pdir/rows-dirs.tsv" >"$pdir/rows.tsv" &&
+      awk -F '\t' -v mode=rows "$attribution_awk" "$run_dir/direct-aliases" "$pdir/rows.tsv" >"$pdir/hits" &&
+      awk -F '\t' 'NR == FNR { row[FNR] = $0; next } { print $1 "\t" row[$2] }' \
+        "$pdir/rows-dirs.tsv" "$pdir/hits" >"$pdir/rows" ||
+      { echo "test-run: the build phase's processes could not be attributed" >&2; exit 126; }
+    bash "$runner_root/tools/replay-rules.sh" plan --dune "$DUNE" --build-dir "$run_dir/build" \
+      --rows "$pdir/rows" --aliases "$run_dir/direct-aliases" --out "$run_dir/plan.json" </dev/null ||
+      exit $?
+    exec bash "$runner_root/tools/replay-rules.sh" run --plan "$run_dir/plan.json" \
+      --out "$run_dir/build-phase" --snapshot </dev/null
     ;;
   _probe)
     # A probed GPU batch's first act inside its slot, and not a command for
@@ -3356,6 +3623,8 @@ case $sub in
       case $wait_repeats in '' | *[!0-9]*) wait_repeats=1 ;; esac
       wait_repeats=$(( 10#$wait_repeats ))
       [ "$wait_repeats" -gt 0 ] || wait_repeats=1
+      # A direct set's build phase and plan are capped steps of their own.
+      [ "$(cat "$run_dir/direct" 2>/dev/null)" != 1 ] || wait_repeats=$(( wait_repeats + 2 ))
     fi
     [ -n "$budget" ] || budget=$(( cap > 0 ? cap * wait_repeats + 120 : 7200 ))
     waited=0

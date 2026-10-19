@@ -855,7 +855,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
   reports publication, never the verdict. `tools/test-test-run.sh` legs 29–32 pin all of this
   against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
-  `repeat [--alone] N` is the supported flake diagnostic: it holds that same worktree lock once,
+  `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one
+  build, then replays; see Dune mechanics below): it holds that same worktree lock once,
   gives every Dune invocation a freshly cleaned cache-disabled build context, retains each
   iteration's separate stdout, stderr and exit status, and writes every pairwise diff. Stdout or status drift is red;
   stderr-only drift is called out separately and stays diagnostic-green. `--alone` adds `-j 1`,
@@ -1528,6 +1529,27 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   it as under `--cache=disabled`), while `--cache=enabled` also stores the test runs and restores
   their outputs instead of re-running them. A GPU batch's repeat has `run`'s two bounds (next
   section's GPU bullet).
+  **`repeat --direct N @<dir>/runtest-<name>...` pays that rebuild once** (gh-ocannl-1377): a
+  build phase builds and runs the named tests into the set's own build directory, then each
+  iteration replays the test's own target-producing rules in the built tree
+  (`tools/replay-rules.sh`, from `dune rules`' expanded action, in the environment
+  `dune exec --no-build` reports for the context plus dune's per-action TMPDIR and
+  BUILD_PATH_PREFIX_MAP) and runs `dune build --force` over the aliases, which re-runs the alias
+  actions (the golden diff, a run-and-diff or inline-test rule) and compiles nothing. On
+  mac-studio an iteration of `runtest-hello_world_op` took 7-8 s at `-j 4` (its inline-test runner
+  is an alias action, so that is the forced dune alone) after a 29 s build phase, against 21-23 s
+  per clean iteration. Every set compares the first replay with dune's own run of the same rules
+  (the build phase's snapshot of their targets): a replay that agrees with itself but not with
+  dune is `REPLAY DIVERGED`, never a stable test — it caught, while the mode was written, `echo`'s
+  space-joining, a python's locale coercion exporting `LC_CTYPE`, and the `SHLVL`/`_` a shell's
+  `exec` drops (so the build phase's dune is never exec'd). Refused before any iteration: a rule
+  dune runs in a sandbox (the scans' `(sandbox always)` targets), an action outside the replayed
+  forms (`system`, `bash`, a directory target), a test the build phase never ran (`BUILD FAILED`
+  when the build itself failed); for those use the clean form. Not reproduced: the named tests'
+  dune scheduling beside each other (a replay runs them in turn) and a fresh tree (files a test
+  leaves beside its targets persist, as between two dune runs). `tools/test-test-run.sh` leg 84
+  pins all of it against a real dune, with a mutant without the replay as the control that dune's
+  `--force` alone never re-runs a target-producing test.
   For one fresh, TIMED run of named tests (a before/after wall-time comparison),
   `tools/test-run.sh fresh @<dir>/runtest-<name> [@<dir>/slow-<name>...]` hands dune a build
   directory of the run's own with `--force --cache=disabled`: the closure compiles there (some

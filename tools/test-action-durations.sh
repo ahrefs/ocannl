@@ -190,6 +190,11 @@ EOF
   printf '%s\t' 1.96 0 env_var_deps.exe test/operations/env_var_deps_control.actual
   printf '%s\n' test/operations/env_var_deps_control.actual
 } >"$TMP/tsv.expected"
+# --dirs: the same rows, each led by its process's directory under the build directory.
+printf '%s\n' default/test/operations default/test/training \
+  .sandbox/53d3fec81e775d978ce99f0295ebd390/default/test/operations default/test/operations \
+  default/arrayjit/lib default/test/operations >"$TMP/tsv-dirs.lead"
+paste "$TMP/tsv-dirs.lead" "$TMP/tsv.expected" >"$TMP/tsv-dirs.expected"
 cat >"$TMP/truncated.expected" <<'EOF'
 processes=1  open=1
   seconds  exit  prog                         action
@@ -244,6 +249,10 @@ leg "--prog filters by program basename and -n limits rows" \
   exact "$SUBJECT" filtered "$TMP/filtered.expected" --prog '\.exe$' -n 2 "$TMP/trace"
 leg "--tsv prints the table's rows, tab-separated, without the header, every target after" \
   exact "$SUBJECT" tsv "$TMP/tsv.expected" --tsv "$TMP/trace"
+leg "--tsv --dirs leads each row with its directory under the build directory, a sandbox's included" \
+  exact "$SUBJECT" tsv-dirs "$TMP/tsv-dirs.expected" --tsv --dirs "$TMP/trace"
+leg "--tsv --dirs reads a --build-dir trace alike" \
+  exact "$SUBJECT" tsv-dirs-build-dir "$TMP/tsv-dirs.expected" --tsv --dirs "$TMP/trace-build-dir"
 
 mkdir -p "$TMP/repo/tools" "$TMP/repo/_build"
 cp "$SUBJECT" "$TMP/repo/tools/"
@@ -277,6 +286,8 @@ leg "an unknown --group is a usage error" \
   refused "$SUBJECT" bad-group 2 'wants prog or dir' --group alias "$TMP/trace"
 leg "--tsv with --group is a usage error" \
   refused "$SUBJECT" tsv-group 2 'not a --group summary' --tsv --group prog "$TMP/trace"
+leg "--dirs without --tsv is a usage error" \
+  refused "$SUBJECT" dirs-no-tsv 2 'it needs --tsv' --dirs "$TMP/trace"
 leg "a non-numeric -n is a usage error" \
   refused "$SUBJECT" bad-n 2 'wants a count' -n x "$TMP/trace"
 leg "an invalid --prog regex is a usage error" \
