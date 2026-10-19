@@ -176,6 +176,25 @@ let () =
   in
   p_exists "conv segment: an unzeroed site the GPU leg seeds" conv_segments ~f:(fun j ->
       (not j.cj_site.c_zeroed) && not (List.is_empty j.cj_gpu.leg_seeds));
+  (* A workgroup-memory cap between the 8-row block's staged tiles (512 bytes) and the whole padded
+     row's (768): the leg still seeds, and notes the flavor the cap refused. *)
+  let tight_limits =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      mma = gpu_limits.Ir.Backend_intf.mma;
+      max_workgroup_memory_bytes = Some 600;
+    }
+  in
+  let tight =
+    List.filter_map segments ~f:(fun seg ->
+        let c = census ~where:"conv segment gpu 600B" ~is_gpu:true ~limits:tight_limits seg in
+        claim_consistent "conv segment (600-byte workgroup memory)" ~is_gpu:true
+          ~limits:tight_limits seg c;
+        conv_judgment c)
+  in
+  p_exists "a partial workgroup-memory refusal is noted beside the seeds" tight ~f:(fun j ->
+      (not (List.is_empty j.cj_gpu.leg_seeds))
+      && List.exists j.cj_gpu.leg_notes ~f:(mentions ~sub:"refused by workgroup memory"));
   (* === A matmul: the census is the family tree's. === *)
   let a =
     TDSL.ndarray (Array.init 64 ~f:Float.of_int) ~label:[ "ma" ] ~input_dims:[ 8 ]
@@ -197,6 +216,20 @@ let () =
         (List.length (Ir.Schedule_space.refutations tree)
         = List.length (Ir.Schedule_space.refutations reference))
   | _ -> p "matmul: the census's refutations are the family tree's" false);
+  let mcc =
+    Autotune.seeding_census ~coalesced:true ~is_gpu:true ~is_cpu:false ~limits:gpu_limits mopt
+  in
+  show ~where:"matmul whole-routine gpu, coalesced" mcc;
+  (match mcc.sc_coalesced with
+  | None -> p "matmul: the coalesced census is the coalesced branch's seeds" false
+  | Some verdicts ->
+      p "matmul: the coalesced census is the coalesced branch's seeds"
+        (List.equal Poly.equal
+           (List.concat_map verdicts ~f:(fun v -> v.Autotune.cv_seeds))
+           (Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits:gpu_limits mopt));
+      p_all "matmul: each coalesced layout names a refusal exactly when it seeds nothing" verdicts
+        ~f:(fun v ->
+          Bool.equal (Option.is_some v.Autotune.cv_refusal) (List.is_empty v.Autotune.cv_seeds)));
   p "matmul: the head line names the family and its refutation count"
     (match Autotune.seeding_census_lines ~where:"m" mc with
     | head :: _ -> mentions head ~sub:"family=matmul" && mentions head ~sub:" refuted="

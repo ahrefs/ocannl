@@ -375,7 +375,9 @@ type conv_leg = {
   leg_seeds : sketch_params list;
   leg_refusal : string option;
       (** The failing gates, every one named, exactly when the leg proposes no seed. *)
-  leg_notes : string list;  (** Flavors a seeding leg withheld, each with its reason. *)
+  leg_notes : string list;
+      (** Flavors the leg's later gates refused, each gate with its count — beside a refusal too,
+          when an earlier gate already removed some. *)
 }
 (** One leg (CPU or GPU) of the conv family's verdict on a site, decided by the gates the seeds come
     from. *)
@@ -408,6 +410,23 @@ val family_seeding :
 (** {!sketch_seed_params} with the judgment its seeds came from: the seed list is the second
     component. *)
 
+type coalesced_verdict = {
+  cv_layout : coalesce_layout;
+  cv_seeds : sketch_params list;
+  cv_refusal : string option;  (** Set exactly when the layout proposes no seed. *)
+}
+(** One layout of the coalesced tuner branch ({!coalesced_seed_params}): its seeds or why it
+    proposes none. *)
+
+val coalesced_seeding :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  coalesced_verdict list
+(** {!coalesced_seed_params} per layout, columns then contraction, refusals named; empty off GPU.
+    Hermetic like it. *)
+
 type seeding_census = {
   sc_stmts : int;  (** Top-level statements, glue excluded. *)
   sc_whole_zeros : int;  (** Of those, whole-node [Zero_out]s. *)
@@ -416,11 +435,15 @@ type seeding_census = {
           whole-node in this lowering — listed whatever family claims the lowering. *)
   sc_family : family_seeding;
   sc_seeds : sketch_params list;  (** Exactly {!sketch_seed_params}' list. *)
+  sc_coalesced : coalesced_verdict list option;
+      (** The coalesced branch's verdicts, when the census was asked for them ([~coalesced:true], as
+          {!Autotune.tune}'s seeding enumerates that branch beside the families). *)
 }
 (** What seeding makes of one lowering, refusals included: the evidence a decline report cannot
     hold, since a refused seed never becomes a candidate. *)
 
 val seeding_census :
+  ?coalesced:bool ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->

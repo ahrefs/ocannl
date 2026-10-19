@@ -2795,7 +2795,7 @@ let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
 (* gh-ocannl-1407: each leg's verdict is kept beside its seeds, so the seeding census
    ({!seeding_census}) names the gate that refused from the gate itself rather than from a
    restatement of it. [leg_refusal] is set exactly when the leg proposes no seed; [leg_notes] name
-   flavors a seeding leg withheld. *)
+   the flavors later gates refused. *)
 type conv_leg = {
   leg_seeds : sketch_params list;
   leg_refusal : string option;
@@ -3076,9 +3076,16 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   conv_leg_refused (String.concat ~sep:"; " failing)
                 else
                   let rows_p = blocks_of site.c_nrow tm_t * tm_t in
+                  (* The flavors the workgroup-memory cap refuses, counted for the census. *)
+                  let mem_refused = ref 0 in
+                  let fits ?copies rows =
+                    let ok = shared_fits ?copies rows in
+                    if not ok then Int.incr mem_refused;
+                    ok
+                  in
                   let whole =
                     let pad_m = if site.c_nrow % tm_t = 0 then 0 else tm_t in
-                    if shared_fits rows_p then
+                    if fits rows_p then
                       [
                         {
                           base with
@@ -3093,7 +3100,7 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   in
                   let blocked =
                     List.filter_map [ 8; 16; 32 ] ~f:(fun bm ->
-                        if bm % tm_t = 0 && blocks_of site.c_nrow bm >= 2 && shared_fits bm then
+                        if bm % tm_t = 0 && blocks_of site.c_nrow bm >= 2 && fits bm then
                           Some
                             {
                               base with
@@ -3131,8 +3138,7 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                         else
                           let rows = if p0.sk_bm = 0 then rows_p else p0.sk_bm in
                           List.filter_map mma.Ir.Backend_intf.mma_pipeline_depths ~f:(fun d ->
-                              if shared_fits ~copies:d rows then Some { p0 with sk_depth = d }
-                              else None))
+                              if fits ~copies:d rows then Some { p0 with sk_depth = d } else None))
                   in
                   let flavors = whole @ blocked @ depth_twins in
                   (* Refuse launch geometries the device gate would reject before paying for a
@@ -3151,27 +3157,47 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                       | Some e -> e.Sched.lx_phrase
                       | None -> "")
                   in
+                  let mem_cap =
+                    Option.value ~default:0 limits.Ir.Backend_intf.max_workgroup_memory_bytes
+                  in
+                  let mem_notes =
+                    if !mem_refused = 0 then []
+                    else
+                      [
+                        Printf.sprintf
+                          "%d flavors refused by workgroup memory: staged tiles over the %d-byte \
+                           cap"
+                          !mem_refused mem_cap;
+                      ]
+                  in
                   if List.is_empty flavors then
                     conv_leg_refused
                       (Printf.sprintf
-                         "workgroup memory: no flavor's staged tiles fit the %d-byte cap"
-                         (Option.value ~default:0 limits.Ir.Backend_intf.max_workgroup_memory_bytes))
+                         "workgroup memory: no flavor's staged tiles fit the %d-byte cap (%d \
+                          refused)"
+                         mem_cap !mem_refused)
                   else if List.is_empty fitting then
-                    conv_leg_refused
-                      (Printf.sprintf "launch caps: all %d flavors refused, the first %s"
-                         (List.length exceeding) (Lazy.force launch_witness))
+                    {
+                      (conv_leg_refused
+                         (Printf.sprintf "launch caps: all %d flavors refused, the first %s"
+                            (List.length exceeding) (Lazy.force launch_witness)))
+                      with
+                      leg_notes = mem_notes;
+                    }
                   else
                     {
                       leg_seeds = fitting;
                       leg_refusal = None;
                       leg_notes =
-                        (if List.is_empty exceeding then []
-                         else
-                           [
-                             Printf.sprintf "%d of %d flavors refused by launch caps, the first %s"
-                               (List.length exceeding) (List.length flavors)
-                               (Lazy.force launch_witness);
-                           ]);
+                        (mem_notes
+                        @
+                        if List.is_empty exceeding then []
+                        else
+                          [
+                            Printf.sprintf "%d of %d flavors refused by launch caps, the first %s"
+                              (List.length exceeding) (List.length flavors)
+                              (Lazy.force launch_witness);
+                          ]);
                     })
       in
       Some { cj_site = site; cj_real_stmts = n_real; cj_cpu = cpu; cj_gpu = gpu }
@@ -4453,6 +4479,60 @@ let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
     (opt : LL.optimized) : sketch_params list =
   snd (family_seeding ~is_gpu ~is_cpu ~limits opt)
 
+(* The coalesced branch's seeds (gh-ocannl-1165, gh-ocannl-1279): per layout, the matmul family
+   enumerated over the prepared coalesced code ([coalesced]), so every refutation — launch caps,
+   companion coverage of the merged chain, divisibility, workgroup memory — is judged on the site
+   the schedule will actually build, and each leaf is stamped with its layout. A separate branch
+   beside {!sketch_seed_params}, not a level of its tree: the tree is over one lowering, this branch
+   over others. Columns first, then the contraction, whose leaves come from its own K menu
+   ([matmul_flavor_tree ~coalesced]); a site has at most one pair of each. GPU scalar blocktile
+   leaves only: the residual the layouts target is the scalar family's tile extent (#915 closed the
+   tensorized gap on CUDA tf32, and gfx1151 has no f32 tile shape), and the tensorized pipelines'
+   [Tensorize] reads each operand's last two axes as its tile, which a [Sub_axis] run is not.
+   Unfused only: [Fuse_epilogue]'s tail is a nest over the target's own dims, which a coalesced
+   output no longer indexes axis by axis (and the projections have no tail); for the contraction
+   layout, admitting the tensorized, hoisted-packing and fused flavors is a follow-up with its own
+   executed test. The probe's minted symbols are discarded: the seeds carry none, and a seeding pass
+   must not shift the names every later compile mints. *)
+(* Each layout's verdict, for the seeding census (gh-ocannl-1407): its seeds, and [cv_refusal]
+   exactly when it has none. Empty off GPU. *)
+type coalesced_verdict = {
+  cv_layout : coalesce_layout;
+  cv_seeds : sketch_params list;
+  cv_refusal : string option;
+}
+
+let coalesced_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : coalesced_verdict list =
+  if not is_gpu then []
+  else
+    Idx.discarding_symbols (fun () ->
+        List.map [ Coalesce_columns; Coalesce_contraction ] ~f:(fun layout ->
+            let refused why = { cv_layout = layout; cv_seeds = []; cv_refusal = Some why } in
+            match coalesced ~layout opt with
+            | None -> refused "no such loop pair at a matmul site, or the Coalesce op declines it"
+            | Some (_, prepared) -> (
+                match detect_matmul prepared.LL.llc with
+                | None -> refused "the coalesced code re-detects no matmul site"
+                | Some site -> (
+                    let seeds =
+                      matmul_seed_params ~coalesced:layout ~is_gpu ~is_cpu ~limits ~opt:prepared
+                        site
+                      |> List.filter_map ~f:(fun p ->
+                          if p.sk_gpu && (not p.sk_mma) && not p.sk_epilogue then
+                            Some { p with sk_coalesce = Some layout }
+                          else None)
+                    in
+                    match seeds with
+                    | [] ->
+                        refused
+                          "the coalesced site's family has no unfused GPU scalar-blocktile leaf"
+                    | _ -> { cv_layout = layout; cv_seeds = seeds; cv_refusal = None }))))
+
+let coalesced_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : sketch_params list =
+  List.concat_map (coalesced_seeding ~is_gpu ~is_cpu ~limits opt) ~f:(fun v -> v.cv_seeds)
+
 (** {2 The seeding census (gh-ocannl-1407)}
 
     Seeding refusals are decided before any candidate exists, so neither the decline report nor
@@ -4466,10 +4546,11 @@ type seeding_census = {
   sc_conv_nests : (Ir.Tnode.t * bool) list;
   sc_family : family_seeding;
   sc_seeds : sketch_params list;
+  sc_coalesced : coalesced_verdict list option;
 }
 
-let seeding_census ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized)
-    : seeding_census =
+let seeding_census ?(coalesced = false) ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : seeding_census =
   (* A dry run: the symbols any probe mints are rewound, so taking a census never shifts the names
      later compiles mint. *)
   Idx.discarding_symbols (fun () ->
@@ -4487,6 +4568,8 @@ let seeding_census ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (
         sc_conv_nests;
         sc_family;
         sc_seeds;
+        sc_coalesced =
+          (if coalesced then Some (coalesced_seeding ~is_gpu ~is_cpu ~limits opt) else None);
       })
 
 let seeding_census_prefix = "autotune-seeding:"
@@ -4507,8 +4590,13 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
         ("conv", " site=" ^ Ir.Tnode.debug_name judgment.cj_site.c_d, "")
   in
   let head =
-    line "where=%S stmts=%d whole_zeros=%d family=%s%s seeds=%d%s" where c.sc_stmts c.sc_whole_zeros
-      family site (List.length c.sc_seeds) verdicts
+    line "where=%S stmts=%d whole_zeros=%d family=%s%s seeds=%d%s%s" where c.sc_stmts
+      c.sc_whole_zeros family site (List.length c.sc_seeds) verdicts
+      (match c.sc_coalesced with
+      | None -> ""
+      | Some vs ->
+          Printf.sprintf " coalesced_seeds=%d"
+            (List.sum (module Int) vs ~f:(fun v -> List.length v.cv_seeds)))
   in
   let family_details =
     match c.sc_family with
@@ -4549,40 +4637,18 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
                (List.map nests ~f:(fun (tn, z) -> Ir.Tnode.debug_name tn ^ if z then "[Z]" else "")));
         ]
   in
-  (head :: family_details) @ nests
-
-(* The coalesced branch's seeds (gh-ocannl-1165, gh-ocannl-1279): per layout, the matmul family
-   enumerated over the prepared coalesced code ([coalesced]), so every refutation — launch caps,
-   companion coverage of the merged chain, divisibility, workgroup memory — is judged on the site
-   the schedule will actually build, and each leaf is stamped with its layout. A separate branch
-   beside {!sketch_seed_params}, not a level of its tree: the tree is over one lowering, this branch
-   over others. Columns first, then the contraction, whose leaves come from its own K menu
-   ([matmul_flavor_tree ~coalesced]); a site has at most one pair of each. GPU scalar blocktile
-   leaves only: the residual the layouts target is the scalar family's tile extent (#915 closed the
-   tensorized gap on CUDA tf32, and gfx1151 has no f32 tile shape), and the tensorized pipelines'
-   [Tensorize] reads each operand's last two axes as its tile, which a [Sub_axis] run is not.
-   Unfused only: [Fuse_epilogue]'s tail is a nest over the target's own dims, which a coalesced
-   output no longer indexes axis by axis (and the projections have no tail); for the contraction
-   layout, admitting the tensorized, hoisted-packing and fused flavors is a follow-up with its own
-   executed test. The probe's minted symbols are discarded: the seeds carry none, and a seeding pass
-   must not shift the names every later compile mints. *)
-let coalesced_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : sketch_params list =
-  if not is_gpu then []
-  else
-    Idx.discarding_symbols (fun () ->
-        List.concat_map [ Coalesce_columns; Coalesce_contraction ] ~f:(fun layout ->
-            match coalesced ~layout opt with
-            | None -> []
-            | Some (_, prepared) -> (
-                match detect_matmul prepared.LL.llc with
-                | None -> []
-                | Some site ->
-                    matmul_seed_params ~coalesced:layout ~is_gpu ~is_cpu ~limits ~opt:prepared site
-                    |> List.filter_map ~f:(fun p ->
-                        if p.sk_gpu && (not p.sk_mma) && not p.sk_epilogue then
-                          Some { p with sk_coalesce = Some layout }
-                        else None))))
+  let coalesced =
+    List.map (Option.value c.sc_coalesced ~default:[]) ~f:(fun v ->
+        let layout =
+          match v.cv_layout with
+          | Coalesce_columns -> "columns"
+          | Coalesce_contraction -> "contraction"
+        in
+        match v.cv_refusal with
+        | Some why -> detail "coalesced %s: refused: %s" layout why
+        | None -> detail "coalesced %s: %d seeds" layout (List.length v.cv_seeds))
+  in
+  (head :: family_details) @ coalesced @ nests
 
 (* The exported tree view of the matmul family (site detection included); the conv family factors
    the same way as a follow-up. *)

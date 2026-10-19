@@ -563,15 +563,30 @@ val family_seeding :
   family_seeding * sketch_params list
 (** {!sketch_seed_params} beside the judgment its seeds came from. *)
 
+type coalesced_verdict = {
+  cv_layout : coalesce_layout;
+  cv_seeds : sketch_params list;
+  cv_refusal : string option;
+}
+
+val coalesced_seeding :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  coalesced_verdict list
+
 type seeding_census = {
   sc_stmts : int;
   sc_whole_zeros : int;
   sc_conv_nests : (Ir.Tnode.t * bool) list;
   sc_family : family_seeding;
   sc_seeds : sketch_params list;
+  sc_coalesced : coalesced_verdict list option;
 }
 
 val seeding_census :
+  ?coalesced:bool ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -585,6 +600,7 @@ val log_seeding_enabled : unit -> bool
 (** Config [autotune_log_seeding], read once per process. *)
 
 val log_seeding :
+  ?coalesced:bool ->
   where:string ->
   is_gpu:bool ->
   is_cpu:bool ->

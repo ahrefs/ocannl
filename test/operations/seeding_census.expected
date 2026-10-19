@@ -21,8 +21,13 @@ a 4-byte vector file: the CPU leg names it: true
 conv segment (GPU): the census's seeds are sketch_seed_params' list: true
 conv segment (GPU): each conv leg names a refusal exactly when it seeds nothing: true
 conv segment: an unzeroed site the GPU leg seeds: true
+conv segment (600-byte workgroup memory): the census's seeds are sketch_seed_params' list: true
+conv segment (600-byte workgroup memory): each conv leg names a refusal exactly when it seeds nothing: true
+a partial workgroup-memory refusal is noted beside the seeds: true
 matmul (GPU): the census's seeds are sketch_seed_params' list: true
 matmul: the census's refutations are the family tree's: true
+matmul: the coalesced census is the coalesced branch's seeds: true
+matmul: each coalesced layout names a refusal exactly when it seeds nothing: true
 matmul: the head line names the family and its refutation count: true
 autotune_log_seeding is on for this run: true
 log_seeding writes exactly the rendered census: true

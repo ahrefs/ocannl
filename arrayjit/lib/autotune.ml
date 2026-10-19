@@ -134,9 +134,10 @@ let print_seeding_lines lines =
   Stdio.Out_channel.flush Stdio.stderr
 
 (* One lowering's census, taken where the caller seeds it; a no-op unless the key is on. *)
-let log_seeding ~where ~is_gpu ~is_cpu ~limits opt =
+let log_seeding ?coalesced ~where ~is_gpu ~is_cpu ~limits opt =
   if log_seeding_enabled () then
-    print_seeding_lines (seeding_census_lines ~where (seeding_census ~is_gpu ~is_cpu ~limits opt))
+    print_seeding_lines
+      (seeding_census_lines ~where (seeding_census ?coalesced ~is_gpu ~is_cpu ~limits opt))
 
 (* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress] -- or, for the
    duration of one call, by its [?progress] argument. A search can run for hours and be killed by a
@@ -4390,14 +4391,30 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
      segment alone: a sketch that does not apply or validate there leaves the segment to the default
      preset rather than costing the routine its other seeds. *)
   let decided = Hashtbl.create (module String) in
+  (* The census line per distinct segment code, every kind of segment included (gh-ocannl-1407). *)
+  let census_printed = Hash_set.create (module String) in
+  let census ~key verdict =
+    if log_seeding_enabled () then
+      let key = Lazy.force key in
+      if not (Hash_set.mem census_printed key) then (
+        Hash_set.add census_printed key;
+        print_seeding_lines
+          [ Printf.sprintf "%s where=\"seeded_default segment\" %s" seeding_census_prefix verdict ])
+  in
   let seed_of kind pre =
+    let key = lazy (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre) in
     match (kind, gate) with
-    | (`Zeros | `Solo), _ -> None
-    | `Normal, Min_reduction n when n <= 0 -> None
+    | `Zeros, _ ->
+        census ~key "refused: a zero-fill segment, which no sketch seeds";
+        None
+    | `Solo, _ ->
+        census ~key "refused: a solo segment, which no sketch seeds";
+        None
+    | `Normal, Min_reduction n when n <= 0 ->
+        census ~key "refused: sketch seeding is off (gpu_default_sketch_min_reduction=0)";
+        None
     | `Normal, _ ->
-        Hashtbl.find_or_add decided
-          (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
-          ~default:(fun () ->
+        Hashtbl.find_or_add decided (Lazy.force key) ~default:(fun () ->
             let judged =
               match gate with
               | Min_reduction min_reduction ->
@@ -4411,15 +4428,7 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
                        ^ ": the auto gate's ranking score does not place it below the preset")
                   | Error _ as refused -> refused)
             in
-            (* The census line for this distinct segment code (gh-ocannl-1407). *)
-            let census verdict =
-              if log_seeding_enabled () then
-                print_seeding_lines
-                  [
-                    Printf.sprintf "%s where=\"seeded_default segment\" %s" seeding_census_prefix
-                      verdict;
-                  ]
-            in
+            let census = census ~key in
             match judged with
             | Error why ->
                 census ("refused: " ^ why);
@@ -6787,7 +6796,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              branch beside them (gh-ocannl-1165) — prepared hermetically from the same lowering, its
              candidates' schedules carry their structural [Coalesce] prefix. *)
           let search_seed_params ~where opt =
-            log_seeding ~where ~is_gpu ~is_cpu ~limits opt;
+            log_seeding ~coalesced:true ~where ~is_gpu ~is_cpu ~limits opt;
             sketch_seed_params ~is_gpu ~is_cpu ~limits opt
             @ coalesced_seed_params ~is_gpu ~is_cpu ~limits opt
           in
