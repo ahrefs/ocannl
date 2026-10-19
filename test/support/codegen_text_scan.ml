@@ -1128,15 +1128,18 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
     let effect_boundary result discarded =
       let written = ref no_provenance in
       let writes =
-        object
+        object (self)
           inherit Ast_traverse.iter as super
           method! attribute _ = ()
 
           method! expression e =
             match e.pexp_desc with
             | Pexp_function _ -> ()
-            | Pexp_setfield (_, _, rhs) | Pexp_setinstvar (_, rhs) ->
+            | Pexp_setfield (target, _, rhs) ->
+                (* The target is computed too, and may itself store (review round 5). *)
+                self#expression target;
                 written := join_provenance !written (of_expr rhs)
+            | Pexp_setinstvar (_, rhs) -> written := join_provenance !written (of_expr rhs)
             | Pexp_apply (callee, args) when writes_cell scope callee ->
                 List.iter args ~f:(fun (_, arg) ->
                     written := join_provenance !written (of_expr arg))

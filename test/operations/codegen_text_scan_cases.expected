@@ -142,6 +142,7 @@ ok: source -- a wrapper forwarding a stored and returned argument keeps the muta
 ok: source -- a discarded call to a storing helper is a write of its argument
 ok: source -- a discarded call storing generated text directly is a write of it
 ok: source -- a helper whose body is a field write stores its argument
+ok: source -- a storing call computing a discarded field write's target is a write
 ok: source -- Stdlib-qualified reference operators are a cell write and read
 ok: source -- a Stdlib-qualified stored argument keeps its boundary through a full application
 ok: source -- a Stdlib-qualified dereference of an initialised ref is a cell read

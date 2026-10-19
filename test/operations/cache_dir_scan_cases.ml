@@ -280,6 +280,20 @@ let () = M.store ~dir:"scratch" key value|ocaml},
 end
 let () = M.store ~dir:"scratch" key value|ocaml},
       [ "~dir names scratch" ] );
+    ( "an include of a namespace of modules leaves the structure's own values",
+      {ocaml|module M = struct
+  include Ir.Schedule_cache
+  let store ~dir _ _ = ignore (dir : string)
+  include Ir
+end
+let () = M.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "opening a structure brings in the modules it inherits from an include",
+      {ocaml|module Schedule_cache = Other
+module M = struct include Ir end
+open M
+let () = Schedule_cache.store ~dir:"autotune_cache_inherited" key value|ocaml},
+      [ "~dir names autotune_cache_inherited" ] );
     (* The forwarding resolver is certified only through the library's own module: a structure that
        includes it may define a [resolve_cache_dir] of its own (review round 3). *)
     ( "a resolver reached through a structure including Autotune certifies nothing",

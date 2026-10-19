@@ -326,7 +326,13 @@ let read ?(source = "") content =
                 match included with Some (Exports e) -> overlay exports e.names | _ -> exports
               in
               (* A named module may define any of the names bound so far, and its own then win. *)
-              let values = if List.is_empty named then values else Set.empty (module String) in
+              (* Ir and Ocannl are namespaces of modules alone, so only an include of the cache or of
+                 Autotune can define a value bound so far (review round 5). *)
+              let values =
+                if List.exists named ~f:(function Cache | Autotune -> true | _ -> false) then
+                  Set.empty (module String)
+                else values
+              in
               let values =
                 match included with Some (Exports e) -> Set.union values e.values | _ -> values
               in
@@ -345,9 +351,19 @@ let read ?(source = "") content =
          any other open. *)
       method! opened ~top:_ ~include_:_ env =
         function
-        | Some (Exports { names; _ }) ->
+        | Some (Exports { names; bases; _ }) ->
+            (* The module members a structure inherits from its bases come into scope too: opening
+               [struct include Ir end] brings [Schedule_cache] (review round 5). Oldest base first,
+               so a later include wins, and the structure's own names over all of them. *)
+            let inherited =
+              List.concat_map (List.rev bases) ~f:(function
+                | Ir -> [ ("Schedule_cache", Cache) ]
+                | Ocannl -> [ ("Ir", Ir) ]
+                | _ -> [])
+              |> Map.of_alist_reduce (module String) ~f:(fun _ later -> later)
+            in
             let certain = Map.filter names ~f:(function May_be_hidden _ -> false | _ -> true) in
-            { env with modules = overlay env.modules certain }
+            { env with modules = overlay env.modules (overlay inherited certain) }
         | _ -> env
 
       val mutable resolver_seen = false
