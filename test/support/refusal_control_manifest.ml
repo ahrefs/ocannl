@@ -364,8 +364,8 @@ let raw_entries =
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
         "[scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width";
         "[scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than";
-        "[scanner-refusal:a5037fa85258b959ae69eb55cacb101d] cc vector width";
-        "[scanner-refusal:6b095fc0a9009014360cdbe631ba7dbb] starts a search";
+        "[scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file";
+        "[scanner-refusal:b75b8032e8725b0889bfea3840ce0f16] starts a search";
         "[scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
@@ -548,6 +548,10 @@ let raw_entries =
         "[scanner-refusal:22825750e1b48f737f60249e27047e28] empty string which";
         "[scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's";
         "[scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does";
+        "[scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the";
+        "[scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement";
+        "[scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds";
+        "[scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );
@@ -848,12 +852,12 @@ let raw_direct_evidence =
       "an entry point renamed away is refused as a lost anchor, not read as no search: true" );
     ( "env_var_deps.ml:677d819fac904c64b7025b4f17c07b5a",
       "a marker on a program that starts no search is refused as stale: true" );
-    ( "env_var_deps.ml:6b095fc0a9009014360cdbe631ba7dbb",
+    ( "env_var_deps.ml:b75b8032e8725b0889bfea3840ce0f16",
       "a program starting a search with a run that can select cc is reported when it neither pins \
        the width nor carries the marker: true" );
     ( "env_var_deps.ml:9de3b3fd1cd96a8d87e76bfa31534244",
       "a marker declaring anything but `independent` is refused: true" );
-    ( "env_var_deps.ml:a5037fa85258b959ae69eb55cacb101d",
+    ( "env_var_deps.ml:a45f7f9b519fd1f5ef3516593179eef6",
       "a marker on a program that pins the width is refused as contradictory: true" );
     ( "env_var_deps.ml:be4bb5e070f7c1653c2f7236cb2e6a18",
       "the marker's sentinel outside a comment is refused: true" );

@@ -278,10 +278,11 @@ Programs reading the cc vector width, every rule running which declares or pins 
   test/operations/dune, test tile_mma_geometry: tile_mma_geometry.ml reads `.simd_vector`
   test/operations/dune, test tile_mma_narrow: tile_mma_narrow.ml reads `.simd_vector`
 
-Programs starting a search with a run that can select cc, each pinning `cc_vector_bytes` or saying why
-its claims hold at every width (gh-ocannl-1368):
+Programs starting a search with a run that can select cc, each pinning the cc vector file
+(`cc_vector_bytes`, `cc_vector_registers`) or saying why its claims hold at every width (gh-ocannl-1368):
   (the search's entry points: Autotune.tune, Ocannl.Calibrate.stream, Ocannl.Train.tune_placements)
-  (the support values stating the width: Fissioned_chain.small_menu, Fissioned_chain.small_menu_envelope)
+  (the support values stating `cc_vector_bytes`: Fissioned_chain.small_menu, Fissioned_chain.small_menu_envelope)
+  (the support values stating `cc_vector_registers`: Fissioned_chain.small_menu, Fissioned_chain.small_menu_envelope)
   bin/dune, executable projection_shape_bench (Autotune.tune): independent, by its marker
   test/operations/dune, executable autotune_arm_containment (Train.tune_placements): independent, by its marker
   test/operations/dune, executable autotune_batched_companion (Autotune.tune): independent, by its marker

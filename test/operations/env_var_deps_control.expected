@@ -232,6 +232,10 @@ nor does a statement of `-1`, the auto-probe's spelling: true
 nor a `setenv` of `-1` or of the empty string, which reads as unset: true
 a call through another module's or a local module's namesake of the helper pins nothing: true
 while one through an alias of the helper's module does: true
+a program pinning the width but not the register count is reported: true
+a `setenv` of `-1` around a run undoes an initializer's statement of the width: true
+a helper spelling that a later namesake module rebinds is not credited at the rebinding: true
+in a plural `(tests)` stanza, one program's pin is not another's, while a program pinning itself passes: true
 
 Synthetic controls: ambient gates derive identity from the program actually run.
 a renamed direct-utils universe test and its resolved runner are gates: true
@@ -323,8 +327,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration
   [scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width
   [scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than
-  [scanner-refusal:a5037fa85258b959ae69eb55cacb101d] cc vector width
-  [scanner-refusal:6b095fc0a9009014360cdbe631ba7dbb] starts a search
+  [scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file
+  [scanner-refusal:b75b8032e8725b0889bfea3840ce0f16] starts a search
   [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
@@ -491,6 +495,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:22825750e1b48f737f60249e27047e28] empty string which
   [scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's
   [scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does
+  [scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the
+  [scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement
+  [scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds
+  [scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself
   [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks
   [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
