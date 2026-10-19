@@ -864,12 +864,12 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     artifact either way; [flip_report] observes nothing. A replayed search that fails without
     poisoning the lineage is a losing arm one level up: it is not reported, the recorded decision is
     treated as stale, and the two arms are searched and reported in position. An entry is recorded
-    only from clean evidence (every observed search completed, none with contention-refused windows,
-    the shipped one having timed something), never under a forced [ship_arm] -- which also never
-    consults the store: the override keeps precedence over a recorded decision exactly as over a
-    measured one -- and is ignored, and overwritten by the cold run that follows, when its decision
-    no longer reproduces the program it was measured on. The directory is resolved as
-    {!Autotune.tune} resolves it ({!Autotune.resolve_cache_dir}), [cache_dir = ""] disabling both
+    only from clean evidence (every observed search completed, none with contention-refused windows
+    or cut by its budget, the shipped one having timed something), never under a forced [ship_arm]
+    -- which also never consults the store: the override keeps precedence over a recorded decision
+    exactly as over a measured one -- and is ignored, and overwritten by the cold run that follows,
+    when its decision no longer reproduces the program it was measured on. The directory is resolved
+    as {!Autotune.tune} resolves it ({!Autotune.resolve_cache_dir}), [cache_dir = ""] disabling both
     stores.
 
     gh-ocannl-1020, [placement_store] (config [tune_placement_store], default [true]): [false]
@@ -1203,7 +1203,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      candidate, or [autotune_search=false] over a schedule cache holding only the other arm) was
      never compared, and recording the winner over it would let a later search-enabled process skip
      the unmeasured competitor for good. A decision reached because an arm failed, or over refused
-     windows, is likewise this process's to make and not the next one's to inherit.
+     windows, is likewise this process's to make and not the next one's to inherit. So is one whose
+     crown came from a search its wall-clock budget cut (gh-ocannl-1409): the schedule cache lets
+     only a budgeted call replay such a crown, and a decision recorded from it would reach every
+     later call, budgeted or not.
 
      gh-ocannl-1022: the entry's [outcome_digest] is the SHIPPED search's own
      {!Autotune.report.source_digest} -- the digest of the base lowering it tuned, and the key its
@@ -1217,7 +1220,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     | Some (problem, key, limits, capabilities, backend) ->
         let unclean =
           List.exists !observed ~f:(fun r ->
-              r.Autotune.timings_contended > 0
+              r.Autotune.timings_contended > 0 || r.Autotune.budget_cut
               || Option.is_some (Autotune.terminal_failure r)
               || not (Float.is_finite r.Autotune.best_ms))
         in
@@ -1227,7 +1230,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         if unclean || not (Float.is_finite shipped_ms) then
           logf
             "placement store: decision %s not recorded (a compared search failed, timed nothing, \
-             or had contention-refused windows)"
+             had contention-refused windows, or was cut by its budget)"
             (SC.shipped_label decision)
         else if String.is_empty outcome_digest then
           logf "placement store: decision %s not recorded (its search reported no source digest)"

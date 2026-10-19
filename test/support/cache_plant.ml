@@ -35,6 +35,7 @@ let entry ?(numerics = SC.numerics_tag ()) ?codegen ?objective ?(saved = []) ?se
     mma_best_ms;
     default_fingerprint = None;
     best_steps = None;
+    budget_cut = false;
   }
 
 (** [key ~backend ~timing_identity ~limits ~capabilities canon] is the key [Autotune.tune] looks

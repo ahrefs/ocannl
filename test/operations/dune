@@ -8637,6 +8637,31 @@
  (preprocess
   (pps ppx_ocannl)))
 
+; gh-ocannl-1409: a search's wall-clock budget (autotune_budget_seconds), read through a virtual
+; clock: what a cut search attempts, crowns and stores, and which later calls replay its crown.
+; Scripted timings, pinned to cc, on Fissioned_chain's small menu, so the model pre-filter's keys
+; and the cc vector width it pins are declared beside the rule's own.
+
+(test
+ (name autotune_budget)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_BUDGET_SECONDS)
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_AUTOTUNE_LOG)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_CC_VECTOR_REGISTERS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (modules autotune_budget)
+ (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-1138: the fine segmentation's staffed sweep. The finer segmentation is GPU-only, so
 ; the search runs on a GPU backend and every claim is skipped elsewhere.
 

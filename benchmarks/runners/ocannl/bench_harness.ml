@@ -628,7 +628,7 @@ let tune_json t =
           ~searched ~cache_hit
           ~timing:(Autotune.timing_string r.Autotune.timing)
           ~rounds_run:r.Autotune.rounds_run ~beam_width:r.Autotune.beam_width
-          ~timings_contended:r.Autotune.timings_contended
+          ~budget_cut:r.Autotune.budget_cut ~timings_contended:r.Autotune.timings_contended
           ~timings_unbatched:r.Autotune.timings_unbatched
           ~timing_decisions:(timing_decisions_wire r.Autotune.timing_decisions)
           ~best_ms:r.Autotune.best_ms ~best_label:r.Autotune.best_label
