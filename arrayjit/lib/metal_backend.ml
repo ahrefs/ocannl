@@ -911,10 +911,13 @@ module Impl = struct
     (* MSL leaves the element-to-thread mapping unspecified, so a half/bfloat fragment cannot supply
        the coordinates of a float accumulator (gh-ocannl-1075). Load the row-major table into the
        accumulator's own type and convert scalar cells at the coordinates it names. [simdgroup_load]
-       accepts only device/threadgroup memory (MSL 4.1 section 6.8.1), so each converted scope
-       initializes one tile's worth of [float]s (256 bytes) of threadgroup storage before its
-       opening barrier. A single thread writes the table even when the workgroup contains several
-       SIMD groups. *)
+       accepts only device/threadgroup memory (MSL 4.1 section 6.8.1), so the table is one tile's
+       worth of [float]s (256 bytes) of threadgroup storage. It holds the same 0..63 for every
+       scope, so it is declared and initialized ONCE per kernel, at kernel scope, when any accepted
+       emission converts (gh-ocannl-1255) — not once per scope, which charged 256 bytes for every
+       converted [Tile_mma] copy an [Unroll] or [Partition] made. A single thread writes it even
+       when the workgroup contains several SIMD groups; each converted scope's opening barrier
+       orders that write before its reads. *)
     let mma_rc_table_len = 8 * 8
     let mma_rc_table_prec = Ops.single
 
@@ -923,8 +926,13 @@ module Impl = struct
        bytes. *)
     let mma_d_converts ~acc_frag ~d_frag = not (String.equal acc_frag d_frag)
 
-    let mma_d_table_lines ~acc_frag ~d_frag =
-      if not (mma_d_converts ~acc_frag ~d_frag) then []
+    let triple_converts (d_prec, a_prec, b_prec) =
+      match mma_fragment_types ~d_prec ~a_prec ~b_prec with
+      | Some (acc_frag, _, _, d_frag) -> mma_d_converts ~acc_frag ~d_frag
+      | None -> false
+
+    let mma_kernel_prologue ~triples =
+      if not (List.exists triples ~f:triple_converts) then []
       else
         let typ = typ_of_prec mma_rc_table_prec in
         [
@@ -936,13 +944,11 @@ module Impl = struct
         ]
 
     (* The table's bytes, for the schedule-level shared-memory estimate (gh-ocannl-1205): the same
-       combination resolver, predicate and declaration as [mma_d_table_lines], so the estimate
-       counts exactly the scopes the hooks convert. *)
-    let mma_scope_workgroup_bytes ~d_prec ~a_prec ~b_prec =
-      match mma_fragment_types ~d_prec ~a_prec ~b_prec with
-      | Some (acc_frag, _, _, d_frag) when mma_d_converts ~acc_frag ~d_frag ->
-          mma_rc_table_len * Ops.prec_in_bytes mma_rc_table_prec
-      | Some _ | None -> 0
+       predicate and declaration as [mma_kernel_prologue], once per kernel (gh-ocannl-1255). *)
+    let mma_kernel_workgroup_bytes ~triples =
+      if List.exists triples ~f:triple_converts then
+        mma_rc_table_len * Ops.prec_in_bytes mma_rc_table_prec
+      else 0
 
     let mma_d_boundary_lines ~dir ~acc_frag ~d_frag ~acc ~ptr ~ldd =
       if not (mma_d_converts ~acc_frag ~d_frag) then
@@ -1094,13 +1100,12 @@ module Impl = struct
                     "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
                   in
                   let body_lines =
-                    mma_d_table_lines ~acc_frag ~d_frag
-                    @ [
-                        barrier;
-                        Printf.sprintf "%s __mma_acc[%d][%d];" acc_frag mt nt;
-                        Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                      ]
+                    [
+                      barrier;
+                      Printf.sprintf "%s __mma_acc[%d][%d];" acc_frag mt nt;
+                      Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+                      Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+                    ]
                     @ List.map
                         (mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag
                            ~acc:"__mma_acc[__mi][__ni]"
@@ -1207,13 +1212,12 @@ module Impl = struct
               in
               let d_addr = Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile in
               let lines_before =
-                mma_d_table_lines ~acc_frag ~d_frag
-                @ [
-                    barrier;
-                    Printf.sprintf "%s %s[%d][%d];" acc_frag fragment mt nt;
-                    Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                    Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                  ]
+                [
+                  barrier;
+                  Printf.sprintf "%s %s[%d][%d];" acc_frag fragment mt nt;
+                  Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+                  Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+                ]
                 @ List.map
                     (mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag
                        ~acc:(Printf.sprintf "%s[__mi][__ni]" fragment)

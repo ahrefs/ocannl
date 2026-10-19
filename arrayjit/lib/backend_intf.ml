@@ -548,13 +548,15 @@ type codegen_capabilities = {
           for every tile of the other's free axis (gh-ocannl-1254). The arm's own description, read
           by the cost model's operand-load count, which has no count where this is [None]: no arm,
           or a backend that does not describe its emission (the default). *)
-  mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
-      (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
-          tiles, for a [(d, a, b)] storage triple: the backend's
-          [C_syntax_config.mma_scope_workgroup_bytes], which it derives from the same combination
-          resolver and declaration its emitting hooks use. Non-zero only for Metal's converted
-          destination boundary (gh-ocannl-1205). [Schedule.check_hardware_limits_classified] adds it
-          per scope to the staged tiles. *)
+  mma_kernel_workgroup_bytes : triples:(Ops.prec * Ops.prec * Ops.prec) list -> int;
+      (** Static workgroup-shared bytes a kernel declares beyond the staged tiles for its tile-MMA
+          emission scopes, given their [(d, a, b)] storage triples: the backend's
+          [C_syntax_config.mma_kernel_workgroup_bytes], which it derives from the same predicate as
+          the kernel-scope declaration ([C_syntax_config.mma_kernel_prologue]). A per-KERNEL term,
+          not a per-scope one: non-zero only for Metal's converted destination boundary, whose
+          coordinate table is declared once per kernel however many scopes read it (gh-ocannl-1205,
+          gh-ocannl-1255). [Schedule.check_hardware_limits_classified] adds it once to the staged
+          tiles. *)
   workgroup_allocation_alignment : int;
       (** The granule the device's allocator rounds each workgroup-shared array up to, in bytes: the
           backend's [C_syntax_config.workgroup_allocation_alignment]. Metal rounds every
@@ -602,7 +604,7 @@ let no_codegen_capabilities =
         ~b:_
       -> false);
     mma_operand_fragments = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
-    mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
+    mma_kernel_workgroup_bytes = (fun ~triples:_ -> 0);
     workgroup_allocation_alignment = 1;
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
@@ -624,10 +626,10 @@ let no_codegen_capabilities =
     and layout, which are the schedule's own content and so already in its canonical digest.
     Rendering them would add no discrimination, only re-tunes.
 
-    The fields deliberately not rendered are [mma_scope_workgroup_bytes],
+    The fields deliberately not rendered are [mma_kernel_workgroup_bytes],
     [workgroup_allocation_alignment] and [lane_all_reduce_workgroup_bytes] (the same argument holds
     for all three): it decides whether a schedule FITS, never what a kernel computes, and it is a
-    function of the storage triple, the numerics policy and the backend, which the key already
+    function of the storage triples, the numerics policy and the backend, which the key already
     carries ([Schedule_cache.numerics_tag] and the backend identity), so rendering it would add no
     discrimination. An emitter change that grows the scratch is caught without it: a replayed winner
     passes the same [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one
@@ -643,7 +645,7 @@ let codegen_capabilities_fingerprint
       mma_operand_loads = _;
       mma_accepts = _;
       mma_operand_fragments = _;
-      mma_scope_workgroup_bytes = _;
+      mma_kernel_workgroup_bytes = _;
       workgroup_allocation_alignment = _;
       lane_all_reduce_workgroup_bytes = _;
     } =

@@ -251,9 +251,12 @@ files.
   still the cheaper refusal, before compilation, so everything a kernel declares in `threadgroup`
   memory must reach `Schedule.workgroup_memory_bytes` (gh-ocannl-1205): staged tiles from
   `workgroup_shared`, and backend-emitted scratch through
-  `codegen_capabilities.mma_scope_workgroup_bytes`, which the emitting backend derives from the same
-  resolver as its declaration (Metal's converted-boundary coordinate table, 256 B per `Tile_mma`
-  statement, each `Unroll`/`Partition` copy included). A new `threadgroup` or `__shared__`
+  `codegen_capabilities.mma_kernel_workgroup_bytes`, which the emitting backend derives from the same
+  predicate as its kernel-scope declaration (`C_syntax_config.mma_kernel_prologue`): Metal's
+  converted-boundary coordinate table, 256 B once per kernel however many converted `Tile_mma`
+  scopes (each `Unroll`/`Partition` copy is one) read it (gh-ocannl-1255; it was per scope). The
+  renderer hands the prologue the triples of the emissions it accepted, the estimate those of every
+  `Tile_mma`, so the estimate is the upper bound. A new `threadgroup` or `__shared__`
   declaration in a backend emitter needs the same route. Metal rounds each `threadgroup` array up
   to 4 bytes (measured, M4 Max: the driver's request for two odd `half` tiles is their rounded sum),
   so the estimate charges each array `Schedule.workgroup_allocation_bytes`, rounded to

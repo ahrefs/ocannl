@@ -8691,11 +8691,12 @@ let maybe_default_schedules ~backend_name ?(limits = Backend_intf.no_hardware_li
 
 (* The emission scopes of [opt]'s [Tile_mma] statements, as [(d, a, b)] operand triples: one per
    statement, wherever it sits — duplicated by a materializing [Unroll] or [Partition], each copy is
-   its own lexical scope and declares its own scratch. A recognized simdgroup-fragment scope is no
-   exception: [C_syntax]'s fragment rendering accepts a reduction holding exactly ONE [Tile_mma]
-   into the fragment, so its scope and that statement are one-to-one (and the fragment carries its
-   target's storage precision, the [d] precision the hook is asked about). Fallbacks are not
-   entered: they render instead of, not beside, the intrinsic. *)
+   its own lexical scope (the kernel-scope scratch they share is the backend's per-kernel term over
+   the whole list, gh-ocannl-1255). A recognized simdgroup-fragment scope is no exception:
+   [C_syntax]'s fragment rendering accepts a reduction holding exactly ONE [Tile_mma] into the
+   fragment, so its scope and that statement are one-to-one (and the fragment carries its target's
+   storage precision, the [d] precision the hook is asked about). Fallbacks are not entered: they
+   render instead of, not beside, the intrinsic. *)
 let mma_emission_scopes (opt : Low_level.optimized) : (Tn.t * Tn.t * Tn.t) list =
   let open Low_level in
   let rec go acc = function
@@ -8731,12 +8732,13 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
         acc + alloc (copies * Lazy.force tn.Tn.size_in_bytes))
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  (* gh-ocannl-1255: one kernel-scope term over all the scopes' triples, not one per scope. *)
   let mma_scratch =
-    List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
-        acc
-        + alloc
-            (capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
-               ~b_prec:(prec b)))
+    staged
+    + alloc
+        (capabilities.Backend_intf.mma_kernel_workgroup_bytes
+           ~triples:
+             (List.map (mma_emission_scopes opt) ~f:(fun (d, a, b) -> (prec d, prec a, prec b))))
   in
   (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
      one declaration per site (a duplicated copy is its own site). The local resides at its compute

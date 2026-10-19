@@ -1218,17 +1218,17 @@ val workgroup_memory_bytes :
 (** The static workgroup-shared bytes the kernel will declare, each array charged by
     {!workgroup_allocation_bytes} (Metal rounds every [threadgroup] array up to 4 bytes,
     gh-ocannl-1330): its [workgroup_shared] tiles (a pipelined tile, one array of rotating copies,
-    counted once per copy) plus, per tile-MMA emission scope, the rendering backend's
-    {!field:Backend_intf.mma_scope_workgroup_bytes} for that scope's storage triple — Metal's
-    converted destination boundary declares a coordinate table there (gh-ocannl-1205). A scope is
-    one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
-    simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same
-    count. Plus, per lane all-reduce site that stages per-simdgroup partials
-    ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
-    {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its extent at the larger of its
-    local's compute and accumulator precisions. Pass the compiling context's
-    [Context.codegen_capabilities]; the capability-free {!Backend_intf.no_codegen_capabilities}
-    counts the tiles alone. *)
+    counted once per copy) plus, once for the kernel, the rendering backend's
+    {!field:Backend_intf.mma_kernel_workgroup_bytes} over the storage triples of its tile-MMA
+    emission scopes — Metal declares one coordinate table per kernel when any of them converts its
+    destination boundary (gh-ocannl-1205, gh-ocannl-1255). A scope is one [Tile_mma] statement, each
+    copy listed where a loop transform duplicated it; a simdgroup-fragment scope is rendered only
+    around exactly one [Tile_mma], so it is the same list. Plus, per lane all-reduce site that
+    stages per-simdgroup partials ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup],
+    gh-ocannl-1168), the backend's {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its
+    extent at the larger of its local's compute and accumulator precisions. Pass the compiling
+    context's [Context.codegen_capabilities]; the capability-free
+    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
 
 val thread_private_bytes : Low_level.optimized -> int
 (** The per-work-item scratch bytes the kernel will declare (gh-ocannl-1313): one function-scope

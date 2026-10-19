@@ -421,6 +421,7 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: co
 test/operations/schedule_mma_scope_scratch.ml
     "ocannl_mma_rc8"
     "threadgroup float ocannl_mma_rc8["
+    "{ /* simdgroup fragment "
 test/operations/schedule_ops.ml [renders generated text in memory; also pins text this scan cannot name: mutation or unseen buffer write]
     "#pragma"
     "<= 3"
