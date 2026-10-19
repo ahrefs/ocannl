@@ -529,6 +529,94 @@ val matmul_sketch_tree :
     candidate build never expands (gh-ocannl-577). The conv family factors the same way as a
     follow-up. Exposed for tests and as the phase-4 search driver's entry into the family space. *)
 
+(** {2 The seeding census (gh-ocannl-1407)}
+
+    Seeding refusals are decided before a candidate exists, so the decline report and
+    [schedule_log_declines] (render and compile declines) cannot hold them. The census reads them
+    off the judgment the seeds come from; config [autotune_log_seeding] prints it for every lowering
+    {!tune} and {!model_default} seed, and one line per segment of the plan the untuned seeded
+    default chooses. See {!Sketch_families.seeding_census} for the fields' documentation.
+
+    The census is the families' seeding. A driver's own filters and lifts after it are not seeding
+    gates and are not in it: {!tune}'s keep-fraction model pre-filter, and {!model_default}'s
+    numerics restriction on CUDA/HIP and its geometry-lattice lift (which re-proposes branches the
+    head line counts in [excluded=N]). *)
+
+type conv_leg = {
+  leg_seeds : sketch_params list;
+  leg_refusal : string option;
+  leg_notes : string list;
+}
+
+type conv_judgment = {
+  cj_site : conv_site;
+  cj_real_stmts : int;
+  cj_cpu : conv_leg;
+  cj_gpu : conv_leg;
+}
+
+type family_seeding =
+  | Seeding_matmul of {
+      site : matmul_site;
+      tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
+    }
+  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
+  | Seeding_none
+
+val family_seeding :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  family_seeding * sketch_params list
+(** {!sketch_seed_params} beside the judgment its seeds came from. *)
+
+type coalesced_verdict = {
+  cv_layout : coalesce_layout;
+  cv_seeds : sketch_params list;
+  cv_refusal : string option;
+}
+
+val coalesced_seeding :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  coalesced_verdict list
+
+type seeding_census = {
+  sc_stmts : int;
+  sc_whole_zeros : int;
+  sc_conv_nests : (Ir.Tnode.t * bool) list;
+  sc_family : family_seeding;
+  sc_seeds : sketch_params list;
+  sc_coalesced : coalesced_verdict list option;
+}
+
+val seeding_census :
+  ?coalesced:bool ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  seeding_census
+
+val seeding_census_prefix : string
+val seeding_census_lines : where:string -> seeding_census -> string list
+
+val log_seeding_enabled : unit -> bool
+(** Config [autotune_log_seeding], read once per process. *)
+
+val log_seeding :
+  ?coalesced:bool ->
+  where:string ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  unit
+(** The census of one lowering on stderr, tagged [where]; a no-op unless {!log_seeding_enabled}. *)
+
 val geometry_lattice_witness : string
 (** The exclusion witness marking the tile-size lattice branches beyond the curated geometry menus
     (gh-ocannl-514 phase 5): binary interval refinements over the staged tile sizes — every
@@ -1002,6 +1090,14 @@ type report = {
           refusal: it ends the call as a [Pre_search_failure] under strict failure classification.
       *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
+  budget_cut : bool;
+      (** The crown comes from a search that stopped proposing candidates because its wall-clock
+          budget (config [autotune_budget_seconds], gh-ocannl-1409) ran out: this call's own search,
+          whose candidates timed are then a prefix of its menu plus the untuned floors (exempt from
+          the budget), or for a {!Cache_replay} the search that stored the entry, as the entry's
+          [budget_cut] records -- like [best_ms], a fact about the crown rather than about this
+          call. [outcome] stays {!Searched} for a cut search -- it completed and shipped its crown
+          -- so this is the field telling a cut search from a full one. *)
   beam_width : int;
       (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how
           many of the fastest candidates each round expands, and the admitted-timing depth an
@@ -1874,6 +1970,15 @@ val seeded_params :
     fixed preference list (64x64x8/4x4, 32x32x8/4x4, 32x32x16/2x2, 16x16x8/2x2, 16x16x8/4x4) whose
     launch has 128 blocks, else the one putting the most threads on the output — among the
     geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
+
+val seeded_params_judged :
+  limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  min_reduction:int ->
+  Ir.Low_level.optimized ->
+  (sketch_params, string) Result.t
+(** {!seeded_params} with the refusing gate named (gh-ocannl-1407): [Ok] exactly where
+    {!seeded_params} is [Some]. *)
 
 val seeded_default_backend : string -> bool
 (** Whether {!seeded_default} seeds on this backend ({!Context.backend_name}): CUDA and HIP. *)
@@ -2757,7 +2862,43 @@ val tune :
     constant pool per such candidate — measured on [cc] at 1 -> 109 constant pools over 181
     candidates, against working pools held within 2-6. Bounding it needs an eviction rule inside the
     shared constant cache, which is gh-ocannl-565's subject; pinned as far as it can be by
-    [test/operations/autotune_candidate_release]. *)
+    [test/operations/autotune_candidate_release].
+
+    Budget (gh-ocannl-1409, config [autotune_budget_seconds], default none): a search whose
+    wall-clock time since the call started has reached the budget attempts no further candidate --
+    checked as each attempt and each beam round starts, so the candidate in flight completes -- and
+    crowns its incumbent as a completed search does; the untuned floors (the seeded untuned plan and
+    the default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
+    slower than what the caller ships untuned. Where the cut left the untuned default unmeasured --
+    no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no seeded
+    plan), or its windows were refused -- the call ships the untuned default compile, stores nothing
+    and reports as a search that timed nothing ({!budget_floor_unmeasured}). The report's
+    [budget_cut] says the budget stopped something. A cut search with clean timings stores its crown
+    marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with a budget replays
+    it, and one without a budget searches in full and overwrites it. The budget's value is part of
+    the search trajectory's identity, so a cut search's [best_steps] serve early stopping only under
+    the same budget. *)
+
+val budget_setting : unit -> float option
+(** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
+    the setting is a positive number, [None] (no budget) when it is empty, zero or negative; text
+    that is no number raises [Utils.Invalid_config_value] (gh-ocannl-1332). *)
+
+val budget_floor_unmeasured :
+  budget_cut:bool -> auto_sched:bool -> baseline_dispatched:bool -> floor_measured:bool -> bool
+(** gh-ocannl-1409: whether a search its budget cut ships the untuned default compile, stores
+    nothing and reports as a search that timed nothing, rather than crowning what it reached: the
+    budget cut it ([budget_cut]), it measured neither untuned floor ([floor_measured]: the default
+    seed's time, the baseline's when automatic scheduling is off, or the seeded plan's), and the
+    untuned default is a form a timed candidate could be slower than -- a scheduled pipeline
+    ([auto_sched]) or a dispatched serial baseline ([baseline_dispatched]), not the undispatched
+    serial form of a GPU with automatic scheduling off. *)
+
+val budget_elapsed : (float -> float) Seam.t
+(** Test seam (gh-ocannl-1409): maps the call's real elapsed seconds to the seconds a budget check
+    reads. A test substitutes a virtual clock -- the attempts so far, say -- to place a cut at a
+    chosen candidate, which a wall clock cannot. The default is the identity and no configuration
+    selects it. *)
 
 val on_candidate_callback :
   ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) Seam.t

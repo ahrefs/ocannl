@@ -4359,7 +4359,7 @@
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules accum_width)
- (libraries base ocannl stdio pprint arrayjit.verdict ll_test test_utils)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5464,6 +5464,25 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name fragment_scope_move_legality)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules fragment_scope_move_legality)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name schedule_ldmatrix_matmul)
  (package neural_nets_lib)
  (deps
@@ -6518,6 +6537,36 @@
      tune_ship_arm.actual
      (run %{dep:tune_ship_arm.exe}))
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
+
+(test
+ ; gh-ocannl-1407: the seeding census, on synthetic device limits, and its config key's stream.
+ (name seeding_census)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules seeding_census)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (action
+  (run %{test} "--ocannl_autotune_log_seeding=true")))
 
 (test
  ; gh-ocannl-1061: the tuner's progress lines, with a candidate line at every attempt.
@@ -8615,6 +8664,51 @@
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_staffed_singles)
  (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1409: a search's wall-clock budget (autotune_budget_seconds), read through a virtual
+; clock: what a cut search attempts, crowns and stores, and which later calls replay its crown.
+; Scripted timings, pinned to cc, on Fissioned_chain's small menu, so the model pre-filter's keys
+; and the cc vector width it pins are declared beside the rule's own.
+
+(test
+ (name autotune_budget)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_BUDGET_SECONDS)
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_AUTOTUNE_LOG)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_CC_VECTOR_REGISTERS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (modules autotune_budget)
+ (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1409: a budget-cut search with no reproducible untuned floor (schedule_fission=false,
+; read once per process, hence its own executable) ships the untuned default and stores nothing.
+
+(test
+ (name autotune_budget_unfloored)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_BUDGET_SECONDS)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOTUNE_LOG)
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_CC_VECTOR_REGISTERS))
+ (modules autotune_budget_unfloored)
+ (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
  (preprocess
   (pps ppx_ocannl)))
 

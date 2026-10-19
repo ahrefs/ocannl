@@ -688,6 +688,29 @@ val pipeline_violation_cause : site:string -> pipeline_violation -> Schedule_out
     so the oracle and the renderer state each fact in one wording; [pipelined_move_legality] pins
     that, on the same IR, they reach the same violation. *)
 
+(** How a [Tile_mma] into a marked fragment falls outside every scope the renderer recognizes —
+    rendered, then, as the lane-0 scalar fallback. *)
+type fragment_scope_violation =
+  | Tile_replicated of { fragment : Tn.t; tiles : int }
+      (** The fragment's load and store-back bracket [tiles > 1] statements into it: a materializing
+          [Unroll] or a [Partition] of a loop inside the scope. *)
+  | Scope_not_leading of { fragment : Tn.t }
+      (** The bracket holds the one statement, but the scope does not lead the statement sequence
+          the renderer tries it in: after another recognized scope (a materializing [Unroll] of a
+          loop around the scope). *)
+  | Tile_unbracketed of { fragment : Tn.t }
+      (** No load/store-back pair of the fragment encloses the statement among its siblings. *)
+[@@deriving sexp_of, variants]
+
+val fragment_scope_violations : Low_level.optimized -> fragment_scope_violation list
+(** One violation per [Tile_mma] into a fragment of [opt.simdgroup_fragments] that no recognized
+    scope covers, in program order. A scope is {!Low_level.fragment_region} over a marked fragment —
+    the renderer's recognition — and coverage follows [C_syntax.pp_ll]'s own route to it (each [Seq]
+    tried whole, a recognized scope's trailing statements rendered one by one). [[]] when [opt]
+    marks no fragment. *)
+
+val fragment_scope_violation_message : fragment_scope_violation -> string
+
 val written_nodes : Low_level.t -> Set.M(Tnode).t
 (** The nodes the code writes: [Set]-family and [Zero_out] statements, [Tile_mma] accumulators, and
     the statements inside [Local_scope] bodies and scan-loop inits. *)
@@ -725,7 +748,9 @@ val op_legality : Low_level.optimized -> optop -> op_verdict
     Before any of that, on code carrying pipelined tiles (gh-ocannl-1231): an op whose application
     leaves a {!pipeline_violation} is a proven [Op_illegal] carrying {!pipeline_violation_message} —
     the staging scope's invariant, stated once for every op shape, so that the beam's menu,
-    seeding's {!schedule_legality} and the renderer agree. *)
+    seeding's {!schedule_legality} and the renderer agree. Likewise, on code marking simdgroup
+    fragments (gh-ocannl-1342): an op whose application leaves more {!fragment_scope_violations}
+    than it found is [Op_illegal] with {!fragment_scope_violation_message} of the first it added. *)
 
 val schedule_legality : Low_level.optimized -> schedule -> (optop * op_verdict) list
 (** Per-op verdicts, each against the code with the preceding ops applied (on a hermetic copy —

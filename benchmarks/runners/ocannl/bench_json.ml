@@ -62,7 +62,10 @@ let string s =
     [rounds_run] and [beam_width] are the search's own record of how far it went (gh-ocannl-1137):
     the result line's [regime_knobs] carries what the configuration ASKED for, and a runner passing
     [~rounds:0] — every OCANNL benchmark runner does — runs no beam round whatever [autotune_rounds]
-    says. A replayed or disabled arm ran none either way.
+    says. A replayed or disabled arm ran none either way. [budget_cut] says the arm's crown comes
+    from a search its wall-clock budget cut ([autotune_budget_seconds], gh-ocannl-1409): this arm's
+    own search, or for a replay the search that stored the entry ({!Autotune.report}'s
+    [budget_cut]).
 
     [timings_contended] is the number of timing windows refused because host contention dominated
     their samples (gh-ocannl-855). A nonzero count means the finite winner, if any, came from an
@@ -114,12 +117,13 @@ let decision_counts_object counts =
            Printf.sprintf {|"%s":{%s}|} (string settle) (String.concat ~sep:"," (cells settle))))
   ^ "}"
 
-let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~timings_contended
-    ~timings_unbatched ~timing_decisions ~best_ms ~best_label ~tensorized ~tensorization
-    ~mma_statements ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
+let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~budget_cut
+    ~timings_contended ~timings_unbatched ~timing_decisions ~best_ms ~best_label ~tensorized
+    ~tensorization ~mma_statements ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms
+    ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
-    (string name) (string state) searched cache_hit (string timing) rounds_run beam_width
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
+    (string name) (string state) searched cache_hit (string timing) rounds_run beam_width budget_cut
     timings_contended timings_unbatched (num best_ms) (string best_label) tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
     mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)

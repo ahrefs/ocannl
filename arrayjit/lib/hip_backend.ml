@@ -1499,6 +1499,11 @@ end = struct
               ("max_grid_size", [%sexp_of: int * int * int] attributes.max_grid_size);
               ("max_threads_dim", [%sexp_of: int * int * int] attributes.max_threads_dim);
               ("unified_addressing", [%sexp_of: bool] attributes.unified_addressing);
+              (* The memory model, as [hardware_limits] reads it: an integrated part shares host
+                 DRAM (minix's gfx1151), a discrete one has its own (tuf's gfx1102) --
+                 [unified_addressing] reads false on both. gh1133_cells.sh's HIP kprof step states
+                 it from here (gh-ocannl-1392). *)
+              ("integrated", [%sexp_of: bool] attributes.integrated);
               (* The DEVICE half of [mma_supported], read through the predicate the backend gates
                  on, so a verifier can tell a device that can never tensorize from a host missing
                  the rocWMMA headers -- [hardware_limits.mma] reports only the conjunction.

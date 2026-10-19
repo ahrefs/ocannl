@@ -37,6 +37,10 @@ module Optional_arg_scan = Optional_arg_scan
 (** Classifying whether [lib/] optional arguments affect their function bodies or are deliberately
     unimplemented, in which case the caller-visible label must begin with an underscore. *)
 
+module Verdict_callee = Verdict_callee
+(** Whose a claim name is -- [Verdict]'s, ambiguously so past an [open] of another module, or not:
+    the one resolver every [Verdict] reader asks (gh-ocannl-1361). *)
+
 module Verdict_scan = Verdict_scan
 (** Scanning test sources for claims a test decides itself and prints outside [Verdict], where a
     failing one is [dune promote]-able into the golden. *)

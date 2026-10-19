@@ -334,6 +334,14 @@ cell is the step: cite the step cell. Each issue's cell:
   step times. Those times are still usable for the cut's question -- a searching process only
   inflates its launches, so a cut cell that matches the untuned cell there matches it a fortiori --
   and the search runs its full compile cost, about 50 min per pass for gpt2_mini_train on rog.
+  To bound a cell's search instead, set the config key `autotune_budget_seconds`
+  (`OCANNL_AUTOTUNE_BUDGET_SECONDS=S`, gh-ocannl-1409): once S seconds have passed since a
+  search started, it compiles nothing more beyond the untuned floors and crowns its incumbent. It
+  stores that crown, marked as cut, when its timings were clean, so the tuned cell's replay pass
+  under the same setting replays it. The result line says so: the arm's `budget_cut` is true on the
+  search pass and on the replay. Each placement arm is its own search, so a two-arm search pass
+  takes about twice S, plus the overrun: the candidate in flight, the floors, the winner's compile,
+  and the base compile, which comes before the first check.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
@@ -652,6 +660,18 @@ cell is the step: cite the step cell. Each issue's cell:
   in-step column only: on rog's gpt2_mini_train_b256 the in-step medians sum to the traced step
   p50 within 0.2%. Tracing costs about 2-3% of step time, so a kprof cell's step time enters no
   matrix.
+  On HIP (`BACKEND=hip`, gh-ocannl-1392) the tracer is `rocprofv3 --kernel-trace`, which records
+  every dispatch at the HSA queue, the replayed graph's nodes included, and the same join runs on
+  its `CELL_kernel_trace.csv`. Before the first cell the driver probes the device
+  (`bin/device_props`, the backend's own `integrated` query) and every cell states its memory model
+  -- `unified` on minix's gfx1151, `discrete` on tuf's gfx1102 -- on a `kprof: memory model` line
+  the attribution prints; a HIP cell without one, a probe that sees more than one device, or a
+  trace whose kernels ran on more than one agent is refused. Ubuntu's ROCm on those boxes ships no
+  rocprofv3 and an HSA runtime that no rocprofiler-sdk can hook, so
+  `benchmarks/rocprofv3-install.sh` unpacks AMD's profiler and HSA runtime (7.2.4) into
+  `~/.local/opt` without root and prints the path to pass as `ROCPROFV3=`: the traced step keeps
+  the system's HIP runtime and kernel compiler and runs over AMD's HSA runtime alone. There is no
+  clock sampler on HIP.
   `BENCH_CANON=1` (`bench_conv_diag`) prints whether the schedule cache can key the step's
   lowering (`Schedule_cache.complete` of its canonical form) and, when it cannot, why: the free
   symbols, the loop symbols bound twice (each with the first node its loop body reads) and the

@@ -115,6 +115,9 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
   model_peak_memory_bandwidth
   strict_failure_classification
 
+search-shaping -- a wall-clock budget on the search (gh-ocannl-1409): it decides how many candidates are attempted before the search crowns its incumbent, never what a crowned schedule means or how fast it runs. The crown of a search it cut is stored marked as cut (Schedule_cache.entry's budget_cut), so only a call that also has a budget replays it -- an incomplete measurement set must not become every later call's answer, the rule that keeps a contended search out of the cache
+  autotune_budget_seconds
+
 keyed: timing -- it picks the OBJECTIVE a candidate is timed against -- the latency of a lone dispatch, or what the kernel sustains under queue depth -- and the two crown different candidates, measured (gh-ocannl-755). Not Search_shaping, which is where it started and where the neighbouring autotune_* knobs correctly sit: those change how carefully the SAME quantity is measured, so either process's winner answers the other's question, whereas an entry crowned under isolated timing is the answer to a question a queued search did not ask -- and its stored best_ms, baseline_ms and mma_best_ms are readings of a different quantity, which a replay copies into the reading process's report under that process's label. Left unkeyed, a warm cache would also defeat the new default outright, replaying isolated-crowned winners forever (Codex P1 on PR #512)
   autotune_timing [read at codegen]
 
@@ -148,6 +151,7 @@ execution-neutral -- startup and configuration-sourcing chatter, which descripto
 execution-neutral -- debug artifacts and where they go: the files are written beside the run, the kernels are what they would have been
   autotune_cache_dir
   autotune_log
+  autotune_log_seeding
   autotune_progress
   build_files_prefix
   clean_up_build_files_on_startup
