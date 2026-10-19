@@ -187,6 +187,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test cost_model_reuse: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test cpu_parallel: Ir.Schedule.apply
+  test/operations/dune, test cpu_scratch_matmul_grid: Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules
   test/operations/dune, test cpu_simd_reduction: Ir.Schedule.apply
   test/operations/dune, test cpu_vectorized: Ir.Schedule.apply
   test/operations/dune, test epilogue_fusion_mma_seeds: Ir.Schedule.apply

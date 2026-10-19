@@ -6068,9 +6068,20 @@ let lane_preamble_reductions ~lane (nest : Low_level.t) : (Indexing.symbol * int
    capping at 2 made every rank-3+ site's companion coverage decline, serializing the axis whose
    spreading the hardware wanted most). The alignment rule is arity-independent; a longer chain only
    asks the same per-position question more times. [lanes] reads chains through {!path_loops}' lane
-   extension (the GPU preset's lane geometry, see {!lane_geometry}). *)
+   extension (the GPU preset's lane geometry, see {!lane_geometry}).
+
+   [shared_locals] (the CPU preset, gh-ocannl-1343): a nest writing no materialized node takes its
+   chain from its scratch writes instead of staying empty. Under the GPU reading such a nest runs
+   whole in every thread over a per-thread copy, so an empty chain is the safe default; on the C
+   backends a serial nest runs once and [Local] scratch is ONE function-scope array, so the empty
+   chain leaves a whole matmul serial whenever its product is a non-materialized intermediate. The
+   chain loops then go through the same alignment and per-nest agreement rules as any written
+   scratch, and the C renderer's own shared/privatization rule for locals under a pool-parallel
+   [Grid] loop ([C_syntax.parallel_grid_safe]) stays the final word on whether the loop renders in
+   parallel. *)
 let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = false)
-    ?(preamble_reductions = false) (opt : Low_level.optimized) : Low_level.t list list =
+    ?(preamble_reductions = false) ?(shared_locals = false) (opt : Low_level.optimized) :
+    Low_level.t list list =
   let open Low_level in
   let plc = opt.optimize_ctx.placements in
   let nests, bare = split_nests plc opt.llc in
@@ -6078,16 +6089,22 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
   if List.exists bare ~f:(fun a -> a.a_write && Tn.Placements.is_materialized_peek plc a.a_tn) then
     raise Bail;
   (* Chains: per nest, the outermost (up to [max_chain]) Serial path loops whose index occurs as a
-     plain [Iterator] component in every materialized write vector of the nest. *)
+     plain [Iterator] component in every materialized write vector of the nest -- or, under
+     [shared_locals], of every write vector of a nest that writes only scratch. *)
   let chains =
     List.map nests ~f:(fun n ->
         let mat_writes =
           List.filter n.n_accesses ~f:(fun a ->
               a.a_write && Tn.Placements.is_materialized_peek plc a.a_tn)
         in
+        let owned_writes =
+          if shared_locals && List.is_empty mat_writes then
+            List.filter n.n_accesses ~f:(fun a -> a.a_write)
+          else mat_writes
+        in
         let qualifies s =
-          (not (List.is_empty mat_writes))
-          && List.for_all mat_writes ~f:(fun a ->
+          (not (List.is_empty owned_writes))
+          && List.for_all owned_writes ~f:(fun a ->
               Array.exists a.a_idcs ~f:(fun idx ->
                   Indexing.equal_axis_index idx (Indexing.Iterator s)))
         in
@@ -7379,7 +7396,12 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
         Utils.registered_int ~arg_name:"cpu_schedule_min_parallel")
   in
   try
-    let chains = analyze_parallel_chains opt in
+    (* Scratch-writing nests take chains too (gh-ocannl-1343); where linking them to their readers
+       bails the kernel, the plain analysis -- those nests serial, as before -- is the fallback, so
+       the extension never costs a nest the parallelism it had. *)
+    let chains =
+      try analyze_parallel_chains ~shared_locals:true opt with Bail -> analyze_parallel_chains opt
+    in
     crosscheck_scratch_containment opt chains;
     if max_parallel_size chains < min_parallel then []
     else
@@ -7435,6 +7457,12 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
       to [On_device] ({!Tnode.Placements.promote_local_to_device}): [Local] is always a compiler
       decision premised on single-kernel lifetime, and fission runs before any consumer of the
       decision (codegen parameter lists, context allocation) has read it.
+
+    A whole-node [Zero_out] of scratch (a non-materialized node) conflicts with nothing, so the
+    grouping would take it into whatever segment precedes it; it joins that segment only when the
+    unit accumulating into its node would join too (gh-ocannl-1343) -- otherwise the node crosses to
+    its accumulation, its promotion makes the zero a bare materialized write, and both segments lose
+    their annotation.
 
     Adjacent segments that both end up unannotated are coalesced back (fewer launches); if
     everything coalesces, the routine compiles to a single kernel exactly as before. *)
@@ -8016,11 +8044,32 @@ let group_units ?max_chain ?(arity_cuts = false) ?(fold_zeros = false) ?mapping 
       && Option.for_all mapping ~f:(fun mapping ->
           keeps_mapping ~mapping opt seg u (standalone mapping))
   in
+  (* gh-ocannl-1343: a whole-node [Zero_out] of scratch (a non-materialized node, so a [`Normal]
+     unit the conflict rule never cuts) belongs with the unit that accumulates into it. Joined to
+     the preceding segment while that unit cuts, the zero leaves its node crossing the boundary: the
+     crossing is promoted to [On_device], and the promoted zero, a bare materialized write, bails
+     the annotation of BOTH segments -- which then coalesce into one serial kernel. So such a zero
+     joins the current segment only when the next unit, touching the node, would join it too. *)
+  let scratch_zero (u : funit) =
+    match List.filter u.f_stmts ~f:(function Low_level.Noop | Comment _ -> false | _ -> true) with
+    | [ Low_level.Zero_out tn ] when not (Tn.Placements.is_materialized_peek plc tn) -> Some tn
+    | _ -> None
+  in
+  let splits_from_user seg u next =
+    match (scratch_zero u, next) with
+    | Some tn, { f_kind = `Normal; f_sum = Some s'; _ } :: _
+      when (not (Set.mem seg.g_reads tn || Set.mem seg.g_writes tn))
+           && (Set.mem s'.s_reads tn || Set.mem s'.s_writes tn) ->
+        let with_zero = merge_segs ~kind:`Normal seg (seg_of_unit u) in
+        not (mergeable with_zero s' (List.hd_exn next))
+    | _ -> false
+  in
   let rec go cur acc = function
     | [] -> List.rev (close cur acc)
     | u :: tl -> (
         match (cur, u.f_kind, u.f_sum) with
-        | Some ({ g_kind = `Normal; _ } as seg), `Normal, Some s when mergeable seg s u ->
+        | Some ({ g_kind = `Normal; _ } as seg), `Normal, Some s
+          when mergeable seg s u && not (splits_from_user seg u tl) ->
             go (Some (merge_segs ~kind:`Normal seg (seg_of_unit u))) acc tl
         | Some ({ g_kind = `Zeros; _ } as seg), `Zeros, Some s
           when (not (mat_conflict plc seg s))
@@ -8648,7 +8697,9 @@ let default_schedule_fingerprint ~backend_name =
         "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
       let mp = Utils.registered_int ~arg_name:"cpu_schedule_min_parallel" in
-      [%string "cpu:fission=%{fission#Bool}:min_parallel=%{mp#Int}"]
+      (* [scratch-chains-v1] (gh-ocannl-1343): scratch-writing nests take chains, and a scratch
+         node's whole-node zero joins the segment of its accumulation. *)
+      [%string "cpu:policy=scratch-chains-v1:fission=%{fission#Bool}:min_parallel=%{mp#Int}"]
 
 let maybe_default_schedule ~backend_name ?(limits = Backend_intf.no_hardware_limits) ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized =

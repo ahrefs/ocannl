@@ -4643,6 +4643,42 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1343: the default CPU pipeline parallelizes a matmul whose product is a non-materialized
+; intermediate (fission keeps a scratch zero with its accumulation; default_cpu takes chains from
+; scratch writes), with parity against the unscheduled compile.
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
+ (name cpu_scratch_matmul_grid)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules cpu_scratch_matmul_grid)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1003 stage 1: the default GPU annotator's lane geometry for the online-softmax hoist's
 ; value pass, executed against exact references and pinned in the emitted kernel.
 
