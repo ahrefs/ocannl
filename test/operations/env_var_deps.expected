@@ -200,6 +200,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test lowered_nest_order: Ir.Schedule.apply
   test/operations/dune, test matmul_interchange: Ir.Schedule.apply
   test/operations/dune, test metal_threadgroup_overflow: Ir.Schedule.apply
+  test/operations/dune, test mma_operand_loads: Ir.Schedule.apply
   test/operations/dune, test mma_tensorization_label: Ir.Schedule.apply
   test/operations/dune, test narrow_storage_compute: Ir.Schedule.apply
   test/operations/dune, test online_softmax_block: Ir.Schedule.apply

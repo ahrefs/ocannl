@@ -727,9 +727,11 @@ files.
   fp8's `ldmatrix.b16` eligibility remains one-sided: A row-major and B transposed.
   Other shared-swizzled orientations gather bytes through the b128 XOR address map,
   so the row-major staged twin uses `ldmatrix` for A and gathers for B. A gather-only
-  statement is tensorized but has no `ldmatrix`; CUDA's `mma_ldmatrix_operands` drives
-  both load emission and `mma_uses_ldmatrix` for the census, rather than inferring the
-  instruction from the layout. `schedule_ldmatrix_matmul` pins both gather-only orientations.
+  statement is tensorized but has no `ldmatrix`; `Cuda_mma.arm_ldmatrix_operands` drives
+  load emission, the census and the `mma_operand_loads` capability the cost model reads
+  (gh-ocannl-1254), rather than any of them inferring the instruction from the layout.
+  `schedule_ldmatrix_matmul` pins both gather-only orientations; `mma_operand_loads` pins the
+  capability against the emitted forms.
   Timed (gh-ocannl-1190, sm_120, 16x32x32 tile, 128 k_o blocks): in the resident scope the
   swizzled fp8 twin is 12.2% faster than the plain one (paired ratio 0.8775, every replicate
   under 0.883), unlike the neutral bf16 twin of gh-481. `tune` times both twins, so it needs no

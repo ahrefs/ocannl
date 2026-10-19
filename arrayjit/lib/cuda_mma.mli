@@ -85,6 +85,27 @@ val arm_ldmatrix_operands : arm -> ta:bool -> tb:bool -> a:bool -> b:bool -> boo
     use [ldmatrix] in both; wmma never. Shared by emission and its census, and the per-arm place an
     operand-load description for the cost model hangs (gh-ocannl-1254). *)
 
+val ldmatrix_eligible : Backend_intf.mma_operand_place -> bool
+(** Whether an operand can be loaded with [ldmatrix] at all (gh-ocannl-481 item 3): the swizzled
+    16-byte-unit layout in shared memory, the only combination whose per-lane row addresses
+    [ldmatrix] can both reach and de-conflict. The emission's eligibility test. *)
+
+val operand_loads :
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  d_prec:Ops.prec ->
+  ta:bool ->
+  tb:bool ->
+  a:Backend_intf.mma_operand_place ->
+  b:Backend_intf.mma_operand_place ->
+  bool * bool
+(** {!arm_ldmatrix_operands} of the per-statement arm ({!resolve_arm}) over each operand's
+    {!ldmatrix_eligible}: which operands an accepted call loads with [ldmatrix]. The backend's
+    [C_syntax_config.mma_operand_loads], so the rendering census and
+    {!Backend_intf.codegen_capabilities.mma_operand_loads} — what the cost model's load tie-break
+    reads (gh-ocannl-1254) — both answer with the emission's own rule. [(false, false)] for a triple
+    with no arm. *)
+
 (** {1 Per-arm rendering data} *)
 
 type wmma_info = {

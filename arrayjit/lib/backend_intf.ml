@@ -449,6 +449,12 @@ type mma_arm = {
     names — CUDA's tf32 arm reads f32 storage as tf32, and accumulates at exactly the f32 that
     [accum_prec] already reports for f32 with the policy off. *)
 
+type mma_operand_place = [ `Device | `Shared | `Thread ] * [ `Plain | `Swizzled_b128 ]
+(** Where a tile-MMA input operand lives and how it is laid out, as the emission hooks see it: the
+    address space the renderer classifies the node into (workgroup-shared, device-resident, or a
+    per-thread array) and its physical layout ([`Swizzled_b128] for a [Low_level.Swizzle_b128]
+    staged tile). What {!field-codegen_capabilities.mma_operand_loads} decides the load path by. *)
+
 type codegen_capabilities = {
   supports_f64 : bool;
       (** Whether the backend dialect can represent f64 tensor storage. This is explicit rather than
@@ -473,6 +479,23 @@ type codegen_capabilities = {
           combination table those hooks consult; [None] where the table has no arm for them. Only
           the precision- and policy-level choice: extents, strides, address spaces, layouts and the
           device can still make a call decline. *)
+  mma_operand_loads :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    a:mma_operand_place ->
+    b:mma_operand_place ->
+    bool * bool;
+      (** Which of the [a] and [b] operands the backend's per-statement mma arm for these storage
+          precisions loads with a warp-cooperative matrix load ([ldmatrix] on CUDA) rather than
+          per-lane gathers, given each operand's place and whether it is stored transposed
+          (gh-ocannl-1254). The very rule the emission and its rendering census apply (CUDA:
+          [Cuda_mma.operand_loads] over [Cuda_mma.arm_ldmatrix_operands]), so a cost model reading
+          it reads the decision the kernel makes. Like {!field-mma_arm}, only the arm- and
+          operand-level choice: a call the hook declines on extents or the device renders the scalar
+          fallback whatever this says. [(false, false)] on a backend without such a load. *)
   mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
           tiles, for a [(d, a, b)] storage triple: the backend's
@@ -502,6 +525,7 @@ let no_codegen_capabilities =
     accum_prec = Fn.id;
     asynchronous_staging_copy = false;
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
+    mma_operand_loads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
@@ -516,6 +540,11 @@ let no_codegen_capabilities =
     move exactly when the resolution does, on every backend, with nothing to add by hand. The record
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
     until it is rendered (warning 9).
+
+    [mma_operand_loads] is not rendered either (gh-ocannl-1254): which operands load through
+    [ldmatrix] is a fixed function of the arm, which the [mma] row below already renders, and of
+    each operand's transposition, space and layout, which are the schedule's own content and so
+    already in its canonical digest. Rendering it would add no discrimination, only re-tunes.
 
     The fields deliberately not rendered are [mma_scope_workgroup_bytes] and
     [lane_all_reduce_workgroup_bytes] (the same argument holds for both): it decides whether a
@@ -533,6 +562,7 @@ let codegen_capabilities_fingerprint
       accum_prec;
       asynchronous_staging_copy;
       mma_arm;
+      mma_operand_loads = _;
       mma_scope_workgroup_bytes = _;
       lane_all_reduce_workgroup_bytes = _;
     } =

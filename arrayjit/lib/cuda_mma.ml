@@ -156,6 +156,20 @@ let arm_ldmatrix_operands arm ~ta ~tb ~a ~b =
   | Inline_ptx (M16n8k16 _) -> (a, b)
   | Wmma _ -> (false, false)
 
+(* An operand [ldmatrix] can both reach and de-conflict: the swizzled 16-byte-unit layout in shared
+   memory. Everything else keeps per-lane gathers. *)
+let ldmatrix_eligible : Backend_intf.mma_operand_place -> bool = function
+  | `Shared, `Swizzled_b128 -> true
+  | (`Shared | `Device | `Thread), (`Plain | `Swizzled_b128) -> false
+
+(* The census and the cost model see no destination, so they read the per-statement arm. An accepted
+   update-only call whose fragment-scope arm differs (wide uniform f16's wmma) has plain operands,
+   wmma declining swizzled ones, so that arm's [(false, false)] is what this answers for it too. *)
+let operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a ~b =
+  match resolve_arm ~a_prec ~b_prec ~d_prec ~scope:Backend_intf.Mma_per_statement with
+  | None -> (false, false)
+  | Some arm -> arm_ldmatrix_operands arm ~ta ~tb ~a:(ldmatrix_eligible a) ~b:(ldmatrix_eligible b)
+
 let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
       {

@@ -230,6 +230,9 @@ test/operations/integer_power_domain.ml
     "powf("
 test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name: mutation or unseen buffer write]
     " := "
+test/operations/mma_operand_loads.ml
+    "ldmatrix.sync.aligned.m8n8.x2"
+    "ldmatrix.sync.aligned.m8n8.x4"
 test/operations/narrow_storage_compute.ml
     "0x7f800000"
     "0x7fffffff"

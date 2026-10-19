@@ -920,21 +920,25 @@ module type C_syntax_config = sig
       apply the emission.
 
       Accepting a [`Swizzled_b128] operand is a promise that it was consumed through a swizzle-aware
-      load. {!mma_uses_ldmatrix} distinguishes that instruction from swizzle-aware gathers in the
+      load. {!mma_operand_loads} distinguishes that instruction from swizzle-aware gathers in the
       rendering census. An arm without a swizzle-aware load must decline the call. *)
 
-  val mma_uses_ldmatrix :
+  val mma_operand_loads :
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->
     d_prec:Ops.prec ->
     ta:bool ->
     tb:bool ->
-    a:mma_source ->
-    b:mma_source ->
-    bool
-  (** Load-path census for an accepted {!mma_syntax} call. Shared-swizzled operands can also use
-      byte gathers, so layout alone cannot establish [ldmatrix] emission. Backends without that
-      instruction inherit [false]. *)
+    a:Backend_intf.mma_operand_place ->
+    b:Backend_intf.mma_operand_place ->
+    bool * bool
+  (** Which of an accepted {!mma_syntax} call's [a] and [b] operands load through a warp-cooperative
+      matrix load ([ldmatrix]) rather than per-lane gathers. Shared-swizzled operands can also use
+      byte gathers, so layout alone cannot establish [ldmatrix] emission: derive it from the rule
+      the emission itself applies. Read twice, so the two cannot drift: by the rendering census
+      ([Mma_intrinsics_ldmatrix] when either is [true]) and, published as
+      {!Backend_intf.codegen_capabilities.mma_operand_loads}, by the cost model's load tie-break
+      (gh-ocannl-1254). Backends without that instruction inherit [(false, false)]. *)
 
   val mma_arm :
     a_prec:Ops.prec ->
@@ -1018,6 +1022,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     accum_prec = Config.accum_prec;
     asynchronous_staging_copy = Option.is_some Config.async_copy;
     mma_arm = Config.mma_arm;
+    mma_operand_loads = Config.mma_operand_loads;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
        simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
@@ -2097,7 +2102,7 @@ struct
   (* No tile-MMA units on plain C backends: [Tile_mma] renders its scalar fallback under the [lane
      == 0] guard. *)
   let mma_syntax = None
-  let mma_uses_ldmatrix ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = false
+  let mma_operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
   let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0
@@ -5776,10 +5781,22 @@ module C_syntax (B : C_syntax_config) = struct
                 let b_ptr_doc, b_src = (operand_ptr b_op, operand_source b_op) in
                 match emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d:d_op ~a:a_src ~b:b_src with
                 | Some emission ->
-                    record
-                      (if B.mma_uses_ldmatrix ~a_prec ~b_prec ~d_prec ~ta ~tb ~a:a_src ~b:b_src then
-                         Mma_intrinsics_ldmatrix
-                       else Mma_intrinsics);
+                    (* An input operand is never a fragment: only [d] is ever addressed as one. *)
+                    let place ((_, space, layout) : mma_source) =
+                      match space with
+                      | (`Device | `Shared | `Thread) as space -> Some (space, layout)
+                      | `Fragment _ -> None
+                    in
+                    let uses_ldmatrix =
+                      match (place a_src, place b_src) with
+                      | Some a, Some b ->
+                          let a_ldm, b_ldm =
+                            B.mma_operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a ~b
+                          in
+                          a_ldm || b_ldm
+                      | _ -> false
+                    in
+                    record (if uses_ldmatrix then Mma_intrinsics_ldmatrix else Mma_intrinsics);
                     emission ~a_ptr:a_ptr_doc ~b_ptr:b_ptr_doc
                 | None ->
                     (declinef ctx) "Tile_mma intrinsics declined by the backend hook: %s"
