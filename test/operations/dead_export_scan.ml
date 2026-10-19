@@ -355,34 +355,33 @@ let exempt_zero_reference_exports =
        [normal], [kaiming], [xavier] -- are reached through [Nn_blocks.DSL_modules] re-exports this
        census does not follow. *)
     "Nn_blocks.avg_pool2d";
-    (* Shared implementation of batch_norm1d/2d, deliberately internal to Nn_blocks; an eventual
-       lib/ interface (gh-ocannl-1010) should hide this state-construction helper. *)
+    (* The state construction batch_norm1d/2d share. Published like every other block: by
+       gh-ocannl-1010's decision Nn_blocks has no interface to hide components in, and this one is
+       usable for a custom normalization over the same running-state semantics. *)
     "Nn_blocks.batch_norm_state";
     "Nn_blocks.box_muller";
-    "Nn_blocks.conv_bn_relu";
     "Nn_blocks.cross_attention";
     "Nn_blocks.decoder_only_block";
     "Nn_blocks.dropout";
-    "Nn_blocks.global_avg_pool2d";
     "Nn_blocks.kaiming";
     "Nn_blocks.kaiming_at";
     "Nn_blocks.kaiming_impl";
-    "Nn_blocks.mobile_cnn";
-    "Nn_blocks.multi_head_att_workshop";
     "Nn_blocks.normal";
     "Nn_blocks.normal1";
     "Nn_blocks.normal_at";
     "Nn_blocks.normal_at1";
     "Nn_blocks.reduce_specified_axes";
     "Nn_blocks.set_uint32_id";
-    "Nn_blocks.sokoban_cnn";
-    "Nn_blocks.transformer_decoder";
     "Nn_blocks.transformer_decoder_block";
-    "Nn_blocks.transformer_encoder";
     "Nn_blocks.vgg_block";
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";
+    (* gh-ocannl-1010 moved the complete demo architectures out of Nn_blocks into Demo_models; these
+       three have no runner in the tree. *)
+    "Demo_models.mobile_cnn";
+    "Demo_models.multi_head_att_workshop";
+    "Demo_models.sokoban_cnn";
     (* gh-ocannl-1085: until then an [include M] credited every value of [M], so these were
        invisible; now a use must spell the value through [M] or through a module including it. Not
        one of them has such a use. [Datatypes.hash_fold_safe_lazy] is live nonetheless: [Row]'s

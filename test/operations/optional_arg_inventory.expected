@@ -8,6 +8,16 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/calibrate.ml:working_set ?m -- implemented
   lib/calibrate.ml:working_set ?n -- implemented
   lib/calibrate.ml:working_set ?repeats -- implemented
+  lib/demo_models.ml:lenet ?label -- implemented
+  lib/demo_models.ml:lenet ?out_channels1 -- implemented
+  lib/demo_models.ml:lenet ?out_channels2 -- implemented
+  lib/demo_models.ml:lenet ?use_padding -- implemented
+  lib/demo_models.ml:mobile_cnn ?_width_mult -- unimplemented
+  lib/demo_models.ml:mobile_cnn ?num_classes -- implemented
+  lib/demo_models.ml:sokoban_cnn ?num_actions -- implemented
+  lib/demo_models.ml:transformer ?epsilon -- implemented
+  lib/demo_models.ml:transformer ?mask_fill -- implemented
+  lib/demo_models.ml:transformer ?pos_embed -- implemented
   lib/mixed_prec.ml:Loss_scaler.create ?backoff_factor -- implemented
   lib/mixed_prec.ml:Loss_scaler.create ?growth_factor -- implemented
   lib/mixed_prec.ml:Loss_scaler.create ?growth_interval -- implemented
@@ -58,18 +68,12 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/nn_blocks.ml:kaiming_at ?scale_sq -- implemented
   lib/nn_blocks.ml:kaiming_impl ?scale_sq -- implemented
   lib/nn_blocks.ml:layer_norm ?epsilon -- implemented
-  lib/nn_blocks.ml:lenet ?label -- implemented
-  lib/nn_blocks.ml:lenet ?out_channels1 -- implemented
-  lib/nn_blocks.ml:lenet ?out_channels2 -- implemented
-  lib/nn_blocks.ml:lenet ?use_padding -- implemented
   lib/nn_blocks.ml:max_pool2d ?stride -- implemented
   lib/nn_blocks.ml:max_pool2d ?use_padding -- implemented
   lib/nn_blocks.ml:max_pool2d ?window_size -- implemented
   lib/nn_blocks.ml:max_pool2d_copy ?stride -- implemented
   lib/nn_blocks.ml:max_pool2d_copy ?use_padding -- implemented
   lib/nn_blocks.ml:max_pool2d_copy ?window_size -- implemented
-  lib/nn_blocks.ml:mobile_cnn ?_width_mult -- unimplemented
-  lib/nn_blocks.ml:mobile_cnn ?num_classes -- implemented
   lib/nn_blocks.ml:multi_head_attention ?dropout_rate -- implemented
   lib/nn_blocks.ml:multi_head_attention ?mask -- implemented
   lib/nn_blocks.ml:multi_head_attention ?mask_fill -- implemented
@@ -79,16 +83,12 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/nn_blocks.ml:resnet_block ?stride -- implemented
   lib/nn_blocks.ml:rope_frequencies ?base -- implemented
   lib/nn_blocks.ml:softmax ?temperature -- implemented
-  lib/nn_blocks.ml:sokoban_cnn ?num_actions -- implemented
   lib/nn_blocks.ml:token_ids_of_array ?label -- implemented
   lib/nn_blocks.ml:token_ids_of_array ?max_len -- implemented
   lib/nn_blocks.ml:token_ids_of_array ?pad_id -- implemented
   lib/nn_blocks.ml:token_ids_of_batch ?label -- implemented
   lib/nn_blocks.ml:token_ids_of_batch ?max_len -- implemented
   lib/nn_blocks.ml:token_ids_of_batch ?pad_id -- implemented
-  lib/nn_blocks.ml:transformer ?epsilon -- implemented
-  lib/nn_blocks.ml:transformer ?mask_fill -- implemented
-  lib/nn_blocks.ml:transformer ?pos_embed -- implemented
   lib/nn_blocks.ml:transformer_decoder ?epsilon -- implemented
   lib/nn_blocks.ml:transformer_decoder ?mask_fill -- implemented
   lib/nn_blocks.ml:transformer_decoder ?pos_embed -- implemented
