@@ -7451,6 +7451,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; Every kernel a training step ships compiles and runs on its own, through the isolated per-kernel
+; instrument itself (gh-ocannl-1391). Runs a training step, so it takes the shared training lock.
+
+(test
+ (name shipped_kernels_alone)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules shipped_kernels_alone)
+ (libraries base stdio pprint bench_harness ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; The executable smoke test of the OCANNL benchmark measurement path (gh-ocannl-702). No fixture and
 ; no Python: `Bench_harness.run_self_test` fabricates a tiny model in memory and drives the whole of
 ; `measure_and_emit`, so a refactor of the emitter fails here rather than as a wrong benchmark

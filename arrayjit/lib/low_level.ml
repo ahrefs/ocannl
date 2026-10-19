@@ -9510,6 +9510,32 @@ let cached_analyze_proc (static_indices : Indexing.static_symbol list) (llc : t)
           analysis_cache := List.take ((key, an) :: !analysis_cache) analysis_cache_capacity;
           an)
 
+(* Whether a subtree holds a [Staged_compilation]: a callback emitting code no analysis can inspect
+   -- a scan containing one has no checkable contract, and a kernel holding one may read any node it
+   has a pointer to. *)
+let rec has_staged_compilation (llc : t) : bool =
+  match llc with
+  | Staged_compilation _ -> true
+  | Seq (a, b) -> has_staged_compilation a || has_staged_compilation b
+  | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> has_staged_compilation body
+  | If { cond = c, _; body } -> scalar_has_staged c || has_staged_compilation body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar_has_staged c.init) || has_staged_compilation body
+  | Set { llsc; _ } | Set_local (_, llsc) -> scalar_has_staged llsc
+  | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_staged v || scalar_has_staged llsc
+  | Set_from_vec { arg = a, _; _ } -> scalar_has_staged a
+  | Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> false
+
+and scalar_has_staged (llsc : scalar_t) : bool =
+  match llsc with
+  | Local_scope { body; _ } -> has_staged_compilation body
+  | Get_dynamic { dyn_value = v, _; _ } -> scalar_has_staged v
+  | Ternop (_, (a, _), (b, _), (c, _)) ->
+      scalar_has_staged a || scalar_has_staged b || scalar_has_staged c
+  | Binop (_, (a, _), (b, _)) -> scalar_has_staged a || scalar_has_staged b
+  | Unop (_, (a, _)) -> scalar_has_staged a
+  | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+
 (** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop}, as a message rather than an
     exception so both pipeline gates can phrase it. Checked per scan, at any nesting depth: the
     carried pair names one node DECLARED virtual ([known_virtual], not merely undecided -- an
@@ -9524,31 +9550,7 @@ let cached_analyze_proc (static_indices : Indexing.static_symbol list) (llc : t)
 let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
   let exception Malformed of string in
   let name (id : scope_id) = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
-  (* Whether a subtree holds a [Staged_compilation]: a callback emitting code none of the counts
-     below can inspect, so a scan containing one has no checkable contract. *)
-  let rec has_staged (llc : t) : bool =
-    match llc with
-    | Staged_compilation _ -> true
-    | Seq (a, b) -> has_staged a || has_staged b
-    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> has_staged body
-    | If { cond = c, _; body } -> scalar_has_staged c || has_staged body
-    | Scan_loop { carried; body; _ } ->
-        List.exists carried ~f:(fun c -> scalar_has_staged c.init) || has_staged body
-    | Set { llsc; _ } | Set_local (_, llsc) -> scalar_has_staged llsc
-    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_staged v || scalar_has_staged llsc
-    | Set_from_vec { arg = a, _; _ } -> scalar_has_staged a
-    | Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> false
-  and scalar_has_staged (llsc : scalar_t) : bool =
-    match llsc with
-    | Local_scope { body; _ } -> has_staged body
-    | Get_dynamic { dyn_value = v, _; _ } -> scalar_has_staged v
-    | Ternop (_, (a, _), (b, _), (c, _)) ->
-        scalar_has_staged a || scalar_has_staged b || scalar_has_staged c
-    | Binop (_, (a, _), (b, _)) -> scalar_has_staged a || scalar_has_staged b
-    | Unop (_, (a, _)) -> scalar_has_staged a
-    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-        false
-  in
+  let has_staged = has_staged_compilation in
   (* Every scope id a subtree mentions -- binders, reads and writes -- at any depth. *)
   let rec scope_ids_in (llc : t) : scope_id list =
     match llc with

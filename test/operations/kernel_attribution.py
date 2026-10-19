@@ -89,9 +89,10 @@ with tempfile.TemporaryDirectory() as scratch:
     check(by[0]["iso_min"] == 1.0 and by[1]["iso_min"] == 3.0, str(rows))
     print("the isolated warmup run is not an isolated timing: true")
     check(by[0]["flags"] == [] and by[3]["flags"] == [] and by[4]["flags"] == [], str(rows))
-    check(by[1]["flags"] == ["ISO"], str(by[1]))
+    check(by[1]["flags"] == ["ISO", "OWN"], str(by[1]))
     check(by[2]["flags"] == ["SPREAD"], str(by[2]))
     print("ISO flags an isolated time off its in-step one, SPREAD a wide in-step spread: true")
+    print("with a common factor of 1, OWN flags exactly what ISO does: true")
 
     text = io.StringIO()
     with contextlib.redirect_stdout(text):
@@ -127,6 +128,40 @@ with tempfile.TemporaryDirectory() as scratch:
     check(code == 0 and "2 cells of one kernel list" in text and "fill1-kprof1" in text, text)
     check("3 cells" not in text, text)
     print("a cell that shipped other kernels is attributed but compared with none: true")
+
+with tempfile.TemporaryDirectory() as scratch:
+    # A capped step (gh-ocannl-1391): every kernel of >= 0.5 ms runs 1.2x its isolated minimum
+    # in-step, and kernel 4, below the factor's population floor, 1.6x. One step of the window runs
+    # 1.4x throughout, so the per-step factor has a spread to report.
+    out = Path(scratch)
+    iso = {0: [1.0] * 20, 1: [2.0] * 20, 2: [1.0] * 20, 3: [0.5] * 20, 4: [0.25] * 20}
+    capped = {i: [v[0] * 1.2] * 3 + [v[0] * 1.4] for i, v in iso.items()}
+    capped[4] = [0.4] * 4
+    stem = "cuda-gpt2_mini_train_b256-base-kprof1"
+    write_cell(out, stem, in_step=capped, isolated=iso)
+    _, rows = ka.attribute(out, stem + ".out")
+    by = {r["i"]: r for r in rows}
+    check(all(by[i]["flags"] == ["ISO", "SPREAD"] for i in range(4)), str(rows))
+    check(by[4]["flags"] == ["ISO", "OWN"], str(by[4]))
+    print("a step-wide clock factor is ISO but not OWN; a kernel's own deviation beyond it is: true")
+    text = io.StringIO()
+    with contextlib.redirect_stdout(text):
+        ka.report(str(out))
+    text = text.getvalue()
+    check("common in-step/isolated factor F = 1.200 (median over the 4 kernels of >= 0.5 ms"
+          " in-step; per-step factor p10..p90 1.200..1.400)" in text, text)
+    check("- OWN (isolated x F off in-step by >10%): 1 kernels, 0.40 ms in-step" in text, text)
+    print("the report states the factor, its per-step spread and the OWN share: true")
+    small = {i: [0.1] * 4 for i in iso}
+    write_cell(out, stem, in_step=small, isolated={i: [0.05] * 20 for i in iso})
+    _, rows = ka.attribute(out, stem + ".out")
+    check(all("OWN" not in r["flags"] and "ISO" in r["flags"] for r in rows), str(rows))
+    text = io.StringIO()
+    with contextlib.redirect_stdout(text):
+        ka.report(str(out))
+    check("common in-step/isolated factor: none (fewer than 3 kernels" in text.getvalue(),
+          text.getvalue())
+    print("without enough sizeable kernels there is no factor, and OWN flags nothing: true")
 
 with tempfile.TemporaryDirectory() as scratch:
     out = Path(scratch)
