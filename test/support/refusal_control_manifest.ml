@@ -566,7 +566,7 @@ let raw_entries =
         "[scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal";
         "[scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim";
         "[scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim";
-        "[scanner-refusal:b743906541a11550a0513ec369b96184] which reads";
+        "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
@@ -581,9 +581,10 @@ let raw_entries =
         "[scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail";
         "[scanner-refusal:df1860b788314bd677ee963aff3f8186] label literal carries";
         "[scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-break reader read";
+        "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
-        "[scanner-refusal:567b8c220b002e1bb52a75940f43f392] Verdict.Claims";
+        "[scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
         "[scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted";
         "[scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on";

@@ -63,6 +63,7 @@
   dune_stanza_scan
   lifecycle_scan
   slot_kind
+  verdict_callee
   verdict_scan
   verdict_provenance
   generated

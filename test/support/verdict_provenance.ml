@@ -202,6 +202,8 @@ and function_closure = {
   loose : bool;
       (** A format-taking claim whose format was not a literal: the last unlabelled argument of the
           next application is taken as the claimed value. *)
+  ambiguous : bool;
+      (** A native claim {!Verdict_callee} resolved as [Ambiguous]: the claims it fires carry it. *)
 }
 
 and parameter = {
@@ -218,6 +220,9 @@ and claim = {
   helper : string option;
       (** The local wrapper the claim fired through, if any; a native claim's direct quantifiers are
           named by the label instead. *)
+  ambiguous : bool;
+      (** The claim function was [Verdict]'s only past an [open] of a module {!Verdict_callee}
+          cannot read, which may export a claim name or a [Verdict] module of its own. *)
 }
 
 and label = Label_slot of binding | Label_expr of expression
@@ -621,18 +626,9 @@ let collection_quantifier path =
       else None
   | _ -> None
 
-let claim_kind_of_path = function
-  | "Verdict" :: _ as path -> (
-      match List.last path with
-      | Some "p" -> Some P
-      | Some "pf" -> Some Pf
-      | Some "pass_fail" -> Some Pass_fail
-      | Some "gated" -> Some Gated
-      | Some "claim" -> Some Claim
-      | Some "claimf" -> Some Claimf
-      | _ -> None)
-  | _ -> None
-
+(* The [Verdict.Claims] members whose last argument is the claimed Boolean, by kind. Whether an
+   identifier naming one IS [Verdict]'s is {!Verdict_callee}'s answer, the resolver every Verdict
+   reader shares. *)
 let claim_kinds =
   [
     ("p", P);
@@ -813,6 +809,7 @@ type context = {
       (** Applications of a parameter made inside the function being analysed. *)
   mutated : Set.M(String).t;
       (** The fields some assignment in the file writes; see [mutated_fields]. *)
+  owners : Verdict_callee.t;  (** Whose each claim name in the file is. *)
 }
 
 (* Unknown opens may replace implicit Boolean operator names. Keep this fact in the lexical
@@ -934,7 +931,7 @@ let tag_via label provenance =
 
 (* [Verdict.p label value], and the other two-slot claim forms: a closure whose one claim is its
    value slot, labelled by its label slot. *)
-let native_claim kind ~site =
+let native_claim kind ~site ~ambiguous =
   let slot name = parameter_binding ~name ~site in
   let parameter name =
     let slot = slot name in
@@ -949,6 +946,7 @@ let native_claim kind ~site =
           label = Label_slot label.slot;
           value = (parameter_provenance value.slot).when_true;
           helper = None;
+          ambiguous;
         }
       in
       Function
@@ -960,6 +958,7 @@ let native_claim kind ~site =
           native = true;
           format = false;
           loose = false;
+          ambiguous;
         }
   | Pf | Claimf ->
       Function
@@ -971,11 +970,12 @@ let native_claim kind ~site =
           native = true;
           format = true;
           loose = false;
+          ambiguous;
         }
 
 (* The closure a format literal turns [Verdict.pf fmt] into: one slot per argument the format
    consumes, then the value slot. A `%a` takes two, and a `*` width or precision one more each. *)
-let format_claim ~site format_expression =
+let format_claim ~site ~ambiguous format_expression =
   let slot name =
     { slot = parameter_binding ~name ~site; label = Asttypes.Nolabel; patterns = []; names = [] }
   in
@@ -986,6 +986,7 @@ let format_claim ~site format_expression =
       label = Label_expr format_expression;
       value = (parameter_provenance value.slot).when_true;
       helper = None;
+      ambiguous;
     }
   in
   match Read.string_literal format_expression with
@@ -1014,6 +1015,7 @@ let format_claim ~site format_expression =
         native = true;
         format = false;
         loose = false;
+        ambiguous;
       }
   | None ->
       {
@@ -1024,6 +1026,7 @@ let format_claim ~site format_expression =
         native = true;
         format = false;
         loose = true;
+        ambiguous;
       }
 
 let quantifier_function ?(stdlib = false) kind =
@@ -1066,10 +1069,13 @@ let quantifier kind populations ~written =
       }
 
 (* What `open Verdict.Claims`, `open List` and `module L = List` bring into scope: the native
-   closures under their unqualified names. *)
-let claim_exports ~site =
+   closures under their unqualified names. Whether a module path denotes [Verdict] is
+   {!Verdict_callee}'s answer; these bindings carry it where that lexical resolver cannot follow,
+   into a functor's body through its application. *)
+let claim_exports ~site ~ambiguous =
   List.map claim_kinds ~f:(fun (name, kind) ->
-      make_binding ~name ~site (Resolved { nothing with closure = Some (native_claim kind ~site) }))
+      make_binding ~name ~site
+        (Resolved { nothing with closure = Some (native_claim kind ~site ~ambiguous) }))
 
 let quantifier_exports ~site ~stdlib =
   List.filter_map quantifier_members ~f:(fun name ->
@@ -1556,9 +1562,23 @@ and fallback ctx expr =
   iterator#children expr
 
 and resolve ctx expr =
-  match Read.longident_of expr with
-  | None -> nothing
-  | Some path -> (
+  let native =
+    match Verdict_callee.resolve ctx.owners expr with
+    | Some { member; ownership = (Verdict_callee.Verdicts | Ambiguous) as ownership; _ } ->
+        Option.map (List.Assoc.find claim_kinds member ~equal:String.equal) ~f:(fun kind ->
+            {
+              nothing with
+              closure =
+                Some
+                  (native_claim kind ~site:(site_of_location expr.pexp_loc)
+                     ~ambiguous:(Poly.equal ownership Verdict_callee.Ambiguous));
+            })
+    | Some _ | None -> None
+  in
+  match (native, Read.longident_of expr) with
+  | Some claim, _ -> claim
+  | None, None -> nothing
+  | None, Some path -> (
       let binary_operator =
         match List.last path with
         | Some ("&&" | "||" | ">" | ">=" | "<" | "<=") -> true
@@ -1606,6 +1626,7 @@ and resolve ctx expr =
                 native = false;
                 format = false;
                 loose = false;
+                ambiguous = false;
               }
         in
         { nothing with closure = Some closure }
@@ -1619,20 +1640,11 @@ and resolve ctx expr =
           else nothing
       | Some binding -> own binding (resolve_binding binding)
       | None -> (
-          match claim_kind_of_path path with
-          | Some kind ->
-              {
-                nothing with
-                closure = Some (native_claim kind ~site:(site_of_location expr.pexp_loc));
-              }
-          | None
-            when match path with
-                 | [ ("&&" | "||" | ">" | ">=" | "<" | "<=") ]
-                 | [ ("Stdlib" | "Base"); ("&&" | "||" | ">" | ">=" | "<" | "<=") ] ->
-                     true
-                 | _ -> false ->
+          match path with
+          | [ ("&&" | "||" | ">" | ">=" | "<" | "<=") ]
+          | [ ("Stdlib" | "Base"); ("&&" | "||" | ">" | ">=" | "<" | "<=") ] ->
               primitive ()
-          | None when Option.equal String.equal (List.last path) (Some "not") ->
+          | _ when Option.equal String.equal (List.last path) (Some "not") ->
               let slot = parameter_binding ~name:"x" ~site:(site_of_location expr.pexp_loc) in
               {
                 nothing with
@@ -1648,9 +1660,10 @@ and resolve ctx expr =
                          native = false;
                          format = false;
                          loose = false;
+                         ambiguous = false;
                        });
               }
-          | None -> (
+          | _ -> (
               match collection_quantifier path with
               | Some (kind, stdlib) -> quantifier_function ~stdlib kind
               | None -> nothing)))
@@ -1867,6 +1880,7 @@ and function_closure ctx parameters body =
              native = false;
              format = false;
              loose = false;
+             ambiguous = false;
            });
   }
 
@@ -2131,7 +2145,7 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
       | None -> { nothing with closure = Some (Function closure) }
       | Some (_, format) ->
           discard_unless_valued format;
-          let expanded = format_claim ~site format in
+          let expanded = format_claim ~site ~ambiguous:closure.ambiguous format in
           let rest =
             List.filter arguments ~f:(fun (label, argument) ->
                 not
@@ -2447,6 +2461,7 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
                    native = false;
                    format = false;
                    loose = false;
+                   ambiguous = false;
                  });
         }
 
@@ -2524,18 +2539,21 @@ and module_exports ctx module_expr =
                 |> Option.map ~f:(fun name -> { binding with name }))
           with
           | _ :: _ as local -> local
-          | [] ->
-              if
-                List.equal String.equal path [ "Verdict"; "Claims" ]
-                || List.equal String.equal path [ "Verdict" ]
-              then claim_exports ~site
-              else if is_collection_module path then
-                quantifier_exports ~site ~stdlib:(stdlib_path path)
-              else if
-                List.equal String.equal path [ "Base" ] || List.equal String.equal path [ "Stdlib" ]
-              then [ make_binding ~name:unknown_boolean_exports ~site (Resolved (constant true)) ]
-              else [ make_binding ~name:unknown_boolean_exports ~site (Resolved (constant false)) ])
-      )
+          | [] -> (
+              match Verdict_callee.module_ownership ctx.owners module_expr with
+              | (Verdict_callee.Verdicts | Ambiguous) as ownership ->
+                  claim_exports ~site ~ambiguous:(Poly.equal ownership Verdict_callee.Ambiguous)
+              | Free | Not_verdicts ->
+                  if is_collection_module path then
+                    quantifier_exports ~site ~stdlib:(stdlib_path path)
+                  else if
+                    List.equal String.equal path [ "Base" ]
+                    || List.equal String.equal path [ "Stdlib" ]
+                  then
+                    [ make_binding ~name:unknown_boolean_exports ~site (Resolved (constant true)) ]
+                  else
+                    [ make_binding ~name:unknown_boolean_exports ~site (Resolved (constant false)) ]
+              )))
   | Pmod_functor (_, body) ->
       (* The functor's body, its parameter unresolved: what an application of it exports. *)
       module_exports ctx body
@@ -2637,6 +2655,7 @@ let claims structure =
       found = ref [];
       pending_calls = ref [];
       mutated = mutated_fields structure;
+      owners = Verdict_callee.of_structure structure;
     }
   in
   ignore (scan_structure ctx structure : binding list * binding list);
