@@ -2,11 +2,11 @@
    collapsed into a count on the C runtime's stderr, and nothing else it carries is touched.
 
    An assertions-enabled ROCr (Ubuntu 26.04's libhsa-runtime64 7.1.0, on an APU) prints that line
-   once per recorded event -- about 2,000 for one autotuning test. gh-ocannl-1031 already keeps it
-   out of ppx_expect goldens, but it still filled the run log, and Dune truncates a long action
-   output from the middle, so a HIP test's own SKIPPED lines and diagnostics were what went missing.
-   The HIP backend now forces [Utils.c_stderr_noise_collapsed] before it initializes the runtime,
-   which replaces the C stream by one that writes the first such line, a note, and at exit a count.
+   once per recorded event -- 268,172 for one autotuning test. gh-ocannl-1031 already keeps it out
+   of ppx_expect goldens, but it still filled the run log, and Dune truncates a long action output
+   from the middle, so a HIP test's own SKIPPED lines and diagnostics were what went missing. The
+   HIP backend now forces [Utils.c_stderr_noise_collapsed] when it opens a device, which replaces
+   the C stream by one that writes the first such line, a note, and at exit a count.
 
    The line is only ever printed at exit or by a foreign library, so it is observed from outside:
    this parent runs [foreign_c_stderr_noise_child] -- which installs the stream the way the HIP
@@ -31,18 +31,20 @@ let scripted stderr_text =
   | Some i -> String.drop_prefix text i
   | None -> ""
 
-let run_child setting =
+let run_child ?(close = false) setting =
   let ((status, stdout_text, stderr_text) as child) =
     Fresh_process.run ~exe:child_exe
-      [ "--ocannl_collapse_foreign_stderr_noise=" ^ Bool.to_string setting ]
+      ([ "--ocannl_collapse_foreign_stderr_noise=" ^ Bool.to_string setting ]
+      @ if close then [ "close" ] else [])
   in
   (match status with
   | Unix.WEXITED 0 -> ()
   | _ -> Fresh_process.report ~label:("child, collapsing " ^ Bool.to_string setting) child);
   let installed = String.is_substring stdout_text ~substring:"stream: collapsing" in
   let text = scripted stderr_text in
-  eprintf "child's stderr with collapsing %s, from the marker (not part of the golden):\n%s\n%!"
+  eprintf "child's stderr with collapsing %s%s, from the marker (not part of the golden):\n%s\n%!"
     (if setting then "on" else "off")
+    (if close then ", then fclose(stderr)" else "")
     (Fresh_process.prefixed (String.rstrip text));
   (status, installed, text)
 
@@ -52,6 +54,7 @@ let ocannl_line l = String.is_prefix l ~prefix:"OCANNL: "
 let () =
   let status_on, installed_on, on = run_child true in
   let status_off, installed_off, off = run_child false in
+  let status_closed, _, closed = run_child ~close:true true in
   let exited_cleanly = function Unix.WEXITED 0 -> true | _ -> false in
   p "both children exit normally" (exited_cleanly status_on && exited_cleanly status_off);
   (* The negative control: every scripted write reaches stderr unchanged when the setting is off,
@@ -97,4 +100,10 @@ let () =
     && Option.value_map
          (List.last (lines on))
          ~default:false
-         ~f:(fun l -> ocannl_line l && String.is_substring l ~substring:summary))
+         ~f:(fun l -> ocannl_line l && String.is_substring l ~substring:summary));
+  (* An [fclose(stderr)] after the writes: the close callback reports the count and retires the exit
+     hook, so the child exits normally with exactly what it would have written at exit. *)
+  gated ~aggregation:`Environment ~when_ ~on:on_
+    ~detail:(fun () -> Printf.sprintf "the child's stderr was %S" closed)
+    "with collapsing on, closing the C stream reports the count and the process still exits cleanly"
+    (exited_cleanly status_closed && String.equal closed on)

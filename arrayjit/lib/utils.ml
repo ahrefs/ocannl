@@ -2253,14 +2253,14 @@ external collapse_c_stderr_noise : unit -> bool = "ocannl_collapse_c_stderr_nois
     Reports whether it took effect (glibc and Darwin only). Idempotent.
 
     {!c_stderr_detached} keeps the line out of a ppx_expect golden, but not off the run log, where
-    an assertions-enabled ROCr prints one per recorded event -- about 2,000 for one autotuning test
-    -- and Dune truncates a long action output from the middle, which is where the test's own
+    an assertions-enabled ROCr prints one per recorded event -- 268,172 for one autotuning test --
+    and Dune truncates a long action output from the middle, which is where the test's own
     diagnostics were. *)
 
 (** Whether the C runtime's [stderr] collapses the ROCm runtime's per-event chatter, installing the
     filter on first force when [collapse_foreign_stderr_noise] (default true) asks for it. The HIP
-    backend forces it before initializing the runtime; nothing else does, so no other process's C
-    stream is replaced. *)
+    backend forces it when it opens a device, before creating its stream; nothing else does, so no
+    other process's C stream is replaced. *)
 let c_stderr_noise_collapsed =
   lazy
     (get_global_flag ~default:true ~arg_name:"collapse_foreign_stderr_noise"

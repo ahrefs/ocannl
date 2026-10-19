@@ -364,17 +364,20 @@ configuration.
   at the stream seam instead (`Utils.c_stderr_detached`, gh-ocannl-1031). A 30-line pure-HIP
   program reproduces it in one line per recorded event, with none when no event is recorded; reach
   for that shape before suspecting OCANNL's event discipline. It is an APU symptom: on gfx1151
-  (minix) one autotuning test prints about 2,000, while the discrete card on tuf, with the identical
+  (minix) one autotuning test prints 268,172 (Dune kept ~2,000 of them), while the discrete card on tuf, with the identical
   package, writes valid timestamps and prints none. Detaching kept it out of goldens but not off the
   run log, where Dune truncates a long action output from the middle and the test's own SKIPPED
-  lines went with it, so since gh-ocannl-1370 the HIP backend, before `H.init`, also forces
+  lines went with it, so since gh-ocannl-1370 the HIP backend, when `get_device` opens a device (before its stream), also forces
   `Utils.c_stderr_noise_collapsed` (`collapse_foreign_stderr_noise`, default true): the C stream
   becomes a cookie stream (`fopencookie`/`funopen`) over the same descriptor that writes the first
   such line, one note, and a count from an exit-time destructor, and writes every other byte
   through at once. The destructor runs from `_dl_fini`, after every `atexit` handler including the
   stream teardown below, which is when ROCclr prints most of them, but before the shared libraries'
   own destructors: a line printed there is written through, uncounted. `fileno(stderr)` reads -1 once it
-  is installed. Only the HIP backend installs it.
+  is installed, and a cookie stream cannot be wide-oriented, so an already wide-oriented C stderr
+  is left alone; an `fclose(stderr)` reports the count at the close (the close callback), so the
+  destructor never touches a freed FILE. Only the HIP backend installs it, and only on opening a
+  device, so a process that probed HIP and fell back keeps its C stream.
 - `Warning: Resource leak detected by SharedSignalPool, 77 Signals leaked.` on a hip run exit is
   the per-device HIP stream never being destroyed, not leaked events: the same pure-HIP probe
   reports exactly 77 whatever the iteration count when it skips `hipStreamDestroy`, and a count

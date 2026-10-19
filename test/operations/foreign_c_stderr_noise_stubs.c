@@ -14,3 +14,10 @@ CAMLprim value ocannl_test_noise_c_stderr(value s) {
   fflush(stderr);
   CAMLreturn(Val_unit);
 }
+
+/* [fclose(stderr)], which foreign code may do (daemonizing, silencing C diagnostics). */
+CAMLprim value ocannl_test_noise_close_c_stderr(value unit) {
+  (void)unit;
+  fclose(stderr);
+  return Val_unit;
+}

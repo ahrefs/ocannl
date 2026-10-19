@@ -1012,15 +1012,16 @@
 # is not assignable (Windows).
 #detach_c_stderr=true
 
-# If true (the default), the HIP backend, before it initializes the ROCm runtime, replaces the C
+# If true (the default), the HIP backend, when it opens a device (before its stream), replaces the C
 # runtime's stderr by a stream that collapses ROCr's `Signal 0x... time stamps may be invalid.`
 # lines into a count: the first is printed with a note that later ones are counted, and the count
 # is reported in one line at exit (gh-ocannl-1370). An assertions-enabled ROCr (Ubuntu 26.04's
-# libhsa-runtime64 7.1.0 on an APU) prints one per recorded event, about 2,000 for one autotuning
+# libhsa-runtime64 7.1.0 on an APU) prints one per recorded event, 268,172 for one autotuning
 # test, and Dune truncates a long action output from the middle, dropping the test's own
 # diagnostics. Every other byte foreign C code writes passes through at once and in order, to the
 # same descriptor `detach_c_stderr` chose. Set to false to see each line. No effect off glibc and
-# Darwin, or in a process that never initializes HIP.
+# Darwin, in a process that never opens a HIP device, or where the C stderr is already
+# wide-oriented (a cookie stream cannot be).
 #collapse_foreign_stderr_noise=true
 
 # If `false`, debug logs from routines are re-logged via the ppx_minidebug framework.

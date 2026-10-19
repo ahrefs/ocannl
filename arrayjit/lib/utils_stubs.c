@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #if !defined(_WIN32)
 #include <errno.h>
@@ -156,7 +157,7 @@ CAMLprim value ocannl_detach_c_stderr(value unit) {
    runtime's [stderr] into a count (gh-ocannl-1370).
 
    [ocannl_detach_c_stderr] keeps that chatter out of a ppx_expect golden, but it still reaches the
-   process's real stderr -- about 2,000 lines for one autotuning test on an assertions-enabled ROCr
+   process's real stderr -- 268,172 lines for one autotuning test on an assertions-enabled ROCr
    (gfx1151; a discrete card writes valid timestamps and prints none) -- and Dune truncates a long
    action output from the middle, so the test's own diagnostics (SKIPPED lines, per-claim output,
    a `cold search` line) were the part that went missing. No switch reaches the print (see
@@ -175,7 +176,9 @@ CAMLprim value ocannl_detach_c_stderr(value unit) {
    [detach_c_stderr] is off -- in which case it keeps following fd 2, as that setting promises.
    Its FILE has no descriptor of its own, so [fileno(stderr)] reads -1 afterwards; nothing in the
    ROCm stack writes to [fileno(stderr)] directly, and the stream is installed only by the HIP
-   backend (see [Utils.c_stderr_noise_collapsed]). Writes through the FILE are serialized by its
+   backend, on opening a device (see [Utils.c_stderr_noise_collapsed]). A cookie stream cannot be
+   wide-oriented, so a C stream already wide-oriented is not replaced; an [fclose(stderr)] reports
+   the count at the close. Writes through the FILE are serialized by its
    lock, which is what makes the filter state safe from the runtime's own threads. */
 
 #ifdef OCANNL_C_STDERR_REPLACEABLE
@@ -263,20 +266,16 @@ static void ocannl_noise_filter(const char *buf, size_t n) {
   }
 }
 
-/* After every [atexit] handler -- among them OCANNL's own exit teardown of the HIP streams, which
-   is when ROCclr prints most of these -- since glibc runs the executable's destructors from
-   [_dl_fini], the earliest-registered exit handler. The shared libraries' own destructors run after
-   the executable's, so a line one of them prints is written through, uncounted, rather than lost. */
-__attribute__((destructor)) static void ocannl_noise_summary(void) {
+/* Write out a held prefix and the count, and stop collapsing: anything written afterwards passes
+   through, uncounted. The caller holds the stream's lock. */
+static void ocannl_noise_finish(void) {
   char line[256];
-  if (!ocannl_noise.installed) return;
-  flockfile(ocannl_noise.stream);
   if (ocannl_noise.held_len > 0) {
     ocannl_noise_write_all(ocannl_noise.held, ocannl_noise.held_len);
     ocannl_noise.held_len = 0;
     ocannl_noise.passthrough = 1;
   }
-  if (ocannl_noise.seen > 1) {
+  if (ocannl_noise.seen > 1 && !ocannl_noise.summarized) {
     snprintf(line, sizeof line,
              "OCANNL: collapsed %lu further `Signal 0x... time stamps may be invalid.` lines from "
              "the ROCm runtime (gh-ocannl-1370)\n",
@@ -284,7 +283,30 @@ __attribute__((destructor)) static void ocannl_noise_summary(void) {
     ocannl_noise_puts(line);
   }
   ocannl_noise.summarized = 1;
+}
+
+/* After every [atexit] handler -- among them OCANNL's own exit teardown of the HIP streams, which
+   is when ROCclr prints most of these -- since glibc runs the executable's destructors from
+   [_dl_fini], the earliest-registered exit handler. The shared libraries' own destructors run after
+   the executable's, so a line one of them prints is written through, uncounted, rather than lost.
+   A stream some code has [fclose]d is not touched: its close callback already summarized and
+   cleared [installed], and its FILE is gone. */
+__attribute__((destructor)) static void ocannl_noise_summary(void) {
+  if (!ocannl_noise.installed) return;
+  flockfile(ocannl_noise.stream);
+  ocannl_noise_finish();
   funlockfile(ocannl_noise.stream);
+}
+
+/* [fclose(stderr)] is valid foreign code (daemonizing, silencing C diagnostics). The descriptor is
+   not closed -- the replaced FILE owns it -- but the count is reported now, since the exit hook
+   must not reach the freed FILE. Called by the C library with the stream's lock held. */
+static int ocannl_noise_cookie_close(void *cookie) {
+  (void)cookie;
+  ocannl_noise_finish();
+  ocannl_noise.installed = 0;
+  ocannl_noise.stream = NULL;
+  return 0;
 }
 
 #if defined(__GLIBC__)
@@ -309,16 +331,21 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
     FILE *replacement;
     int fd;
     if (ocannl_noise.installed) return Val_true;
+    /* A cookie stream is byte-oriented only (glibc gives it no wide-character buffer), so a C
+       stream some code has already made wide-oriented is left alone rather than replaced by one
+       that would make its next [fwprintf] fail. An unoriented stream is the normal case: the first
+       write orients it, and ROCr's own [fprintf] makes it byte-oriented either way. */
+    if (fwide(stderr, 0) > 0) return Val_false;
     fflush(stderr);
     fd = fileno(stderr);
     if (fd < 0) return Val_false;
 #if defined(__GLIBC__)
     {
-      cookie_io_functions_t io = {NULL, ocannl_noise_cookie_write, NULL, NULL};
+      cookie_io_functions_t io = {NULL, ocannl_noise_cookie_write, NULL, ocannl_noise_cookie_close};
       replacement = fopencookie(NULL, "w", io);
     }
 #else
-    replacement = funopen(NULL, NULL, ocannl_noise_cookie_write, NULL, NULL);
+    replacement = funopen(NULL, NULL, ocannl_noise_cookie_write, NULL, ocannl_noise_cookie_close);
 #endif
     if (replacement == NULL) return Val_false;
     setvbuf(replacement, NULL, _IONBF, 0);
