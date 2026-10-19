@@ -754,8 +754,10 @@ let () =
       if n % 2 = 1 then sorted.(n / 2) else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
     in
     let g t = lv.lv_flops /. t /. 1e9 in
-    (* Nearest-rank quantiles of the batch times. *)
-    let q f = sorted.(Int.min (n - 1) (Int.of_float (Float.round_down (f *. Float.of_int n)))) in
+    (* Nearest-rank quantiles of the batch times: the [ceil (f * n)]-th smallest, 1-based. *)
+    let q f =
+      sorted.(Int.max 0 (Int.min (n - 1) (Int.of_float (Float.round_up (f *. Float.of_int n)) - 1)))
+    in
     Hashtbl.set distribution ~key:(dist_key lv.lv_tag lv.lv_label)
       ~data:((q 0.1, median, q 0.9), lv.lv_launch);
     p
