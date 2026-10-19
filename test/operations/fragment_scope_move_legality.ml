@@ -32,8 +32,11 @@
    triple: every fixture, compiled anyway as a candidate, renders exactly as many lane-0 scalar
    fallbacks as the oracle finds violations in the IR it was compiled from, and at least one
    tensorized statement besides where it finds none — and computes the serial twin's values bitwise
-   (small integer operands: every partial sum is exact in half). On the C backends a scope and a
-   bare [Tile_mma] render alike, so there is nothing to relate there. *)
+   (small integer operands: every partial sum is exact in half). The two bases compile there too,
+   with no move, as the reference point. On HIP the values claim is skipped by a tracked defect
+   (ahrefs/ocannl#1420: its tensorized half fragment scopes, the bases' included, write 2^-23 into
+   some exact-zero cells); the census relation is evaluated there all the same. On the C backends a
+   scope and a bare [Tile_mma] render alike, so there is nothing to relate there. *)
 
 open Base
 open Ocannl
@@ -335,21 +338,47 @@ let () =
     | `Advertised -> (on_gpu, `Backend)
     | `Withheld aggregation -> (false, aggregation)
   in
+  (* The bases themselves, with no move, compile beside the fixtures: what the scope renders before
+     any move is applied is the reference point for every fixture's census and values. *)
+  let to_compile =
+    List.map prepared ~f:(fun (base, _, _, reference) ->
+        ("base " ^ base.b_name ^ " (no move)", base, reference, None))
+    @ List.map fixtures ~f:(fun ((base, _, _, reference), label, _, _, _, move, _) ->
+        (label, base, reference, Some move))
+  in
   let compiled =
     if not when_ then []
     else
-      List.mapi fixtures ~f:(fun idx ((base, _, _, reference), label, _, _, _, move, _) ->
+      List.mapi to_compile ~f:(fun idx (label, base, reference, move) ->
           let t = base.b_tensor () in
           let compiled_ir = ref None in
           let transform opt =
             let schedule, s = base.b_schedule ~out:t.Tensor.value opt in
             let base_applied = Sched.apply schedule opt in
-            let applied = Sched.apply [ move_op move s base_applied ] base_applied in
+            let applied =
+              match move with
+              | None -> base_applied
+              | Some move -> Sched.apply [ move_op move s base_applied ] base_applied
+            in
             compiled_ir := Some (hermetic applied);
             applied
           in
           let outcome = values t (compile ~transform ("fsm_move" ^ Int.to_string idx) t) in
           let vs = Option.value_map !compiled_ir ~default:[] ~f:Sched.fragment_scope_violations in
+          (* Which cells differ from the serial twin, reported whatever the values claim's gate says
+             (not part of the golden). *)
+          (match outcome with
+          | Ok (got, _) -> (
+              let mismatches =
+                List.filter_mapi (Array.to_list got) ~f:(fun i g ->
+                    if Float.equal g reference.(i) then None else Some (i, g, reference.(i)))
+              in
+              match mismatches with
+              | [] -> ()
+              | (i, g, r) :: _ ->
+                  Stdio.eprintf "%s: %d of %d cells differ; first at %d: %g vs the twin's %g\n%!"
+                    label (List.length mismatches) (Array.length got) i g r)
+          | Error _ -> ());
           (label, reference, vs, outcome))
   in
   gated_all ~aggregation ~when_ ~on:backend_name
@@ -365,19 +394,19 @@ let () =
             (List.length vs) mma.scalar_fallbacks mma.statements;
           mma.scalar_fallbacks = List.length vs
           && ((not (List.is_empty vs)) || mma.scalar_fallbacks < mma.statements));
-  gated_all ~aggregation ~when_ ~on:backend_name
-    "each compiled fixture computes the serial twin's values bitwise" compiled
-    ~f:(fun (label, reference, _, outcome) ->
+  (* ahrefs/ocannl#1420: HIP's tensorized half fragment scopes write 2^-23 into some cells whose
+     exact sum is 0 -- the bases with no move applied included (minix, gh-ocannl-1342's PR), so the
+     defect predates the moves this test judges. The values claim is skipped there, loudly and by
+     that reason; the census relation above still holds on HIP and stays evaluated. *)
+  let hip_half_scope_defect = String.is_substring backend_name ~substring:"hip" in
+  if when_ && hip_half_scope_defect then
+    Stdio.eprintf
+      "NOTE (ahrefs/ocannl#1420): HIP tensorized half fragment scopes write 2^-23 into exact-zero \
+       cells; the bitwise values claim is skipped on this backend.\n\
+       %!";
+  gated_all ~aggregation ~when_:(when_ && not hip_half_scope_defect)
+    ~on:backend_name "each compiled fixture computes the serial twin's values bitwise" compiled
+    ~f:(fun (_, reference, _, outcome) ->
       match outcome with
       | Error _ -> false
-      | Ok (got, _) ->
-          let mismatches =
-            List.filter_mapi (Array.to_list got) ~f:(fun i g ->
-                if Float.equal g reference.(i) then None else Some (i, g, reference.(i)))
-          in
-          (match mismatches with
-          | [] -> ()
-          | (i, g, r) :: _ ->
-              Stdio.eprintf "%s: %d of %d cells differ; first at %d: %g vs the twin's %g\n%!" label
-                (List.length mismatches) (Array.length got) i g r);
-          List.is_empty mismatches)
+      | Ok (got, _) -> Array.for_all2_exn got reference ~f:Float.equal)
