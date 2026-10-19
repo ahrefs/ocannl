@@ -106,7 +106,18 @@ let composed_schedule ?(bk = bk) ~hoist_b ~tile_prec ~a ~b (opt : LL.optimized) 
   @ [ stage ~hoisted:hoist_b b [ k_i; j ]; stage ~hoisted:false a [ i_i; k_i ] ]
   @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 ()) ] else []
 
-let run ~name ?schedule (out : Tensor.t) =
+(* Which way each compiled [Tile_mma] went is the routine's mma census to say, never the emitted
+   text (gh-ocannl-1316): on the C backends the schedule ends in [Tensorize], and every statement
+   must render the register tiling rather than the lane-0 scalar fallback whose guard wraps both; on
+   GPU backends it stops short of [Tensorize], so no [Tile_mma] may reach the hardware at all. The
+   text pins beside these claims are about the text itself — tile declarations, the precision
+   bridges and their annotations, the vector typedef. *)
+let rendered_as_scheduled ~what census =
+  if on_cpu then Ll_test.all_rendered ~what Ir.C_syntax.Mma_register_tiled census
+  else Ll_test.none_emitted ~what census
+
+(* The readback, and the compile's census. *)
+let run_census ~name ?schedule (out : Tensor.t) =
   let comp = named name (Train.forward out) in
   let transform opt =
     match schedule with None -> opt | Some sched -> Sched.apply (sched opt) opt
@@ -116,7 +127,9 @@ let run ~name ?schedule (out : Tensor.t) =
     Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
-  Context.get_values ctx out.Tensor.value
+  (Context.get_values ctx out.Tensor.value, Ll_test.renderings routine.Context.mma)
+
+let run ~name ?schedule out = fst (run_census ~name ?schedule out)
 
 let () =
   (* === bf16 storage, f32 compute, both panels widened at pack time === Inputs: a in {0, 1/4, 1/2},
@@ -138,8 +151,8 @@ let () =
   let want_b = nonzero "nrw_bf16_serial" (run ~name:"nrw_bf16_serial" bc0) in
   let%op bc1 = mab * mbb in
   Tn.update_prec bc1.Tensor.value Ir.Ops.bfloat16;
-  let got_b =
-    run ~name:"nrw_bf16_packed"
+  let got_b, census_b =
+    run_census ~name:"nrw_bf16_packed"
       ~schedule:
         (composed_schedule ~hoist_b:false ~tile_prec:(Some Ir.Ops.single) ~a:mab.Tensor.value
            ~b:mbb.Tensor.value)
@@ -150,14 +163,16 @@ let () =
    let has s = String.is_substring src ~substring:s in
    let count_sub sub = String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length in
    p "bf16 packing widens into f32 panels; only d crosses the narrow bridge"
-     (if on_cpu then
-        (* Two f32 tile arrays: the widening (the C backends' [bfloat16_to_single]) rides the
-           packing copy; the register tiling sees f32 panels, bridging only the accumulator. *)
-        count_sub "float tile_" = 2
-        && has "bfloat16_to_single" && has "Tile_mma register tiling"
-        && has "narrow storage bridged: d:bfloat16."
-        && has "OCANNL_VEC_WIDEN_BFLOAT16" && has "OCANNL_VEC_NARROW_BFLOAT16"
-      else count_sub "float tile_" = 2 && not (has "tmma_")));
+     (rendered_as_scheduled ~what:"nrw_bf16_packed" census_b
+     &&
+     if on_cpu then
+       (* Two f32 tile arrays: the widening (the C backends' [bfloat16_to_single]) rides the packing
+          copy; the register tiling sees f32 panels, bridging only the accumulator. *)
+       count_sub "float tile_" = 2
+       && has "bfloat16_to_single"
+       && has "narrow storage bridged: d:bfloat16."
+       && has "OCANNL_VEC_WIDEN_BFLOAT16" && has "OCANNL_VEC_NARROW_BFLOAT16"
+     else count_sub "float tile_" = 2));
 
   (* === gh-ocannl-639: bf16 with partial sums that are NOT bf16-exact === *)
   (* Products are multiples of 15/128 with a nonzero mean (~0.23 drift per k step), so the running
@@ -215,8 +230,8 @@ let () =
   let want_h = nonzero "nrw_half_serial" (run ~name:"nrw_half_serial" hc0) in
   let%op hc1 = mah * mbh in
   Tn.update_prec hc1.Tensor.value Ir.Ops.half;
-  let got_h =
-    run ~name:"nrw_half_hoisted"
+  let got_h, census_h =
+    run_census ~name:"nrw_half_hoisted"
       ~schedule:
         (composed_schedule ~hoist_b:true ~tile_prec:(Some Ir.Ops.single) ~a:mah.Tensor.value
            ~b:mbh.Tensor.value)
@@ -230,12 +245,10 @@ let () =
      ((* One in-kernel tile (A~); the B~ panel is a constant-pool buffer packed (and widened) on the
          host, so no in-kernel copy of it exists. *)
       count_sub "float tile_" = 1
-     &&
-     if on_cpu then
-       has "Tile_mma register tiling"
-       && has "narrow storage bridged: d:half."
-       && has "OCANNL_VEC_WIDEN_HALF" && has "OCANNL_VEC_NARROW_HALF"
-     else not (has "tmma_")));
+     && rendered_as_scheduled ~what:"nrw_half_hoisted" census_h
+     && ((not on_cpu)
+        || has "narrow storage bridged: d:half."
+           && has "OCANNL_VEC_WIDEN_HALF" && has "OCANNL_VEC_NARROW_HALF")));
 
   (* === pure fp16: native (forced) f16 arithmetic, f16 accumulators, doubled lanes === *)
   let saved_policy = Numerics.get () in
@@ -249,14 +262,14 @@ let () =
    match
      let want_f = nonzero "nrw_f16_serial" (run ~name:"nrw_f16_serial" fc0) in
      let got_f =
-       run ~name:"nrw_f16_packed"
+       run_census ~name:"nrw_f16_packed"
          ~schedule:
            (composed_schedule ~hoist_b:false ~tile_prec:None ~a:mah.Tensor.value ~b:mbh.Tensor.value)
          fc1
      in
      (want_f, got_f)
    with
-   | want_f, got_f ->
+   | want_f, (got_f, census_f) ->
        p_all2 parity_name got_f want_f ~f:Float.equal;
        let src = Generated.read "nrw_f16_packed" in
        let has s = String.is_substring src ~substring:s in
@@ -264,14 +277,13 @@ let () =
          String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
        in
        p structure_name
-         (if on_cpu then
+         (rendered_as_scheduled ~what:"nrw_f16_packed" census_f
+         && ((not on_cpu)
             (* Half-typed tiles, an [ocannl_vec<2*f32 lanes>h] register file, no narrow bridge —
                storage and compute coincide. *)
-            count_sub "HALF_T tile_" = 2
-            && has "Tile_mma register tiling"
-            && (not (has "narrow storage bridged"))
-            && has half_vec_typ
-          else not (has "tmma_"))
+            || count_sub "HALF_T tile_" = 2
+               && (not (has "narrow storage bridged"))
+               && has half_vec_typ))
    | exception e ->
        (* The one condition verified to warrant a skip: the generated kernel failed to COMPILE over
           the half type ([Backend_rejected]'s detail quotes the compiler output, which names

@@ -64,7 +64,8 @@ open Verdict.Claims
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 (* Intentional dialect identity: this test exists to pin CUDA inline-PTX [ldmatrix] instruction
-   forms and the other dialects' explicit decline source, cross-checked with the MMA census. *)
+   forms; which way each statement rendered, the other dialects' decline included, is the MMA
+   census's to say. *)
 let on_cuda = String.is_substring backend_name ~substring:"cuda"
 let on_gpu = Sched.backend_is_gpu backend_name
 
@@ -206,7 +207,7 @@ let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(
         Ir.Indexing.Empty
     in
     (* The census is a field of the compiled routine since gh-ocannl-626. *)
-    let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+    let census = Ll_test.renderings routine.Context.mma in
     let ctx = Context.run ctx routine in
     let got = Context.get_values ctx t0.Tensor.value in
     (* The nonzero guard is not ceremony: a fragment mapping that reads outside the staged block
@@ -214,7 +215,7 @@ let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(
     p parity_label
       (Array.exists want ~f:(fun x -> Float.(x <> 0.)) && Array.for_all2_exn got want ~f:Float.equal);
     let src = Generated.read (name ^ "_mma") in
-    p struct_label (check ~src ~census)
+    p struct_label (check ~what:name ~src ~census)
   end
 
 (* The bf16 inputs are multiples of 1/4 and 1/2 with 32-term sums bounded by 16, so every product is
@@ -238,31 +239,26 @@ let () =
   let mbh = mk ~l:"lbh" ~prec:Ir.Ops.half ~f:bf_b in
   let b128 = Some LL.Swizzle_b128 in
   let has src s = String.is_substring src ~substring:s in
-  let ldm_census census =
-    (not (List.is_empty census))
-    && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix)
+  let ldm_census ~what census =
+    Ll_test.all_rendered ~what Ir.C_syntax.Mma_intrinsics_ldmatrix census
   in
   (* Every non-CUDA GPU backend declines the swizzled operands: the statement renders the lane-0
-     scalar micro-kernel (correct through the swizzle-aware offsets) and the census says so. *)
-  let declined ~src ~census =
-    has src "== 0)"
-    && (not (List.is_empty census))
-    && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_scalar_fallback)
-  in
-  let fp8_gather_check ~src ~census =
-    if not on_cuda then declined ~src ~census
+     scalar micro-kernel (correct through the swizzle-aware offsets). Which rendering ran is the
+     census's to say (gh-ocannl-1316): the lane-0 guard's text never told the fallback from a
+     rendering that guards for another reason. *)
+  let declined ~what ~census = Ll_test.all_declined ~what census in
+  let fp8_gather_check ~what ~src ~census =
+    if not on_cuda then declined ~what ~census
     else
       has src "mma.sync.aligned.m16n8k32"
       (* B's gathered column (and transposed A's) uses the fragment group coordinate; cooperative
          staging stores cannot satisfy this XOR pin. *)
       && has src "__mma_g) >> 4) ^ "
       && (not (has src "ldmatrix"))
-      && (not (has src "== 0)"))
-      && (not (List.is_empty census))
-      && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
+      && Ll_test.all_rendered ~what Ir.C_syntax.Mma_intrinsics census
   in
-  let bf16_check ~a_trans ~b_trans ~src ~census =
-    if not on_cuda then declined ~src ~census
+  let bf16_check ~a_trans ~b_trans ~what ~src ~census =
+    if not on_cuda then declined ~what ~census
     else
       let a_form =
         if a_trans then "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16"
@@ -277,7 +273,7 @@ let () =
       && has src (arm_marker Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16 ^ " ldmatrix a,b")
       (* No gather chain survives for either operand. *)
       && (not (has src "__bfloat16_as_ushort"))
-      && ldm_census census
+      && ldm_census ~what census
   in
   (* A staged in the A role's own orientation loads with no [.trans]; B staged in the B role's own
      orientation (k x n) needs [.trans], because its fragment is column-major. Staging an operand
@@ -349,14 +345,14 @@ let () =
     ~build:(fun () ->
       let%op t = maf * mbf in
       t)
-    ~check:(fun ~src ~census ->
-      if not on_cuda then declined ~src ~census
+    ~check:(fun ~what ~src ~census ->
+      if not on_cuda then declined ~what ~census
       else
         has src "ldmatrix.sync.aligned.m8n8.x4.shared.b16"
         && has src "mma.sync.aligned.m16n8k32"
         && has src (arm_marker Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single ^ " e5m2 ldmatrix a")
         && (not (has src "ldmatrix.sync.aligned.m8n8.x2"))
-        && ldm_census census)
+        && ldm_census ~what census)
     ();
   (* fp8, B-side only: staging B transposed makes ITS 4 bytes per register contiguous instead. *)
   leg ~tag:"f8_b" ~acc_prec:Ir.Ops.single ~src_a:maf.Tensor.value ~src_b:mbf.Tensor.value
@@ -364,14 +360,14 @@ let () =
     ~build:(fun () ->
       let%op t = maf * mbf in
       t)
-    ~check:(fun ~src ~census ->
-      if not on_cuda then declined ~src ~census
+    ~check:(fun ~what ~src ~census ->
+      if not on_cuda then declined ~what ~census
       else
         has src "ldmatrix.sync.aligned.m8n8.x2.shared.b16"
         && has src "mma.sync.aligned.m16n8k32"
         && has src (arm_marker Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single ^ " e5m2 ldmatrix b")
         && (not (has src "ldmatrix.sync.aligned.m8n8.x4"))
-        && ldm_census census)
+        && ldm_census ~what census)
     ();
   (* A row-major swizzled B needs four bytes strided by its leading dimension, which no
      [ldmatrix.b16] shape produces. Its byte gathers now apply the XOR address map (gh-ocannl-1073);
@@ -400,6 +396,6 @@ let () =
     ~build:(fun () ->
       let%op t = mah * mbh in
       t)
-    ~check:(fun ~src ~census ->
-      (not (has src "ldmatrix")) && (not (has src "wmma::mma_sync")) && declined ~src ~census)
+    ~check:(fun ~what ~src ~census ->
+      (not (has src "ldmatrix")) && (not (has src "wmma::mma_sync")) && declined ~what ~census)
     ()

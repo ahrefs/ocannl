@@ -868,6 +868,18 @@ files.
   through the swizzle map. Eligibility remains per operand and orientation. The census
   distinguishes `Mma_intrinsics_ldmatrix` from `Mma_intrinsics` using the actual load choice,
   so "tensorized" and "fed at rate" are separable in a sweep.
+- **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
+  The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
+  `"== 0)"` never told the two apart; "no intrinsic spelling" says nothing about a statement that
+  declined for another reason; and a decline diagnostic goes to stderr, so a check that the source
+  lacks it always passes. `Ll_test` holds the statement-level forms over
+  `Ll_test.renderings routine.Context.mma`: `all_rendered`, `all_tensorized`, `all_declined`,
+  `none_emitted` (for GPU legs of a CPU-only `Tensorize` schedule) and
+  `census_agrees_with_capability` (tensorized where `Ll_test.advertised` says the backend has the
+  tile for the leg's storage precisions, declined elsewhere — its stanza then declares
+  `OCANNL_TF32_MATMULS` and `OCANNL_CC_VECTOR_BYTES` beside the backend). Keep a text pin only
+  for what the text is about (a dialect's instruction, a register-tile geometry, a fence's
+  position, a swizzle's XOR), and say so at the site.
 ## Register-tile search and ranking
 - **The register-tile geometry is a schedule decision, not a renderer constant** (gh-ocannl-619).
   `Schedule.Tensorize` carries `tile : Register_tile.t option` (`{rm; rn; lanes}`) into

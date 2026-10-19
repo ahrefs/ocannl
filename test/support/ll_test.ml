@@ -928,3 +928,80 @@ let tensorized_capability ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_li
 let tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a ~b ~d =
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
   tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:(prec a) ~b_prec:(prec b) ~d_prec:(prec d)
+
+(** {1 Statement-level mma census claims}
+
+    Which way each compiled [Tile_mma] went — a GPU intrinsic (either load path), the C backends'
+    register tiling, or the lane-0 scalar fallback — is the routine's mma census to say
+    ([Context.routine.mma], gh-ocannl-626), never the emitted text. The text cannot tell them apart:
+    the fallback's [if (lane == 0)] guard also wraps the register tiling on the C backends, and a
+    GPU source with no intrinsic spelling says nothing about a statement that rendered no guard for
+    another reason (gh-ocannl-1283, gh-ocannl-1316). A structure claim reads the decision here and
+    keeps a text pin only for what the text itself is about (a dialect's instruction, a geometry, a
+    fence's placement), saying so at its site.
+
+    {!rendered_tensorized} is the routine-level label ("did anything tensorize"); these are the
+    statement-level forms over {!renderings}, each requiring at least one statement so a compile
+    that emitted no [Tile_mma] cannot pass as "every statement did X" — except {!none_emitted},
+    whose passing case IS the empty census. A failing claim names [what] and the census on stderr,
+    where the golden does not look. *)
+
+(** The census of one compile, in emission order. *)
+let renderings (summary : Ir.C_syntax.mma_summary) = List.map summary.Ir.C_syntax.renderings ~f:snd
+
+let census_string census = Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering census)
+
+(** The compile emitted at least one [Tile_mma] statement and [f] holds of every one of them. *)
+let census_all ~what ~expected census ~f =
+  let holds = (not (List.is_empty census)) && List.for_all census ~f in
+  if not holds then
+    Stdio.eprintf "%s: expected every Tile_mma statement to render %s, census %s\n%!" what expected
+      (census_string census);
+  holds
+
+(** Every statement rendered as [rendering]. *)
+let all_rendered ~what rendering census =
+  census_all ~what
+    ~expected:(Sexp.to_string (Ir.C_syntax.sexp_of_mma_rendering rendering))
+    census
+    ~f:(Ir.C_syntax.equal_mma_rendering rendering)
+
+(** Every statement tensorized, by whichever emission the backend has: the GPU intrinsics (either
+    load path) or the C backends' register tiling. *)
+let all_tensorized ~what census =
+  census_all ~what ~expected:"a tensorized emission" census ~f:Ir.C_syntax.is_tensorized_rendering
+
+(** Every statement rendered the lane-0 scalar fallback. *)
+let all_declined ~what census = all_rendered ~what Ir.C_syntax.Mma_scalar_fallback census
+
+(** The compile emitted no [Tile_mma] statement at all: the schedule requested no tensorization (the
+    GPU legs of a CPU-only [Tensorize] schedule). Emptiness is the passing case here. *)
+let none_emitted ~what census =
+  let holds = List.is_empty census in
+  if not holds then
+    Stdio.eprintf "%s: expected no Tile_mma statement, census %s\n%!" what (census_string census);
+  holds
+
+(** Whether [backend_name]'s backend, under the current configuration, advertises a tensorized
+    emission for these storage precisions: {!tensorized_capability}, the seeder's own judgment, so a
+    structure claim gated here is gated on the backend's capability and never on the rendering under
+    test. The stanza declares the configuration that judgment reads (see {!tensorized_capability}).
+*)
+let advertised ~backend_name ~a_prec ~b_prec ~d_prec =
+  let is_gpu = Ir.Schedule.backend_is_gpu backend_name in
+  match
+    tensorized_capability ~is_gpu ~is_cpu:(not is_gpu)
+      ~limits:(Context.hardware_limits (Context.auto ()))
+      ~a_prec ~b_prec ~d_prec
+  with
+  | `Advertised -> true
+  | `Withheld _ -> false
+
+(** Where a structure claim would accept either the intrinsic or the lane-0 fallback because the arm
+    is device-dependent, a decline on a device that DOES advertise the tile used to pass as the
+    "older device" alternative (gh-ocannl-1283). Read against the capability for the leg's storage
+    precisions, the census takes that choice away: where the tile is advertised every statement must
+    render tensorized, elsewhere every one the deliberate scalar fallback. *)
+let census_agrees_with_capability ~backend_name ~what ~a_prec ~b_prec ~d_prec census =
+  if advertised ~backend_name ~a_prec ~b_prec ~d_prec then all_tensorized ~what census
+  else all_declined ~what census

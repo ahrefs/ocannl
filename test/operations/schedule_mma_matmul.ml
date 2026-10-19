@@ -95,62 +95,15 @@ let () = Generated.init ~backend_name
    rendering is then a claim of its own rather than an unexplained red. *)
 let hip_mma = lazy (Option.is_some (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma)
 
-(* Which way a compiled [Tile_mma] went — the intrinsic, the C backends' register tiling, or the
-   lane-0 scalar fallback — is the routine's mma census to say ([Context.routine.mma],
-   gh-ocannl-626), not the emitted text: the fallback's [if (lane == 0)] guard also wraps the
-   register tiling on the C backends, so ["== 0)"] never told the two apart there, and its absence
-   on a GPU says nothing about a statement that rendered no guard for another reason. The structure
-   claims below read the decision here and keep text pins only for what the text itself is about (a
-   dialect's instruction or declaration, a boundary's form, a fence's placement). [renderings] is
-   the census of one compile, in emission order. *)
-let renderings (routine : Context.routine) =
-  List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd
-
-let census_string census = Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering census)
-
-(* The compile emitted at least one [Tile_mma] statement and [ok] holds of every one of them; a
-   mismatch names [what] and the census on stderr, where the golden does not look. *)
-let census_all ~what ~expected census ~f =
-  let holds = (not (List.is_empty census)) && List.for_all census ~f in
-  if not holds then
-    Stdio.eprintf "%s: expected every Tile_mma statement to render %s, census %s\n%!" what expected
-      (census_string census);
-  holds
-
-let all_rendered ~what rendering census =
-  census_all ~what
-    ~expected:(Sexp.to_string (Ir.C_syntax.sexp_of_mma_rendering rendering))
-    census
-    ~f:(Ir.C_syntax.equal_mma_rendering rendering)
-
-(* Every statement tensorized, by whichever emission the backend has: the GPU intrinsics (either
-   load path) or the C backends' register tiling. *)
-let all_tensorized ~what census =
-  census_all ~what ~expected:"a tensorized emission" census ~f:Ir.C_syntax.is_tensorized_rendering
-
-let all_declined ~what census = all_rendered ~what Ir.C_syntax.Mma_scalar_fallback census
-
-(* Whether the backend, under the current configuration, advertises a tensorized emission for these
-   storage precisions: the seeder's own judgment ({!Ll_test.tensorized_capability}), so a structure
-   claim gated here is gated on the backend's capability and never on the rendering under test. *)
-let advertised ~a_prec ~b_prec ~d_prec =
-  match
-    Ll_test.tensorized_capability ~is_gpu:on_gpu ~is_cpu:(not on_gpu)
-      ~limits:(Context.hardware_limits (Context.auto ()))
-      ~a_prec ~b_prec ~d_prec
-  with
-  | `Advertised -> true
-  | `Withheld _ -> false
-
-(* Where a structure claim below accepts either the intrinsic or the lane-0 fallback because the arm
-   is device-dependent (CUDA's wmma below sm_70, its fp8 inline PTX below sm_89, Metal before
-   Apple7), a decline on a device that DOES advertise the tile used to pass as the "older device"
-   alternative (gh-ocannl-1283). The routine's mma census, read against the capability for the leg's
-   storage precisions, takes that choice away: where the tile is advertised every statement must
-   render tensorized, elsewhere every one the deliberate scalar fallback. *)
-let census_agrees_with_capability ~what ~a_prec ~b_prec ~d_prec census =
-  if advertised ~a_prec ~b_prec ~d_prec then all_tensorized ~what census
-  else all_declined ~what census
+(* Which way a compiled [Tile_mma] went is the routine's mma census to say, not the emitted text
+   (gh-ocannl-626, gh-ocannl-1283): the statement-level claims are {!Ll_test}'s census forms
+   ([all_rendered], [all_tensorized], [all_declined], [census_agrees_with_capability]), shared with
+   the other Tile_mma tests (gh-ocannl-1316). The structure claims below keep text pins only for
+   what the text itself is about (a dialect's instruction or declaration, a boundary's form, a
+   fence's placement). *)
+let renderings (routine : Context.routine) = Ll_test.renderings routine.Context.mma
+let advertised = Ll_test.advertised ~backend_name
+let census_agrees_with_capability = Ll_test.census_agrees_with_capability ~backend_name
 
 (* Named once so a degraded run explains itself on the channel the golden does not see. *)
 let () =
@@ -394,7 +347,7 @@ let () =
     in
     (* The census is a field of the compiled routine since gh-ocannl-626, not a global this call
        site brackets. *)
-    let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+    let census = renderings routine in
     let ctx = Context.run ctx routine in
     (Context.get_values ctx tensor.Tensor.value, census)
   in
@@ -469,7 +422,7 @@ let () =
     let src_off = Generated.read "mm_tf32_off_mma" in
     p_all2 "tf32 policy-off matmul matches the serial twin bitwise" got_off want_off ~f:Float.equal;
     p "tf32 policy-off renders and records the scalar fallback"
-      (all_declined ~what:"tf32 policy-off" census_off
+      (Ll_test.all_declined ~what:"tf32 policy-off" census_off
       && Option.is_none (mma_arm ~scope:statement f32 f32 f32)
       && (not (String.is_substring src_off ~substring:tf32_marker))
       && not (String.is_substring src_off ~substring:"precision::tf32"));
@@ -485,7 +438,7 @@ let () =
     p_all2 "tf32 policy-on matmul matches the serial twin within tolerance" got_on want_on
       ~f:approx_rel;
     p "tf32 policy-on renders and records wmma tf32"
-      (all_rendered ~what:"tf32 policy-on" Ir.C_syntax.Mma_intrinsics census_on
+      (Ll_test.all_rendered ~what:"tf32 policy-on" Ir.C_syntax.Mma_intrinsics census_on
       && String.is_substring src_on ~substring:tf32_marker
       && String.is_substring src_on ~substring:"precision::tf32"
       && String.is_substring src_on ~substring:"__float_to_tf32");
@@ -722,13 +675,13 @@ let () =
      let has s = String.is_substring src ~substring:s in
      p claim_struct
        (if on_metal then
-          all_rendered ~what:"f16->f32 direct" Ir.C_syntax.Mma_intrinsics census
+          Ll_test.all_rendered ~what:"f16->f32 direct" Ir.C_syntax.Mma_intrinsics census
           && has "simdgroup_float8x8 __mma_acc"
           && has "simdgroup_half8x8 __mma_af"
           && (not (has "__mma_dstage"))
           && not (has "thread_elements()")
         else
-          all_rendered ~what:"f16->f32 direct" Ir.C_syntax.Mma_register_tiled census
+          Ll_test.all_rendered ~what:"f16->f32 direct" Ir.C_syntax.Mma_register_tiled census
           && has "narrow storage bridged: a:half b:half"));
 
   (* --- Fp16_wide (gh-ocannl-680): the uniform-f16 combination under the wide policy. CUDA sm_80+
@@ -821,8 +774,10 @@ let () =
    else skipped claim);
   (let src = Generated.read "mm_h_wide_mma" in
    let has s = String.is_substring src ~substring:s in
-   let intrinsics () = all_rendered ~what:"Fp16_wide" Ir.C_syntax.Mma_intrinsics census_hw in
-   let fallback () = all_declined ~what:"Fp16_wide" census_hw in
+   let intrinsics () =
+     Ll_test.all_rendered ~what:"Fp16_wide" Ir.C_syntax.Mma_intrinsics census_hw
+   in
+   let fallback () = Ll_test.all_declined ~what:"Fp16_wide" census_hw in
    let ok =
      if on_metal then
        intrinsics () && metal_table_boundary ~acc:"__mma_acc" src && has "simdgroup_half8x8"
@@ -865,7 +820,7 @@ let () =
          && not (has "nvcuda::wmma")
        else fallback () && not (has "nvcuda::wmma")
      else
-       all_rendered ~what:"Fp16_wide" Ir.C_syntax.Mma_register_tiled census_hw
+       Ll_test.all_rendered ~what:"Fp16_wide" Ir.C_syntax.Mma_register_tiled census_hw
        && has "narrow storage bridged: d:half a:half b:half"
    in
    p "Fp16_wide half tensorized structure as expected" ok);
@@ -900,7 +855,7 @@ let () =
         fallback's localized accumulator staying half — not merely differing from a serial twin
         rendered the same way — is what this must catch (Codex P1 round 3 on PR #477). *)
      p_all2 claim_ncf32_value got_hn wide_ref_hw ~f:Float.equal;
-     p claim_ncf32_structure (all_declined ~what:"Fp16_wide nco" census_hn)
+     p claim_ncf32_structure (Ll_test.all_declined ~what:"Fp16_wide nco" census_hn)
    end);
 
   (* --- Bfloat16 (gh-ocannl-545): the two accumulator shapes, which are NOT interchangeable on
@@ -1009,14 +964,14 @@ let () =
       if on_metal then
         (* gh-ocannl-923: bfloat operand fragments into a float accumulator that is the f32
            destination's own type — no staging fragment. *)
-        all_rendered ~what Ir.C_syntax.Mma_intrinsics census
+        Ll_test.all_rendered ~what Ir.C_syntax.Mma_intrinsics census
         && has "simdgroup_float8x8 __mma_acc"
         && has "simdgroup_bfloat8x8 __mma_af"
         && not (has "__mma_dstage")
       else if on_hip then
         if Lazy.force hip_mma then
-          all_rendered ~what Ir.C_syntax.Mma_intrinsics census && has "rocwmma::mma_sync"
-        else all_declined ~what census && not (has "rocwmma")
+          Ll_test.all_rendered ~what Ir.C_syntax.Mma_intrinsics census && has "rocwmma::mma_sync"
+        else Ll_test.all_declined ~what census && not (has "rocwmma")
       else if on_gpu then
         (* CUDA: the wmma bf16 fragment path. Both bf16 renderings need sm_80, the same floor the
            tf32 legs above already pin strictly. *)
@@ -1026,7 +981,7 @@ let () =
       else
         (* gh-ocannl-575: register-tiled at the f32 accumulator precision, the bf16 operands bridged
            at the memory boundary. *)
-        all_rendered ~what Ir.C_syntax.Mma_register_tiled census
+        Ll_test.all_rendered ~what Ir.C_syntax.Mma_register_tiled census
         && has "narrow storage bridged: a:bfloat16 b:bfloat16")
     ();
   (* The uniform combination in all three operand orientations. CUDA's inline-PTX arm gathers every
@@ -1036,11 +991,11 @@ let () =
   let uniform_check ~what ~census src =
     let has s = String.is_substring src ~substring:s in
     if on_metal then
-      all_rendered ~what Ir.C_syntax.Mma_intrinsics census && has "simdgroup_bfloat8x8"
+      Ll_test.all_rendered ~what Ir.C_syntax.Mma_intrinsics census && has "simdgroup_bfloat8x8"
     else if on_hip then
       if Lazy.force hip_mma then
-        all_rendered ~what Ir.C_syntax.Mma_intrinsics census && has "rocwmma::mma_sync"
-      else all_declined ~what census && not (has "rocwmma")
+        Ll_test.all_rendered ~what Ir.C_syntax.Mma_intrinsics census && has "rocwmma::mma_sync"
+      else Ll_test.all_declined ~what census && not (has "rocwmma")
     else if on_gpu then
       (* CUDA: the inline-PTX bf16 path (sm_80+). *)
       has "mma.sync.aligned.m16n8k16"
@@ -1048,7 +1003,7 @@ let () =
       (* gh-ocannl-575: uniform bf16 register-tiles with f32 compute under the default
          [narrow_compute_f32] policy, every operand bridged. The [bfu_tb] leg still declines to the
          scalar fallback (transposed B), which [uniform_check]'s caller handles below. *)
-      all_rendered ~what Ir.C_syntax.Mma_register_tiled census
+      Ll_test.all_rendered ~what Ir.C_syntax.Mma_register_tiled census
       && has "narrow storage bridged: d:bfloat16 a:bfloat16 b:bfloat16"
   in
   bf16_leg ~tag:"bfu" ~acc_prec:Ir.Ops.bfloat16 ~build:mul ~check:uniform_check ();
@@ -1061,7 +1016,7 @@ let () =
      this leg keeps the lane-0 scalar fallback there, unlike the other orientations. *)
   bf16_leg ~tag:"bfu_tb" ~acc_prec:Ir.Ops.bfloat16
     ~check:(fun ~what ~census src ->
-      if on_gpu then uniform_check ~what ~census src else all_declined ~what census)
+      if on_gpu then uniform_check ~what ~census src else Ll_test.all_declined ~what census)
     ~build:(fun () ->
       let%op t = mtab +* "ik;jk=>ij" mtbb in
       t)
@@ -1214,8 +1169,10 @@ let () =
    else skipped claim);
   (let src = Generated.read "mm_bw_wide_mma" in
    let has s = String.is_substring src ~substring:s in
-   let intrinsics () = all_rendered ~what:"Bf16_wide" Ir.C_syntax.Mma_intrinsics census_bw in
-   let fallback () = all_declined ~what:"Bf16_wide" census_bw in
+   let intrinsics () =
+     Ll_test.all_rendered ~what:"Bf16_wide" Ir.C_syntax.Mma_intrinsics census_bw
+   in
+   let fallback () = Ll_test.all_declined ~what:"Bf16_wide" census_bw in
    let ok =
      if on_metal then
        (* The float accumulator AND the converted boundary: the bf16-accumulate arm this replaces
@@ -1236,7 +1193,7 @@ let () =
          intrinsics () && has "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"
        else fallback ()
      else
-       all_rendered ~what:"Bf16_wide" Ir.C_syntax.Mma_register_tiled census_bw
+       Ll_test.all_rendered ~what:"Bf16_wide" Ir.C_syntax.Mma_register_tiled census_bw
        && has "narrow storage bridged: d:bfloat16 a:bfloat16 b:bfloat16"
    in
    p "Bf16_wide uniform-bf16 tensorized structure as expected" ok);
@@ -1313,12 +1270,12 @@ let () =
               (has "mma.sync.aligned.m16n8k32")
        else if String.equal tag "f8_tb" then
          (* Transposed B declines the register tiling on the C backends. *)
-         all_declined ~what:tag census
+         Ll_test.all_declined ~what:tag census
        else
          (* gh-ocannl-575: fp8 storage register-tiles at the f32 accumulator precision; fp8 has no
             whole-vector conversion, so the operand loads convert per lane (the [vec_bridge]
             fallback arm) while the arithmetic stays vectorized. *)
-         all_rendered ~what:tag Ir.C_syntax.Mma_register_tiled census
+         Ll_test.all_rendered ~what:tag Ir.C_syntax.Mma_register_tiled census
          && has "narrow storage bridged: a:fp8 b:fp8"
      in
      p (Printf.sprintf "%s tensorized structure as expected" tag) ok;
@@ -1427,7 +1384,8 @@ let () =
     let cov = default_coverage ~m:mi ~n:mj in
     let vectors = List.length cov.tail_widths in
     p "edge-extent register tiling covers the edges with vector tiles, not scalar code"
-      (all_rendered ~what:"edge-extent" Ir.C_syntax.Mma_register_tiled (renderings routine_e)
+      (Ll_test.all_rendered ~what:"edge-extent" Ir.C_syntax.Mma_register_tiled
+         (renderings routine_e)
       && has
            (Printf.sprintf "%s; column tail %d in %d vector%s; row tail %d)"
               (full_blocks ~m:mi ~n:mj cov) (mj - cov.n_full) vectors
@@ -1508,7 +1466,8 @@ let () =
     let src = Generated.read "mm_width_mma" in
     let has s = String.is_substring src ~substring:s in
     p "extent-adapted geometry covers the column extent with vector tiles"
-      (all_rendered ~what:"extent-adapted" Ir.C_syntax.Mma_register_tiled (renderings routine_w)
+      (Ll_test.all_rendered ~what:"extent-adapted" Ir.C_syntax.Mma_register_tiled
+         (renderings routine_w)
       && has (full_blocks ~m:wi ~n:wj (default_coverage ~m:wi ~n:wj))
       && not (has "tmma_acc__")))
   else (
@@ -1599,7 +1558,8 @@ let () =
     let src = Generated.read "mm_fused_mma" in
     let has s = String.is_substring src ~substring:s in
     p "register tiling offers a whole-vector fused accumulator update"
-      (all_rendered ~what:"full-mantissa" Ir.C_syntax.Mma_register_tiled (renderings routine_f)
+      (Ll_test.all_rendered ~what:"full-mantissa" Ir.C_syntax.Mma_register_tiled
+         (renderings routine_f)
       && has "__builtin_elementwise_fma"
       (* The gcc arm: a whole-vector builtin, not the per-lane subscripted loop the spill lives in.
          Every arm is emitted target-independently, behind an [#elif] — which one carries the x86
@@ -1916,7 +1876,7 @@ let () =
         (named "mm_huw_staged_mma" (Train.forward mchfw))
         Ir.Indexing.Empty
     in
-    let census_fw = List.map routine_fw.Context.mma.Ir.C_syntax.renderings ~f:snd in
+    let census_fw = renderings routine_fw in
     let ctx_fw = Context.run ctx_fw routine_fw in
     let got_fw = Context.get_values ctx_fw mchfw.Tensor.value in
     Numerics.set_policy saved_policy;
@@ -1927,7 +1887,7 @@ let () =
     let src = Generated.read "mm_huw_staged_mma" in
     let has s = String.is_substring src ~substring:s in
     p claim_fw_struct
-      (all_rendered ~what:"staged Fp16_wide" Ir.C_syntax.Mma_intrinsics census_fw
+      (Ll_test.all_rendered ~what:"staged Fp16_wide" Ir.C_syntax.Mma_intrinsics census_fw
       && staged_half_resident ~converted_d:true src
       &&
       if on_metal then metal_table_boundary ~acc:"__mma_fragment_" src && has "simdgroup_half8x8"
@@ -2023,7 +1983,7 @@ let () =
           (named name (Train.forward t))
           Ir.Indexing.Empty
       in
-      let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+      let census = renderings routine in
       let ctx = Context.run ctx routine in
       (Array.to_list (Context.get_values ctx t.Tensor.value), census, Generated.read name)
     in
@@ -2059,12 +2019,14 @@ let () =
     in
     (let has s = String.is_substring src_direct ~substring:s in
      p claim_h32k_direct_struct
-       (all_rendered ~what:"f16->f32 k-split direct" Ir.C_syntax.Mma_intrinsics census_direct
+       (Ll_test.all_rendered ~what:"f16->f32 k-split direct" Ir.C_syntax.Mma_intrinsics
+          census_direct
        && has acc_decl && has operand_decl
        && not (has conversion)));
     let has s = String.is_substring src_staged ~substring:s in
     p claim_h32k_staged_struct
-      (all_rendered ~what:"f16->f32 k-split fragment" Ir.C_syntax.Mma_intrinsics census_staged
+      (Ll_test.all_rendered ~what:"f16->f32 k-split fragment" Ir.C_syntax.Mma_intrinsics
+         census_staged
       && staged_half_resident src_staged
       && has
            (if on_metal then "simdgroup_float8x8 __mma_fragment_"
@@ -2171,7 +2133,7 @@ let () =
           (named name (Train.forward t))
           Ir.Indexing.Empty
       in
-      let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+      let census = renderings routine in
       let ctx = Context.run ctx routine in
       (Array.to_list (Context.get_values ctx t.Tensor.value), census)
     in
@@ -2251,7 +2213,7 @@ let () =
       | _ -> false
     in
     p claim_bw_struct
-      (all_rendered ~what:"staged Bf16_wide" Ir.C_syntax.Mma_intrinsics census_bw
+      (Ll_test.all_rendered ~what:"staged Bf16_wide" Ir.C_syntax.Mma_intrinsics census_bw
       &&
       if on_cuda then
         cuda_register_resident src && has "float __mma_fragment_" && has wide_bf16_marker
@@ -2275,7 +2237,7 @@ let () =
       let src = Generated.read "mm_buw_swz_staged_mma" in
       let has s = String.is_substring src ~substring:s in
       p claim_bw_swz_struct
-        (all_rendered ~what:"swizzled staged Bf16_wide" Ir.C_syntax.Mma_intrinsics_ldmatrix
+        (Ll_test.all_rendered ~what:"swizzled staged Bf16_wide" Ir.C_syntax.Mma_intrinsics_ldmatrix
            census_swz
         && cuda_register_resident src
         && has (wide_bf16_marker ^ " ldmatrix a,b")
@@ -2470,7 +2432,7 @@ let () =
               (named name (Train.forward t))
               Ir.Indexing.Empty
           in
-          let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+          let census = renderings routine in
           let ctx = Context.run ctx routine in
           let src = Generated.read name in
           (nonzero name (Context.get_values ctx t.Tensor.value), census, register_resident src)
@@ -2578,10 +2540,10 @@ let () =
       else if c_tiled then
         (* C backends, transposed A: the register tiling fires with the A index arithmetic
            swapped. *)
-        all_rendered ~what:tag Ir.C_syntax.Mma_register_tiled census
+        Ll_test.all_rendered ~what:tag Ir.C_syntax.Mma_register_tiled census
       else
         (* C backends, transposed B: the register tiling declines to the scalar fallback. *)
-        all_declined ~what:tag census
+        Ll_test.all_declined ~what:tag census
     in
     p (Printf.sprintf "%s tensorized structure as expected" tag) ok
   in
@@ -2677,7 +2639,7 @@ let () =
                        (named name (Train.forward mcf))
                        Ir.Indexing.Empty
                    in
-                   let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+                   let census = renderings routine in
                    let advertised =
                      List.exists
                        (Autotune.mma_format_triples ~a_prec:aprec ~b_prec:bprec ~d_prec:dprec)
