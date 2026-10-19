@@ -143,6 +143,30 @@ let () =
   p_all "setting: empty, zero, negative and unparsable text mean no budget"
     [ ""; "0"; "-3"; "soon" ] ~f:(fun v -> Option.is_none (parse v))
 
+(* --- the unmeasured-floor rule, case by case (the executed case is autotune_budget_unfloored)
+   --- *)
+
+let () =
+  let unmeasured ~budget_cut ~auto_sched ~baseline_dispatched ~floor_measured =
+    Autotune.budget_floor_unmeasured ~budget_cut ~auto_sched ~baseline_dispatched ~floor_measured
+  in
+  p "floor rule: a measured floor keeps the crown"
+    (not
+       (unmeasured ~budget_cut:true ~auto_sched:true ~baseline_dispatched:true ~floor_measured:true));
+  p "floor rule: an uncut search keeps its crown"
+    (not
+       (unmeasured ~budget_cut:false ~auto_sched:true ~baseline_dispatched:true
+          ~floor_measured:false));
+  p "floor rule: an unmeasured scheduled default ships the default"
+    (unmeasured ~budget_cut:true ~auto_sched:true ~baseline_dispatched:false ~floor_measured:false);
+  (* Automatic scheduling off: the default is the serial baseline, whose window can be refused. *)
+  p "floor rule: an unmeasured dispatched serial default ships the default"
+    (unmeasured ~budget_cut:true ~auto_sched:false ~baseline_dispatched:true ~floor_measured:false);
+  p "floor rule: an undispatched serial default (GPU, scheduling off) keeps the crown"
+    (not
+       (unmeasured ~budget_cut:true ~auto_sched:false ~baseline_dispatched:false
+          ~floor_measured:false))
+
 (* --- cut: the budget lets four attempts start --- *)
 
 let cut = search ~budget:"4" ~cache_dir:cut_cache_dir ~tag:"cut" ()

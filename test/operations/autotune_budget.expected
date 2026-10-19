@@ -1,5 +1,10 @@
 setting: a positive number of seconds is a budget: true
 setting: empty, zero, negative and unparsable text mean no budget: true
+floor rule: a measured floor keeps the crown: true
+floor rule: an uncut search keeps its crown: true
+floor rule: an unmeasured scheduled default ships the default: true
+floor rule: an unmeasured dispatched serial default ships the default: true
+floor rule: an undispatched serial default (GPU, scheduling off) keeps the crown: true
 cut: the search completed, cut by its budget: true
 cut: its attempts are the full search's first four: true
 cut: the full search attempted more: true

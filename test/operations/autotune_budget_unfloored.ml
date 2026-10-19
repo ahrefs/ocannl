@@ -86,6 +86,11 @@ let () =
     ((match r.Autotune.outcome with Autotune.Searched -> true | _ -> false)
     && r.Autotune.budget_cut
     && List.equal String.equal attempts [ "baseline" ]);
+  (* It reports what it shipped: an untimed untuned default, not the baseline it timed. *)
+  p "cold: the report credits no timed crown"
+    (Float.is_inf r.Autotune.best_ms && String.equal r.Autotune.best_label "");
+  p_empty "cold: the report keeps no best-so-far record of the discarded candidates" ~over:attempts
+    r.Autotune.best_steps;
   p_all2 "cold: the shipped routine computes the untuned output bit for bit" output reference
     ~f:Float.equal;
   (* Stored, the baseline crown would replay here. *)

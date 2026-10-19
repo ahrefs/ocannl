@@ -532,6 +532,20 @@ let budget_setting () =
   | Some b when Float.(b > 0.) -> Some b
   | Some _ | None -> None
 
+(* gh-ocannl-1409: whether a search its budget cut must ship the untuned default rather than its
+   crown. A cut search crowns nothing slower than the untuned default because it measured that
+   default: the floors (the seeded plan, the default seed) are exempt from the budget. Where neither
+   was measured -- no candidate reproduces the default (automatic scheduling with
+   [schedule_fission=false] and no seeded plan, where [default_seed_label] is [None]), or the
+   floor's windows were refused, the dispatched serial baseline's included when it is the default
+   (automatic scheduling off) -- the cut crown has no such reference, and the serial baseline can be
+   all it timed. Such a search ships the untuned default and stores nothing, reporting as one that
+   timed nothing. Except where the default is an undispatched serial form (a GPU with automatic
+   scheduling off, gh-ocannl-532), which no timed candidate can be slower than. A policy seam like
+   {!search_measurements_cacheable}, so the cases are pinned without manufacturing each regime. *)
+let budget_floor_unmeasured ~budget_cut ~auto_sched ~baseline_dispatched ~floor_measured =
+  budget_cut && (auto_sched || baseline_dispatched) && not floor_measured
+
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
    winner tests first ([nothing_timed]). *)
 let timed_winner_exists = "Autotune.tune: a finite best time without a compiled candidate"
@@ -7999,16 +8013,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              nothing to cache: a stored entry would pin future processes to a never-timed
              schedule. *)
           let nothing_timed = Float.is_inf best_ms in
-          (* gh-ocannl-1409: a cut search crowns nothing slower than the untuned default because it
-             measured that default -- the floors are exempt from the budget. Where no candidate
-             reproduces the default (automatic scheduling with [schedule_fission=false] and no
-             seeded plan: [default_seed_label] is [None]), or the floor's windows were refused, the
-             cut crown has no such reference, and the serial baseline can be all it timed. Such a
-             search ships the untuned default and stores nothing, as one that timed nothing does. *)
+          (* gh-ocannl-1409: see [budget_floor_unmeasured]. *)
           let floor_unmeasured =
-            !budget_cut && auto_sched
-            && Option.is_none (default_ms ())
-            && Option.is_none (seeded_ms ())
+            budget_floor_unmeasured ~budget_cut:!budget_cut ~auto_sched ~baseline_dispatched
+              ~floor_measured:(Option.is_some (default_ms ()) || Option.is_some (seeded_ms ()))
           in
           (if use_cache then
              if floor_unmeasured then
@@ -8205,6 +8213,25 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     (Outcome.detail_of_cause classified.cause);
                   untuned_default_or_raise ()
               | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+          in
+          (* The report describes the routine returned (Codex P1 on PR #1234): a caller ranking arms
+             by [best_ms] must not credit this one with a candidate it discarded, and the untuned
+             default it ships was never timed -- the nothing-timed report's shape. *)
+          let completed_report =
+            if floor_unmeasured && not nothing_timed then
+              {
+                completed_report with
+                best_ms = Float.infinity;
+                best_label = "";
+                best_tensorized = false;
+                best_tensorization = None;
+                best_mma_statements = 0;
+                best_mma_scalar_fallbacks = 0;
+                best_schedule = [];
+                fissioned = false;
+                best_steps = [];
+              }
+            else completed_report
           in
           (result, completed_report)
         in

@@ -2759,17 +2759,27 @@ val tune :
     the default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
     slower than what the caller ships untuned. Where the cut left the untuned default unmeasured --
     no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no seeded
-    plan), or its windows were refused -- the call ships the untuned default compile and stores
-    nothing, as a search that timed nothing does. The report's [budget_cut] says the budget stopped
-    something. A cut search with clean timings stores its crown marked as cut
-    ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with a budget replays it, and one
-    without a budget searches in full and overwrites it. The budget's value is part of the search
-    trajectory's identity, so a cut search's [best_steps] serve early stopping only under the same
-    budget. *)
+    plan), or its windows were refused -- the call ships the untuned default compile, stores nothing
+    and reports as a search that timed nothing ({!budget_floor_unmeasured}). The report's
+    [budget_cut] says the budget stopped something. A cut search with clean timings stores its crown
+    marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with a budget replays
+    it, and one without a budget searches in full and overwrites it. The budget's value is part of
+    the search trajectory's identity, so a cut search's [best_steps] serve early stopping only under
+    the same budget. *)
 
 val budget_setting : unit -> float option
 (** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
     the setting is a positive number, [None] (no budget) otherwise. *)
+
+val budget_floor_unmeasured :
+  budget_cut:bool -> auto_sched:bool -> baseline_dispatched:bool -> floor_measured:bool -> bool
+(** gh-ocannl-1409: whether a search its budget cut ships the untuned default compile, stores
+    nothing and reports as a search that timed nothing, rather than crowning what it reached: the
+    budget cut it ([budget_cut]), it measured neither untuned floor ([floor_measured]: the default
+    seed's time, the baseline's when automatic scheduling is off, or the seeded plan's), and the
+    untuned default is a form a timed candidate could be slower than -- a scheduled pipeline
+    ([auto_sched]) or a dispatched serial baseline ([baseline_dispatched]), not the undispatched
+    serial form of a GPU with automatic scheduling off. *)
 
 val budget_elapsed : (float -> float) Seam.t
 (** Test seam (gh-ocannl-1409): maps the call's real elapsed seconds to the seconds a budget check
