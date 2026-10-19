@@ -388,13 +388,13 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
    a vanished thread would stay locked). Once the watchdog has committed to the death, no [arm]
    proceeds: the diagnostic it is about to write is never overwritten.
 
-   The death never waits on the diagnostic: the watchdog polls fd 2 for room (2 s at most) and
-   skips the write if there is none, so a full pipe nobody reads cannot hold it. It then puts
+   The death never waits on the diagnostic for more than 2 s: the write runs on a thread of its
+   own, so a blocking fd 2 that is full, or that another writer fills meanwhile, cannot hold it.
+   The watchdog then puts
    SIGALRM's default disposition back, unblocks SIGALRM in its own thread (it blocks every signal
    otherwise, so it never takes the program's) and raises it there. */
 
 #if !defined(_WIN32)
-#include <poll.h>
 #include <pthread.h>
 #include <time.h>
 
@@ -429,19 +429,19 @@ static void ocannl_deadline_atfork_child(void) {
   ocannl_deadline_dying = 0;
 }
 
-static void ocannl_deadline_die(void) {
-  struct pollfd pfd;
-  struct sigaction dfl;
-  sigset_t alrm;
+/* The diagnostic's write runs on a thread of its own, so the death never waits on it: a blocking
+   fd 2 that is full, or that another writer fills between a readiness check and the write, can
+   hold this thread forever, and the process dies regardless. */
+static pthread_mutex_t ocannl_deadline_write_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ocannl_deadline_write_cond = PTHREAD_COND_INITIALIZER;
+static int ocannl_deadline_written;
+
+static void *ocannl_deadline_writer(void *arg) {
   const char *p = ocannl_deadline_msg;
   size_t n = ocannl_deadline_msg_len;
-  pfd.fd = 2;
-  pfd.events = POLLOUT;
+  (void)arg;
   while (n > 0) {
-    ssize_t w;
-    pfd.revents = 0;
-    if (poll(&pfd, 1, 2000) <= 0 || !(pfd.revents & POLLOUT)) break;
-    w = write(2, p, n);
+    ssize_t w = write(2, p, n);
     if (w < 0) {
       if (errno == EINTR) continue;
       break;
@@ -449,6 +449,33 @@ static void ocannl_deadline_die(void) {
     p += w;
     n -= (size_t)w;
   }
+  pthread_mutex_lock(&ocannl_deadline_write_lock);
+  ocannl_deadline_written = 1;
+  pthread_cond_signal(&ocannl_deadline_write_cond);
+  pthread_mutex_unlock(&ocannl_deadline_write_lock);
+  return NULL;
+}
+
+static void ocannl_deadline_die(void) {
+  struct sigaction dfl;
+  sigset_t alrm;
+  pthread_t writer;
+  pthread_attr_t attr;
+  /* The writer inherits this thread's mask, every signal blocked: it never takes the program's. */
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  if (pthread_create(&writer, &attr, ocannl_deadline_writer, NULL) == 0) {
+    struct timespec abs;
+    clock_gettime(CLOCK_REALTIME, &abs);
+    abs.tv_sec += 2;
+    pthread_mutex_lock(&ocannl_deadline_write_lock);
+    while (!ocannl_deadline_written)
+      if (pthread_cond_timedwait(&ocannl_deadline_write_cond, &ocannl_deadline_write_lock, &abs) ==
+          ETIMEDOUT)
+        break;
+    pthread_mutex_unlock(&ocannl_deadline_write_lock);
+  }
+  pthread_attr_destroy(&attr);
   memset(&dfl, 0, sizeof dfl);
   dfl.sa_handler = SIG_DFL;
   sigemptyset(&dfl.sa_mask);
