@@ -9104,6 +9104,14 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_BUFFER_ALIASING)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_DEBUG_LOG_TO_STREAM_FILES)
+  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PREFER_BACKEND_UNIFORMITY)
   (glob_files_rec ../../arrayjit/lib/*.ml)
   (glob_files_rec ../../tensor/*.ml)
   (glob_files_rec ../../lib/*.ml)

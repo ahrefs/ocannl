@@ -52,10 +52,12 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   check_half_prec_constants_cutoff
   cpu_schedule_min_parallel
   debug_log_from_routines
+  debug_log_to_stream_files
   default_prec
   enable_device_only
   exit_stream_teardown_timeout
   fp16_arithmetic
+  gpu_elide_covered_zeros
   gpu_fission_keep_mapping
   gpu_lane_all_reduce_simdgroups
   gpu_lane_preamble_reduction
@@ -81,6 +83,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   narrow_compute_f32
   no_config_file
   output_prec_in_ll_files
+  prefer_backend_uniformity
   profile
   schedule_fission
   schedule_log_launches

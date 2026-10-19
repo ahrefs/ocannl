@@ -2079,7 +2079,8 @@ let cache_capacity_override =
      | "none" -> `Off
      | _ -> (
          match Float.of_string raw with
-         | f when Float.is_finite f && Float.(f >= 0.) -> `Value (Int.of_float f)
+         | f when Float.is_finite f && Float.(f >= 0.) && Float.(f < of_int Int.max_value) ->
+             `Value (Int.of_float f)
          | _ | (exception _) ->
              raise
              @@ Utils.User_error

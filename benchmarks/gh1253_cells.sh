@@ -74,22 +74,26 @@ calibrate=$root/_build/default/tools/calibrate_cache_capacity.exe
 wgrad=$root/_build/default/benchmarks/runners/ocannl/bench_wgrad.exe
 
 failed=0
+last_ok=false
 cell() {
   local name=$1
   shift
   echo "== cell $name: $*"
   if perl -e 'alarm shift; exec @ARGV' "$cap" "$@" >"$out/$name.out" 2>"$out/$name.err"; then
     echo "   ok"
+    last_ok=true
   else
     echo "   FAILED (exit $?)"
     failed=$((failed + 1))
+    last_ok=false
   fi
   cat "$out/$name.out"
 }
 
-# A fitted constant read back from a cell's config-pasteable line; empty when the cell printed none
-# (its failure is already counted).
-fitted() { sed -n "s/^$1=//p" "$2" | tail -1; }
+# A fitted constant read back from a cell's config-pasteable line -- only from a cell that
+# succeeded: a fit its own tool rejected (a non-monotone split exits 1 after printing it) must not
+# reach the later cells. Empty otherwise; the failure is already counted.
+fitted() { if $last_ok; then sed -n "s/^$1=//p" "$2" | tail -1; fi; }
 
 cell bandwidth "$bandwidth" "--ocannl_backend=$backend" \
   "--ocannl_autotune_calibration_file=$out/calibration.tsv"
