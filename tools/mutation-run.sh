@@ -111,7 +111,7 @@ my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
 my %golden_fail;
 my $golden_fails = 0;
 # One pass over a stdout: its rows (the run's own `FAIL: ` rows apart, counted on their own), its
-# last such row, its case raises, its marker rows, and its other rows in order. [$own] says
+# last row, its case raises, its marker rows, and its other rows in order. [$own] says
 # whether the `FAIL: ` rows beyond the golden's are to be set apart (a run's) or the file is the
 # golden itself, whose rows all count.
 sub read_rows {
@@ -133,6 +133,9 @@ sub read_rows {
     }
     %exact = %golden_fail;
     for my $line (@lines) {
+        # The last row is the physical one: a run ending on a failure message after an apparent
+        # last case raise did not end where a complete run does.
+        $r{last} = $line;
         if ($line =~ /^FAIL: /) {
             $r{fail_rows}{$line}++;
             if (!$own) { $golden_fail{$line}++; $golden_fails++ }
@@ -141,7 +144,6 @@ sub read_rows {
             else { $r{own_fail}++; next }
         }
         $r{rows}++;
-        $r{last} = $line;
         $r{raises}++ if $line =~ $case_raise;
         if ($line =~ $marker_row) { $r{markers}++ } else { push @{$r{plain}}, $line }
     }

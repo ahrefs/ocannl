@@ -124,6 +124,11 @@ case "$PROBE_MODE" in
   casecut) rows 'first: the case ran to completion (raised Failure("injected")): false\nnested: label: true\n'
     printf 'FAIL: first: the case ran to completion (raised Failure("injected")): false\n'
     printf 'FAILED: 1 check did not hold: "first: the case ran to completion".\n'; exit 1 ;;
+  # A raise, then a failure message and nothing more: the stdout ends on the message, not on the
+  # raise, however few rows the message counts for.
+  casefailmsg) rows 'first: the case ran to completion (raised Failure("injected")): false\nFAIL: a message\n'
+    printf 'FAIL: first: the case ran to completion (raised Failure("injected")): false\nFAIL: a message\n'
+    printf 'FAILED: 2 checks did not hold: "first: the case ran to completion", "a message".\n'; exit 1 ;;
   # The test never ran this time: the output a previous run left must not count.
   stale) printf 'FAIL: first: false\n'; exit 1 ;;
   reused) exit 0 ;;
@@ -250,7 +255,7 @@ flagged() {
   grep -q "^$1$" "$fixture/result" || { cat "$fixture/result"; echo "missing: $1"; exit 1; }
   grep -q '^(not evidence: the mutant was neither caught nor survived)$' "$fixture/result"
 }
-for mode in raise short failpad stopped casecrash caseexit casecut stale reused both; do
+for mode in raise short failpad stopped casecrash caseexit casecut casefailmsg stale reused both; do
   export PROBE_MODE=$mode
   run_case 4
   case $mode in
@@ -273,6 +278,8 @@ for mode in raise short failpad stopped casecrash caseexit casecut stale reused 
       flagged 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran' ;;
     casecut)
       flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows" ;;
+    casefailmsg)
+      flagged "STOPPED EARLY: the mutated run printed 1 of the golden's 3 rows" ;;
     stale|reused)
       grep -q '^rows: not counted$' "$fixture/result"
       flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)' ;;

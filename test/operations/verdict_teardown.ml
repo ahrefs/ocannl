@@ -214,18 +214,26 @@ let () =
          those"
         manifest_failed ~holds:(fun status out _ ->
           let held_status, held_out, _ = manifest_held in
-          let held = String.split_lines held_out and failed = String.split_lines out in
-          let rec within = function
-            | [], _ -> true
-            | _, [] -> false
-            | row :: rows, h :: hs ->
-                if String.equal row h || String.equal row "the first manifest claim: false" then
-                  within (rows, hs)
-                else within (row :: rows, hs)
+          (* The failing ending derived from the passing one: the first claim false, its marker row
+             (the row carrying [Refusal_control_scan.marker] of its diagnostic) and the trailer's
+             rows (each [OK: ] row and the empty row before it) dropped -- and nothing else, so a
+             printer dropping a row from both endings fails here. *)
+          let first_marker =
+            Test_utils.Refusal_control_scan.(marker (List.hd_exn (diagnostics manifest_source)))
           in
+          let rec derive = function
+            | "" :: ok :: rows when String.is_prefix ok ~prefix:"OK: " -> derive rows
+            | ok :: rows when String.is_prefix ok ~prefix:"OK: " -> derive rows
+            | "the first manifest claim: true" :: rows ->
+                "the first manifest claim: false" :: derive rows
+            | row :: rows when String.is_substring row ~substring:first_marker -> derive rows
+            | row :: rows -> row :: derive rows
+            | [] -> []
+          in
+          let held = String.split_lines held_out in
           exited 0 held_status && exited 1 status
-          && List.length failed < List.length held
-          && within (failed, held));
+          && List.length (derive held) = List.length held - 3
+          && List.equal String.equal (String.split_lines out) (derive held));
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
