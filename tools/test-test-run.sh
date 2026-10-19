@@ -6143,8 +6143,9 @@ harness_leg_run '83: repeat has both bounds #repeat' leg_83
 # zombie is gone before anything looks. So these runs go through a stand-in for
 # that PID 1: a Linux child subreaper (prctl PR_SET_CHILD_SUBREAPER) that waits
 # for its own child only, so every orphan handed to it stays a zombie in the
-# group it left. When its child exits it records what it holds, and KILLs
-# anything still live (a leak, which fails the case). Under it, `repeat` past
+# group it left. When its child exits it records what it holds, KILLs
+# anything still live (a leak, which fails the case), and only then reaps all
+# of it, so its zombies never outlive the harness. Under it, `repeat` past
 # the per-test cap keeps TIMEOUT (142), a GPU batch's set (resolved bounds, the
 # default cap) passes, and `run` keeps its verdict both ways: nothing is
 # refused, and across the cases the stand-in must have held a zombie, or it
@@ -6187,6 +6188,15 @@ for p, state, _ in held:
             os.kill(p, signal.SIGKILL)
         except OSError:
             pass
+# Recorded, it reaps everything it adopted: under a PID 1 that reaps nothing
+# (where this leg matters most) its zombies would otherwise outlive the harness.
+while True:
+    try:
+        os.waitpid(-1, 0)
+    except ChildProcessError:
+        break
+    except InterruptedError:
+        continue
 sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
 SUBREAPER
 reap_held= reap_got=
