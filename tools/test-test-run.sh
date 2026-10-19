@@ -12,12 +12,12 @@
 # Each leg's body is a function, run by `harness_leg_run 'N: what it pins
 # #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
 # below and closed by the one group it belongs to (gh-ocannl-1202):
-# #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83),
-# #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36, 68-69,
-# 71-73, 80), #fresh (81), #lifecycle (40-47, 65, 74: the run/start lifecycle
-# with its signal legs, and both fork-window negative controls), #source
-# (59-63, 66), #slot (53-58, 78), #device (75-77), #credentials (79), #bisect
-# (82), #harness (84). A body that cannot go on (an extraction that
+# #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83,
+# 85), #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36,
+# 68-69, 71-73, 80), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
+# lifecycle with its signal legs, and both fork-window negative controls),
+# #source (59-63, 66), #slot (53-58, 78), #device (75-77), #credentials (79),
+# #bisect (82), #harness (84). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
 # which would end the harness and hide every leg after it (gh-ocannl-1374).
@@ -169,6 +169,14 @@
 #      device ends it as DEVICE UNHEALTHY (69) before any dune; the default is
 #      run's (1500s on a GPU batch, none on a CPU one), and a test inside the
 #      cap or an answering device lets every iteration run.
+#  85 sits after leg 83 (Linux only): under a stand-in for a PID 1 that reaps
+#      no orphans -- a child subreaper that waits for its own child only --
+#      the zombie-only groups `repeat` and `run` leave are read as gone, not
+#      refused: a capped set keeps TIMEOUT, a GPU set passes through the
+#      resolution's inert-zombie branch, and `run` keeps its verdict, while
+#      the stand-in must have held a zombie and nothing live (gh-ocannl-1376).
+#      The negative controls take out the iteration shell's reaping trap and
+#      that branch: each set is then refused, exit 2.
 #  64-65 sit between legs 51 and 52: `plan`, and the run's first phase, in
 #      which the supervisor's child resolves the backends (gh-ocannl-1066,
 #      gh-ocannl-1106).
@@ -2209,7 +2217,10 @@ if await_fixture_ready "$TMP/repeat-never-ready" 1; then
   report 1 "fixture: await_fixture_ready accepted an absent marker (every leg awaiting a fixture reads it)"
 fi
 # The three width-cap probes read what the leg exported, which is the
-# harness-wide absent defaults (hermetic_probes) unless the leg opted in.
+# harness-wide absent defaults (hermetic_probes) unless the leg opted in. A leg
+# that sets the array fixture_launcher runs the script under it (leg 85: a
+# parent that reaps no orphans); empty, the script runs directly.
+fixture_launcher=()
 fixture_probe() { # tag mode runs subcommand [argv...]
   local tag=$1 mode=$2 runs=$3
   shift 3
@@ -2227,6 +2238,7 @@ fixture_probe() { # tag mode runs subcommand [argv...]
   REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
   OCANNL_TOOL_TEST_RUNS=$runs \
   PATH=$repeat_bin:$PATH \
+    ${fixture_launcher[@]+"${fixture_launcher[@]}"} \
     "$repeat_root/tools/test-run.sh" "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
   fixture_rc=$?
   fixture_out=$(cat "$TMP/$tag.out")
@@ -5995,16 +6007,22 @@ harness_leg_run '77: plan reports the probe and the per-test cap #device' leg_77
 # batch's device probe runs before each iteration, inside it: a query that does not answer ends
 # the set as DEVICE UNHEALTHY (69) with dune never started -- not even its clean -- and an answer
 # lets every iteration run, the device asked once each.
+# Whether the fixture's renamed dune reads back as `dune` in ps, as leg 75 asks
+# it: asked once, by the first of the later legs to run that needs it.
+renamed_dune_readable() { # sets test_cap_named_ok=1 where it does
+  local named
+  [ -z "${test_cap_named_ok:-}" ] || return 0
+  perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
+  named=$!
+  sleep 0.3
+  ps -A -o pid= -o comm= 2>/dev/null | grep -Eq "^ *$named +(.*/)?dune$" && test_cap_named_ok=1
+  kill "$named" 2>/dev/null
+  wait "$named" 2>/dev/null
+  return 0
+}
 leg_83() {
 rb_label="repeat bounds: a test past the per-test cap ends the set as TIMEOUT naming it, a wedged device ends it as DEVICE UNHEALTHY; inside the cap, an answering device and a CPU batch's default do not"
-if [ -z "${test_cap_named_ok:-}" ]; then
-  perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
-  rb_named=$!
-  sleep 0.3
-  ps -A -o pid= -o comm= 2>/dev/null | grep -Eq "^ *$rb_named +(.*/)?dune$" && test_cap_named_ok=1
-  kill "$rb_named" 2>/dev/null
-  wait "$rb_named" 2>/dev/null
-fi
+renamed_dune_readable
 rb_detail=
 if [ -z "${test_cap_named_ok:-}" ]; then
   skip "$rb_label" "a process renamed through \$0 does not read back as dune in ps here"
@@ -6112,6 +6130,151 @@ fi
 }
 harness_leg_run '83: repeat has both bounds #repeat' leg_83
 
+# ---------------------------------------------------------------------------
+# Leg 85: zombie-only groups under a parent that reaps no orphans (gh-ocannl-1376)
+# ---------------------------------------------------------------------------
+# Three review rounds of staging#1172 each found a process group holding nothing
+# but zombies, left behind by a `repeat` whose members outlived their parents,
+# that reap_repeat_group refused (exit 2) where the set should have kept its
+# verdict: the iteration shell dying on the supervisor's TERM before its
+# per-test-cap watcher, and the bounds resolution's process-substitution child,
+# which its shell never reaps. Each reproduced only in the reviewer's container,
+# whose PID 1 never reaps orphans; macOS and the Ubuntu runners do, and the
+# zombie is gone before anything looks. So these runs go through a stand-in for
+# that PID 1: a Linux child subreaper (prctl PR_SET_CHILD_SUBREAPER) that waits
+# for its own child only, so every orphan handed to it stays a zombie in the
+# group it left. When its child exits it records what it holds, and KILLs
+# anything still live (a leak, which fails the case). Under it, `repeat` past
+# the per-test cap keeps TIMEOUT (142), a GPU batch's set (resolved bounds, the
+# default cap) passes, and `run` keeps its verdict both ways: nothing is
+# refused, and across the cases the stand-in must have held a zombie, or it
+# reproduced nothing. The negative controls take out the two fixes -- the
+# iteration shell's reaping trap, the resolution's inert-zombie branch -- and
+# each set must then be refused, exit 2, under the same stand-in.
+reap_label="zombie-only groups under a parent that reaps no orphans: repeat keeps TIMEOUT and a GPU set passes, run keeps its verdict, nothing refused"
+reap_nc_trap_label="negative control: without the iteration shell's reaping trap, a capped repeat under that parent is refused"
+reap_nc_resolve_label="negative control: without the resolution's inert-zombie branch, a GPU set under that parent is refused"
+reap_stub=$TMP/subreaper.py
+cat >"$reap_stub" <<'SUBREAPER'
+import ctypes, os, signal, sys
+# The nearest subreaper ancestor inherits every orphan below it; this one waits
+# for its own child only, as a container's PID 1 that reaps nothing would.
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.exit(97)
+if len(sys.argv) == 1:
+    sys.exit(0)  # the capability probe
+pid = os.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+_, st = os.waitpid(pid, 0)
+held = []
+for d in os.listdir('/proc'):
+    if not d.isdigit():
+        continue
+    try:
+        with open('/proc/%s/stat' % d) as f:
+            fields = f.read().rsplit(')', 1)[1].split()
+    except OSError:
+        continue
+    if int(fields[1]) == os.getpid():
+        held.append((int(d), fields[0], fields[2]))
+with open(os.environ['SUBREAPER_RECORD'], 'a') as f:
+    for p, state, pgid in held:
+        f.write('%d %s %s\n' % (p, state, pgid))
+for p, state, _ in held:
+    if state != 'Z':
+        try:
+            os.kill(p, signal.SIGKILL)
+        except OSError:
+            pass
+sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
+SUBREAPER
+reap_held= reap_got=
+reap_case() { # tag want-exit -- argv_probe/slot_probe call...: under the stand-in; 0 iff kept and nothing leaked
+  local tag=$1 want=$2
+  shift 3
+  : >"$TMP/$tag.held"
+  fixture_launcher=(python3 "$reap_stub")
+  SUBREAPER_RECORD=$TMP/$tag.held "$@"
+  fixture_launcher=()
+  reap_held="$reap_held$(cat "$TMP/$tag.held")"$'\n'
+  reap_got="exit $argv_rc (want $want); held (pid state pgid): $(tr '\n' ';' <"$TMP/$tag.held"); output: $argv_out $argv_err"
+  [ "$argv_rc" = "$want" ] || return 1
+  if grep -q 'refusing to reuse' <<<"$argv_out$argv_err"; then return 1; fi
+  if grep -q ' [^Z] ' "$TMP/$tag.held"; then return 1; fi
+}
+reap_swap() { # FROM TO: repeat_root's script is the shipping one with its one line holding FROM made TO
+  FROM=$1 TO=$2 perl -ne 'if (index($_, $ENV{FROM}) >= 0) { $n++; print "$ENV{TO}\n"; next }
+    print; END { exit($n == 1 ? 0 : 1) }' "$SRC" >"$repeat_root/tools/test-run.sh" || return 1
+  if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then return 1; fi
+  bash -n "$repeat_root/tools/test-run.sh"
+}
+reap_refused() { # label: the last case was refused, exit 2, as reap_repeat_group refuses
+  if [ "$argv_rc" = 2 ] && grep -q 'refusing to reuse' <<<"$argv_out$argv_err"; then
+    report 0 "$1"
+  else
+    report 1 "$1" "$reap_got"
+  fi
+}
+leg_85() {
+local why= detail=
+renamed_dune_readable
+if [ "$(uname -s)" != Linux ] || ! command -v python3 >/dev/null 2>&1 ||
+   ! python3 "$reap_stub" >/dev/null 2>&1; then
+  why="needs a Linux child subreaper (prctl PR_SET_CHILD_SUBREAPER, through python3)"
+elif [ -z "${test_cap_named_ok:-}" ] || [ "$have_state" != 1 ]; then
+  why="a process renamed through \$0 does not read back as dune in ps here, or no state reader"
+fi
+if [ -n "$why" ]; then
+  skip "$reap_label" "$why"
+  skip "$reap_nc_trap_label" "$why"
+  skip "$reap_nc_resolve_label" "$why"
+  return
+fi
+reap_held=
+export REPEAT_TEST_ACTION_PID=$TMP/reap-action.pid
+argv_mode=action reap_case reap-repeat-hung 142 -- argv_probe reap-repeat-hung repeat --test-cap 2 2 build @cheap ||
+  detail="repeat past the cap: $reap_got"
+if [ -z "$detail" ]; then
+  argv_mode=action REPEAT_TEST_ACTION_SECS=1 reap_case reap-repeat-gpu 0 -- \
+    slot_probe reap-repeat-gpu hold hip cc repeat 2 build @cheap ||
+    detail="a GPU set: $reap_got"
+  # ...through the resolution's inert-zombie branch, the shape round 3 found.
+  [ -n "$detail" ] || grep -q '^repeat: the resolution left only zombies in group [0-9]*: inert, not reaped$' "$argv_dir/log" ||
+    detail="a GPU set: its log does not say the resolution left only zombies: $(cat "$argv_dir/log")"
+fi
+if [ -z "$detail" ]; then
+  argv_mode=action reap_case reap-run-hung 142 -- argv_probe reap-run-hung run --test-cap 2 build @cheap ||
+    detail="run past the cap: $reap_got"
+fi
+if [ -z "$detail" ]; then
+  argv_mode=action REPEAT_TEST_ACTION_SECS=1 reap_case reap-run-gpu 0 -- \
+    slot_probe reap-run-gpu hold hip cc run build @cheap ||
+    detail="a GPU run: $reap_got"
+fi
+# The stand-in reproduced the shape only if it was handed something to keep.
+if [ -z "$detail" ] && ! grep -q ' Z ' <<<"$reap_held"; then
+  detail="the stand-in held no zombie in any case: no case met a parent that reaps no orphans"
+fi
+if [ -z "$detail" ]; then report 0 "$reap_label"; else report 1 "$reap_label" "$detail"; fi
+# The controls: the shipping script with one fix taken out, put back after.
+if reap_swap '{ kill "$watcher"; wait "$watcher"; } 2>/dev/null; exit 143' '        :'; then
+  argv_mode=action reap_case reap-nc-trap 2 -- argv_probe reap-nc-trap repeat --test-cap 2 2 build @cheap
+  reap_refused "$reap_nc_trap_label"
+else
+  report 1 "$reap_nc_trap_label" "the iteration shell's trap could not be taken out of $SRC"
+fi
+if reap_swap '! group_identity_matches "$resolve_dir" && ! group_alive "$resolve_pg"; then' '       false; then'; then
+  argv_mode=action REPEAT_TEST_ACTION_SECS=1 reap_case reap-nc-resolve 2 -- \
+    slot_probe reap-nc-resolve hold hip cc repeat 2 build @cheap
+  reap_refused "$reap_nc_resolve_label"
+else
+  report 1 "$reap_nc_resolve_label" "the resolution's inert-zombie branch could not be taken out of $SRC"
+fi
+cp "$SRC" "$repeat_root/tools/test-run.sh"
+unset REPEAT_TEST_ACTION_PID
+}
+harness_leg_run '85: zombie-only groups under a parent that reaps no orphans #repeat' leg_85
 
 # ---------------------------------------------------------------------------
 # Leg 79: credentials never reach dune (gh-ocannl-1280)

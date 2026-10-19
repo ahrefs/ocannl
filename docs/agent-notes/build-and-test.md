@@ -894,6 +894,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   A reachable group that loses leader identity before KILL is refused without consulting the
   fallible census. After KILL reached a verified group, leaderless residue is accepted only when
   its census is zombie-only; any live leaderless descendant is a loud refusal to reuse the tree.
+  Those zombie-only shapes reproduce only under a parent that never reaps orphans (staging#1172's
+  three review rounds each found one in the reviewer's container; macOS and the Ubuntu runners
+  reap). Leg 85 of `tools/test-test-run.sh` (Linux, gh-ocannl-1376) runs `repeat` and `run` under
+  a stand-in: a python3 child subreaper (`prctl(PR_SET_CHILD_SUBREAPER)`) that waits for its own
+  child only, so every orphan below it stays a zombie in the group it left, and that records what
+  it held. A capped set keeps TIMEOUT, a GPU set passes through the resolution's inert branch
+  (`left only zombies ... inert, not reaped`), `run` keeps its verdict, and the stand-in must have
+  held a zombie and nothing live; taking out the iteration shell's reaping trap, or that branch,
+  makes the set refused (exit 2) under the same stand-in.
 - Every liveness question in that script — per pid and per process GROUP — reads process STATE and
   not only the signal, because `kill -0` succeeds on a ZOMBIE exactly as on a live process, and an
   identity token does not rescue the check either: a zombie leader still prints its recorded
