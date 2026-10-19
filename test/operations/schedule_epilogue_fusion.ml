@@ -231,7 +231,9 @@ let () =
   let got3, census3 = run_census "epf_mma" transform3 mc3 in
   p "staged fused: epilogue is a sibling of the fragment store-back" !has_epilogue_sibling;
   p_all2 "staged fused values match two-kernel" got3 want ~f:(fun a b -> Float.(abs (a - b) < 1e-2));
-  p_all2 "staged fused bitwise on C backends" got3 want ~f:(fun a b -> on_gpu || Float.equal a b);
+  (let label = "staged fused bitwise on C backends" in
+   if on_gpu then Verdict.skipped ~backend:backend_name label
+   else p_all2 label got3 want ~f:Float.equal);
   (let src = Generated.read "epf_mma" in
    let has s = String.is_substring src ~substring:s in
    (* Which way the [Tile_mma] went is the census's to say, read against the backend's capability

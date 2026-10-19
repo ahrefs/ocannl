@@ -98,9 +98,13 @@ let () =
   let default =
     Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices:[] base
   in
-  p "the untuned default compile of the same code does"
-    ((not (Sched.automatic_schedule_active ~backend_name:backend))
-    || List.exists default ~f:(fun o -> not (List.is_empty (LL.hardware_axes o.LL.llc))));
+  (* The default schedules are a configuration's to switch off ([automatic_gpu_schedule],
+     [automatic_cpu_schedule], routine logging): a run that did has nothing to compare. *)
+  gated ~aggregation:`Environment
+    ~when_:(Sched.automatic_schedule_active ~backend_name:backend)
+    ~on:(backend ^ " with automatic schedules off")
+    "the untuned default compile of the same code does"
+    (List.exists default ~f:(fun o -> not (List.is_empty (LL.hardware_axes o.LL.llc))));
 
   (* --- The search: the baseline is timed on CPU backends and skipped on GPU ones --- *)
   let ma = TDSL.ndarray mav ~label:[ "sb_ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in

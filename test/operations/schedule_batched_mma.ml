@@ -325,9 +325,9 @@ let () =
             if Ir.C_syntax.equal_tensorization mma.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized
             then Int.incr (of_flavor n_intrinsic q)
         | exception _ -> ());
-    p
+    gated ~when_:has_uniform_bf16_tile ~on:backend_name
       (tag ^ " bf16: the backend's advertised tile is seeded")
-      ((not has_uniform_bf16_tile) || not (List.is_empty seeds));
+      (not (List.is_empty seeds));
     (* One set of claims per flavor. A flavor the site does not seed contributes no sampled
        candidate and its claims stand vacuously, which is what keeps the golden backend-uniform; a
        flavor that IS sampled has to compile, run, agree with the serial twin, and reach the
@@ -338,15 +338,15 @@ let () =
       if has_uniform_bf16_tile then
         Stdio.eprintf "%s: %d of %d %s candidates ran, %d matched, %d rendered the intrinsic\n" tag
           (count n_ran) n_sampled label (count n_close) (count n_intrinsic);
-      p
+      gated ~when_:has_uniform_bf16_tile ~on:backend_name
         (tag ^ " bf16: a sampled " ^ label ^ " candidate compiles and runs")
-        ((not has_uniform_bf16_tile) || n_sampled = 0 || count n_ran >= 1);
+        (n_sampled = 0 || count n_ran >= 1);
       p
         (tag ^ " bf16: every running " ^ label ^ " candidate matches the serial twin")
         (count n_ran = count n_close);
-      p
+      gated ~when_:has_uniform_bf16_tile ~on:backend_name
         (tag ^ " bf16: a running " ^ label ^ " candidate renders the tensor-core intrinsic")
-        ((not has_uniform_bf16_tile) || n_sampled = 0 || count n_intrinsic >= 1)
+        (n_sampled = 0 || count n_intrinsic >= 1)
     in
     flavor_claims ~label:"batch-serial" ~grid:false;
     flavor_claims ~label:"batch-grid" ~grid:true

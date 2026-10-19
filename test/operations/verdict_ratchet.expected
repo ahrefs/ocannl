@@ -599,6 +599,57 @@ accepts a gated boolean comparing against the invariant its gate reads: true
 names a gated boolean claim it cannot complete instead of counting it clean: true
 reads a gated claim nothing binds as Verdict's, its name being Verdict's alone: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
+refuses a negated backend gate folded into a claim's value: true
+refuses a backend gate that is itself a disjunct of the claim: true
+refuses a gate written after the claim it folds: true
+refuses a fold bound to a name before the claim: true
+refuses a fold spelled as an if whose else branch passes: true
+refuses a fold spelled as an if whose then branch passes: true
+refuses a fold behind a negated conjunction: true
+refuses a fold in a quantified claim's predicate: true
+refuses a fold in a predicate a name is bound to: true
+refuses a fold in p_none's predicate, whose element passes where it is false: true
+refuses a fold in a computed-label claim: true
+refuses a fold in a gated boolean, beside its own gate: true
+refuses a gate read off a lazy hardware probe: true
+refuses a gate a match on the backend computes: true
+refuses a host gate folded into a claim's value: true
+refuses a gate read off the settings record: true
+accepts a disjunct that is a library constant, which the test did not compute: true
+refuses a fold read off any value of Sys: true
+refuses a gate a later assignment writes into a ref: true
+refuses a ref that ever holds a run-constant, whatever overwrites it: true
+refuses a gate assigned over a ref the test initialized: true
+refuses a gate written through an alias of the ref: true
+refuses a fold in a function-case predicate's guard: true
+refuses a fold in a match guard whose patterns match anything: true
+accepts a function-case predicate that selects on the element: true
+refuses a gate a module of the source binds: true
+accepts a value of a module the source names Sys: true
+refuses a gate a try computes from the configuration: true
+refuses a gate read off a field of a record that also holds the test's data: true
+accepts a field of a record that holds the test's data: true
+refuses a fold inside a protected expression: true
+refuses a gate a module of the source writes into its cell: true
+refuses a gate read off the backend's codegen capabilities: true
+accepts a ref the test alone writes: true
+refuses a fold spelled as a match on the backend with a passing case: true
+accepts a match on the backend every case of which the test computes: true
+accepts a gated claim whose value repeats its own gate: true
+accepts a gated_all whose predicate repeats a conjunct of its gate: true
+marks a fold past an open of another module ambiguous: true
+accepts the gated spelling of the same claim: true
+accepts a skip spelled as a branch: true
+accepts an implication whose antecedent the test computed: true
+accepts a disjunct computed from the program though it read the backend on its way: true
+refuses a backend gate conjoined into an implication's antecedent: true
+accepts an antecedent that compares the element under test with the backend: true
+does not read a claim name the source binds itself: true
+accepts a gate folded below a conjunction, which the claim checks in part everywhere: true
+accepts a claim about the configuration alone: true
+accepts an if both of whose branches the test computes: true
+does not split a disjunction whose connective the source rebinds: true
+refuses a planted folded gate, and names a folded-gate reader that raised: true
 the readers agree on a claim qualified by Verdict: true
 the readers agree on a claim an open of Verdict.Claims brings in: true
 the readers agree on a claim through a module alias of Verdict: true
@@ -692,6 +743,9 @@ and it reads the label of every claim form Verdict.Claims exports: true
 no gated claim's gate reads the population it quantifies: true
 and it recognizes every gated form Verdict.Claims exports: true
 and the gate reader completed gated claims to compare: true
+no claim folds a run-constant gate into its value: true
+and the folded-gate reader judges every member Verdict.Claims exports: true
+and it read the values of Verdict claims: true
 the scan found every literal planted for it: true
 every exemption on this check's lists is still earned: true
 every exempted claim-shaped literal is one source site, not a shared key: true
@@ -711,6 +765,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b58d64bebca3825149316fa29084d773] which reads
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
+  [scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into
+  [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised
   [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict
   [scanner-refusal:63d9475f3df44af6baac8bdc03a3310b] every quantified binding
   [scanner-refusal:d4d40c92b012f9347593f527cb7ad30d] pass_fail
@@ -722,6 +778,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies
   [scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims
   [scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated
+  [scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into
+  [scanner-refusal:e9935bd293c26e123652183c000cb7e8] Verdict.Claims
+  [scanner-refusal:07f11cb8fe0952beedc14df2223a8f0f] values of Verdict
   [scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted
   [scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on
   [scanner-refusal:bd1c6476261fa5d1b680ca8c0959f3f9] exempted claim-shaped literal

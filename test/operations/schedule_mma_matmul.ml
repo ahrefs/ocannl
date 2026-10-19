@@ -506,8 +506,8 @@ let () =
   let ctx_a = Context.run ctx_a routine_a in
   let got_mma = Context.get_values ctx_a mc1.Tensor.value in
   p_all2 "tensorized matmul values match the serial twin" got_mma got_serial ~f:approx;
-  p_all2 "C-backend fallback matches bitwise" got_mma got_serial ~f:(fun a b ->
-      on_gpu || Float.equal a b);
+  (let label = "C-backend fallback matches bitwise" in
+   if on_gpu then skipped label else p_all2 label got_mma got_serial ~f:Float.equal);
   (let src = Generated.read "mm_mma" in
    let has s = String.is_substring src ~substring:s in
    (* Which rendering is the capability's to say: Metal's [simdgroup_float8x8] tile and the C
@@ -2525,8 +2525,8 @@ let () =
     let ctx1 = Context.run ctx1 routine1 in
     let got = Context.get_values ctx1 tensorized.Tensor.value in
     p_all2 (Printf.sprintf "%s tensorized matmul matches the serial twin" tag) got want ~f:approx;
-    p_all2 (Printf.sprintf "%s C-backend fallback matches bitwise" tag) got want ~f:(fun a b ->
-        on_gpu || Float.equal a b);
+    (let label = Printf.sprintf "%s C-backend fallback matches bitwise" tag in
+     if on_gpu then skipped label else p_all2 label got want ~f:Float.equal);
     let src = Generated.read ("mm_" ^ tag ^ "_mma") in
     let has s = String.is_substring src ~substring:s in
     let census = renderings routine1 in
