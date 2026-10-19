@@ -625,10 +625,11 @@ let line_break_census content =
       writes into it, [not], [&&] and [||] (bare where the source does not bind them, or qualified
       by a standard library), [!] and [ref] where unbound too, the branches of an [if] (never the
       condition), the cases of a [match], the body and handlers of a [try], the body of a [let],
-      [let module], local [open] or sequence, type constraints and pipelines; a quantifier is a
-      {!quantifiers} function of a collection module, whose collection is its first positional
-      argument in [Base]'s order (the first two for a pairwise one) and every positional argument in
-      [Stdlib]'s;
+      [let module], local [open] or sequence, type constraints, pipelines, and a quantifier's own
+      arguments, its predicate's body included (a quantifier nested there ranges over a population
+      of its own, the predicate's parameters none); a quantifier is a {!quantifiers} function of a
+      collection module, whose collection is its first positional argument in [Base]'s order (the
+      first two for a pairwise one) and every positional argument in [Stdlib]'s;
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
       a [let alias = name] renaming: the right-hand side of [x := e], and what a writer of a mutable
       collection module ({!mutable_modules}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... —
@@ -1259,6 +1260,19 @@ let gate_census content =
                   visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs)
           | Pexp_let (rec_flag, bindings, body) ->
               visit (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
+          | Pexp_function (params, _, body) -> (
+              (* A quantifier's predicate: what its body quantifies. *)
+              let env =
+                List.fold params ~init:env ~f:(fun env param ->
+                    match param.pparam_desc with
+                    | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                    | Pparam_newtype _ -> env)
+              in
+              match body with
+              | Pfunction_body body -> visit env body
+              | Pfunction_cases (cases, _, _) ->
+                  List.iter cases ~f:(fun case ->
+                      visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs))
           | Pexp_apply (callee, arguments) -> (
               match self#pipeline callee arguments with
               | Some (callee, arguments, _) ->
@@ -1283,7 +1297,11 @@ let gate_census content =
                         when List.mem quantifiers name ~equal:String.equal ->
                           List.iter (quantified_arguments ~stdlib name arguments)
                             ~f:(fun collection ->
-                              Hash_set.iter (self#population env collection) ~f:(Hash_set.add found))
+                              Hash_set.iter (self#population env collection) ~f:(Hash_set.add found));
+                          (* A quantifier nested in the predicate ranges over a population of its
+                             own: the arguments are read as booleans too, a function's body
+                             included, though the predicate's own parameters are no population. *)
+                          List.iter arguments ~f:(fun (_, argument) -> visit env argument)
                       | _ -> ())
                   | _ -> ()))
           | _ -> ()

@@ -591,6 +591,7 @@ refuses a gated boolean whose Stdlib quantifier ranges over the gated population
 refuses a gated boolean written into a ref the claim dereferences: true
 refuses a population gate behind a partially applied gated boolean wrapper: true
 refuses a gated boolean whose pairwise existential is Base's exists2_exn: true
+refuses a gated boolean whose quantifier's predicate quantifies the gated population: true
 does not read a connective the source rebinds as the standard one: true
 accepts a gated boolean over a population a backend gate steers: true
 accepts a gated boolean whose condition, not its value, quantifies what the gate reads: true
@@ -610,6 +611,7 @@ the readers agree that a module taking over the name Verdict is not Verdict: tru
 the readers agree that a path through another module's Verdict is not Verdict: true
 the readers agree that a structure including its own Verdict module does not include Verdict: true
 the readers agree that a Verdict module an opened structure binds is not Verdict: true
+the readers agree that a structure's later unreadable include leaves its Verdict names ambiguous: true
 the readers agree that a claim name a local structure binds is its own: true
 the readers agree that a claim name the source binds is its own: true
 names the qualified remedy for a quantified claim past an open of another module: true

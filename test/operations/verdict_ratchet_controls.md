@@ -598,7 +598,7 @@ tools/mutation-run.sh on the named module and the focused verdict_ratchet alias,
 exactly the listed false claims, and restored the source byte-for-byte with cmp. The runs came in
 four batches, controls being added between them; each batch's baseline exited 0
 (`20261019T120541Z-43268`, `20261019T121617Z-58901`, `20261019T122119Z-22070`,
-`20261019T123158Z-40198`, and review round 1's `20261019T124720Z-1529`). The two rows marked "local review" answer the pre-PR codex review, which
+`20261019T123158Z-40198`, review round 1's `20261019T124720Z-1529` and round 2's `20261019T131053Z-13186`). The two rows marked "local review" answer the pre-PR codex review, which
 found that a structure's own `Verdict` module was resolved outside the structure.
 
 | Mechanism | Mutation | Controls | Run |
@@ -623,6 +623,8 @@ found that a structure's own `Verdict` module was resolved outside the structure
 | An open of a structure brings in the modules it binds (local review) | `verdict_callee.ml`: an open of a structure brings its values alone | Failed: `the readers agree that a Verdict module an opened structure binds is not Verdict` | `20261019T123229Z-57983` |
 | Base's pairwise existential is a quantifier (review round 1) | `verdict_scan.ml`: `exists2_exn` dropped from the quantifiers | Failed: `refuses a gated boolean whose pairwise existential is Base's exists2_exn` | `20261019T124729Z-9085` |
 | A connective or operator the source rebinds is not the standard one (review round 1) | `verdict_scan.ml`: the boolean side ignores a binding of the connective | Failed: `does not read a connective the source rebinds as the standard one` | `20261019T124744Z-16999` |
+| An unreadable include keeps a structure's earlier Verdict names, ambiguously (review round 2) | `verdict_callee.ml`: an unreadable include replaces every claim name | Failed: `the readers agree that a structure's later unreadable include leaves its Verdict names ambiguous` | `20261019T131102Z-20342` |
+| A quantifier nested in a predicate is read on the boolean side (review round 2) | `verdict_scan.ml`: a quantifier's arguments not read as booleans | Failed: `refuses a gated boolean whose quantifier's predicate quantifies the gated population` | `20261019T131118Z-27931` |
 | The ambiguity remedy is named in the refusal | `verdict_ratchet.ml`: the remedy never added | Failed: names the qualified remedy for a quantified claim past an open of another module | `20261019T121413Z-15477` |
 
 The shipped shape, re-seeded into the corpus: in `test/operations/placement_store.ml`, run 8's gate

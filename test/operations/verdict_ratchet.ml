@@ -4028,6 +4028,12 @@ let () =
   Verdict.gated ~when_:(not (List.is_empty xs)) ~on:"cc" "some pair differs"
     (List.exists2_exn xs ys ~f:( <> ))|ocaml},
       [ "xs" ] );
+    ( "refuses a gated boolean whose quantifier's predicate quantifies the gated population",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty ys)) ~on:"cc" "every x meets every y"
+    (List.for_all xs ~f:(fun _ -> (not (List.is_empty ys)) && List.for_all ys ~f:pred))|ocaml},
+      [ "ys" ] );
     ( "does not read a connective the source rebinds as the standard one",
       {ocaml|open Base
 let not _ = true
@@ -4221,6 +4227,11 @@ let agreement_controls =
       "module M = struct module Verdict = Local_printer end\nopen M\n",
       "Verdict.gated",
       Unread );
+    ( "the readers agree that a structure's later unreadable include leaves its Verdict names \
+       ambiguous",
+      "module C = struct include Verdict.Claims include Other end\n",
+      "C.gated",
+      Read_ambiguous );
     ( "the readers agree that a claim name a local structure binds is its own",
       "open Verdict.Claims\n\
        module Checks = struct let gated ~when_:_ ~on:_ _ _ = () end\n\

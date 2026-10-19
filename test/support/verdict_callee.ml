@@ -247,7 +247,17 @@ let of_structure ast : t =
                               later_wins structure_modules included.modules )
                         | Some Standard -> (values, structure_modules)
                         | Some Unknown | None ->
-                            (later_wins values (all_members From_elsewhere), structure_modules)
+                            (* An unreadable module may or may not export a name: one the structure
+                               had from Verdict stays Verdict's, ambiguously, and every other is
+                               anyone's; a module it binds may be shadowed too. *)
+                            ( Map.of_alist_exn
+                                (module String)
+                                (List.map members ~f:(fun name ->
+                                     ( name,
+                                       match Map.find values name with
+                                       | Some (From_verdict _) -> From_verdict { ambiguous = true }
+                                       | Some (Source | From_elsewhere) | None -> From_elsewhere ))),
+                              Map.map structure_modules ~f:ambiguate )
                       in
                       ( self#opened ~top:false ~include_:true scope denotes,
                         values,
