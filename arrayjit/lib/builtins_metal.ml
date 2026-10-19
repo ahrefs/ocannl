@@ -191,11 +191,11 @@ using namespace metal;|}, []);
     ("int8x16_t", {|struct int8x16_t { int8_t v[16]; };|}, []);
     ("uint16x8_t", {|struct uint16x8_t { uint16_t v[8]; };|}, []);
     ("uint8x16_t", {|struct uint8x16_t { uint8_t v[16]; };|}, []);
-    ("half8_t", {|struct half8_t { half v[8]; };|}, []);
+    ("half8_t", {|struct alignas(16) half8_t { half v[8]; };|}, []);
     (* [Set_from_vec] assigns block elements directly into the destination cells. Keep bfloat
        elements as values rather than raw uint16 bit patterns, which would be converted numerically
        on assignment (0x3F80 becoming 16256.0 rather than 1.0). *)
-    ("bfloat16x8_t", {|struct bfloat16x8_t { bfloat v[8]; };|}, []);
+    ("bfloat16x8_t", {|struct alignas(16) bfloat16x8_t { bfloat v[8]; };|}, []);
     ( "uint32_to_single_uniform",
       {|inline float uint32_to_single_uniform(uint32_t x) {
     return (x >> 8) * (1.0f / 16777216.0f);

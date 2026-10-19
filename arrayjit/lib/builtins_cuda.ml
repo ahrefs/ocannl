@@ -80,7 +80,7 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
     ("int64x2_t", {|typedef struct { long long v[2]; } int64x2_t;|}, []);
     ("int8x16_t", {|typedef struct { signed char v[16]; } int8x16_t;|}, []);
     ("uint16x8_t", {|typedef struct { unsigned short v[8]; } uint16x8_t;|}, []);
-    ("bfloat16x8_t", {|typedef struct { __nv_bfloat16 v[8]; } bfloat16x8_t;|}, []);
+    ("bfloat16x8_t", {|typedef struct __align__(16) { __nv_bfloat16 v[8]; } bfloat16x8_t;|}, []);
     ("uint8x16_t", {|typedef struct { unsigned char v[16]; } uint8x16_t;|}, []);
     ("uint32x4_t", {|typedef struct { unsigned int v[4]; } uint32x4_t;|}, []);
     ("uint64x2_t", {|typedef struct { unsigned long long v[2]; } uint64x2_t;|}, []);
@@ -89,7 +89,7 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
        has no assignment from integer types. The 16-byte alignment supports the [Vectorized] packed
        [reinterpret_cast] loads/stores, like float4_t above. *)
     ("fp8x16_t", {|typedef struct __align__(16) { __nv_fp8_e5m2 v[16]; } fp8x16_t;|}, []);
-    ("half8_t", {|typedef struct { __half v[8]; } half8_t;|}, []);
+    ("half8_t", {|typedef struct __align__(16) { __half v[8]; } half8_t;|}, []);
     ( "uint32_to_single_uniform",
       {|__device__ __forceinline__ float uint32_to_single_uniform(unsigned int x) {
   /* Use __uint2float_rn for correct rounding */
