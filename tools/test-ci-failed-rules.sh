@@ -147,15 +147,18 @@ if harness_leg 'a GitHub-served log reads the same #dune'; then
   # line, dune's colour around the header, CRLF line ends; then the same lines
   # behind the JOB<TAB>STEP<TAB> prefix of `gh run view --log-failed`.
   esc=$(printf '\033')
-  awk -v esc="$esc" 'BEGIN { printf "\357\273\277" }
+  LC_ALL=C awk -v esc="$esc" 'BEGIN { printf "\357\273\277" }
     /^File "/ { $0 = esc "[0;1m" $0 esc "[0m" }
     { printf "2026-10-19T13:11:44.%07dZ %s\r\n", NR, $0 }' "$TMP/red.log" >"$TMP/served.log"
-  awk '{ sub(/^\357\273\277/, ""); printf "Build (ubuntu-latest, 5.5.x, main)\tRun opam exec -- dune build\t%s\n", $0 }' \
+  LC_ALL=C awk '{ sub(/^\357\273\277/, ""); printf "Build (ubuntu-latest, 5.5.x, main)\tRun opam exec -- dune build\t%s\n", $0 }' \
     "$TMP/served.log" >"$TMP/gh-view.log"
+  # Under a UTF-8 locale too, where an awk reads the BOM as one character.
   ok=0
-  for form in served gh-view; do
-    out=$(cd "$proj" && subject "$TMP/$form.log" 2>&1); rc=$?
-    listing_ok "$out" "$rc" || { ok=1; detail="$form: exit $rc; $out"; }
+  for locale in C en_US.UTF-8; do
+    for form in served gh-view; do
+      out=$(cd "$proj" && LC_ALL=$locale subject "$TMP/$form.log" 2>&1); rc=$?
+      listing_ok "$out" "$rc" || { ok=1; detail="$form, LC_ALL=$locale: exit $rc; $out"; }
+    done
   done
   report "$ok" 'a GitHub-served log reads the same' "${detail:-}"
   # The negative control: without the timestamp handling the header is not
@@ -185,6 +188,19 @@ if harness_leg 'a dune error without a location is listed #dune'; then
      printf '%s\n' "$out" | sed -n '2p' | grep -q '^  Error: .*runtest-nonesuch'; then
     report 0 'a dune error without a location is listed'
   else report 1 'a dune error without a location is listed' "build exit $brc, exit $rc; $out"; fi
+fi
+if harness_leg 'locationless errors beside located failures #dune'; then
+  # One log holding dune's locationless error, then the red build, then an
+  # `Error:` line a failing action printed: the first stays listed beside
+  # the failed rule, the last is the action's output and is not.
+  { cat "$TMP/alias.log" "$TMP/red.log"; echo 'Error: printed by the failing test itself'; } >"$TMP/mixed.log"
+  out=$(cd "$proj" && subject "$TMP/mixed.log" 2>&1); rc=$?
+  if [ "$rc" = 0 ] && listing_ok "$(printf '%s\n' "$out" | sed -n '1,3p')" 0 &&
+     [ "$(printf '%s\n' "$out" | sed -n '4p')" = 'dune errors without a location (1):' ] &&
+     printf '%s\n' "$out" | sed -n '5p' | grep -q '^  Error: .*runtest-nonesuch' &&
+     [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 5 ]; then
+    report 0 'locationless errors beside located failures'
+  else report 1 'locationless errors beside located failures' "exit $rc; $out"; fi
 fi
 if harness_leg 'a golden mismatch and a compile error are told apart #dune'; then
   write_fixture 0

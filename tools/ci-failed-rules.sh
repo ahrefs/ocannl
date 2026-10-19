@@ -29,8 +29,10 @@
 # second line is the command dune ran for it, or the error it printed. A
 # header in any other file is a compile error or an expectation diff and says
 # which. Warning and alert blocks that did not fail the build are left out.
-# A log with no header but a dune `Error:` line (an unknown alias, say) lists
-# those lines instead. A log with neither prints nothing (except under
+# Dune's locationless `Error:` lines (an unknown alias, say) are listed after
+# them: every one when the log has no header, and otherwise those printed
+# before the first header (after one, such a line may be a failing action's
+# own output). A log with neither prints nothing (except under
 # --github), which is what a green build's log gives.
 #
 # Exit 0 after reading the log, 2 for a usage error or an unreadable LOG.
@@ -76,9 +78,11 @@ done
 esc=$(printf '\033')
 tab=$(printf '\t')
 bom=$(printf '\357\273\277')
-awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" '
+# Bytes, not characters: under a UTF-8 locale an awk may read the BOM as one
+# character, or refuse a log's invalid UTF-8.
+LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" '
 function clean(s) {
-  if (index(s, bom) == 1) s = substr(s, 4)
+  if (index(s, bom) == 1) s = substr(s, length(bom) + 1)
   sub(/\r$/, "", s)
   gsub(esc "\\[[0-9;]*[A-Za-z]", "", s)
   # `gh run view --log` puts JOB<TAB>STEP<TAB> before the timestamp.
@@ -164,7 +168,7 @@ BEGIN {
     next
   }
   if (cur == "" || decided) {
-    if (s ~ /^Error: /) { if (!(s in errseen)) { errseen[s] = 1; errs[++nerr] = s } }
+    if (s ~ /^Error: /) { if (!(s in errseen)) { errseen[s] = 1; errs[++nerr] = s; errafter[nerr] = (cur != "") } }
     next
   }
   # dune excerpt of the located source: `NNN | text`, a row of dots where it
@@ -203,14 +207,21 @@ END {
         printf "::error file=%s,line=%d,endLine=%d,title=Failed dune rule::%s\n", cpath[i], cfirst[i], clast[i], msg
       }
     }
-  } else if (nerr > 0) {
-    printf "dune errors without a location (%d):\n", nerr
-    for (i = 1; i <= nerr; i++) printf "  %s\n", trim(errs[i], 240)
-    if (github) for (i = 1; i <= nerr; i++) {
-      msg = trim(errs[i], 200); gsub(/%/, "%25", msg)
+  }
+  # Every locationless error when no header was found; beside located failures, those dune
+  # printed before its first header -- after one, an `Error:` line may be the output of a
+  # failing action.
+  nshow = 0
+  for (i = 1; i <= nerr; i++) if (count == 0 || !errafter[i]) shown[++nshow] = errs[i]
+  if (nshow > 0) {
+    printf "dune errors without a location (%d):\n", nshow
+    for (i = 1; i <= nshow; i++) printf "  %s\n", trim(shown[i], 240)
+    if (github) for (i = 1; i <= nshow; i++) {
+      msg = trim(shown[i], 200); gsub(/%/, "%25", msg)
       printf "::error title=dune error::%s\n", msg
     }
-  } else if (github) {
+  }
+  if (count == 0 && nshow == 0 && github) {
     print "No failed dune rule in this job'"'"'s build log: the failure lies in another step."
   }
 }
