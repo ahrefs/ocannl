@@ -41,6 +41,7 @@ case "$*" in
   'build -j 4 @runtest-tail') name=tail ;;
   'build -j 4 @runtest-trailer') name=trailer ;;
   'build -j 4 @runtest-replay') name=replay ;;
+  'build -j 4 @runtest-capture') name=capture ;;
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
@@ -93,6 +94,9 @@ case "$PROBE_MODE" in
     printf 'FAIL: first: false\nSTOPPED EARLY: an uncaught exception ended the run\n'; exit 1 ;;
   more) rows 'first: false\nFAIL: a message\nextra row\nnested: label: true\nlast: true\n'
     printf 'FAIL: first: false\n'; exit 1 ;;
+  # A golden of captured diagnostics, one reworded by the mutant: its row still printed.
+  capture) rows 'FAIL: the first diagnostic\nFAIL: the second, reworded\nFAIL: a third, new\n'
+    printf 'the golden differs\n'; exit 1 ;;
   # A run cut short after a multi-line failure message: its `FAIL: ` rows are no rows of the
   # golden, so they cannot make up the rows it never printed (gh-ocannl-1364).
   failpad) rows 'first: false\nFAIL: the message:\nFAIL:   one\nFAIL:   two\n'
@@ -194,6 +198,7 @@ printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > tail.expected
+printf 'FAIL: the first diagnostic\nFAIL: the second diagnostic\n' > capture.expected
 printf 'first: true\n\nOK: every claim held.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > trailer.expected
@@ -279,6 +284,15 @@ done
 export PROBE_MODE=more
 run_case 1
 grep -q '^rows: 4 printed of 3 in probe.expected$' "$fixture/result"
+grep -q "^rows not counted: 1 " "$fixture/result"
+reached
+# A golden that captures diagnostics: the run's `FAIL: ` rows count toward its own, by text first
+# and then by number, so a reworded diagnostic is still a row the run printed; one beyond the
+# golden's is the run's own.
+export PROBE_MODE=capture
+PROBE_ALIAS=@runtest-capture run_case 1
+grep -q '^rows: 2 printed of 2 in capture.expected$' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'capture: the reworded diagnostic was not counted'; exit 1; }
 grep -q "^rows not counted: 1 " "$fixture/result"
 reached
 # A raising Verdict.case prints fewer rows than the golden and still reached its

@@ -101,26 +101,44 @@ my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
 # pinned on its output, not its source.
 my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
 # A `FAIL: ` row is Verdict.fail's (every line of a multi-line message carries the prefix): the
-# run's own report of what went wrong, no row the golden has -- unless the golden has it, as a
-# golden capturing a refusing child's output does. So a run's `FAIL: ` rows beyond the golden's
-# own, row text by row text, are the run's own, and count toward no row of the golden: a run cut
-# short after a long enough failure message must not read as having reached the golden's last row
-# (gh-ocannl-1364). The golden's are counted like any other row.
+# run's own report of what went wrong, no row the golden has -- unless the golden has some, as a
+# golden capturing a refusing child's diagnostics does (config_usage_scan_script_hint's is nothing
+# else). So a run's `FAIL: ` rows count toward the golden's only as far as the golden has `FAIL: `
+# rows: first those with a golden row's exact text, then, while the golden has unmatched ones
+# left, any other (a mutant rewording a captured diagnostic still printed its row). The rest are
+# the run's own and count toward no row of the golden: a run cut short after a long enough failure
+# message must not read as having reached the golden's last row (gh-ocannl-1364).
 my %golden_fail;
+my $golden_fails = 0;
 # One pass over a stdout: its rows (the run's own `FAIL: ` rows apart, counted on their own), its
 # last such row, its case raises, its marker rows, and its other rows in order. [$own] says
-# whether the golden's `FAIL: ` rows are to be set apart (a run's) or counted (the golden's).
+# whether the `FAIL: ` rows beyond the golden's are to be set apart (a run's) or the file is the
+# golden itself, whose rows all count.
 sub read_rows {
     my ($path, $own) = @_;
     open my $f, '<:raw', $path or refuse("read $path: $!");
-    my %r = (rows => 0, own_fail => 0, last => '', raises => 0, markers => 0, plain => [], fail_rows => {});
-    my %seen;
+    my @lines;
     while (my $line = <$f>) {
         $line =~ s/\r?\n$//;
+        push @lines, $line;
+    }
+    my %r = (rows => 0, own_fail => 0, last => '', raises => 0, markers => 0, plain => [], fail_rows => {});
+    # The golden `FAIL: ` rows the run matches by text; the remainder is the budget for others.
+    my %exact = %golden_fail;
+    my $budget = $golden_fails;
+    if ($own) {
+        for my $line (grep { /^FAIL: / } @lines) {
+            if ($exact{$line}) { $exact{$line}--; $budget-- }
+        }
+    }
+    %exact = %golden_fail;
+    for my $line (@lines) {
         if ($line =~ /^FAIL: /) {
             $r{fail_rows}{$line}++;
-            if ($own && ++$seen{$line} > ($golden_fail{$line} // 0)) { $r{own_fail}++; next }
-            $golden_fail{$line}++ unless $own;
+            if (!$own) { $golden_fail{$line}++; $golden_fails++ }
+            elsif ($exact{$line}) { $exact{$line}-- }
+            elsif ($budget > 0) { $budget-- }
+            else { $r{own_fail}++; next }
         }
         $r{rows}++;
         $r{last} = $line;
