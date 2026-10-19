@@ -1,0 +1,17 @@
+the loss sums the squares of exactly the in-extent cells: true
+the in-extent gradient is 2x: true
+past the extent the gradient holds the zero_grads fill, not the backprop's: true
+the update moves the in-extent parameter cells by learning rate times gradient: true
+the update leaves the parameter cells past the extent untouched: true
+a micro-step at extent 2 accumulates x into each in-extent gradient cell: true
+and leaves every gradient cell past the extent exactly as it found it: true
+across micro-steps at extents 2 then 4, each row holds the steps it was in extent for: true
+the concatenation's gradient lowers through a Rev_sides scatter: true
+Rev_sides at extent 1 of 2: u's in-extent gradient is 2u: true
+Rev_sides at extent 1 of 2: u's gradient past the extent is untouched: true
+Rev_sides at extent 1 of 2: v's in-extent gradient is 2v: true
+Rev_sides at extent 1 of 2: v's gradient past the extent is untouched: true
+the forward concatenation over a maximum-one extent is refused in its Block role: true
+its gradient scatter is refused in its Rev_sides role, for the same reason: true
+the user-facing compile of the training step refuses it: true
+the refused scatter would have written u's gradient at element zero of an extent-0 axis: true

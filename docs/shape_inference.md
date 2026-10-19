@@ -483,7 +483,9 @@ a symbolic axis is at least `e`, and the contract about those cells is (gh-ocann
   refuses any bound extent (gh-ocannl-817).
 
 `test/operations/symbolic_extent_contract.ml` pins the first three rules on executed values, for
-both flavours of one accumulation record, with an unguarded control.
+both flavours of one accumulation record, with an unguarded control; `symbolic_extent_backward.ml`
+pins the gradient side through `Train.grad_update`, `Train.sgd_update`, accumulation across two
+extents and the `Rev_sides` scatter, executed where it is guarded and refused where it is not.
 
 ### Convolutions
 
