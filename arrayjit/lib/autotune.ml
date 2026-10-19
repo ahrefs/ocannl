@@ -3105,13 +3105,51 @@ let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimiz
    context's lineage): link-time buffer allocation consults that fork, so placement mutations by
    schedule ops — fission's Local promotions above all — must land there or the allocator would miss
    buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the lineage
-   table anew. The traced store is copied from the base (schedule ops register their tiles in
-   it). *)
-let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-    ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+   table anew. The traced store is copied from the base (schedule ops register their tiles in it).
+
+   gh-ocannl-1421: that is sound only while the fresh lowering IS the base's program. Within the
+   lineage the base was lowered in it is, up to the drift above, which is exactly what rebasing is
+   for. A compile into ANOTHER lineage -- the caller's, after a search on a [timing_ctx] -- can
+   lower differently: a node the timing lineage materialized and the caller's leaves virtual is
+   inlined there, so the base's code reads a buffer the caller's placements never allocate
+   (undeclared on a whole-routine winner, a [promote_local_to_device] on a virtual node on a
+   fissioned one), and in the converse case the base's code never computes a node the caller
+   materialized. [caller_structural], the base lowering's structural digest, is passed for exactly
+   those compiles, and a fresh lowering whose own structural digest differs is refused at
+   [Transform], typed, so the caller's untuned default ships instead. Structural
+   ([with_placements:false]) because placement classes legitimately render differently across
+   lineages on byte-identical code; an inlining decision does not, it changes the code. *)
+let compile_candidate ?name ?label ?caller_structural ~static_indices ~base_opt ~canon ~limits
+    ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
   let candidate = match label with Some l -> l | None -> spec_label spec in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let rebase (fresh : LL.optimized) =
+    Option.iter caller_structural ~f:(fun base_digest ->
+        let fresh_digest =
+          SC.digest (SC.canonicalize ~static_indices ~with_placements:false fresh)
+        in
+        if not (String.equal fresh_digest base_digest) then (
+          (* Unconditional, like the incomplete-canon warning: a tuned schedule that can never ship
+             into this caller is a misconfigured [timing_ctx], and the only other trace of it is a
+             slower routine. *)
+          Stdio.eprintf
+            "autotune: WARNING: %s: the caller's context lowers this routine differently from the \
+             timing context the search ran on (structural digest %s vs %s), so the tuned schedule \
+             is not compiled into it; the untuned default ships (gh-ocannl-1421)\n\
+             %!"
+            candidate fresh_digest base_digest;
+          raise
+            (Outcome.Cause_at
+               ( Outcome.Transform,
+                 Outcome.Illegal_schedule
+                   {
+                     check = "Autotune.caller_lineage";
+                     detail =
+                       Printf.sprintf
+                         "the caller's lineage lowers to structural digest %s, the timing \
+                          lineage's base to %s: a schedule of the one does not apply to the other"
+                         fresh_digest base_digest;
+                   } ))));
     {
       base_opt with
       LL.traced_store = Hashtbl.copy base_opt.LL.traced_store;
@@ -5990,6 +6028,7 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
        later forces the undecided placements into the table the captured [opt] references, and the
        plan's decisions key on placement-sensitive digests. GPU only: the plan is CUDA/HIP's. *)
     let base_pristine = ref None in
+    let base_structural = ref None in
     progress_stage "base_compile";
     let base_outcome =
       Context.compile_outcome ?name
@@ -6000,6 +6039,12 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
              break the exactly-once contract for direct [tune] callers. *)
           Seam.get on_candidate_attempt "baseline";
           base_capture := Some (opt, SC.canonicalize ~static_indices opt);
+          (* gh-ocannl-1421: the base lowering's structural identity, against which a compile into
+             the caller's lineage checks its own fresh lowering. Only with a [timing_ctx]: without
+             one the base was lowered in the caller's lineage. *)
+          if Option.is_some timing_ctx then
+            base_structural :=
+              Some (SC.digest (SC.canonicalize ~static_indices ~with_placements:false opt));
           if is_gpu then base_pristine := Some (scratch_of opt);
           [ opt ])
         ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
@@ -6101,10 +6146,11 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
         ~provenance:Outcome.Candidate search_ctx comp bindings
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
-       base lowering as the search's candidates. *)
+       base lowering as the search's candidates -- provided the caller's lineage lowers to it
+       (gh-ocannl-1421, [?caller_structural]). *)
     let compile_spec_real ?label provenance =
-      compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-        ~provenance ctx comp bindings
+      compile_candidate ?name ?label ?caller_structural:!base_structural ~static_indices ~base_opt
+        ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings
     in
     let flat_schedule = function
       | Whole_saved saved -> saved

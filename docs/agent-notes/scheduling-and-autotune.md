@@ -1919,18 +1919,21 @@ files.
   terminal failure, a finite best — under which an abandoned flip is a measured loser, not spoiled
   evidence; a stricter test-side copy (requiring every report `Searched`/`Cache_replay`) disagrees
   with the recorder exactly when a flip is abandoned.
-- **A timing lineage's schedule does not compile into a caller lineage that lowers differently**
-  (gh-ocannl-1386). With `?timing_ctx` deciding a node materialized that the caller leaves
-  virtual, `Autotune.tune` rebases the timing lineage's base lowering onto the caller's placements
-  for the cache replay and the winner compile (`compile_candidate`'s `rebase`). A whole-routine
-  winner then emits code reading an undeclared buffer — on cc a classified decline, so the untuned
-  default ships; on Metal an unclassified `Failure`, fatal under strict classification — and a
-  FISSIONED winner raises `Tnode.Placements.promote_local_to_device: … is virtual`, fatal too, so
-  the arm (or the placement store's replayed search) dies. On cc which kind wins is timing noise,
-  which made `placement_store`'s timing-context warm replay flake on CI. The test pins around it
-  (its own directory, fissioned candidates ranked last through `Autotune.on_candidate_measured`;
-  on Metal its run-6 claims are counted skips); pinning fissioned candidates FIRST for the warm run
-  reproduces the CI failure deterministically.
+- **A timing lineage's schedule compiles into the caller only where the caller lowers the same
+  program** (gh-ocannl-1421, found as gh-ocannl-1386's flake). `compile_candidate`'s `rebase`
+  applies the base lowering under the compiling lineage's placements, which is drift-immune within
+  one lineage but wrong across two: with `?timing_ctx` materializing a node the caller leaves
+  virtual, a whole-routine winner emitted code reading an undeclared buffer (a classified decline
+  on cc, an unclassified `Failure` on Metal) and a fissioned one raised
+  `promote_local_to_device: … is virtual`, fatal under strict classification. Every compile into
+  the caller (`compile_spec_real`: cache replay, winner, seeded fallback) now compares the fresh
+  lowering's STRUCTURAL digest with the base's (taken in the base transform, `timing_ctx` only)
+  and refuses a mismatch at `Transform` as `Illegal_schedule "Autotune.caller_lineage"`, with an
+  unconditional stderr WARNING, so the plain untuned default ships. Structural, because placement
+  classes legitimately differ across lineages on identical code. It is conservative: a timing
+  lineage that inlines a computation the caller holds materialized (`flip_twins`' inheriting
+  lineage) runs fine but is refused too. `placement_store` run 6 ranks fissioned candidates first
+  through `Autotune.on_candidate_measured`, which reproduced the old failure deterministically.
 - **A budget-cut crown is stored, but only a budgeted call replays it** (gh-ocannl-1409). With
   `autotune_budget_seconds`, `Autotune.tune` checks the budget as each attempt and each beam round
   starts (`budget_allows`), skips everything later except the untuned floors (the seeded plan and
