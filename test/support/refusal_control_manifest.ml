@@ -444,6 +444,7 @@ let raw_entries =
         "[scanner-refusal:f9bd0cf9b0592ab82941e27281a7dc4c] let stays unplaced";
         "[scanner-refusal:b22617ea23d5bd2270d682426b8c2ac5] submodule's value re-exported";
         "[scanner-refusal:823039faeecddef225db5009f088e3b9] library's default implementation";
+        "[scanner-refusal:e9b61c2f984d21446b37e9e79253a234] defines still carries";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";

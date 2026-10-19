@@ -5675,6 +5675,17 @@ let width_control () =
       ~probe:"let () = ignore (Context.Cc_backend.Width.registers ())\n" `Neither
   in
   let via_default_impl = run ~links:" vlib" ~probe:"let () = ()\n" `Neither in
+  let via_local_alias =
+    run
+      ~limits:
+        "module Widths = struct let registers () = Cc_backend.registers () end\n\
+         module W = Widths\n\
+         let cpu_mma_limits () =\n\
+        \  { no_hardware_limits with\n\
+        \    simd_vector_bytes = Cc_backend.vector_bytes_setting ();\n\
+        \    simd_vector_registers = W.registers (); worker_pool_tag = Cc_backend.chunks () }\n"
+      ~probe:updated `Neither
+  in
   let via_named_include =
     run
       ~backend:
@@ -5770,6 +5781,9 @@ let width_control () =
   let via_nested_include_ok =
     refused via_nested_include && says "`Cc_backend.Width.registers`" via_nested_include
   in
+  let via_local_alias_ok =
+    refused via_local_alias && says "leaving `simd_vector_registers` to its base" via_local_alias
+  in
   let via_default_impl_ok =
     refused via_default_impl && says "library vimpl (vm.ml)" via_default_impl
   in
@@ -5817,6 +5831,7 @@ let width_control () =
   if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
   if not via_nested_include_ok then report "via-nested-include" via_nested_include;
   if not via_default_impl_ok then report "via-default-impl" via_default_impl;
+  if not via_local_alias_ok then report "via-local-alias" via_local_alias;
   if not via_named_include_ok then report "via-named-include" via_named_include;
   if not opened_bare_ok then report "opened-bare" opened_bare;
   if not interface_only_ok then report "interface-only" interface_only;
@@ -5921,6 +5936,10 @@ let width_control () =
   Verdict.p
     "a virtual library's default implementation reading the width is the linking program's read"
     via_default_impl_ok;
+  Verdict.p
+    "a field filled through a top-level alias of a structure the limits file defines still carries \
+     the width"
+    via_local_alias_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)

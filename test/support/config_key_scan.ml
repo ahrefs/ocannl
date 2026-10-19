@@ -1166,12 +1166,22 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
      that spelling defined so far, as OCaml resolves it; a path no local value answers to is another
      module's, whatever [external_keys] says of it. *)
   let resolve ~env ~scope path =
-    let rec local depth =
+    let rec local_as path depth =
       if depth < 0 then None
       else
         match Map.find env (dotted (List.take scope depth @ path)) with
         | Some keys -> Some keys
-        | None -> local (depth - 1)
+        | None -> local_as path (depth - 1)
+    in
+    (* As written, then through a top-level [module W = Widths] alias of a structure this file
+       defines: the alias names a local module as surely as an external one (gh-ocannl-1320, Codex
+       P2 round 9). *)
+    let local depth =
+      match local_as path depth with
+      | Some keys -> Some keys
+      | None ->
+          let expanded = expand path in
+          if List.equal String.equal expanded path then None else local_as expanded depth
     in
     let by_name =
       Option.value_map (List.last path)
