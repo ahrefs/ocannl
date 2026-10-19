@@ -709,6 +709,19 @@ files.
   oracle's reasons from the type (ppx_variants_conv) and fails until the fixtures exercise every
   one, and on GPU backends it relates each renderer decline to the oracle's violations of the
   very IR it was compiled from, in both directions.
+- The simdgroup fragment scope has the same treatment, with one difference (gh-ocannl-1342). The
+  renderer maps a marked fragment's lane-0 load, reduction and store-back to persistent intrinsics
+  only when `Schedule.recognize_fragment_scope` (shared with `C_syntax`) matches: exactly one
+  `Tile_mma` between the transfers, the bracket at the HEAD of the statement sequence `pp_ll` tries
+  (a recognized scope's trailing statements render one by one). Any other `Tile_mma` into the
+  fragment silently takes the lane-0 scalar fallback, timed 2-3x slower: a materializing `Unroll`
+  of a loop inside the scope (k_o, or a Base contraction axis around it) replicates the tile, one
+  of a loop around the scope leaves a second scope trailing the first, and a `Vectorized` retype of
+  the transfers' copy loop (a GPU menu move) unbrackets it. `op_legality` refuses an op that leaves
+  MORE `fragment_scope_violations` than it found, not any IR with one, because the fallback still
+  renders; `fragment_scope_move_legality` relates each reason to the census's fallback count on a
+  GPU. A trailing scope beside a hook-rendered first copy used to omit the fragment's local-array
+  declaration (an untyped Metal compile failure); `unscoped_simdgroup_fragments` now keeps it.
 - Autotune fault injection keyed by ATTEMPT INDEX (`Autotune.on_candidate_attempt`) is
   backend-dependent and silently vacuous: how many attempts precede an arm's first *timed* candidate
   varies. On Metal a small matmul's materialize-all arm has a baseline binding no hardware dimension

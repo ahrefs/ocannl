@@ -5538,13 +5538,129 @@ let recognize_fragment_scope ~(fragments : Set.M(Tn).t) (c : Low_level.t) : frag
       | _ -> None)
   | _ -> None
 
-(* The invariant as an op verdict: [Some (Op_illegal _)] when [op], applied to [opt] (which carries
-   pipelined tiles), leaves IR that violates it. Applicability itself stays the op's own arm's
-   question ([None] on a raising apply). Only [opt]'s store-mutating ops need the hermetic copy; the
-   loop rewrites only rebuild [llc]. *)
-let staging_scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict option =
-  if Map.is_empty opt.Low_level.pipelined then None
+(* The invariant: every [Tile_mma] into a marked fragment is the one statement of a scope the
+   renderer recognizes. The renderer declines a tile outside one to the lane-0 scalar fallback,
+   which compiles and computes the same values, so a move that breaks the invariant costs a
+   candidate timing 2-3x slower than its parent (#1229's CUDA probe: 17 of 1204 round-1 candidates,
+   all a materializing [Unroll]). The reasons say where the tile is relative to the fragment's
+   load/store-back bracket. *)
+type fragment_scope_violation =
+  | Tile_replicated of { fragment : Tn.t; tiles : int }
+  | Scope_not_leading of { fragment : Tn.t }
+  | Tile_unbracketed of { fragment : Tn.t }
+[@@deriving sexp_of, variants]
+
+let fragment_scope_violation_message = function
+  | Tile_replicated { fragment; tiles } ->
+      "the scope of simdgroup fragment " ^ Tn.debug_name fragment ^ " holds " ^ Int.to_string tiles
+      ^ " Tile_mma statements (the renderer maps a fragment scope to exactly one; a materializing \
+         Unroll or a Partition of a loop inside the scope replicates it), so each renders as the \
+         lane-0 scalar fallback"
+  | Scope_not_leading { fragment } ->
+      "the scope of simdgroup fragment " ^ Tn.debug_name fragment
+      ^ " is intact but does not lead its statement sequence (the renderer recognizes a scope only \
+         at the head of a sequence and renders the statements after a recognized scope one by one; \
+         a materializing Unroll of a loop around the scope leaves its copies there), so its \
+         Tile_mma renders as the lane-0 scalar fallback"
+  | Tile_unbracketed { fragment } ->
+      "a Tile_mma into simdgroup fragment " ^ Tn.debug_name fragment
+      ^ " has no recognizable fragment load and store-back around it (a retyped copy or lane loop \
+         of the transfers, or a statement moved out of the bracket), so it renders as the lane-0 \
+         scalar fallback"
+
+(* One violation per [Tile_mma] into a marked fragment that no recognized scope covers, in program
+   order. Coverage is decided the way [C_syntax.pp_ll] reaches the recognizer: on a [Seq], the whole
+   flattened sequence is tried; a recognized scope covers its tile and its trailing statements are
+   rendered one by one; an unrecognized [Seq] renders its two halves. *)
+let fragment_scope_violations (opt : Low_level.optimized) : fragment_scope_violation list =
+  let open Low_level in
+  let fragments = opt.simdgroup_fragments in
+  if Set.is_empty fragments then []
   else
+    let marked tn = Set.mem fragments tn in
+    let covered = ref [] in
+    let rec walk c =
+      match c with
+      | Seq (c1, c2) -> (
+          match recognize_fragment_scope ~fragments c with
+          | Some fs ->
+              covered := fs.fs_tile :: !covered;
+              walk fs.fs_reduction;
+              List.iter fs.fs_rest ~f:walk
+          | None ->
+              walk c1;
+              walk c2)
+      | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> walk body
+      | _ -> ()
+    in
+    walk opt.llc;
+    (* Each tile's bracket: the fragment's load and the next store-back of the same fragment among
+       the siblings of one statement sequence, with how many tiles into it they enclose. *)
+    let brackets = ref [] in
+    let rec scan c =
+      match c with
+      | Seq _ ->
+          let lines = Array.of_list (nonempty_lines c) in
+          let len = Array.length lines in
+          Array.iteri lines ~f:(fun p s ->
+              match fragment_transfer ~into_fragment:true s with
+              | Some load when marked load.ft_fragment ->
+                  let fragment = load.ft_fragment in
+                  let rec close q =
+                    if q >= len then None
+                    else
+                      match fragment_transfer ~into_fragment:false lines.(q) with
+                      | Some back when Tn.equal back.ft_fragment fragment -> Some q
+                      | _ -> (
+                          match fragment_transfer ~into_fragment:true lines.(q) with
+                          | Some again when Tn.equal again.ft_fragment fragment -> None
+                          | _ -> close (q + 1))
+                  in
+                  Option.iter
+                    (close (p + 1))
+                    ~f:(fun q ->
+                      let tiles =
+                        List.concat_map
+                          (Array.to_list (Array.sub lines ~pos:(p + 1) ~len:(q - p - 1)))
+                          ~f:(fragment_tiles ~into:(Tn.equal fragment))
+                      in
+                      let n = List.length tiles in
+                      List.iter tiles ~f:(fun t -> brackets := (t, (fragment, n)) :: !brackets))
+              | _ -> ());
+          Array.iter lines ~f:scan
+      | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> scan body
+      | _ -> ()
+    in
+    scan opt.llc;
+    List.filter_map (fragment_tiles ~into:marked opt.llc) ~f:(fun tile ->
+        if List.mem !covered tile ~equal:phys_equal then None
+        else
+          match List.Assoc.find !brackets tile ~equal:phys_equal with
+          | Some (fragment, n) when n > 1 -> Some (Tile_replicated { fragment; tiles = n })
+          | Some (fragment, _) -> Some (Scope_not_leading { fragment })
+          | None ->
+              let fragment = match tile with Tile_mma { d = d, _; _ } -> d | _ -> assert false in
+              Some (Tile_unbracketed { fragment }))
+
+(* Both scopes' invariants as one op verdict: [Some (Op_illegal _)] when [op], applied to [opt],
+   leaves IR that violates one. Applicability itself stays the op's own arm's question ([None] on a
+   raising apply). Only [opt]'s store-mutating ops need the hermetic copy; the loop rewrites only
+   rebuild [llc].
+
+   The staging scope (gh-ocannl-1231) is checked over the applied IR outright: the renderer cannot
+   render a violation at all. The fragment scope (gh-ocannl-1342) refuses an op that leaves MORE
+   uncovered fragment tiles than it found: the renderer's fallback still renders an uncovered tile,
+   so an IR that already has one (e.g. a hand-written schedule) does not make every later move
+   illegal, while a seeded chain — checked op by op from code with no fragment — is refused at the
+   very move that first leaves one. The check is backend-agnostic: on the C backends a scope and a
+   bare tile render alike (both register-tile), so the refusal costs them only the materializing
+   unrolls inside a scope, whose in-place [Unroll] twins stay admitted. *)
+let scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict option =
+  let pipelined = not (Map.is_empty opt.Low_level.pipelined) in
+  let fragmented = not (Set.is_empty opt.Low_level.simdgroup_fragments) in
+  if not (pipelined || fragmented) then None
+  else
+    let before = if fragmented then fragment_scope_violations opt else [] in
     let probe =
       match op with
       | Split _ | Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _ ->
@@ -5558,9 +5674,28 @@ let staging_scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict 
     in
     match probe_opt_op probe op with
     | exception Schedule_outcome.Cause_at _ -> None
-    | applied ->
-        Option.map (pipeline_violation applied) ~f:(fun v ->
-            Op_illegal (pipeline_violation_message v))
+    | applied -> (
+        match if pipelined then pipeline_violation applied else None with
+        | Some v -> Some (Op_illegal (pipeline_violation_message v))
+        | None ->
+            if not fragmented then None
+            else
+              let after = fragment_scope_violations applied in
+              if List.length after <= List.length before then None
+              else
+                (* The first violation the op added: [after] minus [before], as multisets of
+                   messages. *)
+                let added =
+                  List.fold before ~init:(List.map after ~f:fragment_scope_violation_message)
+                    ~f:(fun remaining v ->
+                      let msg = fragment_scope_violation_message v in
+                      let rec drop = function
+                        | [] -> []
+                        | x :: xs -> if String.equal x msg then xs else x :: drop xs
+                      in
+                      drop remaining)
+                in
+                Option.map (List.hd added) ~f:(fun msg -> Op_illegal msg))
 
 let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
   let open Low_level in
@@ -5682,7 +5817,7 @@ let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
 (* The staging-scope invariant first: a move that breaks it is unrenderable whatever the access
    queries would say about its races. *)
 let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
-  match staging_scope_verdict opt op with Some v -> v | None -> access_legality opt op
+  match scope_verdict opt op with Some v -> v | None -> access_legality opt op
 
 (** [schedule_legality opt sched]: per-op verdicts, each against the code with the preceding ops
     applied (on a hermetic copy — checking never mutates [opt]). Stops after a proven-illegal op or
