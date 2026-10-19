@@ -26,6 +26,8 @@
 #                      `wgrad-model: plan=default` rows predict it.
 #   wgrad_b<B>_seeded  the same with the seeded default at threshold 32 -- the seeded plan, whose
 #                      `wgrad-model: plan=seeded` rows predict it.
+# Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
+# environment cannot swap the measured plans for tuned or model-picked ones.
 # The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
 
 set -euo pipefail
@@ -87,18 +89,20 @@ bw=$(fitted model_peak_memory_bandwidth "$out/bandwidth.out")
 if [[ -n "$bw" ]]; then model+=("--ocannl_model_peak_memory_bandwidth=$bw"); fi
 echo "   model flags after bandwidth: ${model[*]:-none}"
 cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
-cap=$(fitted model_cache_capacity "$out/calibrate.out")
-if [[ -n "$cap" ]]; then model+=("--ocannl_model_cache_capacity=$cap"); fi
+capacity=$(fitted model_cache_capacity "$out/calibrate.out")
+if [[ -n "$capacity" ]]; then model+=("--ocannl_model_cache_capacity=$capacity"); fi
 cache_bw=$(fitted model_cache_bandwidth "$out/calibrate.out")
 if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
 echo "   model flags for the wgrad cells: ${model[*]:-none}"
 for batch in 8 256; do
   dims="$batch,128,256,1024"
-  cell "wgrad_b${batch}_untiled" env BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
-    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=0 \
+  cell "wgrad_b${batch}_untiled" env BENCH_TUNE=0 BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
+    "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
+    --ocannl_gpu_default_sketch_min_reduction=0 \
     --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
-  cell "wgrad_b${batch}_seeded" env BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
-    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+  cell "wgrad_b${batch}_seeded" env BENCH_TUNE=0 BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
+    "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
+    --ocannl_gpu_default_sketch_min_reduction=32 \
     ${model[@]+"${model[@]}"}
 done
 
