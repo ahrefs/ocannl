@@ -1874,14 +1874,16 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               clock, memory clock x bus width) remain calibration follow-up work. *)
            peak_flops = Some 1.5e13;
            peak_memory_bandwidth = Some 8.0e12;
-           (* gh-ocannl-1253: the ranking score's cache capacity and residency, read only by the
-              untimed choosers (Untimed, outside the schedule-cache key). Residency is queried --
+           (* gh-ocannl-1253: the ranking score's two tiers and residency, read only by the untimed
+              choosers (Untimed, outside the schedule-cache key). Residency is queried --
               multiprocessors times resident threads per multiprocessor, minimum over devices. The
-              capacity and cache bandwidth are calibrated per class by benchmarks/gh1253_cells.sh;
-              CUDA's run (rog-nv) is pending, so the capacity stays provisional and no cache tier is
-              claimed. *)
-           cache_capacity_bytes = Some (1 lsl 30);
-           cache_bandwidth = None;
+              capacity and the cache bandwidth come from benchmarks/gh1253_cells.sh on the RTX 5070
+              Ti of rog-nv (2026-10-19, 84b727ea): the untiled weight gradient's requested rate
+              stays on a 1.8 TB/s cache plateau up to a 4.6 GB working set and is still at 1.26 TB/s
+              at 9.3 GB, falling towards the 582 GB/s DRAM rate by 18.6 GB (1.04 TB/s there, at the
+              split threshold); the fit put the capacity near 13 GB. *)
+           cache_capacity_bytes = Some (12 * 1024 * 1024 * 1024);
+           cache_bandwidth = Some 1.8e12;
            max_resident_threads =
              min_over (fun (a : Cu.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);
