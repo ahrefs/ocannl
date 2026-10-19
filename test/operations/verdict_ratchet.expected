@@ -601,6 +601,7 @@ reads a gated claim nothing binds as Verdict's, its name being Verdict's alone: 
 names a collection-module function the table does not list instead of guessing: true
 names an unlisted quantifier-position function of a gated boolean: true
 names an unlisted function handed a mutable container the population reads: true
+names an unlisted function the gate reaches: true
 follows a collection function through a value alias: true
 follows a quantifier of a gated boolean through a value alias: true
 refuses a gate read off a value pushed through a writer's value alias: true
@@ -621,6 +622,10 @@ accepts a gate on a value written after the iteration whose callback makes the c
 accepts a gate on a value written after an aliased iteration whose module is later shadowed: true
 accepts a gate on a value written after a claim in a for loop's bound: true
 accepts a gate on a value written after a claim in a binding operator's operand: true
+refuses a gate on a value written before a partially applied iteration's callback runs: true
+accepts a gate on a value written after a piped iteration whose callback makes the claim: true
+refuses a gate on a value written in an argument evaluated in unspecified order beside the claim: true
+accepts a gate on a value written in the right operand of a conjunction after the claim: true
 refuses a gate on a value written after a binding operator whose body makes the claim: true
 refuses a gate on a value written before a claim a collection stores is called: true
 refuses a gate on a value written before a claim a Stdlib collection stores is called: true

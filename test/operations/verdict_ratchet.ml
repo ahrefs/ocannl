@@ -4090,6 +4090,12 @@ let () =
   Array.permute cells;
   Verdict.gated_all ~when_:on_gpu ~on:"cc" "all cells pass" (Array.to_list cells) ~f:Fn.id|ocaml},
       [ "unlisted Array.permute" ] );
+    ( "names an unlisted function the gate reaches",
+      {ocaml|open Base
+let () =
+  Verdict.gated_all ~when_:(not (List.is_empty (List.permute flags))) ~on:"cc" "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [ "unlisted List.permute" ] );
     ( "follows a collection function through a value alias",
       {ocaml|open Base
 let () =
@@ -4266,6 +4272,48 @@ let () =
     x
   in
   Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written before a partially applied iteration's callback runs",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check =
+    List.iter ~f:(fun row ->
+        Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+          ~f:positive)
+  in
+  Queue.enqueue queue sample;
+  check rows|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written after a piped iteration whose callback makes the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  rows
+  |> List.iter ~f:(fun row ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+        ~f:positive);
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written in an argument evaluated in unspecified order beside the \
+       claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  consume
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     ())
+    (Queue.enqueue queue sample)|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written in the right operand of a conjunction after the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  if
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     ready ())
+    && (Queue.enqueue queue sample; true)
+  then ()|ocaml},
       [] );
     ( "refuses a gate on a value written after a binding operator whose body makes the claim",
       {ocaml|open Base

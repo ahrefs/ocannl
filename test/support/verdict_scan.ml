@@ -603,7 +603,9 @@ let line_break_census content =
 
     - the GATE is every value identifier the [~when_] expression spells, and transitively every one
       spelled by the right-hand side of a [let] it resolves to (function bodies included), or by
-      what the source writes into that binding (below), in any position;
+      what the source writes into that binding (below), in any position; a collection-module
+      function {!collection_functions} does not list, applied anywhere the gate reaches, is reported
+      as unlisted;
     - the POPULATION of a [gated_*] claim is the identifier the quantified argument spells, and the
       collections it is BUILT from: following a [let]-bound name into its right-hand side, the
       branches (not the condition) of an [if], the cases of a [match] (the scrutinee only through a
@@ -1014,10 +1016,14 @@ let rec strip_constraints expr =
     call of a once function, (a) both are inside one frame that may repeat (a loop, a function that
     is not once, a deferred construct), (b) the claim is inside such a frame of its own that may run
     at any later time (a function that is not once, or a deferred construct) the write is not in, or
-    (c) the write starts before the claim ends. (A write in a function defined before the claim is
-    before it; one in a function defined after it cannot run before it unless the claim runs again,
-    which (a) and (b) cover.) Inside one call of a once function the same question is asked of the
-    two points within it. A claim's own arguments are before its end, so a write there precedes it.
+    (c) the write starts before the claim ends, or (d) the two sit in different operands of one
+    expression whose operands OCaml evaluates in an unspecified order -- an application's callee and
+    arguments ([&&] and [||] apart), a tuple, array or record's components, the bindings of one
+    [let ... and ...], a binding operator's operands -- so [consume (claim; ()) (write ())] may run
+    the write first. (A write in a function defined before the claim is before it; one in a function
+    defined after it cannot run before it unless the claim runs again, which (a) and (b) cover.)
+    Inside one call of a once function the same question is asked of the two points within it. A
+    claim's own arguments are before its end, so a write there precedes it.
 
     What this does not model, each erring toward following the write: a function value stored and
     called later is placed where it is defined; a once function's name passed anywhere but a call is
@@ -1060,6 +1066,42 @@ let calls_back ~stdlib name label index =
   | Ppxlib.Asttypes.Nolabel when stdlib ->
       if String.equal name "init" then index = 1 else index = 0 && Set.mem stdlib_callers name
   | _ -> false
+
+(* Whether an application of the collection-module function [name] with these argument labels is
+   complete, so that it calls its callback before it returns: [List.map ~f:g] alone is a partial
+   application, a function value holding [g] for later. The arity is by name: [Base]-ordered, the
+   collection (two for a pairwise [map2], a [Map.update m key], ...) and the [~init] of a fold; in
+   [Stdlib]'s order the callback, then the collections and a fold's initial value. *)
+let applied_fully ~stdlib name labels =
+  let positional = List.count labels ~f:(function Ppxlib.Asttypes.Nolabel -> true | _ -> false) in
+  let has label =
+    List.exists labels ~f:(function
+      | Ppxlib.Asttypes.Labelled given | Ppxlib.Asttypes.Optional given -> String.equal given label
+      | Ppxlib.Asttypes.Nolabel -> false)
+  in
+  let pairwise = String.is_substring name ~substring:"2" in
+  if stdlib then
+    positional
+    >=
+    match name with
+    | "fold_left2" | "fold_right2" -> 4
+    | "fold_left" | "fold_right" | "fold" | "merge" | "equal" | "compare" -> 3
+    | _ when pairwise -> 3
+    | _ -> 2
+  else
+    let required_positional, required_labels =
+      match name with
+      | "merge_into" -> (0, [ "src"; "dst" ])
+      | "fold_range_inclusive" -> (1, [ "min"; "max"; "init" ])
+      | "fold_until" -> (1, [ "init"; "finish" ])
+      | "update" | "change" | "update_and_return" | "merge" | "merge_skewed" | "find_and_call"
+      | "findi_and_call" ->
+          (2, [])
+      | _ when String.is_prefix name ~prefix:"fold" || String.is_prefix name ~prefix:"folding_" ->
+          ((if pairwise then 2 else 1), [ "init" ])
+      | _ -> ((if pairwise then 2 else 1), [])
+    in
+    positional >= required_positional && List.for_all required_labels ~f:has
 
 (* A function's frame, from its parameters. *)
 let function_kind ~binding params body =
@@ -1104,7 +1146,7 @@ let fully_applies kind labels =
 
 (* [precedes ~once write claim]: whether [write] may run before [claim] ends, [once] giving the call
    a once function's frame runs at. *)
-let precedes ~once write claim =
+let precedes ~once ~unordered write claim =
   (* The levels a point runs at, outermost first: each the point (a call site, at every level but
      the innermost) with the frames it is inside there, and the once frame it was entered
      through. *)
@@ -1136,7 +1178,7 @@ let precedes ~once write claim =
           | (Some into_write, _, _) :: _, (Some into_claim, _, _) :: _ when into_write = into_claim
             ->
               compare_levels deeper_writes deeper_claims
-          | _ -> write.at_start < claim.at_end)
+          | _ -> write.at_start < claim.at_end || unordered write claim)
     | _ -> true
   in
   compare_levels (chain 0 write) (chain 0 claim)
@@ -1162,6 +1204,16 @@ let gate_census content =
   let function_bindings = Hashtbl.create (module Int) in
   let next_frame = ref 0 in
   let once_calls = Hashtbl.create (module Int) in
+  (* For {!precedes}: the operand spans of every expression whose operands are evaluated in an
+     unspecified order, and whether two points sit in different operands of one. *)
+  let unordered_operands = ref [] in
+  let siblings write claim =
+    let inside (start, stop) point = start <= point.at_start && point.at_end <= stop in
+    List.exists !unordered_operands ~f:(fun operands ->
+        List.existsi operands ~f:(fun i operand ->
+            inside operand claim
+            && List.existsi operands ~f:(fun j other -> i <> j && inside other write)))
+  in
   (* The call a once function's frame runs at, if it is once; asked only after the walk. *)
   let once frame =
     match frame.shape with
@@ -1239,7 +1291,9 @@ let gate_census content =
 
       (* Whether something done at [point] may run before the claim being compared. *)
       method before point =
-        match claim_point with None -> true | Some claim -> precedes ~once point claim
+        match claim_point with
+        | None -> true
+        | Some claim -> precedes ~once ~unordered:siblings point claim
 
       method framed : 'a. kind:frame_kind -> start:int -> stop:int -> (unit -> 'a) -> 'a =
         fun ~kind ~start ~stop walk ->
@@ -1966,6 +2020,45 @@ let gate_census content =
 
       method visit env expr =
         (if quiet = 0 then
+           let span e = (e.pexp_loc.loc_start.pos_cnum, e.pexp_loc.loc_end.pos_cnum) in
+           let operands =
+             match expr.pexp_desc with
+             | Pexp_apply (callee, arguments) -> (
+                 match (strip_constraints callee).pexp_desc with
+                 | Pexp_ident { txt = Ppxlib.Longident.Lident ("&&" | "||" | "&" | "or"); _ } -> []
+                 | _ -> callee :: List.map arguments ~f:snd)
+             | Pexp_tuple elements | Pexp_array elements -> elements
+             | Pexp_record (fields, base) -> Option.to_list base @ List.map fields ~f:snd
+             | Pexp_setfield (record, _, value) -> [ record; value ]
+             | Pexp_let (_, (_ :: _ :: _ as bindings), _) ->
+                 List.map bindings ~f:(fun binding -> binding.pvb_expr)
+             | Pexp_letop { let_; ands = _ :: _ as ands; _ } ->
+                 List.map (let_ :: ands) ~f:(fun operand -> operand.pbop_exp)
+             | _ -> []
+           in
+           if List.length operands >= 2 then
+             unordered_operands := List.map operands ~f:span :: !unordered_operands);
+        (* The gate's side ({!identifiers}): a collection-module function the table does not list,
+           which may compute anything from what it is handed, is reported as the population side's
+           is. *)
+        (match (collecting, expr.pexp_desc) with
+        | Some _, Pexp_apply (callee, arguments) -> (
+            let callee =
+              match self#pipeline callee arguments with
+              | Some (callee, _, _) -> callee
+              | None -> callee
+            in
+            match self#resolve_callee env callee with
+            | ( ({ pexp_desc = Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }; _ } as
+                 resolved),
+                callee_env ) -> (
+                match self#module_path callee_env prefix with
+                | Some (Collection_module _) when Option.is_none (collection_function name) ->
+                    self#note_unlisted resolved
+                | _ -> ())
+            | _ -> ())
+        | _ -> ());
+        (if quiet = 0 then
            match expr.pexp_desc with
            | Pexp_apply (callee, arguments) -> (
                (* [sample |> Queue.enqueue queue] is [Queue.enqueue queue sample]. *)
@@ -1976,13 +2069,22 @@ let gate_census content =
                    Hashtbl.set applications ~key:loc.loc_start.pos_cnum
                      ~data:(List.map arguments ~f:fst, self#point_of expr)
                | _ -> ());
-               (match self#resolve_callee env callee with
+               (* A pipeline is read as the application it spells, so that [rows |> List.iter ~f] is
+                  complete; only a complete application calls its callback. *)
+               let applied, applied_arguments =
+                 match self#pipeline callee arguments with
+                 | Some (callee, arguments, _) -> (callee, arguments)
+                 | None -> (callee, arguments)
+               in
+               (match self#resolve_callee env applied with
                | ( { pexp_desc = Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }; _ },
                    callee_env ) -> (
                    (* The module is the one the alias's definition named, in its own scope. *)
+                   let arguments = applied_arguments in
                    match self#module_path callee_env prefix with
                    | Some (Collection_module { stdlib; family; _ })
-                     when not (List.mem [ "Seq"; "Sequence" ] family ~equal:String.equal) ->
+                     when (not (List.mem [ "Seq"; "Sequence" ] family ~equal:String.equal))
+                          && applied_fully ~stdlib name (List.map arguments ~f:fst) ->
                        let positional = ref 0 in
                        List.iter arguments ~f:(fun (label, argument) ->
                            let index = !positional in
