@@ -1014,12 +1014,16 @@ let probe_kernel_toolchain ~flags =
       let src = temp ".c" in
       let lib = temp Utils.dynamic_library_extension in
       let log = temp ".log" in
+      (* The command must write its output, not merely exit 0, so the placeholder goes first. *)
+      Stdlib.Sys.remove lib;
       Stdio.Out_channel.write_all src ~data:"int ocannl_toolchain_probe(void) { return 0; }\n";
       let command =
         Printf.sprintf "%s %s %s -o %s %s" (compiler_command ()) (Stdlib.Filename.quote src) flags
           (Stdlib.Filename.quote lib) (Lazy.force kernel_link_flags)
       in
-      if Stdlib.Sys.command (Printf.sprintf "%s > %s 2>&1" command (Stdlib.Filename.quote log)) = 0
+      if
+        Stdlib.Sys.command (Printf.sprintf "%s > %s 2>&1" command (Stdlib.Filename.quote log)) = 0
+        && Stdlib.Sys.file_exists lib
       then Some Probe_compiles
       else
         let output =
@@ -1179,18 +1183,6 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
     remove temp_log;
     (* A compiler can exit non-zero after writing part of its output. *)
     if library_owned then remove libname;
-    (* A header the compiler could not open is the toolchain's fault, and fails every kernel alike:
-       it propagates untyped rather than as a decline of this kernel (ahrefs/ocannl#1387). The
-       trivial-kernel probe below includes no header, so it cannot see this case. *)
-    if C_syntax.missing_include compiler_output then
-      failwith
-        (Printf.sprintf
-           "OCANNL cc backend: the compiler could not open a header (exit code %d); check the C \
-            compiler installation.\n\
-            Compilation command: %s\n\
-            Compiler output:\n\
-            %s"
-           _rc _cmdline compiler_output);
     (* gh-ocannl-1350: before blaming the generated code, ask whether this toolchain configuration
        compiles anything at all. *)
     match toolchain_fault () with
@@ -1208,6 +1200,20 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
                        ~compiler_output;
                  } ))
     | None ->
+        (* A header the compiler could not open is the toolchain's fault, and fails every kernel
+           alike: it propagates untyped rather than as a decline of this kernel
+           (ahrefs/ocannl#1387). Asked only after the probe, which can name a setting that injects
+           the header (an [-include] in the flags); a header only the generated code includes is
+           this case. *)
+        if C_syntax.missing_include compiler_output then
+          failwith
+            (Printf.sprintf
+               "OCANNL cc backend: the compiler could not open a header (exit code %d); check the \
+                C compiler installation.\n\
+                Compilation command: %s\n\
+                Compiler output:\n\
+                %s"
+               _rc _cmdline compiler_output);
         let detail =
           compile_failure_detail ~exit_code:_rc ~source_note ~command:_cmdline ~compiler_output
         in

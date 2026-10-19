@@ -5,10 +5,12 @@
    reject every candidate alike.
 
    Each dune rule breaks the configuration one way. [arch_flags] passes a target flag no compiler
-   knows, [compiler_command] names a compiler that does not exist, and [codegen] -- the control --
-   keeps the toolchain intact but renames [float] to an undeclared type in the compiler command, so
-   only the generated code fails to compile, and a trivial kernel (which declares no float) still
-   does: the bug claim stays. *)
+   knows, [include_flag] a flag forcing in a header that does not exist (a missing header is
+   otherwise the generic installation error of ahrefs/ocannl#1387, which must not pre-empt the
+   setting's name), [compiler_command] names a compiler that does not exist, and [codegen] -- the
+   control -- keeps the toolchain intact but renames [float] to an undeclared type in the compiler
+   command, so only the generated code fails to compile, and a trivial kernel (which declares no
+   float) still does: the bug claim stays. *)
 
 open Base
 open Ocannl
@@ -21,7 +23,7 @@ let mode = Stdlib.Sys.argv.(1)
 (* The setting each configuration mode breaks. *)
 let culprit =
   match mode with
-  | "arch_flags" -> Some "cc_backend_arch_flags"
+  | "arch_flags" | "include_flag" -> Some "cc_backend_arch_flags"
   | "compiler_command" -> Some "cc_backend_compiler_command"
   | "codegen" -> None
   | other -> invalid_arg ("cc_toolchain_attribution: unknown mode " ^ other)

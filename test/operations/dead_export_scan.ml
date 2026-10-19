@@ -341,7 +341,6 @@ let exempt_zero_reference_exports =
        shapes. Utils has no .mli to hide them in. *)
     "Utils.clean_filename";
     "Utils.owned_artifact_name";
-    "Utils.parse_owned_artifact_name";
     (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library, where these
        implicit exports have no caller in the tree. Unlike the entries above, most are not helpers
        leaked by a missing interface: [Nn_blocks]' architectures and initializers and [Train]'s

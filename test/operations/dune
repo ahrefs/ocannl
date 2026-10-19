@@ -249,6 +249,7 @@
   (alias runtest-cc_kept_library-debug)
   (alias runtest-cc_temp_library_sweep)
   (alias runtest-cc_toolchain_attribution-arch_flags)
+  (alias runtest-cc_toolchain_attribution-include_flag)
   (alias runtest-cc_toolchain_attribution-compiler_command)
   (alias runtest-cc_toolchain_attribution-codegen)
   (alias runtest-micrograd_demo_logging)
@@ -1278,6 +1279,31 @@
   (diff
    cc_toolchain_attribution-arch_flags.expected
    cc_toolchain_attribution-arch_flags.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the toolchain is the cc compile's; the command line pins the backend.
+ (target cc_toolchain_attribution-include_flag.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_toolchain_attribution.exe}
+    include_flag
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_arch_flags=-include ocannl_gh1350_no_such_header.h"))))
+
+(rule
+ (alias runtest-cc_toolchain_attribution-include_flag)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_toolchain_attribution-include_flag.expected
+   cc_toolchain_attribution-include_flag.actual)))
 
 (rule
  ; ocannl-backend: cc -- the toolchain is the cc compile's; the command line pins the backend.

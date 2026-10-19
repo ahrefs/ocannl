@@ -338,13 +338,14 @@ configuration.
   cannot tell the sibling's ownerless artifacts from a finished run's, and not even a gone-looking
   owner-named one is safe, since the lock reaches across PID namespaces where liveness
   (`Utils.process_alive`) does not; the stale ones go at the next startup that finds no sibling.
-  Without a sibling, the owner-named artifacts of a RUNNING process (`Utils.parse_owned_artifact_name`)
-  still stay, and the root is emptied, never
+  Without a sibling, the kept libraries of a RUNNING process (`Utils.parse_kept_library_name`; a
+  source copy is never read for an owner, since a routine may be NAMED owner-shaped) still stay, and the root is emptied, never
   removed, since a sibling may hold a path inside it it has yet to write. A lock dies with its
   process, which is why it is not a marker file. Two traps: POSIX drops all of a process's locks on
   a file when ANY descriptor of it closes, so nothing else may open the lock file (it sits beside
   the subdirectory, out of every listing; under the flat layout the cleanup skips it by its
-  suffix); and two dune rules running ONE executable share its subdirectory and so sweep each
+  suffix, and it is created 0666 so every account sharing the directory can lock it -- one that
+  cannot open it for writing reads it as held); and two dune rules running ONE executable share its subdirectory and so sweep each
   other, which `cc_kept_library`'s rules serialize with a dune lock.
 
 - A failed cc kernel compile blames the generated code only after a trivial kernel compiles under

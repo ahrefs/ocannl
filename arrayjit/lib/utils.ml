@@ -1762,7 +1762,8 @@ module Artifacts_lock = struct
     if Stdlib.Filename.is_relative path then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) path
     else path
 
-  let open_ base = Unix.openfile (path base) [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC ] 0o644
+  (* World-writable before the umask: every account that writes artifacts here needs to open it. *)
+  let open_ base = Unix.openfile (path base) [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC ] 0o666
 
   (* Best effort: where the lock cannot be taken (a file system without locks) the process goes
      unprotected, as every process did before gh-ocannl-1335. Blocking: a starting sibling holds the
@@ -1778,7 +1779,13 @@ module Artifacts_lock = struct
           if not (Hashtbl.mem holds key) then
             let fd =
               try
-                let fd = open_ base in
+                let fd =
+                  (* A shared lock needs only read access: an account that cannot write another's
+                     lock file still holds it. *)
+                  try open_ base
+                  with Unix.Unix_error ((Unix.EACCES | Unix.EPERM), _, _) ->
+                    Unix.openfile (path base) [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+                in
                 try
                   Unix.lockf fd Unix.F_RLOCK 0;
                   Some fd
@@ -1853,7 +1860,7 @@ let library_kernel_name base_name =
     [nonce]) keeps in {!build_files_dir}. The pid and the nonce keep apart the processes that share
     that directory -- concurrently running ones of one executable, and those in other PID namespaces
     -- and the pid is what the startup cleanup asks about; the run id keeps the compiles of one
-    process apart. {!parse_owned_artifact_name} inverts it. *)
+    process apart. *)
 let owned_artifact_name ~pid ~nonce ~run_id ~extension base_name =
   Printf.sprintf "%s_pid%d_n%s_run%d%s" (library_kernel_name base_name) pid nonce run_id extension
 
@@ -1870,9 +1877,8 @@ type kept_library = {
   owner_nonce : string;
   library_run_id : int;
 }
-(** The owner and the compile an artifact's file name records: an owned artifact's
-    ([parse_owned_artifact_name]), a kept library's ([parse_kept_library_name]) or a temporary
-    library's ([parse_temp_library_name]). *)
+(** The owner and the compile a library's file name records: a kept library's
+    ([parse_kept_library_name]) or a temporary one's ([parse_temp_library_name]). *)
 
 (** [temp_library_prefix ~pid ~nonce ~run_id base_name] is the [Filename.temp_file] prefix of the
     temporary library that the process [pid] (with {!process_nonce} [nonce]) names for its compile
@@ -1900,13 +1906,14 @@ let temp_library_prefix ~pid ~nonce ~run_id base_name =
     scan of a fresh library included, while a Windows leftover still goes at a later startup. *)
 let temp_library_sweep_min_age = 3600.
 
-(** [parse_owned_artifact_name fname] inverts {!owned_artifact_name} on a file name of any
-    extension, [parse_kept_library_name fname] on a library's, and [parse_temp_library_name fname]
-    reads the owner and the compile from the name of a temporary library that {!temp_library_prefix}
-    named; each is [None] for any other file name. The owned and temporary shapes are disjoint: an
-    owned name ends in [_run<N>], a temporary one in [temp_file]'s hex suffix. Fields are read from
-    the right, so a kernel name may itself contain underscores and field-like words. *)
-let parse_owned_artifact_name, parse_kept_library_name, parse_temp_library_name =
+(** [parse_kept_library_name fname] inverts {!kept_library_name} on a file name, and
+    [parse_temp_library_name fname] reads the owner and the compile from the name of a temporary
+    library that {!temp_library_prefix} named; each is [None] for any other file name. Only
+    libraries are read so, never an owned source copy: the informational debug source of a routine
+    whose NAME is owner-shaped would otherwise pass for another process's. The two shapes are
+    disjoint: a kept name ends in [_run<N>], a temporary one in [temp_file]'s hex suffix. Fields are
+    read from the right, so a kernel name may itself contain underscores and field-like words. *)
+let parse_kept_library_name, parse_temp_library_name =
   let number s =
     if (not (String.is_empty s)) && String.for_all s ~f:Char.is_digit then Int.of_string_opt s
     else None
@@ -1937,11 +1944,6 @@ let parse_owned_artifact_name, parse_kept_library_name, parse_temp_library_name 
         Option.bind (field ~prefix:"run" ~f:number run) ~f:(fun library_run_id ->
             owner ~library_run_id rest))
   in
-  let owned fname : kept_library option =
-    match Stdlib.Filename.extension fname with
-    | "" -> None
-    | extension -> owned_stem (String.drop_suffix fname (String.length extension))
-  in
   let kept fname : kept_library option =
     Option.bind (String.chop_suffix fname ~suffix:dynamic_library_extension) ~f:owned_stem
   in
@@ -1957,7 +1959,7 @@ let parse_owned_artifact_name, parse_kept_library_name, parse_temp_library_name 
                           (String.chop_suffix rest ~suffix:"_run_id")
                           ~f:(owner ~library_run_id))))))
   in
-  (owned, kept, temp)
+  (kept, temp)
 
 (** [owned_artifact_file ~run_id ~extension base_name] is where this process keeps an artifact of
     [base_name]'s compile number [run_id]: beside [base_name]'s debug source, under the
@@ -1999,9 +2001,9 @@ let () =
     owner_pid <> os_process_id () && process_alive owner_pid
   in
   let owner_running fname =
-    Option.exists (parse_owned_artifact_name fname) ~f:library_owner_running
+    Option.exists (parse_kept_library_name fname) ~f:library_owner_running
   in
-  (* What the cleanup keeps: the lock files, and owner-named artifacts of a running owner. *)
+  (* What the cleanup keeps: the lock files, and the kept libraries of a running owner. *)
   let keep fname = String.is_suffix fname ~suffix:Artifacts_lock.suffix || owner_running fname in
   (* Answers whether [dirname] is gone: a directory keeping something stays. The cleanup's own root
      is emptied but kept ([~keep_root]): a concurrent process of the same executable may already
@@ -2054,8 +2056,15 @@ let () =
        written into under its lock, by a sibling before the removal below reads it. *)
     let lock =
       match lstat_kind base with
+      | None ->
+          (* Nothing to remove; whatever appears here from now on is a sibling's. *)
+          `Absent
       | Some Unix.S_DIR -> (
           match Artifacts_lock.open_ base with
+          | exception Unix.Unix_error ((Unix.EACCES | Unix.EPERM), _, _) ->
+              (* A lock file another account created, which this one cannot open for writing:
+                 whoever shares the directory may hold it, so take it as held. *)
+              `Held
           | exception Unix.Unix_error _ -> `Unlockable
           | fd -> (
               match Unix.lockf fd Unix.F_TLOCK 0 with
@@ -2066,17 +2075,17 @@ let () =
               | exception Unix.Unix_error _ ->
                   Unix.close fd;
                   `Unlockable))
-      | Some _ | None -> `Unlockable
+      | Some _ -> `Unlockable
     in
     Exn.protect
       ~f:(fun () ->
         match lock with
-        | `Held -> ()
+        | `Held | `Absent -> ()
         | `Exclusive _ | `Unlockable -> ignore (remove_dir_if_exists ~keep_root:true root : bool))
       ~finally:(fun () ->
         match lock with
         | `Exclusive fd -> ( try Unix.close fd with Unix.Unix_error _ -> ())
-        | `Held | `Unlockable -> ())
+        | `Held | `Absent | `Unlockable -> ())
   in
   (* Cleanup is scoped to this process's own subdirectory (see [artifacts_subdir]), so a starting
      test cannot delete the in-flight artifacts of a concurrently running one. If the artifact root
