@@ -1481,15 +1481,17 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
            so a later constant [Set] or [Zero_out] is not taken for the table's first touch. No
            read-modify-write exemption: the runtime row is not provably the write's cell, as
            [reads_covered_query] rules for a gather under a static write (gh-ocannl-1244), and the
-           one write that could share it, [Set_dynamic], never reaches this pass. *)
+           one write that could share it, [Set_dynamic], never reaches this pass. The index is
+           walked first: it is evaluated before the load (a [Local_scope] in it hoists ahead of the
+           statement), so a touch inside it precedes the gather's in program order. *)
         check_no_concat idcs;
+        loop v;
         let traced : traced_array = get_node traced_store ptr in
         if not (Option.exists lhs ~f:(fun (tn, _) -> Tn.equal ptr tn)) then
           traced.read_by_other <- true;
         Option.iter reads ~f:(fun (self, _stmt, cur) ->
             if not (Tn.equal ptr self) then Hash_set.add cur ptr);
-        Hash_set.add read_seen ptr;
-        loop v
+        Hash_set.add read_seen ptr
     | Local_scope { body; _ } ->
         (* The body hoists to statement level, outside any conditional arm of the enclosing
            expression: its reads record into the statement sink unconditionally. *)
