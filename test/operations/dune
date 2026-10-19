@@ -2338,6 +2338,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1329: every Context entry point that touches buffers refuses a released context, while a
+; compile sibling and the parent keep working. gh-ocannl-1339: Context.run refuses a read-before-write
+; input nothing in the lineage ever wrote (the issue's never-seeded counter).
+
+(test
+ (name context_handle_refusals)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules context_handle_refusals)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 (test
  (name rope_test)
  (package neural_nets_lib)

@@ -105,6 +105,31 @@ files.
   must share the id, and `Context.derive` preserves it for them; a fresh id per upload strands the
   readers compiled before it and refuses every later refill. An upload fork gets its own id and a
   copy of its parent's registrations; `test_execution_deps` Test 9 pins both directions.
+- **The same flag is what refuses a dead handle** (gh-ocannl-1329). `Context.check_live` reads
+  `finalized` at every entry point that touches buffers (compile, run on either the run context or
+  the routine's compile context, sync, the transfers, the `decide_*` recorders) and raises a typed
+  `User_error`. The compile-context check is waived when the run context shares its upload lineage:
+  a live upload fork reference-counts the routine's pools, so it outlives the released chain. Because the flag is shared exactly where pools are, an earlier value of a linear
+  upload chain is refused with the latest one, while compile siblings and upload forks keep working.
+  What it cannot see is a released ANCESTOR: a compiled descendant has a fresh flag of its own, so
+  "release leaves" stays an unchecked precondition. The `decide_*` refusal matters for that reason:
+  `make_child` of a dead handle would mint a live-looking flag over freed buffer locations.
+  Guard: `test/operations/context_handle_refusals.ml`.
+- **`Context.run`'s initialization check has two classes** (gh-ocannl-1339). A read-before-write
+  input (in both `inputs` and `outputs`: a counter, a running statistic) must have its BUFFER
+  written in the lineage: the ledger's `written_buffers` holds the buffer keys every run, upload and
+  device copy wrote. It is keyed by buffer, not by node, so a compile sibling that seeded its own
+  buffer for the same node vouches for nothing here (the run context's node-level
+  `initialized_nodes` is deliberately not consulted for this class), and a caller dropping the
+  context `run` returned loses nothing. `rollback_execution` withdraws exactly the keys the
+  rolled-back run introduced (`fresh_writes`). Allocation-time zeros no longer count. A read-only
+  input is still accepted once merely allocated, because read-only gradient accumulators
+  legitimately start at zero. Before, any allocated buffer passed, and since `compile` allocates
+  every input, the check fired only for a routine run in a context that had not compiled it.
+  Hand-built tests that accumulate from zero therefore seed the accumulator (`peel_census`); state
+  meant to start from zero inside a model is an inline declaration, an embedded node excluded from
+  `inputs` (`Train.sgd_one`'s momentum). An SGD step compiled without `Train.init_params` never
+  reaches this check: linking already refuses a parameter the prior context lacks.
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working

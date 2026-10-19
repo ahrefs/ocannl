@@ -64,6 +64,19 @@ type execution_ledger = {
           unusable: every entrypoint re-raises the stored failure, naming the routine. Scratch
           lineages ([timing_ctx]) are separate, so poisoning one does not condemn the caller's
           context. *)
+  mutable written_buffers : Set.M(Buffer_key).t;
+      (** Every concrete ordinary buffer of this lineage that something has written: a {!run} (its
+          outputs), a host upload or a device copy. Unlike [current_writers] it survives external
+          writes, because it answers a different question — not "which routine must this one wait
+          for" but "has this buffer ever held a value anyone put there", which is what
+          [check_lineage_runnable] asks of a read-before-write input (gh-ocannl-1339). Ledger-wide
+          and keyed by the concrete buffer rather than by the node or the immutable context value: a
+          caller that discarded the context [run] returned does not lose the fact, and a sibling
+          that wrote ITS buffer for the same node does not vouch for this one. Shrinks only through
+          [rollback_execution], by [fresh_writes]. *)
+  fresh_writes : Buffer_key.t list Hashtbl.M(Int).t;
+      (** Per routine id, the [written_buffers] entries the routine's latest {!run} introduced —
+          what [rollback_execution] withdraws for a run known not to have written. *)
 }
 (** Shared mutable state for execution tracking, allocated once per root context. Shared by
     reference across all contexts derived from the same root. *)
@@ -85,6 +98,8 @@ let create_ledger () =
     merge_buffer_readers = Hashtbl.create (module Int);
     current_merge_buffer_writer = None;
     poisoned = None;
+    written_buffers = Set.empty (module Buffer_key);
+    fresh_writes = Hashtbl.create (module Int);
   }
 
 type t = {
@@ -111,6 +126,24 @@ let backend_name ctx = Backends.backend_name (Backends.wrapped_backend ctx.wrapp
    shared by an upload fork and fresh for a lifecycle child. *)
 let release_flag wrapped = Backends.query wrapped { q = (fun _ c -> c.BI.finalized) }
 let upload_lineage wrapped = Backends.query wrapped { q = (fun _ c -> c.BI.upload_arenas) }
+
+(* gh-ocannl-1329: a released context is a dead handle (see {!release}); every public entry point
+   that would touch its buffers -- compile, run, sync, the transfers, the decision recorders --
+   refuses it here, by its own release flag, rather than reaching a freed pool or pointer. The flag
+   is shared exactly by the values that share pools (a linear upload chain), so a still-live sibling
+   (a compile sibling, an upload fork) keeps its own flag and keeps working. One atomic read per
+   call, at entry points only: nothing below them re-checks. What this cannot see is a released
+   ANCESTOR: a descendant has a flag of its own, so releasing an interior node stays the documented,
+   unchecked precondition of {!release}. *)
+let check_live ~fn ctx =
+  if Atomic.get (release_flag ctx.wrapped) then
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf
+            "Context.%s: context %d (backend %s, device %d) was released by Context.release and is \
+             a dead handle: its device buffers are freed. Use a live context -- e.g. a sibling, or \
+             recompile from a live ancestor."
+            fn ctx.context_id (backend_name ctx) ctx.ordinal)
 
 (* The one constructor for a derived logical context — the result of any operation that makes a
    child (compiling, transfers that touch the wrapped context, decision recording). [context_id]
@@ -238,6 +271,9 @@ let auto () =
       create_from_backend_name ~ordinal:0 backend_name
 
 let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate ctx comp bindings =
+  (* Raised, not returned as an outcome: a dead handle is the caller's error, not a property of any
+     candidate, and no search over it can succeed. *)
+  check_live ~fn:"compile" ctx;
   (* Compile and link on the wrapped backend context; only backend-independent routine components
      (and, via [with_backend]'s rebuilt constructor, the updated context) escape the dispatch. *)
   let wrapped, backend_outcome =
@@ -443,7 +479,11 @@ let check_not_poisoned ctx = Option.iter (poisoned_failure ctx) ~f:raise
 let rollback_execution ctx routine_id =
   ctx.ledger.executed <- Set.remove ctx.ledger.executed routine_id;
   ctx.ledger.current_writers <-
-    Map.filter ctx.ledger.current_writers ~f:(fun writer_id -> writer_id <> routine_id)
+    Map.filter ctx.ledger.current_writers ~f:(fun writer_id -> writer_id <> routine_id);
+  (* Only the write claims this run introduced: a buffer an earlier writer had filled keeps its
+     value, so it stays written. *)
+  Option.iter (Hashtbl.find_and_remove ctx.ledger.fresh_writes routine_id) ~f:(fun keys ->
+      ctx.ledger.written_buffers <- List.fold keys ~init:ctx.ledger.written_buffers ~f:Set.remove)
 
 let poison_lineage ctx ~routine_name exn =
   if Option.is_none ctx.ledger.poisoned then ctx.ledger.poisoned <- Some (routine_name, exn)
@@ -460,27 +500,63 @@ let poison_lineage ctx ~routine_name exn =
    serial baseline hit this first and took the arm down with it, which is why the divergence was
    CPU-invisible until HIP ran the suite. *)
 let check_lineage_runnable ctx routine =
+  (* Both handles: [ctx] is the lineage value the caller runs in, [routine.context] holds the buffer
+     locations the task actually binds. The second is waived for a live [ctx] of the routine's own
+     upload lineage: an upload fork derived from [routine.context] reference-counts the pools it
+     holds, so it keeps the routine's buffers alive after the chain it forked from is released (and
+     [derive] keeps its merge-buffer consumers registered to it, so refusing them would leave them
+     blocking refills forever). Any other [ctx] -- the parent, a compile sibling -- does not hold
+     those pools. *)
+  check_live ~fn:"run" ctx;
+  if not (phys_equal (upload_lineage ctx.wrapped) (upload_lineage routine.context.wrapped)) then
+    check_live ~fn:"run (the routine's compile context)" routine.context;
   check_not_poisoned ctx;
-  (* Check that all required inputs are initialized. A node counts as initialized if it was produced
-     by a prior routine ([initialized_nodes]) or is already allocated in the running context's
-     device buffers ([in_backend]): such inputs are either user-set via [set_values]/[from_host]
-     (which write the allocated buffer in place) or zero-initialized at allocation, which is the
-     correct identity for read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not
-     distinguish a forgotten non-zero data input from a zero-valid accumulator — both are read-only
-     buffers allocated with [~zero_init:true] — so a forgotten data input reads zeros rather than
-     failing. Catching that precisely needs per-node "needs-nonzero-init" metadata OCANNL does not
-     currently carry; a stricter check produces false positives on read-only accumulator gradients
-     (zero2hero_1of7, primitive_ops). *)
+  (* Check that all required inputs are initialized, in two classes.
+
+     A READ-BEFORE-WRITE input (the routine both reads it first and writes it: a counter, a running
+     statistic, a recurrent state) must have held a value someone put there: the very buffer the
+     routine binds must have been written, in this lineage, by a run, upload or device copy
+     ([written_buffers]). Not the run context's node-level [initialized_nodes]: [ctx] need not be
+     [routine.context], and a sibling that seeded its own buffer for the same node says nothing
+     about this one. Every path that marks a node initialized also records its buffer, so nothing is
+     lost by asking the buffer. Its allocation-time zeros do not count (gh-ocannl-1339): an
+     uninitialized read of state the routine then overwrites is a user bug the context can see.
+     State a routine is meant to start from zero carries that in its own computation -- an inline
+     declaration is an embedded node, excluded from [inputs] at compile ([Train.sgd_one]'s momentum
+     is the pattern) -- or is seeded explicitly.
+
+     A READ-ONLY input is accepted once it is allocated in the running context's device buffers
+     ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which write the
+     allocated buffer in place) or zero-initialized at allocation, which is the correct identity for
+     read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not distinguish a forgotten
+     non-zero data input from a zero-valid accumulator — both are read-only buffers allocated with
+     [~zero_init:true] — so a forgotten data input reads zeros rather than failing. Catching that
+     precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently carry; a
+     stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
+     primitive_ops). *)
   let ctx_buffers = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.ctx_buffers) } in
   let in_backend tn = Map.mem ctx_buffers tn in
+  let written tn =
+    Option.exists (buffer_key routine.context tn) ~f:(Set.mem ctx.ledger.written_buffers)
+  in
   let missing_inputs =
-    Set.filter routine.inputs ~f:(fun tn -> not (Set.mem ctx.initialized_nodes tn || in_backend tn))
+    Set.filter routine.inputs ~f:(fun tn ->
+        if Set.mem routine.outputs tn then not (written tn)
+        else not (Set.mem ctx.initialized_nodes tn || in_backend tn))
   in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
-       Set.to_list missing_inputs |> List.map ~f:Tn.debug_name |> String.concat ~sep:", "
+       Set.to_list missing_inputs
+       |> List.map ~f:(fun tn ->
+           Tn.debug_name tn ^ if Set.mem routine.outputs tn then " (read before written)" else "")
+       |> String.concat ~sep:", "
      in
-     failwith (Printf.sprintf "Context.run: required input nodes not initialized: %s" missing_names));
+     raise
+     @@ Utils.User_error
+          (Printf.sprintf
+             "Context.run: routine %s: required input nodes not initialized: %s. Seed them (e.g. \
+              Context.set_values, or a routine writing them run first) before running."
+             routine.name missing_names));
 
   (* Check execution dependencies *)
   let missing_deps = Set.diff routine.execution_deps ctx.ledger.executed in
@@ -521,16 +597,26 @@ let run ctx routine =
 
   (* Mark executed in shared ledger *)
   ctx.ledger.executed <- Set.add ctx.ledger.executed routine.routine_id;
-  ctx.ledger.current_writers <-
-    Set.fold routine.outputs ~init:ctx.ledger.current_writers ~f:(fun writers tn ->
-        Option.value_map (buffer_key routine.context tn) ~default:writers ~f:(fun key ->
-            Map.set writers ~key ~data:routine.routine_id));
+  let fresh =
+    Set.fold routine.outputs ~init:[] ~f:(fun fresh tn ->
+        match buffer_key routine.context tn with
+        | None -> fresh
+        | Some key ->
+            ctx.ledger.current_writers <-
+              Map.set ctx.ledger.current_writers ~key ~data:routine.routine_id;
+            if Set.mem ctx.ledger.written_buffers key then fresh
+            else (
+              ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key;
+              key :: fresh))
+  in
+  Hashtbl.set ctx.ledger.fresh_writes ~key:routine.routine_id ~data:fresh;
 
   (* Mark outputs as initialized and return updated context *)
   let initialized_nodes = Set.union ctx.initialized_nodes routine.outputs in
   { ctx with initialized_nodes }
 
 let sync ctx =
+  check_live ~fn:"sync" ctx;
   check_not_poisoned ctx;
   Backends.query ctx.wrapped
     {
@@ -569,9 +655,10 @@ let mark_initialized ctx nodes =
    unexecuted reader cannot impose a WAR edge on a write that already happened. The merge-buffer
    frontier is separate storage and is deliberately unaffected. *)
 let record_external_writes ctx nodes =
-  ctx.ledger.current_writers <-
-    Set.fold nodes ~init:ctx.ledger.current_writers ~f:(fun writers tn ->
-        Option.value_map (buffer_key ctx tn) ~default:writers ~f:(Map.remove writers));
+  Set.iter nodes ~f:(fun tn ->
+      Option.iter (buffer_key ctx tn) ~f:(fun key ->
+          ctx.ledger.current_writers <- Map.remove ctx.ledger.current_writers key;
+          ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key));
   let frontier =
     Set.fold nodes ~init:ctx.frontier ~f:(fun frontier tn ->
         {
@@ -682,6 +769,7 @@ let copy_nd (src : Nd.t) : Nd.t =
 (** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
+  check_live ~fn:"to_host" ctx;
   check_not_poisoned ctx;
   (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice
      owns no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run.
@@ -749,6 +837,7 @@ let to_host ctx (tn : Tn.t) : Nd.t =
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
+  check_live ~fn:"from_host" ctx;
   check_not_poisoned ctx;
   (* Reject direct host writes to an [\@|] slice view (gh-ocannl-293 293a). Critically, [slice_of]
      is set eagerly at construction, so this fires even when the slice has not been lowered yet and
@@ -803,6 +892,8 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
      export a possibly partially written buffer into a clean lineage — exactly what poisoning is for
      (Codex P2 on PR #256). Reading from a condemned lineage and running transfer work on one are
      both refused. *)
+  check_live ~fn:"copy (source)" src;
+  check_live ~fn:"copy (destination)" dst;
   check_not_poisoned src;
   check_not_poisoned dst;
   (* The fallback also serves nodes with no device buffer in [src]: [to_host] reads host-init
@@ -1016,6 +1107,8 @@ let decision_surface ?name ctx comp bindings =
   (lowered_for_decisions ?name ctx comp bindings).Ir.Low_level.flip_candidates
 
 let decide_materialized ctx tns =
+  (* A child of a dead handle would inherit its freed buffer locations under a fresh, unset flag. *)
+  check_live ~fn:"decide_materialized" ctx;
   let wrapped, () =
     Backends.with_backend ctx.wrapped
       {
@@ -1031,6 +1124,7 @@ let decide_materialized ctx tns =
   derive ctx wrapped
 
 let decide_inline ctx tns =
+  check_live ~fn:"decide_inline" ctx;
   let wrapped, () =
     Backends.with_backend ctx.wrapped
       {
@@ -1053,6 +1147,7 @@ let decide_inline ctx tns =
   derive ctx wrapped
 
 let decide_footprint ctx tns =
+  check_live ~fn:"decide_footprint" ctx;
   let wrapped, () =
     Backends.with_backend ctx.wrapped
       {

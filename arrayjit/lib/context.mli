@@ -171,7 +171,10 @@ val compile :
     {!get_values}, rather than only analyzed. Pass [~name] and {!Ir.Assignments.empty_comp} unless
     the routine's nodes must settle against a prior context. The record's [optimize_ctx] becomes the
     returned context's lineage state, so the caller owns its provenance; production code should not
-    use this parameter. *)
+    use this parameter.
+
+    Refuses a {!release}d context with {!Ir.Utils.User_error}, raised rather than returned as an
+    outcome by {!compile_outcome} as well. *)
 
 val compile_outcome :
   ?name:string ->
@@ -223,7 +226,15 @@ val decision_surface :
 
 val run : t -> routine -> t
 (** Execute a compiled routine. Mutates buffers in-place. Returns updated context with newly
-    initialized nodes tracked. Raises [Failure] if execution dependencies are not satisfied.
+    initialized nodes tracked. Raises [Failure] if execution dependencies are not satisfied, and
+    {!Ir.Utils.User_error} if [t] was {!release}d, or the routine's compile context was and [t] is
+    not a live upload fork of it (a fork reference-counts the routine's buffers), or if a required
+    input was never initialized. A {e read-before-write} input — one the routine reads and then
+    writes, such as a counter or a running statistic — must have been written by something in this
+    lineage (a run, an upload, a device copy): its allocation-time zeros do not count
+    (gh-ocannl-1339). State meant to start from zero declares that in its own computation (an inline
+    declaration, embedded in the routine) or is seeded with {!set_values}. A read-only input is
+    accepted once it is allocated, since zero is the right initial value of a read-only accumulator.
 
     The routine's static-index bindings are read HERE, not when the device gets to the work: the
     dispatch carries the values they hold at this call, so a caller may rebind them for the next run
@@ -263,7 +274,7 @@ val check_launch_bindings : routine -> unit
 val sync : t -> unit
 (** Blocks until the context's device is idle. Host reads ({!to_host}, {!get_values}) synchronize on
     their own; explicit [sync] is for timing runs (e.g. the autotuner) and for fencing against
-    out-of-band observation. *)
+    out-of-band observation. Refuses a {!release}d context with {!Ir.Utils.User_error}. *)
 
 val failure_classifier :
   t -> Ir.Schedule_outcome.phase -> exn -> Ir.Schedule_outcome.classified_cause option
@@ -404,7 +415,9 @@ val to_host : t -> Ir.Tnode.t -> Ir.Ndarray.t
 (** Transfers the node's device buffer into a fresh host [Ndarray] and returns it. Raises if the
     node is not present in the context (and has no host-init data or for-print proxy), and if this
     lineage placed the node [Local] -- routine-scoped scratch, whose buffer no routine writes (see
-    the on-demand host access section above). *)
+    the on-demand host access section above). Refuses a {!release}d context with
+    {!Ir.Utils.User_error}, as do {!from_host}, {!copy} (either side) and the accessors built on
+    them. *)
 
 val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
 (** Uploads the host buffer into the node's device buffer (allocating it if needed) and returns a
@@ -481,9 +494,13 @@ val release : t -> unit
     create a lifecycle child still require their ancestor to remain live. {!Autotune.tune} releases
     only leaf siblings of one search context.
 
-    A context whose buffers were released must not be run or read again; it is a dead handle,
-    exactly as after the finalizer had reclaimed it. Nothing in the context is invalidated for
-    {e reading metadata} (placements, names, the ledger), only for touching buffers.
+    A context whose buffers were released is a dead handle: {!compile}, {!run}, {!sync}, the
+    transfers and the [decide_*] recorders refuse it with {!Ir.Utils.User_error} naming the context
+    (gh-ocannl-1329), by the release flag it shares with exactly the values that share its pools (a
+    linear upload chain). A compile sibling or an upload fork has its own flag and keeps working.
+    Nothing in the context is invalidated for {e reading metadata} (placements, names, the ledger,
+    the backend's static queries), only for touching buffers. What the refusal cannot see is a
+    released {e ancestor} — the precondition above.
 
     What it does {e not} free: per-device constants
     ({!Ir.Backend_intf.field-device.constant_buffer_cache} entries), which are shared across
