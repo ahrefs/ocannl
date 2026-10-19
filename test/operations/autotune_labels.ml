@@ -56,7 +56,7 @@ let lo : Autotune.sketch_params =
     sk_epilogue = false;
     sk_batch_grid = false;
     sk_batch_inner = false;
-    sk_coalesce = false;
+    sk_coalesce = None;
     sk_swizzle = None;
     sk_depth = 1;
     sk_pack_prec = None;
@@ -80,7 +80,7 @@ let hi : Autotune.sketch_params =
     sk_epilogue = true;
     sk_batch_grid = true;
     sk_batch_inner = true;
-    sk_coalesce = true;
+    sk_coalesce = Some Autotune.Coalesce_contraction;
     sk_swizzle = Some Ir.Low_level.Swizzle_b128;
     sk_depth = 2;
     sk_pack_prec = Some Ir.Ops.single;
@@ -129,7 +129,14 @@ let () =
            label (with_field_of ~donor:hi lo name);
            label (with_field_of ~donor:lo hi name);
          ]))
-    ~f:(fun l -> String.mem l ',')
+    ~f:(fun l -> String.mem l ',');
+  (* The field flips above reach only the two base points' values; a variant field needs each of its
+     constructors labelled apart too: a column-coalesced and a contraction-coalesced seed of one
+     geometry are different schedules (gh-ocannl-1279). *)
+  let layouts = [ None; Some Autotune.Coalesce_columns; Some Autotune.Coalesce_contraction ] in
+  let layout_labels = List.map layouts ~f:(fun l -> label { lo with sk_coalesce = l }) in
+  p "every coalesced layout labels apart"
+    (List.length (List.dedup_and_sort layout_labels ~compare:String.compare) = List.length layouts)
 
 (* Two segments can admit the same parameters (two matmul segments sharing a tile geometry), and
    their one-entry per-segment candidates schedule different kernels: the label names the segment

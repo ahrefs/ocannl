@@ -364,7 +364,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.transformer_decoder";
     "Nn_blocks.transformer_decoder_block";
     "Nn_blocks.transformer_encoder";
-    "Nn_blocks.transformer_encoder_block";
     "Nn_blocks.vgg_block";
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";

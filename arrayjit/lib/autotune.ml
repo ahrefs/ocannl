@@ -1899,20 +1899,10 @@ let sr_hermetic (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
-(* gh-ocannl-1414: the reduction pair [(outer, inner)] of [opt] merged into one loop, as the merged
-   loop's fresh symbol and the coalesced code (on a hermetic copy), or [None] where [Sched.Coalesce]
-   declines -- the pair is not a perfect nest of two [Serial] loops, or some access does not read it
-   as two adjacent plain iterators over unpadded axes. The op's own recognizer decides, as for the
-   split. *)
-let coalesce_reduction_pair ?(static_indices = []) (opt : LL.optimized) ~outer ~inner :
-    (Idx.symbol * LL.optimized) option =
-  let op, merged = Sched.coalesce ~outer ~inner in
-  match Sched.op_legality opt op with
-  | Sched.Op_illegal _ | Sched.Op_unknown _ -> None
-  | Sched.Op_legal -> (
-      match Sched.apply_classified ~static_indices [ op ] (sr_hermetic opt) with
-      | coalesced -> Some (merged, coalesced)
-      | exception Outcome.Cause_at _ -> None)
+(* [coalesce_reduction_pair] (gh-ocannl-1414) lives in {!Sketch_families}, which this module
+   includes: the contraction layout of the coalesced sketch branch (gh-ocannl-1279) prepares its
+   pair through it too, so a split of the merged loop and a tile of it start from one
+   preparation. *)
 
 let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site list =
   let acc = ref [] in
@@ -2743,9 +2733,13 @@ let sketch_params_label p =
       | true, false -> " bgrid"
       | true, true -> " bgrid-in"
       | false, true -> " bin");
-      (* The coalesced layout's seeds (gh-ocannl-1165), whose tile fields describe the coalesced
-         site. *)
-      flag p.sk_coalesce " coal";
+      (* The coalesced layouts' seeds, whose tile fields describe the coalesced site: [coal-n] for
+         the interior batch loop merged into the column role (gh-ocannl-1165), [coal-k] for the
+         contraction pair merged into one k (gh-ocannl-1279). *)
+      (match p.sk_coalesce with
+      | None -> ""
+      | Some Coalesce_columns -> " coal-n"
+      | Some Coalesce_contraction -> " coal-k");
       flag p.sk_epilogue " ep";
       (* The register-tile twins of one CPU tensorized leaf (gh-ocannl-619, gh-ocannl-1166). *)
       (match p.sk_tile with
@@ -4570,8 +4564,8 @@ let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sket
           let leaves =
             List.filter (Sspace.leaves tree) ~f:(fun p ->
                 p.sk_gpu && (not p.sk_mma) && (not p.sk_conv) && (not p.sk_epilogue)
-                && (not p.sk_coalesce) && (not p.sk_batch_inner) && Option.is_none p.sk_swizzle
-                && p.sk_depth = 1)
+                && Option.is_none p.sk_coalesce && (not p.sk_batch_inner)
+                && Option.is_none p.sk_swizzle && p.sk_depth = 1)
           in
           let batch = List.map (site.m_bo @ site.m_bi) ~f:snd in
           (* A batched site's batch loops launch as grid blocks where the device's [.z] cap admits

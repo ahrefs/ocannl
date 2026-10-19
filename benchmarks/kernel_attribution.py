@@ -22,6 +22,16 @@ step, in every repeat, with identical code and launch geometry). Each row says w
            the step.
   SPREAD   the in-step p90/p10 over the timed steps exceeds SPREAD_TOLERANCE: a difference of this
            kernel smaller than its own spread is not a difference.
+  OWN      the isolated minimum times the cell's common factor is still more than ISO_TOLERANCE
+           (and ABS_FLOOR_MS) away from the in-step median: the kernel's own deviation, not the
+           clock's (gh-ocannl-1391).
+
+The common factor F is the median in-step/isolated ratio over the kernels of at least
+FACTOR_FLOOR_MS in-step. It is a property of the step, not of a kernel: on rog's power-capped laptop
+GPU a b256 step runs every sizeable kernel ~6.5% slower than its isolated minimum, and the per-step
+slowdowns of kernels adjacent in time move together (gh-ocannl-1391), while a 21-run isolated burst
+draws too little for long enough to be capped. ISO therefore flags most of a capped step; OWN flags
+what remains once the step's clock is accounted for.
 
 Subcommands:
   check OUT NAME   validate one cell (OUT/NAME.out, .err, _cuda_gpu_trace.csv); exit 1 with a reason
@@ -43,6 +53,9 @@ from gh1002_cells import KERNEL  # noqa: E402  (the one reader of the kernel-tab
 ISO_TOLERANCE = 0.10
 SPREAD_TOLERANCE = 1.10
 ABS_FLOOR_MS = 0.02
+# The common factor's population: kernels of at least this in-step median, at least this many.
+FACTOR_FLOOR_MS = 0.5
+FACTOR_MIN = 3
 # Rows printed per cell: the largest kernels until they cover this share of the in-step total.
 SHOWN_SHARE = 0.95
 SHOWN_MAX = 60
@@ -155,8 +168,27 @@ def attribute(out, name):
             flags.append("SPREAD")
         attributed.append({"i": i, "med": med, "p10": p10, "p90": p90, "iso_min": iso_min,
                            "host_min": host_min, "geometry": geometry, "writes": writes,
-                           "flags": flags})
+                           "flags": flags, "steps": steps})
+    factor = common_factor(attributed)
+    if factor is not None:
+        for r in attributed:
+            scaled = r["iso_min"] * factor["f"]
+            if abs(scaled - r["med"]) >= ABS_FLOOR_MS and abs(scaled / r["med"] - 1) > ISO_TOLERANCE:
+                r["flags"].append("OWN")
     return rec, attributed
+
+
+def common_factor(rows):
+    """The cell's common in-step/isolated factor: {"f": the median ratio over the kernels of at
+    least FACTOR_FLOOR_MS in-step, "n": how many, "p10"/"p90": the spread over the timed steps of
+    each step's own median ratio}; None with fewer than FACTOR_MIN such kernels."""
+    big = [r for r in rows if r["med"] >= FACTOR_FLOOR_MS and r["iso_min"] > 0]
+    if len(big) < FACTOR_MIN:
+        return None
+    per_step = [statistics.median(r["steps"][s] / r["iso_min"] for r in big)
+                for s in range(len(big[0]["steps"]))]
+    return {"f": statistics.median(r["med"] / r["iso_min"] for r in big), "n": len(big),
+            "p10": percentile(per_step, 10), "p90": percentile(per_step, 90)}
 
 
 def clocks(out, stem):
@@ -199,6 +231,18 @@ def render_cell(out, name, rec, rows):
     print("- SPREAD (in-step p90/p10 > %.2f): %d kernels, %.2f ms in-step (%.1f%%)"
           % (SPREAD_TOLERANCE, len(spread), sum(r["med"] for r in spread),
              100 * sum(r["med"] for r in spread) / total))
+    factor = common_factor(rows)
+    if factor is None:
+        print("- common in-step/isolated factor: none (fewer than %d kernels of >= %.1f ms in-step);"
+              " OWN flags nothing" % (FACTOR_MIN, FACTOR_FLOOR_MS))
+    else:
+        own = [r for r in rows if "OWN" in r["flags"]]
+        print("- common in-step/isolated factor F = %.3f (median over the %d kernels of >= %.1f ms"
+              " in-step; per-step factor p10..p90 %.3f..%.3f)"
+              % (factor["f"], factor["n"], FACTOR_FLOOR_MS, factor["p10"], factor["p90"]))
+        print("- OWN (isolated x F off in-step by >%d%%): %d kernels, %.2f ms in-step (%.1f%%)"
+              % (round(ISO_TOLERANCE * 100), len(own), sum(r["med"] for r in own),
+                 100 * sum(r["med"] for r in own) / total))
     clk = clocks(out, stem)
     if clk:
         print("- SM clock in P0: %d..%d MHz, median %d (%d samples)" % (clk[0], clk[2], clk[1], clk[3]))
@@ -215,9 +259,10 @@ def render_cell(out, name, rec, rows):
             r["host_min"], " ".join(r["flags"]), label(r["writes"])))
     rest = sorted(rows, key=lambda r: -r["med"])[shown:]
     if rest:
-        print("\n%d further kernels: %.2f ms in-step (%.1f%%), %d flagged ISO, %d SPREAD." % (
+        print("\n%d further kernels: %.2f ms in-step (%.1f%%), %d flagged ISO, %d SPREAD, %d OWN." % (
             len(rest), sum(r["med"] for r in rest), 100 * sum(r["med"] for r in rest) / total,
-            sum("ISO" in r["flags"] for r in rest), sum("SPREAD" in r["flags"] for r in rest)))
+            sum("ISO" in r["flags"] for r in rest), sum("SPREAD" in r["flags"] for r in rest),
+            sum("OWN" in r["flags"] for r in rest)))
 
 
 def render_repeatability(cells):

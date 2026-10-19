@@ -315,6 +315,242 @@ let () =
   p "stage+privatize: the coalesced, packed reduction computes the plain one's values bitwise"
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want got)
 
+(* {1 The contraction pair: the out projection's [(h, e)] (gh-ocannl-1279)}
+
+   The legs above coalesce an OUTPUT pair. Attention's out projection [d[s,j] += w[j,h,e] *
+   x[s,h,e]] contracts over its pair instead: both operands read [(h, e)] as adjacent plain
+   iterators and the accumulator reads neither, so [Coalesce] makes the contraction one k loop of
+   extent [h*e]. What the tiling needs from the ops on that merged k, pinned on hand-built nests
+   before any seed relies on it:
+
+   - [Pad] + [Split] along the merged k with a block that does not divide the head ([e = 5], block
+   4, odd [K = 15]): tiles cross head boundaries and the last one runs past [K]; - [Stage] of BOTH
+   operands at the k-block loop: each load nest reads its source through the flattened address and
+   guards the fringe against the merged extent [K], not against [e]; - [Privatize] over the k-block
+   loop, with the pad's iteration mask on the leaf; - an unrelated second reader of the activation,
+   in its own nest, keeps reading the source; - [Split_reduce] on the merged k of a small-output
+   contraction; - a weight stored [w[h, j, e]] (the pair not adjacent), a per-head-only operand, and
+   a padded inner axis each make [Coalesce] decline.
+
+   Inputs are multiples of 1/4 and 1/2 with partial sums far below 2^24, so every order of
+   accumulation is exact in f32 and the claims are bitwise. *)
+
+let () =
+  let ss = 4 and jj = 6 and hh = 3 and ee = 5 and bk = 4 in
+  let kk = hh * ee in
+  let mk = L.node_factory ~first_id:127900 ~dims:[||] () in
+  let w = mk ~dims:[| jj; hh; ee |] "ck_w" and x = mk ~dims:[| ss; hh; ee |] "ck_x" in
+  let d = mk ~dims:[| ss; jj |] "ck_d" and r = mk ~dims:[| ss; hh; ee |] "ck_r" in
+  List.iter [ w; x; d; r ] ~f:L.materialize;
+  let s = L.sym () and j = L.sym () and h = L.sym () and e = L.sym () in
+  let s' = L.sym () and h' = L.sym () and e' = L.sym () in
+  let at = [| L.iter s; L.iter j |] in
+  let llc =
+    L.seq
+      (L.seq (L.zero d)
+         (L.loop_n s ss
+            (L.loop_n j jj
+               (L.loop_n h hh
+                  (L.loop_n e ee
+                     (L.set d at
+                        (L.add (L.get d at)
+                           (L.mul
+                              (L.get w [| L.iter j; L.iter h; L.iter e |])
+                              (L.get x [| L.iter s; L.iter h; L.iter e |])))))))))
+      (* The unrelated second reader: its own nest over [x], which nothing below schedules. *)
+      (L.loop_n s' ss
+         (L.loop_n h' hh
+            (L.loop_n e' ee
+               (L.set r
+                  [| L.iter s'; L.iter h'; L.iter e' |]
+                  (L.mul (L.c 2.) (L.get x [| L.iter s'; L.iter h'; L.iter e' |]))))))
+  in
+  let seed =
+    [
+      ( w,
+        Array.init (jj * kk)
+          ~f:(L.cycle_flat ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5) );
+      ( x,
+        Array.init (ss * kk)
+          ~f:(L.cycle_flat ~dims:[| ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25) );
+    ]
+  in
+  let o = L.optimize ~name:"ck_plain" llc in
+  let co, f = Sched.coalesce ~outer:h ~inner:e in
+  p "contraction: Coalesce of the contraction pair is Op_legal"
+    (Sched.equal_op_verdict (Sched.op_legality o co) Sched.Op_legal);
+  let oc = Sched.apply [ co ] o in
+  p "contraction: the merged k loop spans the whole contraction"
+    (Option.exists
+       (L.find_loop ~f:(fun site -> Ir.Indexing.equal_symbol site.L.ls_index f) oc.LL.llc)
+       ~f:(fun site -> site.L.ls_extent = kk));
+  p "contraction: the accumulator's index is untouched by the coalescing"
+    (L.count_stmt oc.LL.llc ~f:(function
+       | LL.Set { tn; idcs; _ } ->
+           Ir.Tnode.equal tn d && Array.equal Ir.Indexing.equal_axis_index idcs at
+       | _ -> false)
+    > 0);
+  let sp, f_o, f_i = Sched.split ~axis:f ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
+  let stage source =
+    Sched.Stage
+      {
+        source;
+        tile_loops = [ f_i ];
+        shared = false;
+        cooperative = None;
+        hoisted = false;
+        swizzle = None;
+        pad_stride = None;
+        pipeline_depth = 1;
+        tile_prec = None;
+      }
+  in
+  let sched =
+    [
+      co;
+      Sched.Pad { axis = f; to_multiple_of = bk };
+      sp;
+      stage w;
+      stage x;
+      Sched.privatize ~accum_prec ~target:d ~over:f_o;
+    ]
+  in
+  let os = Sched.apply sched o in
+  (* Every read of the two operands, split by whether it reads the flattened pair: the load nests'
+     reads do, the second reader's do not. *)
+  let flat_reads = ref [] and plain_x_reads = ref [] in
+  L.walk os.LL.llc ~on_scalar:(function
+    | LL.Get (tn, idcs) when Ir.Tnode.equal tn w || Ir.Tnode.equal tn x ->
+        if Array.exists idcs ~f:(Ir.Indexing.equal_axis_index Ir.Indexing.Sub_axis) then
+          flat_reads := (tn, idcs) :: !flat_reads
+        else if Ir.Tnode.equal tn x then plain_x_reads := idcs :: !plain_x_reads
+    | _ -> ());
+  p "contraction: both operands are staged through their flattened address"
+    (List.exists !flat_reads ~f:(fun (tn, _) -> Ir.Tnode.equal tn w)
+    && List.exists !flat_reads ~f:(fun (tn, _) -> Ir.Tnode.equal tn x));
+  p_all "contraction: every staged read spans the merged extent on its flattened axis" !flat_reads
+    ~f:(fun (tn, idcs) ->
+      let dims = Lazy.force tn.Ir.Tnode.dims in
+      (Ir.Affine.axis_extents ~dims idcs).(2) = kk);
+  p "contraction: the unrelated second reader keeps reading the activation axis by axis"
+    (List.exists !plain_x_reads ~f:(fun idcs ->
+         Array.equal Ir.Indexing.equal_axis_index idcs [| L.iter s'; L.iter h'; L.iter e' |]));
+  (* [bk = 4] divides neither [e = 5] nor [K = 15]: tiles cross heads and the last one runs past
+     [K]. A fringe guarded against the head's [e] instead of [K] would zero most of every tile,
+     which the bitwise claim below catches. *)
+  let want_d, want_r, got_d, got_r =
+    match
+      ( L.execute ~name:"ck_plain_run" o ~seed ~read:[ d; r ],
+        L.execute ~name:"ck_tiled_run" os ~seed ~read:[ d; r ] )
+    with
+    | [ wd; wr ], [ gd; gr ] -> (wd, wr, gd, gr)
+    | _ -> assert false
+  in
+  p
+    "contraction: the coalesced, padded, staged and privatized contraction computes the plain \
+     one's values bitwise"
+    ((not (Array.is_empty want_d))
+    && Array.for_all want_d ~f:(fun v -> Float.(v <> 0.))
+    && Array.equal Float.equal want_d got_d);
+  p "contraction: the second reader's values are untouched"
+    (Array.exists want_r ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want_r got_r);
+  (* Declines: the pair not adjacent in the weight, a per-head-only operand, a padded inner axis. *)
+  let declines ~tag ~substring ~w_dims ~w_at ~extra =
+    let w' = mk ~dims:w_dims ("ck_w_" ^ tag) and d' = mk ~dims:[| ss; jj |] ("ck_d_" ^ tag) in
+    let x' =
+      mk ~dims:[| ss; hh; (if String.equal tag "padded" then ee + 2 else ee) |] ("ck_x_" ^ tag)
+    in
+    let g = mk ~dims:[| hh |] ("ck_g_" ^ tag) in
+    List.iter [ w'; d'; x'; g ] ~f:L.materialize;
+    let s = L.sym () and j = L.sym () and h = L.sym () and e = L.sym () in
+    let at = [| L.iter s; L.iter j |] in
+    let prod = L.mul (L.get w' (w_at ~j ~h ~e)) (L.get x' [| L.iter s; L.iter h; L.iter e |]) in
+    let prod = if extra then L.mul prod (L.get g [| L.iter h |]) else prod in
+    let llc =
+      L.loop_n s ss
+        (L.loop_n j jj (L.loop_n h hh (L.loop_n e ee (L.set d' at (L.add (L.get d' at) prod)))))
+    in
+    let o = L.optimize ~name:("ck_" ^ tag) llc in
+    let op = fst (Sched.coalesce ~outer:h ~inner:e) in
+    p
+      (Printf.sprintf "contraction %s: Coalesce declines" tag)
+      (raises_with ~substring (fun () -> Sched.apply [ op ] o));
+    p
+      (Printf.sprintf "contraction %s: the oracle proves it illegal" tag)
+      (match Sched.op_legality o op with Sched.Op_illegal _ -> true | _ -> false)
+  in
+  let plain_w ~j ~h ~e = [| L.iter j; L.iter h; L.iter e |] in
+  declines ~tag:"hje" ~substring:"does not read" ~w_dims:[| hh; jj; ee |]
+    ~w_at:(fun ~j ~h ~e -> [| L.iter h; L.iter j; L.iter e |])
+    ~extra:false;
+  declines ~tag:"per_head" ~substring:"does not read" ~w_dims:[| jj; hh; ee |] ~w_at:plain_w
+    ~extra:true;
+  declines ~tag:"padded" ~substring:"padded axis" ~w_dims:[| jj; hh; ee |] ~w_at:plain_w
+    ~extra:false
+
+(* [Split_reduce] on the merged k of a small-output contraction [d[j] += w[j,h,e] * x[h,e]]: the
+   split's legality probe accepts the merged loop, and the coalesced, split, default-scheduled
+   reduction computes the plain one's values bitwise on these exact inputs ([Split_reduce]
+   reassociates, so bitwise parity is promised on exact fixtures only). *)
+let () =
+  let jj = 4 and hh = 4 and ee = 32 in
+  let mk = L.node_factory ~first_id:127950 ~dims:[||] () in
+  let w = mk ~dims:[| jj; hh; ee |] "cks_w" and x = mk ~dims:[| hh; ee |] "cks_x" in
+  let d = mk ~dims:[| jj |] "cks_d" in
+  List.iter [ w; x; d ] ~f:L.materialize;
+  let j = L.sym () and h = L.sym () and e = L.sym () in
+  let at = [| L.iter j |] in
+  let llc =
+    L.seq (L.zero d)
+      (L.loop_n j jj
+         (L.loop_n h hh
+            (L.loop_n e ee
+               (L.set d at
+                  (L.add (L.get d at)
+                     (L.mul
+                        (L.get w [| L.iter j; L.iter h; L.iter e |])
+                        (L.get x [| L.iter h; L.iter e |])))))))
+  in
+  let seed =
+    [
+      ( w,
+        Array.init
+          (jj * hh * ee)
+          ~f:(L.cycle_flat ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5) );
+      ( x,
+        Array.init (hh * ee)
+          ~f:(L.cycle_flat ~dims:[| hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25) );
+    ]
+  in
+  let o = L.optimize ~name:"cks_plain" llc in
+  let co, f = Sched.coalesce ~outer:h ~inner:e in
+  let oc = Sched.apply [ co ] o in
+  let sr, _, _, _ = Sched.split_reduce ~axis:f ~target:d ~num_blocks:4 in
+  p "contraction split-reduce: the split of the merged k is Op_legal"
+    (Sched.equal_op_verdict (Sched.op_legality oc sr) Sched.Op_legal);
+  let os = Sched.apply [ co; sr ] o in
+  let run name o transform =
+    let ctx, routine =
+      Context.compile ~name ~prelowered:o ~lowered_transform:transform (Context.auto ())
+        Ir.Assignments.empty_comp Ir.Indexing.Empty
+    in
+    let ctx = List.fold seed ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) in
+    Context.get_values (Context.run ctx routine) d
+  in
+  let want = run "cks_plain_run" o (fun o -> [ o ]) in
+  let got =
+    run "cks_split_run" os
+      (Sched.maybe_default_schedules ~backend_name
+         ~limits:(Context.hardware_limits (Context.auto ()))
+         ~static_indices:[])
+  in
+  p
+    "contraction split-reduce: the coalesced, split, default-scheduled contraction computes the \
+     plain one's values bitwise"
+    ((not (Array.is_empty want))
+    && Array.for_all want ~f:(fun v -> Float.(v <> 0.))
+    && Array.equal Float.equal want got)
+
 (* {1 Composition: a coalesced pair under [Fuse_epilogue]}
 
    The one caller of the shared per-axis decomposition ([Schedule.terms_of_index]) that refuses a
@@ -433,7 +669,7 @@ let () =
   let cand = projection () in
   let fwd = named "co_sched" (Train.forward cand) in
   let opt = capture fwd in
-  let prefix = Autotune.coalesce_prefix opt in
+  let prefix = Autotune.coalesce_prefix ~layout:Coalesce_columns opt in
   p "projection: the coalesced layout's prefix applies" (Option.is_some prefix);
   let prefix = Option.value ~default:[] prefix in
   p "projection: the prefix expands the zeroing, coalesces its pair, then the site's"
@@ -458,7 +694,9 @@ let () =
   let seeds = Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits opt in
   p "projection: the coalesced branch offers seeds" (not (List.is_empty seeds));
   p_all "projection: every coalesced seed is a scalar blocktile seed stamped coalesced" seeds
-    ~f:(fun q -> q.Autotune.sk_coalesce && blocktile q && not q.Autotune.sk_epilogue);
+    ~f:(fun q ->
+      Poly.equal q.Autotune.sk_coalesce (Some Autotune.Coalesce_columns)
+      && blocktile q && not q.Autotune.sk_epilogue);
   p_exists "projection: some coalesced seed's column tile is wider than one head" seeds ~f:(fun q ->
       q.Autotune.sk_bn > ee);
   p_empty "projection: the coalesced branch offers nothing off GPU" ~over:seeds
@@ -519,7 +757,8 @@ let () =
   in
   let opt = capture (named "co_companion" (Train.forward cand)) in
   let limits = Ir.Backend_intf.no_hardware_limits in
-  p "companion: the site's own pair still coalesces" (Option.is_some (Autotune.coalesce_prefix opt));
+  p "companion: the site's own pair still coalesces"
+    (Option.is_some (Autotune.coalesce_prefix ~layout:Coalesce_columns opt));
   let family = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits opt in
   p_exists "companion: the ordinary family still covers the tail" family ~f:blocktile;
   p_empty
@@ -560,7 +799,7 @@ let () =
   p_exists
     "fission: the site's unzeroed segment coalesces by its own Coalesce alone, and seeds the branch"
     segments ~f:(fun (kind, pre, _, _) ->
-      match (kind, Autotune.coalesce_prefix pre) with
+      match (kind, Autotune.coalesce_prefix ~layout:Coalesce_columns pre) with
       | `Normal, Some [ Sched.Coalesce _ ] ->
           not
             (List.is_empty (Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits pre))
@@ -600,7 +839,7 @@ let () =
   in
   let folded =
     List.find_map segments ~f:(fun (kind, pre, _, _) ->
-        match (kind, Autotune.coalesce_prefix pre) with
+        match (kind, Autotune.coalesce_prefix ~layout:Coalesce_columns pre) with
         | `Normal, Some [ Sched.Coalesce _; Sched.Coalesce _ ] -> Some pre
         | _ -> None)
   in
@@ -638,3 +877,228 @@ let () =
                  o ~seed ~read:[ cand.Tensor.value ])
           in
           Array.equal Float.equal got want))
+
+(* {1 The contraction layout on the real out projection (gh-ocannl-1279)}
+
+   [{ w_o } * attn] with the weight's two input axes [(h, e)] lowers to [d[b,s,j] += w[j,h,e] *
+   x[b,s,h,e]]: a contraction nest, [m_ko = [h]] and [m_k = e]. The contraction layout's prefix is
+   [Coalesce (h, e)] alone (the output coordinates, and so the zeroing, are untouched); the prepared
+   code re-detects as one k of extent [h * e] with every output role unchanged, and the branch
+   enumerates the GPU scalar blocktile family over it. Each seed must construct, validate, keep both
+   staged loads on the flattened source address bounded by the merged extent, survive the cache's
+   structural round trip and, on GPU backends, execute to the serial reference bitwise.
+
+   Inputs: the weight strictly negative and the activation strictly positive, every product a small
+   multiple of 1/8 and every partial sum far below 2^24, so no cell is zero and every accumulation
+   order is exact in f32. *)
+
+let out_proj ~tag ~bb ~ss ~jj ~hh ~ee () =
+  let w =
+    NTDSL.init ~l:(tag ^ "_w") ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ]
+      ~f:(Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
+      ()
+  in
+  let att =
+    NTDSL.init ~l:(tag ^ "_att") ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ]
+      ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25)
+      ()
+  in
+  let%op out = w * att in
+  (out, w, att)
+
+let contraction_seeds ?(limits = Ir.Backend_intf.no_hardware_limits) opt =
+  Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits opt
+  |> List.filter ~f:(fun q ->
+      Poly.equal q.Autotune.sk_coalesce (Some Autotune.Coalesce_contraction))
+
+(* One out-projection leg; returns the captured lowering, the contraction seeds under no limits, and
+   those under the device's limits (the executed ones on GPU), for the caller's K-menu claims. *)
+let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
+  let kk = hh * ee in
+  let reference, _, _ = out_proj ~tag:(tag ^ "_ref") ~bb ~ss ~jj ~hh ~ee () in
+  let want = run_with (named (tag ^ "_ref") (Train.forward reference)) reference Fn.id in
+  p
+    (tag ^ ": no cell of the serial reference is zero")
+    ((not (Array.is_empty want)) && Array.for_all want ~f:(fun v -> Float.(v <> 0.)));
+  let cand, w, att = out_proj ~tag ~bb ~ss ~jj ~hh ~ee () in
+  let fwd = named (tag ^ "_sched") (Train.forward cand) in
+  let opt = capture fwd in
+  p
+    (tag ^ ": the columns layout has no interior batch loop to merge here")
+    (Option.is_none (Autotune.coalesce_prefix ~layout:Coalesce_columns opt));
+  let prefix = Autotune.coalesce_prefix ~layout:Coalesce_contraction opt in
+  p
+    (tag ^ ": the contraction prefix is the one Coalesce of the contraction pair")
+    (match prefix with Some [ Sched.Coalesce _ ] -> true | _ -> false);
+  let prefix = Option.value ~default:[] prefix in
+  p_all (tag ^ ": the contraction prefix is Op_legal") (Sched.schedule_legality opt prefix)
+    ~f:(fun (_, v) -> Sched.equal_op_verdict v Sched.Op_legal);
+  let before = Autotune.detect_matmul opt.LL.llc in
+  let prepared = Sched.apply prefix opt in
+  let site = Autotune.detect_matmul prepared.LL.llc in
+  p
+    (tag ^ ": the coalesced site contracts over one k of the pair's product, every output role kept")
+    (match (before, site) with
+    | Some b, Some s ->
+        s.Autotune.m_nk = kk
+        (* The pair left [m_ko]: what remains is the original outer contraction loops minus the head
+           loop the merge consumed. *)
+        && (match List.rev b.Autotune.m_ko with
+          | (_, nh) :: rest ->
+              nh = hh
+              && List.equal
+                   (fun (x, n) (y, n') -> Ir.Indexing.equal_symbol x y && n = n')
+                   (List.rev rest) s.Autotune.m_ko
+          | [] -> false)
+        && b.Autotune.m_ni = s.Autotune.m_ni && b.Autotune.m_nj = s.Autotune.m_nj
+        && s.Autotune.m_nj = jj
+        && List.length b.Autotune.m_bo = List.length s.Autotune.m_bo
+    | _ -> false);
+  p
+    (tag ^ ": the prefix alone computes the serial reference bitwise")
+    (Array.equal Float.equal want (run_with fwd cand (fun o -> Sched.apply prefix o)));
+  let seeds = contraction_seeds opt in
+  p (tag ^ ": the contraction branch offers seeds") (not (List.is_empty seeds));
+  p_all (tag ^ ": every contraction seed is an unfused scalar blocktile seed") seeds ~f:(fun q ->
+      blocktile q && not q.Autotune.sk_epilogue);
+  let canon = SC.canonicalize opt in
+  let schedules = List.map seeds ~f:(fun q -> (q, Autotune.sketch_schedule ~accum_prec ~p:q opt)) in
+  p_all (tag ^ ": every contraction schedule constructs and validates") schedules
+    ~f:(fun (_, sched) ->
+      match Sched.apply sched opt with
+      | o -> (
+          match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
+          | () -> true
+          | exception exn ->
+              Stdio.eprintf "%s validate_parallel FAILED: %s\n" tag (Exn.to_string exn);
+              false)
+      | exception exn ->
+          Stdio.eprintf "%s schedule FAILED: %s\n" tag (Exn.to_string exn);
+          false);
+  (* After the pipeline every read of either operand is a staged load's: each reads the source
+     through the flattened address, bounded by the merged extent (the edge guards' source). *)
+  p_all
+    (tag ^ ": every contraction schedule loads both operands through the flattened address over K")
+    schedules ~f:(fun (_, sched) ->
+      match Sched.apply sched opt with
+      | o ->
+          let reads = ref [] in
+          L.walk o.LL.llc ~on_scalar:(function
+            | LL.Get (tn, idcs)
+              when Ir.Tnode.equal tn w.Tensor.value || Ir.Tnode.equal tn att.Tensor.value ->
+                reads := (tn, idcs) :: !reads
+            | _ -> ());
+          let flat_ok tn =
+            let mine = List.filter !reads ~f:(fun (t, _) -> Ir.Tnode.equal t tn) in
+            (not (List.is_empty mine))
+            && List.for_all mine ~f:(fun (t, idcs) ->
+                let dims = Lazy.force t.Ir.Tnode.dims in
+                let n = Array.length idcs in
+                n = Array.length dims
+                && Ir.Indexing.equal_axis_index idcs.(n - 2) Ir.Indexing.Sub_axis
+                && (Ir.Affine.axis_extents ~dims idcs).(n - 1) = kk)
+          in
+          flat_ok w.Tensor.value && flat_ok att.Tensor.value
+      | exception _ -> false);
+  p_all (tag ^ ": every contraction schedule survives the cache's structural round trip") schedules
+    ~f:(fun (_, sched) ->
+      let saved, _ = SC.to_saved (SC.base_registry canon) sched in
+      let replayed, _ = SC.of_saved canon saved in
+      List.exists saved ~f:(function SC.Coalesce _ -> true | _ -> false)
+      && String.equal
+           (SC.digest (SC.canonicalize (Sched.apply sched opt)))
+           (SC.digest (SC.canonicalize (Sched.apply replayed opt))));
+  Stdio.eprintf "%s: backend %s, %d contraction seed(s): %s (not part of the golden)\n" tag
+    backend_name (List.length seeds)
+    (String.concat ~sep:", " (List.map seeds ~f:Autotune.sketch_params_label));
+  (* Executed under the device's own limits: a seed the synthetic no-limits enumeration admits but
+     this device's workgroup memory does not (32x32x256 in f32) is refuted there, not run. *)
+  let device_seeds =
+    if on_gpu then contraction_seeds ~limits:(Context.hardware_limits (Context.auto ())) opt
+    else seeds
+  in
+  Stdio.eprintf "%s: %d contraction seed(s) under this device's limits (not part of the golden)\n"
+    tag (List.length device_seeds);
+  gated_all ~when_:on_gpu ~on:backend_name
+    (tag ^ ": every contraction seed this device admits executes to the serial reference bitwise")
+    device_seeds ~f:(fun q ->
+      match
+        run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
+      with
+      | got -> Array.equal Float.equal got want
+      | exception exn ->
+          Stdio.eprintf "%s contraction seed FAILED: %s\n" tag (Exn.to_string exn);
+          false);
+  (opt, seeds, device_seeds)
+
+(* The K menu (gh-ocannl-1279). gpt2_mini's heads, h = 8 and e = 32: K = 256, so the deepest depth
+   tiles the whole merged contraction in one k-block, and every menu depth divides K. Under Metal's
+   32 KiB threadgroup limit the 16x16x256 tile (32 KiB of f32 operand tiles) is admitted exactly at
+   the limit and the 32x32x256 one (64 KiB) is refuted by the workgroup-memory floor. *)
+let () =
+  let kk = 8 * 32 in
+  let opt, seeds, device_seeds = contraction_leg ~tag:"ck_proj" ~bb:2 ~ss:32 ~jj:64 ~hh:8 ~ee:32 in
+  let geom (bm, bn, bk) q =
+    q.Autotune.sk_bm = bm && q.Autotune.sk_bn = bn && q.Autotune.sk_bk = bk
+  in
+  p_exists "ck_proj: a contraction seed tiles the whole merged k (bk = K = 256)" seeds ~f:(fun q ->
+      q.Autotune.sk_bk = kk);
+  p_all "ck_proj: no contraction seed's k-tile is shallower than one head" seeds ~f:(fun q ->
+      q.Autotune.sk_bk >= 32);
+  p_exists "ck_proj: the menu reaches below 256 too" seeds ~f:(fun q -> q.Autotune.sk_bk < kk);
+  let metal_like =
+    { Ir.Backend_intf.no_hardware_limits with max_workgroup_memory_bytes = Some 32768 }
+  in
+  let limited = contraction_seeds ~limits:metal_like opt in
+  p_exists "ck_proj: 32 KiB of workgroup memory admits the 16x16x256 tile, exactly at the limit"
+    limited
+    ~f:(geom (16, 16, 256));
+  p_none "ck_proj: 32 KiB of workgroup memory refutes the 32x32x256 tile" limited
+    ~f:(geom (32, 32, 256));
+  p_exists "ck_proj: no-limits enumeration offers the 32x32x256 tile the floor refutes" seeds
+    ~f:(geom (32, 32, 256));
+  (* Every GPU this runs on admits at least 32 KiB (Metal exactly that), so the headline tile is
+     among the seeds executed above. *)
+  gated_exists ~when_:on_gpu ~on:backend_name
+    "ck_proj: this device admits, and so executed, the 16x16x256 tile" device_seeds
+    ~f:(geom (16, 16, 256))
+
+(* An odd K: h = 3 heads of e = 20, K = 60. A depth whose half already covers K would only pad, so
+   the menu offers 64 and 32: a 32-deep tile crosses a head boundary in every block and pads the
+   last one, a 64-deep one is a single block padding K by four. *)
+let () =
+  let _opt, seeds, _ = contraction_leg ~tag:"ck_odd" ~bb:2 ~ss:16 ~jj:32 ~hh:3 ~ee:20 in
+  p_all "ck_odd: no contraction seed's k-tile is deeper than one padded block of K" seeds
+    ~f:(fun q -> q.Autotune.sk_bk <= 64);
+  p_exists "ck_odd: a contraction seed's k-tile crosses heads (32 does not divide e = 20)" seeds
+    ~f:(fun q -> q.Autotune.sk_bk = 32);
+  p_exists "ck_odd: a contraction seed pads the merged k (64 does not divide K = 60)" seeds
+    ~f:(fun q -> q.Autotune.sk_bk = 64)
+
+(* A weight storing the pair apart ([w[h, j, e]]): the contraction prefix declines, so the branch
+   offers no contraction seed, while the ordinary family still seeds the site. *)
+let () =
+  let bb = 2 and ss = 16 and jj = 32 and hh = 4 and ee = 16 in
+  let w =
+    NTDSL.init ~l:"ck_hje_w" ~prec:Ir.Ops.single ~o:[ hh; jj; ee ]
+      ~f:(Ll_test.cycle ~dims:[| hh; jj; ee |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
+      ()
+  in
+  let att =
+    NTDSL.init ~l:"ck_hje_att" ~prec:Ir.Ops.single ~o:[ bb; ss; hh; ee ]
+      ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:1. ~stride:0.25)
+      ()
+  in
+  let%op out = att +* "bshe;hje=>bsj" w in
+  let opt = capture (named "ck_hje" (Train.forward out)) in
+  p "ck_hje: the site is a multi-axis contraction"
+    (Option.exists (Autotune.detect_matmul opt.LL.llc) ~f:(fun s ->
+         not (List.is_empty s.Autotune.m_ko)));
+  p "ck_hje: the contraction prefix declines on the weight storing the pair apart"
+    (Option.is_none (Autotune.coalesce_prefix ~layout:Coalesce_contraction opt));
+  let family =
+    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
+      ~limits:Ir.Backend_intf.no_hardware_limits opt
+  in
+  p_exists "ck_hje: the ordinary family still seeds the site" family ~f:blocktile;
+  p_empty "ck_hje: the branch offers no contraction seed" ~over:family (contraction_seeds opt)

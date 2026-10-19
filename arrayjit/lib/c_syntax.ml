@@ -7638,10 +7638,21 @@ module C_syntax (B : C_syntax_config) = struct
        | _ -> Set.empty (module Tn));
     ctx
 
-  let derive_kparams ~traced_store ~placements ~alias_candidates ~(merge_node : Tn.t option)
+  let derive_kparams ~llc ~traced_store ~placements ~alias_candidates ~(merge_node : Tn.t option)
       ~idx_params =
-    (* The materialized in-context nodes, in deterministic [traced_store] order, with their
-       per-param pointer declaration (used by the [`Per_param] style). *)
+    (* The materialized in-context nodes the kernel's code touches, in deterministic [traced_store]
+       order, with their per-param pointer declaration (used by the [`Per_param] style). Touched,
+       not merely stored (gh-ocannl-1391, ahrefs/ocannl#1387): parameter names come from
+       [get_ident], whose disambiguation visits the code, so a store entry the code never touches
+       would be declared under a name nothing disambiguated -- two such nodes with one label are a
+       duplicate parameter, which a kernel compiled alone (the isolated per-kernel instrument)
+       cannot get past. Every node [Low_level.code_touches_tn] reports is one [get_ident] visits. A
+       [Staged_compilation] callback's accesses are invisible to both, so a kernel holding one keeps
+       every stored entry. *)
+    let touched =
+      if Low_level.has_staged_compilation llc then fun _ -> true
+      else fun tn -> Low_level.code_touches_tn tn llc
+    in
     let ptr_params : (string * Tn.t) list =
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ acc ->
@@ -7660,7 +7671,7 @@ module C_syntax (B : C_syntax_config) = struct
           let backend_info = Sexp.Atom backend_info in
           if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
             tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-          if is_param then (
+          if is_param && touched tn then (
             (* Assignments lowering rewrites every alias-view access to a parent access, so alias
                tnodes never reach this parameter list — but hand-built [Low_level.t] (schedule
                layer, tests) could mint one, and with [restrict_keyword] an aliased parameter pair
@@ -7820,7 +7831,7 @@ module C_syntax (B : C_syntax_config) = struct
        in
        scan llc);
     let ptr_params, sorted_params =
-      derive_kparams ~traced_store ~placements:optimize_ctx.Low_level.placements
+      derive_kparams ~llc ~traced_store ~placements:optimize_ctx.Low_level.placements
         ~alias_candidates:optimize_ctx.Low_level.alias_candidates ~merge_node ~idx_params
     in
     let args_docs =

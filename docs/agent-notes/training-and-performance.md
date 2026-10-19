@@ -187,13 +187,32 @@ files.
   and diff `build_files/` kernels before blaming the instrument. What it does NOT give is a
   kernel's share of the step. The in-step device durations (`gh1133_cells.sh ... kprof`,
   `--cuda-graph-trace=node`: the step replays one CUDA graph, so without it nsys sees no
-  segments) sum to the step, but on rog b256 34 kernels (16% of the step) sit 15-40% below
-  (layer-norm and softmax backward) or 1.3-2.3x above (`gamma_lnf.grad`, `gamma_ln2_l1.grad`)
-  their isolated minimum, in every A/A repeat, with identical code, geometry and registers. A
-  shared-box co-tenant can also double a whole isolated window, since 20 back-to-back runs fit in
-  under a second; GPU counters (`ncu`) need admin on rog. The laptop clock hops between 1.8 and
-  2.8 GHz under the power cap, so b8 kernels below 1 ms carry about 10% step-to-step spread, and
-  a per-kernel difference below the `SPREAD` it shows is not one.
+  segments) sum to the step; read step shares from them only. A shared-box co-tenant can double a
+  whole isolated window, since 20 back-to-back runs fit in under a second; GPU counters (`ncu`)
+  need admin on rog. The laptop clock hops between 1.8 and 2.8 GHz under the power cap, so b8
+  kernels below 1 ms carry about 10% step-to-step spread, and a per-kernel difference below the
+  `SPREAD` it shows is not one.
+- **What separates an isolated time from the in-step one on rog, and what does not**
+  (gh-ocannl-1391). Not the buffers: the isolated compile is a child of the step's context and
+  links against the step's own buffers (a probe of every kernel of gpt2_mini_train_b256 found
+  none fresh and no non-finite input; a node new to a context is zero-filled at link anyway). Not
+  state drift: running each kernel 21 times in census order compounds the accumulators later
+  kernels read (gradients reach ~1e5), yet restoring every kernel's outputs after its window moved
+  no row, including gh-ocannl-1347's 2.3x `gamma_ln2_l1.grad` at its own revision `d90f69c2b`.
+  That row belonged to the single-kernel layer-norm parameter gradient that gh-ocannl-1325's split
+  retired; since then the same gradient's kernel reads within 10% of in-step (0.98 at `3985d045`,
+  1.08 at `d061aeb59`). What remains is the clock: a b256 step runs at the SW power cap (reason
+  0x4, ~114 W) and in-step every kernel of >= 0.5 ms runs a common factor slower than its isolated
+  minimum (F = 1.064-1.066 in the exclusive A/A, per-step 1.05-1.08); the per-step slowdowns of
+  kernels adjacent in time correlate (median 0.84-0.96, random pairs about 0-0.27),
+  and re-running the whole step right before each isolated window leaves the factor in place, so
+  it is the step's aggregate draw, not a warm-up state. `kernel_attribution.py` prints that factor
+  per cell and flags `OWN` only what isolated times the factor still misses (18 b256 kernels, 6.6%
+  of the step, `wte.grad` at 0.62 the largest). A row that declines
+  to compile alone empties the attribution: a kernel declares only the store entries its code
+  touches (`C_syntax.derive_kparams`), because parameter names are disambiguated over the code and
+  an untouched entry -- a node whose zero `gpu_elide_covered_zeros` dropped -- otherwise shared
+  its name with another (ahrefs/ocannl#1387; `shipped_kernels_alone` pins it).
 - That digest covers the compiled result, NOT the diagnostics. When re-measuring a search's
   decline census after changing only an error message or a log line, `rm benchmarks/autotune_cache/*.sexp`
   first — otherwise the second run reports `state=cache-replay`, `timed=0`, `declines=[]` and every

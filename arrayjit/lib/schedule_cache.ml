@@ -758,8 +758,9 @@ type entry = {
    14: gh-ocannl-1325 -- wte.grad / v.grad become matmul sites; the scalar blocktile ep twins compile
    15: gh-ocannl-1414 -- two-loop reduction bands become split-reduce sites, coalesced or interchanged
    16: gh-ocannl-1388 -- the seeded untuned plan seeds the search first, a floor older crowns lack
+   17: gh-ocannl-1279 -- contraction-coalesced seeds: a two-axis contraction tiled along one merged k
 *)
-let entry_version = 16
+let entry_version = 17
 
 let sanitize name =
   String.map name ~f:(fun c ->

@@ -7,6 +7,23 @@
 
 (** {2 Recognizing sites and describing candidates} *)
 
+(** Which pair of a matmul site the coalesced tuner branch ({!coalesced_seed_params}) merges into
+    one loop with {!Ir.Schedule.constructor-Coalesce}. One pair per site and layout. *)
+type coalesce_layout =
+  | Coalesce_columns
+      (** gh-ocannl-1165: the innermost interior batch loop into the column role —
+          [Coalesce { outer = last m_bi; inner = m_j }], plus the zeroing nest's own last two loops
+          alike — so the q/k/v projections' column tile spans several heads. *)
+  | Coalesce_contraction
+      (** gh-ocannl-1279: the two innermost contraction loops into one k —
+          [Coalesce { outer = last m_ko; inner = m_k }] — so the attention out projection
+          [d[b,s,j] += w[j,h,e] * x[b,s,h,e]] contracts over one loop of extent [h * e], and its
+          k-tile can span several heads. Output coordinates are untouched, so the zeroing nest is
+          not coalesced. Its seeds come from a bounded K menu of their own (depths 256 down to 32,
+          under the usual workgroup-memory, thread, pad and launch judgments), not the family's
+          8/16-deep tiles. *)
+[@@deriving sexp]
+
 type sketch_params = {
   sk_gpu : bool;  (** Register blocktiling with shared staging vs. CPU operand packing. *)
   sk_mma : bool;
@@ -121,13 +138,15 @@ type sketch_params = {
           third batch flavor rather than the [sk_batch_grid] twin's order, for the same reason the
           twin is one: the tuner measures, not a heuristic. Always [false] where [sk_batch_grid] is,
           and on sites without interior batch loops, where the two orders are the same schedule. *)
-  sk_coalesce : bool;
-      (** GPU scalar blocktile pipeline only (gh-ocannl-1165): the seed was enumerated on — and its
-          schedule is built over — the site with its innermost interior batch loop coalesced into
-          the column role ({!coalesce_prefix}: [Coalesce { outer = last m_bi; inner = m_j }], plus
-          the expanded zeroing nest coalesced alike), so its column tile spans useful columns of
-          several heads. The schedule is that structural prefix followed by the ordinary pipeline
-          over the coalesced site; every tile field of the record describes the coalesced site. *)
+  sk_coalesce : coalesce_layout option;
+      (** GPU scalar blocktile pipeline only: [Some layout] when the seed was enumerated on — and
+          its schedule is built over — the site with that layout's pair coalesced
+          ({!coalesce_prefix}): the interior batch loop into the column role (gh-ocannl-1165), so
+          the column tile spans useful columns of several heads, or the contraction pair into one k
+          (gh-ocannl-1279), so the k-tile spans several heads. The schedule is that structural
+          prefix followed by the ordinary pipeline over the coalesced site; every tile field of the
+          record describes the coalesced site ([sk_bk] a tile of the merged k). [None] for the
+          family's own seeds. *)
   sk_swizzle : Ir.Low_level.swizzle_kind option;
       (** Staged GPU mma sketches only ([sk_mma] with [sk_bk > 0]): store both cooperative operand
           tiles in this XOR layout (gh-ocannl-481 item 3, D3). Seeded as a {e twin} of each staged
@@ -350,15 +369,31 @@ val sketch_seed_params :
 (** The composed seed list: matmul tree leaves when a matmul is detected, otherwise convolution
     seeds followed by their eligible epilogue-fusion twins. Empty when neither site is detected. *)
 
-val coalesce_prefix : Ir.Low_level.optimized -> Ir.Schedule.schedule option
-(** The coalesced layout's structural prefix (gh-ocannl-1165), when the detected matmul site has an
-    interior batch loop that coalesces into the column role: [Coalesce (last m_bi, m_j)], preceded,
+val coalesce_reduction_pair :
+  ?static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Low_level.optimized ->
+  outer:Ir.Indexing.symbol ->
+  inner:Ir.Indexing.symbol ->
+  (Ir.Indexing.symbol * Ir.Low_level.optimized) option
+(** gh-ocannl-1414: the loops [outer] and [inner] merged by a {!Ir.Schedule.constructor-Coalesce},
+    as the merged loop's fresh symbol and the coalesced code (built on a hermetic copy), or [None]
+    where the op declines. The one preparation of a reduction pair: the split-reduce sites of a
+    two-loop band ([Autotune.split_reduce_sites]) and the contraction layout
+    ([Coalesce_contraction], gh-ocannl-1279) both prepare through it. *)
+
+val coalesce_prefix :
+  layout:coalesce_layout -> Ir.Low_level.optimized -> Ir.Schedule.schedule option
+(** A coalesced layout's structural prefix, when the detected matmul site has that layout's pair and
+    the op accepts it. [Coalesce_columns] (gh-ocannl-1165): [Coalesce (last m_bi, m_j)], preceded,
     when the site's output is zeroed in the routine, by that [Zero_out]'s expansion with its last
     two loops coalesced alike — or, for a covering per-cell zero nest (a GPU fission segment's
-    folded zero, gh-ocannl-1175), by that nest's own coalescing. [None] when there is no such loop,
-    or when the op declines (a per-head operand, a padded inner axis, any access not reading the
-    pair as adjacent plain iterators) — probed on a hermetic copy. Mints fresh symbols, which the
-    returned ops carry. *)
+    folded zero, gh-ocannl-1175), by that nest's own coalescing. [Coalesce_contraction]
+    (gh-ocannl-1279): [Coalesce (last m_ko, m_k)] alone, prepared by {!coalesce_reduction_pair}, and
+    kept only when the prepared code re-detects as the expected site — the merged loop as [m_k] over
+    the pair's product, the pair gone from [m_ko], every output role unchanged. [None] when there is
+    no such pair, or when the op declines (a per-head operand, a padded inner axis, a weight storing
+    the pair apart, any access not reading the pair as adjacent plain iterators) — probed on a
+    hermetic copy. Mints fresh symbols, which the returned ops carry. *)
 
 val coalesced_seed_params :
   is_gpu:bool ->
@@ -366,10 +401,10 @@ val coalesced_seed_params :
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized ->
   sketch_params list
-(** The coalesced tuner branch (gh-ocannl-1165), beside {!sketch_seed_params}: the matmul family's
-    unfused GPU scalar-blocktile leaves enumerated over the code {!coalesce_prefix} produces — every
-    refutation judged on the coalesced site — each stamped [sk_coalesce]. Empty off GPU and when no
-    prefix applies. *)
+(** The coalesced tuner branch, beside {!sketch_seed_params}: per layout (columns, then
+    contraction), the matmul family's unfused GPU scalar-blocktile leaves enumerated over the code
+    {!coalesce_prefix} produces — every refutation judged on the coalesced site — each stamped
+    [sk_coalesce = Some layout]. Empty off GPU and where no prefix applies. *)
 
 val geometry_lattice_witness : string
 (** The exclusion witness for tile-lattice alternatives beyond the curated geometry menus. *)
