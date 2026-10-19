@@ -4103,6 +4103,29 @@ let () =
   let rows = map raw ~f:run in
   Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "raw" ] );
+    ( "follows a collection function a local open of List brings in",
+      {ocaml|open Base
+let () =
+  let rows = List.(map raw ~f:Fn.id) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "accepts a gate beside a helper bound inside an open of List under a listed name",
+      {ocaml|open Base
+let () =
+  let rows =
+    let open List in
+    let map _ ~f:_ = fresh () in
+    map raw ~f:Fn.id
+  in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a gate read off the increment a hash table counter is bumped by",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.incr table "rows" ~by:sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all counts pass" (Hashtbl.data table) ~f:positive|ocaml},
+      [ "sample" ] );
     ( "follows a quantifier of a gated boolean through a value alias",
       {ocaml|open Base
 let () =
@@ -4315,6 +4338,34 @@ let () =
     && (Queue.enqueue queue sample; true)
   then ()|ocaml},
       [] );
+    ( "refuses a gate on a value written in an operand of a rebound conjunction",
+      {ocaml|open Base
+let () =
+  let ( && ) a b = a || b in
+  let queue = Queue.create () in
+  if
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     ready ())
+    && (Queue.enqueue queue sample; true)
+  then ()|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value a writer stores once its argument making the claim is evaluated",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  Queue.enqueue queue
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     sample)|ocaml},
+      [] );
+    ( "refuses a gate on a value written by a writer whose callback makes the claim",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.update table "rows" ~f:(fun _ ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Hashtbl.data table)
+        ~f:positive;
+      sample)|ocaml},
+      [ "sample" ] );
     ( "refuses a gate on a value written after a binding operator whose body makes the claim",
       {ocaml|open Base
 let () =

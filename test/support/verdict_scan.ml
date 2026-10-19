@@ -666,16 +666,19 @@ let line_break_census content =
 
     The population is not followed through a call to any other function (a file-local
     [gpu_seeds pre] stops at the call), through a record field, through a function parameter (the
-    caller's argument is not substituted), or through an [open List]-style unqualified collection
-    call; a destructured [let] binds names that are followed no further, and a value reached through
-    a module path ([M.rows]) is an identity on neither side. A gate threaded into a wrapper as its
-    own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the wrapper's
-    definition, where it is a parameter, and not at its callers. A [gated] boolean that quantifies
-    nothing has no population: its comparisons and other calls are operands this reader does not
-    read, so [gated ~when_:(xs <> []) label (sum xs = want)] passes, and so does a gate folded into
-    a value ([p "…" ((not on_cpu) || ok)]), which {!folded_gate_census} reads instead. Each of these
-    is a place a population gate can hide from this reader; none is a place it reports one that is
-    not there.
+    caller's argument is not substituted), or through an unqualified name under an open of a
+    collection module ([List.(permute raw)]) that {!collection_functions} does not list: such a name
+    is read as whatever else binds it, and is not reported as unlisted, since without the module's
+    signature it cannot be told from a function of the source (a listed name there is the module's,
+    {!resolve_callee}); a destructured [let] binds names that are followed no further, and a value
+    reached through a module path ([M.rows]) is an identity on neither side. A gate threaded into a
+    wrapper as its own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the
+    wrapper's definition, where it is a parameter, and not at its callers. A [gated] boolean that
+    quantifies nothing has no population: its comparisons and other calls are operands this reader
+    does not read, so [gated ~when_:(xs <> []) label (sum xs = want)] passes, and so does a gate
+    folded into a value ([p "…" ((not on_cpu) || ok)]), which {!folded_gate_census} reads instead.
+    Each of these is a place a population gate can hide from this reader; none is a place it reports
+    one that is not there.
 
     A gated application the reader cannot complete — a partial application no [let] binds, a
     [let]-bound one that no use the reader resolves completes (reached only through a module path,
@@ -1041,7 +1044,15 @@ type frame_kind =
   | Deferred
 
 type frame = { frame_id : int; shape : frame_kind; frame_start : int; frame_stop : int }
-type point = { at_start : int; at_end : int; enclosing : frame list  (** Innermost first. *) }
+
+type point = {
+  at_start : int;
+  at_end : int;
+  effect_at : int;
+      (** Where its effect takes place: a write into a container, once the writer's arguments are
+          evaluated, at its end; anything else at its start. *)
+  enclosing : frame list;  (** Innermost first. *)
+}
 
 (* The [Stdlib]-ordered functions of a collection module that call the function they are handed
    first -- positionally, after the count for [init] -- before they return. *)
@@ -1102,6 +1113,10 @@ let applied_fully ~stdlib name labels =
       | _ -> ((if pairwise then 2 else 1), [])
     in
     positional >= required_positional && List.for_all required_labels ~f:has
+
+(* The name of the marker an [open] of a collection module leaves in scope, and of that module
+   there: no source can spell it. *)
+let opened_collection = " opened collection"
 
 (* A function's frame, from its parameters. *)
 let function_kind ~binding params body =
@@ -1178,7 +1193,12 @@ let precedes ~once ~unordered write claim =
           | (Some into_write, _, _) :: _, (Some into_claim, _, _) :: _ when into_write = into_claim
             ->
               compare_levels deeper_writes deeper_claims
-          | _ -> write.at_start < claim.at_end || unordered write claim)
+          | _ ->
+              write.effect_at < claim.at_end
+              (* A claim in a callback the writer calls during the call. *)
+              || List.exists claim_frames ~f:(fun f ->
+                  write.at_start <= f.frame_start && f.frame_stop <= write.at_end)
+              || unordered write claim)
     | _ -> true
   in
   compare_levels (chain 0 write) (chain 0 claim)
@@ -1286,6 +1306,7 @@ let gate_census content =
         {
           at_start = expr.pexp_loc.loc_start.pos_cnum;
           at_end = expr.pexp_loc.loc_end.pos_cnum;
+          effect_at = expr.pexp_loc.loc_start.pos_cnum;
           enclosing = stack;
         }
 
@@ -1469,6 +1490,26 @@ let gate_census content =
                what the structure defines them as. *)
             Lexical_scope.push_frame env
               (Map.of_alist_reduce (module String) exports ~f:(fun _ later -> later))
+        | Some (Collection_module _ as collection) ->
+            (* [let open List in map raw ~f], [List.(map raw ~f)]: a marker frame, under which an
+               unqualified callee {!collection_functions} lists and nothing inside the open binds is
+               the module's ({!resolve_callee}). *)
+            Lexical_scope.push_frame env
+              (Map.singleton
+                 (module String)
+                 opened_collection
+                 {
+                   identity = 0;
+                   definition =
+                     Some
+                       ( Ppxlib.Ast_builder.Default.evar ~loc:Ppxlib.Location.none opened_collection,
+                         {
+                           env with
+                           Lexical_scope.modules =
+                             Map.set env.Lexical_scope.modules ~key:opened_collection
+                               ~data:collection;
+                         } );
+                 })
         | _ -> env
 
       method! binding_denotes env binding =
@@ -1826,7 +1867,32 @@ let gate_census content =
       method resolve_callee env callee =
         let rec go seen env callee =
           let callee = strip_constraints callee in
+          (* The opened collection module a name is the function of, if one is opened inside every
+             binding of it and lists it. *)
+          let opened name =
+            if Option.is_none (collection_function name) then None
+            else
+              Option.join
+                (List.find_map env.Lexical_scope.frames ~f:(fun frame ->
+                     if Map.mem frame name then Some None
+                     else
+                       match Map.find frame opened_collection with
+                       | Some { definition = Some (_, module_env); _ } -> Some (Some module_env)
+                       | _ -> None))
+          in
           match callee.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } when Option.is_some (opened name)
+            ->
+              ( {
+                  callee with
+                  pexp_desc =
+                    Pexp_ident
+                      {
+                        txt = Ppxlib.Longident.Ldot (Ppxlib.Longident.Lident opened_collection, name);
+                        loc;
+                      };
+                },
+                Option.value_exn (opened name) )
           | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
               match Lexical_scope.lookup env name with
               | Some { identity; definition = Some (rhs, rhs_env) }
@@ -1844,7 +1910,9 @@ let gate_census content =
       (* A write into a binding: [x := e], or a function {!collection_functions} marks as writing,
          handed [x]. *)
       method record_write env expr callee arguments =
-        let point = self#point_of expr in
+        (* The container changes once the writer's arguments are evaluated: a claim in one of them
+           ([Queue.enqueue queue (claim; v)]) runs before the write. *)
+        let point = { (self#point_of expr) with effect_at = expr.pexp_loc.loc_end.pos_cnum } in
         (* The binding written into, through any [let alias = rows] renaming on the way: a write
            through an alias is a write into what it names. *)
         let rec target env expr =
@@ -1887,8 +1955,9 @@ let gate_census content =
                 let data =
                   List.filter_map arguments ~f:(function
                     | (Ppxlib.Asttypes.Labelled label | Optional label), argument
-                      when List.mem [ "data"; "default"; "init"; "key" ] label ~equal:String.equal
-                      ->
+                      when List.mem
+                             [ "data"; "default"; "init"; "key"; "by" ]
+                             label ~equal:String.equal ->
                         Some argument
                     | _ -> None)
                 in
@@ -2025,7 +2094,11 @@ let gate_census content =
              match expr.pexp_desc with
              | Pexp_apply (callee, arguments) -> (
                  match (strip_constraints callee).pexp_desc with
-                 | Pexp_ident { txt = Ppxlib.Longident.Lident ("&&" | "||" | "&" | "or"); _ } -> []
+                 | Pexp_ident
+                     { txt = Ppxlib.Longident.Lident (("&&" | "||" | "&" | "or") as name); _ }
+                   when Option.is_none (Lexical_scope.lookup env name) ->
+                     (* The built-in short-circuit operators; a rebound one is an application. *)
+                     []
                  | _ -> callee :: List.map arguments ~f:snd)
              | Pexp_tuple elements | Pexp_array elements -> elements
              | Pexp_record (fields, base) -> Option.to_list base @ List.map fields ~f:snd
