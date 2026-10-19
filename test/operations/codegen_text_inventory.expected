@@ -145,7 +145,11 @@ test/operations/accum_width.ml
     "single_to_bfloat16((bfloat16_to_single("
 test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component]
     "?"
+    "[b0,]:=0.;}"
     "s0"
+    "}set <cr_d>[?,]"
+    "}set <cr_d>[b0,]"
+    "}set <cr_d>[s0,]"
 test/operations/cc_march_census.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
