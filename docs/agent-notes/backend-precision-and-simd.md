@@ -1937,6 +1937,12 @@ files.
   The CUDA and HIP tables are stdlib-only libraries beside it (`arrayjit.builtins_cuda`,
   `arrayjit.builtins_hip`, gh-ocannl-1353), not modules of the optional backend libraries, so
   `dune build @check` compiles them on every PR although no CI job installs cudajit or hipjit.
+  `cuda_like_builtins_emulation` links them to compile, under host shims for the intrinsics, every
+  function each table shares by name with the C table (the uniform draws, scalar, `_vec` and
+  `_lane`, and the `<prec>_to_uint4x32` counters) plus HIP's fp8 cast guards, assembled by
+  `C_syntax.builtin_definitions` as a kernel prelude is, and compares them bitwise with the C ones.
+  A new shared helper needs a probe shape there or a named exclusion (threefry: its CUDA-like round
+  takes a C++ reference), and a dependency list missing an entry fails that compile.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.

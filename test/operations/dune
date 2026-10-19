@@ -9173,6 +9173,27 @@
   ctypes
   ctypes.foreign))
 
+; gh-ocannl-1353: the CUDA and HIP tables' device-free conversion helpers, compiled by the host C
+; compiler beside the C table and compared with it bitwise; the stdlib-only arrayjit.builtins_cuda
+; and arrayjit.builtins_hip libraries are what let a test link the tables without a backend.
+
+(test
+ ; ocannl-backend: cc -- compiles the CUDA and HIP tables' helpers with the host C compiler, no device.
+ (name cuda_like_builtins_emulation)
+ (package neural_nets_lib)
+ (modules cuda_like_builtins_emulation)
+ (deps
+  ocannl_config
+  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (libraries
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.builtins_cuda
+  arrayjit.builtins_hip
+  arrayjit.verdict
+  ctypes
+  ctypes.foreign))
+
 ; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
 ; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
 

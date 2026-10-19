@@ -188,7 +188,9 @@
 
 ; The CUDA and HIP definition tables are strings too, so they are stdlib-only libraries beside it
 ; rather than modules of the optional backend libraries (gh-ocannl-1353): every `dune build @check`
-; compiles them, on machines with neither cudajit nor hipjit -- per-PR CI among them.
+; compiles them, on machines with neither cudajit nor hipjit -- per-PR CI among them -- and a host
+; test (test/operations/cuda_like_builtins_emulation) links them to compile their device-free
+; conversion helpers with the host C compiler and compare them with the C table's.
 
 (library
  (name builtins_cuda)
