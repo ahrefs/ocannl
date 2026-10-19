@@ -4022,6 +4022,18 @@ let () =
   let check = Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" in
   check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
       [ "rows" ] );
+    ( "refuses a gated boolean whose pairwise existential is Base's exists2_exn",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty xs)) ~on:"cc" "some pair differs"
+    (List.exists2_exn xs ys ~f:( <> ))|ocaml},
+      [ "xs" ] );
+    ( "does not read a connective the source rebinds as the standard one",
+      {ocaml|open Base
+let not _ = true
+let () =
+  Verdict.gated ~when_:(List.length xs > 0) ~on:"cc" "the probe holds" (not (List.for_all xs ~f:Fn.id))|ocaml},
+      [] );
     ( "accepts a gated boolean over a population a backend gate steers",
       {ocaml|open Base
 let () =

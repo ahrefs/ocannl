@@ -609,25 +609,26 @@ let line_break_census content =
       name a case pattern binds and the case returns), the body of a function in data position (a
       [~default:(fun () -> ...)] thunk), the body and handlers of a [try], the body of a [let],
       [let module], local [open] or sequence, the elements of a list, array or tuple literal or
-      constructor payload, the operand of [!] and of [ref] and both operands of [@], and the
-      arguments that carry the collection into a function of a standard collection module ([List],
-      [Array], [Hashtbl], [Map], [Option], [String], ... — see {!collection_modules}), reached by
-      name, through an alias ([module Rows = List]), and not under a name a local module took over
-      ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an [open Base] in scope
-      rebinds it. Which arguments carry it is {!collection_arguments}': every positional one, except
-      that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
-      collection alone, a [make]/[create] the value it fills in and not its count, an [init] what
-      its callback returns, and a [range] nothing, plus the data-bearing labels [~default], [~init],
-      [~data];
+      constructor payload, the operand of [!] and of [ref] and both operands of [@] (where the
+      source does not bind the operator itself), and the arguments that carry the collection into a
+      function of a standard collection module ([List], [Array], [Hashtbl], [Map], [Option],
+      [String], ... — see {!collection_modules}), reached by name, through an alias
+      ([module Rows = List]), and not under a name a local module took over ([module Map = Custom]);
+      an unqualified [List] is [Stdlib]'s until an [open Base] in scope rebinds it. Which arguments
+      carry it is {!collection_arguments}': every positional one, except that a [Base]-ordered
+      selector ([find], [nth], [take], [remove], ...) contributes its collection alone, a
+      [make]/[create] the value it fills in and not its count, an [init] what its callback returns,
+      and a [range] nothing, plus the data-bearing labels [~default], [~init], [~data];
     - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
     - the POPULATION of a [gated] claim is what its boolean's quantifiers range over, each followed
       as above: the boolean is read through a name into its right-hand side and what the source
-      writes into it, [not], [&&] and [||] (bare or qualified by a standard library), [!] and [ref],
-      the branches of an [if] (never the condition), the cases of a [match], the body and handlers
-      of a [try], the body of a [let], [let module], local [open] or sequence, type constraints and
-      pipelines; a quantifier is a {!quantifiers} function of a collection module, whose collection
-      is its first positional argument in [Base]'s order (the first two for a pairwise one) and
-      every positional argument in [Stdlib]'s;
+      writes into it, [not], [&&] and [||] (bare where the source does not bind them, or qualified
+      by a standard library), [!] and [ref] where unbound too, the branches of an [if] (never the
+      condition), the cases of a [match], the body and handlers of a [try], the body of a [let],
+      [let module], local [open] or sequence, type constraints and pipelines; a quantifier is a
+      {!quantifiers} function of a collection module, whose collection is its first positional
+      argument in [Base]'s order (the first two for a pairwise one) and every positional argument in
+      [Stdlib]'s;
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
       a [let alias = name] renaming: the right-hand side of [x := e], and what a writer of a mutable
       collection module ({!mutable_modules}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... —
@@ -708,7 +709,17 @@ let gated_boolean = "gated"
 (** The collection-module functions that quantify over their collection, which a [gated] boolean is
     read through: true or false of every element, or of none. *)
 let quantifiers =
-  [ "for_all"; "for_alli"; "for_all2"; "for_all2_exn"; "exists"; "existsi"; "exists2"; "is_empty" ]
+  [
+    "for_all";
+    "for_alli";
+    "for_all2";
+    "for_all2_exn";
+    "exists";
+    "existsi";
+    "exists2";
+    "exists2_exn";
+    "is_empty";
+  ]
 
 (* The arguments a quantifier ranges over: in [Base]'s order the first positional argument, the
    first two for a pairwise one; in [Stdlib]'s, where the predicate comes first ([List.for_all f
@@ -1183,7 +1194,8 @@ let gate_census content =
                       | _ -> None)
                   in
                   match (strip_constraints callee).pexp_desc with
-                  | Pexp_ident { txt = Ppxlib.Longident.Lident ("!" | "@" | "ref"); _ } ->
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident (("!" | "@" | "ref") as name); _ }
+                    when Option.is_none (Lexical_scope.lookup env name) ->
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path env prefix with
@@ -1260,7 +1272,8 @@ let gate_census content =
                   let connective name = List.mem [ "not"; "&&"; "||" ] name ~equal:String.equal in
                   match (strip_constraints callee).pexp_desc with
                   | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }
-                    when connective name || List.mem [ "!"; "ref" ] name ~equal:String.equal ->
+                    when (connective name || List.mem [ "!"; "ref" ] name ~equal:String.equal)
+                         && Option.is_none (Lexical_scope.lookup env name) ->
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path env prefix with

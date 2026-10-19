@@ -590,6 +590,8 @@ refuses a gated boolean whose quantified population is mapped from what the gate
 refuses a gated boolean whose Stdlib quantifier ranges over the gated population: true
 refuses a gated boolean written into a ref the claim dereferences: true
 refuses a population gate behind a partially applied gated boolean wrapper: true
+refuses a gated boolean whose pairwise existential is Base's exists2_exn: true
+does not read a connective the source rebinds as the standard one: true
 accepts a gated boolean over a population a backend gate steers: true
 accepts a gated boolean whose condition, not its value, quantifies what the gate reads: true
 accepts a gated boolean comparing against the invariant its gate reads: true
