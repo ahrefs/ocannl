@@ -116,18 +116,20 @@ files.
   `make_child` of a dead handle would mint a live-looking flag over freed buffer locations.
   Guard: `test/operations/context_handle_refusals.ml`.
 - **`Context.run`'s initialization check has two classes** (gh-ocannl-1339). A read-before-write
-  input (in both `inputs` and `outputs`: a counter, a running statistic) must have been WRITTEN in
-  the lineage: `initialized_nodes` of the run context, or the ledger's `written_buffers`, which
-  every run, upload and device copy adds its buffer keys to and which never shrinks (so it outlives
-  `rollback_execution` and survives a caller dropping the context `run` returned). Allocation-time
-  zeros no longer count. A read-only input is still accepted once merely allocated, because
-  read-only gradient accumulators legitimately start at zero. Before, any allocated buffer passed,
-  and since `compile` allocates every input, the check fired only for a routine run in a context
-  that had not compiled it. Hand-built tests that accumulate from zero therefore seed the
-  accumulator (`peel_census`); state meant to start from zero inside a model is an inline
-  declaration, an embedded node excluded from `inputs` (`Train.sgd_one`'s momentum). Note also that
-  an SGD step compiled without `Train.init_params` never reaches this check: linking already refuses
-  a parameter the prior context lacks.
+  input (in both `inputs` and `outputs`: a counter, a running statistic) must have its BUFFER
+  written in the lineage: the ledger's `written_buffers` holds the buffer keys every run, upload and
+  device copy wrote. It is keyed by buffer, not by node, so a compile sibling that seeded its own
+  buffer for the same node vouches for nothing here (the run context's node-level
+  `initialized_nodes` is deliberately not consulted for this class), and a caller dropping the
+  context `run` returned loses nothing. `rollback_execution` withdraws exactly the keys the
+  rolled-back run introduced (`fresh_writes`). Allocation-time zeros no longer count. A read-only
+  input is still accepted once merely allocated, because read-only gradient accumulators
+  legitimately start at zero. Before, any allocated buffer passed, and since `compile` allocates
+  every input, the check fired only for a routine run in a context that had not compiled it.
+  Hand-built tests that accumulate from zero therefore seed the accumulator (`peel_census`); state
+  meant to start from zero inside a model is an inline declaration, an embedded node excluded from
+  `inputs` (`Train.sgd_one`'s momentum). An SGD step compiled without `Train.init_params` never
+  reaches this check: linking already refuses a parameter the prior context lacks.
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working

@@ -170,6 +170,48 @@ let () =
     (Poly.equal (Context.get_values c_bump ctr) [| 2.; 4.; 6.; 8. |]);
   Context.release c_bump
 
+(* What vouches for a read-before-write input is the buffer the routine binds, not the node. Two
+   compile siblings each allocate their own counter buffer: seeding one sibling's does not let the
+   other's routine run, even in the seeded sibling's context, whose [initialized_nodes] does name
+   the counter. *)
+let () =
+  Verdict.case "chr_sibling_seed" @@ fun () ->
+  let base = Context.auto () in
+  let ctr = node "chr_ctr_s" in
+  Ll_test.materialize ctr;
+  let link name =
+    Ll_test.link ~ctx:base ~name (Ll_test.optimize ~materialized:[ ctr ] ~name (bump ctr))
+  in
+  let c_a, _r_a = link "chr_bump_sa" and c_b, r_b = link "chr_bump_sb" in
+  let c_a = Context.set_values c_a ctr seed in
+  pf "chr_sibling_seed: the seeded sibling's context names the counter initialized"
+    (Context.is_initialized c_a ctr);
+  pf "chr_sibling_seed: the other sibling's routine is refused even run in that context"
+    (refused ~needle:"chr_ctr_s (read before written)" (fun () -> Context.run c_a r_b));
+  Context.release c_a;
+  Context.release c_b
+
+(* A run [rollback_execution] withdraws -- one known not to have written -- withdraws its write
+   claims too: the counter its writer never filled is refused again. (The initialization check runs
+   before the dependency check, so the refusal names the counter rather than the rolled-back
+   writer.) *)
+let () =
+  Verdict.case "chr_rollback" @@ fun () ->
+  let base = Context.auto () in
+  let ctr = node "chr_ctr_rb" in
+  Ll_test.materialize ctr;
+  let lctx = LL.empty_optimize_ctx () in
+  let o_fill = Ll_test.optimize_in lctx ~materialized:[ ctr ] ~name:"chr_fill_rb" (fill ctr) in
+  let c_fill, r_fill = Ll_test.link ~ctx:base ~name:"chr_fill_rb" o_fill in
+  let o_bump = Ll_test.optimize_in lctx ~materialized:[ ctr ] ~name:"chr_bump_rb" (bump ctr) in
+  let c_bump, r_bump = Ll_test.link ~ctx:c_fill ~name:"chr_bump_rb" o_bump in
+  ignore (Context.run c_fill r_fill : Context.t);
+  Context.sync c_fill;
+  Context.rollback_execution c_fill r_fill.Context.routine_id;
+  pf "chr_rollback: after the writer's run is rolled back, the counter is unwritten again"
+    (refused ~needle:"chr_ctr_rb (read before written)" (fun () -> Context.run c_bump r_bump));
+  Context.release c_bump
+
 let () =
   Verdict.case "chr_read_only" @@ fun () ->
   let base = Context.auto () in

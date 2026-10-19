@@ -66,12 +66,17 @@ type execution_ledger = {
           context. *)
   mutable written_buffers : Set.M(Buffer_key).t;
       (** Every concrete ordinary buffer of this lineage that something has written: a {!run} (its
-          outputs), a host upload or a device copy. Only grows. Unlike [current_writers] it survives
-          external writes and [rollback_execution], because it answers a different question — not
-          "which routine must this one wait for" but "has this buffer ever held a value anyone put
-          there", which is what [check_lineage_runnable] asks of a read-before-write input
-          (gh-ocannl-1339). Ledger-wide and keyed by buffer rather than by the immutable context
-          value, so a caller that discarded the context [run] returned does not lose the fact. *)
+          outputs), a host upload or a device copy. Unlike [current_writers] it survives external
+          writes, because it answers a different question — not "which routine must this one wait
+          for" but "has this buffer ever held a value anyone put there", which is what
+          [check_lineage_runnable] asks of a read-before-write input (gh-ocannl-1339). Ledger-wide
+          and keyed by the concrete buffer rather than by the node or the immutable context value: a
+          caller that discarded the context [run] returned does not lose the fact, and a sibling
+          that wrote ITS buffer for the same node does not vouch for this one. Shrinks only through
+          [rollback_execution], by [fresh_writes]. *)
+  fresh_writes : Buffer_key.t list Hashtbl.M(Int).t;
+      (** Per routine id, the [written_buffers] entries the routine's latest {!run} introduced —
+          what [rollback_execution] withdraws for a run known not to have written. *)
 }
 (** Shared mutable state for execution tracking, allocated once per root context. Shared by
     reference across all contexts derived from the same root. *)
@@ -94,6 +99,7 @@ let create_ledger () =
     current_merge_buffer_writer = None;
     poisoned = None;
     written_buffers = Set.empty (module Buffer_key);
+    fresh_writes = Hashtbl.create (module Int);
   }
 
 type t = {
@@ -473,7 +479,11 @@ let check_not_poisoned ctx = Option.iter (poisoned_failure ctx) ~f:raise
 let rollback_execution ctx routine_id =
   ctx.ledger.executed <- Set.remove ctx.ledger.executed routine_id;
   ctx.ledger.current_writers <-
-    Map.filter ctx.ledger.current_writers ~f:(fun writer_id -> writer_id <> routine_id)
+    Map.filter ctx.ledger.current_writers ~f:(fun writer_id -> writer_id <> routine_id);
+  (* Only the write claims this run introduced: a buffer an earlier writer had filled keeps its
+     value, so it stays written. *)
+  Option.iter (Hashtbl.find_and_remove ctx.ledger.fresh_writes routine_id) ~f:(fun keys ->
+      ctx.ledger.written_buffers <- List.fold keys ~init:ctx.ledger.written_buffers ~f:Set.remove)
 
 let poison_lineage ctx ~routine_name exn =
   if Option.is_none ctx.ledger.poisoned then ctx.ledger.poisoned <- Some (routine_name, exn)
@@ -504,14 +514,16 @@ let check_lineage_runnable ctx routine =
   (* Check that all required inputs are initialized, in two classes.
 
      A READ-BEFORE-WRITE input (the routine both reads it first and writes it: a counter, a running
-     statistic, a recurrent state) must have held a value someone put there: produced by a prior
-     routine or a transfer into this context value ([initialized_nodes]), or written, in this
-     lineage, by any run, upload or device copy ([written_buffers], which does not depend on the
-     caller threading [run]'s returned context). Its allocation-time zeros do not count
-     (gh-ocannl-1339): an uninitialized read of state the routine then overwrites is a user bug the
-     context can see. State a routine is meant to start from zero carries that in its own
-     computation -- an inline declaration is an embedded node, excluded from [inputs] at compile
-     ([Train.sgd_one]'s momentum is the pattern) -- or is seeded explicitly.
+     statistic, a recurrent state) must have held a value someone put there: the very buffer the
+     routine binds must have been written, in this lineage, by a run, upload or device copy
+     ([written_buffers]). Not the run context's node-level [initialized_nodes]: [ctx] need not be
+     [routine.context], and a sibling that seeded its own buffer for the same node says nothing
+     about this one. Every path that marks a node initialized also records its buffer, so nothing is
+     lost by asking the buffer. Its allocation-time zeros do not count (gh-ocannl-1339): an
+     uninitialized read of state the routine then overwrites is a user bug the context can see.
+     State a routine is meant to start from zero carries that in its own computation -- an inline
+     declaration is an embedded node, excluded from [inputs] at compile ([Train.sgd_one]'s momentum
+     is the pattern) -- or is seeded explicitly.
 
      A READ-ONLY input is accepted once it is allocated in the running context's device buffers
      ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which write the
@@ -529,8 +541,8 @@ let check_lineage_runnable ctx routine =
   in
   let missing_inputs =
     Set.filter routine.inputs ~f:(fun tn ->
-        (not (Set.mem ctx.initialized_nodes tn))
-        && if Set.mem routine.outputs tn then not (written tn) else not (in_backend tn))
+        if Set.mem routine.outputs tn then not (written tn)
+        else not (Set.mem ctx.initialized_nodes tn || in_backend tn))
   in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
@@ -585,11 +597,19 @@ let run ctx routine =
 
   (* Mark executed in shared ledger *)
   ctx.ledger.executed <- Set.add ctx.ledger.executed routine.routine_id;
-  Set.iter routine.outputs ~f:(fun tn ->
-      Option.iter (buffer_key routine.context tn) ~f:(fun key ->
-          ctx.ledger.current_writers <-
-            Map.set ctx.ledger.current_writers ~key ~data:routine.routine_id;
-          ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key));
+  let fresh =
+    Set.fold routine.outputs ~init:[] ~f:(fun fresh tn ->
+        match buffer_key routine.context tn with
+        | None -> fresh
+        | Some key ->
+            ctx.ledger.current_writers <-
+              Map.set ctx.ledger.current_writers ~key ~data:routine.routine_id;
+            if Set.mem ctx.ledger.written_buffers key then fresh
+            else (
+              ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key;
+              key :: fresh))
+  in
+  Hashtbl.set ctx.ledger.fresh_writes ~key:routine.routine_id ~data:fresh;
 
   (* Mark outputs as initialized and return updated context *)
   let initialized_nodes = Set.union ctx.initialized_nodes routine.outputs in
