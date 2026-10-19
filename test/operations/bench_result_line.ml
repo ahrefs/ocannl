@@ -170,6 +170,8 @@ let ordinary =
   Bench_json.result_line ~shipped_mma:("scalar-fallback", 3, 3) ~backend:"cc" ~variant:"default"
     ~precision:"f32" ~profile:None
     ~regime_knobs:[ ("tf32_matmuls", None); ("cc_backend_fast_math", None) ]
+    ~ambient_resolved:
+      [ ("OCANNL_NARROW_COMPUTE_F32", "narrow_compute_f32", Some ("false", "environment")) ]
     ~workload:"mlp3" ~compile_s:2.5 ~searched:false ~p10:0.5 ~p50:0.75 ~p90:1.25 ~queued_ms:0.625
     ~timed_steps:20
       (* A fabricated counter name, deliberately not the harness's own spelling: what this test pins
@@ -187,6 +189,16 @@ let diverged =
         ("tf32_matmuls", Some ("true", "profile 'approximate' via the commandline"));
         (* An override beside the profile, and a quote to escape. *)
         ("tune_inline_flips", Some ("5", "environment \"OCANNL_TUNE_INLINE_FLIPS\""));
+      ]
+    ~ambient_resolved:
+      [
+        (* A path with a quote and a backslash to escape, a key blank to every source, and a
+           variable the profile outranked. *)
+        ("OCANNL_AUTOTUNE_CACHE_DIR", "autotune_cache_dir", Some ("/tmp/a \"b\"\\c", "environment"));
+        ("OCANNL_CC_VECTOR_BYTES", "cc_vector_bytes", None);
+        ( "OCANNL_TF32_MATMULS",
+          "tf32_matmuls",
+          Some ("true", "profile 'approximate' via the commandline") );
       ]
     ~workload:"gpt2_mini" ~compile_s:Float.nan ~searched:true ~tokens_per_step:4096 ~tune
     ~p10:Float.infinity ~p50:Float.nan ~p90:Float.neg_infinity ~queued_ms:Float.nan
@@ -308,6 +320,25 @@ let () =
      match member "peak_memory_source" o with
      | `String s -> String.equal s "fabricated 'high-water' counter (requested bytes)"
      | _ -> false);
+  (* gh-ocannl-1337: where each inherited OCANNL_* key resolved from, keyed by the variable, which
+     is what the driver checks its [ambient_ocannl_shadowed] prediction against. *)
+  let resolved var = member var (member "ambient_ocannl_resolved" j) in
+  p "an inherited variable's resolution names its key, its value and its source"
+    (Yojson.Safe.equal (resolved "OCANNL_TF32_MATMULS")
+       (`Assoc
+          [
+            ("key", `String "tf32_matmuls");
+            ("value", `String "true");
+            ("source", `String "profile 'approximate' via the commandline");
+          ]));
+  p "one blank to every source reads as the default, with no value"
+    (Yojson.Safe.equal
+       (resolved "OCANNL_CC_VECTOR_BYTES")
+       (`Assoc [ ("key", `String "cc_vector_bytes"); ("source", `String "default") ]));
+  p "a value is scrubbed like every string on the line"
+    (Yojson.Safe.equal
+       (member "value" (resolved "OCANNL_AUTOTUNE_CACHE_DIR"))
+       (`String "/tmp/a 'b'/c"));
   p "a tune object that recorded no shipped census says null, not a label"
     (Yojson.Safe.equal
        (member "shipped_mma"
@@ -392,26 +423,34 @@ let checkpoints =
     ( "mid-parity",
       Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
         ~profile:(Some "approximate") ~regime_knobs:approximate_knobs
+        ~ambient_resolved:
+          [
+            ("OCANNL_BACKEND", "backend", Some ("hip", "commandline"));
+            ( "OCANNL_TUNE_INLINE_FLIPS",
+              "tune_inline_flips",
+              Some ("2", "profile 'approximate' via the commandline") );
+          ]
         ~workload:"gpt2_mini_train_s1024"
         ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
         ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:2
         ~at:(Bench_json.In_parity 2) ~losses:[| 10.375; Float.nan |] );
     ( "before diagnostics",
       Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16" ~profile:None
-        ~regime_knobs:exact_knobs ~workload:"gpt2_mini_train_s1024"
+        ~regime_knobs:exact_knobs ~ambient_resolved:[] ~workload:"gpt2_mini_train_s1024"
         ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
         ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:46
         ~at:Bench_json.Before_diagnostics
         ~losses:[| 10.375; 10.25; 10.125; 10.0; 9.875; 9.75 |] );
     ( "in memory, instrument off",
       Bench_json.checkpoint_line ~backend:"cc" ~variant:"self-test" ~precision:"f32" ~profile:None
-        ~regime_knobs:exact_knobs ~workload:"selftest-tiny" ~fixture:None
+        ~regime_knobs:exact_knobs ~ambient_resolved:[] ~workload:"selftest-tiny" ~fixture:None
         ~executable:"bench_self_test.exe" ~parity_steps:2 ~dominant_kernel:false ~completed_steps:13
         ~at:Bench_json.Before_diagnostics ~losses:[| 1.25; 1.125 |] );
     ( "ambient knob leak",
       Bench_json.checkpoint_line ~backend:"cuda" ~variant:"default" ~precision:"f32" ~profile:None
         ~regime_knobs:
           [ ("tf32_matmuls", Some ("true", "environment")); ("cc_backend_fast_math", None) ]
+        ~ambient_resolved:[ ("OCANNL_TF32_MATMULS", "tf32_matmuls", Some ("true", "environment")) ]
         ~workload:"mlp_wide"
         ~fixture:(Some ("fixtures/mlp_wide.safetensors", 9650952))
         ~executable:"bench_mlp.exe" ~parity_steps:4 ~dominant_kernel:true ~completed_steps:3
@@ -474,6 +513,18 @@ let () =
     (Yojson.Safe.equal (member "profile" leaked) `Null
     && Yojson.Safe.equal (knob "tf32_matmuls" leaked)
          (`Assoc [ ("value", `String "true"); ("source", `String "environment") ]));
+  let resolutions (_, j) = member "ambient_ocannl_resolved" j in
+  p_all "every checkpoint carries the inherited variables' resolutions, as an object" parsed
+    ~f:(fun c -> match resolutions c with `Assoc _ -> true | _ -> false);
+  p "a variable the profile outranked is recorded with the profile as its source"
+    (Yojson.Safe.equal
+       (member "OCANNL_TUNE_INLINE_FLIPS" (resolutions ("", mid)))
+       (`Assoc
+          [
+            ("key", `String "tune_inline_flips");
+            ("value", `String "2");
+            ("source", `String "profile 'approximate' via the commandline");
+          ]));
   let off = List.Assoc.find_exn parsed ~equal:String.equal "in memory, instrument off" in
   p "an instrument switched off is skipped, and an in-memory model names no fixture"
     (Yojson.Safe.equal (stage "dominant_kernel" off) (`String "skipped")

@@ -7142,6 +7142,110 @@ class OcannlFlagTest(unittest.TestCase):
         self.assertIsNone(orchestrate.shadowed_env_line([exact], [other]))
 
 
+class ShadowingObservationTest(unittest.TestCase):
+    """gh-ocannl-1337: the sweep's `ambient_ocannl_shadowed` stamp, checked against where the
+    runner reports each inherited key resolved (`ambient_ocannl_resolved`). Fed the checkpoints
+    `Bench_json` built (the golden of test/operations/bench_result_line), so the comparison is
+    pinned to what a runner writes; the prediction side is `ocannl_cell`'s own."""
+
+    def observed(self, workload, **stages):
+        return orchestrate.last_checkpoint(golden_checkpoint_line(workload, **stages))[
+            "ambient_ocannl_resolved"
+        ]
+
+    # The golden's mid-parity checkpoint: a hip cell under the approximate profile, which
+    # inherited OCANNL_BACKEND and OCANNL_TUNE_INLINE_FLIPS.
+    AMBIENT = {"OCANNL_BACKEND": "cuda", "OCANNL_TUNE_INLINE_FLIPS": "16"}
+
+    def stamp(self, regime, flags=()):
+        _, stamp = orchestrate.ocannl_cell(
+            "gpt2", "hip", regime, "default", list(flags), self.AMBIENT
+        )
+        return stamp["ambient_ocannl_shadowed"]
+
+    def test_a_correct_prediction_agrees_with_the_runner(self):
+        observed = self.observed("gpt2_mini_train_s1024", parity="running")
+        self.assertEqual(orchestrate.shadowing_mismatches(self.stamp("approximate"), observed), {})
+
+    def test_a_mispredicted_stamp_is_flagged_in_each_direction(self):
+        observed = self.observed("gpt2_mini_train_s1024", parity="running")
+        # Predicted applied, resolved from the profile.
+        self.assertEqual(
+            orchestrate.shadowing_mismatches(self.stamp("exact"), observed),
+            {
+                "OCANNL_TUNE_INLINE_FLIPS": "stamped applied, but the runner resolved it from "
+                "profile 'approximate' via the commandline"
+            },
+        )
+        # Predicted outranked by a per-cell flag, resolved from the profile: the right verdict
+        # (not applied) for the wrong reason is still a wrong account.
+        self.assertEqual(
+            orchestrate.shadowing_mismatches(
+                self.stamp("approximate", [("tune_inline_flips", "4")]), observed
+            ),
+            {
+                "OCANNL_TUNE_INLINE_FLIPS": "stamped outranked by --ocannl_tune_inline_flips=4, "
+                "but the runner resolved it from profile 'approximate' via the commandline"
+            },
+        )
+        # Predicted outranked, resolved from the environment: the golden's leaked exact cell.
+        leaked = self.observed("mlp_wide")
+        self.assertEqual(
+            orchestrate.shadowing_mismatches(
+                {"OCANNL_TF32_MATMULS": "--ocannl_profile=approximate"}, leaked
+            ),
+            {
+                "OCANNL_TF32_MATMULS": "stamped outranked by --ocannl_profile=approximate, but "
+                "the runner resolved it from environment"
+            },
+        )
+        # Predicted outranked, never inherited as a setting at all.
+        self.assertEqual(
+            orchestrate.shadowing_mismatches(
+                {"OCANNL_NARROW_COMPUTE_F32": "--ocannl_profile=approximate"}, {}
+            ),
+            {
+                "OCANNL_NARROW_COMPUTE_F32": "stamped outranked by --ocannl_profile=approximate, "
+                "but the runner inherited no such setting"
+            },
+        )
+
+    def test_the_variables_own_argument_is_a_commandline_source(self):
+        # OCANNL_PROFILE is outranked by the profile argument as the key's own argument, which the
+        # runner reports as `commandline`, not as the profile's payload.
+        observed = {"OCANNL_PROFILE": {"key": "profile", "value": "approximate",
+                                       "source": "commandline"}}
+        stamp = {"OCANNL_PROFILE": "--ocannl_profile=approximate"}
+        self.assertEqual(orchestrate.shadowing_mismatches(stamp, observed), {})
+
+    def test_a_row_or_record_without_both_sides_is_not_checked(self):
+        old = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        old["ambient_ocannl_shadowed"] = {"OCANNL_BACKEND": "--ocannl_backend=cc"}
+        torch = cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        self.assertEqual(orchestrate.shadowing_check([old, torch]), [])
+        self.assertIsNone(orchestrate.shadowing_mismatches(None, {}))
+
+    def test_a_failure_record_checks_its_stamp_against_its_checkpoint(self):
+        checkpoint = orchestrate.last_checkpoint(
+            golden_checkpoint_line("gpt2_mini_train_s1024", parity="running")
+        )
+        wrong = {"ocannl_flags": [], "ambient_ocannl_shadowed": self.stamp("exact")}
+        right = {"ocannl_flags": [], "ambient_ocannl_shadowed": self.stamp("approximate")}
+
+        flagged = orchestrate.failure_record("w", "TIMED OUT", self.AMBIENT, checkpoint,
+                                             regime="exact", cell_stamp=wrong)
+        clean = orchestrate.failure_record("w", "TIMED OUT", self.AMBIENT, checkpoint,
+                                           regime="approximate", cell_stamp=right)
+
+        self.assertIn("OCANNL_TUNE_INLINE_FLIPS stamped applied", flagged["shadowing_mismatch"])
+        self.assertNotIn("shadowing_mismatch", clean)
+        line = orchestrate.shadowing_mismatch_line(
+            [], [orchestrate.Failure("w ocannl/hip/default", "TIMED OUT", checkpoint, "exact",
+                                     wrong)]
+        )
+        self.assertIn("w ocannl/hip/default (failed): OCANNL_TUNE_INLINE_FLIPS stamped", line)
+
+
 class OcannlFlagSweepTest(unittest.TestCase):
     """The issue's acceptance, through `main` itself (gh-ocannl-1273): a sweep under the
     approximate regime with OCANNL_TUNE_INLINE_FLIPS=16 in the environment warns and stamps the
@@ -7181,11 +7285,20 @@ class OcannlFlagSweepTest(unittest.TestCase):
             workload="flagged",
             profile="approximate" if "profile" in settings else None,
             regime_knobs={"tune_inline_flips": knob},
+            # Where the inherited variable resolved, as the runner reports it (gh-ocannl-1337):
+            # the same resolution as the knob's, since it is the same key.
+            ambient_ocannl_resolved=(
+                {"OCANNL_TUNE_INLINE_FLIPS": {"key": "tune_inline_flips", **knob}}
+                if (env or {}).get("OCANNL_TUNE_INLINE_FLIPS")
+                else {}
+            ),
             searched=False,
         )
         return row, None
 
-    def sweep(self, *argv, env=None):
+    def sweep(self, *argv, env=None, gate=None):
+        """`main` over the fake cells; `gate`, when given, is the gate the sweep is expected to
+        fail on, whose exit is caught so the artifacts can be read."""
         self.dispatched = []
         environ = {k: v for k, v in os.environ.items() if not k.startswith("OCANNL_")}
         environ.update(env or {})
@@ -7210,8 +7323,14 @@ class OcannlFlagSweepTest(unittest.TestCase):
                 )
             )
             stack.enter_context(contextlib.redirect_stdout(out))
-            # Returns rather than exiting: every gate passes, the regime gate included.
-            orchestrate.main()
+            if gate is None:
+                # Returns rather than exiting: every gate passes, the regime gate included.
+                orchestrate.main()
+            else:
+                with self.assertRaises(SystemExit) as failed:
+                    orchestrate.main()
+                self.assertEqual(failed.exception.code, 1)
+                self.assertIn(gate, out.getvalue())
         rows = [
             json.loads(line)
             for line in (self.dir / "results" / "results.jsonl").read_text().splitlines()
@@ -7240,6 +7359,35 @@ class OcannlFlagSweepTest(unittest.TestCase):
             "OCANNL cells",
             report_text,
         )
+        # gh-ocannl-1337: and the row records what the runner observed, which agrees.
+        self.assertEqual(
+            row["ambient_ocannl_resolved"]["OCANNL_TUNE_INLINE_FLIPS"]["source"],
+            "profile 'approximate' via the commandline",
+        )
+        self.assertNotIn("shadowing_mismatch", row)
+        self.assertNotIn("SHADOWING GATE", stdout)
+        self.assertNotIn("stamps their runner contradicted", report_text)
+
+    def test_a_mispredicted_stamp_fails_the_sweep_and_is_named_in_the_report(self):
+        # gh-ocannl-1337's acceptance, its second half: the stamp is deliberately mispredicted --
+        # the sweep is made to believe the profile outranks nothing -- and the runner's own record
+        # of where the variable resolved contradicts it.
+        with unittest.mock.patch.object(orchestrate, "shadowed_ambient", lambda ambient, argv: {}):
+            stdout, rows, report_text = self.sweep(
+                env={"OCANNL_TUNE_INLINE_FLIPS": "16"}, gate="SHADOWING GATE"
+            )
+
+        [row] = rows
+        self.assertEqual(row["ambient_ocannl_shadowed"], {})
+        expected = (
+            "OCANNL_TUNE_INLINE_FLIPS stamped applied, but the runner resolved it from "
+            "profile 'approximate' via the commandline"
+        )
+        self.assertEqual(row["shadowing_mismatch"], expected)
+        [gate] = [l for l in stdout.splitlines() if "SHADOWING GATE" in l]
+        self.assertIn(expected, gate)
+        self.assertIn("ambient OCANNL_* stamps their runner contradicted", report_text)
+        self.assertIn(expected, report_text)
 
     def test_a_flag_reaching_only_skipped_cells_is_refused(self):
         # Review round 3: validated against the cells the sweep RUNS, so a selector naming only a

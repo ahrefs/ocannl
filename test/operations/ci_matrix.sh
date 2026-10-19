@@ -181,15 +181,38 @@ full = sorted(normal + [('macos-latest', '5.5.x', 'train'), ('windows-latest', '
 windows = [('windows-latest', '5.5.x', 'main'), ('windows-latest', '5.5.x', 'train')]
 
 
+def build_steps(text):
+    # The steps of the `run` job, each as its text from `    - ` on.
+    job = text.split('\n  run:\n', 1)[1].split('\n  fmt:\n', 1)[0]
+    return ['    - ' + step for step in job.split('\n    - ')[1:]]
+
+
 def suite_step(text):
     # The unsharded legs name the suite's aliases in ci.yml; the shards get
     # theirs from tools/ci-shard.sh. Drift between the two would let the shards
     # build a different suite than the job they replace, green either way.
-    step = re.search(r"^      run: opam exec -- dune build \$\{\{ matrix.suite == 'train' "
-                     r"&& '\"@train\"' \|\| '([^']*)' \}\}$", text, re.M)
-    assert step, 'unsharded suite step missing'
-    named = [token.strip('"').removeprefix('@') for token in step[1].split()]
+    step = re.search(r"^      SUITE_TARGETS: \$\{\{ matrix.suite == 'train' "
+                     r"&& '@train' \|\| '([^']*)' \}\}$", text, re.M)
+    assert step, 'unsharded suite targets missing'
+    named = [token.removeprefix('@') for token in step[1].split()]
     assert named == sys.argv[3].split(), 'ci.yml names %s, ci-shard.sh %s' % (named, sys.argv[3].split())
+    steps = build_steps(text)
+    # Both unsharded steps build those targets: bash word-splits them, and
+    # PowerShell must split them into an array (gh-ocannl-1304's PowerShell
+    # step), since a literal unquoted `@word` there is an empty splat.
+    assert any('opam exec -- dune build $SUITE_TARGETS 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"' in step
+               for step in steps), 'bash unsharded step does not build SUITE_TARGETS'
+    windows = [step for step in steps if "@($env:SUITE_TARGETS -split ' ')" in step]
+    assert len(windows) == 1, 'PowerShell unsharded step does not build SUITE_TARGETS'
+    # Its pipe into Tee-Object ends in the cmdlet's status, not dune's.
+    assert re.search(r'^        exit \$LASTEXITCODE$', windows[0], re.M), \
+        "PowerShell build step does not exit with dune's status"
+    # A bash step piping a build into tee reports tee's status unless the
+    # shell runs with pipefail, which only an explicit `shell: bash` gives
+    # (the implicit default is `bash -e`): a red build would read green.
+    for step in steps:
+        if re.search(r'\| tee\b', step):
+            assert '\n      shell: bash\n' in step, 'a step pipes into tee without pipefail: ' + step.splitlines()[0]
     # The sharded step hands the script the job's suite: without it every
     # `train` shard would build a share of `main` instead, green either way.
     shard = text.split("    - if: ${{ matrix.shard }}\n", 1)
@@ -270,6 +293,7 @@ print('PASS side jobs are read from ci.yml: a new guarded job joins the selectio
 print('PASS a scheduled side job runs on the schedule and an ordinary dispatch, never per PR or in the fallback')
 print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
 print('PASS per PR and on master macOS runs one job, main; the schedule adds its train job')
+print('PASS every build step piping into tee has pipefail; the PowerShell one exits with dune\'s status')
 second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
 train_second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "2/2"},'
 train_last = train_second.rstrip(',') + "]'"
@@ -312,7 +336,15 @@ for label, mutant in (
     ('scheduled shard dropped', source.replace(second, '', 1)),
     ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
     ('floor job sharded', source.replace('"ocaml-compiler": "5.3.x", "suite": "main"}', '"ocaml-compiler": "5.3.x", "suite": "main", "shard": "1/1"}')),
-    ('suite alias drift', source.replace('"@default" "@runtest" "@bin-smoke"', '"@default" "@runtest"')),
+    ('suite alias drift', source.replace("'@default @runtest @bin-smoke'", "'@default @runtest'")),
+    ('unsharded bash build without pipefail',
+     source.replace("    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n      shell: bash\n",
+                    "    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n", 1)),
+    ('sharded build without pipefail',
+     source.replace('    - if: ${{ matrix.shard }}\n      shell: bash\n', '    - if: ${{ matrix.shard }}\n', 1)),
+    ('PowerShell build exits with the pipe status', source.replace('        exit $LASTEXITCODE\n', '', 1)),
+    ('PowerShell build names its aliases as literals',
+     source.replace("@($env:SUITE_TARGETS -split ' ')", '@default @runtest @bin-smoke', 1)),
     ('per-PR train shard dropped', source.replace(',\n               ' + train_last, "]'", 1)),
     ('scheduled train shard dropped', source.replace(train_second, '', 1)),
     ('train back on macOS per PR', source[:source.rindex(train_last)] + train_second

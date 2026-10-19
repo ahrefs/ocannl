@@ -50,7 +50,10 @@ let with_lowering ~name tensor =
   Option.value_exn !captured
 
 let cpu_limits =
-  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = 16 }
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    simd_vector = { Ir.Vector_file.bytes = 32; registers = 16 };
+  }
 
 let f32 = Ir.Backend_intf.Mma_f32
 

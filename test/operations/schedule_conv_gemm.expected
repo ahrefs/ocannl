@@ -31,6 +31,15 @@ cvf: fused conv twin matches the natural form within tolerance: true
 cvf: the unfused and the fused conv routines are both labeled tensorized: true
 cvu: GPU staged conv pipeline matches the natural form within tolerance: true
 cvu: the GPU staged conv pipeline's routine is labeled tensorized: true
+cvz: the whole-routine conv site is zeroed in its lowering: true
+cvz: the whole-routine zeroed site seeds GPU staged conv flavors: true
+cvz: every whole-routine zeroed GPU candidate compiles, and matches the natural form run twice: true
+cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized: true
+cvzt: the whole-routine conv+tail site is zeroed in its lowering: true
+cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors: true
+cvzt: a whole-routine zeroed conv+tail GPU candidate compiles: true
+cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run twice: true
+cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized: true
 cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc): true
 cvu: tuned conv matches the untuned twin within tolerance: true
 cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance: true
@@ -44,6 +53,10 @@ cvb: blocked (row-panel) conv pipeline matches the natural form within tolerance
 cvb: the blocked conv pipeline's routine is labeled tensorized: true
 cvb: blocked flavors seeded per fission segment: true
 cvb: tuned blocked conv matches the untuned twin within tolerance: true
+cvzb: the whole-routine blocked-shape conv site is zeroed in its lowering: true
+cvzb: the whole-routine zeroed site seeds a GPU row-block flavor: true
+cvzb: every whole-routine zeroed GPU candidate compiles, and matches the natural form run twice: true
+cvzb: every whole-routine zeroed GPU candidate's routine is labeled tensorized: true
 cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance: true
 cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized: true
 cvmb: blocked flavor seeded on the merged fission segment: true

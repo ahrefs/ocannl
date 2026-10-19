@@ -175,6 +175,27 @@ let regime_knobs_object knobs =
                  (string source)))
   ^ "}"
 
+(** The [ambient_ocannl_resolved] object (gh-ocannl-1337): every configuration key this process
+    inherited from its environment ({!Utils.inherited_env_key_sources}), keyed by the variable, with
+    the key it spells and where that key resolved from -- [{"key":…,"source":"default"}] for one
+    nothing set after all (a value that is blank to every source), [{"key":…,"value":…,"source":…}]
+    otherwise, the source in {!Utils.config_source_label}'s spelling. A source other than
+    ["environment"] is a variable the process inherited and did not apply. The orchestrator stamps
+    each cell with the inherited variables it PREDICTS the cell's command line outranks
+    ([ambient_ocannl_shadowed], from the argv and the profile payload's quoted key list); this is
+    the observation it checks that prediction against. *)
+let ambient_resolved_object entries =
+  "{"
+  ^ String.concat ~sep:","
+      (List.map entries ~f:(fun (var, key, resolution) ->
+           match resolution with
+           | None ->
+               Printf.sprintf {|"%s":{"key":"%s","source":"default"}|} (string var) (string key)
+           | Some (value, source) ->
+               Printf.sprintf {|"%s":{"key":"%s","value":"%s","source":"%s"}|} (string var)
+                 (string key) (string value) (string source)))
+  ^ "}"
+
 (** {1 The dominant kernel's %-of-peak (gh-ocannl-1006, the report's second column)}
 
     One kernel per cell: the one that takes longest when every kernel the step SHIPPED is timed on
@@ -342,7 +363,9 @@ let profile_value = function Some p -> Printf.sprintf {|"%s"|} (string p) | None
     cell's regime as [--ocannl_profile=...] and checks the row against what the runner reports, so a
     regime a row claims is the one the process actually ran under (gh-ocannl-719); [regime_knobs]
     (see {!regime_knobs_object}) is the same fact per setting, which is what catches an ambient
-    numerics flag that no profile name shows.
+    numerics flag that no profile name shows. [ambient_resolved] ({!ambient_resolved_object},
+    gh-ocannl-1337) is where every inherited [OCANNL_*] key resolved from, payload or not: what the
+    driver's [ambient_ocannl_shadowed] stamp predicted, observed.
 
     [peak_memory] is the cell's peak device footprint over the timed steps, as
     [(bytes, counter, source)] -- or [None] for a cell that measured none, which reaches the report
@@ -360,9 +383,9 @@ let profile_value = function Some p -> Printf.sprintf {|"%s"|} (string p) | None
 
     [dominant_kernel] is the already-built {!dominant_kernel_object}, or [None] — [null] on the wire
     — for a cell that did not run the instrument, which the report prints as a dash. *)
-let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~compile_s ~searched
-    ?tokens_per_step ?tune ?shipped_mma ?fp_licences ~p10 ~p50 ~p90 ~queued_ms ~timed_steps
-    ~peak_memory ?dominant_kernel ~losses () =
+let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~ambient_resolved ~workload
+    ~compile_s ~searched ?tokens_per_step ?tune ?shipped_mma ?fp_licences ~p10 ~p50 ~p90 ~queued_ms
+    ~timed_steps ~peak_memory ?dominant_kernel ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
@@ -386,9 +409,10 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
           Printf.sprintf {|"%s"|} (string source) )
   in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"shipped_mma":%s,"losses":[%s]}|}
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"ambient_ocannl_resolved":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"shipped_mma":%s,"losses":[%s]}|}
     (string backend) (string variant) (string precision) (profile_value profile)
     (regime_knobs_object regime_knobs)
+    (ambient_resolved_object ambient_resolved)
     (string workload) (fixed compile_s) searched tokens_field tune_field algebra_field (num p10)
     (num p50) (num p90) (num queued_ms) timed_steps peak_bytes_field peak_counter_field
     peak_source_field
@@ -433,9 +457,11 @@ type checkpoint_at =
     an offline reader of [partial-failures.jsonl] can recompute it. [regime_knobs] is the result
     line's own per-setting record of that regime ({!regime_knobs_object}, gh-ocannl-1297): a profile
     name cannot show an ambient knob with no profile behind it — [OCANNL_TF32_MATMULS] on an exact
-    cell — so without it the saved-loss diagnostic read such a cell's losses as exact ones. *)
-let checkpoint_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~fixture
-    ~executable ~parity_steps ~dominant_kernel ~completed_steps ~at ~losses =
+    cell — so without it the saved-loss diagnostic read such a cell's losses as exact ones.
+    [ambient_resolved] is the result line's record of where each inherited [OCANNL_*] key resolved
+    from ({!ambient_resolved_object}), so a failed cell's record can check its stamp too. *)
+let checkpoint_line ~backend ~variant ~precision ~profile ~regime_knobs ~ambient_resolved ~workload
+    ~fixture ~executable ~parity_steps ~dominant_kernel ~completed_steps ~at ~losses =
   let parity, warmup, timing, instrument =
     match at with
     | In_parity k ->
@@ -449,8 +475,9 @@ let checkpoint_line ~backend ~variant ~precision ~profile ~regime_knobs ~workloa
     | Some (path, bytes) -> Printf.sprintf {|{"path":"%s","bytes":%d}|} (string path) bytes
   in
   Printf.sprintf
-    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
+    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"ambient_ocannl_resolved":%s,"workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
     (string backend) (string variant) (string precision) (profile_value profile)
     (regime_knobs_object regime_knobs)
+    (ambient_resolved_object ambient_resolved)
     (string workload) fixture_field (string executable) parity warmup timing instrument parity_steps
     completed_steps (nums ~prec:9 losses)

@@ -803,43 +803,60 @@ val lane_all_reduce_sites : reassociable:(Tnode.t -> bool) -> t -> lane_all_redu
     [Schedule.workgroup_memory_bytes] counts the partials of exactly those sites, so the estimate
     and the kernel read one predicate. *)
 
-type inserted_barrier_form =
+type inserted_collective_form =
   | Lane_all_reduce_partials
       (** [C_syntax.try_lane_all_reduce]'s cross-simdgroup form: partials of a reassociable scope
           local between two barriers. *)
   | Warp_reduce_partials
       (** [C_syntax.try_warp_reduce]'s multi-warp form: per-warp partials of an accumulation into a
           cell, a barrier, the first warp's combine, a barrier. *)
+  | Lane_all_reduce_butterfly
+      (** [C_syntax.try_lane_all_reduce]'s single-simdgroup form: an [ocannl_shfl_xor] butterfly, no
+          barrier (gh-ocannl-1334). *)
+  | Warp_reduce_shuffle
+      (** [C_syntax.try_warp_reduce]'s single-warp form: an [ocannl_shfl_xor] tree, no barrier
+          (gh-ocannl-1334). *)
 [@@deriving sexp_of, equal]
 
-type inserted_barrier = {
-  ib_index : Indexing.symbol;  (** The [Workgroup_reduce] loop's symbol. *)
-  ib_extent : int;
-  ib_form : inserted_barrier_form;
-  ib_uniform : bool;
-      (** Whether workgroup-uniform control reaches every copy of the loop: no enclosing workgroup
-          loop, and every enclosing [If] condition built from constants and index symbols no
-          workgroup loop binds (the judgement [lar_cross_simdgroup] asks for, gh-ocannl-1168). *)
+val inserts_barrier : inserted_collective_form -> bool
+(** The two [_partials] forms; the other two insert warp shuffles only. *)
+
+type inserted_collective = {
+  ic_index : Indexing.symbol;  (** The [Workgroup_reduce] loop's symbol. *)
+  ic_extent : int;
+  ic_form : inserted_collective_form;
+  ic_uniform : bool;
+      (** Whether control uniform across the lanes the collective spans reaches every copy of the
+          loop. For a barrier form, the workgroup: no enclosing workgroup loop, and every enclosing
+          [If] condition built from constants and index symbols no workgroup loop binds (the
+          judgement [lar_cross_simdgroup] asks for, gh-ocannl-1168). For a shuffle-only form, the
+          warp: the same rule, except that workgroup loops and symbols at slots above 0 are uniform
+          within a warp, since both renderings span the whole [.x] dimension in whole warps
+          (gh-ocannl-1334). *)
 }
 
-val inserted_barriers :
-  reassociable:(Tnode.t -> bool) -> warp_size:int -> t -> inserted_barrier list
-(** gh-ocannl-1238: the statements of a kernel whose rendering emits a workgroup barrier the IR does
-    not contain, on a backend whose warp shuffles span [warp_size] lanes ([[]] when
-    [warp_size <= 0]: the C backends render neither form with a barrier). The ONE notion of "this
-    statement renders a barrier" shared by {!validate_parallel}, which refuses a non-uniform entry
-    before anything renders, and by the renderers: [C_syntax.try_warp_reduce] renders its multi-warp
-    form only for a listed, uniform entry, and [C_syntax.try_lane_all_reduce] admits by
+val inserted_collectives :
+  reassociable:(Tnode.t -> bool) -> warp_size:int -> t -> inserted_collective list
+(** gh-ocannl-1238 / gh-ocannl-1334: the statements of a kernel whose rendering emits a lane
+    collective the IR does not contain -- a workgroup barrier, or warp shuffles -- on a backend
+    whose warp shuffles span [warp_size] lanes ([[]] when [warp_size <= 0]: the C backends render
+    neither). The ONE notion of "this statement renders a lane collective" shared by
+    {!validate_parallel}, which refuses a non-uniform entry before anything renders, and by the
+    renderers: [C_syntax.try_warp_reduce] renders either form only for a listed, uniform entry, and
+    [C_syntax.try_lane_all_reduce] renders its butterfly only for a listed entry and its partials by
     {!lane_all_reduce_sites}, derived from the same walk.
 
-    Lane-form entries are listed where [lar_cross_simdgroup] holds past one simdgroup; that
-    admission asks for uniformity itself, so it declines to the serial loop under divergent control
-    and the validator refuses none of them. Cell-form entries are every [Workgroup_reduce] loop past
-    one warp whose body (past its own launch guard) is ONE accumulation statement into a cell
-    invariant in the loop -- [C_syntax]'s shared accumulator decision at a single statement, asked
-    of the same {!peel_accum_nest} -- uniform or not: that form has no barrier-free rendering. An
-    entry the renderer refuses for other reasons (partial warps, a narrow residency, ...) is listed
-    too, so the list over-approximates only by statements that never render. *)
+    Lane-form entries are listed where the admission holds: the butterfly at exactly one warp under
+    warp-uniform control, the partials where [lar_cross_simdgroup] holds past one simdgroup. Both
+    admissions ask for uniformity themselves, so the form declines to the serial loop under
+    divergent control and the validator refuses none of its entries. Cell-form entries are every
+    [Workgroup_reduce] loop whose body (past its own launch guard) is ONE accumulation statement
+    into a cell invariant in the loop -- [C_syntax]'s shared accumulator decision at a single
+    statement, asked of the same {!peel_accum_nest} -- uniform or not: that form has neither a
+    barrier-free nor a shuffle-free rendering. Past one warp they are [Warp_reduce_partials], within
+    one [Warp_reduce_shuffle]. An entry the renderer refuses for other reasons (partial warps, a
+    narrow residency, ...) is listed too, so the list over-approximates only by statements that
+    never render. *)
 
 val launch_dims : t -> launch_dims
 (** Per-slot maximum extents over the kernel's annotated loops; [grid.(2)] is the product of the
@@ -904,11 +921,11 @@ val validate_parallel :
     an uncovered dimension executes the write once per hardware index — and whole-node [Zero_out] of
     materialized nodes in multi-threaded kernels (nesting never distributes it). With [warp_size]
     (and the lane all-reduce's [reassociable], [Online_softmax.reassociable_local]) it also refuses
-    a barrier the renderer inserts ({!inserted_barriers}) under control flow that is not
-    workgroup-uniform (gh-ocannl-1238); the default [warp_size] of 0 is a backend rendering no warp
-    shuffles. Does not prove iteration independence: an annotating pass proves it for the
-    annotations it mints, and the renderer asks {!unseparated_thread_write} of every binding it
-    actually emits. *)
+    a lane collective the renderer inserts ({!inserted_collectives}) under control flow that is not
+    uniform across the lanes it spans (gh-ocannl-1238 for barriers, gh-ocannl-1334 for warp
+    shuffles); the default [warp_size] of 0 is a backend rendering no warp shuffles. Does not prove
+    iteration independence: an annotating pass proves it for the annotations it mints, and the
+    renderer asks {!unseparated_thread_write} of every binding it actually emits. *)
 
 val validate_parallel_classified :
   warp_size:int -> reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit

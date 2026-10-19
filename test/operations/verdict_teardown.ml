@@ -57,6 +57,24 @@ let one_line_err =
   ^ Verdict.teardown_line [ broken_label; broken_label; broken_label; broken_label ]
   ^ "\n"
 
+(* A scan's ending, through the printers the scans share: its claims, [Verdict.success_trailer],
+   then the refusal-control marker section, where [Refusal_control_manifest.print_section] prints a
+   claim's marker only once Verdict recorded the claim passing. The claims' diagnostics come from
+   this source text, by the extractor [print] itself reads a scan's source with. *)
+let manifest_source =
+  {|let () =
+  p "the first manifest claim" ok;
+  p "the last manifest claim" true|}
+
+let manifest_ending ~first_holds =
+  p "the first manifest claim" first_holds;
+  p "the last manifest claim" true;
+  Verdict.success_trailer ~blank_line:true [ "every manifest claim held." ];
+  let diagnostics = Test_utils.Refusal_control_scan.diagnostics manifest_source in
+  Test_utils.Refusal_control_manifest.print_section ~source:"test/operations/verdict_teardown.ml"
+    ~expected:(List.map diagnostics ~f:Test_utils.Refusal_control_scan.marker)
+    diagnostics
+
 (* What [tools/test-mutation-run.sh] replays through [tools/mutation-run.sh]: the runner reads
    Verdict's own text -- a raising case's claim, the teardown line, an exit inside a case, the
    [FAIL: ] prefix on every line of a failure -- and that harness, which builds no OCaml, takes the
@@ -69,7 +87,8 @@ let print_transcript mode ((_, stdout_text, stderr_text) : Fresh_process.t) =
     [ ("stdout", stdout_text); ("stderr", stderr_text) ]
     ~f:(fun (stream, text) ->
       List.iter (String.split_lines text) ~f:(fun line ->
-          Stdio.printf "  %s %s | %s\n" mode stream line))
+          (* An empty line ends on the bar: no trailing blank in the golden. *)
+          Stdio.printf "  %s %s |%s\n" mode stream (if String.is_empty line then "" else " " ^ line)))
 
 (* Byte-for-byte comparisons below, so both streams are binary (Windows would rewrite "\n"): the
    children's stderr is matched line-exactly too. *)
@@ -185,6 +204,36 @@ let () =
                 String.is_suffix row ~suffix && List.mem lines ("FAIL: " ^ row) ~equal:String.equal)
           in
           exited 1 status && echoed ": FAIL" && echoed ": FAIL (got 1 want 2)");
+      (* What tools/mutation-run.sh reads a failing scan's ending by: a failed claim prints no
+         refusal marker, and no success trailer prints once a claim failed; every other row is the
+         passing run's. *)
+      let manifest_held = run_child "manifest_held"
+      and manifest_failed = run_child "manifest_failed" in
+      about "manifest_failed"
+        "a failing scan's ending omits the failed claim's marker and the success trailer, and only \
+         those"
+        manifest_failed ~holds:(fun status out _ ->
+          let held_status, held_out, _ = manifest_held in
+          (* The failing ending derived from the passing one: the first claim false, its marker row
+             (the row carrying [Refusal_control_scan.marker] of its diagnostic) and the trailer's
+             rows (each [OK: ] row and the empty row before it) dropped -- and nothing else, so a
+             printer dropping a row from both endings fails here. *)
+          let first_marker =
+            Test_utils.Refusal_control_scan.(marker (List.hd_exn (diagnostics manifest_source)))
+          in
+          let rec derive = function
+            | "" :: ok :: rows when String.is_prefix ok ~prefix:"OK: " -> derive rows
+            | ok :: rows when String.is_prefix ok ~prefix:"OK: " -> derive rows
+            | "the first manifest claim: true" :: rows ->
+                "the first manifest claim: false" :: derive rows
+            | row :: rows when String.is_substring row ~substring:first_marker -> derive rows
+            | row :: rows -> row :: derive rows
+            | [] -> []
+          in
+          let held = String.split_lines held_out in
+          exited 0 held_status && exited 1 status
+          && List.length (derive held) = List.length held - 3
+          && List.equal String.equal (String.split_lines out) (derive held));
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
@@ -196,7 +245,9 @@ let () =
       print_transcript "case_raise" case_raise;
       print_transcript "case_exit" case_exit;
       print_transcript "trailer_omitted" trailer_omitted;
-      print_transcript "pass_fail_forms" pass_fail_forms
+      print_transcript "pass_fail_forms" pass_fail_forms;
+      print_transcript "manifest_held" manifest_held;
+      print_transcript "manifest_failed" manifest_failed
   | [ _; mode ] -> (
       (* Only on the paths whose stdout is not compared byte for byte. *)
       if String.is_prefix mode ~prefix:"fail_then_" then Stdlib.Format.printf "%s@\n" formatted;
@@ -248,13 +299,16 @@ let () =
           fail "second claim\n  expected a, got b";
           p "third claim" false;
           p "last claim" true;
-          if not (Verdict.any_failed ()) then
-            Stdio.printf "\nOK: every claim held.\nOK: four claims checked.\n"
+          Verdict.success_trailer ~blank_line:true [ "every claim held."; "four claims checked." ]
       | "pass_fail_forms" ->
           pass_fail "held" true;
           pass_fail "failed" false;
           fail "a message, not a claim";
-          pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false
+          pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false;
+          (* A message ending as a claim would: still no claim (gh-ocannl-1364). *)
+          fail "a message ending like a claim: false"
+      | "manifest_held" -> manifest_ending ~first_holds:true
+      | "manifest_failed" -> manifest_ending ~first_holds:false
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))

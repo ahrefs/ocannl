@@ -621,28 +621,34 @@ let native_vector_file =
   in
   fun () -> Lazy.force probed
 
-(* How many vector registers of the configured [vector_bytes_setting] width the kernels have: config
-   [cc_vector_registers], or (auto) the native count, scaled down where the configured vector is
-   wider than a native register -- the compiler splits it across [vector_bytes / native] registers,
-   so a 32-byte vector on NEON costs two of its 32 and the file holds 16 of them. 0 when explicit
-   SIMD is off. [Register_tile.rn_cap] fits the register tile's columns to it, through
-   [hardware_limits.simd_vector_registers] in the seeding and [C_syntax_config.vector_registers] in
-   the renderer. Not a function of the width alone: a 16-byte file is 32 registers on NEON and 16 on
-   SSE, and keying the cap on the width gave SSE NEON's 4 x 6 tile, which spills there. *)
-let vector_registers_setting () =
-  match Int.of_string @@ Utils.get_global_arg ~default:"-1" ~arg_name:"cc_vector_registers" with
-  | n when n > 256 ->
-      (* No vector register file has more than 64 registers; a count past that is a typo, and the
-         register-tile arithmetic over it would overflow. *)
-      invalid_arg
-        (Printf.sprintf "cc_vector_registers: expected -1 (auto) or a count from 0 to 256, got %d" n)
-  | n when n >= 0 -> n
-  | _ ->
-      let vector_bytes = vector_bytes_setting () in
-      if vector_bytes <= 0 then 0
-      else
-        let registers, native_bytes = native_vector_file () in
-        registers * native_bytes / Int.max native_bytes vector_bytes
+(* The vector register file of the explicit-SIMD renderings: the configured [vector_bytes_setting]
+   width, and how many registers of that width the kernels have -- config [cc_vector_registers], or
+   (auto) the native count, scaled down where the configured vector is wider than a native register
+   (the compiler splits it across [vector_bytes / native] registers, so a 32-byte vector on NEON
+   costs two of its 32 and the file holds 16 of them); 0 when explicit SIMD is off. One value
+   (gh-ocannl-1399), read by [hardware_limits.simd_vector] in the seeding and
+   [C_syntax_config.vector_file] in the renderer, where [Register_tile.rn_cap] fits the register
+   tile's columns to the count. Not a function of the width alone: a 16-byte file is 32 registers on
+   NEON and 16 on SSE, and keying the cap on the width gave SSE NEON's 4 x 6 tile, which spills
+   there (gh-ocannl-1285). *)
+let vector_file_setting () =
+  let bytes = vector_bytes_setting () in
+  let registers =
+    match Int.of_string @@ Utils.get_global_arg ~default:"-1" ~arg_name:"cc_vector_registers" with
+    | n when n > 256 ->
+        (* No vector register file has more than 64 registers; a count past that is a typo, and the
+           register-tile arithmetic over it would overflow. *)
+        invalid_arg
+          (Printf.sprintf "cc_vector_registers: expected -1 (auto) or a count from 0 to 256, got %d"
+             n)
+    | n when n >= 0 -> n
+    | _ ->
+        if bytes <= 0 then 0
+        else
+          let registers, native_bytes = native_vector_file () in
+          registers * native_bytes / Int.max native_bytes bytes
+  in
+  { Ir.Vector_file.bytes; registers }
 
 (* Whether the kernel .so is a macOS bundle or an ELF/PE shared object. Distinguishing the two BSDs
    from Darwin needs [uname], and this used to shell out once per kernel compile -- on a machine
@@ -867,8 +873,8 @@ let codegen_tag () =
       Option.value (fp_contract_flag ()) ~default:"fp-contract-default";
       arch_flags ();
       simd_flags ();
-      Int.to_string (vector_bytes_setting ());
-      Int.to_string (vector_registers_setting ());
+      Int.to_string (vector_file_setting ()).bytes;
+      Int.to_string (vector_file_setting ()).registers;
       (match fp16_arithmetic_support () with
       | `None -> "fp16-none"
       | `Promoted -> "fp16-promoted"
@@ -931,6 +937,53 @@ let codegen_tag () =
           ]
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
+
+(* gh-ocannl-1371: which kind of host a run had, from the probes and settings the renderer itself
+   reads, so a log can say it without anything restating the probe logic. The ISA is what those
+   probes found under the kernel flags -- the AVX2/FMA stage of [simd_flags], [avx512_target], and
+   [native_vector_file]'s AArch64 answer, which is NEON's register file -- so it names the target
+   the kernels are compiled for, which with the default [-march=native] is the host. *)
+let host_capabilities () =
+  let registers, native_bytes = native_vector_file () in
+  let isa =
+    List.filter_opt
+      [
+        Option.some_if (String.is_substring (simd_flags ()) ~substring:"avx2") "avx2+fma";
+        Option.some_if (avx512_target ()) "avx512f+bw+vl";
+        Option.some_if (registers = 32 && native_bytes = 16) "neon";
+      ]
+  in
+  (* [cpu_model] keeps /proc/cpuinfo's [model name\t: ...] lines whole, as the timing identity wants
+     them; here only the values. *)
+  let cpu =
+    String.split (Lazy.force cpu_model) ~on:';'
+    |> List.map ~f:(fun entry ->
+        match String.lsplit2 entry ~on:':' with
+        | Some (key, value)
+          when String.is_prefix key ~prefix:"model name" || String.is_prefix key ~prefix:"Hardware"
+          ->
+            String.strip value
+        | _ -> String.strip entry)
+    |> String.concat ~sep:"; "
+  in
+  [
+    ("cpu", cpu);
+    ("cpus", Int.to_string (Utils.Cpu_topology.effective_cpu_count ()));
+    ("pool", pool_tag ());
+    ("isa", if List.is_empty isa then "none-probed" else String.concat ~sep:"," isa);
+    ("cc_vector_bytes", Int.to_string (vector_bytes_setting ()));
+    ("auto_vector_bytes", Int.to_string (auto_vector_bytes ()));
+    ("cc_vector_registers", Int.to_string (vector_file_setting ()).registers);
+    ("native_vector_file", Printf.sprintf "%dx%d" registers native_bytes);
+    ( "fp16",
+      match fp16_arithmetic_support () with
+      | `None -> "none"
+      | `Promoted -> "promoted"
+      | `Native -> "native" );
+    ("compiler", compiler_command ());
+    ("arch_flags", arch_flags ());
+    ("simd_flags", simd_flags ());
+  ]
 
 module Tn = Tnode
 
@@ -1341,8 +1394,7 @@ struct
   let ident_blacklist = ident_blacklist @ C_syntax.builtin_idents Builtins_cc.builtins
   let parallel_grid_syntax = parallel_grid_syntax_setting ()
   let parallel_grid_chunks = parallel_grid_chunks_setting ()
-  let vector_bytes = vector_bytes_setting ()
-  let vector_registers = vector_registers_setting ()
+  let vector_file = vector_file_setting ()
 
   (* gh-ocannl-517: a CPU has no 16-bit arithmetic -- the narrow arms of the operator renderings
      below are widen/op/narrow round-trips through f32, and [_Float16] arithmetic, where the type

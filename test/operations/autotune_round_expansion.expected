@@ -1,12 +1,23 @@
 menu: the pre-filtered seeding keys two segments: true
 menu: each segment offers three or more singles: true
+probe: round 1 recorded the recombined composite as its head: true
+probe: its beam holds every alternate: true
+probe: some alternate offers a round move on the segment it differs in: true
+setup: the last alternate, seated by position, offers no round move where it differs: true
 setup: every rule ran its round: true
 setup: every rule entered round 1 with the same beam: true
-setup: the last alternate, seated by position, is extended only on segments it shares: true
+setup: the seated alternate is the near-copy: true
 setup: the near-copy differs from the head in exactly one segment: true
 full: every round candidate extends a beam entry: true
 full: the round extends the near-copy on a segment it shares with the head: true
 full: the round extends the near-copy on its differing segment: true
+report: every unit's move count is the round's attempts on it: true
+report: the round attempted nothing the units do not count: true
+report: round 1 is recorded under its rule, over the beam it extended: true
+report: the near-copy's differing segments are the ones its digest differs in: true
+report: full's near-copy offers a move on its differing segment: true
+report: differing expands the near-copy on its differing segment alone: true
+report: head expands no unit of the near-copy: true
 differing: the round extends the head: true
 differing: the head's moves are exactly full's: true
 differing: the near-copy's moves are on its differing segment: true

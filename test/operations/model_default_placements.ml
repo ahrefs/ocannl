@@ -112,3 +112,67 @@ let () =
       p "the placement pick fired and the label carries it"
         (String.is_prefix r.Autotune.mc_label ~prefix:"placements[");
       p "the pick materializes y" (String.is_substring r.Autotune.mc_label ~substring:"mat:exp_y")
+
+(* gh-ocannl-1390: the pick's fallback recompiles from the default placements on a CLASSIFIED
+   rejection only. It used to catch every [Invalid_argument] out of the compile under the picked
+   placements, so a transform bug there -- fatal under [strict_failure_classification], the default
+   -- was retried from the default placements and the routine came back as though nothing had
+   happened. The injection is [Schedule.with_transform_fault], firing at the LAST op application a
+   clean run makes: the placement search scores hermetic lowerings first and the compile under the
+   picked placements applies its pipeline last, so that call is inside the picked compile (the pick
+   must fire, as above). A clean run's count is checked stable first, since the injected run is
+   located by it. The graph keeps the flip -- [y = exp u] read twice, now within one elementwise
+   statement -- at [cpu_schedule_min_parallel]'s default extent, so the default CPU pipeline is not
+   empty: it retypes the parallel loop to [Grid], which is what gives the compile op applications to
+   fault (the graph above, whose consumers are scalar reductions, applies none). *)
+let () =
+  let m = 16384 in
+  let uv = Array.init m ~f:(fun i -> Float.of_int (i % 9) *. 0.25) in
+  let u = TDSL.ndarray uv ~label:[ "u_fault" ] ~output_dims:[ m ] () in
+  let%op y = exp u in
+  let%op total = relu y + y in
+  ignore y;
+  let comp = named "mdp_fault" (Train.forward total) in
+  let picked = ref false in
+  let run fault =
+    Ir.Schedule.with_transform_fault fault (fun () ->
+        Autotune.model_default
+          ~report:(fun r -> picked := String.is_prefix r.Autotune.mc_label ~prefix:"placements[")
+          (Context.auto ()) comp Ir.Indexing.Empty)
+  in
+  let count () =
+    let n = ref 0 in
+    ignore (run (fun _ -> Int.incr n) : Context.t * Context.routine);
+    !n
+  in
+  let calls = count () in
+  let picked_clean = !picked in
+  Stdio.eprintf "clean run: %d op application(s), pick fired: %b (not part of the golden)\n" calls
+    picked_clean;
+  p "a clean run's op applications are counted, and the pick fires there" (calls > 0 && picked_clean);
+  p "the count is stable across clean runs" (count () = calls);
+  let injected = "injected transform bug in the picked compile (gh-ocannl-1390)" in
+  let n = ref 0 in
+  let fired = ref false in
+  let outcome =
+    match
+      run (fun _ ->
+          Int.incr n;
+          if !n = calls then (
+            fired := true;
+            invalid_arg injected))
+    with
+    | (_ : Context.t * Context.routine) -> `Returned
+    | exception Invalid_argument detail when String.equal detail injected -> `Propagated
+    | exception exn -> `Other (Exn.to_string exn)
+  in
+  p "the injected transform bug fired" !fired;
+  p
+    "an untyped transform exception in the picked compile propagates, never retried from the \
+     default placements"
+    (match outcome with
+    | `Propagated -> true
+    | `Returned -> false
+    | `Other e ->
+        Stdio.eprintf "unexpected exception (not part of the golden): %s\n" e;
+        false)

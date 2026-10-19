@@ -59,7 +59,10 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 (* Synthetic limits keep the seeding checks machine-independent: a 32-byte vector file for the CPU
    register tiling, and an f32-capable mma capability for the GPU tensorized seeds. *)
 let cpu_limits =
-  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = 16 }
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    simd_vector = { Ir.Vector_file.bytes = 32; registers = 16 };
+  }
 
 let gpu_limits =
   {

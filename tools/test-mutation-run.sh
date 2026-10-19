@@ -47,16 +47,31 @@ case "$*" in
   'build -j 4 @runtest-tail') name=tail ;;
   'build -j 4 @runtest-trailer') name=trailer ;;
   'build -j 4 @runtest-replay') name=replay ;;
+  'build -j 4 @runtest-capture') name=capture ;;
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
-case "$(cat module.ml)" in *MUTATED*) ;; *) exit 99 ;; esac
+out=${DUNE_BUILD_DIR:-_build}/default
+# The unmutated module is the runner's baseline: green, writing nothing, unless the case says
+# otherwise -- red, as a golden not promoted after a change to the test leaves it, or green
+# having rewritten the test's stdout, as a real baseline does.
+case "$(cat module.ml)" in
+  *MUTATED*) ;;
+  *)
+    printf '%s\n' baseline >> "$PROBE_HOME/baselines"
+    case "${PROBE_BASELINE:-green}" in
+      green) exit 0 ;;
+      rewrote) mkdir -p "$out"; rm -f "$out/$name.exe.output"; cp "$name.expected" "$out/$name.exe.output"; exit 0 ;;
+      red) printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
+      sleep) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
+      *) exit 99 ;;
+    esac ;;
+esac
 cp module.ml "$PROBE_HOME/observed"
 # The test's stdout, where dune leaves it even when the test exits nonzero; the
 # golden, probe.expected, has three rows, manifest.expected six, two of them
 # refusal-manifest marker rows, and trailer.expected eight: manifest.expected's
 # with a blank row and a success trailer (`OK: `) before its section.
-out=${DUNE_BUILD_DIR:-_build}/default
 mkdir -p "$out"
 rows() { rm -f "$out/$name.exe.output"; printf "$1" > "$out/$name.exe.output"; }
 m1='  [scanner-refusal:00000000000000000000000000000001] first refusal\n'
@@ -64,8 +79,10 @@ m2='  [scanner-refusal:00000000000000000000000000000002] last refusal\n'
 section='\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n'
 case "$PROBE_MODE" in
   fail)
-    rows 'first: false\nnested: label: false\nlast: true\n'
-    printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n'
+    # Two Verdict.fail messages ending like claims, on both streams as Verdict.fail prints them.
+    rows 'first: false\nFAIL: a message ending like a claim: false\nnested: label: false\nlast: true\nFAIL: one ending like pass_fail: FAIL\n'
+    printf 'FAIL: first: false\nFAIL: a message ending like a claim: false\nFAIL: nested: label: false\nFAIL: first: false\n'
+    printf 'FAIL: one ending like pass_fail: FAIL\n'
     printf 'prefix FAIL: decoy: false\nFAIL: true claim: true\nFAIL: suffix: false extra\n'
     exit 1 ;;
   pass) rows 'first: true\nnested: label: true\nlast: true' ; exit 0 ;;
@@ -81,8 +98,15 @@ case "$PROBE_MODE" in
   short) rows 'first: false\nnested: label: true\n'; printf 'FAIL: first: false\n'; exit 1 ;;
   stopped) rows 'first: false\nnested: label: true\nlast: true\n'
     printf 'FAIL: first: false\nSTOPPED EARLY: an uncaught exception ended the run\n'; exit 1 ;;
-  more) rows 'first: false\nFAIL: extra\nnested: label: true\nlast: true\n'
+  more) rows 'first: false\nFAIL: a message\nextra row\nnested: label: true\nlast: true\n'
     printf 'FAIL: first: false\n'; exit 1 ;;
+  # A golden of captured diagnostics, one reworded by the mutant: its row still printed.
+  capture) rows 'FAIL: the first diagnostic\nFAIL: the second, reworded\nFAIL: a third, new\n'
+    printf 'the golden differs\n'; exit 1 ;;
+  # A run cut short after a multi-line failure message: its `FAIL: ` rows are no rows of the
+  # golden, so they cannot make up the rows it never printed (gh-ocannl-1364).
+  failpad) rows 'first: false\nFAIL: the message:\nFAIL:   one\nFAIL:   two\n'
+    printf 'FAIL: first: false\nFAIL: the message:\nFAIL:   one\nFAIL:   two\n'; exit 1 ;;
   # A raising Verdict.case (gh-ocannl-1084): one failed claim in place of the
   # rows the raise kept from printing, and the cases after it still run.
   casemid) rows 'nested: the case ran to completion (raised Failure("injected")): false\nlast: true\n'
@@ -106,6 +130,11 @@ case "$PROBE_MODE" in
   casecut) rows 'first: the case ran to completion (raised Failure("injected")): false\nnested: label: true\n'
     printf 'FAIL: first: the case ran to completion (raised Failure("injected")): false\n'
     printf 'FAILED: 1 check did not hold: "first: the case ran to completion".\n'; exit 1 ;;
+  # A raise, then a failure message and nothing more: the stdout ends on the message, not on the
+  # raise, however few rows the message counts for.
+  casefailmsg) rows 'first: the case ran to completion (raised Failure("injected")): false\nFAIL: a message\n'
+    printf 'FAIL: first: the case ran to completion (raised Failure("injected")): false\nFAIL: a message\n'
+    printf 'FAILED: 2 checks did not hold: "first: the case ran to completion", "a message".\n'; exit 1 ;;
   # The test never ran this time: the output a previous run left must not count.
   stale) printf 'FAIL: first: false\n'; exit 1 ;;
   reused) exit 0 ;;
@@ -180,6 +209,7 @@ printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > tail.expected
+printf 'FAIL: the first diagnostic\nFAIL: the second diagnostic\n' > capture.expected
 printf 'first: true\n\nOK: every claim held.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > trailer.expected
@@ -206,6 +236,9 @@ run_case() {
   fi
   perl -e 'exit((stat($ARGV[0]))[2] & 07777 ^ 0640 ? 1 : 0)' module.ml
 }
+# The listing between `false claims:` and the next section: the claims alone (gh-ocannl-1364).
+claims() { awk '/^false claims:$/ { on = 1; next } /^(failure messages|rows)/ { on = 0 } on' "$fixture/result"; }
+messages() { awk '/^failure messages/ { on = 1; next } /^rows/ { on = 0 } on' "$fixture/result"; }
 reached() {
   if grep -Eq '^(STOPPED EARLY|NEVER RAN|NOT COUNTED): ' "$fixture/result"; then
     cat "$fixture/result"; echo "a run that reached its last row was flagged"; exit 1
@@ -222,11 +255,16 @@ leg_1() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 export PROBE_MODE=fail
 run_case 1
-sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
+claims > "$fixture/claims"
 printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n' > "$fixture/expected"
-cmp "$fixture/claims" "$fixture/expected"
+cmp "$fixture/claims" "$fixture/expected" || { cat "$fixture/result"; echo 'fail: the false claims are not the claims'; exit 1; }
+# Verdict.fail messages ending like claims are listed as messages, apart from the claims.
+messages > "$fixture/messages"
+printf 'FAIL: a message ending like a claim: false\nFAIL: one ending like pass_fail: FAIL\n' > "$fixture/expected"
+cmp "$fixture/messages" "$fixture/expected" || { cat "$fixture/result"; echo 'fail: the failure messages are not listed apart'; exit 1; }
 grep -q '^run: ' "$fixture/result"
 grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
+grep -q "^rows not counted: 2 \`FAIL: \` rows of the run's own " "$fixture/result"
 reached
 grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
 printf 'PASS exact claims and red verdict, CRLF/no-final-newline restoration\n'
@@ -234,7 +272,7 @@ printf 'PASS exact claims and red verdict, CRLF/no-final-newline restoration\n'
 harness_leg_run '1: exact claims and red verdict, CRLF and no-final-newline restoration' leg_1
 leg_2() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
-for mode in raise short stopped casecrash caseexit casecut stale reused both; do
+for mode in raise short failpad stopped casecrash caseexit casecut casefailmsg stale reused both; do
   export PROBE_MODE=$mode
   run_case 4
   case $mode in
@@ -244,6 +282,10 @@ for mode in raise short stopped casecrash caseexit casecut stale reused both; do
     short)
       grep -q '^FAIL: first: false$' "$fixture/result"
       flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows" ;;
+    failpad)
+      grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
+      grep -q "^rows not counted: 3 " "$fixture/result"
+      flagged "STOPPED EARLY: the mutated run printed 1 of the golden's 3 rows" ;;
     stopped)
       grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
       flagged 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran' ;;
@@ -253,6 +295,8 @@ for mode in raise short stopped casecrash caseexit casecut stale reused both; do
       flagged 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran' ;;
     casecut)
       flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows" ;;
+    casefailmsg)
+      flagged "STOPPED EARLY: the mutated run printed 1 of the golden's 3 rows" ;;
     stale|reused)
       grep -q '^rows: not counted$' "$fixture/result"
       flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)' ;;
@@ -264,6 +308,16 @@ done
 export PROBE_MODE=more
 run_case 1
 grep -q '^rows: 4 printed of 3 in probe.expected$' "$fixture/result"
+grep -q "^rows not counted: 1 " "$fixture/result"
+reached
+# A golden that captures diagnostics: the run's `FAIL: ` rows count toward its own, by text first
+# and then by number, so a reworded diagnostic is still a row the run printed; one beyond the
+# golden's is the run's own.
+export PROBE_MODE=capture
+PROBE_ALIAS=@runtest-capture run_case 1
+grep -q '^rows: 2 printed of 2 in capture.expected$' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'capture: the reworded diagnostic was not counted'; exit 1; }
+grep -q "^rows not counted: 1 " "$fixture/result"
 reached
 # A raising Verdict.case prints fewer rows than the golden and still reached its
 # last case: caught, not stopped early (gh-ocannl-1084).
@@ -308,11 +362,6 @@ done
 export PROBE_MODE=tailcut
 PROBE_ALIAS=@runtest-tail run_case 1
 grep -q '^refusal markers omitted: 1 ' "$fixture/result"
-# The marker row the runner skips is the manifest's own: a rewording there must fail here.
-grep -qF 'Printf.sprintf "[scanner-refusal:%s] %s"' "$root/test/support/refusal_control_scan.ml" ||
-  { echo 'Refusal_control_scan.marker no longer writes "[scanner-refusal:<digest>] <fragment>"'; exit 1; }
-grep -qF 'printf "  %s\n" marker' "$root/test/support/refusal_control_manifest.ml" ||
-  { echo 'Refusal_control_manifest.print no longer indents a marker row by two spaces'; exit 1; }
 printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
 }
 harness_leg_run '3: rows short only by a failed claim'\''s refusal marker' leg_3
@@ -344,23 +393,19 @@ for mode in trailercut trailerkilled trailerswap; do
     trailerkilled|trailerswap) flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 8 rows" ;;
   esac
 done
-# The trailer the runner skips is the scans' own: the ratchet whose failing runs it was written
-# for prints its `OK: ` row only when no claim failed, and its golden carries that row.
-grep -qF 'if not (Verdict.any_failed ()) then' "$root/test/operations/verdict_ratchet.ml" &&
-  grep -q '^OK: ' "$root/test/operations/verdict_ratchet.expected" ||
-  { echo 'verdict_ratchet no longer prints a success trailer `OK: ` row under Verdict.any_failed'; exit 1; }
 printf 'PASS a failing run short by its success trailer is caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
 # A failure message spanning lines: Verdict.fail prefixes every line, so the runner skips each row
 # of it as it skips any `FAIL: ` row, and a run short by its trailer is still caught. Each
 # unprefixed continuation row, the shape Verdict.fail printed before, is a row the golden lacks.
 export PROBE_MODE=trailermulti
 PROBE_ALIAS=@runtest-trailer run_case 1
-grep -q '^rows: 7 printed of 8 in trailer.expected$' "$fixture/result"
+grep -q '^rows: 5 printed of 8 in trailer.expected$' "$fixture/result"
+grep -q "^rows not counted: 2 " "$fixture/result"
 grep -q '^success trailer omitted: 2 rows ' "$fixture/result"
 reached
 export PROBE_MODE=trailermultibare
 PROBE_ALIAS=@runtest-trailer run_case 4
-flagged "STOPPED EARLY: the mutated run printed 7 of the golden's 8 rows"
+flagged "STOPPED EARLY: the mutated run printed 6 of the golden's 8 rows"
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
 }
 harness_leg_run '4: a failing run short by its success trailer' leg_4
@@ -370,15 +415,21 @@ reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # real Verdict runs: the streams of verdict_teardown's children, which its golden pins byte for byte
 # (each line prefixed with its child and stream). A refactor of verdict.ml that keeps its text
 # changes nothing here; a rewording the runner no longer reads fails here once that golden is
-# promoted. Each golden below is what the child's run would print had every claim held.
+# promoted. Each golden below is what the child's run would print had every claim held: written
+# out here, or (`@<child>`) the stdout of a sibling child in which every claim did hold.
 teardown_golden="$root/test/operations/verdict_teardown.expected"
+# A child's stream, as the golden prints it: `  <child> <stream> | <line>`, or the bare bar for an
+# empty line.
+transcript() {
+  sed -n -e "s/^  $1 $2 | //p" -e "s/^  $1 $2 |\$//p" "$teardown_golden" > "$3"
+  [ -s "$3" ] || { echo "verdict_teardown.expected carries no $1 $2 transcript"; exit 1; }
+}
 replay() {
-  for stream in stdout stderr; do
-    sed -n "s/^  $1 $stream | //p" "$teardown_golden" > "$fixture/replay.$stream"
-    [ -s "$fixture/replay.$stream" ] ||
-      { echo "verdict_teardown.expected carries no $1 $stream transcript"; exit 1; }
-  done
-  printf "$2" > replay.expected
+  for stream in stdout stderr; do transcript "$1" "$stream" "$fixture/replay.$stream"; done
+  case $2 in
+    @*) transcript "${2#@}" stdout replay.expected ;;
+    *) printf "$2" > replay.expected ;;
+  esac
   export PROBE_MODE=replay
   PROBE_ALIAS=@runtest-replay run_case "$3"
   if grep -q '^(none)$' "$fixture/result"; then
@@ -395,27 +446,45 @@ reached
 replay case_exit 'the claim: true\nexits: done: true\nafter the exit: true\n' 4
 flagged 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran'
 # A scan-shaped run short by its success trailer: every line of a multi-line Verdict.fail carries
-# `FAIL: `, and the teardown names several checks. Its `FAIL: ` rows count among the rows printed,
-# and the runner reads a trailer only on a run short of the golden, hence a trailer of two rows.
+# `FAIL: `, and the teardown names several checks. Its `FAIL: ` rows are no rows of the golden, so
+# they do not count among the rows printed (gh-ocannl-1364).
 replay trailer_omitted 'first claim: true\nthird claim: true\nlast claim: true\n\nOK: every claim held.\nOK: four claims checked.\n' 1
-grep -q '^rows: 5 printed of 6 in replay.expected$' "$fixture/result"
+grep -q '^rows: 3 printed of 6 in replay.expected$' "$fixture/result"
 grep -q '^success trailer omitted: 3 rows ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'trailer_omitted: no omitted-trailer line'; exit 1; }
 reached
-# Failed pass_fail claims, bare and detailed, beside a Verdict.fail message: a claim's stderr line
-# is its stdout row behind `FAIL: `, so the runner lists every such line, and the message, a `FAIL: `
-# row on both streams, is none of them.
+# Failed pass_fail claims, bare and detailed, beside Verdict.fail messages, one of them ending like a
+# claim: a claim's stderr line is its stdout row behind `FAIL: `, so the runner lists every such
+# line, and a message, a `FAIL: ` row on both streams, is none of them but one of the failure
+# messages listed apart (gh-ocannl-1364).
 replay pass_fail_forms 'held: PASS\nfailed: PASS\ndetailed: PASS\n' 1
-sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
+claims > "$fixture/claims"
 sed 's/^/FAIL: /' "$fixture/replay.stdout" > "$fixture/echoes"
 grep -Fx -f "$fixture/echoes" "$fixture/replay.stderr" > "$fixture/expected" || true
 [ "$(wc -l < "$fixture/expected")" -ge 2 ] ||
   { echo 'pass_fail_forms: fewer than two failed claims echo their row on stderr'; exit 1; }
 cmp "$fixture/claims" "$fixture/expected" ||
   { cat "$fixture/result"; echo 'pass_fail_forms: the false claims are not the echoed rows'; exit 1; }
-grep -q '^rows: 4 printed of 3 in replay.expected$' "$fixture/result"
+grep '^FAIL: ' "$fixture/replay.stdout" > "$fixture/expected"
+[ "$(($(wc -l < "$fixture/expected")))" -ge 2 ] ||
+  { echo 'pass_fail_forms: fewer than two Verdict.fail messages on stdout'; exit 1; }
+messages > "$fixture/messages"
+cmp "$fixture/messages" "$fixture/expected" ||
+  { cat "$fixture/result"; echo 'pass_fail_forms: the failure messages are not the stdout FAIL rows'; exit 1; }
+grep -q '^rows: 3 printed of 3 in replay.expected$' "$fixture/result"
 reached
-printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed\n'
+# A scan's ending through the printers the scans share (gh-ocannl-1364): a failed claim leaves out its
+# refusal-control marker and the success trailer, which Refusal_control_manifest.print_section and
+# Verdict.success_trailer print, and the golden is the same ending with every claim held. What the
+# runner skips is thereby theirs: a marker or trailer printed differently fails here once
+# verdict_teardown's golden is promoted, where a refactor that prints the same rows changes nothing.
+replay manifest_failed @manifest_held 1
+grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'manifest_failed: the omitted marker was not read as one'; exit 1; }
+grep -q '^success trailer omitted: 2 rows ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'manifest_failed: the omitted success trailer was not read as one'; exit 1; }
+reached
+printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed, a scan ending short by a failed claim'"'"'s marker and its trailer is caught\n'
 }
 harness_leg_run '5: real Verdict runs, from verdict_teardown'\''s golden' leg_5
 leg_6() {
@@ -429,6 +498,31 @@ done
 printf 'PASS surviving mutation, compile failure (never ran), invocation refusal\n'
 }
 harness_leg_run '6: surviving mutation, compile failure, invocation refusal' leg_6
+leg_6b() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
+# The baseline (gh-ocannl-1364): the unmutated test runs first, and a red one refuses before
+# anything is mutated -- one invocation, the baseline's, and the module never seen mutated. A green
+# baseline is named in the report; one that rewrote the test's stdout leaves an output the mutated
+# run must still rewrite to be counted.
+export PROBE_MODE=fail
+run_case 1
+grep -q '^baseline: [0-9TZ-]* (the unmutated test passed)$' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'no baseline line'; exit 1; }
+count=$(wc -l < "$fixture/invocations")
+rm -f "$fixture/observed"
+PROBE_BASELINE=red run_case 2
+grep -q '^mutation-run: BASELINE RED: the unmutated test exited 1 (run [0-9TZ-]*), so probe.expected is not what it prints' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'red baseline: no refusal'; exit 1; }
+grep -q '^  FAIL: first: false$' "$fixture/result" || { cat "$fixture/result"; echo 'red baseline: its failure is not shown'; exit 1; }
+[ $(($(wc -l < "$fixture/invocations"))) = $((count + 1)) ] && [ ! -e "$fixture/observed" ] ||
+  { echo 'red baseline: the mutated module was run'; exit 1; }
+if grep -q '^recovery: ' "$fixture/result"; then echo 'red baseline: a recovery copy was announced'; exit 1; fi
+export PROBE_MODE=reused
+PROBE_BASELINE=rewrote run_case 4
+flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)'
+printf 'PASS a red baseline refuses before mutating; the baseline'"'"'s own stdout never counts as the mutant'"'"'s\n'
+}
+harness_leg_run '6b: a red baseline refuses before mutating' leg_6b
 leg_7() {
 # A launch this leg must not make would pass under a refusing mode.
 export PROBE_MODE=pass
@@ -525,11 +619,15 @@ print $s;
 PERL
 chmod +x tools/mutation-fork-window.sh
 # Drive signals from Perl so an asynchronous shell does not inherit ignored INT.
-for signal_case in normal:INT normal:TERM normal:HUP fork:INT fork:TERM fork:HUP; do
+# A signal during the baseline ends the run as one, with nothing mutated and so nothing restored.
+for signal_case in normal:INT normal:TERM normal:HUP fork:INT fork:TERM fork:HUP \
+  baseline:INT baseline:TERM baseline:HUP; do
   signal=${signal_case#*:}
+  unset PROBE_BASELINE
   case $signal_case in
     normal:*) export PROBE_RUNNER=tools/mutation-run.sh ;;
     fork:*) export PROBE_RUNNER=tools/mutation-fork-window.sh ;;
+    baseline:*) export PROBE_RUNNER=tools/mutation-run.sh PROBE_BASELINE=sleep ;;
   esac
   rm -f "$fixture/ready"
   export PROBE_MODE=sleep
@@ -557,11 +655,46 @@ alarm 0;
 die "not ready or wrong signal status: $got\n" unless $ready && $got == $rc{$signal};
 PERL
   cmp module.ml "$fixture/pristine"
-  grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
+  case $signal_case in
+    baseline:*)
+      if grep -Eq '^(recovery|restored): ' "$fixture/result"; then
+        cat "$fixture/result"; echo "$signal_case: a run cancelled in its baseline announced a mutation"; exit 1
+      fi ;;
+    *) grep -q '^restored: byte-identical (cmp)$' "$fixture/result" ;;
+  esac
 done
-printf 'PASS INT TERM HUP cancel in the fork window and during test-run, then restore\n'
+unset PROBE_BASELINE
+printf 'PASS INT TERM HUP cancel in the baseline, the fork window and during test-run, restoring what was mutated\n'
 }
-harness_leg_run '10: INT TERM HUP cancel in the fork window and during test-run, then restore' leg_10
+harness_leg_run '10: INT TERM HUP cancel in the baseline, the fork window and during test-run, then restore' leg_10
+leg_10b() {
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
+# A signal landing after the baseline was judged, before the mutation's own handlers: injected into a
+# copy of the runner right after the baseline, it still cancels before anything is mutated.
+perl - tools/mutation-run.sh > tools/mutation-late-signal.sh <<'PERL'
+use strict;
+use warnings;
+local $/;
+open my $f, '<', $ARGV[0] or die $!;
+my $s = <$f>;
+my $anchor = qq{\nunlink "\$scratch/baseline";\n};
+my $at = index($s, $anchor);
+die "missing post-baseline anchor" if $at < 0;
+substr($s, $at + length($anchor), 0, qq{kill 'TERM', \$\$;\n});
+print $s;
+PERL
+export PROBE_MODE=pass
+rm -f "$fixture/observed"
+set +e
+bash tools/mutation-late-signal.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
+actual=$?
+set -e
+[ "$actual" = 143 ] && [ ! -e "$fixture/observed" ] ||
+  { cat "$fixture/result"; echo "late baseline signal: exit $actual, or the mutant ran"; exit 1; }
+cmp module.ml "$fixture/pristine"
+printf 'PASS a signal between the baseline and the mutation cancels before mutating\n'
+}
+harness_leg_run '10b: a signal between the baseline and the mutation cancels before mutating' leg_10b
 leg_11() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 export PROBE_MODE=sleep OCANNL_TOOL_TEST_CAP=1

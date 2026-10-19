@@ -68,7 +68,8 @@ let segments ?(in_place = false) ?preamble_reduction ~keep (o : LL.optimized) =
   let keep_mapping =
     match preamble_reduction with
     | None -> if keep then S.fission_keep_mapping ~is_gpu:true ~limits else None
-    | Some _ -> Option.some_if keep (fun o -> S.default_gpu ~limits ?preamble_reduction o)
+    | Some _ ->
+        Option.some_if keep (S.mapping_probe (fun o -> S.default_gpu ~limits ?preamble_reduction o))
   in
   S.fission_scheduled ~promote_locals:true ?keep_mapping
     ~preset:(fun o -> S.default_gpu ~limits ?preamble_reduction o)

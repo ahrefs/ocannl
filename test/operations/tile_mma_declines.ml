@@ -258,7 +258,10 @@ let () =
    pre-schedule lowering, so the counts hold on every backend. === *)
 let () =
   let limits =
-    { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = 16 }
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      simd_vector = { Ir.Vector_file.bytes = 32; registers = 16 };
+    }
   in
   let seeds_of ~name comp =
     let captured = ref None in

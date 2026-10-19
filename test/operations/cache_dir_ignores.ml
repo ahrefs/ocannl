@@ -317,6 +317,6 @@ let () =
      moved, and two branches each adding one merged cleanly to a wrong total (gh-ocannl-1046). *)
   eprintf "Sources naming a schedule cache directory: %d (not part of the golden).\n"
     (List.length naming);
-  if not (Verdict.any_failed ()) then
-    printf "\nOK: every source listed names one; the ignore list needs no entry per directory.\n";
+  Verdict.success_trailer ~blank_line:true
+    [ "every source listed names one; the ignore list needs no entry per directory." ];
   Test_utils.Refusal_control_manifest.print "cache_dir_ignores.ml"

@@ -1528,10 +1528,10 @@ let record_type_labels content =
       | _ -> [])
 
 (** Where [content] reads one of [fields] off a record, in words a diagnostic can quote: a field
-    projection [limits.simd_vector_bytes], a record pattern naming the field, and a
-    [{ base with … }] update that leaves some of [fields] to its base -- a copy of the base's value,
-    read where the base came from. An update is recognised as one of the record by overwriting any
-    of [record_fields] (every label of the record type [fields] belong to) or of [fields], so
+    projection [limits.simd_vector], a record pattern naming the field, and a [{ base with … }]
+    update that leaves some of [fields] to its base -- a copy of the base's value, read where the
+    base came from. An update is recognised as one of the record by overwriting any of
+    [record_fields] (every label of the record type [fields] belong to) or of [fields], so
     [{ limits with native_fp16_arithmetic = false }] copies every one of [fields] from its base.
 
     A CONSTANT base is no read: [base_value] (the library's synthetic limits) at its home module
