@@ -3855,8 +3855,9 @@
 ; top-level type declaration against a mention of its name anywhere but its own declaration. The matching policy is pure in
 ; test/support/dead_export_scan.ml, so these cases exercise it against synthetic violations and
 ; near misses rather than trusting today's usually-clean repository as its own control. They also
-; hold every modelled derived name equal to the installed PPX expansion (gh-ocannl-913), hence the
-; linked derivers: listing [ppx_hash] registers it, its archive being force-linked.
+; hold every modelled derived name and inferred call equal to the installed PPX expansion of a
+; fixture corpus (gh-ocannl-913/914), hence the linked derivers: listing [ppx_hash] registers it,
+; its archive being force-linked.
 
 (test
  ; ocannl-backend: none -- reads synthetic OCaml sources through ppxlib and links no backend.

@@ -681,8 +681,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `[%compare: M.ty]`, `[%equal: M.ty]`, `[%compare.equal: M.ty]`, `[%hash: M.ty]`,
   `[%hash_fold: M.ty]` and `[%all: M.ty]` count as references to the corresponding generated
   value; the walk also reaches type constructors nested inside the extension's type and those
-  consumed by another deriving. `dead_export_scan_cases` holds every derived name equal to the
-  installed PPX expansion.
+  consumed by another deriving. A call that a deriving of the defining module itself generates
+  (`compare_entry` calling `compare_scope`) is a support reference (gh-ocannl-914): it counts
+  while its caller is live, so a helper a live sibling needs is not reported and one whose caller
+  is dead is. `dead_export_scan_cases` holds every derived name and inferred call equal to the
+  installed PPX expansion of a fixture corpus; a fixture whose ignored component shares its type
+  with a kept one cannot see a misread ignore attribute, so each one carries its own type.
   `sexp.opaque`, `sexp.ignore`, `compare.ignore`, `equal.ignore` and `hash.ignore` suppress the
   corresponding implicit reference (ppx_hash also skips what `compare.ignore` marks), and an inherited polymorphic-variant row calls the inherited type's `__<type>_of_sexp__` parser helper.
   A polymorphic-variant `sexp` deriving contributes that additional helper to the export set.

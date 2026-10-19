@@ -28,11 +28,14 @@
     reaches through them). A deriving applied to arguments ([fields ~getters]) is refused rather
     than guessed at. Their expression extensions ([[%compare: ty]], [[%hash: ty]], [[%all: ty]],
     ...) count as references without needing to spell the generated value, and so does what another
-    deriving's generated code calls on the type. The synthetic cases hold every derived name equal
-    to the installed PPX expansion. An accessor is named after its label, so the [open] rule above
-    credits it for any bare identifier of that name in an opened scope:
-    [Einsum_types.parsed_axis_labels]' twelve getters read live that way though nothing called them
-    (gh-ocannl-913 removed the deriving).
+    deriving's generated code calls on the type. Inside the defining source, such a call is a
+    SUPPORT reference (gh-ocannl-914): a [compare_scope] that the module's own [compare_entry] calls
+    cannot go while [compare_entry] is live, so it counts exactly while its caller does ({!counts}).
+    The synthetic cases hold every derived name and every inferred call equal to the installed PPX
+    expansion of a fixture corpus, so a PPX change fails as contract drift. An accessor is named
+    after its label, so the [open] rule above credits it for any bare identifier of that name in an
+    opened scope: [Einsum_types.parsed_axis_labels]' twelve getters read live that way though
+    nothing called them (gh-ocannl-913 removed the deriving).
 
     The [sexp_of] converters -- derived or hand-written, recognized by the [sexp_of_] name prefix --
     are excluded by policy: they are the entry point for debugging and observability, and consumed
@@ -71,6 +74,11 @@ type reference = {
   source : string;
   line : int;
   spelling : string;
+  via : string option;
+      (** [Some caller] for a support reference (gh-ocannl-914): a call that the expansion of a
+          deriving in the defining source itself makes, from the generated value [caller] of the
+          same module. It counts only while [caller] is live ({!counts}). [None] for an ordinary
+          reference from another source. *)
 }
 
 let export_key ({ module_name; value; _ } : export) = module_name ^ "." ^ value
@@ -377,6 +385,28 @@ let hash_alias_target declaration =
   | [], Ptype_abstract, Some { ptyp_desc = Ptyp_constr ({ txt; _ }, []); _ } -> Some txt
   | _ -> None
 
+(** Calls between the values one deriving generates for one type, as [(caller, callee)]: the public
+    parser calls the polymorphic-variant helper, [hash_<type>] calls [hash_fold_<type>] (or, on an
+    alias, the target's [hash_<target>], an ordinary reference), and the [Variants_of_<type>] and
+    [Fields_of_<type>] modules hold the constructor values and the accessors. *)
+let intrinsic_edges ~derivers declaration =
+  let type_name = declaration.ptype_name.txt in
+  List.concat_map derivers ~f:(function
+    | ("sexp" | "of_sexp") when is_polymorphic_variant declaration ->
+        [ (type_name ^ "_of_sexp", "__" ^ type_name ^ "_of_sexp__") ]
+    | "hash"
+      when List.is_empty declaration.ptype_params && Option.is_none (hash_alias_target declaration)
+      ->
+        [ (named ~t:"hash" ~prefix:"hash_" type_name, "hash_fold_" ^ type_name) ]
+    | "variants" ->
+        List.map (variants_constructors declaration) ~f:(fun name ->
+            (variants_module declaration, name))
+    | "fields" ->
+        List.map (fields_accessors declaration) ~f:(fun name -> (fields_module declaration, name))
+    | _ -> [])
+  |> List.dedup_and_sort ~compare:(fun (a1, b1) (a2, b2) ->
+      match String.compare a1 a2 with 0 -> String.compare b1 b2 | ordering -> ordering)
+
 let has_attribute name attributes =
   List.exists attributes ~f:(fun attribute -> String.equal attribute.attr_name.txt name)
 
@@ -575,8 +605,12 @@ let iter_declaration_references ~derivers ~on_constr declaration =
           | None -> ())
       | _ -> ())
 
-(** References to [exports] from [sources]. Sources are [(repository-relative path, contents)]. A
-    use inside the defining source is an internal use, which does not need the export. *)
+(** References to [exports] from [sources]. Sources are [(repository-relative path, contents)].
+
+    A defining source contributes support references only ({!reference.via}): what the derivings of
+    its own top-level types call on its own types -- spelled unqualified there -- and the calls
+    between the values one deriving generates ({!intrinsic_edges}). Any other use inside the
+    defining source is an internal use, which does not need the export. *)
 let references ~(exports : export list) ~sources =
   let modules =
     List.map exports ~f:(fun export -> export.module_name)
@@ -603,11 +637,29 @@ let references ~(exports : export list) ~sources =
       List.concat_map modules ~f:(fun module_name ->
           let names = Map.find_exn export_names module_name in
           let found = ref [] in
-          let add ~value ~line ~spelling () =
+          let add ?via ~value ~line ~spelling () =
             if Set.mem names value then
-              found := { module_name; value; source; line; spelling } :: !found
+              found := { module_name; value; source; line; spelling; via } :: !found
           in
-          if defines module_name source then []
+          if defines module_name source then (
+            List.iter (top_level_type_groups structure) ~f:(fun declarations ->
+                let derivers = List.concat_map declarations ~f:derivers_of_type_declaration in
+                List.iter declarations ~f:(fun declaration ->
+                    let line = declaration.ptype_loc.loc_start.pos_lnum in
+                    iter_declaration_references ~derivers declaration
+                      ~on_constr:(fun ~caller ~family ~value path _position ->
+                        match path with
+                        | [ type_name ] when not (String.equal (value type_name) caller) ->
+                            add ~via:caller ~value:(value type_name) ~line
+                              ~spelling:("[@@deriving] " ^ family ^ " over " ^ type_name)
+                              ()
+                        | _ -> ());
+                    List.iter (intrinsic_edges ~derivers declaration) ~f:(fun (caller, callee) ->
+                        if Set.mem names caller then
+                          add ~via:caller ~value:callee ~line
+                            ~spelling:("generated " ^ caller ^ " calls " ^ callee)
+                            ())));
+            List.rev !found)
           else
             let receivers, open_ranges =
               List.fold
@@ -718,13 +770,40 @@ let references ~(exports : export list) ~sources =
             iterator#structure structure;
             List.rev !found))
 
+(** The reference count of each of [exports], keyed by {!export_key}. An ordinary reference counts
+    once. A support reference counts once while its caller is live -- referenced from outside or,
+    transitively, supported by a live caller -- since a generated value cannot be removed while a
+    live value of the same deriving family calls it; a support chain no outside reference reaches
+    keeps nothing alive. *)
 let counts ~(exports : export list) references =
   let table = Hashtbl.create (module String) in
   List.iter exports ~f:(fun export -> Hashtbl.set table ~key:(export_key export) ~data:0);
-  List.iter references ~f:(fun reference ->
-      Hashtbl.update table
-        (reference.module_name ^ "." ^ reference.value)
-        ~f:(fun count -> 1 + Option.value count ~default:0));
+  let key (reference : reference) = reference.module_name ^ "." ^ reference.value in
+  let ordinary, support =
+    List.partition_tf references ~f:(fun reference -> Option.is_none reference.via)
+  in
+  List.iter ordinary ~f:(fun reference ->
+      Hashtbl.update table (key reference) ~f:(fun count -> 1 + Option.value count ~default:0));
+  let caller_key (reference : reference) =
+    reference.module_name ^ "." ^ Option.value_exn reference.via
+  in
+  let live = Hash_set.create (module String) in
+  Hashtbl.iteri table ~f:(fun ~key ~data -> if data > 0 then Hash_set.add live key);
+  let rec spread () =
+    let grew =
+      List.fold support ~init:false ~f:(fun grew reference ->
+          if Hash_set.mem live (caller_key reference) && not (Hash_set.mem live (key reference))
+          then (
+            Hash_set.add live (key reference);
+            true)
+          else grew)
+    in
+    if grew then spread ()
+  in
+  spread ();
+  List.iter support ~f:(fun reference ->
+      if Hash_set.mem live (caller_key reference) then
+        Hashtbl.update table (key reference) ~f:(fun count -> 1 + Option.value count ~default:0));
   table
 
 (** {1 Type declarations}
