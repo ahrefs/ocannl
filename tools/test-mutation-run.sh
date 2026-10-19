@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Exercise the shipping mutation runner and real test-run supervisor in an
 # isolated repository fixture, with a deterministic fake dune on PATH.
+# Usage: tools/test-mutation-run.sh [--keep] [--only REGEX] [--list-legs]
+# Each leg is a function run by `harness_leg_run 'N: ...' leg_N`
+# (scripts/harness-support.sh) that starts from its own module, patch and
+# probe mode, so any one passes run alone (tools/harness-legs-alone.sh); the
+# fixture repository, the fake dune and the goldens are shared. A failed check
+# still ends the harness (`set -e`), naming the leg it was in.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 . "$root/scripts/harness-support.sh"
@@ -177,10 +183,15 @@ printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised
 printf 'first: true\n\nOK: every claim held.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > trailer.expected
-printf 'prefix\r\nANCHOR\r\nsuffix without newline' > module.ml
-chmod 640 module.ml
-cp module.ml "$fixture/pristine"
-printf 'ANCHOR@@@MUTATED' > patch
+# Each leg starts from its own module and patch (reset_module), so it passes
+# run alone; the goldens above and the helpers below are shared.
+reset_module() { # MODULE-TEXT PATCH-TEXT, each a printf format
+  printf "$1" > module.ml
+  chmod 640 module.ml
+  cp module.ml "$fixture/pristine"
+  printf "$2" > patch
+}
+: > "$fixture/invocations"
 run_case() {
   expected=$1
   shift
@@ -195,21 +206,11 @@ run_case() {
   fi
   perl -e 'exit((stat($ARGV[0]))[2] & 07777 ^ 0640 ? 1 : 0)' module.ml
 }
-export PROBE_MODE=fail
-run_case 1
-sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
-printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n' > "$fixture/expected"
-cmp "$fixture/claims" "$fixture/expected"
-grep -q '^run: ' "$fixture/result"
-grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
 reached() {
   if grep -Eq '^(STOPPED EARLY|NEVER RAN|NOT COUNTED): ' "$fixture/result"; then
     cat "$fixture/result"; echo "a run that reached its last row was flagged"; exit 1
   fi
 }
-reached
-grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
-printf 'PASS exact claims and red verdict, CRLF/no-final-newline restoration\n'
 # A run that did not reach its last row is no evidence: exit 4, never 1's "caught"
 # or 0's "survived" (gh-ocannl-1083). Each line names why; `stale` follows runs
 # that left a full three-row output behind, which it must not count.
@@ -217,6 +218,22 @@ flagged() {
   grep -q "^$1$" "$fixture/result" || { cat "$fixture/result"; echo "missing: $1"; exit 1; }
   grep -q '^(not evidence: the mutant was neither caught nor survived)$' "$fixture/result"
 }
+leg_1() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
+export PROBE_MODE=fail
+run_case 1
+sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
+printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n' > "$fixture/expected"
+cmp "$fixture/claims" "$fixture/expected"
+grep -q '^run: ' "$fixture/result"
+grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
+reached
+grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
+printf 'PASS exact claims and red verdict, CRLF/no-final-newline restoration\n'
+}
+harness_leg_run '1: exact claims and red verdict, CRLF and no-final-newline restoration' leg_1
+leg_2() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 for mode in raise short stopped casecrash caseexit casecut stale reused both; do
   export PROBE_MODE=$mode
   run_case 4
@@ -264,6 +281,10 @@ run_case 4
 grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
 unset DUNE_BUILD_DIR
 printf 'PASS stopped early, never ran and unattributable runs exit 4 and say why; a raising Verdict.case that reached its last case is caught\n'
+}
+harness_leg_run '2: stopped early, never ran and unattributable runs exit 4' leg_2
+leg_3() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # Rows short only by refusal-manifest markers, the run having printed every other
 # row and ended through Verdict's teardown, reached its last row (gh-ocannl-1216);
 # the same shortfall with the last row missing, or with no teardown, did not.
@@ -293,6 +314,10 @@ grep -qF 'Printf.sprintf "[scanner-refusal:%s] %s"' "$root/test/support/refusal_
 grep -qF 'printf "  %s\n" marker' "$root/test/support/refusal_control_manifest.ml" ||
   { echo 'Refusal_control_manifest.print no longer indents a marker row by two spaces'; exit 1; }
 printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
+}
+harness_leg_run '3: rows short only by a failed claim'\''s refusal marker' leg_3
+leg_4() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # A failing run of a scan lacks its success trailer, the `OK: ` rows printed only when no claim
 # failed, and the blank row before it when that is the trailer's own: still its last row reached,
 # alone or beside an omitted marker; cut, killed or row-swapped, still no evidence.
@@ -337,6 +362,10 @@ export PROBE_MODE=trailermultibare
 PROBE_ALIAS=@runtest-trailer run_case 4
 flagged "STOPPED EARLY: the mutated run printed 7 of the golden's 8 rows"
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
+}
+harness_leg_run '4: a failing run short by its success trailer' leg_4
+leg_5() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # The text above is this fixture's own; what the runner reads is Verdict's. So the runner also reads
 # real Verdict runs: the streams of verdict_teardown's children, which its golden pins byte for byte
 # (each line prefixed with its child and stream). A refactor of verdict.ml that keeps its text
@@ -387,6 +416,10 @@ cmp "$fixture/claims" "$fixture/expected" ||
 grep -q '^rows: 4 printed of 3 in replay.expected$' "$fixture/result"
 reached
 printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed\n'
+}
+harness_leg_run '5: real Verdict runs, from verdict_teardown'\''s golden' leg_5
+leg_6() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac
@@ -394,6 +427,12 @@ for mode in pass compile refused; do
   grep -q '^(none)$' "$fixture/result"
 done
 printf 'PASS surviving mutation, compile failure (never ran), invocation refusal\n'
+}
+harness_leg_run '6: surviving mutation, compile failure, invocation refusal' leg_6
+leg_7() {
+# A launch this leg must not make would pass under a refusing mode.
+export PROBE_MODE=pass
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 count=$(wc -l < "$fixture/invocations")
 for patch_text in 'MISSING@@@x' 'ANCHOR' '@@@x' 'ANCHOR@@@x@@@y' 'ANCHOR@@@ANCHOR'; do
   printf '%s' "$patch_text" > patch
@@ -420,15 +459,24 @@ printf 'aa@@@x' > patch
 run_case 2
 [ "$(wc -l < "$fixture/invocations")" = "$count" ]
 printf 'PASS missing, ambiguous, overlapping, malformed and unchanged anchors, and aliases without a golden, refuse before launch\n'
-printf 'ANCHOR' > module.ml
-cp module.ml "$fixture/pristine"
-printf 'ANCHOR@@@MUTATED' > patch
+}
+harness_leg_run '7: malformed anchors and aliases without a golden refuse before launch' leg_7
+leg_8() {
+# A launch this leg must not make would pass under a refusing mode.
+export PROBE_MODE=pass
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Hard links share the mutated inode; refuse without touching either path.
 ln module.ml peer.ml
 run_case 2
 cmp peer.ml "$fixture/pristine"
 rm peer.ml
 printf 'PASS multiply linked module refuses without mutating either path\n'
+}
+harness_leg_run '8: a multiply linked module refuses without mutating either path' leg_8
+leg_9() {
+# A launch this leg must not make would pass under a refusing mode.
+export PROBE_MODE=pass
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Fail the write-open in a copied runner, even when tests run as root.
 perl - tools/mutation-run.sh > tools/mutation-open-failure.sh <<'PERL'
 use strict;
@@ -452,6 +500,10 @@ set -e
 cmp module.ml "$fixture/pristine"
 if grep -q '^restored:' "$fixture/result"; then echo 'failed open replaced source'; exit 1; fi
 printf 'PASS failed write-open leaves the original inode and bytes untouched\n'
+}
+harness_leg_run '9: a failed write-open leaves the original inode and bytes untouched' leg_9
+leg_10() {
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Hold the fork child before resetting inherited handlers, deterministically.
 perl - tools/mutation-run.sh > tools/mutation-fork-window.sh <<'PERL'
 use strict;
@@ -508,10 +560,19 @@ PERL
   grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
 done
 printf 'PASS INT TERM HUP cancel in the fork window and during test-run, then restore\n'
+}
+harness_leg_run '10: INT TERM HUP cancel in the fork window and during test-run, then restore' leg_10
+leg_11() {
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 export PROBE_MODE=sleep OCANNL_TOOL_TEST_CAP=1
 run_case 142
 unset OCANNL_TOOL_TEST_CAP
 printf 'PASS test-run cap expiry preserves status and restores\n'
+}
+harness_leg_run '11: test-run cap expiry preserves status and restores' leg_11
+leg_12() {
+export PROBE_MODE=sleep
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 export OCANNL_TOOL_TEST_CAP=1
 perl -e '
     open my $pipe, "-|", "tools/mutation-run.sh", "module.ml", "patch", q{@runtest-probe} or die $!;
@@ -522,18 +583,20 @@ perl -e '
 unset OCANNL_TOOL_TEST_CAP
 cmp module.ml "$fixture/pristine"
 printf 'PASS closed output pipe cannot interrupt restoration\n'
-
+}
+harness_leg_run '12: a closed output pipe cannot interrupt restoration' leg_12
+leg_13() {
 export PROBE_MODE=pass
-printf 'MUTATED\r\nANCHOR\r\nend' > module.ml
-cp module.ml "$fixture/pristine"
-printf 'ANCHOR\r\n@@@' > patch
+reset_module 'MUTATED\r\nANCHOR\r\nend' 'ANCHOR\r\n@@@'
 run_case 0
 printf 'MUTATED\r\nend' > "$fixture/expected"
 cmp "$fixture/observed" "$fixture/expected"
 printf 'PASS multiline anchor and empty replacement use literal bytes\n'
-printf 'ANCHOR' > module.ml
-cp module.ml "$fixture/pristine"
-printf 'ANCHOR@@@MUTATED' > patch
+}
+harness_leg_run '13: a multiline anchor and an empty replacement use literal bytes' leg_13
+leg_14() {
+export PROBE_MODE=pass
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Fault-inject exec failure into a scratch copy: only the parent restores.
 sed "s/exec('bash',/exec('\/no-such-mutation-run-shell',/" tools/mutation-run.sh > tools/mutation-no-shell.sh
 set +e
@@ -544,6 +607,10 @@ set -e
 cmp module.ml "$fixture/pristine"
 grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
 printf 'PASS failed child exec cannot unwind into parent restoration\n'
+}
+harness_leg_run '14: a failed child exec cannot unwind into parent restoration' leg_14
+leg_15() {
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A failing independent comparison must never print a restoration confirmation.
 cat > "$fixture/bin/cmp" <<'CMP'
 #!/usr/bin/env bash
@@ -563,6 +630,10 @@ rm "$fixture/bin/cmp"
 cmp "$backup" "$fixture/pristine"
 cmp module.ml "$fixture/pristine"
 printf 'PASS failed comparison retains byte-identical recovery copy and exits 3\n'
+}
+harness_leg_run '15: a failed comparison retains a recovery copy and exits 3' leg_15
+leg_16() {
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Failure to publish the restoration also leaves the recovery bytes available.
 export PROBE_MODE=restore_error
 set +e
@@ -576,6 +647,10 @@ cmp "$backup" "$fixture/pristine"
 rmdir module.ml
 cp "$fixture/pristine" module.ml
 printf 'PASS failed restoration rename retains recovery copy and exits 3\n'
+}
+harness_leg_run '16: a failed restoration rename retains a recovery copy and exits 3' leg_16
+leg_17() {
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A killed launcher/supervisor can leave a live Dune holder of the same flock.
 # Check the actual ownership signal, retain the mutant, then recover explicitly.
 for victim in launcher supervisor; do
@@ -647,6 +722,13 @@ PERL
   cmp module.ml "$fixture/pristine"
 done
 printf 'PASS independently killed launcher/supervisor retain source until survivor is stopped\n'
+}
+harness_leg_run '17: a killed launcher or supervisor retains the source until the survivor is stopped' leg_17
+leg_18() {
+reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
+# A finished run leaves the worktree lock behind; this leg reads it.
+export PROBE_MODE=pass
+run_case 0
 # Pin the remaining public idle status and ensure it never replaces a bad lock.
 set -- "$fixture"/runs/lock-*
 [ "$#" = 1 ]
@@ -663,6 +745,9 @@ rmdir "$lock"
 mv "$lock.saved" "$lock"
 tools/test-run.sh idle
 printf 'PASS idle returns 0/3/2 without creating or replacing lock state\n'
+}
+harness_leg_run '18: idle returns 0/3/2 without creating or replacing lock state' leg_18
+leg_19() {
 perl -e '
   use Fcntl ":flock";
   open my $lock, ">", ".test-run.lock" or die $!;
@@ -675,5 +760,7 @@ tools/test-run.sh idle
 [ -f .test-run.lock ]
 rm .test-run.lock
 printf 'PASS idle observes the legacy lock without removing it\n'
+}
+harness_leg_run '19: idle observes the legacy lock without removing it' leg_19
 
 finish
