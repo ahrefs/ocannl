@@ -396,9 +396,10 @@ type family_seeding =
       site : matmul_site;
       tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
     }  (** The matmul family claimed the lowering; its refusals are the tree's refutations. *)
-  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool }
+  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
       (** No matmul site, a conv site: both legs' verdicts, and whether its seeds got
-          epilogue-fusion twins. *)
+          epilogue-fusion twins — and when seeds got none, the fusion recognizer's reason
+          ([Schedule.fuse_epilogue_witness]). *)
   | Seeding_none  (** Neither family detects a site. *)
 
 val family_seeding :
@@ -429,10 +430,13 @@ val coalesced_seeding :
 
 type seeding_census = {
   sc_stmts : int;  (** Top-level statements, glue excluded. *)
-  sc_whole_zeros : int;  (** Of those, whole-node [Zero_out]s. *)
+  sc_whole_zeros : int;
+      (** Of those, whole-node zero initializers: a [Zero_out] or its expanded covering nest
+          ([Low_level.zero_initializer_target]). *)
   sc_conv_nests : (Ir.Tnode.t * bool) list;
-      (** Every top-level statement {!detect_conv} recognizes, with whether its output is zeroed
-          whole-node in this lowering — listed whatever family claims the lowering. *)
+      (** Every top-level statement {!detect_conv} recognizes, with whether one of the whole-node
+          zero initializers above targets its output — listed whatever family claims the lowering.
+      *)
   sc_family : family_seeding;
   sc_seeds : sketch_params list;  (** Exactly {!sketch_seed_params}' list. *)
   sc_coalesced : coalesced_verdict list option;

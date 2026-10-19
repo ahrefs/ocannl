@@ -14,6 +14,7 @@ no f32 tile: the GPU leg names the missing tile, before the site's own gates: tr
 conv whole-routine (CPU): the census's seeds are sketch_seed_params' list: true
 conv whole-routine (CPU): each conv leg names a refusal exactly when it seeds nothing: true
 conv whole-routine: the CPU leg seeds on a 16-byte vector file: true
+conv whole-routine: seeds without a fusable tail name the fusion recognizer's reason: true
 conv whole-routine: the zeroed site's row-block flavors are noted withheld: true
 conv whole-routine (4-byte vectors): the census's seeds are sketch_seed_params' list: true
 conv whole-routine (4-byte vectors): each conv leg names a refusal exactly when it seeds nothing: true

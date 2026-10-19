@@ -4444,7 +4444,7 @@ let matmul_seed_params ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.har
    verdicts its seeds came from. *)
 type family_seeding =
   | Seeding_matmul of { site : matmul_site; tree : family_tree }
-  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool }
+  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
   | Seeding_none
 
 (* The families composed into the seed list the search enumerates: the matmul family when a matmul
@@ -4468,10 +4468,13 @@ let family_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (
       | None -> (Seeding_none, [])
       | Some judgment ->
           let seeds = conv_judgment_seeds judgment in
-          let fused_twins =
-            (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:judgment.cj_site.c_d opt
+          (* [Sched.can_fuse_epilogue], with the recognizer's reason kept for the census. *)
+          let twin_refusal =
+            if List.is_empty seeds then None
+            else Sched.fuse_epilogue_witness ~target:judgment.cj_site.c_d opt
           in
-          ( Seeding_conv { judgment; fused_twins },
+          let fused_twins = (not (List.is_empty seeds)) && Option.is_none twin_refusal in
+          ( Seeding_conv { judgment; fused_twins; twin_refusal },
             if fused_twins then seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
             else seeds ))
 
@@ -4556,7 +4559,9 @@ let seeding_census ?(coalesced = false) ~is_gpu ~is_cpu ~(limits : Ir.Backend_in
   Idx.discarding_symbols (fun () ->
       let sc_family, sc_seeds = family_seeding ~is_gpu ~is_cpu ~limits opt in
       let stmts = strip_stmts (LL.flat_lines [ opt.LL.llc ]) in
-      let zeroed = List.filter_map stmts ~f:(function LL.Zero_out tn -> Some tn | _ -> None) in
+      (* A whole-node [Zero_out] or its expanded covering nest, as the seeding's companion
+         accounting reads it. *)
+      let zeroed = List.filter_map stmts ~f:LL.zero_initializer_target in
       let sc_conv_nests =
         List.filter_map stmts ~f:(fun stmt ->
             Option.map (detect_conv stmt) ~f:(fun site ->
@@ -4615,7 +4620,7 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
             detail "refuted x%d at %s: %s" (Hashtbl.find_exn counts witness)
               (Sspace.render_path ~label:Family_decision.to_label path)
               witness)
-    | Seeding_conv { judgment = j; fused_twins } ->
+    | Seeding_conv { judgment = j; fused_twins; twin_refusal } ->
         let leg name (l : conv_leg) =
           (match l.leg_refusal with
           | Some why -> detail "%s leg: refused: %s" name why
@@ -4626,6 +4631,8 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
           (Ir.Tnode.debug_name j.cj_site.c_d)
           j.cj_site.c_zeroed j.cj_real_stmts fused_twins
         :: (leg "cpu" j.cj_cpu @ leg "gpu" j.cj_gpu)
+        @ Option.to_list
+            (Option.map twin_refusal ~f:(fun why -> detail "epilogue twins withheld: %s" why))
   in
   let nests =
     match c.sc_conv_nests with

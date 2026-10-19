@@ -146,6 +146,10 @@ let () =
   claim_consistent "conv whole-routine (CPU)" ~is_gpu:false ~limits:cpu_limits opt cpu;
   p "conv whole-routine: the CPU leg seeds on a 16-byte vector file"
     (Option.exists (conv_judgment cpu) ~f:(fun j -> not (List.is_empty j.cj_cpu.leg_seeds)));
+  p "conv whole-routine: seeds without a fusable tail name the fusion recognizer's reason"
+    (match cpu.sc_family with
+    | Autotune.Seeding_conv { fused_twins = false; twin_refusal = Some _; _ } -> true
+    | _ -> false);
   p "conv whole-routine: the zeroed site's row-block flavors are noted withheld"
     (Option.exists (conv_judgment cpu) ~f:(fun j ->
          List.exists j.cj_cpu.leg_notes ~f:(mentions ~sub:"row-block flavors withheld")));

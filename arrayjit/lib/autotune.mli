@@ -535,7 +535,12 @@ val matmul_sketch_tree :
     [schedule_log_declines] (render and compile declines) cannot hold them. The census reads them
     off the judgment the seeds come from; config [autotune_log_seeding] prints it for every lowering
     {!tune} and {!model_default} seed, and one line per segment of the plan the untuned seeded
-    default chooses. See {!Sketch_families.seeding_census} for the fields' documentation. *)
+    default chooses. See {!Sketch_families.seeding_census} for the fields' documentation.
+
+    The census is the families' seeding. A driver's own filters and lifts after it are not seeding
+    gates and are not in it: {!tune}'s keep-fraction model pre-filter, and {!model_default}'s
+    numerics restriction on CUDA/HIP and its geometry-lattice lift (which re-proposes branches the
+    head line counts in [excluded=N]). *)
 
 type conv_leg = {
   leg_seeds : sketch_params list;
@@ -555,7 +560,7 @@ type family_seeding =
       site : matmul_site;
       tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
     }
-  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool }
+  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
   | Seeding_none
 
 val family_seeding :
