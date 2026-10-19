@@ -385,9 +385,11 @@ files.
   the tile narrows once per execution of `over` (all three from the local Codex review). Which hardware levels a backend serializes is
   codegen's fact, so the walk is asked vouching for none and for every one, and the op is refused
   where the answers differ — the pattern `Low_level.seed_first_write` already used. After all ops
-  `apply_typed` re-checks each wide tile against the FINAL program
-  (`Schedule.privatized_tile_widens`) and falls it back to storage where a later op left an update
-  the decision does not widen (`Schedule.privatize_fallbacks` records it). Hardware levels between
+  `apply_typed` re-checks each wide tile (`Schedule.privatized_tile_widens`) and falls it back to
+  storage where a later op left an update the decision does not widen (`Schedule.privatize_fallbacks`
+  records it) — BEFORE `simplify_llc`, which visits every `Set` and so forces the tile's precision,
+  after which `Tn.update_prec` can no longer change it; the finalized program is judged again and a
+  failure there is refused. Hardware levels between
   the privatized loop and the update are still refused outright, and an f32/f64 target never
   reaches any of this. Do not reintroduce a schedule-side reconstruction of codegen's input: the
   rebuilt peel nest this replaced disagreed with codegen one shape at a time through eight review

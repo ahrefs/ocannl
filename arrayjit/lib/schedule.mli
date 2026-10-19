@@ -320,15 +320,17 @@ type optop =
           tile stays at storage. Likewise sibling statements of any kind, a reduction level the cell
           varies under, a non-reduction or mixed-operator recurrence, an RNG-bearing contribution
           and routine logging all get a storage-precision tile, which code generation renders
-          exactly as it would [target], so the narrowing points do not move. After all ops, {!apply}
-          re-checks each wide tile against the final program ({!privatized_tile_widens}) and falls
-          it back to storage precision where a later op left an accumulation the decision does not
-          widen ({!privatize_fallbacks}). A [target] whose storage is already its residency (f32,
-          f64) is unaffected by all of this. A hardware-typed loop [target]'s cell does not mention,
-          between [over] and the update, is rejected: it would split the accumulation across
-          threads. Any other admissible value is an explicit numerics choice of the schedule, e.g.
-          the storage precision reproduces per-step narrowing. Part of the schedule's identity (the
-          cache saves it). *)
+          exactly as it would [target], so the narrowing points do not move. After all ops, and
+          before the finalization passes force its precision, {!apply} re-checks each wide tile
+          against the program the ops left ({!privatized_tile_widens}) and falls it back to storage
+          precision where a later op left an accumulation the decision does not widen
+          ({!privatize_fallbacks}); the finalized program is judged once more, and a tile failing
+          there is refused. A [target] whose storage is already its residency (f32, f64) is
+          unaffected by all of this. A hardware-typed loop [target]'s cell does not mention, between
+          [over] and the update, is rejected: it would split the accumulation across threads. Any
+          other admissible value is an explicit numerics choice of the schedule, e.g. the storage
+          precision reproduces per-step narrowing. Part of the schedule's identity (the cache saves
+          it). *)
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
       (** Expand the unique [Zero_out tn] statement into an ordinary loop nest over the supplied
           symbols (one per axis of [tn]'s padded dims; see {!expand_zero}). Whole-node [Zero_out] of
@@ -605,7 +607,8 @@ val apply :
     schedule, or violates an op precondition (see {!optop}) -- the rendering of the typed refusal
     {!apply_classified} passes through. An empty schedule is the identity. Every op is applied with
     the program the schedule started from in hand, which [Privatize] judges its tile width on, and
-    its wide tiles are re-checked against the final program last ({!privatized_tile_widens}).
+    its wide tiles are re-checked after the ops, before the finalization passes force their
+    precision, and confirmed after them ({!privatized_tile_widens}).
 
     The barrier elision (gh-ocannl-487, widened to every staged anchor by gh-ocannl-567) is a
     synchronization-only rewrite — bitwise identical output, on every backend path. It rests on the
@@ -631,15 +634,16 @@ val apply_classified :
     (gh-ocannl-1323). *)
 
 val privatized_tile_widens : tile:Tn.t -> Low_level.t -> bool
-(** The final-program re-check of a [Privatize] tile minted at the accumulator residency
-    (gh-ocannl-1151): every write of [tile] in the program is either a transfer (it does not read
-    the tile) or a self-accumulating update whose base {!Low_level.accum_base_widens} — a
-    [Tile_mma]'s scalar fallback judged like any statement. {!apply} falls a tile failing it back to
-    its target's storage precision. Exposed for tests. *)
+(** The re-check of a [Privatize] tile minted at the accumulator residency (gh-ocannl-1151): every
+    write of [tile] in the program is either a transfer (it does not read the tile) or a
+    self-accumulating update whose base {!Low_level.accum_base_widens} — a [Tile_mma]'s scalar
+    fallback judged like any statement. {!apply} asks it of the program its ops left, falling a tile
+    failing it back to its target's storage precision while that is still unforced, and again of the
+    finalized program, refusing there. Exposed for tests. *)
 
 val privatize_fallbacks : unit -> (Tn.t * Tn.t) list
-(** The [(target, tile)] pairs whose wide [Privatize] tile {!apply}'s final re-check fell back to
-    storage precision in the calling domain, most recent first. *)
+(** The [(target, tile)] pairs whose wide [Privatize] tile {!apply}'s re-check fell back to storage
+    precision in the calling domain, most recent first. *)
 
 val with_transform_fault : (optop -> unit) -> (unit -> 'a) -> 'a
 (** Test seam (gh-ocannl-1323): [with_transform_fault fault body] runs [body] with [fault] called on

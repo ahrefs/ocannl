@@ -4886,11 +4886,17 @@ let privatize_fallbacks_key : (Tn.t * Tn.t) list ref Stdlib.Domain.DLS.key =
 
 let privatize_fallbacks () = !(Stdlib.Domain.DLS.get privatize_fallbacks_key)
 
-(* The re-check {!apply_typed} runs over the tiles its [Privatize]s minted wide. A tile whose
-   precision a later op already forced cannot fall back, and is refused rather than left wide. *)
+(* The re-check {!apply_typed} runs over the tiles its [Privatize]s minted wide, in two places. On
+   the program the ops left, before any finalization pass: a failing tile falls back to storage
+   precision there, while its precision is still unforced ([Low_level.simplify_llc] visits every
+   [Set] and forces its node's precision, Codex round 1 on staging#1210) — only an op that already
+   consumed it (none known) makes that a refusal. Returns the tiles left wide, which
+   {!confirm_privatized_tiles} judges again on the finalized program, where a failure can only be
+   refused. *)
 let recheck_privatized_tiles ~wide_tiles (llc : Low_level.t) =
-  List.iter (List.rev wide_tiles) ~f:(fun (target, tile) ->
-      if not (privatized_tile_widens ~tile llc) then begin
+  List.filter (List.rev wide_tiles) ~f:(fun (target, tile) ->
+      privatized_tile_widens ~tile llc
+      || begin
         if Lazy.is_val tile.Tn.storage_prec then
           refuse
             ("Schedule.Privatize: a later op left the accumulation of " ^ Tn.debug_name target
@@ -4898,8 +4904,16 @@ let recheck_privatized_tiles ~wide_tiles (llc : Low_level.t) =
               consumed");
         Tn.update_prec tile (Lazy.force target.Tn.storage_prec);
         let log = Stdlib.Domain.DLS.get privatize_fallbacks_key in
-        log := (target, tile) :: !log
+        log := (target, tile) :: !log;
+        false
       end)
+
+let confirm_privatized_tiles ~wide_tiles (llc : Low_level.t) =
+  List.iter wide_tiles ~f:(fun (target, tile) ->
+      if not (privatized_tile_widens ~tile llc) then
+        refuse
+          ("Schedule.Privatize: the finalization passes left the accumulation of "
+         ^ Tn.debug_name target ^ "'s wide tile one the shared decision does not widen"))
 
 (* The candidate-facing application: an op precondition refusal arrives typed ({!refuse}), every
    other exception as raised. Every op sees the program the schedule started from as its [entry]:
@@ -4914,6 +4928,7 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
           Stdlib.Domain.DLS.get transform_fault op;
           apply_opt_op ~entry ~wide_tiles opt op)
     in
+    let wide_tiles = recheck_privatized_tiles ~wide_tiles:!wide_tiles opt.Low_level.llc in
     let opt = elide_staged_barriers opt in
     let llc = opt.Low_level.llc in
     (* Transforms fold their own guards (schedule-ir-optops §2): the pipeline's simplify already
@@ -4927,7 +4942,7 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
       then Low_level.hoist_cross_statement_cse @@ Low_level.eliminate_common_subexpressions llc
       else llc
     in
-    recheck_privatized_tiles ~wide_tiles:!wide_tiles llc;
+    confirm_privatized_tiles ~wide_tiles llc;
     { opt with llc }
 
 let apply ?static_indices sched opt =
