@@ -104,7 +104,14 @@ if [[ -n "$bw" ]]; then model+=("--ocannl_model_peak_memory_bandwidth=$bw"); fi
 echo "   model flags after bandwidth: ${model[*]:-none}"
 cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
 capacity=$(fitted model_cache_capacity "$out/calibrate.out")
-if [[ -n "$capacity" ]]; then model+=("--ocannl_model_cache_capacity=$capacity"); fi
+if [[ -n "$capacity" ]]; then
+  model+=("--ocannl_model_cache_capacity=$capacity")
+elif $last_ok; then
+  # The sweep never reached DRAM: the capacity is only known to exceed every swept working set,
+  # which covers the wgrad cells' (the same contraction, at most the same extent). No DRAM tier is
+  # then the reading for them -- not the backend's advisory, which the sweep contradicts.
+  model+=("--ocannl_model_cache_capacity=none")
+fi
 cache_bw=$(fitted model_cache_bandwidth "$out/calibrate.out")
 if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
 echo "   model flags for the wgrad cells: ${model[*]:-none}"
