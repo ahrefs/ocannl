@@ -632,7 +632,7 @@ cell is the step: cite the step cell. Each issue's cell:
   repeatability table. Each cell also states its common in-step/isolated factor F, the median ratio
   over its kernels of at least 0.5 ms with the per-step factor's p10..p90, and flags `OWN` a
   kernel whose isolated minimum times F still misses in-step by more than 10% (gh-ocannl-1391): on
-  rog's power-capped GPU a b256 step runs every sizeable kernel a common 7-11% slower than alone,
+  rog's power-capped GPU a b256 step runs every sizeable kernel a common ~6.5% slower than alone,
   so `ISO` there marks the clock and `OWN` the kernel. Read per-kernel step shares from the
   in-step column only: on rog's gpt2_mini_train_b256 the in-step medians sum to the traced step
   p50 within 0.2%. Tracing costs about 2-3% of step time, so a kprof cell's step time enters no

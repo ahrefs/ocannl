@@ -28,7 +28,7 @@ step, in every repeat, with identical code and launch geometry). Each row says w
 
 The common factor F is the median in-step/isolated ratio over the kernels of at least
 FACTOR_FLOOR_MS in-step. It is a property of the step, not of a kernel: on rog's power-capped laptop
-GPU a b256 step runs every sizeable kernel 6-11% slower than its isolated minimum, and the per-step
+GPU a b256 step runs every sizeable kernel ~6.5% slower than its isolated minimum, and the per-step
 slowdowns of kernels adjacent in time move together (gh-ocannl-1391), while a 21-run isolated burst
 draws too little for long enough to be capped. ISO therefore flags most of a capped step; OWN flags
 what remains once the step's clock is accounted for.

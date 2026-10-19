@@ -176,13 +176,15 @@ files.
   kernels read (gradients reach ~1e5), yet restoring every kernel's outputs after its window moved
   no row, including gh-ocannl-1347's 2.3x `gamma_ln2_l1.grad` at its own revision `d90f69c2b`.
   That row belonged to the single-kernel layer-norm parameter gradient that gh-ocannl-1325's split
-  retired; at master the same gradient reads within 2% of in-step. What remains is the clock: a
-  b256 step runs at the SW power cap (reason 0x4, ~114 W) and in-step every kernel of >= 0.5 ms
-  runs a common factor slower than its isolated minimum (1.07-1.11 per cell); the per-step
-  slowdowns of kernels adjacent in time correlate (median 0.84-0.96, random pairs about 0-0.27),
+  retired; since then the same gradient's kernel reads within 10% of in-step (0.98 at `3985d045`,
+  1.08 at `d061aeb59`). What remains is the clock: a b256 step runs at the SW power cap (reason
+  0x4, ~114 W) and in-step every kernel of >= 0.5 ms runs a common factor slower than its isolated
+  minimum (F = 1.064-1.066 in the exclusive A/A, per-step 1.05-1.08); the per-step slowdowns of
+  kernels adjacent in time correlate (median 0.84-0.96, random pairs about 0-0.27),
   and re-running the whole step right before each isolated window leaves the factor in place, so
   it is the step's aggregate draw, not a warm-up state. `kernel_attribution.py` prints that factor
-  per cell and flags `OWN` only what isolated times the factor still misses. A row that declines
+  per cell and flags `OWN` only what isolated times the factor still misses (18 b256 kernels, 6.6%
+  of the step, `wte.grad` at 0.62 the largest). A row that declines
   to compile alone empties the attribution: a kernel declares only the store entries its code
   touches (`C_syntax.derive_kparams`), because parameter names are disambiguated over the code and
   an untouched entry -- a node whose zero `gpu_elide_covered_zeros` dropped -- otherwise shared
