@@ -6,6 +6,14 @@
 ; directory; the source is shared, and its header says why the dependency is the world
 ; rather than 112 key names.
 
+; gh-ocannl-1149: this directory checks in a configuration of its own, so the shared one that
+; carries the ambient environment (see test/config/dune) is not what its tests read. They depend
+; on the record of the environment itself instead, which `config_dep_completeness` asks of every
+; rule here that reads a configuration.
+
+(copy_files
+ (files ../../test/config/ocannl_ambient))
+
 (copy_files
  (files ../../test/config/env_spelling_gate.ml))
 
@@ -78,6 +86,7 @@
  (modules test_numerical_types)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir arrayjit.verdict)
  (preprocess
@@ -89,7 +98,7 @@
  (name test_schedule_outcome)
  (package arrayjit)
  (modules test_schedule_outcome)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries base arrayjit.ir)
  (preprocess
   (pps ppx_here)))
@@ -100,6 +109,7 @@
  (modules test_ndarray_binary_io)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base stdio unix arrayjit.ir arrayjit.verdict)
  (preprocess
@@ -111,6 +121,7 @@
  (modules test_ndarray_used_memory)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
@@ -120,6 +131,7 @@
  (modules tree_map_test)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.utils)
  (preprocess
@@ -131,6 +143,7 @@
  (modules test_cross_cse)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
@@ -140,6 +153,7 @@
  (modules test_one_hot_gather_rewrite)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
@@ -149,6 +163,7 @@
  (modules test_zero_out_codegen)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries arrayjit.ll_builders base stdio arrayjit.ir))
 
@@ -157,7 +172,7 @@
  (name test_hip_compile_options)
  (package arrayjit)
  (modules test_hip_compile_options)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
 ; gh-ocannl-849: exercise the production HIPRTC wrapper against both invalid and valid source.
@@ -170,6 +185,7 @@
  (modules test_hip_compile_failure_options)
  (deps
   ocannl_config
+  ocannl_ambient
   test_hip_compile_failure_options.expected
   (env_var OCANNL_BACKEND))
  (libraries
@@ -193,7 +209,7 @@
  (name test_cuda_compile_options)
  (package arrayjit)
  (modules test_cuda_compile_options)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
 (test
@@ -201,7 +217,7 @@
  (name test_metal_compile_options)
  (package arrayjit)
  (modules test_metal_compile_options)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
 (test
@@ -210,6 +226,7 @@
  (modules test_aligned_alloc)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base stdio ctypes arrayjit.ir arrayjit.verdict))
 
@@ -219,6 +236,7 @@
  (modules test_vectorized_codegen)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
@@ -228,6 +246,7 @@
  (modules test_local_scope_init)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries arrayjit.ll_builders base stdio arrayjit.ir))
 
@@ -237,6 +256,7 @@
  (modules test_slab_free_on_grow)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
@@ -260,7 +280,7 @@
  (name test_metal_storage_mode)
  (package arrayjit)
  (modules test_metal_storage_mode)
- (deps ocannl_config test_metal_storage_mode.expected)
+ (deps ocannl_config ocannl_ambient test_metal_storage_mode.expected)
  (libraries
   base
   stdio
@@ -280,7 +300,7 @@
  (name test_metal_alloc)
  (package arrayjit)
  (modules test_metal_alloc)
- (deps ocannl_config test_metal_alloc.expected)
+ (deps ocannl_config ocannl_ambient test_metal_alloc.expected)
  (libraries
   base
   stdio
@@ -301,7 +321,7 @@
  (name test_cuda_classify_failure)
  (package arrayjit)
  (modules test_cuda_classify_failure)
- (deps ocannl_config test_cuda_classify_failure.expected)
+ (deps ocannl_config ocannl_ambient test_cuda_classify_failure.expected)
  (libraries
   base
   stdio
@@ -325,7 +345,7 @@
  (name test_cuda_arch_flags)
  (package arrayjit)
  (modules test_cuda_arch_flags)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries base stdio arrayjit.ir))
 
 (test
@@ -335,7 +355,7 @@
  (name test_pool_segments)
  (package arrayjit)
  (modules test_pool_segments)
- (deps ocannl_config test_pool_segments.expected)
+ (deps ocannl_config ocannl_ambient test_pool_segments.expected)
  (libraries base stdio arrayjit.context arrayjit.verdict))
 
 (test
@@ -344,6 +364,7 @@
  (modules test_stage_b_where_debug)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
@@ -353,6 +374,7 @@
  (modules test_backend_selection)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base arrayjit.ir arrayjit.context))
 
@@ -362,6 +384,7 @@
  (modules test_multidev_error_propagation)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir arrayjit.context arrayjit.verdict))
 
@@ -370,7 +393,7 @@
  (name test_render_context)
  (package arrayjit)
  (modules test_render_context)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries arrayjit.ll_builders base arrayjit.ir arrayjit.verdict))
 
 (test
@@ -380,6 +403,7 @@
  (modules test_shared_builtins)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
  (libraries
   arrayjit.context
@@ -393,7 +417,7 @@
  (name test_backend_compile_driver)
  (package arrayjit)
  (modules test_backend_compile_driver)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries base pprint arrayjit.ir arrayjit.verdict))
 
 (test
@@ -401,5 +425,5 @@
  (name test_cuda_like_config)
  (package arrayjit)
  (modules test_cuda_like_config)
- (deps ocannl_config)
+ (deps ocannl_config ocannl_ambient)
  (libraries base pprint arrayjit.ir arrayjit.verdict))

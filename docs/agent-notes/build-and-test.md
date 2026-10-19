@@ -1279,6 +1279,28 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   setting; there dropping any one dep fails the run. Dune also plants an empty `.git` above every
   sandbox, so nothing inside one can read the enclosing checkout's repository: a test of a
   revision-stamping helper builds a repository of its own.
+- **The environment reaches a test through its `ocannl_config` dependency** (gh-ocannl-1149). Dune
+  reruns a rule for a variable only where the rule declares it, and nothing tied the hand-written
+  `(env_var OCANNL_<KEY>)` lists to what the linked pipeline reads: review found one missing key per
+  round, and every test compiling through `Context.compile` read dozens of keys it never declared.
+  So `test/config/dune` runs `ocannl_ambient_env` under `(universe)` -- once per invocation,
+  milliseconds -- writing `ocannl_ambient`, a sorted, escaped, comment-only record of the
+  environment variables `Utils.classify_env_var` addresses to the configuration, and appends it to
+  the shared configuration as `test/config/ambient/ocannl_config`, which every test directory
+  copies. An unchanged environment gives a byte-identical file and dune's early cutoff stops there
+  (checked: a test declaring no key reruns under a newly set `OCANNL_TF32_MATMULS` and is served
+  from the cache on the next identical invocation). Left out: the `OCANNL_TOOL_`/`OCANNL_LOG_LEVEL_<MODULE>`
+  namespaces (test-run.sh exports a fresh run directory in the former every run, which would rerun
+  the whole suite), and `OCANNL_BACKEND`, whose per-stanza declaration-or-marker rule above stays,
+  so switching backends between sweep legs does not rerun backend-pinned stanzas. A directory that
+  checks in its own configuration (`arrayjit/test`, `profiles/`, `startup_streams/`) copies
+  `ocannl_ambient` and lists it beside `ocannl_config`. `config_dep_completeness` requires one of
+  the three -- the carrying copy as the nearest configuration, `ocannl_ambient`, or `(universe)` --
+  of every site it requires a configuration of, and checks both producers in `test/config/dune`;
+  `Slot_kind` reads the carrying copy as test/config's backend only while its producer has exactly
+  the two-`cat` shape. `env_var_deps`' per-key derivations below (named schedule values, the cc
+  width, guards, `Generated.init`) predate the record and still ask for their declarations, which
+  are redundant for any rule the record reaches.
 - **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
   run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
   `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one
@@ -1335,7 +1357,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   modeled, so a rerun is the cost. Not followed: functor bodies, functions passed as values,
   modules outside `arrayjit/lib`, and reads the backend makes on its own while compiling
   (`Backends.compile` consulting `Schedule.log_launches`) -- that is the `Context.compile` route. Out of scope on purpose: a program reaching the pipeline only through
-  `Context.compile` (every compiled test), a library, and an executable no rule runs. The failure
+  `Context.compile` (every compiled test; the ambient record above answers for it), a library, and
+  an executable no rule runs. The failure
   message lists the exact `(env_var …)` lines to add; the golden lists the derived key universe, so
   a new key the pipeline reaches shows up as a diff and as a failure on each stanza that reaches it.
 - **A test that reads the cc vector width declares `(env_var OCANNL_CC_VECTOR_BYTES)` — derived

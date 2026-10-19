@@ -1,5 +1,5 @@
 (copy_files
- (files ../test/config/ocannl_config))
+ (files ../test/config/ambient/ocannl_config))
 
 (copy_files
  (files ../test/config/env_spelling_gate.ml))

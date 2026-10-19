@@ -1,5 +1,5 @@
 (copy_files
- (files ../config/ocannl_config))
+ (files ../config/ambient/ocannl_config))
 
 ; The ambient-environment gate (gh-ocannl-652). `(universe)` makes dune rerun it on every
 ; invocation, which is the only way a rejected environment spelling reaches a check at all:
