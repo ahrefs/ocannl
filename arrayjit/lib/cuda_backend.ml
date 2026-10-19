@@ -1877,8 +1877,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            (* gh-ocannl-1253: the ranking score's cache capacity and residency, read only by the
               untimed choosers (Untimed, outside the schedule-cache key). Residency is queried --
               multiprocessors times resident threads per multiprocessor, minimum over devices. The
-              capacity is a fitted constant of the score's working-set proxy, not the L2 size (see
-              the field): provisional until the per-class calibration. *)
+              capacity and cache bandwidth are calibrated per class by benchmarks/gh1253_cells.sh;
+              CUDA's run (rog-nv) is pending, so the capacity stays provisional and no cache tier is
+              claimed. *)
            cache_capacity_bytes = Some (1 lsl 30);
            cache_bandwidth = None;
            max_resident_threads =
