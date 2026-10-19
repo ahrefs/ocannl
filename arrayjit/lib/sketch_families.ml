@@ -3078,6 +3078,16 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   let rows_p = blocks_of site.c_nrow tm_t * tm_t in
                   (* The flavors the workgroup-memory cap refuses, counted for the census. *)
                   let mem_refused = ref 0 in
+                  (* The flavors other later gates withhold, by reason, in first-seen order. *)
+                  let withheld = ref [] in
+                  let withhold reason =
+                    withheld :=
+                      match List.Assoc.find !withheld reason ~equal:String.equal with
+                      | Some n ->
+                          List.map !withheld ~f:(fun (r, k) ->
+                              if String.equal r reason then (r, n + 1) else (r, k))
+                      | None -> !withheld @ [ (reason, 1) ]
+                  in
                   let fits ?copies rows =
                     let ok = shared_fits ?copies rows in
                     if not ok then Int.incr mem_refused;
@@ -3100,7 +3110,16 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   in
                   let blocked =
                     List.filter_map [ 8; 16; 32 ] ~f:(fun bm ->
-                        if bm % tm_t = 0 && blocks_of site.c_nrow bm >= 2 && fits bm then
+                        if bm % tm_t <> 0 then (
+                          withhold
+                            (Printf.sprintf "row block not a multiple of the %d-row mma tile" tm_t);
+                          None)
+                        else if blocks_of site.c_nrow bm < 2 then (
+                          withhold
+                            (Printf.sprintf "row block gives fewer than two blocks of the %d rows"
+                               site.c_nrow);
+                          None)
+                        else if fits bm then
                           Some
                             {
                               base with
@@ -3134,7 +3153,21 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   in
                   let depth_twins =
                     List.concat_map (whole @ blocked) ~f:(fun p0 ->
-                        if masked p0 || not async_wide then []
+                        let advertised =
+                          not (List.is_empty mma.Ir.Backend_intf.mma_pipeline_depths)
+                        in
+                        if masked p0 then (
+                          if advertised then
+                            withhold
+                              "pipelined depth twin of a masked (padded) flavor, whose Tensorize \
+                               stays on the barrier-bracketed arm";
+                          [])
+                        else if not async_wide then (
+                          if advertised then
+                            withhold
+                              "pipelined depth twin under sub-4-byte operands, which render only \
+                               the synchronous copy";
+                          [])
                         else
                           let rows = if p0.sk_bm = 0 then rows_p else p0.sk_bm in
                           List.filter_map mma.Ir.Backend_intf.mma_pipeline_depths ~f:(fun d ->
@@ -3160,7 +3193,13 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                   let mem_cap =
                     Option.value ~default:0 limits.Ir.Backend_intf.max_workgroup_memory_bytes
                   in
+                  let withheld_notes =
+                    List.map !withheld ~f:(fun (reason, n) ->
+                        Printf.sprintf "%d flavors withheld: %s" n reason)
+                  in
                   let mem_notes =
+                    withheld_notes
+                    @
                     if !mem_refused = 0 then []
                     else
                       [
@@ -3171,11 +3210,15 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                       ]
                   in
                   if List.is_empty flavors then
-                    conv_leg_refused
-                      (Printf.sprintf
-                         "workgroup memory: no flavor's staged tiles fit the %d-byte cap (%d \
-                          refused)"
-                         mem_cap !mem_refused)
+                    {
+                      (conv_leg_refused
+                         (Printf.sprintf
+                            "workgroup memory: no flavor's staged tiles fit the %d-byte cap (%d \
+                             refused)"
+                            mem_cap !mem_refused))
+                      with
+                      leg_notes = withheld_notes;
+                    }
                   else if List.is_empty fitting then
                     {
                       (conv_leg_refused

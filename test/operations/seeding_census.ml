@@ -180,6 +180,8 @@ let () =
   in
   p_exists "conv segment: an unzeroed site the GPU leg seeds" conv_segments ~f:(fun j ->
       (not j.cj_site.c_zeroed) && not (List.is_empty j.cj_gpu.leg_seeds));
+  p_exists "conv segment: row blocks too large for the 9-row site are noted withheld" conv_segments
+    ~f:(fun j -> List.exists j.cj_gpu.leg_notes ~f:(mentions ~sub:"fewer than two blocks"));
   (* A workgroup-memory cap between the 8-row block's staged tiles (512 bytes) and the whole padded
      row's (768): the leg still seeds, and notes the flavor the cap refused. *)
   let tight_limits =

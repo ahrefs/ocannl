@@ -4625,10 +4625,16 @@ let seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_be
           ]
       with
       | _ -> Ok p
-      | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+      | exception ((Outcome.Cause_at _ | Invalid_argument _) as exn) ->
           logf "seeded_default: %s declined on a segment; keeping the preset"
             (sketch_params_label p);
-          Error (sketch_params_label p ^ " declined on the segment"))
+          let detail =
+            match exn with
+            | Outcome.Cause_at (_, cause) -> Outcome.detail_of_cause cause
+            | Invalid_argument detail -> detail
+            | _ -> ""
+          in
+          Error (sketch_params_label p ^ " declined on the segment: " ^ detail))
 
 let seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre =
   Result.ok (seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre)
