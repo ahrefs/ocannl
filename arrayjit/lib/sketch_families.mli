@@ -352,22 +352,31 @@ module Family_decision : sig
 end
 
 val matmul_sketch_tree :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized ->
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
 (** The lazy matmul family, including unfused and epilogue-fused flavors; [None] when no site is
-    recognized. Refutations carry statically decidable builder failures. *)
+    recognized. Refutations carry statically decidable builder failures. The workgroup-memory
+    refutations charge the staged tiles as the gate does ([Schedule.kernel_workgroup_bytes]):
+    [capabilities] (the compiling context's [Context.codegen_capabilities]) supplies the backend's
+    allocation rounding and tile-MMA scratch; the default,
+    {!Ir.Backend_intf.no_codegen_capabilities}, charges the exact tile sizes alone — a weaker floor,
+    never a wrong one (gh-ocannl-1255). *)
 
 val sketch_seed_params :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized ->
   sketch_params list
 (** The composed seed list: matmul tree leaves when a matmul is detected, otherwise convolution
-    seeds followed by their eligible epilogue-fusion twins. Empty when neither site is detected. *)
+    seeds followed by their eligible epilogue-fusion twins. Empty when neither site is detected.
+    [capabilities] as for {!matmul_sketch_tree}, for the convolution seeds' workgroup-memory filter
+    too. *)
 
 (** {2 The seeding census (gh-ocannl-1407)} *)
 
@@ -403,6 +412,7 @@ type family_seeding =
   | Seeding_none  (** Neither family detects a site. *)
 
 val family_seeding :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -420,6 +430,7 @@ type coalesced_verdict = {
     proposes none. *)
 
 val coalesced_seeding :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -448,6 +459,7 @@ type seeding_census = {
 
 val seeding_census :
   ?coalesced:bool ->
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -492,6 +504,7 @@ val coalesce_prefix :
     hermetic copy. Mints fresh symbols, which the returned ops carry. *)
 
 val coalesced_seed_params :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->

@@ -371,6 +371,7 @@ val mma_tile_for_precisions_in_scope :
     resolver's floors at every cutoff (gh-ocannl-1214). *)
 
 val sketch_seed_params :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -389,13 +390,17 @@ val sketch_seed_params :
     also pre-filter here, as the family tree's construction-time refutations (gh-ocannl-577): a seed
     list never proposes a candidate that statically must fail its build. For the matmul family this
     list {e is} {!Ir.Schedule_space.leaves} of {!matmul_sketch_tree}, epilogue twins included.
-    Exposed for tests. *)
+    [capabilities] is the compiling context's [Context.codegen_capabilities]: the workgroup-memory
+    refutations charge the staged tiles by it as the gate does ([Schedule.kernel_workgroup_bytes]:
+    allocation rounding, tile-MMA scratch, gh-ocannl-1255); the default charges exact tile sizes, a
+    weaker floor. Exposed for tests. *)
 
 val coalesce_prefix :
   layout:coalesce_layout -> Ir.Low_level.optimized -> Ir.Schedule.schedule option
 (** See {!Sketch_families.coalesce_prefix} (gh-ocannl-1165, gh-ocannl-1279). Exposed for tests. *)
 
 val coalesced_seed_params :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -511,6 +516,7 @@ module Family_decision : sig
 end
 
 val matmul_sketch_tree :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -564,6 +570,7 @@ type family_seeding =
   | Seeding_none
 
 val family_seeding :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -578,6 +585,7 @@ type coalesced_verdict = {
 }
 
 val coalesced_seeding :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -595,6 +603,7 @@ type seeding_census = {
 
 val seeding_census :
   ?coalesced:bool ->
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -609,6 +618,7 @@ val log_seeding_enabled : unit -> bool
 
 val log_seeding :
   ?coalesced:bool ->
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   where:string ->
   is_gpu:bool ->
   is_cpu:bool ->

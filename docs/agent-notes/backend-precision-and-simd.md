@@ -920,9 +920,10 @@ files.
   `ocannl_mma_rc8` into a float fragment, then widens/narrows each scalar cell at the coordinate
   that fragment names (the coordinate-table principle above); no half/bfloat staging fragment
   remains. MSL 4.1 section 6.8.1 accepts only device/threadgroup pointers for `simdgroup_load`, so
-  `mma_d_table_lines` initializes a 64-float threadgroup table with a single writer (`lid == 0`
-  in every dimension) before the existing opening barrier. This costs 256 static bytes per
-  converted scope; `link_proc` checks the compiled kernel's actual allocation.
+  `mma_kernel_prologue` initializes a 64-float threadgroup table with a single writer (`lid == 0`
+  in every dimension) at kernel scope, once per kernel (gh-ocannl-1255), ahead of every converted
+  scope's opening barrier. This costs 256 static bytes per kernel; `link_proc` checks the compiled
+  kernel's actual allocation.
   The per-lane count derives from the float fragment's `storage_type` divided by the advertised
   32-thread width; `sizeof(thread_elements())` counts pointer bytes, not elements. Both scopes
   keep the old `(float)`, `(half)` and `(bfloat)` casts, preserving conversion rounding.

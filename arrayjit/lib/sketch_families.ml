@@ -2810,8 +2810,8 @@ let conv_leg_refused why = { leg_seeds = []; leg_refusal = Some why; leg_notes =
 let conv_offset_witness =
   "a conv axis carries a nonzero padding offset, at which the packing anchor would mispack"
 
-let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : conv_judgment option =
+let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~is_gpu ~is_cpu
+    ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized) : conv_judgment option =
   match detect_conv opt.LL.llc with
   | None -> None
   | Some site ->
@@ -3042,12 +3042,23 @@ let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                 let nred_p = blocks_of site.c_nred tk_t * tk_t in
                 let pad_n = if site.c_noc % tn_t = 0 then 0 else tn_t in
                 let pad_k = if site.c_nred % tk_t = 0 then 0 else tk_t in
-                let shared_bytes rows =
-                  ((rows * nred_p) + (nred_p * noc_p)) * Ir.Ops.prec_in_bytes prec
-                in
+                (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each tile one array of
+                   [copies] rotating copies, rounded to the backend's allocation granule, plus the
+                   per-kernel tile-MMA scratch of the site's triple, which every completion's
+                   [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). *)
                 let shared_fits ?(copies = 1) rows =
                   match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
-                  | Some cap -> copies * shared_bytes rows <= cap
+                  | Some cap ->
+                      let pb = Ir.Ops.prec_in_bytes prec in
+                      Sched.kernel_workgroup_bytes ~capabilities
+                        ~arrays:[ copies * rows * nred_p * pb; copies * nred_p * noc_p * pb ]
+                        ~mma_triples:
+                          [
+                            ( Lazy.force site.c_d.Ir.Tnode.storage_prec,
+                              Lazy.force site.c_a.Ir.Tnode.storage_prec,
+                              Lazy.force site.c_b.Ir.Tnode.storage_prec );
+                          ]
+                      <= cap
                   | None -> true
                 in
                 (* Every failing conjunct named, for the census: on a whole-routine lowering the
@@ -3494,7 +3505,8 @@ let interval_axis ~(axis : [ `Bm | `Bk ]) ~(values : int array)
 (* One epilogue-fusion flavor of the matmul family: the pipeline level and everything below it.
    [fused] selects the leaves' [sk_epilogue] and the flavor's own companion-coverage verdict
    ([coverage_witness], owned by {!matmul_family_tree} so that the flavors can share it). *)
-let matmul_flavor_tree ?(coalesced : coalesce_layout option) ~is_gpu ~is_cpu
+let matmul_flavor_tree ?(coalesced : coalesce_layout option)
+    ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~is_gpu ~is_cpu
     ~(limits : Ir.Backend_intf.hardware_limits) ~(coverage_witness : string option Lazy.t)
     ~(fused : bool) site : family_tree =
   (* Builder preconditions statically decidable at tree construction (gh-ocannl-577): rules the
@@ -3663,19 +3675,25 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option) ~is_gpu ~is_cpu
                               ]
                           | _ -> [])
                         @
+                        (* Charged as the gate charges them, each tile rounded to the backend's
+                           allocation granule (gh-ocannl-1330); no tile-MMA scope here. *)
+                        let staged =
+                          Sched.kernel_workgroup_bytes ~capabilities
+                            ~arrays:
+                              [
+                                bm * bk * Ir.Ops.prec_in_bytes a_prec;
+                                bk * bn * Ir.Ops.prec_in_bytes b_prec;
+                              ]
+                            ~mma_triples:[]
+                        in
                         match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
-                        | Some cap
-                          when (bm * bk * Ir.Ops.prec_in_bytes a_prec)
-                               + (bk * bn * Ir.Ops.prec_in_bytes b_prec)
-                               > cap ->
+                        | Some cap when staged > cap ->
                             [
                               ( false,
                                 Printf.sprintf
                                   "staged operand tiles need %d bytes of workgroup memory, \
                                    exceeding the %d-byte limit"
-                                  ((bm * bk * Ir.Ops.prec_in_bytes a_prec)
-                                  + (bk * bn * Ir.Ops.prec_in_bytes b_prec))
-                                  cap );
+                                  staged cap );
                             ]
                         | _ -> [])
                         (fun () ->
@@ -3793,18 +3811,32 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option) ~is_gpu ~is_cpu
             let staged_tiles_exceed ~bm ~bn ~bk ~depth =
               match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
               | Some cap when bk > 0 ->
-                  let bytes =
-                    ((bm * bk * Ir.Ops.prec_in_bytes a_prec)
-                    + (bk * bn * Ir.Ops.prec_in_bytes b_prec))
-                    * depth
+                  (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each operand tile one
+                     array of [depth] copies, rounded to the backend's allocation granule, plus the
+                     per-kernel scratch of the site's triple, which every completion's [Tile_mma]
+                     carries — Metal's coordinate table where its boundary converts (gh-ocannl-1330,
+                     gh-ocannl-1255). *)
+                  let charge ~mma_triples =
+                    Sched.kernel_workgroup_bytes ~capabilities
+                      ~arrays:
+                        [
+                          depth * bm * bk * Ir.Ops.prec_in_bytes a_prec;
+                          depth * bk * bn * Ir.Ops.prec_in_bytes b_prec;
+                        ]
+                      ~mma_triples
                   in
+                  let bytes = charge ~mma_triples:[ (d_prec, a_prec, b_prec) ] in
+                  let scratch = bytes - charge ~mma_triples:[] in
                   if bytes > cap then
                     Some
                       (Printf.sprintf
-                         "staged operand tiles need %d bytes of workgroup memory%s, exceeding the \
-                          %d-byte limit"
+                         "staged operand tiles need %d bytes of workgroup memory%s%s, exceeding \
+                          the %d-byte limit"
                          bytes
                          (if depth > 1 then Printf.sprintf " at pipeline depth %d" depth else "")
+                         (if scratch > 0 then
+                            Printf.sprintf " (%d of them tile-MMA scratch)" scratch
+                          else "")
                          cap)
                   else None
               | _ -> None
@@ -4449,8 +4481,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option) ~is_gpu ~is_cpu
    is derived from it and the alignment analysis runs twice only where the unfused flavor is
    refuted. Both flavors' subtrees stay lazy like every other level: nothing below the root is built
    before a consumer descends into it. *)
-let matmul_family_tree ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    ~(opt : LL.optimized) site : family_tree =
+let matmul_family_tree ?coalesced ?capabilities ~is_gpu ~is_cpu
+    ~(limits : Ir.Backend_intf.hardware_limits) ~(opt : LL.optimized) site : family_tree =
   let unfused_coverage = lazy (matmul_coverage_witness ~opt ~fused:false site) in
   let fused_coverage =
     lazy
@@ -4460,7 +4492,9 @@ let matmul_family_tree ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.har
   in
   let flavor ~fused ~coverage_witness =
     Sspace.Child
-      (lazy (matmul_flavor_tree ?coalesced ~is_gpu ~is_cpu ~limits ~coverage_witness ~fused site))
+      (lazy
+        (matmul_flavor_tree ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits ~coverage_witness
+           ~fused site))
   in
   decided_choice
     [
@@ -4471,9 +4505,9 @@ let matmul_family_tree ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.har
         | None -> flavor ~fused:true ~coverage_witness:fused_coverage );
     ]
 
-let matmul_seed_params ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~opt
-    site : sketch_params list =
-  Sspace.leaves (matmul_family_tree ?coalesced ~is_gpu ~is_cpu ~limits ~opt site)
+let matmul_seed_params ?coalesced ?capabilities ~is_gpu ~is_cpu
+    ~(limits : Ir.Backend_intf.hardware_limits) ~opt site : sketch_params list =
+  Sspace.leaves (matmul_family_tree ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits ~opt site)
 
 (** {2 The composed seed list} *)
 
@@ -4487,8 +4521,8 @@ type family_seeding =
 (* The families composed into the seed list the search enumerates: the matmul family when a matmul
    site is detected, else the convolution family, each with its epilogue-fusion twins. Returned
    beside the seeds, so the seeding census reports the judgment the seeds came from. *)
-let family_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized)
-    : family_seeding * sketch_params list =
+let family_seeding ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : family_seeding * sketch_params list =
   (* Fused-epilogue variants (gh-ocannl-486): when the site's output feeds an eligible elementwise
      tail, every seed gets a fused twin — the tuner measures fused (one kernel) vs. unfused (the
      fissioned two-kernel form). The check runs on the base code where the plain accumulation-nest
@@ -4498,10 +4532,10 @@ let family_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (
      preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
   match detect_matmul_canonical opt with
   | Some (site, _, opt) ->
-      let tree = matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site in
+      let tree = matmul_family_tree ?capabilities ~is_gpu ~is_cpu ~limits ~opt site in
       (Seeding_matmul { site; tree }, Sspace.leaves tree)
   | None -> (
-      match conv_seed_judgment ~is_gpu ~is_cpu ~limits opt with
+      match conv_seed_judgment ?capabilities ~is_gpu ~is_cpu ~limits opt with
       | None -> (Seeding_none, [])
       | Some judgment ->
           let seeds = conv_judgment_seeds judgment in
@@ -4515,9 +4549,9 @@ let family_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (
             if fused_twins then seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
             else seeds ))
 
-let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+let sketch_seed_params ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : sketch_params list =
-  snd (family_seeding ~is_gpu ~is_cpu ~limits opt)
+  snd (family_seeding ?capabilities ~is_gpu ~is_cpu ~limits opt)
 
 (* The coalesced branch's seeds (gh-ocannl-1165, gh-ocannl-1279): per layout, the matmul family
    enumerated over the prepared coalesced code ([coalesced]), so every refutation — launch caps,
@@ -4542,7 +4576,7 @@ type coalesced_verdict = {
   cv_refusal : string option;
 }
 
-let coalesced_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+let coalesced_seeding ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : coalesced_verdict list =
   if not is_gpu then []
   else
@@ -4556,8 +4590,8 @@ let coalesced_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits
                 | None -> refused "the coalesced code re-detects no matmul site"
                 | Some site -> (
                     let seeds =
-                      matmul_seed_params ~coalesced:layout ~is_gpu ~is_cpu ~limits ~opt:prepared
-                        site
+                      matmul_seed_params ~coalesced:layout ?capabilities ~is_gpu ~is_cpu ~limits
+                        ~opt:prepared site
                       |> List.filter_map ~f:(fun p ->
                           if p.sk_gpu && (not p.sk_mma) && not p.sk_epilogue then
                             Some { p with sk_coalesce = Some layout }
@@ -4569,9 +4603,10 @@ let coalesced_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits
                           "the coalesced site's family has no unfused GPU scalar-blocktile leaf"
                     | _ -> { cv_layout = layout; cv_seeds = seeds; cv_refusal = None }))))
 
-let coalesced_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+let coalesced_seed_params ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : sketch_params list =
-  List.concat_map (coalesced_seeding ~is_gpu ~is_cpu ~limits opt) ~f:(fun v -> v.cv_seeds)
+  List.concat_map (coalesced_seeding ?capabilities ~is_gpu ~is_cpu ~limits opt) ~f:(fun v ->
+      v.cv_seeds)
 
 (** {2 The seeding census (gh-ocannl-1407)}
 
@@ -4589,12 +4624,12 @@ type seeding_census = {
   sc_coalesced : coalesced_verdict list option;
 }
 
-let seeding_census ?(coalesced = false) ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : seeding_census =
+let seeding_census ?(coalesced = false) ?capabilities ~is_gpu ~is_cpu
+    ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized) : seeding_census =
   (* A dry run: the symbols any probe mints are rewound, so taking a census never shifts the names
      later compiles mint. *)
   Idx.discarding_symbols (fun () ->
-      let sc_family, sc_seeds = family_seeding ~is_gpu ~is_cpu ~limits opt in
+      let sc_family, sc_seeds = family_seeding ?capabilities ~is_gpu ~is_cpu ~limits opt in
       let stmts = strip_stmts (LL.flat_lines [ opt.LL.llc ]) in
       (* A whole-node [Zero_out] or its expanded covering nest, as the seeding's companion
          accounting reads it. *)
@@ -4611,7 +4646,8 @@ let seeding_census ?(coalesced = false) ~is_gpu ~is_cpu ~(limits : Ir.Backend_in
         sc_family;
         sc_seeds;
         sc_coalesced =
-          (if coalesced then Some (coalesced_seeding ~is_gpu ~is_cpu ~limits opt) else None);
+          (if coalesced then Some (coalesced_seeding ?capabilities ~is_gpu ~is_cpu ~limits opt)
+           else None);
       })
 
 let seeding_census_prefix = "autotune-seeding:"
@@ -4696,10 +4732,10 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
 
 (* The exported tree view of the matmul family (site detection included); the conv family factors
    the same way as a follow-up. *)
-let matmul_sketch_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+let matmul_sketch_tree ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : family_tree option =
   Option.map (detect_matmul_canonical opt) ~f:(fun (site, _, opt) ->
-      matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site)
+      matmul_family_tree ?capabilities ~is_gpu ~is_cpu ~limits ~opt site)
 
 (* gh-ocannl-514 phase 5: lift every tile-lattice exclusion in the family tree, preserving the
    laziness of everything else — a lifted branch remains subject to legality (box refutations), and

@@ -1,4 +1,5 @@
 C: even-length half tiles estimated at exactly the limit compile, link and run correctly: true
-O: odd-length half tiles are estimated at exactly the limit too: true
-O: pipeline creation's refusal is a contained Workgroup_memory decline at Backend_link, over the device limit: true
+G: odd-length half tiles whose exact bytes total the limit are refused at Hardware_limits, requesting their rounded estimate, over the limit: true
+O: with exact sizes the gate estimates the odd tiles at exactly the limit: true
+O: pipeline creation's refusal is a contained Workgroup_memory decline at Backend_link, requesting leg G's rounded estimate over the device limit: true
 O: the public compile reports the refusal as a Utils.User_error: true

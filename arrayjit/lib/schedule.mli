@@ -1214,15 +1214,30 @@ val launch_geometry_excess :
     on Metal) exempts its dimensions. The workgroup thread PRODUCT is deliberately not a row: it is
     not a per-dimension geometry question, and only the gate checks it. *)
 
+val kernel_workgroup_bytes :
+  capabilities:Backend_intf.codegen_capabilities ->
+  arrays:int list ->
+  mma_triples:(Ops.prec * Ops.prec * Ops.prec) list ->
+  int
+(** The workgroup-shared charge of a kernel declaring [arrays] (each one array's declared bytes) and
+    tile-MMA emission scopes of the [(d, a, b)] storage triples [mma_triples]: every array rounded
+    up to the backend's {!field:Backend_intf.workgroup_allocation_alignment} (gh-ocannl-1330), plus
+    the backend's per-kernel {!field:Backend_intf.mma_kernel_workgroup_bytes} over the triples, once
+    (gh-ocannl-1255). What {!workgroup_memory_bytes} charges the code it reads, and what a seeding
+    prediction of it charges the tiles and scopes every completion of a sketch declares
+    ([Sketch_families]), so the two round and count alike. *)
+
 val workgroup_memory_bytes :
   capabilities:Backend_intf.codegen_capabilities -> Low_level.optimized -> int
-(** The static workgroup-shared bytes the kernel will declare: its [workgroup_shared] tiles (a
-    pipelined tile counted once per rotating copy) plus, per tile-MMA emission scope, the rendering
-    backend's {!field:Backend_intf.mma_scope_workgroup_bytes} for that scope's storage triple —
-    Metal's converted destination boundary declares a coordinate table there (gh-ocannl-1205). A
-    scope is one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
-    simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same
-    count. Plus, per lane all-reduce site that stages per-simdgroup partials
+(** The static workgroup-shared bytes the kernel will declare, charged by {!kernel_workgroup_bytes}
+    (Metal rounds every [threadgroup] array up to 4 bytes, gh-ocannl-1330): its [workgroup_shared]
+    tiles (a pipelined tile, one array of rotating copies, counted once per copy) plus, once for the
+    kernel, the rendering backend's {!field:Backend_intf.mma_kernel_workgroup_bytes} over the
+    storage triples of its tile-MMA emission scopes — Metal declares one coordinate table per kernel
+    when any of them converts its destination boundary (gh-ocannl-1205, gh-ocannl-1255). A scope is
+    one [Tile_mma] statement, each copy listed where a loop transform duplicated it; a
+    simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same list.
+    Plus, per lane all-reduce site that stages per-simdgroup partials
     ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
     {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its extent at the larger of its
     local's compute and accumulator precisions. Pass the compiling context's
@@ -1260,6 +1275,16 @@ val check_hardware_limits :
     [compile] calls this after any [?lowered_transform] (or the default annotator, which already
     respects the limits), turning driver-level launch failures into early, named errors. A no-op for
     all-[None] limits. *)
+
+val with_gate_capabilities :
+  (Backend_intf.codegen_capabilities -> Backend_intf.codegen_capabilities) -> f:(unit -> 'a) -> 'a
+(** Test seam (gh-ocannl-1330): runs [f] with {!check_hardware_limits_classified} judging by
+    [adjust capabilities] instead of the capabilities it is handed, in the calling domain only,
+    restoring the previous adjustment on return or exception. The default is the identity and no
+    configuration selects another. What it is for: reaching a refusal downstream of the gate (the
+    driver's own) with a kernel the exact gate would refuse first —
+    [test/operations/metal_threadgroup_overflow] removes the per-allocation rounding. Not a
+    production seam: a schedule the gate misjudges is a defect of the estimate. *)
 
 val check_hardware_limits_classified :
   name:string ->

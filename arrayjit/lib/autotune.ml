@@ -134,10 +134,11 @@ let print_seeding_lines lines =
   Stdio.Out_channel.flush Stdio.stderr
 
 (* One lowering's census, taken where the caller seeds it; a no-op unless the key is on. *)
-let log_seeding ?coalesced ~where ~is_gpu ~is_cpu ~limits opt =
+let log_seeding ?coalesced ?capabilities ~where ~is_gpu ~is_cpu ~limits opt =
   if log_seeding_enabled () then
     print_seeding_lines
-      (seeding_census_lines ~where (seeding_census ?coalesced ~is_gpu ~is_cpu ~limits opt))
+      (seeding_census_lines ~where
+         (seeding_census ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits opt))
 
 (* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress] -- or, for the
    duration of one call, by its [?progress] argument. A search can run for hours and be killed by a
@@ -4181,7 +4182,7 @@ let model_family_search ?(on_rejected = fun () -> ()) ?(admit = fun _ -> true)
     ?(on_excluded = fun () -> ()) ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
     ~peak_memory_bandwidth ~score ~incumbent (base_opt : LL.optimized) =
   let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
-  match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base_opt with
+  match matmul_sketch_tree ~capabilities ~is_gpu ~is_cpu ~limits base_opt with
   | None -> None
   | Some tree ->
       (* gh-ocannl-514 phase 5: the tile-size lattice beyond the curated menus enters the searched
@@ -5131,7 +5132,9 @@ let model_default ?name ?report ctx comp bindings =
         | Some ds -> (
             (* Whole-routine sketch candidates. A candidate without coverage is skipped — it is
                never picked over the default without a measured run ({!tune} covers that). *)
-            log_seeding ~where:"model_default whole-routine" ~is_gpu ~is_cpu ~limits base;
+            let capabilities = Context.codegen_capabilities ctx in
+            log_seeding ~capabilities ~where:"model_default whole-routine" ~is_gpu ~is_cpu ~limits
+              base;
             let whole_best =
               match tree_search ~incumbent:ds base with
               | Some tree_best ->
@@ -5140,7 +5143,8 @@ let model_default ?name ?report ctx comp bindings =
                   tree_best
               | None ->
                   (* No matmul site: the flat path covers the conv family. *)
-                  best_flat ~threshold:ds base (sketch_seed_params ~is_gpu ~is_cpu ~limits base)
+                  best_flat ~threshold:ds base
+                    (sketch_seed_params ~capabilities ~is_gpu ~is_cpu ~limits base)
             in
             let contenders =
               match whole_best with
@@ -5168,7 +5172,7 @@ let model_default ?name ?report ctx comp bindings =
                         match score [ post ] with
                         | None -> None
                         | Some bs -> (
-                            log_seeding
+                            log_seeding ~capabilities
                               ~where:("model_default segment " ^ seg_key_tag key)
                               ~is_gpu ~is_cpu ~limits pre;
                             (* The segment's family tree searched with the segment's own
@@ -5179,7 +5183,7 @@ let model_default ?name ?report ctx comp bindings =
                               | Some tree_best -> tree_best
                               | None ->
                                   best_flat ~threshold:bs pre
-                                    (sketch_seed_params ~is_gpu ~is_cpu ~limits pre)
+                                    (sketch_seed_params ~capabilities ~is_gpu ~is_cpu ~limits pre)
                             in
                             match best_sketch with Some (p, _s) -> Some (key, p) | None -> None))
                   in
@@ -5538,11 +5542,11 @@ let model_explain ?name ctx comp bindings =
     in
     let admits = model_admits ~seeding ~accum_prec base in
     let leaves =
-      match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base with
+      match matmul_sketch_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits base with
       | Some tree ->
           Sspace.leaves
             (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-      | None -> sketch_seed_params ~is_gpu ~is_cpu ~limits base
+      | None -> sketch_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits base
     in
     (* Exactly the leaves [model_default] can score: a schedule that fails to apply, or whose
        scheduled form fails validation, is excluded from its ranking too. *)
@@ -7260,9 +7264,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              branch beside them (gh-ocannl-1165) — prepared hermetically from the same lowering, its
              candidates' schedules carry their structural [Coalesce] prefix. *)
           let search_seed_params ~where opt =
-            log_seeding ~coalesced:true ~where ~is_gpu ~is_cpu ~limits opt;
-            sketch_seed_params ~is_gpu ~is_cpu ~limits opt
-            @ coalesced_seed_params ~is_gpu ~is_cpu ~limits opt
+            let capabilities = Context.codegen_capabilities ctx in
+            log_seeding ~coalesced:true ~capabilities ~where ~is_gpu ~is_cpu ~limits opt;
+            sketch_seed_params ~capabilities ~is_gpu ~is_cpu ~limits opt
+            @ coalesced_seed_params ~capabilities ~is_gpu ~is_cpu ~limits opt
           in
           let block_size_presets mk =
             mk None
