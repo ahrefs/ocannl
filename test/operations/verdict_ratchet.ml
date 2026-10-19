@@ -4111,6 +4111,13 @@ let () =
   push queue sample;
   Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
       [ "sample" ] );
+    ( "follows a Verdict alias a local module exports through an open of it",
+      {ocaml|module Checks = struct
+  let gated_all = Verdict.gated_all
+end
+open Checks
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
     ( "refuses a gate read off the set an in-place filter keeps the population's keys by",
       {ocaml|open Base
 let () =

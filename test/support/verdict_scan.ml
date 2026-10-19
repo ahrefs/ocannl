@@ -592,13 +592,14 @@ let line_break_census content =
     reader shares -- reads the name as [Verdict]'s, [Ambiguous] (reported as such, with the remedy
     of qualifying the call) or [Free]: a [gated] name nothing binds is read too, since it exists
     nowhere but in [Verdict.Claims]. A file's own [gated_all], and another module's, are not
-    [Verdict]'s. A partial application bound by [let] to a name, under any number of further partial
-    applications, is completed at each application of that name, and [x |> f] and [f @@ x] are read
-    as [f x]; so the [let check = Verdict.gated_all ~when_ ~on in check label xs] wrapper is one
-    site per use. The two sides are then compared by LEXICAL identity, a name plus the binding it
-    resolves to through {!Lexical_scope}, so a shadowed name is a different value; a name no binding
-    of the source gives (a global, or one an unmodelled [open] brought in) is one identity, the same
-    on both sides:
+    [Verdict]'s; a name a structure of the file exports is followed to its definition there, so
+    [module Checks = struct let gated_all = Verdict.gated_all end] opened is [Verdict]'s. A partial
+    application bound by [let] to a name, under any number of further partial applications, is
+    completed at each application of that name, and [x |> f] and [f @@ x] are read as [f x]; so the
+    [let check = Verdict.gated_all ~when_ ~on in check label xs] wrapper is one site per use. The
+    two sides are then compared by LEXICAL identity, a name plus the binding it resolves to through
+    {!Lexical_scope}, so a shadowed name is a different value; a name no binding of the source gives
+    (a global, or one an unmodelled [open] brought in) is one identity, the same on both sides:
 
     - the GATE is every value identifier the [~when_] expression spells, and transitively every one
       spelled by the right-hand side of a [let] it resolves to (function bodies included), or by
@@ -686,12 +687,14 @@ type gate_module =
   | Standard_library of { stdlib : bool }
       (** [Base] or [Core] ([stdlib = false]), [Stdlib] or [Caml] ([true]): an [open] of one rebinds
           the collection modules to its own. *)
-  | Local_structure of string list
-      (** A [struct ... end] of this source, with the value names it binds: an [open] of it brings
-          them into scope as this source's own. *)
+  | Local_structure of (string * gate_denotation) list
+      (** A [struct ... end] of this source, with the value names it exports and what each denotes,
+          its definition included (resolved in the structure's own scope): an [open] of it brings
+          them into scope as this source's own, so a [let gated_all = Verdict.gated_all] exported
+          from it is still followed to [Verdict]'s (gh-ocannl-1303). *)
   | Other_module
 
-type gate_denotation = {
+and gate_denotation = {
   identity : int;
   mutable definition : (expression * (gate_denotation, gate_module) Lexical_scope.env) option;
       (** Mutable only so that a recursive group's definitions can see each other: they are set once
@@ -1097,17 +1100,42 @@ let gate_census content =
 
       method! shadowed = Some Other_module
 
+      (* A structure's exports, each with what it denotes at the structure's end: the scope is built
+         up item by item as {!Lexical_scope.scoped} builds it -- bindings, [external]s, modules,
+         opens and includes, an included structure's exports joining its own -- without walking
+         anything, which the main walk does once. *)
       method! module_of env module_expr =
         match module_expr.pmod_desc with
         | Pmod_structure items ->
+            let final, exports =
+              List.fold items ~init:(env, []) ~f:(fun (env, exports) item ->
+                  match item.pstr_desc with
+                  | Pstr_value (rec_flag, bindings) ->
+                      ( self#bind_group env bindings (self#denotations env rec_flag bindings),
+                        exports
+                        @ Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)) )
+                  | Pstr_primitive { pval_name = { txt; _ }; _ } ->
+                      (Lexical_scope.bind_values env [ txt ] self#local, exports @ [ txt ])
+                  | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+                      (self#bind_module env name pmb_expr, exports)
+                  | Pstr_open { popen_expr; _ } ->
+                      ( self#opened ~top:false ~include_:false env (self#module_of env popen_expr),
+                        exports )
+                  | Pstr_include { pincl_mod; _ } -> (
+                      let denotes = self#module_of env pincl_mod in
+                      ( self#opened ~top:false ~include_:true env denotes,
+                        match denotes with
+                        | Some (Local_structure included) -> exports @ List.map included ~f:fst
+                        | _ -> exports ))
+                  | _ -> (env, exports))
+            in
             Some
               (Local_structure
-                 (List.concat_map items ~f:(fun item ->
-                      match item.pstr_desc with
-                      | Pstr_value (_, bindings) ->
-                          Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat))
-                      | Pstr_primitive { pval_name = { txt; _ }; _ } -> [ txt ]
-                      | _ -> [])))
+                 (List.dedup_and_sort exports ~compare:String.compare
+                 |> List.map ~f:(fun name ->
+                     ( name,
+                       Option.value_or_thunk (Lexical_scope.lookup final name) ~default:(fun () ->
+                           self#local) ))))
         | _ -> super#module_of env module_expr
 
       (* An [open Base] rebinds every collection module to [Base]'s, and an [open Stdlib] back to
@@ -1128,9 +1156,11 @@ let gate_census content =
                              family = name;
                            }));
             }
-        | Some (Local_structure names) ->
-            (* Its names shadow whatever they denoted, a [gated_all] of its own included. *)
-            Lexical_scope.bind_values env names self#local
+        | Some (Local_structure exports) ->
+            (* Its names shadow whatever they denoted, a [gated_all] of its own included, and denote
+               what the structure defines them as. *)
+            Lexical_scope.push_frame env
+              (Map.of_alist_reduce (module String) exports ~f:(fun _ later -> later))
         | _ -> env
 
       method! binding_denotes env binding =
