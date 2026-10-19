@@ -146,6 +146,8 @@
   (alias runtest-ll_test_ratchet)
   (alias runtest-ll_test_scan_cases)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-tensorized_census_ratchet)
+  (alias runtest-tensorized_census_scan_cases)
   (alias runtest-operand_key_scan_cases)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
@@ -311,6 +313,7 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
@@ -3406,6 +3409,9 @@
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
+  tensorized_census_ratchet.ml
+  tensorized_census_ratchet.expected
+  tensorized_census_scan_cases.expected
   provenance_tag_inventory.ml
   provenance_tag_inventory.expected
   provenance_tag_scan_cases.expected
@@ -3464,6 +3470,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
+   tensorized_census_ratchet.ml
+   tensorized_census_ratchet.expected,tensorized_census_scan_cases.expected
    provenance_tag_inventory.ml
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
    ocamlformat_ignore_scan.ml
@@ -8621,6 +8629,50 @@
  (package neural_nets_lib)
  (action
   (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
+
+; gh-ocannl-1309: an executed claim about a tensorized routine whose item judges no mma census --
+; parity alone also passes for a Tile_mma that declined to the scalar fallback (gh-ocannl-1283).
+; The reader states its closed lists of recognised forms. Same arrangement as ll_test_ratchet.
+
+(executable
+ (name tensorized_census_ratchet)
+ (modules tensorized_census_ratchet)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target tensorized_census_ratchet.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:tensorized_census_ratchet.exe}
+    %{workspace_root}
+    %{dep:tensorized_census_ratchet.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-tensorized_census_ratchet)
+ (package neural_nets_lib)
+ (action
+  (diff tensorized_census_ratchet.expected tensorized_census_ratchet.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic source cases and child scanner invocations.
+ (name tensorized_census_scan_cases)
+ (package neural_nets_lib)
+ (modules tensorized_census_scan_cases)
+ (libraries base stdio unix fresh_process test_utils arrayjit.verdict)
+ (deps ocannl_config tensorized_census_ratchet.exe)
+ (action
+  (run %{test} %{dep:tensorized_census_ratchet.exe})))
 
 ; gh-ocannl-1056: a census total printed in a repository-scan golden -- hand-fixed three times
 ; (gh-ocannl-665, gh-ocannl-701, gh-ocannl-1046) -- is refused on the PR that adds it. The scanner

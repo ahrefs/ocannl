@@ -484,6 +484,8 @@ env_var_deps.ml: [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is re
 refused_action_streams.ml has exactly the explicitly assigned refusal controls: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
+tensorized_census_ratchet.ml has exactly the explicitly assigned refusal controls: true
+tensorized_census_ratchet.ml: [scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 provenance_tag_inventory.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:e1f2fc5fc55abe7d73725c939c81a516] ocamlformat-ignore ends in (claim) is catalogued beside ocamlformat_ignore_scan.expected: true
