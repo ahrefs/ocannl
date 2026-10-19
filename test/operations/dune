@@ -8440,7 +8440,7 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_composite_playoff)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -8465,7 +8465,7 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_staffed_singles)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
  (preprocess
   (pps ppx_ocannl)))
 

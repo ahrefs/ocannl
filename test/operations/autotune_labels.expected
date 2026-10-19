@@ -14,6 +14,8 @@ the two base chains have equal length: true
 changing any one field of the first base site changes its label: true
 changing any one field of the second base site changes its label: true
 changing the block count changes the label: true
+a staffed split label is the bare one's focus followed by its staff: true
+split staffs of different block counts print apart: true
 no site label carries a comma: true
 the search ran its round: true
 a round candidate extends a segment of a fissioned parent: true

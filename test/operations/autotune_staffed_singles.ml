@@ -43,6 +43,7 @@
 
    Pinned to cc: the scripted ranking is backend-independent, and cc is always available. *)
 open Base
+open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
@@ -464,3 +465,127 @@ let () =
       p "heavy: the keys are swept heaviest first"
         (List.equal String.equal (keys o.measured) by_weight)
   | _ -> p "heavy: the search logged a weight for each of the two keys" false
+
+(* --- split: the split-reduce sites keep a running composite too --- *)
+
+(* Two skinny matvec accumulations, each a split-reduce site (the multi-site workload of
+   [autotune_split_reduce], over dyadic values whose sums are exact in any order, so the split's
+   reassociation moves no bit): the sites are swept in their cost order, each single's prelude
+   staffed with the other site's block count. The script is additive over the sites a split
+   candidate splits, every other candidate far slower. *)
+let () =
+  let out = 8 and red1 = 128 and red2 = 256 in
+  let matrix label red =
+    TDSL.ndarray
+      (Array.init (out * red)
+         ~f:(Ll_test.cycle_flat ~dims:[| out; red |] ~modulus:5 ~offset:0. ~stride:0.25))
+      ~label:[ label ] ~input_dims:[ red ] ~output_dims:[ out ] ()
+  in
+  let vector label red =
+    TDSL.ndarray
+      (Array.init red ~f:(Ll_test.cycle_flat ~dims:[| red |] ~modulus:3 ~offset:(-0.5) ~stride:0.5))
+      ~label:[ label ] ~output_dims:[ red ] ()
+  in
+  let m1 = matrix "ss_m1" red1 and v1 = vector "ss_v1" red1 in
+  let m2 = matrix "ss_m2" red2 and v2 = vector "ss_v2" red2 in
+  let%op y1 = m1 * v1 in
+  Train.set_materialized y1.Tensor.value;
+  let%op y2 = m2 * v2 in
+  Train.set_materialized y2.Tensor.value;
+  let%op z = y1 + y2 in
+  let comp = Train.forward z in
+  let comp =
+    { comp with Ir.Assignments.asgns = Ir.Assignments.Block_comment ("ss_pair", comp.asgns) }
+  in
+  let reference = untuned (z, comp) in
+  let is_split label = String.is_prefix label ~prefix:"F_split[" in
+  let split_parts label =
+    let body =
+      String.chop_prefix_exn label ~prefix:"F_split[" |> String.chop_suffix_exn ~suffix:"]"
+    in
+    let entries s = if String.is_empty s then [] else String.split s ~on:',' in
+    match String.substr_index body ~pattern:" | staff " with
+    | Some i -> (entries (String.prefix body i), entries (String.drop_prefix body (i + 9)))
+    | None -> (entries body, [])
+  in
+  (* A site entry without its block count: which site it splits. *)
+  let site entry =
+    String.split entry ~on:' '
+    |> List.filter ~f:(fun w ->
+        not
+          (String.length w > 1
+          && Char.equal w.[0] 'b'
+          && String.for_all (String.drop_prefix w 1) ~f:Char.is_digit))
+    |> String.concat ~sep:" "
+  in
+  let cost entry = hashed entry in
+  let split_ms label =
+    if is_split label then
+      let f, s = split_parts label in
+      List.sum (module Float) (f @ s) ~f:cost
+      +. (preset_ms *. Float.of_int (2 - List.length (f @ s)))
+    else 1000.
+  in
+  let measured = ref [] and report = ref None in
+  let output =
+    Exn.protect
+      ~finally:(fun () -> Hashtbl.remove Utils.config_file_args staffed_key)
+      ~f:(fun () ->
+        Hashtbl.set Utils.config_file_args ~key:staffed_key ~data:"true";
+        Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
+            measured := label :: !measured;
+            split_ms label)
+        @@ fun () ->
+        let ctx, routine =
+          Autotune.with_uncontended_test_windows (fun () ->
+              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false
+                ~progress:false
+                ~report:(fun r -> report := Some r)
+                (Context.cpu ()) comp Ir.Indexing.Empty)
+        in
+        let ctx = Context.run ctx routine in
+        let values = Context.get_values ctx z.Tensor.value in
+        Context.release ctx;
+        values)
+  in
+  let measured = List.rev !measured in
+  let singles =
+    List.filter measured ~f:(fun l -> is_split l && List.length (fst (split_parts l)) = 1)
+  in
+  let sites =
+    List.fold singles ~init:[] ~f:(fun seen l ->
+        let s = site (List.hd_exn (fst (split_parts l))) in
+        if List.mem seen s ~equal:String.equal then seen else s :: seen)
+    |> List.rev
+  in
+  let of_site s =
+    List.filter singles ~f:(fun l -> String.equal (site (List.hd_exn (fst (split_parts l)))) s)
+  in
+  let fastest s =
+    List.map (of_site s) ~f:(fun l -> List.hd_exn (fst (split_parts l)))
+    |> List.min_elt ~compare:(fun a b -> Float.compare (cost a) (cost b))
+  in
+  match (sites, !report) with
+  | [ first; second ], Some r ->
+      p_all "split: the first site is swept bare" (of_site first) ~f:(fun l ->
+          List.is_empty (snd (split_parts l)));
+      p_all "split: every single of the second site is staffed with the first site's fastest"
+        (of_site second) ~f:(fun l ->
+          Option.exists (fastest first) ~f:(fun e ->
+              List.equal String.equal (snd (split_parts l)) [ e ]));
+      p "split: the composite was eligible and its window counted"
+        (r.Autotune.split_reduce_composite_eligible && r.Autotune.split_reduce_composite_timed);
+      p_none "split: no window re-timed the composite, the last accepted staffed single"
+        (List.filter measured ~f:is_split) ~f:(fun l -> List.length (fst (split_parts l)) >= 2);
+      p "split: the crown is a staffed single holding each site's fastest"
+        (is_split r.Autotune.best_label
+        && List.equal String.equal
+             (List.sort ~compare:String.compare
+                (fst (split_parts r.Autotune.best_label) @ snd (split_parts r.Autotune.best_label)))
+             (List.sort ~compare:String.compare (List.filter_opt [ fastest first; fastest second ]))
+        );
+      p_all2 "split: the crowned routine computes the untuned output bit for bit" output reference
+        ~f:Float.equal
+  | _ ->
+      Stdio.eprintf "split: sites %s\n%!" (String.concat ~sep:"; " sites);
+      p "split: the search swept the workload's two sites" false

@@ -36,3 +36,9 @@ ties: every composite window is the playoff's: true
 ties: only the first key plays; the last key's sweep ran inside the composite: true
 heavy: the model weighs the second enumerated key the heavier: true
 heavy: the keys are swept heaviest first: true
+split: the first site is swept bare: true
+split: every single of the second site is staffed with the first site's fastest: true
+split: the composite was eligible and its window counted: true
+split: no window re-timed the composite, the last accepted staffed single: true
+split: the crown is a staffed single holding each site's fastest: true
+split: the crowned routine computes the untuned output bit for bit: true

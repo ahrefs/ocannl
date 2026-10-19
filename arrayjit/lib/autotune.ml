@@ -2342,7 +2342,7 @@ type fiss_flavor =
           join rather than against every other segment's preset. [entries] stays the candidate's
           focus: what it is a single OF, what the search ranks it as, and the part of its label
           before [" | staff "]; empty [staff] is the bare single. *)
-  | F_split of { sites : (sr_site * int) list }
+  | F_split of { sites : (sr_site * int) list; staff : (sr_site * int) list }
       (** Split-reduce seeds (gh-ocannl-484 task 3): per listed site, a
           [Sched.Split_reduce { axis = sr_axis; target = sr_target; num_blocks }] — applied
           {e whole-routine, before fission}, unlike the per-segment flavors: the two passes must
@@ -2350,7 +2350,9 @@ type fiss_flavor =
           races — the combine needs grid-wide synchronization), and the partials producer/consumer
           pair is exactly the materialized cross-nest edge fission cuts at. Each resulting segment
           then gets the aggressive default preset — the block loop parallelizes pass 1, the combine
-          nest annotates like any small kernel. *)
+          nest annotates like any small kernel. [staff] (gh-ocannl-1138): further sites split by the
+          same prelude, the running split composite's choices for the sites other than the one being
+          swept; [sites] stays the candidate's focus, and empty [staff] is the bare single. *)
   | F_split_saved of SC.saved_schedule * SC.saved_segment list * move option
       (** Replay of a split-reduce winner: the whole-routine prelude (resolved against the base
           canonical form, re-minting the partials node and fresh symbols via [SC.of_saved]), then
@@ -2739,8 +2741,10 @@ let split_site_label (s, num_blocks) =
     | None -> ""
     | Some (outer, inner) -> " coalesce:" ^ Idx.symbol_ident outer ^ "*" ^ Idx.symbol_ident inner)
 
-let split_sites_label sites =
-  Printf.sprintf "F_split[%s]" (String.concat ~sep:"," (List.map sites ~f:split_site_label))
+let split_sites_label ?(staff = []) sites =
+  let render sites = String.concat ~sep:"," (List.map sites ~f:split_site_label) in
+  Printf.sprintf "F_split[%s%s]" (render sites)
+    (match staff with [] -> "" | _ -> " | staff " ^ render staff)
 
 (* gh-ocannl-1388: the seeded plan's identity, from its content: each split site by its target's
    debug name, extents, block count and interchange length (the ids and symbols {!split_site_label}
@@ -2792,7 +2796,7 @@ let spec_label = function
       let from, extension = move_label move in
       Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
   | Fiss (F_sketch { entries; staff; fine; _ }) -> fiss_sketch_label ~staff ~fine entries
-  | Fiss (F_split { sites }) -> split_sites_label sites
+  | Fiss (F_split { sites; staff }) -> split_sites_label ~staff sites
   | Fiss (F_seeded plan) -> seeded_plan_label plan
   | Fiss (F_split_saved (prelude, segs, move)) ->
       let from, extension = move_label move in
@@ -2960,7 +2964,11 @@ let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_
           let prelude, prelude_saved =
             match flavor with
             | F_preset _ | F_saved _ | F_sketch _ -> ([], [])
-            | F_split { sites } | F_seeded { sp_split = _ :: _ as sites; _ } ->
+            | F_split { sites; staff } ->
+                let sched = split_reduce_prelude (sites @ staff) in
+                let saved, _ = SC.to_saved (SC.base_registry canon) sched in
+                (sched, saved)
+            | F_seeded { sp_split = _ :: _ as sites; _ } ->
                 let sched = split_reduce_prelude sites in
                 let saved, _ = SC.to_saved (SC.base_registry canon) sched in
                 (sched, saved)
@@ -6215,9 +6223,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                               | [ (key, _) ] -> Hash_set.add coarse_single_refused key
                               | _ :: _ :: _ -> fs_composite := `Refused
                               | [] -> ())
-                        | Fiss (F_split { sites }) ->
+                        | Fiss (F_split { sites; staff }) ->
                             Int.incr n_sr_timed;
-                            if List.length sites >= 2 then sr_composite_timed := true
+                            if List.length sites >= 2 && List.is_empty staff then
+                              sr_composite_timed := true
                         | _ -> ());
                         if spec_expects_mma spec then Int.incr n_mma_timed;
                         Int.incr n_timings_contended;
@@ -6258,9 +6267,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                               | [ (key, _) ] -> Hash_set.add coarse_single_measured key
                               | _ :: _ :: _ -> fs_composite := `Timed
                               | [] -> ())
-                        | Fiss (F_split { sites }) -> (
+                        | Fiss (F_split { sites; staff }) -> (
                             Int.incr n_sr_timed;
                             match sites with
+                            | _ when not (List.is_empty staff) ->
+                                (* A staffed single: its sweep ranks it, in its own backdrop. *)
+                                ()
                             | [ (s, b) ] ->
                                 sr_single_results := (s, b, ms) :: !sr_single_results;
                                 sr_composite_eligible :=
@@ -6618,7 +6630,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           let sr_specs =
             List.concat_map sr_sites ~f:(fun s ->
                 List.filter_map sr_num_blocks ~f:(fun b ->
-                    if 2 * b <= s.sr_red then Some (Fiss (F_split { sites = [ (s, b) ] })) else None))
+                    if 2 * b <= s.sr_red then
+                      Some (Fiss (F_split { sites = [ (s, b) ]; staff = [] }))
+                    else None))
           in
           n_split_reduce_candidates := List.length sr_specs;
           (* gh-ocannl-1388: the seeded untuned plan, the step the recipes' untuned compile ships on
@@ -6642,7 +6656,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           (* gh-ocannl-1138: with staffed singles the coarse singles are not seeded as a list but
              swept key by key against the running composite (below), where the list would time them:
              after the whole-routine sketches, before the fine singles. *)
-          let staffed = staffed_singles && not (List.is_empty fiss_sketch_entries) in
+          let staffed = staffed_singles in
           let pre_sweep_specs =
             seeded_specs
             @ block_size_presets (fun block_size -> Whole (W_preset { block_size }))
@@ -6659,12 +6673,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                else [])
             @ List.map sketch_params ~f:(fun p -> Whole (W_sketch p))
           in
-          let post_sweep_specs = (if staffed then [] else fine_single_specs) @ sr_specs in
+          let post_sweep_specs = if staffed then [] else fine_single_specs @ sr_specs in
           let fiss_single_results = ref [] in
           progress_phase_begin "seeds"
             (Some
                (List.length pre_sweep_specs + List.length coarse_single_specs
-               + (if staffed then List.length fine_single_specs else 0)
+               + (if staffed then List.length fine_single_specs + List.length sr_specs else 0)
                + List.length post_sweep_specs));
           let run_seed spec =
             let result = try_spec spec in
@@ -6689,24 +6703,29 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              bare, so one invalid choice in the staff cannot mask the key's seeds; once a key's bare
              retry is refused too, its seeds fail on their own and its refusals stop being
              retried. *)
-          let bare_exhausted = Hash_set.Poly.create () in
           let without key choices =
             List.filter choices ~f:(fun (k, _) -> not (equal_seg_key k key))
           in
-          (* One segmentation's running composite (coarse, or fine: gh-ocannl-574) over its [keys]:
-             the composite, its time when a window timed exactly it, and per swept key the staff its
-             sweep ran against (for the playoff). *)
-          let sweeper ~plan ~fine ~keys =
+          (* One running composite over [keys], each with one choice: a segmentation's sketches
+             (coarse, or fine: gh-ocannl-574), or the split-reduce sites' block counts. The
+             composite, its time when a window timed exactly it, per swept key the staff its sweep
+             ran against (for the playoff), and the sweep of one key, which returns that key's
+             results in its own backdrop. [single key staff choice] is the candidate; [describe]
+             names a choice for the log. Keys compare by [equal_key] and choices structurally. *)
+          let sweeper ~equal_key ~keys ~single ~describe =
             let running = ref [] and running_ms = ref None and swept_against = ref [] in
+            let bare_exhausted = ref [] in
+            let without key choices =
+              List.filter choices ~f:(fun (k, _) -> not (equal_key k key))
+            in
             let in_key_order choices =
               List.filter_map keys ~f:(fun k ->
-                  Option.map (List.Assoc.find choices ~equal:equal_seg_key k) ~f:(fun p -> (k, p)))
+                  Option.map (List.Assoc.find choices ~equal:equal_key k) ~f:(fun p -> (k, p)))
             in
             let sweep_key (key, ps) =
               let staff = without key !running in
               swept_against := (key, staff) :: !swept_against;
-              let current = List.Assoc.find !running ~equal:equal_seg_key key in
-              let single staff p = Fiss (F_sketch { plan; entries = [ (key, p) ]; staff; fine }) in
+              let current = List.Assoc.find !running ~equal:equal_key key in
               let ps =
                 match current with
                 | Some q -> q :: List.filter ps ~f:(fun p -> not (Poly.equal p q))
@@ -6719,7 +6738,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                         (* The running composite itself, timed already: not compiled again. *)
                         Some (p, ms)
                     | _ -> (
-                        match try_spec (single staff p) with
+                        match try_spec (single key staff p) with
                         | Some ((_, ms) as r) ->
                             admit r;
                             Some (p, ms)
@@ -6728,23 +6747,21 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                             | `Dedup (Some ms) -> Some (p, ms)
                             | `Declined
                               when (not (List.is_empty staff))
-                                   && not (Hash_set.mem bare_exhausted key) ->
+                                   && not (List.mem !bare_exhausted key ~equal:equal_key) ->
                                 Int.incr n_backdrop_fallbacks;
                                 logf "%s: refused with its staff; retrying it bare"
-                                  (spec_label (single staff p));
-                                (match try_spec (single [] p) with
+                                  (spec_label (single key staff p));
+                                (match try_spec (single key [] p) with
                                 | Some r -> admit r
                                 | None -> (
                                     match !last_attempt with
-                                    | `Declined -> Hash_set.add bare_exhausted key
+                                    | `Declined -> bare_exhausted := key :: !bare_exhausted
                                     | _ -> ()));
                                 None
                             | _ -> None)))
               in
-              fiss_single_results :=
-                List.rev_map results ~f:(fun (p, ms) -> (key, fine, (p, ms))) @ !fiss_single_results;
               (* The fastest in this backdrop; a tie keeps the composite's own choice. *)
-              match List.min_elt results ~compare:(fun (_, a) (_, b) -> Float.compare a b) with
+              (match List.min_elt results ~compare:(fun (_, a) (_, b) -> Float.compare a b) with
               | None -> ()
               | Some (p, ms) ->
                   let p, ms =
@@ -6757,19 +6774,31 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     | _ -> (p, ms)
                   in
                   if not (Option.exists current ~f:(Poly.equal p)) then
-                    logf "staffed: %ssegment %s: %s joins the running composite (%.4f ms)"
-                      (if fine then "fine " else "")
-                      (seg_key_tag key) (spec_label (Whole (W_sketch p))) ms;
+                    logf "staffed: %s joins the running composite (%.4f ms)" (describe key p) ms;
                   running := in_key_order ((key, p) :: without key !running);
-                  running_ms := Some ms
+                  running_ms := Some ms);
+              results
             in
-            (* Heaviest key first: its weight is its segment count times the roofline score of its
-               best-scored sketch, so the keys whose geometries differ most, whose gaps can absorb a
-               noisy backdrop, are decided first, and the near-tie keys last, in the smallest
-               backdrop. A key the model cannot score keeps its enumeration order, after the scored
-               ones. *)
-            let sweep ~pre_of ~start entries =
-              running := in_key_order start;
+            let start choices = running := in_key_order choices in
+            (running, running_ms, swept_against, start, sweep_key)
+          in
+          (* A segmentation's sketch sweeper. Heaviest key first: its weight is its segment count
+             times the roofline score of its best-scored sketch, so the keys whose geometries differ
+             most, whose gaps can absorb a noisy backdrop, are decided first, and the near-tie keys
+             last, in the smallest backdrop. A key the model cannot score keeps its enumeration
+             order, after the scored ones. *)
+          let sketch_sweeper ~plan ~fine ~keys =
+            let running, running_ms, swept_against, start, sweep_key =
+              sweeper ~equal_key:equal_seg_key ~keys
+                ~single:(fun key staff p ->
+                  Fiss (F_sketch { plan; entries = [ (key, p) ]; staff; fine }))
+                ~describe:(fun key p ->
+                  Printf.sprintf "%ssegment %s: %s"
+                    (if fine then "fine " else "")
+                    (seg_key_tag key) (spec_label (Whole (W_sketch p))))
+            in
+            let sweep ~pre_of ~start:choices entries =
+              start choices;
               if not (List.is_empty !running) then
                 logf "staffed: the running %scomposite starts from %s"
                   (if fine then "fine " else "")
@@ -6800,7 +6829,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 (List.stable_sort scored ~compare:(fun (_, a) (_, b) ->
                      Option.compare Float.compare b a)
                 @ unscored)
-                ~f:(fun (entry, _) -> sweep_key entry)
+                ~f:(fun (((key, _) as entry), _) ->
+                  let results = sweep_key entry in
+                  fiss_single_results :=
+                    List.rev_map results ~f:(fun (p, ms) -> (key, fine, (p, ms)))
+                    @ !fiss_single_results)
             in
             (running, running_ms, swept_against, sweep)
           in
@@ -6816,10 +6849,19 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             | Some { sp_segments = None; _ } | None -> None
           in
           let running, running_ms, swept_against, sweep =
-            sweeper ~plan:coarse_plan ~fine:false ~keys:(List.map fiss_sketch_entries ~f:fst)
+            sketch_sweeper ~plan:coarse_plan ~fine:false ~keys:(List.map fiss_sketch_entries ~f:fst)
           in
           let fine_running, fine_running_ms, fine_swept_against, fine_sweep =
-            sweeper ~plan:fine_plan ~fine:true ~keys:(List.map fine_all_entries ~f:fst)
+            sketch_sweeper ~plan:fine_plan ~fine:true ~keys:(List.map fine_all_entries ~f:fst)
+          in
+          (* The split-reduce sites' running composite: each site's block count, swept over the
+             sites in [sr_sites]' cost order (heaviest first already), each single's prelude staffed
+             with the other sites' choices, which start from the seeded plan's split. *)
+          let same_site a b = Idx.equal_symbol a.sr_axis b.sr_axis in
+          let sr_running, sr_running_ms, _, sr_start, sr_sweep_key =
+            sweeper ~equal_key:same_site ~keys:sr_sites
+              ~single:(fun s staff b -> Fiss (F_split { sites = [ (s, b) ]; staff }))
+              ~describe:(fun s b -> "split site " ^ split_site_label (s, b))
           in
           if staffed then (
             sweep ~pre_of:coarse_pre
@@ -6841,6 +6883,21 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 fine_new_entries)
           else List.iter coarse_single_specs ~f:run_seed;
           List.iter post_sweep_specs ~f:run_seed;
+          if staffed && not (List.is_empty sr_specs) then (
+            (* A seeded split site, by its target and extents: the plan detected its sites on the
+               pristine lowering, whose symbols are not the search's. *)
+            sr_start
+              (List.filter_map
+                 (Option.value_map seeded ~default:[] ~f:(fun plan -> plan.sp_split))
+                 ~f:(fun (seeded_site, b) ->
+                   List.find sr_sites ~f:(fun s ->
+                       Ir.Tnode.equal s.sr_target seeded_site.sr_target
+                       && s.sr_red = seeded_site.sr_red && s.sr_out = seeded_site.sr_out)
+                   |> Option.map ~f:(fun s -> (s, b))));
+            List.iter sr_sites ~f:(fun s ->
+                match List.filter sr_num_blocks ~f:(fun b -> 2 * b <= s.sr_red) with
+                | [] -> ()
+                | blocks -> ignore (sr_sweep_key (s, blocks) : (int * float) list)));
           (* gh-ocannl-1388: a refused window drops its digest from [seen] so that an equivalent
              later seed can measure it, but no later seed reproduces the seeded plan, so its floor
              would be lost to one contended window. Retried once here, after the seed pass. Still
@@ -6951,9 +7008,13 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 |> List.min_elt ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
                 |> Option.map ~f:(fun (s2, b, _) -> (s2, b)))
           in
+          (* Staffed, the running split composite, timed by its last accepted window when that
+             schedules every site. *)
+          let recombined = if staffed then !sr_running else recombined in
           sr_composite_eligible := List.length recombined >= 2;
           if !sr_composite_eligible then
-            Option.iter (try_spec (Fiss (F_split { sites = recombined }))) ~f:admit;
+            if staffed && Option.is_some !sr_running_ms then sr_composite_timed := true
+            else Option.iter (try_spec (Fiss (F_split { sites = recombined; staff = [] }))) ~f:admit;
           (* The composite playoff (gh-ocannl-1166; see [default_playoff_margin]), after every
              recombination composite so the [playoff] progress phase holds only its windows:
              starting from the faster timed composite, each key in turn tries its near-tie singles

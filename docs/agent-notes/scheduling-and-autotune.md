@@ -1130,6 +1130,11 @@ files.
   The fine segmentation (GPU, gh-ocannl-574) keeps its own composite: a fine key the finer cuts left
   unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded plan's,
   and only the new keys are swept (`test/operations/autotune_staffed_fine`, skipped off GPU).
+  The split-reduce sites keep one more (`F_split`'s `staff`, the other sites' block counts, starting
+  from the seeded plan's split matched by target and extents): staffing a site's prelude with the
+  others' splits forms the multi-site composite during the seeds, but every segment of a split
+  candidate still runs its preset, so the split singles' backdrop does not shrink the way a sketch
+  single's does.
   `test/operations/autotune_staffed_singles` scripts an additive landscape and seeds the start through
   the `Autotune.on_staffed_start` seam, which only a seeded plan fills in production.
 - **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**

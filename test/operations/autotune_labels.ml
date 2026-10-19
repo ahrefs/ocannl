@@ -263,6 +263,17 @@ let () =
        (String.equal
           (Autotune.split_sites_label [ (site_lo, 32) ])
           (Autotune.split_sites_label [ (site_lo, 16) ])));
+  (* A staffed split single (gh-ocannl-1138) appends its staff after [" | staff "], as a staffed
+     sketch single does, so its focus reads as the bare label and two staffs print apart. *)
+  let bare = Autotune.split_sites_label [ (site_lo, 32) ] in
+  let staffed b = Autotune.split_sites_label ~staff:[ (site_hi, b) ] [ (site_lo, 32) ] in
+  p "a staffed split label is the bare one's focus followed by its staff"
+    (String.equal (Autotune.split_sites_label ~staff:[] [ (site_lo, 32) ]) bare
+    && String.is_prefix (staffed 8) ~prefix:(String.chop_suffix_exn bare ~suffix:"]" ^ " | staff ")
+    );
+  p_pairwise_distinct "split staffs of different block counts print apart"
+    [ bare; staffed 8; staffed 16 ]
+    ~equal:String.equal ~to_string:Fn.id;
   p_none "no site label carries a comma"
     (List.concat_map site_updates ~f:(fun (_, update) ->
          [
