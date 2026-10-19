@@ -59,11 +59,12 @@ let one_line text =
     String.map text ~f:(fun c -> if is_control c then ' ' else c)
   else text
 
-(* [msg] with every line of it prefixed by ["FAIL: "]. A [FAIL: ] row is a run's own, never a
-   golden's, and [tools/mutation-run.sh] matches a mutated run's other rows against the golden row
-   by row: an unprefixed continuation line -- an "expected/got" pair, a child's captured output --
-   would be a row the golden lacks, and turn a caught mutant into one that "stopped early". A
-   trailing newline adds no empty row. *)
+(* [msg] with every line of it prefixed by ["FAIL: "]. A [FAIL: ] row is a run's own (a golden has
+   one only where it captures a refusing child), and [tools/mutation-run.sh] counts none toward the
+   golden's rows and matches a mutated run's other rows against the golden row by row: an unprefixed
+   continuation line -- an "expected/got" pair, a child's captured output -- would be a row the
+   golden lacks, and turn a caught mutant into one that "stopped early". A trailing newline adds no
+   empty row. *)
 let fail_lines msg =
   let lines =
     match String.split msg ~on:'\n' with

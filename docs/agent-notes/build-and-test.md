@@ -1802,12 +1802,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   skipped -- `Verdict.fail` prefixes EVERY line of a multi-line message, so an "expected/got"
   continuation is skipped too rather than read as a row the golden lacks), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
   teardown, still exits 4. A golden's success trailer is read the same way (`success trailer
-  omitted: K rows`): the scans print their `OK: ` rows under `if not (Verdict.any_failed ())`,
-  most of them behind a blank row of the trailer's own (`printf "\nOK: …"`), so every complete
+  omitted: K rows`): the scans print their `OK: ` rows through `Verdict.success_trailer`, which
+  prints them only while no check has failed, most of them behind a blank row of the trailer's own
+  (`~blank_line:true`), so every complete
   failing run of `verdict_ratchet`, `env_var_deps`, `config_dep_completeness` and the rest is
   that many rows short; the runner matches the run against the golden without its `OK: ` rows,
   with or without the blank row before them, under the same row-for-row and teardown conditions.
-  A new scan that keeps the `OK: ` prefix for its conditional rows inherits this. Residual: a golden ending on its marker section cannot tell a complete
+  A new scan that prints its trailer through `Verdict.success_trailer` inherits this. Residual: a golden ending on its marker section cannot tell a complete
   run from one cut inside the markers (nor one ending on its trailer a failing run from one cut
   before it), and a mutant that silences one refusal while every claim
   passes leaves no teardown, so it reads STOPPED EARLY although the golden caught it -- both want a
@@ -1824,8 +1825,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   manually. It is temporary storage, without a power-loss or reboot recovery guarantee. `tools/test-mutation-run.sh` drives the shipping
   runner and test-run supervisor in isolated fixtures; Ubuntu's shell-harness CI runs it. The
   Verdict text the runner reads it takes from `verdict_teardown.expected`, whose last section is
-  three children's streams, and replays through the runner: a refactor of `verdict.ml` keeps the
+  its children's streams, and replays through the runner: a refactor of `verdict.ml` keeps the
   harness green, while a promotion that changes those transcripts means running the harness.
+  The same holds for what the runner skips of a scan's ending: the `manifest_held`/`manifest_failed` pair ends
+  through the printers every scan shares, `Verdict.success_trailer` and
+  `Refusal_control_manifest.print_section`, and the failing child's run, replayed against the
+  passing child's stdout, must read as caught with one marker and the trailer omitted -- no source
+  grep of either printer, nor of a scan (gh-ocannl-1364).
 - The guarded pairwise claim has the same two label dialects as the scalar claim (gh-ocannl-816):
   `pf_all2` formats a computed label before taking the two arrays, and `pass_fail_all2` preserves
   `pass_fail`'s lazy failure detail while adding the structural empty, floor-shortfall, or

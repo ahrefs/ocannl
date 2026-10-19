@@ -306,11 +306,6 @@ done
 export PROBE_MODE=tailcut
 PROBE_ALIAS=@runtest-tail run_case 1
 grep -q '^refusal markers omitted: 1 ' "$fixture/result"
-# The marker row the runner skips is the manifest's own: a rewording there must fail here.
-grep -qF 'Printf.sprintf "[scanner-refusal:%s] %s"' "$root/test/support/refusal_control_scan.ml" ||
-  { echo 'Refusal_control_scan.marker no longer writes "[scanner-refusal:<digest>] <fragment>"'; exit 1; }
-grep -qF 'printf "  %s\n" marker' "$root/test/support/refusal_control_manifest.ml" ||
-  { echo 'Refusal_control_manifest.print no longer indents a marker row by two spaces'; exit 1; }
 printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
 # A failing run of a scan lacks its success trailer, the `OK: ` rows printed only when no claim
 # failed, and the blank row before it when that is the trailer's own: still its last row reached,
@@ -338,11 +333,6 @@ for mode in trailercut trailerkilled trailerswap; do
     trailerkilled|trailerswap) flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 8 rows" ;;
   esac
 done
-# The trailer the runner skips is the scans' own: the ratchet whose failing runs it was written
-# for prints its `OK: ` row only when no claim failed, and its golden carries that row.
-grep -qF 'if not (Verdict.any_failed ()) then' "$root/test/operations/verdict_ratchet.ml" &&
-  grep -q '^OK: ' "$root/test/operations/verdict_ratchet.expected" ||
-  { echo 'verdict_ratchet no longer prints a success trailer `OK: ` row under Verdict.any_failed'; exit 1; }
 printf 'PASS a failing run short by its success trailer is caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
 # A failure message spanning lines: Verdict.fail prefixes every line, so the runner skips each row
 # of it as it skips any `FAIL: ` row, and a run short by its trailer is still caught. Each
@@ -361,15 +351,21 @@ printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-sh
 # real Verdict runs: the streams of verdict_teardown's children, which its golden pins byte for byte
 # (each line prefixed with its child and stream). A refactor of verdict.ml that keeps its text
 # changes nothing here; a rewording the runner no longer reads fails here once that golden is
-# promoted. Each golden below is what the child's run would print had every claim held.
+# promoted. Each golden below is what the child's run would print had every claim held: written
+# out here, or (`@<child>`) the stdout of a sibling child in which every claim did hold.
 teardown_golden="$root/test/operations/verdict_teardown.expected"
+# A child's stream, as the golden prints it: `  <child> <stream> | <line>`, or the bare bar for an
+# empty line.
+transcript() {
+  sed -n -e "s/^  $1 $2 | //p" -e "s/^  $1 $2 |\$//p" "$teardown_golden" > "$3"
+  [ -s "$3" ] || { echo "verdict_teardown.expected carries no $1 $2 transcript"; exit 1; }
+}
 replay() {
-  for stream in stdout stderr; do
-    sed -n "s/^  $1 $stream | //p" "$teardown_golden" > "$fixture/replay.$stream"
-    [ -s "$fixture/replay.$stream" ] ||
-      { echo "verdict_teardown.expected carries no $1 $stream transcript"; exit 1; }
-  done
-  printf "$2" > replay.expected
+  for stream in stdout stderr; do transcript "$1" "$stream" "$fixture/replay.$stream"; done
+  case $2 in
+    @*) transcript "${2#@}" stdout replay.expected ;;
+    *) printf "$2" > replay.expected ;;
+  esac
   export PROBE_MODE=replay
   PROBE_ALIAS=@runtest-replay run_case "$3"
   if grep -q '^(none)$' "$fixture/result"; then
@@ -406,7 +402,18 @@ cmp "$fixture/claims" "$fixture/expected" ||
   { cat "$fixture/result"; echo 'pass_fail_forms: the false claims are not the echoed rows'; exit 1; }
 grep -q '^rows: 3 printed of 3 in replay.expected$' "$fixture/result"
 reached
-printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed\n'
+# A scan's ending through the printers the scans share (gh-ocannl-1364): a failed claim leaves out its
+# refusal-control marker and the success trailer, which Refusal_control_manifest.print_section and
+# Verdict.success_trailer print, and the golden is the same ending with every claim held. What the
+# runner skips is thereby theirs: a marker or trailer printed differently fails here once
+# verdict_teardown's golden is promoted, where a refactor that prints the same rows changes nothing.
+replay manifest_failed @manifest_held 1
+grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'manifest_failed: the omitted marker was not read as one'; exit 1; }
+grep -q '^success trailer omitted: 2 rows ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'manifest_failed: the omitted success trailer was not read as one'; exit 1; }
+reached
+printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed, a scan ending short by a failed claim'"'"'s marker and its trailer is caught\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac

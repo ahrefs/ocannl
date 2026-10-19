@@ -91,10 +91,11 @@ my %before = map { $_ => signature($_) } @outputs;
 # What a Verdict.case prints when its case raises (test/support/verdict.ml): the
 # case's own failed claim, standing in for rows the raise kept from printing.
 my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
-# A refusal-manifest marker row, as Test_utils.Refusal_control_manifest.print writes one: a
+# A refusal-manifest marker row, as Test_utils.Refusal_control_manifest.print_section writes one: a
 # claim's marker prints only once Verdict recorded that claim passing, so a run in which the
 # claim failed is a marker row short of the golden while it still reached its last row
-# (gh-ocannl-1216).
+# (gh-ocannl-1216). tools/test-mutation-run.sh replays a run that printer ended, so this shape is
+# pinned on its output, not its source.
 my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
 # A `FAIL: ` row is Verdict.fail's (every line of a multi-line message carries the prefix): the
 # run's own report of what went wrong, no row the golden has -- unless the golden has it, as a
@@ -145,8 +146,8 @@ sub log_pass {
 my $golden_read = read_rows("$root/$golden", 0);
 my ($golden_rows, $golden_last, $golden_markers, @golden_plain) =
     ($golden_read->{rows}, $golden_read->{last}, $golden_read->{markers}, @{$golden_read->{plain}});
-# A scan's success trailer: its `OK: ` rows, which it prints only once no claim failed (`if not
-# (Verdict.any_failed ()) then printf "\nOK: ..."`, the shape the manifest-printing scans share),
+# A scan's success trailer: its `OK: ` rows, which it prints only once no claim failed
+# (Verdict.success_trailer, whose output tools/test-mutation-run.sh replays),
 # so a complete failing run lacks them -- and the blank row a trailer's leading `\n` puts before
 # its first row (gh-ocannl-1083's row count read every failing run of such a scan as stopped
 # early). The forms a complete failing run of the golden can take: the golden's rows as they are,
