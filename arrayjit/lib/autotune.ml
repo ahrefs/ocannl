@@ -4336,9 +4336,13 @@ let seeded_split_backend backend = seeded_default_backend backend
 
 (* gh-ocannl-1331: whether a search on [backend] can read the [Search_shaping] key [key]: the seeded
    plan's keys where {!seeded_settings} resolves them (its backend tests come first, so another
-   backend never reads them), the default pipeline's per {!Sched.search_shaping_key_read}. *)
+   backend never reads them), the register-tile twin gate where the matmul family's CPU branch reads
+   it ([matmul_flavor_tree]'s [is_cpu] arm, the register-tiled rendering), the default pipeline's
+   per {!Sched.search_shaping_key_read}. The other [autotune_*] keys are read on every backend: the
+   search's own knobs, and [autotune_pad_waste_max] in the GPU and CPU menus alike. *)
 let search_shaping_key_read ~backend key =
   match key with
+  | "autotune_register_tile_rm_twin" -> Sched.backend_is_cpu backend
   | "gpu_default_sketch_min_reduction" | "gpu_default_reduction_sink" ->
       seeded_default_backend backend
   | "gpu_default_split_reduce_min_serial" ->

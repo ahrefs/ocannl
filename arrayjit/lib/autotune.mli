@@ -1886,9 +1886,11 @@ val seeded_split_backend : string -> bool
 val search_shaping_key_read : backend:string -> string -> bool
 (** Whether a search on [backend] can read the [Utils.Search_shaping] configuration key [key]
     (gh-ocannl-1331): the seeded plan's [gpu_default_*] keys where {!seeded_default_backend} (and,
-    for the split threshold, {!seeded_split_backend}) holds, the default pipeline's keys per
-    {!Ir.Schedule.search_shaping_key_read}, and every other key everywhere. A key a backend's search
-    cannot read keys nothing in its trajectory identity ({!search_shaping_identity}). *)
+    for the split threshold, {!seeded_split_backend}) holds, [autotune_register_tile_rm_twin] where
+    [Ir.Schedule.backend_is_cpu] does (only the CPU register-tiled rendering reads it), the default
+    pipeline's keys per {!Ir.Schedule.search_shaping_key_read}, and every other key everywhere. A
+    key a backend's search cannot read keys nothing in its trajectory identity
+    ({!search_shaping_identity}). *)
 
 val search_shaping_identity : backend:string -> limits:Ir.Backend_intf.hardware_limits -> string
 (** The [Search_shaping] part of {!tune}'s search-trajectory identity on [backend] at [limits]:

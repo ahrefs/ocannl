@@ -950,6 +950,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      and any other driver failure as an ordinary [Invalid_argument]. *)
   let must_propagate = function
     | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _ -> true
+    (* A malformed registered setting (gh-ocannl-1332) is the configuration's failure, not an arm's
+       or a flip's: contained, it would ship whichever placement happens not to read the key, as
+       though the setting had been honored. *)
+    | Utils.Invalid_config_value _ -> true
     | _ -> false
   in
   (* A [report] callback exception is the caller's failure, not the search's — {!Autotune.tune}
