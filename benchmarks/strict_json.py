@@ -13,9 +13,21 @@ shell drivers included (they put this directory on sys.path from STRICT_JSON_DIR
 tooling writes and reads back itself (preflight records, matrices, results.jsonl, fixture headers,
 workload specs) is out of scope; test_orchestrate's ResultLineReaderInventoryTest holds each such
 `json.loads` call with its reason and fails on any other.
+
+A shell driver that needs ONE field of a cell's result line asks for it by name instead of
+grepping the line's text (gh-ocannl-1355):
+
+  python3 benchmarks/strict_json.py field CELL.out step_ms.p50
+
+prints the field of the cell's last result line (`last_result`, `field`): a string as it is,
+anything else as JSON. It exits 1, naming the problem on stderr, when the file holds no result
+line, the line is not strict JSON, or the field is missing -- so `step_ms` being a
+`{p10,p50,p90}` object, or a nested `tune.shipped`, is the reader's business, not a pattern's.
+test_orchestrate's ShellFieldGrepInventoryTest fails on a driver line that greps a quoted JSON key.
 """
 import json
 import math
+import sys
 
 
 class NonFinite(ValueError):
@@ -42,3 +54,46 @@ def loads(text):
     can catch `NonFinite` first to name the problem instead.
     """
     return json.loads(text, parse_constant=_reject_constant, parse_float=_finite_float)
+
+
+def last_result(text):
+    """The record of the last line of `text` (a cell's stdout) that opens a JSON object, read by
+    `loads`; None when there is none. The LAST one, as orchestrate.py and gh612_cells.sh's parity
+    gate read it: a cell's stdout can carry earlier records."""
+    line = next((l.strip() for l in reversed(text.splitlines()) if l.lstrip().startswith("{")), None)
+    return None if line is None else loads(line)
+
+
+def field(record, path):
+    """`record`'s value at the dotted `path` (`step_ms.p50`, `tune.shipped`), refusing with
+    `KeyError` -- naming the path so far -- where a key is missing or its parent is not an
+    object."""
+    value, walked = record, []
+    for key in path.split("."):
+        walked.append(key)
+        if not isinstance(value, dict) or key not in value:
+            raise KeyError(f"the result line has no {'.'.join(walked)}")
+        value = value[key]
+    return value
+
+
+def _main(argv):
+    if len(argv) != 3 or argv[0] != "field":
+        print("usage: strict_json.py field FILE KEY[.KEY...]", file=sys.stderr)
+        return 2
+    _, path, key = argv
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            record = last_result(f.read())
+        if record is None:
+            raise ValueError("no result line")
+        value = field(record, key)
+    except (OSError, ValueError, KeyError) as e:
+        print(f"strict_json: {path}: {e.args[0] if isinstance(e, KeyError) else e}", file=sys.stderr)
+        return 1
+    print(value if isinstance(value, str) else json.dumps(value))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))

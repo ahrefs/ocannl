@@ -12,6 +12,7 @@ import json
 import statistics
 import sys
 
+from display_safe import display_value, table_lines
 from gh1133_summary import loss_vs, median_p50, p90_p10_spread, read_cells
 
 
@@ -23,8 +24,7 @@ def fold_matrix(out, treatments):
     whether the matrix is incomplete."""
     treatments = treatments.split()
     cells, incomplete = read_cells(out, treatments)
-    print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs composed | vs two-pass | p10..p90 spread | shipped mma | loss vs composed |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    rows = []
     for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1], treatments.index(kv[0][2]))):
         p50s = [r["step_ms"]["p50"] for _, r in reps]
         m = statistics.median(p50s)
@@ -33,10 +33,14 @@ def fold_matrix(out, treatments):
         record = reps[0][1]
         mma = record["shipped_mma"] if "shipped_mma" in record else (record.get("tune") or {}).get("shipped_mma")
         loss = loss_vs(reps, cells.get((backend, fixture, "composed")))
-        print("| %s | %s | %s | %s | %.1f | %s | %s | %.3fx | %s | %s |" % (
-            backend, fixture, treatment, ", ".join("%.1f" % p for p in p50s), m,
+        rows.append((
+            display_value(backend), display_value(fixture), display_value(treatment),
+            ", ".join("%.1f" % p for p in p50s), "%.1f" % m,
             "%.3fx" % (m / comp) if comp else "", "%.3fx" % (m / two) if two else "",
-            p90_p10_spread(reps), json.dumps(mma) if mma is not None else "", loss))
+            "%.3fx" % p90_p10_spread(reps), json.dumps(mma) if mma is not None else "", loss))
+    print("\n".join(table_lines(
+        ["backend", "fixture", "treatment", "p50 per repeat (ms)", "median p50", "vs composed",
+         "vs two-pass", "p10..p90 spread", "shipped mma", "loss vs composed"], rows)))
     return incomplete
 
 

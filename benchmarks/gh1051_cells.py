@@ -52,6 +52,8 @@ import re
 import statistics
 import sys
 
+from display_safe import display_value, log_line, table_lines
+
 VARIANTS = ["parallel", "smem", "regtile", "mma_pd1", "mma_pd2"]
 DIGITS = set()
 # The structural bound (see above): five times the ~5% a legitimately per-step-narrowed 2048-term
@@ -103,7 +105,7 @@ def load(out, pattern, key_of):
     for f in sorted(glob.glob(os.path.join(out, pattern))):
         key = key_of(os.path.basename(f))
         if key is None:
-            problems.append(f"{os.path.basename(f)}: not a cell this driver can name")
+            problems.append(f"{display_value(os.path.basename(f))}: not a cell this driver can name")
             continue
         ok, why = status_ok(f, key["prec"])
         if not ok:
@@ -180,21 +182,23 @@ def ab(out, label):
         if p1 is not None:
             print(f"n={size}: narrow tensorized checksum off the exact one by {rel(p1, exact):.3g} "
                   f"(the arm's accuracy, reported not bounded)")
-    print("\n| memory | n | variant | narrow (true) ms | wide (false) ms | wide/narrow "
-          "| f32 control wide/narrow | chk err narrow / wide | census (wide) |")
-    print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    shown, rows = display_value(label), []
     for size in sizes:
         for v in VARIANTS:
             try:
                 a, w = cells[(size, "true", "bfloat16", v)], cells[(size, "false", "bfloat16", v)]
                 ca, cw = cells[(size, "true", "single", v)], cells[(size, "false", "single", v)]
             except KeyError:
-                print(f"| {label} | {size} | {v} | missing | missing | | | | |")
+                rows.append((shown, str(size), v, "missing", "missing", "", "", "", ""))
                 continue
             exact = cw[0][1]
             err = f"{rel(a[0][1], exact):.2g} / {rel(w[0][1], exact):.2g}"
-            print(f"| {label} | {size} | {v} | {fmt(a)} | {fmt(w)} | {med(w) / med(a):.3f} | "
-                  f"{med(cw) / med(ca):.3f} | {err} | {w[0][2]} |")
+            rows.append((shown, str(size), v, fmt(a), fmt(w), f"{med(w) / med(a):.3f}",
+                         f"{med(cw) / med(ca):.3f}", err, w[0][2]))
+    print()
+    print("\n".join(table_lines(
+        ["memory", "n", "variant", "narrow (true) ms", "wide (false) ms", "wide/narrow",
+         "f32 control wide/narrow", "chk err narrow / wide", "census (wide)"], rows)))
     return problems
 
 
@@ -216,14 +220,17 @@ def split(out, label):
             c = checksum_of(cells, (size, "after", "bfloat16", v), [])
             if par is not None and c is not None and rel(c, par) > REL_BOUND:
                 problems.append(f"n={size} {v}: checksum off the serial wide one by {rel(c, par):.3g}")
-    print("\n| memory | n | variant | role | before ms | after ms | after/before | census (after) |")
-    print("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    shown, rows = display_value(label), []
     for size in sizes:
         for v in VARIANTS:
             b, a = cells[(size, "before", "bfloat16", v)], cells[(size, "after", "bfloat16", v)]
             role = "treatment" if v.startswith("mma") else "control"
-            print(f"| {label} | {size} | {v} | {role} | {fmt(b)} | {fmt(a)} | "
-                  f"{med(a) / med(b):.3f} | {a[0][2]} |")
+            rows.append((shown, str(size), v, role, fmt(b), fmt(a), f"{med(a) / med(b):.3f}",
+                         a[0][2]))
+    print()
+    print("\n".join(table_lines(
+        ["memory", "n", "variant", "role", "before ms", "after ms", "after/before",
+         "census (after)"], rows)))
     return problems
 
 
@@ -238,5 +245,5 @@ if __name__ == "__main__":
         print("checksum equality compared as printed: at most ten significant digits, lossless only "
               "if this bench renders %.17g (older revisions' %.10g may round)")
     for p in problems:
-        print("INVALID:", p)
+        print(log_line(f"INVALID: {p}"))
     sys.exit(1 if problems else 0)

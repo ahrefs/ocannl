@@ -81,9 +81,9 @@ cell() {
     # `none logged`/`?` in the summary instead of ending the driver under `set -e -o pipefail`.
     census=$({ grep -o 'seeded_default: [0-9]* of [0-9]* segments seeded.*' "$out/$name.err" ||
       true; } | tail -1)
-    # The runner's step_ms is a percentile object; the summary carries its median.
-    ms=$({ grep -o '"step_ms":{[^}]*}' "$out/$name.out" || true; } | tail -1 |
-      { grep -o '"p50":[0-9.e+-]*' || true; } | cut -d: -f2)
+    # The runner's step_ms is a percentile object; the summary carries its median, read off the
+    # parsed result line (strict_json.py names on stderr why a cell has none).
+    ms=$(python3 "$root/benchmarks/strict_json.py" field "$out/$name.out" step_ms.p50) || ms=""
     derive=$({ grep -o 'seeded_default: plan derived in [0-9.]* s' "$out/$name.err" || true; } |
       sed 's/.* in //' | paste -sd, -)
     echo "$fixture gate=$gate pass=$pass step_p50_ms=${ms:-?} plan_derivation=[${derive:-none logged}] census=[${census:-none logged}]" |

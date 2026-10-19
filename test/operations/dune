@@ -9057,7 +9057,8 @@
   gh1133_summary.py
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
-  ../../benchmarks/strict_json.py)
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py)
  (action
   (no-infer
    (progn
@@ -9082,7 +9083,8 @@
   ../../benchmarks/gh1002_cells.py
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
-  ../../benchmarks/strict_json.py)
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py)
  (action
   (no-infer
    (progn
@@ -9105,7 +9107,8 @@
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
   ../../benchmarks/cell_group.py
-  ../../benchmarks/strict_json.py)
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py)
  (action
   (no-infer
    (progn

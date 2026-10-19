@@ -42,6 +42,8 @@ import box_gate
 import fixture_digest
 import cell_group
 import strict_json
+# The shared builders every report-writing script uses (gh-ocannl-1355).
+from display_safe import display_value, log_line, log_lines, table_lines
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -658,84 +660,6 @@ def ocannl_cell(model, backend, regime, variant, flags, ambient):
         "ambient_ocannl_shadowed": shadowed_ambient(ambient, args),
     }
     return [str(ocannl_exe(model)), *args], stamp
-
-
-_DISPLAY_PLAIN_RE = re.compile(r"[A-Za-z0-9_.,:/=+@%~-]*")
-
-
-def display_value(value):
-    """An operator-supplied value as a label, a report cell, a failure note or a message shows it.
-
-    Every human-facing rendering of a string the operator or the environment supplied goes through
-    this (or through `json.dumps`, as the report's header lines do): a `--cell-flag` value, a
-    `--skip-cell` workload, a fixture's name and the workload a result row or checkpoint names after
-    it, a cache path from the environment, an exception's text, the value a regime knob resolved to.
-    Only the records keep the raw value. A label built from such a string (`<workload> ocannl/...`)
-    is a display string from the start, so the report and the run log print labels as they are.
-    Origins need nothing: `fixture_digest.check_origin` holds them to a portable alphabet.
-
-    Plain values (`16`, `/tmp/cache`) are shown as they are. Anything else is JSON-quoted with `|`
-    and the backtick escaped as well, so a value cannot add a column to a report table, a line to
-    the report or the run log, or open a code span -- `debug_highlight_pcre=a|b` is a legitimate
-    setting -- while the shown text still decodes to the exact value. The raw value is what the
-    command line, the row's `ocannl_flags` and the JSON records carry.
-    """
-    if _DISPLAY_PLAIN_RE.fullmatch(value):
-        return value
-    return json.dumps(value).replace("|", "\\u007c").replace("`", "\\u0060")
-
-
-# What ends a Markdown table cell early: the column separator, and every character `str.splitlines`
-# breaks a line at (a renderer ends the row there, and so does any reader that splits the report
-# into lines). `display_value` escapes all of them, so a value shown through it never trips this.
-_TABLE_CELL_BREAKERS_RE = re.compile("[|\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
-
-
-class UnsafeTableRow(ValueError):
-    """A report table row whose cell would add a column or end the row (a raw `|` or line break),
-    or whose cell count is not its table's column count.
-
-    Raised by `table_row` and `table_lines` when the row is rendered, so a string that reached a
-    cell without going through `display_value` fails the report loudly instead of shifting every
-    column after it.
-    """
-
-
-def table_row(*cells):
-    """One row of a report table -- its header and rule included -- from its cell texts.
-
-    Every Markdown table `report` writes is built here and only here, so display safety is checked
-    where the row is rendered rather than remembered at each interpolation (post-wave follow-up of
-    gh-ocannl-1273): a cell holding a raw `|` or line break raises `UnsafeTableRow`, naming the
-    cell. Show an operator- or environment-supplied string through `display_value` first; that is
-    the fix the refusal asks for, never escaping at the call site.
-    """
-    for column, cell in enumerate(cells):
-        if not isinstance(cell, str):
-            raise TypeError(f"table cell {column} is {type(cell).__name__}, not str: {cell!r}")
-        breaker = _TABLE_CELL_BREAKERS_RE.search(cell)
-        if breaker:
-            raise UnsafeTableRow(
-                f"table cell {column} holds a raw {breaker.group()!r}, which would "
-                f"{'add a column' if breaker.group() == '|' else 'end the row'}: {cell!r} "
-                "(show the value through display_value)"
-            )
-    return "|" + "|".join(f" {cell} " if cell else " " for cell in cells) + "|"
-
-
-def table_lines(columns, rows):
-    """A report table as its lines: the header row naming `columns`, the rule, then `rows`, each a
-    sequence of cell texts as long as `columns` (a short or long row is refused as a malformed one
-    would be read: every column after the gap shifts)."""
-    lines = [table_row(*columns), "|" + "---|" * len(columns)]
-    for row in rows:
-        row = tuple(row)
-        if len(row) != len(columns):
-            raise UnsafeTableRow(
-                f"table row has {len(row)} cells for {len(columns)} columns: {row!r}"
-            )
-        lines.append(table_row(*row))
-    return lines
 
 
 def display_arg(arg):
@@ -1366,7 +1290,10 @@ def read_cell_log(path):
 
 
 def _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint):
-    print(f"--- {label}", flush=True)
+    # Checked before the cell runs. The `!!!` lines below print inside a cell's failure handling,
+    # where a refusal would turn a recorded failure into a lost sweep; their notes are the ones the
+    # failure record carries, which the end-of-run RUNNER FAILURES lines check.
+    print(log_line(f"--- {label}"), flush=True)
     log, log_path, temporary = open_cell_log(label)
     try:
         return _run_logged_cell(
@@ -1957,11 +1884,13 @@ def check_fixture_digests(fixtures, digests_path=None, allow_unpinned=False):
         measured[fx] = (sha, origins)
         where = f" — {origins}'s bytes" if verdict == "MATCH" else ""
         print(
-            f"fixture {display_value(fx.name)}: sha256 {sha} ({size} bytes) — {verdict}{where}",
+            log_line(
+                f"fixture {display_value(fx.name)}: sha256 {sha} ({size} bytes) — {verdict}{where}"
+            ),
             flush=True,
         )
         if verdict != "MATCH":
-            print(f"  recorded: {fixture_digest.describe(fx.name, entries)}", flush=True)
+            print(log_line(f"  recorded: {fixture_digest.describe(fx.name, entries)}"), flush=True)
             unpinned.append((fx, verdict))
     named = ", ".join(f"{display_value(fx.name)} ({verdict})" for fx, verdict in unpinned)
     if unpinned and not allow_unpinned:
@@ -1976,8 +1905,10 @@ def check_fixture_digests(fixtures, digests_path=None, allow_unpinned=False):
         )
     if unpinned:
         print(
-            f"MEASURING UNPINNED FIXTURES: {named} — results carry their measured digest, but "
-            "nothing checked in describes them",
+            log_line(
+                f"MEASURING UNPINNED FIXTURES: {named} — results carry their measured digest, but "
+                "nothing checked in describes them"
+            ),
             flush=True,
         )
     return measured
@@ -3193,7 +3124,7 @@ def main():
             precisions, not_applicable = available_precisions(model, mode, args.precision)
             for precision, reason in not_applicable:
                 unavailable.append((name, precision, reason))
-                print(f"--- {shown} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
+                print(log_line(f"--- {shown} ocannl/*/{precision}: NOT APPLICABLE ({reason})"))
             for backend in swept_backends(gpu_ocannl):
                 for precision in precisions:
                     for variant in variants:
@@ -3202,7 +3133,7 @@ def main():
                             name, backend, variant, precision, operator_skips, args.no_skip_cells
                         )
                         if why:
-                            print(f"--- {shown} ocannl/{backend}/{cell}: SKIPPED ({why})")
+                            print(log_line(f"--- {shown} ocannl/{backend}/{cell}: SKIPPED ({why})"))
                             for regime in args.profile:
                                 skipped.append(
                                     (f"{shown} ocannl/{backend}/{cell}{regime_label(regime)}", why)
@@ -3352,15 +3283,19 @@ def main():
         # Not a failure: these cells were requested but the workload cannot express them. Saying so
         # is the point — an unavailable cell and an unrun one otherwise look identical.
         print(
-            f"NOT APPLICABLE: {len(unavailable)} requested cell(s) the workload cannot express: "
-            + ", ".join(f"{display_value(w)}/{p}" for w, p, _ in unavailable),
+            log_line(
+                f"NOT APPLICABLE: {len(unavailable)} requested cell(s) the workload cannot express: "
+                + ", ".join(f"{display_value(w)}/{p}" for w, p, _ in unavailable)
+            ),
             flush=True,
         )
     if skipped:
         # Not a failure either, and said for the same reason as NOT APPLICABLE above.
         print(
-            f"SKIPPED: {len(skipped)} cell(s) left out of this sweep: "
-            + ", ".join(label for label, _ in skipped),
+            log_line(
+                f"SKIPPED: {len(skipped)} cell(s) left out of this sweep: "
+                + ", ".join(label for label, _ in skipped)
+            ),
             flush=True,
         )
     if failures:
@@ -3369,15 +3304,20 @@ def main():
         # the cache it was writing, which run together into one line is unreadable exactly where
         # an unattended run is read (gh-ocannl-760).
         print(
-            f"RUNNER FAILURES: {len(failures)} cell(s) produced no result:\n"
-            + "\n".join(f"  - {failure_line(f)}" for f in failures),
+            log_lines(
+                [f"RUNNER FAILURES: {len(failures)} cell(s) produced no result:"]
+                + [f"  - {failure_line(f)}" for f in failures]
+            ),
             flush=True,
         )
     no_ref = [r for r in results if r["parity"] == "NO-REF"]
     if no_ref and "pytorch" in args.only:
         # The reference cell was requested but is missing — the gate would be vacuous.
         ok = False
-        print(f"PARITY GATE: {len(no_ref)} cell(s) have no reference to compare against", flush=True)
+        print(
+            log_line(f"PARITY GATE: {len(no_ref)} cell(s) have no reference to compare against"),
+            flush=True,
+        )
     if provenance_violations:
         # Not a parity problem: these cells computed the right thing. Their step times are the
         # search process's, which the two-pass protocol exists to keep out of a report — and which
@@ -3385,8 +3325,10 @@ def main():
         ok = False
         labels = ", ".join(map(gate_label, provenance_violations))
         print(
-            f"PROVENANCE GATE: {len(provenance_violations)} tuned cell(s) reported step times "
-            f"from a process that searched: {labels}",
+            log_line(
+                f"PROVENANCE GATE: {len(provenance_violations)} tuned cell(s) reported step times "
+                f"from a process that searched: {labels}"
+            ),
             flush=True,
         )
     if tensorization_mismatches:
@@ -3394,7 +3336,7 @@ def main():
         # declining is the correct decision. It is announced because the number is honest only
         # about a scalar kernel, and the row's variant name says otherwise (gh-ocannl-626) — the
         # failure mode is a reader quoting it as a tensor-core measurement.
-        print(tensorization_notice(tensorization_mismatches), flush=True)
+        print(log_line(tensorization_notice(tensorization_mismatches)), flush=True)
     if regime_mismatches:
         # A row labelled with a regime its process did not run in is worse than a missing row:
         # its number would be quoted as the other regime's (gh-ocannl-719).
@@ -3403,8 +3345,10 @@ def main():
             f"{gate_label(r)} (runner reports {r['regime_mismatch']})" for r in regime_mismatches
         )
         print(
-            f"REGIME GATE: {len(regime_mismatches)} cell(s) ran under a regime other than the "
-            f"one dispatched: {labels}",
+            log_line(
+                f"REGIME GATE: {len(regime_mismatches)} cell(s) ran under a regime other than the "
+                f"one dispatched: {labels}"
+            ),
             flush=True,
         )
     if precision_mismatches:
@@ -3415,14 +3359,16 @@ def main():
             f"{gate_label(r)} (runner ran {r['precision_mismatch']})" for r in precision_mismatches
         )
         print(
-            f"PRECISION GATE: {len(precision_mismatches)} cell(s) ran at a precision other than "
-            f"their label: {labels}",
+            log_line(
+                f"PRECISION GATE: {len(precision_mismatches)} cell(s) ran at a precision other "
+                f"than their label: {labels}"
+            ),
             flush=True,
         )
     failed = [r for r in results if r["parity"] == "FAIL"]
     if failed:
         ok = False
-        print(f"PARITY GATE: {len(failed)} cell(s) FAILED", flush=True)
+        print(log_line(f"PARITY GATE: {len(failed)} cell(s) FAILED"), flush=True)
     diverged = [r for r in results if r["parity"] == "DIVERGED"]
     if diverged:
         # A cell that ran and blew up, reported as such (gh-ocannl-676). It is a gate failure like
@@ -3431,7 +3377,7 @@ def main():
         ok = False
         labels = ", ".join(f"{gate_label(r)} (from step {r['diverged_at']})" for r in diverged)
         print(
-            f"PARITY GATE: {len(diverged)} cell(s) DIVERGED (non-finite loss): {labels}",
+            log_line(f"PARITY GATE: {len(diverged)} cell(s) DIVERGED (non-finite loss): {labels}"),
             flush=True,
         )
     stationary = [
@@ -3441,7 +3387,7 @@ def main():
         ok = False
         labels = ", ".join(map(gate_label, stationary))
         print(
-            f"LOSS-MOVEMENT GATE: {len(stationary)} stationary cell(s): {labels}",
+            log_line(f"LOSS-MOVEMENT GATE: {len(stationary)} stationary cell(s): {labels}"),
             flush=True,
         )
     if not ok:
