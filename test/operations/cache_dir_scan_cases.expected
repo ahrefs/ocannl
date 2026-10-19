@@ -46,6 +46,9 @@ ok: use -- through an alias of the cache module, a nested include and a signatur
 ok: use -- including Ir makes its Schedule_cache reachable through the structure
 ok: use -- an included module's exports still win over the structure's base
 ok: use -- a later include of another named module keeps the cache's values
+ok: use -- a structure's own value shadows the included cache's
+ok: use -- and a later include of the cache takes the name back
+ok: use -- a resolver reached through a structure including Autotune certifies nothing
 ok: use -- a structure including an unrelated module is not the cache
 ok: use -- an open inside a structure is not an export
 ok: use -- opening a structure brings its exported alias into scope

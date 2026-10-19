@@ -854,6 +854,19 @@ let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substri
 let wrapper z = store z
 let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m11")|ocaml},
       {|"m11" +partial(mutation)|} );
+    (* A storing helper called for its effect alone writes what it stores (review round 3). *)
+    ( "a discarded call to a storing helper is a write of its argument",
+      {ocaml|let cell = ref ""
+let store x = cell := x; ()
+let wrapper z = store z; !cell
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m12")|ocaml},
+      "+partial(mutation)" );
+    ( "a discarded call storing generated text directly is a write of it",
+      {ocaml|let cell = ref ""
+let store x = cell := x
+let src = (store (Generated.read "w"); !cell)
+let () = p "marker" (String.is_substring src ~substring:"m13")|ocaml},
+      "+partial(mutation)" );
     (* gh-ocannl-1237: the [Stdlib]-qualified spellings of the cell operators are the same cells. *)
     ( "Stdlib-qualified reference operators are a cell write and read",
       {ocaml|let store x = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r

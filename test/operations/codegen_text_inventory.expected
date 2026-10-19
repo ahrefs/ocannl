@@ -143,7 +143,7 @@ test/operations/accum_width.ml
     "= single_to_bfloat16(v"
     "Vectorized reduction rendering"
     "single_to_bfloat16((bfloat16_to_single("
-test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component]
+test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
     "[b0,]:=0.;}"
     "s0"
@@ -211,7 +211,7 @@ test/operations/hardware_axes_parity.ml
     "if ("
     "lid.x"
     "threadIdx.x"
-test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name: untraced callback]
+test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
     "__nv_bfloat16 wred_partials_"
     "__nv_bfloat16 wred_v_"
     "float wred_partials_"

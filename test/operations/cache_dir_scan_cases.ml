@@ -263,6 +263,34 @@ let () = M.Schedule_cache.store ~dir:"scratch" key value|ocaml},
 let () = M.store ~dir:"scratch" key value
 let () = M.Schedule_cache.store ~dir:"autotune_cache_both" key value|ocaml},
       [ "~dir names scratch"; "~dir names autotune_cache_both" ] );
+    (* A value the structure binds itself wins over its includes, as a module name does (review
+       round 3): a local [store] is not a cache write, unless a later include of the cache takes the
+       name back. *)
+    ( "a structure's own value shadows the included cache's",
+      {ocaml|module M = struct
+  include Ir.Schedule_cache
+  let store ~dir _ _ = ignore (dir : string)
+end
+let () = M.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "and a later include of the cache takes the name back",
+      {ocaml|module M = struct
+  let store ~dir _ _ = ignore (dir : string)
+  include Ir.Schedule_cache
+end
+let () = M.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    (* The forwarding resolver is certified only through the library's own module: a structure that
+       includes it may define a [resolve_cache_dir] of its own (review round 3). *)
+    ( "a resolver reached through a structure including Autotune certifies nothing",
+      {ocaml|module A = struct
+  include Autotune
+  let resolve_cache_dir ?cache_dir ~search () = ignore (cache_dir, search); "scratch"
+end
+let f ?cache_dir () =
+let cache_dir = A.resolve_cache_dir ?cache_dir ~search:true () in
+Ir.Schedule_cache.store ~dir:cache_dir k v|ocaml},
+      [ "~cache_dir forwards the parameter cache_dir"; "~dir names `cache_dir`" ] );
     ( "a structure including an unrelated module is not the cache",
       {ocaml|module Cache = struct include Other end
 let () = Cache.store ~dir:"scratch" key value|ocaml},

@@ -1103,6 +1103,15 @@ let reads_cell scope callee =
   || calls scope callee ~target:"Array" ~name:"get"
   || calls scope callee ~target:"Bytes" ~name:"get"
 
+(** A write into a mutable cell: [:=], [Array.set], [Bytes.set], each bare or under [Stdlib.]. *)
+let writes_cell scope callee =
+  ref_operator scope callee ":="
+  || calls scope callee ~target:"Array" ~name:"set"
+  || calls scope callee ~target:"Bytes" ~name:"set"
+
+(** Whether [p] carries anything a site could pin: generated text, a parameter, a buffer. *)
+let carries_text p = p.generated || (not (Set.is_empty p.parameters)) || p.buffer
+
 let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
     ?(source_parameters = Hashtbl.Poly.create ()) ?(function_parameters = Hashtbl.Poly.create ())
     ?(outer = fun _ -> no_provenance) collect =
@@ -1128,12 +1137,20 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             | Pexp_function _ -> ()
             | Pexp_setfield (_, _, rhs) | Pexp_setinstvar (_, rhs) ->
                 written := join_provenance !written (of_expr rhs)
-            | Pexp_apply (callee, args)
-              when ref_operator scope callee ":="
-                   || calls scope callee ~target:"Array" ~name:"set"
-                   || calls scope callee ~target:"Bytes" ~name:"set" ->
+            | Pexp_apply (callee, args) when writes_cell scope callee ->
                 List.iter args ~f:(fun (_, arg) ->
                     written := join_provenance !written (of_expr arg))
+            | Pexp_apply _ ->
+                (* A call made for its effect writes whatever it stores (review round 3): a helper
+                   that stores its argument, here or in a cell outside it, reads as a write of that
+                   argument. *)
+                let side_effect = of_expr e in
+                if
+                  carries_text side_effect
+                  && (List.mem side_effect.because Mutation ~equal:Poly.equal
+                     || not (Set.is_empty side_effect.stored))
+                then written := join_provenance !written side_effect;
+                super#expression e
             | _ -> super#expression e
         end
       in
@@ -1199,6 +1216,22 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
           else result
         in
         { result with functions = [ span expr.pexp_loc ] }
+    | Pexp_apply (callee, args) when writes_cell scope callee ->
+        (* The value of a write is [()], and what it writes is stored: so a function whose body is
+           the write stores its argument (review round 3). *)
+        let written =
+          List.fold args ~init:no_provenance ~f:(fun acc (_, arg) ->
+              join_provenance acc (of_expr arg))
+        in
+        let stored = Set.union written.parameters written.stored in
+        if carries_text written then
+          {
+            (uncertain Uncorrelated Mutation written) with
+            uncertainty = Uncorrelated;
+            functions = [];
+            stored;
+          }
+        else { no_provenance with stored }
     | Pexp_apply (callee, args) ->
         let callee_value = of_expr callee in
         let direct_source =
@@ -1292,7 +1325,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                [Unresolved]; where the cell is the only way the argument comes back, it joins
                [Uncorrelated], as the same write does inside a body. An argument carrying nothing a
                site could pin (ordinary text) adds nothing. *)
-            let carries p = p.generated || (not (Set.is_empty p.parameters)) || p.buffer in
+            let carries = carries_text in
             let stored_only, stored_returned =
               List.fold formal_parameters ~init:(no_provenance, no_provenance)
                 ~f:(fun (only, returned) (symbol, destination) ->

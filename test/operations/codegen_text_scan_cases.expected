@@ -139,6 +139,8 @@ ok: source -- an ordinary stored argument does not mark a direct pin partial
 ok: source -- an argument both stored and returned keeps its pin beside the mutation
 ok: source -- a wrapper forwarding a stored argument keeps the mutation boundary
 ok: source -- a wrapper forwarding a stored and returned argument keeps the mutation boundary
+ok: source -- a discarded call to a storing helper is a write of its argument
+ok: source -- a discarded call storing generated text directly is a write of it
 ok: source -- Stdlib-qualified reference operators are a cell write and read
 ok: source -- a Stdlib-qualified stored argument keeps its boundary through a full application
 ok: source -- a Stdlib-qualified dereference of an initialised ref is a cell read

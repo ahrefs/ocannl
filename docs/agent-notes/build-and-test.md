@@ -2191,7 +2191,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   independently validated fragments alongside their partial mark. A parameter the callee writes
   into a cell is recorded (`provenance.stored`), so substituting it does NOT discharge `Mutation`
   (gh-ocannl-1237): an argument that only the cell returns joins uncorrelated, one also returned
-  directly keeps its pins beside the mark, and ordinary text adds nothing. The cell operators are
+  directly keeps its pins beside the mark, and ordinary text adds nothing. A wrapper forwarding
+  its parameter to such a callee stores it too, and a call made only for its effect (a discarded
+  `store z;`) is a write of what it stores. The cell operators are
   `!`, `:=`, `Array`/`Bytes` `get`/`set` and field writes, bare or under a `Stdlib` qualifier.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
