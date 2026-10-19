@@ -16,6 +16,8 @@ chr_released: decide_footprint is refused: true
 chr_released: the refusal names the entry point and the backend: true
 chr_released: the compile sibling still runs and reads back: true
 chr_released: the live parent still compiles and runs: true
+chr_fork: the compile context, sharing the released chain's flag, is refused: true
+chr_fork: the live fork still runs the routine and reads back: true
 chr_unseeded: the counter is read before written: true
 chr_unseeded: the counter is both an input and an output of the routine: true
 chr_unseeded: the counter has a buffer, which is not a value: true

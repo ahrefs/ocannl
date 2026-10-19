@@ -227,7 +227,8 @@ val decision_surface :
 val run : t -> routine -> t
 (** Execute a compiled routine. Mutates buffers in-place. Returns updated context with newly
     initialized nodes tracked. Raises [Failure] if execution dependencies are not satisfied, and
-    {!Ir.Utils.User_error} if [t] or the routine's compile context was {!release}d, or if a required
+    {!Ir.Utils.User_error} if [t] was {!release}d, or the routine's compile context was and [t] is
+    not a live upload fork of it (a fork reference-counts the routine's buffers), or if a required
     input was never initialized. A {e read-before-write} input — one the routine reads and then
     writes, such as a counter or a running statistic — must have been written by something in this
     lineage (a run, an upload, a device copy): its allocation-time zeros do not count

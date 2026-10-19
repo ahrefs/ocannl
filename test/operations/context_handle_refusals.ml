@@ -1,11 +1,11 @@
 (* Two refusals at the Context API's entry points.
 
    gh-ocannl-1329: a context [Context.release] freed is a dead handle. Compile, run (on the released
-   value, or on a live value with a routine compiled into the released one), sync, the transfers and
-   the decision recorders all refuse it with a typed [Utils.User_error] naming the release, rather
-   than reaching a freed pool. The release flag is shared exactly by the values that share pools: an
-   earlier value of the same linear upload chain is refused too, while a compile sibling and the
-   parent keep working.
+   value, or on a live value outside its upload lineage with a routine compiled into it), sync, the
+   transfers and the decision recorders all refuse it with a typed [Utils.User_error] naming the
+   release, rather than reaching a freed pool. The release flag is shared exactly by the values that
+   share pools: an earlier value of the same linear upload chain is refused too, while a compile
+   sibling, the parent and an upload fork keep working.
 
    gh-ocannl-1339: [Context.run] refuses a READ-BEFORE-WRITE input that nothing ever wrote. The
    issue's case is a counter a routine reads and then overwrites, run with the counter never seeded:
@@ -99,6 +99,27 @@ let () =
     (Poly.equal (Context.get_values c_c out_c) shifted);
   Context.release c_b;
   Context.release c_c
+
+(* An upload fork survives the release of the chain it forked from: uploading a node the routine's
+   context lacks continues that context's linear chain the first time, and forks it the second time.
+   The fork reference-counts the pools it holds, the routine's included, so after the chain is
+   released the fork still runs the routine, while the chain's own values are refused. *)
+let () =
+  Verdict.case "chr_fork" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_fx" and out = node "chr_fout" and y = node "chr_fy" in
+  Ll_test.materialize y;
+  let c, r = link_shift ~ctx:base ~name:"chr_fork" ~src:x ~dst:out () in
+  let chain = Context.set_values c y seed in
+  let fork = Context.set_values c y shifted in
+  Context.release chain;
+  pf "chr_fork: the compile context, sharing the released chain's flag, is refused"
+    (refused ~needle:released (fun () -> Context.run c r));
+  let fork = Context.run (Context.set_values fork x seed) r in
+  pf "chr_fork: the live fork still runs the routine and reads back"
+    (Poly.equal (Context.get_values fork out) shifted
+    && Poly.equal (Context.get_values fork y) shifted);
+  Context.release fork
 
 (* [ctr[i] := ctr[i] + 1 + i]: the counter is read before it is written. *)
 let bump ctr = shift ~src:ctr ~dst:ctr

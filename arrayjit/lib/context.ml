@@ -491,9 +491,15 @@ let poison_lineage ctx ~routine_name exn =
    CPU-invisible until HIP ran the suite. *)
 let check_lineage_runnable ctx routine =
   (* Both handles: [ctx] is the lineage value the caller runs in, [routine.context] holds the buffer
-     locations the task actually binds. *)
+     locations the task actually binds. The second is waived for a live [ctx] of the routine's own
+     upload lineage: an upload fork derived from [routine.context] reference-counts the pools it
+     holds, so it keeps the routine's buffers alive after the chain it forked from is released (and
+     [derive] keeps its merge-buffer consumers registered to it, so refusing them would leave them
+     blocking refills forever). Any other [ctx] -- the parent, a compile sibling -- does not hold
+     those pools. *)
   check_live ~fn:"run" ctx;
-  check_live ~fn:"run (the routine's compile context)" routine.context;
+  if not (phys_equal (upload_lineage ctx.wrapped) (upload_lineage routine.context.wrapped)) then
+    check_live ~fn:"run (the routine's compile context)" routine.context;
   check_not_poisoned ctx;
   (* Check that all required inputs are initialized, in two classes.
 

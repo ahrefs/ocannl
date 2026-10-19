@@ -108,7 +108,8 @@ files.
 - **The same flag is what refuses a dead handle** (gh-ocannl-1329). `Context.check_live` reads
   `finalized` at every entry point that touches buffers (compile, run on either the run context or
   the routine's compile context, sync, the transfers, the `decide_*` recorders) and raises a typed
-  `User_error`. Because the flag is shared exactly where pools are, an earlier value of a linear
+  `User_error`. The compile-context check is waived when the run context shares its upload lineage:
+  a live upload fork reference-counts the routine's pools, so it outlives the released chain. Because the flag is shared exactly where pools are, an earlier value of a linear
   upload chain is refused with the latest one, while compile siblings and upload forks keep working.
   What it cannot see is a released ANCESTOR: a compiled descendant has a fresh flag of its own, so
   "release leaves" stays an unchecked precondition. The `decide_*` refusal matters for that reason:
