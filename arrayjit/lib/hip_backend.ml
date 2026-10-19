@@ -242,6 +242,9 @@ end = struct
   let ensure_initialized =
     lazy
       (if not !initialized then (
+         (* Before the runtime exists, so every per-event [time stamps may be invalid.] line an
+            assertions-enabled ROCr prints meets the collapsing stream (gh-ocannl-1370). *)
+         ignore (Lazy.force Utils.c_stderr_noise_collapsed : bool);
          quiet_first_call (fun () -> H.init ());
          initialized := true))
 
