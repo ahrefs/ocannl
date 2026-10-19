@@ -170,8 +170,11 @@
 #      DIVERGED when the replay can be told from dune, a sandboxed rule and an
 #      unreplayable action refused before any iteration, BUILD FAILED for a
 #      test that does not build, the per-test cap timing and killing a
-#      replayed test, and non-alias operands refused; a mutant without the
-#      replay shows dune alone does not re-run a target-producing test.
+#      replayed test, a replayed test's session-escaped child refusing the
+#      build tree's reuse, and non-alias operands refused; a mutant without
+#      the replay shows dune alone does not re-run a target-producing test,
+#      and one closing the replay's inherited descriptors that the escaped
+#      child then goes unseen.
 #  64-65 sit between legs 51 and 52: `plan`, and the run's first phase, in
 #      which the supervisor's child resolves the backends (gh-ocannl-1066,
 #      gh-ocannl-1106).
@@ -6060,11 +6063,13 @@ fi # leg 83
 if harness_leg '84: repeat --direct builds once and replays the rules #repeat'; then
 direct_label="repeat --direct: one build, then each test's own rules replayed as dune ran them (real dune)"
 direct_nc_label="negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)"
+direct_fd_label="negative control: with the replay's inherited descriptors closed, a session-escaped descendant goes unseen (real dune)"
 direct_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
   command -v dune) 2>/dev/null) || direct_real=
 if [ -z "$direct_real" ] || ! command -v python3 >/dev/null 2>&1; then
   skip "$direct_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
   skip "$direct_nc_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
+  skip "$direct_fd_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
 else
   direct_root=$TMP/direct-repo
   mkdir -p "$direct_root/tools" "$direct_root/scripts" "$direct_root/t"
@@ -6098,6 +6103,8 @@ else
 (rule (alias runtest-sb) (action (diff sb.actual sb.actual)))
 (rule (target sys.actual) (action (with-stdout-to sys.actual (system "echo sys"))))
 (rule (alias runtest-sys) (action (diff sys.actual sys.actual)))
+(rule (target escape.actual) (action (with-stdout-to escape.actual (run %{dep:det.exe} escape))))
+(rule (alias runtest-escape) (action (diff escape.actual escape.actual)))
 (executable (name broken) (modules broken))
 (rule (target broken.actual) (action (with-stdout-to broken.actual (run %{dep:broken.exe}))))
 (rule (alias runtest-broken) (action (diff broken.actual broken.actual)))
@@ -6127,6 +6134,21 @@ let () =
   | [| _; "leak" |] ->
     print_endline (if Sys.getenv_opt "DUNE_ACTION_TRACE_DIR" = None then "replayed" else "dune")
   | [| _; "slow" |] -> if count "slow" > 1 then Unix.sleep 60; print_endline "slow"
+  | [| _; "escape" |] ->
+    (* Replayed (not the build phase's run): a child leaves the session and outlives the test. *)
+    if count "escape" > 1 then begin
+      flush stdout;
+      if Unix.fork () = 0 then begin
+        ignore (Unix.setsid ());
+        Out_channel.with_open_text (Sys.getenv "DIRECT_COUNTER" ^ ".escape-pid") (fun oc ->
+          output_string oc (string_of_int (Unix.getpid ())));
+        let release = Sys.getenv "DIRECT_COUNTER" ^ ".escape-release" in
+        let t0 = Unix.gettimeofday () in
+        while (not (Sys.file_exists release)) && Unix.gettimeofday () -. t0 < 30. do Unix.sleepf 0.1 done;
+        Unix._exit 0
+      end
+    end;
+    print_endline "escape"
   | _ -> print_endline "sb"
 ML
   printf 'let () = print_endline (1 + "broken")\n' >"$direct_root/t/broken.ml"
@@ -6209,6 +6231,26 @@ ML
     [ -z "$direct_left" ] || { direct_detail="slow: the test survived the set: $direct_left"
       kill -KILL $(awk '{print $1}' <<<"$direct_left") 2>/dev/null; }
   fi
+  # A replayed test's child that leaves the session holds the descendant witness as dune's
+  # actions do, so the set refuses to reuse the build tree under it.
+  direct_escape() { # tag script -> sets direct_escaped (the escaped pid, released and gone)
+    direct_probe "$1" "$2" --direct 2 @t/runtest-escape
+    direct_escaped=$(cat "$TMP/direct-count-$1.escape-pid" 2>/dev/null)
+    : >"$TMP/direct-count-$1.escape-release"
+    if [ -n "$direct_escaped" ]; then
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        kill -0 "$direct_escaped" 2>/dev/null || break
+        sleep 0.2
+      done
+      kill -KILL "$direct_escaped" 2>/dev/null
+    fi
+  }
+  if [ -z "$direct_detail" ]; then
+    direct_escape escape "$direct_root/tools/test-run.sh"
+    { [ "$direct_rc" = 2 ] && [ -n "$direct_escaped" ] &&
+      grep -qF 'iteration 1 left a session-escaped descendant; refusing to reuse' <<<"$direct_out" &&
+      [ ! -e "$direct_dir/iteration-2" ]; } || direct_detail="escape: exit $direct_rc, escaped pid ${direct_escaped:-none}: $direct_out"
+  fi
   if [ -z "$direct_detail" ]; then
     direct_probe usage "$direct_root/tools/test-run.sh" --direct 2 runtest
     { [ "$direct_rc" = 2 ] && grep -qF 'repeat --direct takes per-test aliases and -j N only, not: runtest' <<<"$direct_out"; } ||
@@ -6236,6 +6278,25 @@ ML
       report 0 "$direct_nc_label"
     else
       report 1 "$direct_nc_label" "counts det=$(direct_count mutant det) env=$(direct_count mutant env) inalias=$(direct_count mutant inalias): $direct_out"
+    fi
+  fi
+  # The witness reaches a replayed action only because the replay passes on what it inherited.
+  direct_fd_root=$TMP/direct-repo-fd
+  rm -rf "$direct_fd_root"
+  mkdir -p "$direct_fd_root"
+  cp -R "$direct_root/tools" "$direct_root/scripts" "$direct_root/t" "$direct_root/dune-project" "$direct_fd_root/"
+  rm -f "$direct_fd_root/tools/test-run-mutant.sh"
+  perl -0pe 's/stderr=err,\s*pass_fds=INHERITED\)/stderr=err)/' "$HERE/replay-rules.sh" \
+    >"$direct_fd_root/tools/replay-rules.sh"
+  if grep -q 'pass_fds' "$direct_fd_root/tools/replay-rules.sh" || ! bash -n "$direct_fd_root/tools/replay-rules.sh"; then
+    report 1 "$direct_fd_label" "the mutant was not made"
+  else
+    direct_escape escape-fd "$direct_fd_root/tools/test-run.sh"
+    if [ -n "$direct_escaped" ] && [ "$direct_rc" != 2 ] &&
+       ! grep -qF 'session-escaped descendant' <<<"$direct_out"; then
+      report 0 "$direct_fd_label"
+    else
+      report 1 "$direct_fd_label" "exit $direct_rc, escaped pid ${direct_escaped:-none}: $direct_out"
     fi
   fi
 fi

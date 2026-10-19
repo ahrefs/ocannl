@@ -43,7 +43,9 @@
 # caller's environment), plus what dune adds per action and `exec` does not:
 # a TMPDIR of its own (removed afterwards) and the build context in
 # BUILD_PATH_PREFIX_MAP; dune's per-action DUNE_ACTION_TRACE_DIR is not set.
-# Standard input is /dev/null unless the rule redirects it, as under dune. It
+# Standard input is /dev/null unless the rule redirects it, as under dune, and
+# every descriptor this process inherited beyond stdio is passed on (the
+# repeat's descendant witness, which a session-escaped child must hold). It
 # writes:
 #   outputs        every replayed target's bytes, `== REL (N bytes)` before each
 #   statuses       `REL: ok` or `REL: exit N` per rule (REL its first target)
@@ -80,6 +82,23 @@ import tempfile
 
 if os.environ.pop('REPLAY_RULES_COERCE_UNSET', None):
     os.environ.pop('PYTHONCOERCECLOCALE', None)
+
+
+def inherited_fds():
+    # What this process was handed beyond stdio -- test-run.sh's descendant witness (a FIFO
+    # writer every descendant must hold, so a session-escaped one keeps it open) -- read before
+    # anything is opened here, and passed on to every replayed action as dune's are.
+    fds = []
+    for fd in range(3, 256):
+        try:
+            if os.get_inheritable(fd):
+                fds.append(fd)
+        except OSError:
+            pass
+    return tuple(fds)
+
+
+INHERITED = inherited_fds()
 
 
 def die(code, msg):
@@ -419,7 +438,8 @@ def interp(a, cwd, env, stdin, out, err, pred):
     if h == 'run':
         prog = a[1] if os.path.isabs(a[1]) else os.path.join(cwd, a[1])
         try:
-            p = subprocess.run([prog] + a[2:], cwd=cwd, env=env, stdin=stdin, stdout=out, stderr=err)
+            p = subprocess.run([prog] + a[2:], cwd=cwd, env=env, stdin=stdin, stdout=out, stderr=err,
+                               pass_fds=INHERITED)
             code = p.returncode if p.returncode >= 0 else 128 - p.returncode
         except OSError as e:
             err.write(('replay-rules: cannot run %s: %s\n' % (prog, e)).encode())
