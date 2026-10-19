@@ -9132,7 +9132,9 @@
   (diff limits_field_classes.expected limits_field_classes.actual)))
 
 ; gh-ocannl-1253: the cache-capacity fit on synthetic sweeps, and a toy working-set sweep on the
-; configured backend (structural claims only).
+; configured backend (structural claims only). The sweep schedules through the default pipeline, so
+; the stanza declares that pipeline's whole key class (Utils.config_key_classification's
+; default-pipeline Search_shaping row) beside the model keys it reads.
 
 (test
  (name capacity_calibration)
@@ -9143,6 +9145,17 @@
   (env_var OCANNL_MODEL_CACHE_CAPACITY)
   (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
   (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_SERIAL_LANES))
  (modules capacity_calibration)
  (libraries base ocannl arrayjit.verdict))

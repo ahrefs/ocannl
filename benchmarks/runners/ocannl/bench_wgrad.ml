@@ -191,7 +191,7 @@ let () =
   Stdio.printf
     "wgrad: backend=%s arm=%s dims=%d,%d,%d,%d loops=[%s] compile_s=%.2f ms=%.4f checksum=%h%s\n%!"
     backend
-    (if tune then "tuned" else "default")
+    (if tune then "tuned" else if require_seeded then "seeded" else "default")
     nb ns no ni
     (String.concat ~sep:"," (List.map !loops ~f:Int.to_string))
     compile_s !best checksum tuned;
