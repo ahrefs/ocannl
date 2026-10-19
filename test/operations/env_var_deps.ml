@@ -1299,10 +1299,18 @@ let main () =
   in
   let pipeline_table = ref [] in
   (* gh-ocannl-1320: the width's values and fields, derived; and per source, how it reads them. *)
+  (* `Cc_backend` read directly rather than through the shared [module_reach] cache, with every name
+     a destructuring top-level `let` binds credited (Codex P2, round 10) -- an over-read kept to the
+     width module, where it can only add width values. *)
+  let width_backend_reach =
+    Option.map (List.Assoc.find library_modules width_module ~equal:String.equal) ~f:(fun on_disk ->
+        Sources.top_level_key_reach ~external_keys ~settings_field_keys ~all_pattern_names:true
+          (In_channel.read_all on_disk))
+  in
   let width_values =
-    match module_reach width_module with
+    match width_backend_reach with
     | None -> []
-    | Some reach ->
+    | Some { Sources.reach; _ } ->
         List.filter_map reach ~f:(fun (name, keys) ->
             Option.some_if (List.mem keys width_key ~equal:String.equal) name)
   in
@@ -1310,14 +1318,9 @@ let main () =
      field and no reader -- so it is refused rather than read as an absence of readers (Codex P2,
      round 4): the key read outside every named top-level value of `Cc_backend`, or reached by none
      of them at all. *)
-  (match List.Assoc.find library_modules width_module ~equal:String.equal with
+  (match width_backend_reach with
   | None -> ()
-  | Some on_disk ->
-      let unplaced =
-        (Sources.top_level_key_reach ~external_keys ~settings_field_keys
-           (In_channel.read_all on_disk))
-          .unplaced
-      in
+  | Some { Sources.unplaced; _ } ->
       if List.mem unplaced width_key ~equal:String.equal then
         fail
           (Printf.sprintf
@@ -5675,6 +5678,29 @@ let width_control () =
       ~probe:"let () = ignore (Context.Cc_backend.Width.registers ())\n" `Neither
   in
   let via_default_impl = run ~links:" vlib" ~probe:"let () = ()\n" `Neither in
+  let via_aliased_include =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            end\n\
+            module W = Public\n\
+            include W\n\
+            let vector_bytes_setting () = Public.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let via_destructuring =
+    run
+      ~backend:
+        (Some
+           "let read_width () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            let (registers, other) = (read_width, fun () -> 0)\n\
+            let vector_bytes_setting () = read_width ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
   let via_local_alias =
     run
       ~limits:
@@ -5784,6 +5810,12 @@ let width_control () =
   let via_local_alias_ok =
     refused via_local_alias && says "leaving `simd_vector_registers` to its base" via_local_alias
   in
+  let via_aliased_include_ok =
+    refused via_aliased_include && says "`Cc_backend.registers`" via_aliased_include
+  in
+  let via_destructuring_ok =
+    refused via_destructuring && says "`Cc_backend.registers`" via_destructuring
+  in
   let via_default_impl_ok =
     refused via_default_impl && says "library vimpl (vm.ml)" via_default_impl
   in
@@ -5831,6 +5863,8 @@ let width_control () =
   if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
   if not via_nested_include_ok then report "via-nested-include" via_nested_include;
   if not via_default_impl_ok then report "via-default-impl" via_default_impl;
+  if not via_aliased_include_ok then report "via-aliased-include" via_aliased_include;
+  if not via_destructuring_ok then report "via-destructuring" via_destructuring;
   if not via_local_alias_ok then report "via-local-alias" via_local_alias;
   if not via_named_include_ok then report "via-named-include" via_named_include;
   if not opened_bare_ok then report "opened-bare" opened_bare;
@@ -5940,6 +5974,10 @@ let width_control () =
     "a field filled through a top-level alias of a structure the limits file defines still carries \
      the width"
     via_local_alias_ok;
+  Verdict.p
+    "a `Cc_backend` value re-exported by `include` of an alias of a structure is a width value"
+    via_aliased_include_ok;
+  Verdict.p "and so is one bound by a destructuring top-level `let`" via_destructuring_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)

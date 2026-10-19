@@ -148,6 +148,24 @@ let rec pattern_name pattern =
   | Ppat_constraint (inner, _) | Ppat_alias (inner, _) -> pattern_name inner
   | _ -> None
 
+(** Every variable a pattern binds, in order: [x], and both [a] and [b] of [(a, b)] or
+    [{ f = a; g = b }]. *)
+let pattern_names pattern =
+  let found = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! pattern pat =
+        (match pat.ppat_desc with
+        | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> found := txt :: !found
+        | _ -> ());
+        super#pattern pat
+    end
+  in
+  iterator#pattern pattern;
+  List.rev !found
+
 (* A path is flattened defensively here, unlike {!longident_of}: this one runs over MODULE paths,
    where a functor application is a shape the language admits, and a scan that raised on one would
    refuse a file for containing an unrelated [module M = F (X)]. *)
@@ -1102,7 +1120,14 @@ type key_reach = {
     derivation predates it. *)
 let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     ?(settings_field_keys = fun field -> [ field ]) ?(by_last_component = fun (_ : string) -> [])
-    content =
+    ?(all_pattern_names = false) content =
+  (* The names a binding is credited under: its simple name, or with [~all_pattern_names] every
+     variable its pattern binds, each with the whole initializer's reach (Codex P2, round 10).
+     Opt-in because that over-reads -- in `Utils`, [config_file_args] would reach the bootstrap keys
+     and widen the schedule pipeline's requirement on every stanza naming it. *)
+  let names_of pattern =
+    if all_pattern_names then pattern_names pattern else Option.to_list (pattern_name pattern)
+  in
   let structure = structure_of content in
   let aliases =
     List.filter_map structure ~f:(fun item ->
@@ -1260,10 +1285,14 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     List.fold items ~init:env ~f:(fun env item ->
         match item.pstr_desc with
         | Pstr_value (rec_flag, bindings) ->
+            (* Every name the binding is credited under ([names_of] above). *)
             let group =
-              List.filter_map bindings ~f:(fun binding ->
-                  Option.map (pattern_name binding.pvb_pat) ~f:(fun name ->
-                      (dotted (scope @ [ name ]), direct_of binding.pvb_expr)))
+              List.concat_map bindings ~f:(fun binding ->
+                  match names_of binding.pvb_pat with
+                  | [] -> []
+                  | names ->
+                      let direct = direct_of binding.pvb_expr in
+                      List.map names ~f:(fun name -> (dotted (scope @ [ name ]), direct)))
             in
             let rec close env =
               let env' =
@@ -1288,7 +1317,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             (* Named bindings only: [direct_of] marks every literal read it visits as placed, and an
                unnamed [let () = …] must keep its reads in [unplaced] (Codex P2, round 7). *)
             let named =
-              List.filter bindings ~f:(fun b -> Option.is_some (pattern_name b.pvb_pat))
+              List.filter bindings ~f:(fun b -> not (List.is_empty (names_of b.pvb_pat)))
             in
             List.iter named ~f:(fun binding ->
                 (* And the helpers the binding declares locally (Codex P2, round 2): a single name
@@ -1331,7 +1360,8 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             (* [include M] of a structure this file walked as [M.v] re-exports each [v] here (Codex
                P2, round 7). *)
             | Pmod_ident { txt; _ } -> (
-                match flatten_module_path txt with
+                (* Through a top-level [module W = Public] alias too (Codex P2, round 10). *)
+                match Option.map (flatten_module_path txt) ~f:expand with
                 | Some path ->
                     let prefix = dotted (scope @ path) ^ "." in
                     Map.fold env ~init:env ~f:(fun ~key ~data acc ->

@@ -428,6 +428,8 @@ env_var_deps.ml: [scanner-refusal:f9bd0cf9b0592ab82941e27281a7dc4c] let stays un
 env_var_deps.ml: [scanner-refusal:b22617ea23d5bd2270d682426b8c2ac5] submodule's value re-exported (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:823039faeecddef225db5009f088e3b9] library's default implementation (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:e9b61c2f984d21446b37e9e79253a234] defines still carries (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:bea334cae6dc5ff82766eb1a3460ce00] Cc_backend (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:9030a635de21129bfd2b27cbf880edc3] destructuring top-level let (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
