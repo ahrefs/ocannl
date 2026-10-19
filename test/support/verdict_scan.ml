@@ -607,7 +607,9 @@ let line_break_census content =
     - the POPULATION of a [gated_*] claim is the identifier the quantified argument spells, and the
       collections it is BUILT from: following a [let]-bound name into its right-hand side, the
       branches (not the condition) of an [if], the cases of a [match] (the scrutinee only through a
-      name a case pattern binds and the case returns), the body of a function in data position (a
+      name a case pattern binds and the case returns -- and of that name, only the component it
+      takes apart, where the scrutinee is, through [let]-bound names, a literal tuple, record or
+      constructor application: see {!parts}), the body of a function in data position (a
       [~default:(fun () -> ...)] thunk), the body and handlers of a [try], the body of a [let],
       [let module], local [open] or sequence, the elements of a list, array or tuple literal or
       constructor payload, the operand of [!] and of [ref] and both operands of [@] (where the
@@ -1228,6 +1230,79 @@ let gate_census content =
         visit env expr;
         reads
 
+      (* What [expr] is, through the names that bind it and any type constraints: a literal tuple,
+         record or constructor application where it is one. A name something writes into is not
+         followed: its value is not its definition alone. *)
+      method literal env expr =
+        let rec go seen env expr =
+          let expr = strip_constraints expr in
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some { identity; definition = Some (rhs, rhs_env) }
+                when (not (Set.mem seen identity))
+                     && (not (Hashtbl.mem writes identity))
+                     && not (Hashtbl.mem unlisted_writes identity) ->
+                  go (Set.add seen identity) rhs_env rhs
+              | _ -> (expr, env))
+          | _ -> (expr, env)
+        in
+        go (Set.empty (module Int)) env expr
+
+      (* The names [pattern] binds, matched against [part], each bound in [env] to what it is a part
+         of (gh-ocannl-1303): where [part] is a literal the pattern takes apart -- a tuple of the
+         pattern's arity, a record, a constructor or polymorphic variant of the pattern's own name
+         -- a name in a component's place is a part of that component alone, as
+         [verdict_provenance.ml] reads destructured components; anywhere else, a part of the whole
+         of [part]. So [match (on_gpu, raw) with _, xs -> xs] is built from [raw], not [on_gpu]. *)
+      method parts pattern ((part, part_env) as whole) =
+        let all pattern =
+          List.map (Lexical_scope.pattern_vars [ pattern ]) ~f:(fun name -> (name, whole))
+        in
+        let literal () = self#literal part_env part in
+        let same_constructor a b =
+          String.equal (Ppxlib.Longident.last_exn a) (Ppxlib.Longident.last_exn b)
+        in
+        match pattern.ppat_desc with
+        | Ppat_var { txt; _ } -> [ (txt, whole) ]
+        | Ppat_alias (inner, { txt; _ }) -> (txt, whole) :: self#parts inner whole
+        | Ppat_constraint (inner, _) -> self#parts inner whole
+        | Ppat_tuple patterns -> (
+            match literal () with
+            | { pexp_desc = Pexp_tuple components; _ }, env
+              when List.length components = List.length patterns ->
+                List.concat
+                  (List.map2_exn patterns components ~f:(fun pattern component ->
+                       self#parts pattern (component, env)))
+            | _ -> all pattern)
+        | Ppat_construct (constructor, Some (_, inner)) -> (
+            match literal () with
+            | { pexp_desc = Pexp_construct (built, Some payload); _ }, env
+              when same_constructor constructor.txt built.txt ->
+                self#parts inner (payload, env)
+            | _ -> all pattern)
+        | Ppat_variant (tag, Some inner) -> (
+            match literal () with
+            | { pexp_desc = Pexp_variant (built, Some payload); _ }, env when String.equal tag built
+              ->
+                self#parts inner (payload, env)
+            | _ -> all pattern)
+        | Ppat_record (fields, _) -> (
+            match literal () with
+            | { pexp_desc = Pexp_record (given, None); _ }, env ->
+                List.concat_map fields ~f:(fun (field, inner) ->
+                    match
+                      List.find given ~f:(fun (name, _) -> same_constructor field.txt name.txt)
+                    with
+                    | Some (_, component) -> self#parts inner (component, env)
+                    | None -> all inner)
+            | _ -> all pattern)
+        | _ -> all pattern
+
+      method bind_parts env pattern whole =
+        List.fold (self#parts pattern whole) ~init:env ~f:(fun env (name, part) ->
+            Lexical_scope.bind_values env [ name ] { (self#local) with definition = Some part })
+
       (* The population's side: the collections it is built from. *)
       method population env expr =
         let seen = Hash_set.create (module Int) in
@@ -1271,14 +1346,10 @@ let gate_census content =
               Option.iter no ~f:(visit env)
           | Pexp_match (scrutinee, cases) ->
               (* The scrutinee steers; a name a case pattern binds is a part of it, so a case that
-                 returns one is built from the scrutinee. *)
+                 returns one is built from the scrutinee -- from its component, where the scrutinee
+                 is a literal the pattern takes apart ({!bind_parts}). *)
               List.iter cases ~f:(fun case ->
-                  let part = { (self#local) with definition = Some (scrutinee, env) } in
-                  visit
-                    (Lexical_scope.bind_values env
-                       (Lexical_scope.pattern_vars [ case.pc_lhs ])
-                       part)
-                    case.pc_rhs)
+                  visit (self#bind_parts env case.pc_lhs (scrutinee, env)) case.pc_rhs)
           | Pexp_function (params, _, body) -> (
               (* A thunk or callback in data position ([~default:(fun () -> ...)]): what it returns,
                  in either syntax. *)
@@ -1376,12 +1447,7 @@ let gate_census content =
               Option.iter no ~f:(visit env)
           | Pexp_match (scrutinee, cases) ->
               List.iter cases ~f:(fun case ->
-                  let part = { (self#local) with definition = Some (scrutinee, env) } in
-                  visit
-                    (Lexical_scope.bind_values env
-                       (Lexical_scope.pattern_vars [ case.pc_lhs ])
-                       part)
-                    case.pc_rhs)
+                  visit (self#bind_parts env case.pc_lhs (scrutinee, env)) case.pc_rhs)
           | Pexp_try (body, cases) ->
               visit env body;
               List.iter cases ~f:(fun case ->

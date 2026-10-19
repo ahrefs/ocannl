@@ -605,6 +605,11 @@ follows a collection function through a value alias: true
 follows a quantifier of a gated boolean through a value alias: true
 refuses a gate read off a value pushed through a writer's value alias: true
 follows a Verdict alias a local module exports through an open of it: true
+accepts a backend gate beside a population a match takes apart from a literal pair: true
+refuses a gate read off the component a match takes the population from: true
+refuses a gate read off the literal record field a match takes the population from: true
+accepts a backend gate beside a population a match takes from a constructor payload: true
+accepts a backend gate beside a gated boolean a match takes apart from a literal pair: true
 refuses a gate read off the set an in-place filter keeps the population's keys by: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 refuses a negated backend gate folded into a claim's value: true

@@ -4118,6 +4118,39 @@ end
 open Checks
 let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
+    ( "accepts a backend gate beside a population a match takes apart from a literal pair",
+      {ocaml|open Base
+let () =
+  let pair = (on_gpu, raw) in
+  let rows = match pair with _, xs -> xs in
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a gate read off the component a match takes the population from",
+      {ocaml|open Base
+let () =
+  let rows = match (on_gpu, raw) with _, xs -> xs in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off the literal record field a match takes the population from",
+      {ocaml|open Base
+type probe = { enabled : bool; found : bool list }
+let () =
+  let probe = { enabled = on_gpu; found = raw } in
+  let rows = match probe with { found; _ } -> found in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "accepts a backend gate beside a population a match takes from a constructor payload",
+      {ocaml|open Base
+let () =
+  let rows = match Some (on_gpu, raw) with Some (_, xs) -> xs | None -> [] in
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "accepts a backend gate beside a gated boolean a match takes apart from a literal pair",
+      {ocaml|open Base
+let () =
+  let ok = match (on_gpu, rows) with _, xs -> List.for_all xs ~f:Fn.id in
+  Verdict.gated ~when_:on_gpu ~on:"cc" "all rows pass" ok|ocaml},
+      [] );
     ( "refuses a gate read off the set an in-place filter keeps the population's keys by",
       {ocaml|open Base
 let () =
