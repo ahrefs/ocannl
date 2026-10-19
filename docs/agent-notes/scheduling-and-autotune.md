@@ -778,6 +778,17 @@ files.
   a process-wide ref: two domains' searches would otherwise overwrite and observe each other
   (`autotune_seam_domains` pins the isolation). The resource fault-injection callback follows the
   same per-domain rule; its placement constraint is in backend-memory.md.
+- **Searches in different domains take turns; they never overlap** (gh-ocannl-1352). `Autotune.tune`
+  runs inside `Autotune.exclusive_search`, and `Train.tune_placements` takes it for the whole call,
+  so another domain cannot slip a search in between two arms; a search started while another
+  domain holds it raises `Autotune.Concurrent_search` before resolving a setting, calling a seam or
+  emitting a report. The holder is a domain with a per-domain depth, so nesting in the holding
+  domain proceeds. Refused rather than made safe because the compile path's process-wide state
+  (`Tnode.next_uid`, `Low_level.analysis_cache`, `Context`'s print proxies, a device's
+  `constant_buffer_cache`, Base hash tables throughout) was never audited for two domains at once;
+  the per-domain seams, streams and observers serve turn-taking searches. A test that overlaps two
+  searches on purpose blocks one inside its own `on_candidate_attempt` until the other has tried
+  (`autotune_concurrent_refusal`, whose refusal claims fail with the gate removed).
 - Scripted search fixtures opt into `Autotune.with_uncontended_test_windows` (gh-ocannl-1156)
   around `on_candidate_measured`: the measurement callback alone only sees windows the host already
   admitted, so a loaded runner could time nothing and leave cache controls vacuous. The scoped seam
@@ -1338,11 +1349,13 @@ files.
   (AVX-512) bytes keep different singles through the pre-filter, so a seat picked by attempt
   position passed on ARM and on AVX-512 runners and failed six claims on the AVX2 ones
   (ahrefs/ocannl#1363; the scripted crown at 10.00 ms was the round falling short, not a timing
-  tie). The test now pins `cc_vector_bytes=32` and seats by the property: latest alternate first,
-  one `full` search each, until one's differing segment offers moves; a setup control claims the
-  positional seat fails at that width. Reproduce a CPU-menu difference between boxes with
-  `--ocannl_cc_vector_bytes=<16|32|64>` on the built exe. To see each alternate's moves at once,
-  probe with a beam wide enough to hold them all and read the round line below. `autotune_sketch_placements` runs on the same small menu on CPU backends
+  tie). The test now pins `cc_vector_bytes=32` and seats by the property, read off the report:
+  `Autotune.report.round_moves` (gh-ocannl-1360) records each round's beam entries with their
+  per-unit `unit_expanded`/`unit_moves`, before the round attempts anything, so a probe search
+  with a beam wide enough for every alternate, stopped by raising from `on_candidate_attempt` at
+  the first round candidate, says which alternates offer moves on their differing segment without
+  compiling one; a setup control claims the positional seat offers none at that width. Reproduce a
+  CPU-menu difference between boxes with `--ocannl_cc_vector_bytes=<16|32|64>` on the built exe. `autotune_sketch_placements` runs on the same small menu on CPU backends
   (its claims ask which segments a single sketched, so they need one single per key, not particular
   ones). Before reaching for it elsewhere, count the search's `F_sketch`/`W_sketch` labels in its
   autotune log or progress lines: `autotune_split_reduce`, `autotune_labels` and `flip_abandonment`

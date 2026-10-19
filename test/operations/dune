@@ -8830,6 +8830,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1352: searches run one at a time per process -- a search started in a second domain
+; while the first domain's runs raises Autotune.Concurrent_search before doing anything, and the
+; second domain's later turn is admitted.
+
+(test
+ ; ocannl-backend: cc -- both searches run on an explicit Context.cpu (); the property is the search entry's, not a backend's.
+ (name autotune_concurrent_refusal)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_concurrent_refusal)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1199: the BENCH_TIMING_TRACE decision line, formatted by Bench_harness from
 ; each Autotune.timing_call record on an injected clock, agrees with the decision each call took.
 
