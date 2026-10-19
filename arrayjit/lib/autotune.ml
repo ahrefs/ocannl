@@ -121,6 +121,24 @@ let log_enabled () = stream_enabled log_switch
 let logf fmt =
   Printf.ksprintf (fun s -> if log_enabled () then Stdio.eprintf "autotune: %s\n%!" s) fmt
 
+(* gh-ocannl-1407: the seeding census on stderr, gated by config [autotune_log_seeding]. Seeding
+   refusals happen before any candidate exists, so the decline report cannot hold them; this is
+   where an evidence gate citing a seeding gate is checked. Separate from [autotune_log]: that
+   stream pays for an extra control compile, and a census of a whole search wants nothing else. *)
+let log_seeding_enabled =
+  let on = lazy (Utils.get_global_flag ~default:false ~arg_name:"autotune_log_seeding") in
+  fun () -> Lazy.force on
+
+let print_seeding_lines lines =
+  List.iter lines ~f:(fun l -> Stdio.eprintf "%s\n" l);
+  Stdio.Out_channel.flush Stdio.stderr
+
+(* One lowering's census, taken where the caller seeds it; a no-op unless the key is on. *)
+let log_seeding ?coalesced ~where ~is_gpu ~is_cpu ~limits opt =
+  if log_seeding_enabled () then
+    print_seeding_lines
+      (seeding_census_lines ~where (seeding_census ?coalesced ~is_gpu ~is_cpu ~limits opt))
+
 (* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress] -- or, for the
    duration of one call, by its [?progress] argument. A search can run for hours and be killed by a
    cap before it reports anything, and [autotune_log] is no substitute: it pays for an extra
@@ -4313,16 +4331,26 @@ let accumulates_at_storage ~accum_prec (site : matmul_site) =
   let d_prec = Lazy.force site.m_d.Ir.Tnode.storage_prec in
   Ir.Ops.equal_prec (accum_prec d_prec) d_prec
 
-let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sketch_params option =
+(* [Error] names the refusing gate, for the seeding census (gh-ocannl-1407). *)
+let seeded_params_judged ~limits ~accum_prec ~min_reduction (seg : LL.optimized) :
+    (sketch_params, string) Result.t =
   match detect_matmul_canonical seg with
-  | None -> None
-  | Some (site, _, _) when site_reduction_extent site < min_reduction -> None
+  | None -> Error "no matmul site"
+  | Some (site, _, _) when site_reduction_extent site < min_reduction ->
+      Error
+        (Printf.sprintf "site %s: reduction extent %d is under the seeding threshold %d"
+           (Ir.Tnode.debug_name site.m_d) (site_reduction_extent site) min_reduction)
   | Some (site, _, _) when not (accumulates_at_storage ~accum_prec site) ->
       (* Left to the default, so that seeding never changes a result. *)
-      None
+      Error
+        (Printf.sprintf
+           "site %s: the accumulator precision widens its %s storage, so a sketch would change the \
+            result"
+           (Ir.Tnode.debug_name site.m_d)
+           (Ir.Ops.prec_string (Lazy.force site.m_d.Ir.Tnode.storage_prec)))
   | Some (site, _, _) -> (
       match matmul_sketch_tree ~is_gpu:true ~is_cpu:false ~limits seg with
-      | None -> None
+      | None -> Error "no matmul site"
       | Some tree -> (
           (* The tree's own leaves, so every refutation the search applies (launch caps,
              workgroup-memory and thread floors, companion coverage) applies here too; of those, the
@@ -4363,12 +4391,25 @@ let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sket
             match List.filter ranked ~f:(fun p -> not (padded p)) with [] -> ranked | snug -> snug
           in
           match List.find ranked ~f:(fun p -> blocks p >= seeded_min_blocks) with
-          | Some p -> Some p
-          | None ->
+          | Some p -> Ok p
+          | None -> (
               (* Nothing reaches the block count: the geometry putting the most threads on the
                  output, the earlier one on a tie. *)
-              List.fold ranked ~init:None ~f:(fun best p ->
-                  match best with Some b when threads b >= threads p -> best | _ -> Some p)))
+              match
+                List.fold ranked ~init:None ~f:(fun best p ->
+                    match best with Some b when threads b >= threads p -> best | _ -> Some p)
+              with
+              | Some p -> Ok p
+              | None ->
+                  Error
+                    (Printf.sprintf
+                       "site %s: no seeded geometry is a scalar blocktile leaf of its family tree \
+                        (%d such leaves, %d refutations)"
+                       (Ir.Tnode.debug_name site.m_d) (List.length leaves)
+                       (List.length (Sspace.refutations tree))))))
+
+let seeded_params ~limits ~accum_prec ~min_reduction seg =
+  Result.ok (seeded_params_judged ~limits ~accum_prec ~min_reduction seg)
 
 (* The untuned split runs wherever the seeded default does (gh-ocannl-1325, gh-ocannl-1412). It was
    CUDA's alone until its first pass ran the block loop outside the cell loops ([sr_block_hoist]):
@@ -4554,21 +4595,27 @@ let seeded_ranker ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
    probe runs on a copy. *)
 (* The seeded plan's decision for one segment: the sketch its gate admits there, probed and validated
    on the segment alone, or [None] where the segment keeps its preset. Also the staffed search's
-   start (gh-ocannl-1138), which applies it to each key's own segment. *)
-let seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_below
-    (pre : LL.optimized) =
+   start (gh-ocannl-1138), which applies it to each key's own segment. The judgment's [Error]
+   names the refusing gate, for the seeding census (gh-ocannl-1407). *)
+let seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_below
+    (pre : LL.optimized) : (sketch_params, string) Result.t =
   let candidate =
     match gate with
-    | Min_reduction n when n <= 0 -> None
-    | Min_reduction min_reduction -> seeded_params ~limits ~accum_prec ~min_reduction pre
+    | Min_reduction n when n <= 0 ->
+        Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
+    | Min_reduction min_reduction -> seeded_params_judged ~limits ~accum_prec ~min_reduction pre
     | Ranked { capacity; cache_rate } -> (
-        match seeded_params ~limits ~accum_prec ~min_reduction:1 pre with
-        | Some p when ranked_below ~capacity ~cache_bandwidth:cache_rate p pre -> Some p
-        | Some _ | None -> None)
+        match seeded_params_judged ~limits ~accum_prec ~min_reduction:1 pre with
+        | Ok p when ranked_below ~capacity ~cache_bandwidth:cache_rate p pre -> Ok p
+        | Ok p ->
+            Error
+              (sketch_params_label p
+             ^ ": the auto gate's ranking score does not place it below the preset")
+        | Error _ as refused -> refused)
   in
   match candidate with
-  | None -> None
-  | Some p -> (
+  | Error _ as refused -> refused
+  | Ok p -> (
       match
         validate_segments_for_model ~limits
           [
@@ -4577,11 +4624,20 @@ let seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_belo
               (scratch_of pre);
           ]
       with
-      | _ -> Some p
-      | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+      | _ -> Ok p
+      | exception ((Outcome.Cause_at _ | Invalid_argument _) as exn) ->
           logf "seeded_default: %s declined on a segment; keeping the preset"
             (sketch_params_label p);
-          None)
+          let detail =
+            match exn with
+            | Outcome.Cause_at (_, cause) -> Outcome.detail_of_cause cause
+            | Invalid_argument detail -> detail
+            | _ -> ""
+          in
+          Error (sketch_params_label p ^ " declined on the segment: " ^ detail))
+
+let seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre =
+  Result.ok (seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre)
 
 let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~sink_enabled
     (opt : LL.optimized) =
@@ -4595,15 +4651,44 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
      segment alone: a sketch that does not apply or validate there leaves the segment to the default
      preset rather than costing the routine its other seeds. *)
   let decided = Hashtbl.create (module String) in
+  (* Each segment code's census verdict, every kind of segment included (gh-ocannl-1407). Recorded
+     as decided and printed once the plan's segmentation is chosen ([census_plan]), so a segment of
+     the segmentation the refinement discards prints nothing. *)
+  let census_verdicts = Hashtbl.create (module String) in
+  let census ~key verdict =
+    if log_seeding_enabled () then Hashtbl.set census_verdicts ~key:(Lazy.force key) ~data:verdict
+  in
+  let census_plan segments =
+    if log_seeding_enabled () then
+      print_seeding_lines
+        (List.map segments ~f:(fun (at, _, _, _, pre) ->
+             Printf.sprintf "%s where=\"seeded_default segment u%d\" %s" seeding_census_prefix at
+               (Option.value ~default:"undecided"
+                  (Hashtbl.find census_verdicts
+                     (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)))))
+  in
   let seed_of kind pre =
+    let key = lazy (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre) in
     match (kind, gate) with
-    | (`Zeros | `Solo), _ -> None
-    | `Normal, Min_reduction n when n <= 0 -> None
+    | `Zeros, _ ->
+        census ~key "refused: a zero-fill segment, which no sketch seeds";
+        None
+    | `Solo, _ ->
+        census ~key "refused: a solo segment, which no sketch seeds";
+        None
+    | `Normal, Min_reduction n when n <= 0 ->
+        census ~key "refused: sketch seeding is off (gpu_default_sketch_min_reduction=0)";
+        None
     | `Normal, _ ->
-        Hashtbl.find_or_add decided
-          (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)
-          ~default:(fun () ->
-            seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre)
+        Hashtbl.find_or_add decided (Lazy.force key) ~default:(fun () ->
+            let judged =
+              seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre
+            in
+            census ~key
+              (match judged with
+              | Ok p -> "seeded: " ^ sketch_params_label p
+              | Error why -> "refused: " ^ why);
+            Result.ok judged)
   in
   (* Probed on the segment alone like a seed; a chain that does not validate leaves the plain
      preset. *)
@@ -4657,6 +4742,7 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
           ~seed:(fun k pre ->
             Option.map (seed_of k pre) ~f:(fun p -> (p, digest ~with_placements:false pre)))
       in
+      census_plan hybrid;
       (* The segments no sketch takes, one decision per distinct segment code like the seeds. *)
       let sink_decided = Hashtbl.create (module String) in
       let segments =
@@ -5041,6 +5127,7 @@ let model_default ?name ?report ctx comp bindings =
         | Some ds -> (
             (* Whole-routine sketch candidates. A candidate without coverage is skipped — it is
                never picked over the default without a measured run ({!tune} covers that). *)
+            log_seeding ~where:"model_default whole-routine" ~is_gpu ~is_cpu ~limits base;
             let whole_best =
               match tree_search ~incumbent:ds base with
               | Some tree_best ->
@@ -5077,6 +5164,9 @@ let model_default ?name ?report ctx comp bindings =
                         match score [ post ] with
                         | None -> None
                         | Some bs -> (
+                            log_seeding
+                              ~where:("model_default segment " ^ seg_key_tag key)
+                              ~is_gpu ~is_cpu ~limits pre;
                             (* The segment's family tree searched with the segment's own
                                default-preset score as incumbent; conv segments keep the flat
                                path. *)
@@ -7121,7 +7211,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           (* The search's seeds for one lowering: the family seeds, then the coalesced layout's
              branch beside them (gh-ocannl-1165) — prepared hermetically from the same lowering, its
              candidates' schedules carry their structural [Coalesce] prefix. *)
-          let search_seed_params opt =
+          let search_seed_params ~where opt =
+            log_seeding ~coalesced:true ~where ~is_gpu ~is_cpu ~limits opt;
             sketch_seed_params ~is_gpu ~is_cpu ~limits opt
             @ coalesced_seed_params ~is_gpu ~is_cpu ~limits opt
           in
@@ -7160,7 +7251,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           in
           let sketch_params =
             model_prefilter_params ~seg_opt:base_opt ~family:"whole-routine"
-              (search_seed_params base_opt)
+              (search_seed_params ~where:"tune whole-routine" base_opt)
           in
           n_sketch_candidates := List.length sketch_params;
           n_epilogue_sketch_candidates := List.count sketch_params ~f:(fun p -> p.sk_epilogue);
@@ -7197,7 +7288,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   ( plan,
                     List.filter_map (keyed_segments ~static_indices plan tuples)
                       ~f:(fun (key, pre, _) ->
-                        match search_seed_params pre with
+                        let where =
+                          Printf.sprintf "tune %s segment %s"
+                            (if arity_cuts then "fine" else "coarse")
+                            (seg_key_tag key)
+                        in
+                        match search_seed_params ~where pre with
                         | [] -> None
                         | params -> Some (key, pre, params)) )
           in

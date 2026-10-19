@@ -529,6 +529,94 @@ val matmul_sketch_tree :
     candidate build never expands (gh-ocannl-577). The conv family factors the same way as a
     follow-up. Exposed for tests and as the phase-4 search driver's entry into the family space. *)
 
+(** {2 The seeding census (gh-ocannl-1407)}
+
+    Seeding refusals are decided before a candidate exists, so the decline report and
+    [schedule_log_declines] (render and compile declines) cannot hold them. The census reads them
+    off the judgment the seeds come from; config [autotune_log_seeding] prints it for every lowering
+    {!tune} and {!model_default} seed, and one line per segment of the plan the untuned seeded
+    default chooses. See {!Sketch_families.seeding_census} for the fields' documentation.
+
+    The census is the families' seeding. A driver's own filters and lifts after it are not seeding
+    gates and are not in it: {!tune}'s keep-fraction model pre-filter, and {!model_default}'s
+    numerics restriction on CUDA/HIP and its geometry-lattice lift (which re-proposes branches the
+    head line counts in [excluded=N]). *)
+
+type conv_leg = {
+  leg_seeds : sketch_params list;
+  leg_refusal : string option;
+  leg_notes : string list;
+}
+
+type conv_judgment = {
+  cj_site : conv_site;
+  cj_real_stmts : int;
+  cj_cpu : conv_leg;
+  cj_gpu : conv_leg;
+}
+
+type family_seeding =
+  | Seeding_matmul of {
+      site : matmul_site;
+      tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
+    }
+  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
+  | Seeding_none
+
+val family_seeding :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  family_seeding * sketch_params list
+(** {!sketch_seed_params} beside the judgment its seeds came from. *)
+
+type coalesced_verdict = {
+  cv_layout : coalesce_layout;
+  cv_seeds : sketch_params list;
+  cv_refusal : string option;
+}
+
+val coalesced_seeding :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  coalesced_verdict list
+
+type seeding_census = {
+  sc_stmts : int;
+  sc_whole_zeros : int;
+  sc_conv_nests : (Ir.Tnode.t * bool) list;
+  sc_family : family_seeding;
+  sc_seeds : sketch_params list;
+  sc_coalesced : coalesced_verdict list option;
+}
+
+val seeding_census :
+  ?coalesced:bool ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  seeding_census
+
+val seeding_census_prefix : string
+val seeding_census_lines : where:string -> seeding_census -> string list
+
+val log_seeding_enabled : unit -> bool
+(** Config [autotune_log_seeding], read once per process. *)
+
+val log_seeding :
+  ?coalesced:bool ->
+  where:string ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  unit
+(** The census of one lowering on stderr, tagged [where]; a no-op unless {!log_seeding_enabled}. *)
+
 val geometry_lattice_witness : string
 (** The exclusion witness marking the tile-size lattice branches beyond the curated geometry menus
     (gh-ocannl-514 phase 5): binary interval refinements over the staged tile sizes — every
@@ -1874,6 +1962,15 @@ val seeded_params :
     fixed preference list (64x64x8/4x4, 32x32x8/4x4, 32x32x16/2x2, 16x16x8/2x2, 16x16x8/4x4) whose
     launch has 128 blocks, else the one putting the most threads on the output — among the
     geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
+
+val seeded_params_judged :
+  limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  min_reduction:int ->
+  Ir.Low_level.optimized ->
+  (sketch_params, string) Result.t
+(** {!seeded_params} with the refusing gate named (gh-ocannl-1407): [Ok] exactly where
+    {!seeded_params} is [Some]. *)
 
 val seeded_default_backend : string -> bool
 (** Whether {!seeded_default} seeds on this backend ({!Context.backend_name}): CUDA and HIP. *)

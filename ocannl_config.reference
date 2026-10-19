@@ -773,6 +773,23 @@
 # overrides it for that call.
 #autotune_progress=false
 
+# gh-ocannl-1407: the seeding census. Seeding refusals happen before any candidate exists, so the
+# search's decline report and schedule_log_declines (render and compile declines) never see them.
+# If true, every lowering the sketch families seed writes `autotune-seeding:` lines to stderr:
+# where it was seeded (`Autotune.tune`'s whole routine and each coarse or fine fission segment,
+# `Autotune.model_default`'s whole routine and segments), its statement and whole-node zero
+# counts, the family that claimed it (matmul, conv or none) with its site and seed count, then the
+# refusing gates -- the matmul tree's refutations grouped by witness, or each conv leg's seed count
+# or every failing gate (the companion cap, a zeroed output, no mma tile, ...) and the flavors it
+# withheld -- and every conv nest in the lowering. `Autotune.tune`'s lines also give each coalesced
+# layout's seed count or refusal. The untuned seeded default (CUDA/HIP) adds one line per segment
+# of the plan it chose, named by its first unit: the sketch it seeded, or why it refused. A
+# driver's own filters and lifts after the seeding (tune's keep-fraction pre-filter;
+# model_default's numerics restriction and its geometry-lattice lift, which re-proposes what the
+# head line counts as excluded) are not in it. Adds no candidate, compile or timing. Read once per
+# process.
+#autotune_log_seeding=false
+
 # gh-555: budget for the greedy per-node inlining refinement of `Train.tune_placements` — after
 # the placement A/B, try flipping up to this many of the winning arm's most expensive inlining
 # decisions (materialize a policy-virtual node / inline a cap-materialized one), each accepted
