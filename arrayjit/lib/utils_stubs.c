@@ -375,19 +375,27 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
    default disposition (the program's own handler, or an ignore, stays exactly as it was) or when
    the real-time timer is already running (an [alarm] or [setitimer] the program set fires exactly
    when it would have: the timer is not read-and-restored, it is not touched at all). One region
-   is armed at a time process-wide; a concurrent or nested [arm] refuses. [disarm] cancels the
-   timer and restores the saved disposition. A SIGALRM some other process SENDS during the region
+   is armed at a time process-wide; a concurrent or nested [arm] refuses (the OCaml side
+   serializes guarded regions, so a refusal for that reason only meets a nested region, which the
+   outer deadline covers). The expiry is process-directed and is delivered only to a thread that
+   does not block SIGALRM, so [arm] unblocks it in the calling thread -- the one that runs the
+   initialization -- and [disarm] restores that thread's mask: a process that inherited a blocked
+   SIGALRM, or whose every thread blocks it, would otherwise arm a deadline that never fires. A
+   SIGALRM already PENDING (blocked and raised) refuses the arm, since unblocking would deliver
+   it to the deadline's handler. [disarm] cancels the timer and restores the saved disposition. A SIGALRM some other process SENDS during the region
    (si_code SI_USER) is not the deadline: it still kills, as SIGALRM's default action would have,
    but without the deadline's diagnostic, so that line always means the timer expired. No
    deadline on Windows, which has no SIGALRM. */
 
 #if !defined(_WIN32)
+#include <pthread.h>
 #include <sys/time.h>
 
 #define OCANNL_DEADLINE_MSG_MAX 1024
 static char ocannl_deadline_msg[OCANNL_DEADLINE_MSG_MAX];
 static size_t ocannl_deadline_msg_len;
 static struct sigaction ocannl_deadline_saved;
+static sigset_t ocannl_deadline_saved_mask;
 static int ocannl_deadline_armed; /* accessed through __atomic builtins */
 
 static void ocannl_deadline_write(const char *p, size_t n) {
@@ -399,6 +407,17 @@ static void ocannl_deadline_write(const char *p, size_t n) {
     }
     p += w;
     n -= (size_t)w;
+  }
+}
+
+/* Block SIGALRM again in the calling thread if [arm] found it blocked. Only that one signal's bit
+   is put back, so a mask change the initialization made for other signals is kept. */
+static void ocannl_deadline_reblock(void) {
+  sigset_t alrm;
+  if (sigismember(&ocannl_deadline_saved_mask, SIGALRM)) {
+    sigemptyset(&alrm);
+    sigaddset(&alrm, SIGALRM);
+    pthread_sigmask(SIG_BLOCK, &alrm, NULL);
   }
 }
 
@@ -447,6 +466,7 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   double seconds = Double_val(v_seconds);
   struct sigaction cur, ours;
   struct itimerval running, deadline;
+  sigset_t pending, alrm;
   int expected = 0;
   size_t len;
   if (!(seconds > 0.0) || seconds > 1e8) return Val_false;
@@ -455,7 +475,8 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
     return Val_false;
   if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
       cur.sa_handler != SIG_DFL || getitimer(ITIMER_REAL, &running) != 0 ||
-      running.it_value.tv_sec != 0 || running.it_value.tv_usec != 0) {
+      running.it_value.tv_sec != 0 || running.it_value.tv_usec != 0 || sigpending(&pending) != 0 ||
+      sigismember(&pending, SIGALRM)) {
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
     return Val_false;
   }
@@ -476,7 +497,15 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   deadline.it_value.tv_usec = (suseconds_t)((seconds - (double)(time_t)seconds) * 1e6);
   if (deadline.it_value.tv_sec == 0 && deadline.it_value.tv_usec == 0)
     deadline.it_value.tv_usec = 1;
+  sigemptyset(&alrm);
+  sigaddset(&alrm, SIGALRM);
+  if (pthread_sigmask(SIG_UNBLOCK, &alrm, &ocannl_deadline_saved_mask) != 0) {
+    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
+    __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
+    return Val_false;
+  }
   if (setitimer(ITIMER_REAL, &deadline, NULL) != 0) {
+    ocannl_deadline_reblock();
     sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
     return Val_false;
@@ -485,8 +514,9 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
 #endif
 }
 
-/* Cancel the timer [ocannl_device_init_deadline_arm] started and restore the disposition it saved.
-   A no-op when nothing is armed. */
+/* Cancel the timer [ocannl_device_init_deadline_arm] started and restore the disposition it saved,
+   and the calling thread's signal mask -- it must be the thread that armed (the OCaml side disarms
+   in the same call). A no-op when nothing is armed. */
 CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
   (void)unit;
 #if !defined(_WIN32)
@@ -494,6 +524,7 @@ CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
     struct itimerval off;
     memset(&off, 0, sizeof off);
     setitimer(ITIMER_REAL, &off, NULL);
+    ocannl_deadline_reblock();
     sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
   }

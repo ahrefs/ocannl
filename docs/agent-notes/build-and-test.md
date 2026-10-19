@@ -3751,13 +3751,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   stands for a Linux far side).
 - **Inside every process, a GPU backend's device discovery and device opening have a deadline
   too** (`device_init_deadline`, 120 s, gh-ocannl-1281): `Backends.With_device_init_deadline`
-  guards the cuda, hip and metal entry points until each has once returned, and past the bound a C
-  SIGALRM handler writes one line opening `OCANNL device_init_deadline:` and kills the process
-  (142), reaching bare `dune`, `bin/` tools and user programs the harness bounds never see. Under
+  guards every call of the cuda, hip and metal entry points that reach the driver, serialized
+  process-wide (the real-time timer is one per process), and past the bound a C SIGALRM handler
+  writes one line opening `OCANNL device_init_deadline:` and kills the process (142), reaching
+  bare `dune`, `bin/` tools and user programs the harness bounds never see. Under
   dune that death is a red action whose signal the default display does not name, so the digest
   reads the line itself, at a line's start, as `WEDGED DEVICE` (leg 84). A program with its own
-  SIGALRM handler or a running real-time timer gets no deadline, and no deadline exists on
-  Windows; `test/operations/device_init_deadline` pins all of it through a test stall hook.
+  SIGALRM handler, a running real-time timer or a pending SIGALRM gets no deadline (a blocked
+  one is unblocked for the region), and no deadline exists on Windows; `test/operations/device_init_deadline` pins all of it through a test stall hook.
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
   dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
   batch's into the run directory and keeps only the five slowest, below) and

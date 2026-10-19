@@ -21,6 +21,17 @@
 
    [unguarded BACKEND]: one guarded call whose hook would print [hook-ran]; prints [returned].
 
+   [again BACKEND]: one real [num_devices] call (on a missing backend's stub, or on a device that
+   answers), then a 30 s stall in the same entry point.
+
+   [blocked BACKEND]: SIGALRM is blocked in the (only) thread first; then a 5 s stall.
+
+   [blocked-pending BACKEND]: SIGALRM is blocked and then sent to the process, so it is pending;
+   then a 1.5 s stall, and whether SIGALRM is still blocked afterwards.
+
+   [concurrent FIRST SECOND]: a second domain enters FIRST's guarded [num_devices], whose stall is
+   healthy (0.3 s); 0.1 s later this thread enters SECOND's, whose stall is 5 s.
+
    Times are seconds on the monotonic clock, which is system-wide, so the parent can subtract its
    own reading from them. *)
 
@@ -116,6 +127,41 @@ let () =
       say "disposition-default %b" default;
       say "timer-idle %b" idle;
       Unix.sleepf 1.0;
+      say "survived"
+  | [ "again"; name ] ->
+      (match call_entry name "num_devices" with
+      | () -> say "first-call returned"
+      | exception exn -> say "first-call raised %s" (Exn.to_string exn));
+      guarded_call name (stall_for 30.0);
+      say "survived"
+  | [ "blocked"; name ] ->
+      ignore (Unix.sigprocmask Unix.SIG_BLOCK [ Stdlib.Sys.sigalrm ] : int list);
+      guarded_call name (stall_for 5.0);
+      say "survived"
+  | [ "blocked-pending"; name ] ->
+      ignore (Unix.sigprocmask Unix.SIG_BLOCK [ Stdlib.Sys.sigalrm ] : int list);
+      Unix.kill (Unix.getpid ()) Stdlib.Sys.sigalrm;
+      guarded_call name (stall_for 1.5);
+      let mask = Unix.sigprocmask Unix.SIG_BLOCK [] in
+      say "still-blocked %b" (List.mem mask Stdlib.Sys.sigalrm ~equal:Int.equal);
+      say "survived"
+  | [ "concurrent"; first; second ] ->
+      (* The first region to take the hook is the healthy one: it returns 0.3 s in, while the
+         second, entered 0.1 s after the first, is the wedged one. *)
+      let calls = Atomic.make 0 in
+      Utils.device_init_test_stall :=
+        Some
+          (fun () ->
+            if Atomic.fetch_and_add calls 1 = 0 then (
+              Unix.sleepf 0.3;
+              raise Stall_done)
+            else stall_for 5.0 ());
+      let healthy =
+        Stdlib.Domain.spawn (fun () -> try call_entry first "num_devices" with Stall_done -> ())
+      in
+      Unix.sleepf 0.1;
+      (try call_entry second "num_devices" with Stall_done -> ());
+      Stdlib.Domain.join healthy;
       say "survived"
   | [ "unguarded"; name ] ->
       guarded_call name (fun () ->

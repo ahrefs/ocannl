@@ -6,17 +6,21 @@
    from outside; [Utils.with_device_init_deadline] bounds it inside every process, around the entry
    points [Backends.With_device_init_deadline] guards. A wedged driver cannot be produced on demand,
    so the stuck initialization is simulated by [Utils.device_init_test_stall], a test-only hook that
-   sleeps INSIDE the guarded region and then raises before any driver contact -- so the children
-   below touch no device, whichever backend they name. Death, and the deadline's restraint, are
-   observed from outside: each case is a fresh [device_init_deadline_child], with the deadline
-   pinned on its commandline.
+   sleeps INSIDE the guarded region and then raises before any driver contact -- so the stalled
+   calls touch no device, whichever backend they name (the one real call, in the [again] case, is to
+   metal: a missing backend's stub off macOS). Death, and the deadline's restraint, are observed
+   from outside: each case is a fresh [device_init_deadline_child], with the deadline pinned on its
+   commandline.
 
    The cases: every GPU backend's discovery, and each other guarded entry point, dies within the
    deadline by SIGALRM with the diagnostic; [device_init_deadline=0] lets the same stall run out; a
    program's own SIGALRM handler is left installed and in charge, and its own timer fires on time; a
    pending timer under the default disposition fires on time, unextended, without the diagnostic
    (the negative control: an implementation that armed over it would survive); disarming restores
-   the default disposition and an idle timer; and the cc backends are not guarded at all. Last, the
+   the default disposition and an idle timer; an entry point stays guarded after a call that
+   returned; a SIGALRM blocked in the thread still fires the deadline, and one already pending is
+   not armed over; overlapping regions on two domains are serialized, so a healthy one's disarm does
+   not leave a wedged one unbounded; and the cc backends are not guarded at all. Last, the
    diagnostic's tag is the one [tools/test-run.sh]'s digest reads. *)
 
 open Base
@@ -154,6 +158,29 @@ let () =
     (holds restored ~f:(fun o ->
          exited_0 o && says o "hook-ran" && says o "disposition-default true"
          && says o "timer-idle true" && says o "survived"));
+  let again = run ~deadline:"0.5" [ "again"; "metal" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "a guarded entry point stays guarded after a call that returned: a later stall in it dies by \
+     the deadline"
+    (holds again ~f:(fun o -> says o "first-call returned" && died_by_deadline "metal" o));
+  let blocked = run ~deadline:"0.5" [ "blocked"; "cuda" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "with SIGALRM blocked in the process's only thread, the deadline still fires: the region \
+     unblocks it"
+    (holds blocked ~f:(died_by_deadline "cuda"));
+  let blocked_pending = run ~deadline:"0.5" [ "blocked-pending"; "cuda" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "a blocked SIGALRM already pending is not armed over: the stall runs out, SIGALRM is still \
+     blocked after the region, and nothing is written"
+    (holds blocked_pending ~f:(fun o ->
+         exited_0 o && stalled o && says o "survived" && says o "still-blocked true"
+         && Option.is_none (diagnostic o)
+         && not (List.exists o.stderr_lines ~f:(String.is_substring ~substring:"external SIGALRM"))));
+  let concurrent = run ~deadline:"0.5" [ "concurrent"; "cuda"; "hip" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "guarded regions are serialized: a wedged one entered while a healthy one held the timer is \
+     still killed by its own deadline after the healthy one returns"
+    (holds concurrent ~f:(died_by_deadline "hip"));
   let cpu =
     List.map cpu_backends ~f:(fun name -> (name, run ~deadline:"0.5" [ "unguarded"; name ]))
   in
