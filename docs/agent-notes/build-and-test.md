@@ -786,7 +786,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   shared fixture outside every gate, and define a helper two legs call outside both. `tools/harness-legs-alone.sh [HARNESS...]` runs each
   harness once in full, then every leg and every `#group` alone, reporting `ALONE FAIL` (with
   whether the full run passed), `ALONE SKIP` (a check skipped alone that the full run decided) and
-  `ALONE MISS` (the selection did not run exactly the legs meant); with no argument it takes every
+  `ALONE MISS` (the selection did not run exactly the legs meant), and `CHECKOUT CHANGED` for any run
+that leaves a tracked or untracked file behind (a later run could pass on it); with no argument it takes every
   member of `tools/test-harnesses.sh` whose gates list a leg. CI runs it on the daily schedule and
   on a dispatch (job `harness-legs-alone`), since it costs a run per leg; run it locally, slot-wrapped,
   on a harness whose legs you restructured. `HARNESS --list-legs` prints each gate (`LEG  NAME`)

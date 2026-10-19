@@ -19,6 +19,11 @@
 #   3. HARNESS --only '#GROUP$' for each group tag the leg names close with;
 #   4. HARNESS --only '^NAME$' for each leg, NAME escaped so that the run
 #      selects exactly that leg.
+# Every run starts from the same checkout: one that changes its tracked or
+# untracked files is a finding (CHECKOUT CHANGED), since a later run could
+# pass on what it left. State a leg keeps outside the checkout and its own
+# scratch directory is beyond this check, as it is beyond harness_scratch's
+# contract.
 # A selected run is a finding when it fails (ALONE FAIL), when its coverage
 # account does not say it ran exactly the legs meant -- or the selector, read
 # by harness_leg's own matcher, would not select exactly them (ALONE MISS) --
@@ -52,7 +57,11 @@ done
 named=${#harnesses[@]}
 if [ "$named" -eq 0 ]; then
   while IFS= read -r script; do
-    grep -qE 'harness_leg(_run)? ' "$root/$script" 2>/dev/null && harnesses+=("$script")
+    # A pre-filter only: a gate call outside a comment, its arguments on the
+    # same line or a continued one. The listing below is the authority, and a
+    # candidate that lists no leg is printed as not checked.
+    grep -qE '^[^#]*(^|[^A-Za-z0-9_])harness_leg(_run)?([[:space:]]|\\|$)' "$root/$script" 2>/dev/null &&
+      harnesses+=("$script")
   done < <("$root/tools/test-harnesses.sh" --list)
   [ ${#harnesses[@]} -gt 0 ] || { echo "harness-legs-alone.sh: no member of tools/test-harnesses.sh gates a leg" >&2; exit 2; }
 fi
@@ -80,19 +89,53 @@ ere_escape() {
   done
   printf '%s' "$out"
 }
+# A signal to this check stops the member running too, and waits for its
+# cleanup, before the check exits with the signal's status. The member is
+# sent TERM whatever the signal: a background child of a non-interactive
+# shell starts with INT ignored, and every harness exits on TERM through
+# its cleanup (harness_scratch).
+child=
+stop() { # STATUS
+  trap '' HUP INT TERM
+  if [ -n "$child" ]; then
+    kill -TERM "$child" 2>/dev/null
+    wait "$child" 2>/dev/null
+  fi
+  printf 'harness-legs-alone: interrupted (exit %s)%s\n' "$1" "${current_log:+ in $current_log}" >&2
+  exit "$1"
+}
+trap 'stop 129' HUP
+trap 'stop 130' INT
+trap 'stop 143' TERM
+# What the runs may not change: the checkout's tracked and untracked files
+# (ignored ones such as _build are out of reach). A run that leaves state
+# there could hand it to a later run of the same leg, which would then pass
+# alone on what an earlier run made, so it is a finding of its own.
+checkout_state() { git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null; }
 member() { # LOG SCRIPT [ARG...] -- one run; rc in $rc
-  local log=$1 script=$2
+  local log=$1 script=$2 after
   shift 2
-  rc=0
-  OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" "$@" >"$log" 2>&1 </dev/null || rc=$?
+  rc=0 current_log=$log
+  OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" "$@" >"$log" 2>&1 </dev/null &
+  child=$!
+  wait "$child" || rc=$?
+  child= current_log=
   case $rc in
     129|130|143) printf 'harness-legs-alone: interrupted (exit %s) in %s\n' "$rc" "$log" >&2; exit "$rc" ;;
   esac
+  after=$(checkout_state)
+  if [ "$after" != "$baseline" ]; then
+    findings=$((findings + 1))
+    printf '  CHECKOUT CHANGED  by %s %s: %s\n' "$script" "$*" "$log"
+    diff <(printf '%s\n' "$baseline") <(printf '%s\n' "$after") | sed -n 's/^[<>] /        /p' | head -10
+    baseline=$after
+  fi
 }
 excerpt() { # LOG -- the lines a finding is read from
   grep -E '^(FAIL  |      |SKIP  |aborted |--only )' "$1" | head -20 | sed 's/^/        /'
 }
 findings=0 red=0 checked=0 bad_listing=0
+baseline=$(checkout_state)
 for script in "${harnesses[@]}"; do
   [ -f "$root/$script" ] || { echo "harness-legs-alone.sh: no harness $script" >&2; exit 2; }
   slug=$(printf '%s' "$script" | tr '/ ' '__')

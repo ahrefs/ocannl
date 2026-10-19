@@ -21,6 +21,7 @@ cat >"$fixture/tools/test-harnesses.sh" <<'STUB'
 #!/usr/bin/env bash
 [ "$*" = --list ] || exit 2
 printf '%s\n' fixtures/gated.sh fixtures/ungated.sh
+[ "${DISCOVERY:-0}" = 0 ] || printf '%s\n' fixtures/continued.sh fixtures/commented.sh
 STUB
 cat >"$fixture/fixtures/gated.sh" <<'GATED'
 #!/usr/bin/env bash
@@ -30,6 +31,10 @@ set -u
 harness_args "$@"
 harness_scratch gated
 leg_1() {
+  if [ -n "${HOLD:-}" ]; then
+    echo $$ >"$HOLD"
+    while :; do sleep 0.2; done
+  fi
   report 0 'one'
   [ "${LEAK:-0}" = 0 ] || shared=made
   [ "${SKIPLEAK:-0}" = 0 ] || touch "$TMP/from-one"
@@ -42,7 +47,10 @@ leg_3() {
   if [ "${SKIPLEAK:-0}" = 1 ] && [ ! -f "$TMP/from-one" ]; then skip 'three check' 'nothing from one'
   else report 0 'three'; fi
 }
-leg_4() { report "${RED:-0}" 'four'; }
+leg_4() {
+  [ "${LITTER:-0}" = 0 ] || : >"$(dirname "$0")/../litter"
+  report "${RED:-0}" 'four'
+}
 dot() { report 0 "$1"; }
 harness_leg_run '1: one makes things #a' leg_1
 harness_leg_run '2: two (x.y) reads them #a' leg_2
@@ -64,9 +72,28 @@ if [ "${NEVER:-0}" = 1 ] && harness_leg 'never'; then report 0 'never'; fi
 report 0 'ungated'
 finish
 UNGATED
+cat >"$fixture/fixtures/continued.sh" <<'CONTINUED'
+#!/usr/bin/env bash
+# Fixture harness whose one gate continues onto the next line.
+set -u
+. "$(dirname "$0")/../scripts/harness-support.sh"
+harness_args "$@"
+only() { report 0 'only'; }
+harness_leg_run\
+  'only leg' only
+finish
+CONTINUED
+cat >"$fixture/fixtures/commented.sh" <<'COMMENTED'
+#!/usr/bin/env bash
+# Fixture harness naming harness_leg_run only in this comment; running it fails.
+exit 1
+COMMENTED
 chmod +x "$fixture/tools/"*.sh "$fixture/fixtures/"*.sh
+# The checkout every run must leave as it found it.
+git -C "$fixture" init -q && git -C "$fixture" add -A &&
+  git -C "$fixture" -c user.name=t -c user.email=t@t commit -q -m fixture || exit 2
 subject="$fixture/tools/harness-legs-alone.sh"
-unset OCANNL_TOOL_HARNESS_STRICT LEAK SKIPLEAK RED DUP NEVER BROKEN
+unset OCANNL_TOOL_HARNESS_STRICT LEAK SKIPLEAK RED DUP NEVER BROKEN HOLD LITTER DISCOVERY
 run() { # [subject arguments] -- from an unrelated directory
   rc=0
   (cd "$TMP" && "${SUBJECT:-$subject}" "$@") >"$TMP/out" 2>&1 || rc=$?
@@ -125,6 +152,43 @@ if [ "$rc" = 1 ] && grep -q '^HARNESS fixtures/ungated.sh: LISTING FAILED (exit 
    && has 'harness-legs-alone: 1 harness(es) checked; 0 red full run(s), 1 failed listing(s), 0 finding(s) run alone'; then
   report 0 'a listing that dies before its first gate is a failed listing, not a host without legs'
 else report 1 'a listing that dies before its first gate is a failed listing, not a host without legs' "exit $rc; $(cat "$TMP/out")"; fi
+
+LITTER=1 run fixtures/gated.sh
+rm -f "$fixture/litter"
+if [ "$rc" = 1 ] && grep -q '^  CHECKOUT CHANGED  by fixtures/gated.sh : ' "$TMP/out" \
+   && has '        ?? litter' \
+   && has 'harness-legs-alone: 1 harness(es) checked; 0 red full run(s), 0 failed listing(s), 1 finding(s) run alone'; then
+  report 0 'a run that leaves a file in the checkout is a finding'
+else report 1 'a run that leaves a file in the checkout is a finding' "exit $rc; $(cat "$TMP/out")"; fi
+
+DISCOVERY=1 run
+if [ "$rc" = 0 ] && has 'HARNESS fixtures/continued.sh: 1 leg(s), 0 group(s)' && has '  ALONE PASS  only leg' \
+   && ! grep -q 'commented' "$TMP/out"; then
+  report 0 'discovery: a continued gate line is found, a gate named in a comment is not'
+else report 1 'discovery: a continued gate line is found, a gate named in a comment is not' "exit $rc; $(cat "$TMP/out")"; fi
+
+# A TERM to the check stops the harness it is running, and waits for it.
+hold="$TMP/hold.pid"
+rm -f "$hold"
+(cd "$TMP" && exec env HOLD="$hold" "$subject" fixtures/gated.sh) >"$TMP/out" 2>&1 &
+checker=$!
+for _ in $(seq 100); do [ -s "$hold" ] && break; sleep 0.1; done
+if [ -s "$hold" ]; then
+  member_pid=$(cat "$hold")
+  kill -TERM "$checker"
+  rc=0
+  wait "$checker" || rc=$?
+  if [ "$rc" = 143 ] && ! kill -0 "$member_pid" 2>/dev/null && grep -q '^harness-legs-alone: interrupted (exit 143) in ' "$TMP/out"; then
+    report 0 'TERM to the check stops the running harness first and keeps its status'
+  else
+    kill -TERM "$member_pid" 2>/dev/null
+    report 1 'TERM to the check stops the running harness first and keeps its status' "exit $rc; $(cat "$TMP/out")"
+  fi
+else
+  kill -TERM "$checker" 2>/dev/null
+  wait "$checker" 2>/dev/null
+  report 1 'TERM to the check stops the running harness first and keeps its status' "the held leg never started: $(cat "$TMP/out")"
+fi
 
 kept="$(cd "$TMP" && pwd)/kept"
 run --logs "$kept" fixtures/gated.sh
