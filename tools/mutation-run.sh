@@ -4,6 +4,10 @@
 # Patch bytes are OLD@@@NEW (exactly one delimiter; no newline is stripped).
 # OLD must occur exactly once, including overlapping occurrences. NEW may be empty.
 # Use an otherwise idle, isolated worktree; do not edit the module during the run.
+# First the unmutated test runs once, the BASELINE, and must pass: a golden not promoted
+# after a change to the test, or a test red on its own, would read every mutant as caught or
+# stopped early, so a red baseline refuses (exit 2) before anything is mutated (gh-ocannl-1364).
+# It costs one more test run per mutation; the report names it (`baseline: <run>`).
 # The alias names ONE test -- @<dir>/runtest-<name>, slow-<name> or train-<name>
 # -- whose golden is <dir>/<name>.expected: a mutated run counts as evidence only
 # once it has REACHED ITS LAST ROW (gh-ocannl-1083). The stdout this run wrote
@@ -81,13 +85,12 @@ my $golden = "$dir$name.expected";
 my $build = $ENV{DUNE_BUILD_DIR} // '_build';
 $build = "$root/$build" unless $build =~ m{^/};
 my @outputs = map { "$build/default/$dir$name$_" } qw(.exe.output .actual .output);
-# What each candidate stdout file is BEFORE the run: an output this run did not
-# rewrite is a previous run's, and counting it would read "never ran" as caught.
+# A candidate stdout file's identity, taken of each before the mutated run (below).
 sub signature {
     my @s = Time::HiRes::lstat($_[0]);
     return @s ? join(':', @s[0, 1, 7, 9, 10]) : 'absent';
 }
-my %before = map { $_ => signature($_) } @outputs;
+my %before;
 # What a Verdict.case prints when its case raises (test/support/verdict.ml): the
 # case's own failed claim, standing in for rows the raise kept from printing.
 my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
@@ -191,6 +194,69 @@ substr($mutated, $at, length($old), $new);
 system('bash', "$root/tools/test-run.sh", 'idle') == 0
     or refuse('worktree is busy or its test-run lock is unreadable; nothing mutated');
 my $scratch = tempdir('ocannl-mutation-XXXXXXXX', TMPDIR => 1, CLEANUP => 0);
+my $owner = $$;
+# The digest line test-run prints of its run, in a transcript of it.
+sub run_log {
+    open my $f, '<:raw', $_[0] or return undef;
+    while (my $line = <$f>) { return $1 if $line =~ /^log: +(.+\/log)\r?\n?$/ }
+    return undef;
+}
+# The BASELINE: the unmutated test, run before anything is mutated. A mutant's rows are counted
+# against the golden, so the golden must be what the unmutated source prints and its claims must
+# hold. A golden not yet promoted after a change to the test read a mutant as stopped early
+# (gh-ocannl-1361's worker, twice), and one the test fails regardless of the mutation would read
+# every mutant as caught (gh-ocannl-1364). A red baseline refuses with nothing mutated. Nothing is
+# printed until the module is restored, so that the first line stays the recovery copy's.
+my ($baseline_status, $baseline_stop) = (0, 0);
+{
+    my $pid = 0;
+    for my $pair ([INT => 2], [TERM => 15], [HUP => 1]) {
+        my ($name, $number) = @$pair;
+        $SIG{$name} = sub {
+            exit(128 + $number) if $$ != $owner;
+            $baseline_stop ||= 128 + $number;
+            kill 'TERM', $pid if $pid;
+        };
+    }
+    $pid = fork();
+    defined $pid or do { rmdir $scratch; refuse("fork: $!") };
+    if ($pid == 0) {
+        $SIG{$_} = 'DEFAULT' for qw(INT TERM HUP);
+        chdir $root or exit 126;
+        open STDIN, '<', '/dev/null' or exit 126;
+        open STDOUT, '>', "$scratch/baseline" or exit 126;
+        open STDERR, '>&', \*STDOUT or exit 126;
+        exec 'bash', 'tools/test-run.sh', 'run', 'build', '-j', '4', $alias;
+        exit 127;
+    }
+    kill 'TERM', $pid if $baseline_stop;
+    while (1) {
+        my $got = waitpid($pid, 0);
+        next if $got < 0 && $! == EINTR;
+        $baseline_status = ($? & 127) ? 128 + ($? & 127) : $? >> 8;
+        last;
+    }
+}
+my $baseline_log = run_log("$scratch/baseline");
+if ($baseline_stop || $baseline_status) {
+    $| = 1;
+    if (!$baseline_stop && open my $f, '<:raw', "$scratch/baseline") {
+        print while <$f>;
+        close $f;
+    }
+    unlink "$scratch/baseline";
+    rmdir $scratch;
+    exit $baseline_stop if $baseline_stop;
+    refuse("BASELINE RED: the unmutated test exited $baseline_status"
+        . (defined $baseline_log ? ' (run ' . basename(dirname($baseline_log)) . ')' : '')
+        . ", so $golden is not what it prints, or its claims fail without a mutation (promote the "
+        . 'golden, or fix the test): no mutant can be counted against it; nothing was mutated');
+}
+unlink "$scratch/baseline";
+# What each candidate stdout file is BEFORE the mutated run, the baseline's rewrite included: an
+# output the mutated run did not rewrite is an earlier run's, and counting it would read "never
+# ran" as caught or survived.
+%before = map { $_ => signature($_) } @outputs;
 my $backup = "$scratch/original";
 copy($module, $backup) or refuse("backup: $!");
 my $mode = (stat($module))[2] & 07777;
@@ -198,7 +264,6 @@ chmod($mode, $backup) or refuse("backup permissions: $!");
 $| = 1;
 print "recovery: $backup\n";
 my ($child, $cancel, $changed) = (0, 0, 0);
-my $owner = $$;
 for my $pair ([INT => 2], [TERM => 15], [HUP => 1]) {
     my ($name, $number) = @$pair;
     $SIG{$name} = sub {
@@ -279,6 +344,8 @@ my $reported = eval {
         }
         close $transcript or refuse("close transcript: $!");
     }
+    print 'baseline: ', basename(dirname($baseline_log)), " (the unmutated test passed)\n"
+        if defined $baseline_log;
     # Read the digest from THIS invocation, never 'last' or its truncated tail.
     if (defined $log) {
         # The one stdout this run wrote, when it wrote exactly one: the rows it counts against the

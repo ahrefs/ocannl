@@ -44,13 +44,27 @@ case "$*" in
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
-case "$(cat module.ml)" in *MUTATED*) ;; *) exit 99 ;; esac
+out=${DUNE_BUILD_DIR:-_build}/default
+# The unmutated module is the runner's baseline: green, writing nothing, unless the case says
+# otherwise -- red, as a golden not promoted after a change to the test leaves it, or green
+# having rewritten the test's stdout, as a real baseline does.
+case "$(cat module.ml)" in
+  *MUTATED*) ;;
+  *)
+    printf '%s\n' baseline >> "$PROBE_HOME/baselines"
+    case "${PROBE_BASELINE:-green}" in
+      green) exit 0 ;;
+      rewrote) mkdir -p "$out"; rm -f "$out/$name.exe.output"; cp "$name.expected" "$out/$name.exe.output"; exit 0 ;;
+      red) printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
+      sleep) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
+      *) exit 99 ;;
+    esac ;;
+esac
 cp module.ml "$PROBE_HOME/observed"
 # The test's stdout, where dune leaves it even when the test exits nonzero; the
 # golden, probe.expected, has three rows, manifest.expected six, two of them
 # refusal-manifest marker rows, and trailer.expected eight: manifest.expected's
 # with a blank row and a success trailer (`OK: `) before its section.
-out=${DUNE_BUILD_DIR:-_build}/default
 mkdir -p "$out"
 rows() { rm -f "$out/$name.exe.output"; printf "$1" > "$out/$name.exe.output"; }
 m1='  [scanner-refusal:00000000000000000000000000000001] first refusal\n'
@@ -428,6 +442,27 @@ for mode in pass compile refused; do
   grep -q '^(none)$' "$fixture/result"
 done
 printf 'PASS surviving mutation, compile failure (never ran), invocation refusal\n'
+# The baseline (gh-ocannl-1364): the unmutated test runs first, and a red one refuses before
+# anything is mutated -- one invocation, the baseline's, and the module never seen mutated. A green
+# baseline is named in the report; one that rewrote the test's stdout leaves an output the mutated
+# run must still rewrite to be counted.
+export PROBE_MODE=fail
+run_case 1
+grep -q '^baseline: [0-9TZ-]* (the unmutated test passed)$' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'no baseline line'; exit 1; }
+count=$(wc -l < "$fixture/invocations")
+rm -f "$fixture/observed"
+PROBE_BASELINE=red run_case 2
+grep -q '^mutation-run: BASELINE RED: the unmutated test exited 1 (run [0-9TZ-]*), so probe.expected is not what it prints' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'red baseline: no refusal'; exit 1; }
+grep -q '^  FAIL: first: false$' "$fixture/result" || { cat "$fixture/result"; echo 'red baseline: its failure is not shown'; exit 1; }
+[ $(($(wc -l < "$fixture/invocations"))) = $((count + 1)) ] && [ ! -e "$fixture/observed" ] ||
+  { echo 'red baseline: the mutated module was run'; exit 1; }
+if grep -q '^recovery: ' "$fixture/result"; then echo 'red baseline: a recovery copy was announced'; exit 1; fi
+export PROBE_MODE=reused
+PROBE_BASELINE=rewrote run_case 4
+flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)'
+printf 'PASS a red baseline refuses before mutating; the baseline'"'"'s own stdout never counts as the mutant'"'"'s\n'
 count=$(wc -l < "$fixture/invocations")
 for patch_text in 'MISSING@@@x' 'ANCHOR' '@@@x' 'ANCHOR@@@x@@@y' 'ANCHOR@@@ANCHOR'; do
   printf '%s' "$patch_text" > patch
@@ -507,11 +542,15 @@ print $s;
 PERL
 chmod +x tools/mutation-fork-window.sh
 # Drive signals from Perl so an asynchronous shell does not inherit ignored INT.
-for signal_case in normal:INT normal:TERM normal:HUP fork:INT fork:TERM fork:HUP; do
+# A signal during the baseline ends the run as one, with nothing mutated and so nothing restored.
+for signal_case in normal:INT normal:TERM normal:HUP fork:INT fork:TERM fork:HUP \
+  baseline:INT baseline:TERM baseline:HUP; do
   signal=${signal_case#*:}
+  unset PROBE_BASELINE
   case $signal_case in
     normal:*) export PROBE_RUNNER=tools/mutation-run.sh ;;
     fork:*) export PROBE_RUNNER=tools/mutation-fork-window.sh ;;
+    baseline:*) export PROBE_RUNNER=tools/mutation-run.sh PROBE_BASELINE=sleep ;;
   esac
   rm -f "$fixture/ready"
   export PROBE_MODE=sleep
@@ -539,9 +578,16 @@ alarm 0;
 die "not ready or wrong signal status: $got\n" unless $ready && $got == $rc{$signal};
 PERL
   cmp module.ml "$fixture/pristine"
-  grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
+  case $signal_case in
+    baseline:*)
+      if grep -Eq '^(recovery|restored): ' "$fixture/result"; then
+        cat "$fixture/result"; echo "$signal_case: a run cancelled in its baseline announced a mutation"; exit 1
+      fi ;;
+    *) grep -q '^restored: byte-identical (cmp)$' "$fixture/result" ;;
+  esac
 done
-printf 'PASS INT TERM HUP cancel in the fork window and during test-run, then restore\n'
+unset PROBE_BASELINE
+printf 'PASS INT TERM HUP cancel in the baseline, the fork window and during test-run, restoring what was mutated\n'
 export PROBE_MODE=sleep OCANNL_TOOL_TEST_CAP=1
 run_case 142
 unset OCANNL_TOOL_TEST_CAP

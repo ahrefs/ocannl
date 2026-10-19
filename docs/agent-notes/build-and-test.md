@@ -1774,8 +1774,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - Mutation manifest rows use `tools/mutation-run.sh <module> <patch-file> <@alias>`
   (gh-ocannl-969), in an otherwise idle, isolated worktree. The patch is literal bytes
   `OLD@@@NEW`, with exactly one delimiter, a nonempty OLD occurring exactly once (overlapping
-  occurrences count), and no implicit newline trimming; NEW can be empty. The runner invokes
-  `tools/test-run.sh`, prints its actual verdict and run id, and extracts every complete
+  occurrences count), and no implicit newline trimming; NEW can be empty. The runner first runs
+  the unmutated test once (`baseline: <run>`) and refuses, with nothing mutated, when that
+  baseline is red: a golden not yet promoted after a change to the test read mutants as stopped
+  early (gh-ocannl-1361's worker, twice), and a test red on its own would read every mutant as
+  caught (gh-ocannl-1364). That is one more test run per mutation. It then invokes
+  `tools/test-run.sh` on the mutant, prints its actual verdict and run id, and extracts every complete
   `FAIL: ...: false` line from that run's full log, and every failed `pass_fail`'s
   `FAIL: ...: FAIL` or `FAIL: ...: FAIL (<detail>)`, preserving order and duplicates -- apart from
   `Verdict.fail` messages, whose line the stdout carries too, listed under `failure messages`
