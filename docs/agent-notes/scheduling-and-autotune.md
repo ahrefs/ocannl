@@ -1115,6 +1115,19 @@ files.
   moved 2.474 -> 2.427 ms (replicate means) with the spread narrowed 16x. Before reading a per-key
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
+- **Staffed singles time a key's sketches inside the running composite** (gh-ocannl-1138, config
+  `autotune_staffed_singles`): the coarse keys are swept one at a time, each single's `staff` holding
+  the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
+  before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its
+  sweep. Only times within one key's sweep are comparable, so per-key minima stay valid but a
+  cross-key comparison does not; the composite's own choice is swept first, at its known time and
+  without a compile. The composite starts from the seeded plan's `Seeded_sketch` choices, matched to
+  coarse keys by structural digest only, so its split prelude and sunk segments are not in the staff.
+  A refused (not contended) staffed single is retried bare once (`fiss_sketch_backdrop_fallbacks`),
+  until a key's bare retry is refused too; the last key's winning window IS the coarse composite, so
+  `fs_composite` is set from it, and the playoff skips a key whose sweep ran inside the incumbent.
+  `test/operations/autotune_staffed_singles` scripts an additive landscape and seeds the start through
+  the `Autotune.on_staffed_start` seam, which only a seeded plan fills in production.
 - **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**
   (gh-ocannl-1137; a capped correctness-grade probe on a shared rog box, CUDA, approximate profile).
   A round is adopted only when its best beats the incumbent by `min_progress` (1%); a sub-1% best is

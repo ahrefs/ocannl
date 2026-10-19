@@ -32,6 +32,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   autotune_round_expansion
   autotune_rounds
   autotune_search
+  autotune_staffed_singles
   backend
   bf16_arithmetic
   big_models
@@ -246,6 +247,7 @@ Programs reading the cc vector width, every rule running which declares or pins 
   test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, test autotune_staffed_singles: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector_bytes`
   test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base

@@ -107,6 +107,7 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
   autotune_rounds
   autotune_search
   autotune_split_reduce_max_sites
+  autotune_staffed_singles
   model_peak_flops
   model_peak_memory_bandwidth
   strict_failure_classification

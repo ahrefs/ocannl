@@ -1,0 +1,36 @@
+menu: the pre-filtered seeding keys two segments: true
+menu: each segment offers three or more singles: true
+off: no candidate carries a staff: true
+off: the report counts no staffed window or fallback: true
+on: the first key is swept bare (the composite starts empty): true
+on: every single of the second key is staffed with the first key's fastest: true
+on: every staffed window is counted: true
+on: the crown is a staffed single holding each key's fastest: true
+on: no bare retry without a refusal: true
+on: the reference's singles, in the reference's order, only their backdrops differing: true
+on: one window fewer than the reference, its coarse composite timed already: true
+on: no composite window was timed: true
+on and off: the same crown time: true
+on: the best reaches the crown at the crown's own window: true
+off: the best reaches the crown at the crown's own window: true
+on: the crown's window is a single of the seed pass: true
+off: the reference's crown is its coarse composite (the flat best this fixes): true
+on: the crowned routine computes the untuned output bit for bit: true
+replay: the staffed crown replays from the schedule cache: true
+replay: the crown's schedule, at the time the search stored: true
+replay: the replayed routine computes the untuned output bit for bit: true
+start: the seam gave both keys a choice: true
+start: the first key's own choice is swept first, staffed with the second's: true
+start: every slower replacement left the first key's choice as it was: true
+start: the second key's start choice, the timed composite by then, is not timed again: true
+start: a faster single replaced the second key's start choice: true
+refused: one staffed single refused, one bare retry: true
+refused: the attempt after the refusal is its bare twin: true
+refused: the bare twin was timed: true
+refused: the refused staffed single was never timed: true
+refused: the refusal is a contained pre-dispatch decline: true
+refused_all: the first bare retry, refused too, is the only one: true
+refused_all: every staffed single of the key was still attempted: true
+ties: the playoff timed alternates: true
+ties: every composite window is the playoff's: true
+ties: only the first key plays; the last key's sweep ran inside the composite: true

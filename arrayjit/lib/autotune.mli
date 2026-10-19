@@ -1044,6 +1044,15 @@ type report = {
   fiss_sketch_playoff_swaps : int;
       (** Of [fiss_sketch_playoff_timed], the alternates that ran faster than the incumbent
           composite and replaced it, so later segments' alternates build on them. *)
+  fiss_sketch_staffed_timed : int;
+      (** Of [fiss_sketch_timed], the staffed singles' windows (gh-ocannl-1138, config
+          [autotune_staffed_singles]): singles timed with the other keyed segments on the running
+          composite's choices rather than on their presets. [0] with the setting off. *)
+  fiss_sketch_backdrop_fallbacks : int;
+      (** Staffed singles that were refused (a compile or run decline, not a contended window) and
+          retried once without their staff (gh-ocannl-1138), so one invalid choice in the running
+          composite cannot mask another segment's seeds. A key stops being retried after its first
+          bare retry is refused too: its seeds then fail on their own. *)
   split_reduce_candidates : int;
       (** Split-reduce seeds (gh-ocannl-484 task 3): one candidate per {!split_reduce_sites} site
           within the [max_split_reduce_sites] cap and eligible [num_blocks] value — the two-pass
@@ -2367,6 +2376,18 @@ val on_candidate_attempt : (string -> unit) Seam.t
     to [?report] and the exception propagates out of {!tune}, which is what [Train.tune_placements]
     must survive without losing the other arm's winner. Not a production seam: candidate failures
     that a backend {e can} attribute are contained without it (see [declines]). *)
+
+val on_staffed_start :
+  (menu:(seg_key * sketch_params list) list ->
+  (seg_key * sketch_params) list ->
+  (seg_key * sketch_params) list)
+  Seam.t
+(** Test seam for the staffed sweep (gh-ocannl-1138, config [autotune_staffed_singles]), called once
+    per search that sweeps with [~menu], the coarse segment keys and the parameters seeded for each,
+    and the running composite the sweep would start from (the seeded untuned plan's sketches matched
+    to those keys; empty where there is no seeded plan, on cc always); the sweep starts from its
+    result. It is how a test gives a key a choice before that key's own sweep, which only a seeded
+    plan does in production. The default is the identity and no configuration selects it. *)
 
 val on_candidate_preflight : (string -> unit) Seam.t
 (** Fault-injection seam for the pre-dispatch containment tests (gh-ocannl-564), called with a

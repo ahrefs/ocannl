@@ -1,0 +1,402 @@
+(* gh-ocannl-1138: staffed singles. A per-segment sketch single used to be timed as the whole
+   routine with every other segment on its untuned preset, a backdrop several times the composite
+   the single would join, so a search's best stayed flat until the recombination composites it timed
+   last. With config [autotune_staffed_singles] the search sweeps the keyed segments one at a time,
+   each single staffed with the running composite's choice for every other key, and after a key's
+   sweep its fastest single joins the composite.
+
+   The ranking is the test's: every admitted window is scripted through
+   [Autotune.on_candidate_measured] (gh-ocannl-1027), the windows opted out of host contention
+   ([with_uncontended_test_windows], gh-ocannl-1156). The script is ADDITIVE, the model the sweep is
+   built for: a per-segment candidate measures the sum of its scheduled segments' costs plus a
+   preset's cost for each keyed segment it leaves alone, a segment's cost a function of its label
+   entry ([params @key]); every other candidate measures far slower, so the crown is a per-segment
+   one by construction. The searches run over [Fissioned_chain]'s two-matmul chain on its small
+   menu, so the chain keys two segments with three or more singles each ([menu_claim]); on cc no
+   seeded untuned plan exists, so the running composite starts empty unless [on_staffed_start] gives
+   it a start.
+
+   [off] is the reference search; [on] the same search staffed. From the script alone the test
+   derives the composite each key's sweep must have been staffed with, and claims every staffed
+   single carried exactly that staff; that the staffed search times the reference's singles in the
+   reference's order, only their backdrops differing, and one window fewer (the reference's coarse
+   composite, which the last key's winning staffed single already timed), with the playoff off in
+   both so the count is the sweep's alone; that its best reaches the crown inside the seed pass,
+   where the reference's stays short of it until the composite; and that the crowned routine
+   computes what the untuned compile computes, bit for bit (the chain's inputs are dyadic and its
+   sums exact, so no reassociation can move a bit). The crown then replays from a schedule cache,
+   computing the same.
+
+   [start] gives the composite a start: the first key's last single, scripted the fastest of its
+   key, and the second key's last single, scripted the slowest. The first key's own choice is swept
+   first, staffed with the second's; every slower replacement leaves it as it was; the second key's
+   start choice, by then the timed composite itself, is not compiled again; and a faster single
+   replaces it.
+
+   [refused] fault-injects a refusal of the first staffed single ([on_candidate_preflight]): it is
+   retried bare at once, and that bare twin is timed. [refused_all] refuses every attempt of the
+   second key, staffed and bare: the first bare retry is refused too, so the key's later refusals
+   are not retried.
+
+   [ties] runs the playoff over a staffed search whose singles tie within each key: the last key's
+   sweep ran inside the crowned composite already, so only the first key's alternates play.
+
+   Pinned to cc: the scripted ranking is backend-independent, and cc is always available. *)
+open Base
+open Ocannl.Operation.DSL_modules
+open Verdict.Claims
+
+let staffed_key = "autotune_staffed_singles"
+let width_key = "autotune_composite_playoff_width"
+let () = Fissioned_chain.small_menu ()
+
+(* A per-segment label's entries ([params @key]), its focus and its staff apart. *)
+let parts label =
+  let body =
+    String.chop_prefix_exn label ~prefix:"F_sketch["
+    |> String.chop_suffix_exn ~suffix:"]"
+    |> String.chop_prefix_if_exists ~prefix:"fine "
+  in
+  let entries s = if String.is_empty s then [] else String.split s ~on:',' in
+  let sep = " | staff " in
+  match String.substr_index body ~pattern:sep with
+  | Some i ->
+      (entries (String.prefix body i), entries (String.drop_prefix body (i + String.length sep)))
+  | None -> (entries body, [])
+
+let focus label = fst (parts label)
+let staff label = snd (parts label)
+let key_of entry = List.last_exn (String.split entry ~on:'@')
+let is_sketch label = String.is_prefix label ~prefix:"F_sketch["
+let is_single = Fissioned_chain.is_single
+let is_composite = Fissioned_chain.is_composite
+let is_staffed = Fissioned_chain.is_staffed
+
+(* A bare single's label from a staffed one's: its focus alone. *)
+let bare label = Fissioned_chain.focus label ^ if is_staffed label then "]" else ""
+
+(* A segment's scripted cost when scheduled by [entry]: a spread of distinct values, so each key has
+   one fastest single. *)
+let hashed entry = 2. +. (Float.of_int (Stdlib.Hashtbl.hash entry % 1000) /. 100.)
+let preset_ms = 50.
+let keyed_segments = 2
+
+let routine_ms ~cost label =
+  if is_sketch label then
+    let f, s = parts label in
+    let entries = f @ s in
+    List.sum (module Float) entries ~f:cost
+    +. (preset_ms *. Float.of_int (keyed_segments - List.length entries))
+  else 1000.
+
+(* An entry's label text, as [parts] reads it off a candidate label. *)
+let entry_of key p =
+  Autotune.fiss_sketch_label ~fine:false [ (key, p) ]
+  |> String.chop_prefix_exn ~prefix:"F_sketch["
+  |> String.chop_suffix_exn ~suffix:"]"
+
+type observed = {
+  report : Autotune.report;
+  measured : string list;
+      (** Every admitted window's label, in attempt order, the baseline's first. *)
+  attempts : string list;  (** Every candidate attempt's label, in order. *)
+  output : float array;  (** What the crowned routine computed. *)
+}
+
+let untuned (qg, comp) =
+  let ctx, routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
+  let ctx = Context.run ctx routine in
+  let values = Context.get_values ctx qg.Tensor.value in
+  Context.release ctx;
+  values
+
+(* One search under the additive script [cost]. [?staffed] and [?width] state
+   [autotune_staffed_singles] and [autotune_composite_playoff_width] for this search only; [?start]
+   gives the running composite its start; [?refuse] refuses (at pre-dispatch validation, a contained
+   decline) every attempt whose label it holds for. *)
+let search ?(staffed = true) ?width ?start ?refuse ?(cache_dir = "") ?chain ~tag ~cost () =
+  let qg, comp = match chain with Some c -> c | None -> Fissioned_chain.chain_with_output () in
+  let report = ref None and measured = ref [] and attempts = ref [] and current = ref "" in
+  let settings =
+    (staffed_key, Bool.to_string staffed)
+    :: Option.value_map width ~default:[] ~f:(fun w -> [ (width_key, Int.to_string w) ])
+  in
+  let output =
+    Exn.protect
+      ~finally:(fun () ->
+        List.iter settings ~f:(fun (key, _) -> Hashtbl.remove Utils.config_file_args key))
+      ~f:(fun () ->
+        List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
+        Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
+            measured := label :: !measured;
+            routine_ms ~cost label)
+        @@ fun () ->
+        Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
+            current := label;
+            attempts := label :: !attempts)
+        @@ fun () ->
+        Autotune.Seam.with_value Autotune.on_candidate_preflight (fun _routine ->
+            match refuse with
+            | Some refused when refused !current -> failwith ("injected refusal of " ^ !current)
+            | Some _ | None -> ())
+        @@ fun () ->
+        Autotune.Seam.with_value Autotune.on_staffed_start (fun ~menu seeded ->
+            match start with Some f -> f ~menu | None -> seeded)
+        @@ fun () ->
+        let ctx, routine =
+          Autotune.with_uncontended_test_windows (fun () ->
+              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~log:false ~progress:false
+                ~report:(fun r -> report := Some r)
+                (Context.cpu ()) comp Ir.Indexing.Empty)
+        in
+        let ctx = Context.run ctx routine in
+        let values = Context.get_values ctx qg.Tensor.value in
+        Context.release ctx;
+        values)
+  in
+  match !report with
+  | Some report ->
+      Stdio.eprintf
+        "%s (not part of the golden): timed %d, staffed %d, fallbacks %d, playoff %d, crown %s \
+         %.2f ms\n\
+         %!"
+        tag report.Autotune.candidates_timed report.Autotune.fiss_sketch_staffed_timed
+        report.Autotune.fiss_sketch_backdrop_fallbacks report.Autotune.fiss_sketch_playoff_timed
+        report.Autotune.best_label report.Autotune.best_ms;
+      { report; measured = List.rev !measured; attempts = List.rev !attempts; output }
+  | None -> failwith (tag ^ ": the search delivered no report")
+
+(* The keys in sweep order, by their singles' first appearance among [measured]. *)
+let keys measured =
+  List.filter measured ~f:is_single
+  |> List.map ~f:(fun l -> key_of (List.hd_exn (focus l)))
+  |> List.fold ~init:[] ~f:(fun seen k ->
+      if List.mem seen k ~equal:String.equal then seen else k :: seen)
+  |> List.rev
+
+let singles_of key measured =
+  List.filter measured ~f:(fun l ->
+      is_single l && String.equal (key_of (List.hd_exn (focus l))) key)
+
+(* The fastest single of [key] under [cost], by its focus entry: within one key's sweep the backdrop
+   is common to every single, so the ranking is the entries' own. *)
+let fastest ~cost key measured =
+  List.map (singles_of key measured) ~f:(fun l -> List.hd_exn (focus l))
+  |> List.min_elt ~compare:(fun a b -> Float.compare (cost a) (cost b))
+
+(* 1-based position of the first admitted window labeled [label]. *)
+let position measured label =
+  Option.map (List.findi measured ~f:(fun _ l -> String.equal l label)) ~f:(fun (i, _) -> i + 1)
+
+let last_step (r : Autotune.report) = List.last r.Autotune.best_steps
+
+(* --- off and on: the same search, bare and staffed --- *)
+
+let cost = hashed
+let cache_dir = "autotune_cache_staffed"
+
+(* An earlier run's entries would turn the staffed search into a replay. *)
+let () =
+  if Stdlib.Sys.file_exists cache_dir && Stdlib.Sys.is_directory cache_dir then
+    Array.iter (Stdlib.Sys.readdir cache_dir) ~f:(fun f ->
+        Stdlib.Sys.remove (Stdlib.Filename.concat cache_dir f))
+
+let chain = Fissioned_chain.chain_with_output ()
+let reference = untuned chain
+let off = search ~staffed:false ~width:0 ~tag:"off" ~cost ()
+let on = search ~width:0 ~cache_dir ~chain ~tag:"on" ~cost ()
+
+let () =
+  Fissioned_chain.menu_claim off.measured;
+  let r = on.report in
+  p_none "off: no candidate carries a staff" off.attempts ~f:is_staffed;
+  p "off: the report counts no staffed window or fallback"
+    (off.report.Autotune.fiss_sketch_staffed_timed = 0
+    && off.report.Autotune.fiss_sketch_backdrop_fallbacks = 0);
+  (match keys on.measured with
+  | [ first; second ] ->
+      p_all "on: the first key is swept bare (the composite starts empty)"
+        (singles_of first on.measured) ~f:(fun l -> List.is_empty (staff l));
+      (match fastest ~cost first on.measured with
+      | Some best ->
+          p_all "on: every single of the second key is staffed with the first key's fastest"
+            (singles_of second on.measured) ~f:(fun l -> List.equal String.equal (staff l) [ best ])
+      | None -> p "on: every single of the second key is staffed with the first key's fastest" false);
+      p "on: every staffed window is counted"
+        (r.Autotune.fiss_sketch_staffed_timed = List.length (singles_of second on.measured));
+      (* The crown is the composite of each key's fastest. *)
+      p "on: the crown is a staffed single holding each key's fastest"
+        (is_staffed r.Autotune.best_label
+        && List.equal String.equal
+             (List.sort ~compare:String.compare
+                (focus r.Autotune.best_label @ staff r.Autotune.best_label))
+             (List.sort ~compare:String.compare
+                (List.filter_opt
+                   [ fastest ~cost first on.measured; fastest ~cost second on.measured ])))
+  | ks ->
+      Stdio.eprintf "on: swept keys %s\n%!" (String.concat ~sep:" " ks);
+      p "on: the search swept the chain's two keys" false);
+  p "on: no bare retry without a refusal" (r.Autotune.fiss_sketch_backdrop_fallbacks = 0);
+  (* Candidate coverage: staffing changes a single's backdrop, never which singles are timed or in
+     what order. *)
+  p "on: the reference's singles, in the reference's order, only their backdrops differing"
+    (List.equal String.equal
+       (List.filter off.measured ~f:is_single)
+       (List.map (List.filter on.measured ~f:is_single) ~f:bare));
+  p "on: one window fewer than the reference, its coarse composite timed already"
+    (r.Autotune.candidates_timed = off.report.Autotune.candidates_timed - 1);
+  p_none "on: no composite window was timed" on.measured ~f:is_composite;
+  p "on and off: the same crown time" (Float.equal r.Autotune.best_ms off.report.Autotune.best_ms);
+  (* The best improves during the seeds: it reaches the crown at the crown's own window, a staffed
+     single, where the reference's reaches it only at its coarse composite. *)
+  let reached_at (o : observed) =
+    match last_step o.report with
+    | Some (n, ms) ->
+        Float.equal ms o.report.Autotune.best_ms
+        && Option.equal Int.equal (Some n) (position o.measured o.report.Autotune.best_label)
+    | None -> false
+  in
+  p "on: the best reaches the crown at the crown's own window" (reached_at on);
+  p "off: the best reaches the crown at the crown's own window" (reached_at off);
+  p "on: the crown's window is a single of the seed pass" (is_single r.Autotune.best_label);
+  p "off: the reference's crown is its coarse composite (the flat best this fixes)"
+    (is_composite off.report.Autotune.best_label);
+  (* Executed: the crown computes what the untuned compile does. *)
+  p_all2 "on: the crowned routine computes the untuned output bit for bit" on.output reference
+    ~f:Float.equal;
+  let replay = search ~width:0 ~cache_dir ~chain ~tag:"replay" ~cost () in
+  p "replay: the staffed crown replays from the schedule cache"
+    (match replay.report.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false);
+  (* A replay is labeled by its saved form, so it is the schedule and the stored time that match. *)
+  p "replay: the crown's schedule, at the time the search stored"
+    (Poly.equal replay.report.Autotune.best_schedule r.Autotune.best_schedule
+    && Float.equal replay.report.Autotune.best_ms r.Autotune.best_ms);
+  p_all2 "replay: the replayed routine computes the untuned output bit for bit" replay.output
+    reference ~f:Float.equal
+
+(* --- start: a composite with a choice for each key before its sweep --- *)
+
+let () =
+  let cheap = ref "" and dear = ref "" in
+  let start ~menu =
+    match menu with
+    | [ (k1, ps1); (k2, ps2) ] ->
+        let p1 = List.last_exn ps1 and p2 = List.last_exn ps2 in
+        cheap := entry_of k1 p1;
+        dear := entry_of k2 p2;
+        [ (k1, p1); (k2, p2) ]
+    | _ -> []
+  in
+  let cost entry =
+    if String.equal entry !cheap then 1. else if String.equal entry !dear then 20. else hashed entry
+  in
+  let o = search ~width:0 ~start ~tag:"start" ~cost () in
+  let r = o.report in
+  p "start: the seam gave both keys a choice"
+    ((not (String.is_empty !cheap)) && not (String.is_empty !dear));
+  match keys o.measured with
+  | [ first; second ] -> (
+      let firsts = singles_of first o.measured and seconds = singles_of second o.measured in
+      (match firsts with
+      | head :: _ ->
+          p "start: the first key's own choice is swept first, staffed with the second's"
+            (List.equal String.equal (focus head) [ !cheap ]
+            && List.equal String.equal (staff head) [ !dear ])
+      | [] -> p "start: the first key's own choice is swept first, staffed with the second's" false);
+      p_all "start: every slower replacement left the first key's choice as it was" seconds
+        ~f:(fun l -> List.equal String.equal (staff l) [ !cheap ]);
+      p_none "start: the second key's start choice, the timed composite by then, is not timed again"
+        seconds ~f:(fun l -> List.equal String.equal (focus l) [ !dear ]);
+      match fastest ~cost second o.measured with
+      | Some best ->
+          p "start: a faster single replaced the second key's start choice"
+            ((not (String.equal best !dear))
+            && List.equal String.equal
+                 (List.sort ~compare:String.compare
+                    (focus r.Autotune.best_label @ staff r.Autotune.best_label))
+                 (List.sort ~compare:String.compare [ !cheap; best ]))
+      | None -> p "start: a faster single replaced the second key's start choice" false)
+  | _ -> p "start: the search swept the chain's two keys" false
+
+(* --- refused: a staffed refusal is retried bare --- *)
+
+let () =
+  let refused = ref None in
+  let refuse label =
+    match !refused with
+    | None when is_staffed label ->
+        refused := Some label;
+        true
+    | Some l -> String.equal l label
+    | None -> false
+  in
+  let o = search ~width:0 ~refuse ~tag:"refused" ~cost () in
+  let r = o.report in
+  match !refused with
+  | None -> p "refused: a staffed single was refused" false
+  | Some label ->
+      p "refused: one staffed single refused, one bare retry"
+        (r.Autotune.fiss_sketch_backdrop_fallbacks = 1);
+      (match List.findi o.attempts ~f:(fun _ l -> String.equal l label) with
+      | Some (i, _) ->
+          p "refused: the attempt after the refusal is its bare twin"
+            (Option.equal String.equal (List.nth o.attempts (i + 1)) (Some (bare label)))
+      | None -> p "refused: the attempt after the refusal is its bare twin" false);
+      p "refused: the bare twin was timed" (Option.is_some (position o.measured (bare label)));
+      p_none "refused: the refused staffed single was never timed" o.measured
+        ~f:(String.equal label);
+      p "refused: the refusal is a contained pre-dispatch decline"
+        (List.exists r.Autotune.declines ~f:(fun d ->
+             match d.Autotune.key with
+             | Ir.Schedule_outcome.Unclassified_key (Ir.Schedule_outcome.Preflight, _) -> true
+             | _ -> false))
+
+(* --- refused_all: a key whose seeds fail on their own stops being retried --- *)
+
+let () =
+  let second = ref None in
+  (* The second key is the first one a staffed attempt focuses on. *)
+  let refuse label =
+    if is_staffed label && Option.is_none !second then
+      second := Some (key_of (List.hd_exn (focus label)));
+    is_sketch label
+    && (not (is_composite label))
+    && Option.exists !second ~f:(fun k -> String.equal k (key_of (List.hd_exn (focus label))))
+  in
+  let o = search ~width:0 ~refuse ~tag:"refused_all" ~cost () in
+  let r = o.report in
+  match !second with
+  | None -> p "refused_all: a staffed single was refused" false
+  | Some k ->
+      let ofk =
+        List.filter o.attempts ~f:(fun l ->
+            is_single l && String.equal (key_of (List.hd_exn (focus l))) k)
+      in
+      p "refused_all: the first bare retry, refused too, is the only one"
+        (r.Autotune.fiss_sketch_backdrop_fallbacks = 1
+        && List.count ofk ~f:(fun l -> not (is_staffed l)) = 1);
+      p "refused_all: every staffed single of the key was still attempted"
+        (List.count ofk ~f:is_staffed >= 3)
+
+(* --- ties: the playoff over a staffed composite --- *)
+
+let () =
+  let cost _ = 3. in
+  let o = search ~tag:"ties" ~cost () in
+  let r = o.report in
+  match keys o.measured with
+  | [ first; second ] ->
+      let playoff = List.filter o.measured ~f:is_composite in
+      p "ties: the playoff timed alternates" (r.Autotune.fiss_sketch_playoff_timed >= 1);
+      p "ties: every composite window is the playoff's"
+        (List.length playoff = r.Autotune.fiss_sketch_playoff_timed);
+      let crowned_second =
+        List.find
+          (focus r.Autotune.best_label @ staff r.Autotune.best_label)
+          ~f:(fun e -> String.equal (key_of e) second)
+      in
+      p_all "ties: only the first key plays; the last key's sweep ran inside the composite" playoff
+        ~f:(fun l ->
+          Option.exists crowned_second ~f:(fun e -> List.mem (focus l) e ~equal:String.equal)
+          && List.exists (focus l) ~f:(fun e -> String.equal (key_of e) first))
+  | _ -> p "ties: the search swept the chain's two keys" false

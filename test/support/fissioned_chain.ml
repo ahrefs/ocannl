@@ -45,7 +45,7 @@ let matrix ~label ~modulus ~offset ~stride =
 
 (* Two matmul segments of different shapes (the multi-site chain of [autotune_fission_sketch]): the
    materialized sums cut the chain so each product is a keyed segment of its own. *)
-let chain () =
+let chain_with_output () =
   let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
   let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
   let qc = matrix ~label:"qc" ~modulus:5 ~offset:(-2.) ~stride:0.5 in
@@ -60,7 +60,11 @@ let chain () =
   let%op qe = qd * qc in
   Train.set_materialized qe.Tensor.value;
   let%op qg = qc16 * qe in
-  Train.forward qg
+  (qg, Train.forward qg)
+
+(* The chain's computation alone. [chain_with_output] also returns the output tensor, for a test
+   that reads what a crowned routine computes. *)
+let chain () = snd (chain_with_output ())
 
 (* The fraction of each segment's sketches the small menu keeps, for a test that passes it to one
    search ([Autotune.tune ~keep_fraction]) rather than stating it for all of them. *)

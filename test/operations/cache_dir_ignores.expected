@@ -10,6 +10,7 @@ Sources naming a schedule cache directory, all with the `autotune_cache` prefix 
   test/operations/autotune_serial_baseline.ml
   test/operations/autotune_smoke.ml
   test/operations/autotune_split_reduce.ml
+  test/operations/autotune_staffed_singles.ml
   test/operations/bench_splice_dirs.ml
   test/operations/fission_replay_segmentation.ml
   test/operations/flip_abandonment.ml
