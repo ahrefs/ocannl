@@ -757,9 +757,8 @@ type entry = {
    15: gh-ocannl-1414 -- two-loop reduction bands become split-reduce sites, coalesced or interchanged
    16: gh-ocannl-1388 -- the seeded untuned plan seeds the search first, a floor older crowns lack
    17: gh-ocannl-1279 -- contraction-coalesced seeds: a two-axis contraction tiled along one merged k
-   18: gh-ocannl-1138 -- staffed singles: each single timed inside the running composite, by default
 *)
-let entry_version = 18
+let entry_version = 17
 
 let sanitize name =
   String.map name ~f:(fun c ->

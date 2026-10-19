@@ -59,14 +59,6 @@ let is_composite = Fissioned_chain.is_composite
 (* The small menu (see the header), for every search here: stated before the first search. It pins
    the cc vector width too ([Fissioned_chain.vector_bytes]). *)
 let () = Fissioned_chain.small_menu ()
-
-(* gh-ocannl-1138: these searches time their singles bare, against every other segment's preset, and
-   recombine them into a composite they time last -- the search before staffed singles, which
-   [autotune_staffed_singles] still selects with [false]. The rounds' claims read that search's
-   beam: the recombined composite and its playoff near-copies; a staffed search has no recombination
-   window and times its singles in the composite, which [autotune_staffed_singles]'s own test
-   covers, the playoff over a staffed composite included. *)
-let () = Fissioned_chain.state [ ("autotune_staffed_singles", "false") ]
 let expansion_key = "autotune_round_expansion"
 
 (* A beam-round candidate's parent tag and the segment its move extends: [F_saved[<n> segs from

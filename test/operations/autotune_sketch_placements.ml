@@ -58,14 +58,6 @@ let is_cpu = Sched.backend_is_cpu backend_name
 
 (* Before the first search: the pre-filter reads its envelope once per process. *)
 let () = if is_cpu then Fissioned_chain.small_menu ()
-
-(* gh-ocannl-1138: these searches time their singles bare, against every other segment's preset, and
-   recombine them into a composite they time last -- the search before staffed singles, which
-   [autotune_staffed_singles] still selects with [false]. Which segments a single sketched is read
-   off its schedule digest, so a single must sketch its focus alone; a staffed search has no
-   recombination window and times its singles in the composite, which [autotune_staffed_singles]'s
-   own test covers, the playoff over a staffed composite included. *)
-let () = Fissioned_chain.state [ ("autotune_staffed_singles", "false") ]
 let q = 32
 
 let matrix ~label ~modulus ~offset ~stride =

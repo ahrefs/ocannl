@@ -566,9 +566,9 @@ let () =
      pairing (n-th combo = every segment's n-th set) gives [max site_a site_b], and pinning the
      others to their first set adds masking through an invalid first seed (observed on cifar_conv,
      PR #174: the fc matmul's invalid packrest-grid seed masked the conv segments' row-block seed).
-     Cross-segment combination is recovered by the running composite (gh-ocannl-1138): the second
-     site's singles are timed with the first site's best already applied, so the composite holding
-     each site's best is the second site's winning single, and takes no window of its own. === *)
+     Cross-segment combination is recovered by one extra composite candidate that applies each
+     site's best-timed single simultaneously — counted in [fiss_sketch_timed] but not in the seeded
+     [fiss_sketch_candidates]. === *)
   let q2 = 16 in
   let qc16v =
     Array.init (q2 * q)
@@ -646,21 +646,18 @@ let () =
   p "multi-site: both sites seed per-segment sketches" (cand_a > 1 && cand_b > 1);
   p "multi-site: unmasked singles combo count (a + b)" (cand_ab = cand_a + cand_b);
   p "multi-site: best-timed singles recombined into a composite candidate"
-    (* Refused single windows still count as timed, but cannot join a composite. The eligibility
+    (* Refused single windows still count as timed, but cannot staff a composite. The eligibility
        fact comes from usable singles for two distinct segments, never from a report-wide contention
-       waiver. Every eligible composite reaches a window, its last accepted single's. *)
+       waiver. Every eligible composite must reach its own window. *)
     (((not eligible) || composite_timed report_ab)
-    && if is_cpu then timed_ab = cand_ab else timed_ab > 0);
+    && if is_cpu then timed_ab = cand_ab + Bool.to_int eligible else timed_ab > 0);
   p_all2 "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial ~f:approx;
 
   (* A post-admission failure must not erase the window from the partial report. The attempt label
      identifies the coarse multi-entry candidate; the timed hook guarantees that the injection
      happens after admission, not merely after dispatch. Pin this report-ordering control to cc,
      where the normal leg's exact singles count establishes that both sites are viable; GPU
-     transform-capability differences must not gate a bookkeeping control. The composite window is
-     the bare search's, timed after every single ([autotune_staffed_singles=false], gh-ocannl-1138):
-     a staffed search's composite is its last accepted single, with no window of its own to cut
-     at. *)
+     transform-capability differences must not gate a bookkeeping control. *)
   let partial = ref None and injected = ref false and composite_attempt = ref false in
   let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
@@ -673,10 +670,8 @@ let () =
     if !composite_attempt then (
       injected := true;
       raise Stdlib.Exit) );
-  Hashtbl.set Utils.config_file_args ~key:"autotune_staffed_singles" ~data:"false";
   Exn.protect
     ~finally:(fun () ->
-      Hashtbl.remove Utils.config_file_args "autotune_staffed_singles";
       Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
       Autotune.Seam.set Autotune.on_candidate_timed old_timed)
     ~f:(fun () ->

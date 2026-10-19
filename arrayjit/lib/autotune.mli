@@ -1050,8 +1050,7 @@ type report = {
   fiss_sketch_staffed_timed : int;
       (** Of [fiss_sketch_timed], the staffed singles' windows (gh-ocannl-1138, config
           [autotune_staffed_singles]): singles timed with the other keyed segments on the running
-          composite's choices rather than on their presets. On by default; [0] with the setting off.
-      *)
+          composite's choices rather than on their presets. [0] with the setting off. *)
   fiss_sketch_backdrop_fallbacks : int;
       (** Staffed singles that were refused (a compile or run decline, not a contended window) and
           retried once without their staff (gh-ocannl-1138), so one invalid choice in the running

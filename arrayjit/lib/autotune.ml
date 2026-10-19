@@ -511,7 +511,7 @@ let default_playoff_width = 2
    against the running composite (see [tune]'s staffed sweep) rather than against every other
    segment's preset. Changing the default bumps [Schedule_cache.entry_version]: the search then
    times candidates the other one never did. *)
-let default_staffed_singles = true
+let default_staffed_singles = false
 
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
    winner tests first ([nothing_timed]). *)

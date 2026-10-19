@@ -1116,9 +1116,13 @@ files.
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
 - **Staffed singles time a key's sketches inside the running composite** (gh-ocannl-1138, config
-  `autotune_staffed_singles`, on by default since `entry_version` 18; `false` is the bare search the
-  playoff, round-expansion and sketch-placement tests still pin, since their claims read its
-  recombination window or a single's lone-segment digest): the coarse keys are swept one at a time, each single's `staff` holding
+  `autotune_staffed_singles`, **default off: measured, not yet worth it**). With the seeded-rule start
+  (below) on the gh-ocannl-1109 cell (gpt2_mini, approximate, rog/CUDA, one pair) the first 1% gain came at
+  12 s of a search instead of 455 s, but the best came within 5% of final only at 55%/75% of the two
+  placement arms' timings (bare: 96%), at +29% search compile time, crown and step p50 unchanged,
+  against the plan's bar of under half. The pre-sweep seeds (presets, whole-routine sketches) still
+  come first and late keys still lower the best; flip the default only on a re-measurement that
+  clears it (entry_version bump with it). The coarse keys are swept one at a time, each single's `staff` holding
   the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
   before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its
   sweep, heaviest key first (segment count times its best sketch's roofline score, logged as

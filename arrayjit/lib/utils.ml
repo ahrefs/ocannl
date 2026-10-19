@@ -608,7 +608,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_pad_waste_max", (Float_at_least { floor = 1.; fallback = 2. }, "2."));
     ("autotune_composite_playoff_width", (Integer, "2"));
     ("autotune_composite_playoff_margin", (Float_number, "0.005"));
-    ("autotune_staffed_singles", (Flag, "true"));
+    ("autotune_staffed_singles", (Flag, "false"));
     ("autotune_round_expansion", (Keyword, "differing"));
     ("autotune_keep_fraction", (Float_number, "1."));
     ("autotune_bound_pruning", (Flag, "false"));

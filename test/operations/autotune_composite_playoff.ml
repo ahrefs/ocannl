@@ -77,14 +77,6 @@ let playoff_margin_key = "autotune_composite_playoff_margin"
 (* The small menu (see the header), for every search here: stated before the first search. *)
 let () = Fissioned_chain.small_menu ()
 
-(* gh-ocannl-1138: these searches time their singles bare, against every other segment's preset, and
-   recombine them into a composite they time last -- the search before staffed singles, which
-   [autotune_staffed_singles] still selects with [false]. The playoff's claims read that search: the
-   recombination composite they start from, and a single's backdrop the preset one; a staffed search
-   has no recombination window and times its singles in the composite, which
-   [autotune_staffed_singles]'s own test covers, the playoff over a staffed composite included. *)
-let () = Fissioned_chain.state [ ("autotune_staffed_singles", "false") ]
-
 (* A list of records as a report counts them: per (settle, admission), in constructor order. *)
 let tally (calls : Autotune.timing_call list) =
   List.map calls ~f:(fun c -> (c.decision.settle, c.decision.admission))
