@@ -13,7 +13,7 @@
 #   OUT        results directory, created, and refused unless empty: OUT/driver.log is everything
 #              this script prints, each cell writes OUT/<cell>.out (the runner's result line) and
 #              OUT/<cell>.err (its log, the census line included), and OUT/summary.txt one line per
-#              cell: fixture, gate, pass, step ms, the seeded-plan derivation time of each untuned
+#              cell: fixture, gate, pass, median step ms, the seeded-plan derivation time of each untuned
 #              compile (the cost tune repeats on a trajectory-matched warm hit), and the census (the
 #              seeded segments and their geometries).
 #   CAP        wall cap in seconds per cell (default 1800).
@@ -78,10 +78,12 @@ cell() {
     "--ocannl_gpu_default_sketch_min_reduction=$gate" \
     >"$out/$name.out" 2>"$out/$name.err"; then
     census=$(grep -o 'seeded_default: [0-9]* of [0-9]* segments seeded.*' "$out/$name.err" | tail -1)
-    ms=$(grep -o '"step_ms":[0-9.e+-]*' "$out/$name.out" | tail -1 | cut -d: -f2)
+    # The runner's step_ms is a percentile object; the summary carries its median.
+    ms=$(grep -o '"step_ms":{[^}]*}' "$out/$name.out" | tail -1 | grep -o '"p50":[0-9.e+-]*' |
+      cut -d: -f2)
     derive=$(grep -o 'seeded_default: plan derived in [0-9.]* s' "$out/$name.err" |
       sed 's/.* in //' | paste -sd, -)
-    echo "$fixture gate=$gate pass=$pass step_ms=${ms:-?} plan_derivation=[${derive:-none logged}] census=[${census:-none logged}]" |
+    echo "$fixture gate=$gate pass=$pass step_p50_ms=${ms:-?} plan_derivation=[${derive:-none logged}] census=[${census:-none logged}]" |
       tee -a "$out/summary.txt"
   else
     echo "   FAILED (exit $?)"
