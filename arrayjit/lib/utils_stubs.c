@@ -433,7 +433,6 @@ static void ocannl_deadline_atfork_child(void) {
    fd 2 that is full, or that another writer fills between a readiness check and the write, can
    hold this thread forever, and the process dies regardless. */
 static pthread_mutex_t ocannl_deadline_write_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t ocannl_deadline_write_cond = PTHREAD_COND_INITIALIZER;
 static int ocannl_deadline_written;
 
 static void *ocannl_deadline_writer(void *arg) {
@@ -451,7 +450,6 @@ static void *ocannl_deadline_writer(void *arg) {
   }
   pthread_mutex_lock(&ocannl_deadline_write_lock);
   ocannl_deadline_written = 1;
-  pthread_cond_signal(&ocannl_deadline_write_cond);
   pthread_mutex_unlock(&ocannl_deadline_write_lock);
   return NULL;
 }
@@ -465,15 +463,15 @@ static void ocannl_deadline_die(void) {
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   if (pthread_create(&writer, &attr, ocannl_deadline_writer, NULL) == 0) {
-    struct timespec abs;
-    clock_gettime(CLOCK_REALTIME, &abs);
-    abs.tv_sec += 2;
-    pthread_mutex_lock(&ocannl_deadline_write_lock);
-    while (!ocannl_deadline_written)
-      if (pthread_cond_timedwait(&ocannl_deadline_write_cond, &ocannl_deadline_write_lock, &abs) ==
-          ETIMEDOUT)
-        break;
-    pthread_mutex_unlock(&ocannl_deadline_write_lock);
+    /* At most 2 s, in relative 10 ms naps: no wall-clock wait. */
+    struct timespec nap = {0, 10000000};
+    int i, done = 0;
+    for (i = 0; i < 200 && !done; i++) {
+      pthread_mutex_lock(&ocannl_deadline_write_lock);
+      done = ocannl_deadline_written;
+      pthread_mutex_unlock(&ocannl_deadline_write_lock);
+      if (!done) nanosleep(&nap, NULL);
+    }
   }
   pthread_attr_destroy(&attr);
   memset(&dfl, 0, sizeof dfl);
@@ -499,7 +497,7 @@ static void *ocannl_deadline_watchdog(void *arg) {
     {
       int64_t now = ocannl_monotonic_ns();
       int64_t left = ocannl_deadline_due_ns - now;
-      struct timespec abs;
+      struct timespec nap;
       int64_t step;
       if (now >= 0 && left <= 0) {
         /* Still armed past the due time: the deadline. Committed under the lock, so no [arm]
@@ -507,14 +505,15 @@ static void *ocannl_deadline_watchdog(void *arg) {
         ocannl_deadline_dying = 1;
         break;
       }
-      /* Waits in steps of at most 100 ms on the realtime clock [pthread_cond_timedwait] takes,
-         re-reading the monotonic one after each, so a wall-clock jump moves no deadline. */
+      /* Sleeps relative steps of at most 100 ms with the lock released, re-reading the monotonic
+         clock after each: no wait anywhere is pinned to the wall clock, so stepping it moves no
+         deadline. An arm or disarm meanwhile is seen at the next step. */
       step = (now < 0 || left > 100000000) ? 100000000 : left;
-      clock_gettime(CLOCK_REALTIME, &abs);
-      abs.tv_nsec += (long)step;
-      abs.tv_sec += abs.tv_nsec / 1000000000;
-      abs.tv_nsec %= 1000000000;
-      pthread_cond_timedwait(&ocannl_deadline_cond, &ocannl_deadline_lock, &abs);
+      nap.tv_sec = 0;
+      nap.tv_nsec = (long)step;
+      pthread_mutex_unlock(&ocannl_deadline_lock);
+      nanosleep(&nap, NULL);
+      pthread_mutex_lock(&ocannl_deadline_lock);
     }
   }
   pthread_mutex_unlock(&ocannl_deadline_lock);
@@ -522,18 +521,22 @@ static void *ocannl_deadline_watchdog(void *arg) {
   return NULL;
 }
 
+/* Registered when the library is loaded, before the deadline's lock can ever be taken: a fork
+   racing the first arm must already run the child reset. */
+static int ocannl_deadline_atfork_registered;
+__attribute__((constructor)) static void ocannl_deadline_register_atfork(void) {
+  ocannl_deadline_atfork_registered =
+      pthread_atfork(NULL, NULL, ocannl_deadline_atfork_child) == 0;
+}
+
 /* Under the lock. */
 static int ocannl_deadline_start_thread(void) {
-  static int atfork_registered = 0;
   pthread_t thread;
   pthread_attr_t attr;
   sigset_t all, saved;
   int rc;
   if (ocannl_deadline_thread_started) return 1;
-  if (!atfork_registered) {
-    if (pthread_atfork(NULL, NULL, ocannl_deadline_atfork_child) != 0) return 0;
-    atfork_registered = 1;
-  }
+  if (!ocannl_deadline_atfork_registered) return 0;
   /* Created with every signal blocked, which it inherits: it must never take the program's. */
   sigfillset(&all);
   pthread_sigmask(SIG_SETMASK, &all, &saved);
@@ -559,32 +562,36 @@ CAMLprim value ocannl_device_init_deadline_supported(value unit) {
 #endif
 }
 
-/* [ocannl_device_init_deadline_arm seconds message]: true iff the deadline is now armed (and must be
-   disarmed). False when disabled, refused, nested in this thread's own armed region, or on
-   Windows. Waits, outside the OCaml runtime lock, while another thread's region is armed. */
+/* [ocannl_device_init_deadline_arm seconds message]: 1 when the deadline is now armed (and must be
+   disarmed); 0 when disabled, refused, nested in this thread's own armed region, or on Windows; 2
+   when it should have been armed and the watchdog thread could not be started (or the monotonic
+   clock read), which the caller must not take as "no deadline". Waits, outside the OCaml runtime
+   lock, while another thread's region is armed. */
 CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
 #if defined(_WIN32)
   (void)v_seconds;
   (void)v_msg;
-  return Val_false;
+  return Val_int(0);
 #else
   double seconds = Double_val(v_seconds);
   struct sigaction cur;
   char msg[OCANNL_DEADLINE_MSG_MAX];
   size_t len;
-  int armed = 0;
+  int armed = 2;
   pthread_t self = pthread_self();
-  if (!(seconds > 0.0) || seconds > 1e8) return Val_false;
+  if (!(seconds > 0.0) || seconds > 1e8) return Val_int(0);
   if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
       cur.sa_handler != SIG_DFL)
-    return Val_false;
+    return Val_int(0);
   /* Copied before the runtime lock is released: the OCaml string may move meanwhile. */
   len = caml_string_length(v_msg);
   if (len > OCANNL_DEADLINE_MSG_MAX) len = OCANNL_DEADLINE_MSG_MAX;
   memcpy(msg, String_val(v_msg), len);
   caml_enter_blocking_section();
   pthread_mutex_lock(&ocannl_deadline_lock);
-  if (!(ocannl_deadline_armed && pthread_equal(ocannl_deadline_owner, self))) {
+  if (ocannl_deadline_armed && pthread_equal(ocannl_deadline_owner, self))
+    armed = 0;
+  else {
     while (ocannl_deadline_armed || ocannl_deadline_dying)
       pthread_cond_wait(&ocannl_deadline_free, &ocannl_deadline_lock);
     if (ocannl_deadline_start_thread()) {
@@ -602,7 +609,7 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   }
   pthread_mutex_unlock(&ocannl_deadline_lock);
   caml_leave_blocking_section();
-  return Val_bool(armed);
+  return Val_int(armed);
 #endif
 }
 

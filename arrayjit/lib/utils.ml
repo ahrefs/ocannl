@@ -2386,7 +2386,7 @@ let device_init_test_stall : (unit -> unit) option ref = ref None
 
 (** The pieces of {!with_device_init_deadline}: its C stubs ([utils_stubs.c]) and its setting. *)
 module Device_init_deadline_internals = struct
-  external arm : float -> string -> bool = "ocannl_device_init_deadline_arm"
+  external arm : float -> string -> int = "ocannl_device_init_deadline_arm"
   external disarm : unit -> unit = "ocannl_device_init_deadline_disarm"
 
   let default = 120.0
@@ -2432,13 +2432,26 @@ let with_device_init_deadline ~backend_name f =
   let seconds = Stub.seconds in
   let armed =
     Float.(seconds > 0.)
-    && Stub.arm seconds
-         (Printf.sprintf
-            "\n\
-             %s %s device initialization or query did not finish within %gs; the device or driver \
-             is likely wedged. Dying by SIGALRM. The bound is the config key device_init_deadline \
-             (seconds; 0 disables; gh-ocannl-1281).\n"
-            device_init_deadline_tag backend_name seconds)
+    &&
+    match
+      Stub.arm seconds
+        (Printf.sprintf
+           "\n\
+            %s %s device initialization or query did not finish within %gs; the device or driver \
+            is likely wedged. Dying by SIGALRM. The bound is the config key device_init_deadline \
+            (seconds; 0 disables; gh-ocannl-1281).\n"
+           device_init_deadline_tag backend_name seconds)
+    with
+    | 1 -> true
+    | 0 -> false
+    | _ ->
+        (* Fail closed: a configured bound that cannot be armed is not "no bound". *)
+        failwith
+          (Printf.sprintf
+             "OCANNL: cannot arm the %gs device_init_deadline before a %s driver call: its \
+              watchdog thread could not be started (device_init_deadline=0 proceeds without the \
+              bound; gh-ocannl-1281)"
+             seconds backend_name)
   in
   Exn.protect
     ~f:(fun () ->
