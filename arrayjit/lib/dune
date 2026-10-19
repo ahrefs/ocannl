@@ -93,6 +93,7 @@
   register_tile
   low_level
   online_softmax
+  fp_algebra
   rewrites
   cost_model
   schedule_space

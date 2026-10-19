@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Ablate simplify_llc float algebra on byte-identical benchmark fixtures (#998).
+"""Ablate the floating-point licences on byte-identical benchmark fixtures (#998).
 
 prepare --out DIR: bind the revision, executable bytes and fixture digests, run the existing
 Torch CPU exact oracle. Build bench_mlp.exe and the selected fixture runners beforehand, outside a timing hold.
 dry --out DIR --backends metal,cc: arms-on/off self-test twice per backend (discard timings).
 The self-test uses the same compilation, execution and emission path with a short protocol.
-run --out DIR --backends metal,cc: four reverse-paired rounds of all, none and each family off.
+run --out DIR --backends metal,cc: four reverse-paired rounds of all, none and each licence off
+(fp_contract, fp_reassociate, fp_finite_math; the measurement that split them ablated six arm
+families of the simplifier, before they became these three keys).
 summarize --out DIR: print the per-workload envelopes against arms-on and the Torch oracle.
 --workloads selects a comma-separated subset (use the same selection for prepare/dry/run).
 --rounds selects the repeat count for run (default 4, even); summarize reads the recorded matrix.
@@ -17,7 +19,7 @@ must emit byte-identical sources; its raw ratio spread is reported beside each w
 The preflight records the host and CPU; cc measurements on different CPUs are separate rows.
 
 Each cell uses the suite's unchanged f32 protocol, untuned default schedule and fixed compiler
-math settings. A family's removal may expose another simplifier arm or be undone by backend
+math settings. A licence's removal may expose another rewrite or be undone by backend
 compilation; ratios measure its marginal end-to-end effect under those settings, not a strict
 IEEE promise. A null/non-finite loss or incomplete trajectory refuses an envelope. Full stdout,
 stderr, flags and emitted sources are retained per cell. No builds/searches/setup run in `run`.
@@ -42,10 +44,12 @@ import strict_json
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / 'benchmarks'
-FAMILIES = ['contract', 'constants', 'sub', 'mul_div', 'pow', 'identities']
+# The floating-point licence keys (gh-ocannl-998), each a boolean; a treatment states all three.
+LICENCES = ['fp_contract', 'fp_reassociate', 'fp_finite_math']
 WORKLOADS = ['lenet', 'gpt2_mini', 'gpt2_mini_train']
-TREATMENTS = {'all': 'all', 'all-control': 'all', 'none': 'none', **{
-    'no-' + arm: ','.join(a for a in FAMILIES if a != arm) for arm in FAMILIES}}
+TREATMENTS = {'all': dict.fromkeys(LICENCES, True), 'all-control': dict.fromkeys(LICENCES, True),
+              'none': dict.fromkeys(LICENCES, False), **{
+    'no-' + key: {k: k != key for k in LICENCES} for key in LICENCES}}
 
 
 CELL_TIMEOUT_S = 1800
@@ -162,6 +166,10 @@ def cell(out, name, argv, env):
     return row
 
 
+def flag(treatment, key):
+    return 'true' if TREATMENTS[treatment][key] else 'false'
+
+
 def ocannl(out, backend, workload, treatment, repeat, dry=False):
     name = f'{"dry-" if dry else ""}{backend}-{workload}-{treatment}-{repeat}'
     env = clean_env()
@@ -181,7 +189,9 @@ def ocannl(out, backend, workload, treatment, repeat, dry=False):
             '--ocannl_output_debug_files_in_build_directory=true',
             '--ocannl_clean_up_build_files_on_startup=false',
             f'--ocannl_build_files_prefix={prefix}',
-            f'--ocannl_simplify_fp_algebra={TREATMENTS[treatment]}']
+            f'--ocannl_fp_contract={flag(treatment, "fp_contract")}',
+            f'--ocannl_fp_reassociate={flag(treatment, "fp_reassociate")}',
+            f'--ocannl_fp_finite_math={flag(treatment, "fp_finite_math")}']
     if dry:
         argv[0] = str(ROOT / '_build/default/benchmarks/runners/ocannl/bench_mlp.exe')
         argv.append('--self-test')
@@ -195,8 +205,9 @@ def ocannl(out, backend, workload, treatment, repeat, dry=False):
     expected_workload = 'selftest-tiny' if dry else workload
     if row['backend'] != backend or row['workload'] != expected_workload or row['searched']:
         raise RuntimeError(f'{name}: wrong backend/workload or a searching process')
-    if row.get('simplify_fp_algebra') != dict(value=TREATMENTS[treatment], source='commandline'):
-        raise RuntimeError(f'{name}: result does not confirm the selected float algebra')
+    expected = {key: dict(value=on, source='commandline') for key, on in TREATMENTS[treatment].items()}
+    if row.get('fp_licences') != expected:
+        raise RuntimeError(f'{name}: result does not confirm the selected float licences')
     if dry:
         envelope(row['losses'], row['losses'])
     else:

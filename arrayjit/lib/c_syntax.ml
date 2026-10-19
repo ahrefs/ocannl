@@ -5284,8 +5284,10 @@ module C_syntax (B : C_syntax_config) = struct
            inexact values — the gh-ocannl-545 accumulator precedent), so parity tests pick
            narrow-exact inputs. The plain-add (non-FMA) fallback form is declined — its [a * b + c]
            arithmetic is only maybe-contracted, so a vector twin could not promise the equality.
-           Emitted under the same lane-0 guard as the fallback ([`Vec_extensions] backends render
-           the lane loop serially; GPU backends never take this path). *)
+           [Schedule.Tensorize] writes its floating fallbacks fused whatever the simplifier's
+           contraction licence (gh-ocannl-998), so the decline guards hand-built statements. Emitted
+           under the same lane-0 guard as the fallback ([`Vec_extensions] backends render the lane
+           loop serially; GPU backends never take this path). *)
         let try_register_tile () : PPrint.document option =
           (* [cond] names a rule violation: decline (with the per-rule diagnostic, gh-ocannl-479)
              when it holds. *)

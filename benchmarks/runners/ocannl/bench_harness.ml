@@ -225,6 +225,17 @@ let run_train_step routines ctx_ref ~step =
       in
       ctx_ref := ctx
 
+(* The floating-point licences a cell compiled under (gh-ocannl-998): each key's resolved value and
+   where it came from, so a report can tell an exact cell from one that ran licensed algebra. *)
+let fp_licence_record () =
+  List.map
+    Ir.Low_level.Fp_licence.(fields (of_config ()))
+    ~f:(fun (key, value) ->
+      let source =
+        match Utils.profile_key_source key with None -> Utils.From_default | Some (_, s) -> s
+      in
+      (key, value, Utils.config_source_label source))
+
 let percentile sorted p =
   let n = Array.length sorted in
   let idx = Float.to_int (Float.round_nearest (p /. 100. *. Float.of_int (n - 1))) in
@@ -1339,13 +1350,9 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
     Bench_json.Before_diagnostics losses;
   let dominant_kernel = Option.map dominant_kernel ~f:(fun measure -> measure ()) in
   Array.sort synced ~compare:Float.compare;
-  let fp_algebra, fp_source =
-    Utils.get_global_arg_with_source ~default:"all" ~arg_name:"simplify_fp_algebra"
-  in
   let line =
     Bench_json.result_line ~backend ~variant ~precision ~profile ~regime_knobs
-      ~simplify_fp_algebra:(fp_algebra, Utils.config_source_label fp_source)
-      ~workload ~compile_s
+      ~fp_licences:(fp_licence_record ()) ~workload ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
       ~shipped_mma:(mma_wire (step_census routines))
       ?tokens_per_step ?tune:(Option.bind tune ~f:tune_json) ~p10:(percentile synced 10.)

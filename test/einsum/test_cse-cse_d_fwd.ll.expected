@@ -5,7 +5,7 @@ cse_d_fwd (): /* cse_d fwd */
   for i12 = 0 to 2 {
     cse_d[i12] := (v1_c * v1_c {
       v1_c := 0.0;
-      for i13 = 0 to 3 { v1_c := fma(r3x4_a[i12, i13], r4_b[i13], v1_c); }
+      for i13 = 0 to 3 { v1_c := (v1_c + (r3x4_a[i12, i13] * r4_b[i13])); }
     });
   }
   /* end */

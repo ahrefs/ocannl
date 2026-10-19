@@ -33,6 +33,9 @@ Profile "reproducible" sets:
   cc_backend_arch_flags=none
   cc_backend_simd_flags=none
   cc_backend_fp_contract=off
+  fp_contract=false
+  fp_reassociate=false
+  fp_finite_math=false
   cc_backend_fast_math=false
   cc_vector_bytes=0
   tf32_matmuls=false
@@ -68,6 +71,9 @@ Profile "approximate" sets:
   online_softmax_block=auto
   cc_backend_fast_math=true
   cc_backend_fp_contract=fast
+  fp_contract=true
+  fp_reassociate=true
+  fp_finite_math=true
   tune_inline_flips=2
 
 every key the performance profile sets, the approximate profile sets to the same value: true
