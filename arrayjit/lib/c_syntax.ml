@@ -729,11 +729,14 @@ module type C_syntax_config = sig
       the override. *)
 
   val vector_prec_ok : Ops.prec -> bool
-  (** Whether the explicit vector renderings ([Vectorized] loops) can operate at this {e compute}
-      precision. f32 and f64 everywhere; fp16 additionally on CPU targets with native 16-bit
-      arithmetic (gh-ocannl-516), which is exactly where {!compute_prec} leaves [Half_prec] alone. A
-      storage precision this rejects can still be vectorized when {!compute_prec} maps it to one
-      this accepts -- that is gh-ocannl-517's convert-on-load/store. *)
+  (** Whether the explicit vector-arithmetic renderings ([`Vec_extensions] [Vectorized] loops and
+      reductions) can operate at this {e compute} precision. f32 and f64 everywhere; fp16
+      additionally on CPU targets with native 16-bit arithmetic (gh-ocannl-516), which is exactly
+      where {!compute_prec} leaves [Half_prec] alone. A storage precision this rejects can still be
+      vectorized when {!compute_prec} maps it to one this accepts -- that is gh-ocannl-517's
+      convert-on-load/store. The [`Packed_struct] rendering does no vector arithmetic and does not
+      consult this: its own gate admits every float precision with a full-width [vec_typ_of_prec]
+      pack type that is also the storage precision of the nodes it packs (gh-ocannl-1295). *)
 
   val hardware_index : kind:[ `Grid | `Workgroup ] -> slot:int -> string option
   (** The hardware register expression an annotated loop's index binds to (e.g. ["blockIdx.x"],
@@ -3071,6 +3074,27 @@ module C_syntax (B : C_syntax_config) = struct
      per machine, and for what the floor protects. *)
   let vec_lanes_for ~prec ~extent =
     simd_lanes_for ~vector_bytes:B.vector_bytes ~elt_bytes:(Ops.prec_in_bytes prec) ~extent
+
+  (* The [`Packed_struct] rendering's own gate (gh-ocannl-1295). It does no vector arithmetic: it
+     moves whole [vector_bytes] packs and computes every lane as a scalar, so the SIMD-arithmetic
+     predicate [vector_prec_ok] is not its question. Its question is whether a pack type of the full
+     width exists ([vec_typ_of_prec], the owner of that fact; every one the gate admits is declared
+     16-byte aligned in the backend's builtins) and whether the packs are the nodes' own cells: a
+     float precision that is the storage precision of every store target, as [lane_expr] requires of
+     every load. A storage/compute seam (Metal's fp8, stored as a byte and computed in f32) declines
+     here rather than reinterpreting a byte buffer as a [float4_t]. *)
+  let packed_lanes prec = B.vector_bytes / Ops.prec_in_bytes prec
+
+  let packed_prec_ok ~store_precs prec =
+    (match prec with
+      | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Single_prec _ | Ops.Double_prec _ -> true
+      | _ -> false)
+    && packed_lanes prec >= 2
+    && List.for_all store_precs ~f:(Ops.equal_prec prec)
+    &&
+    match B.vec_typ_of_prec ~length:(packed_lanes prec) prec with
+    | _ -> true
+    | exception _ -> false
 
   (* {4 Convert-on-load / convert-on-store for narrow storage (gh-ocannl-517)}
 
@@ -6185,9 +6209,19 @@ module C_syntax (B : C_syntax_config) = struct
         let tn, _, _ = List.hd_exn sets in
         comp_prec (Lazy.force tn.Tn.storage_prec)
       in
-      if not (B.vector_prec_ok prec) then raise Vectorization_declined;
       let lanes =
-        match vec_lanes_for ~prec ~extent with Some l -> l | None -> raise Vectorization_declined
+        match B.vector_style with
+        | `Vec_extensions -> (
+            if not (B.vector_prec_ok prec) then raise Vectorization_declined;
+            match vec_lanes_for ~prec ~extent with
+            | Some l -> l
+            | None -> raise Vectorization_declined)
+        | `Packed_struct ->
+            let store_precs = List.map sets ~f:(fun (tn, _, _) -> Lazy.force tn.Tn.storage_prec) in
+            if not (packed_prec_ok ~store_precs prec) then raise Vectorization_declined;
+            let lanes = packed_lanes prec in
+            if extent < lanes then raise Vectorization_declined;
+            lanes
       in
       let written = Hashtbl.create (module Int) in
       List.iter sets ~f:(fun (tn, idcs, _) ->
@@ -6233,12 +6267,8 @@ module C_syntax (B : C_syntax_config) = struct
                transaction — while the arithmetic stays scalar in a per-lane loop over the pack's
                [.v] payload (per-lane [fmaf]/[fma] keeps the serial path's rounding). Sound only at
                provably lane-aligned offsets of device-resident buffers, hence the extra eligibility
-               checks. *)
-            let vtyp =
-              match B.vec_typ_of_prec ~length:lanes prec with
-              | s -> s
-              | exception _ -> raise Vectorization_declined
-            in
+               checks. [packed_prec_ok] above already established that the pack type exists. *)
+            let vtyp = B.vec_typ_of_prec ~length:lanes prec in
             (* The flat offset must stay a lane multiple whenever the loop index is one: components
                before the last contribute stride multiples of [dims.(n - 1)], so the last dimension
                must be a lane multiple (unless the access is 1-D), and the last component's constant

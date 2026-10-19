@@ -1,0 +1,24 @@
+half mul: the Serial twin is within the precision's rounding of the f64 reference: true
+half mul: the Vectorized loop equals its Serial twin bitwise: true
+half mul: the Serial twin renders no pack: true
+half mul: the Vectorized loop loads and stores whole half8_t packs: true
+bf16 mul: the Serial twin is within the precision's rounding of the f64 reference: true
+bf16 mul: the Vectorized loop equals its Serial twin bitwise: true
+bf16 mul: the Serial twin renders no pack: true
+bf16 mul: the Vectorized loop loads and stores whole bfloat16x8_t packs: true
+half fma: the Serial twin is within the precision's rounding of the f64 reference: true
+half fma: the Vectorized loop equals its Serial twin bitwise: true
+half fma: the Serial twin renders no pack: true
+half fma: the Vectorized loop loads and stores whole half8_t packs: true
+bf16 fma: the Serial twin is within the precision's rounding of the f64 reference: true
+bf16 fma: the Vectorized loop equals its Serial twin bitwise: true
+bf16 fma: the Serial twin renders no pack: true
+bf16 fma: the Vectorized loop loads and stores whole bfloat16x8_t packs: true
+f32 mul: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 mul: the Vectorized loop equals its Serial twin bitwise: true
+f32 mul: the Serial twin renders no pack: true
+f32 mul: the Vectorized loop loads and stores whole float4_t packs: true
+fp8: the Serial twin is within e5m2 rounding of the f64 reference: true
+fp8: the Vectorized loop equals its Serial twin bitwise: true
+fp8: a store whose storage is not its compute precision renders no pack: true
+every type a pointer is cast to is declared 16-byte aligned in the same source: true

@@ -1220,6 +1220,18 @@ files.
   `#elif` lines from the emitted `.c` instead, and keep a positive control: building
   `bin/narrow_gebp_bench` at 97e7d286 (gh-614's parent) still reproduces 12.57 GFLOP/s against
   HEAD's ~128, and its kernel censuses 199 / 52 / 6 at `-O3`.
+- **The GPU packed path (`Packed_struct`) has its own precision gate** (gh-ocannl-1295):
+  `C_syntax.packed_prec_ok`, not `vector_prec_ok`, which only the `Vec_extensions` renderings
+  consult. A packed loop moves whole 128-bit packs and computes each lane as a scalar, so it admits
+  half, bf16, f32 and f64 wherever `vec_typ_of_prec` has a full-width pack type, always at full
+  width (`packed_lanes`). It also requires that precision to be every store target's STORAGE
+  precision, as `lane_expr` requires of every load. Two traps sat behind the old SIMD gate. Metal
+  computes fp8 at f32 and stores it as a byte, and the old compute-precision check let
+  `fp8_out[i] = f32_in[i] * c` store `float4_t` packs into the byte buffer (confirmed on M4 Max:
+  wrong values). And the narrow pack types were not 16-byte aligned; they are now `__align__(16)`
+  on CUDA/HIP and `alignas(16)` on Metal, which MSL accepts. A `reinterpret_cast` to a 2-byte-aligned
+  struct compiles as a 2-byte-aligned access. `test/operations/gpu_packed_prec` pins both, the
+  alignment as a relationship over every cast in the emitted source.
 ## Assembly census and compiler differences
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG

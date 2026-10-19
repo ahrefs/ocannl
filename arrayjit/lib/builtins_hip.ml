@@ -48,12 +48,12 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
        emission assigns vector elements to the fp8 array cells without a cast, and [__hip_fp8_e5m2]
        has no assignment from integer types. *)
     ("fp8x16_t", {|typedef struct __align__(16) { __hip_fp8_e5m2 v[16]; } fp8x16_t;|}, []);
-    ("half8_t", {|typedef struct { __half v[8]; } half8_t;|}, []);
+    ("half8_t", {|typedef struct __align__(16) { __half v[8]; } half8_t;|}, []);
     (* Like [fp8x16_t] and [half8_t], the elements are the class type: [Set_from_vec] assigns them
        to the bfloat16 array cells without a cast, and [__hip_bfloat16] has no assignment from an
        integer type -- an [unsigned short] element would be converted by *value* (a bit pattern of
        0x3F80 becoming 16256.0) instead of reinterpreted. *)
-    ("bfloat16x8_t", {|typedef struct { __hip_bfloat16 v[8]; } bfloat16x8_t;|}, []);
+    ("bfloat16x8_t", {|typedef struct __align__(16) { __hip_bfloat16 v[8]; } bfloat16x8_t;|}, []);
     ( "htanh_approx",
       (* hip_fp16.h has no htanh/htanh_approx (unlike CUDA 12.8+); route through float. *)
       {|__device__ __forceinline__ __half htanh_approx(__half x) {

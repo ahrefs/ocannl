@@ -175,6 +175,14 @@ test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: com
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
     "lane all-reduce into a scope local"
+test/operations/gpu_packed_prec.ml [also pins text this scan cannot name: untraced callback]
+    "bfloat16x8_t"
+    "float4_t"
+    "half8_t"
+    "reinterpret_cast"
+    "reinterpret_cast<"
+    sprintf " %s*>(&"
+    sprintf "const %s*>(&"
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     "for ("
 test/operations/half_float_power.ml
