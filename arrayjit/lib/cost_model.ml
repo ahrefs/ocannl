@@ -768,15 +768,22 @@ let tile_mma_operand_loads ~operand_fragments ~operand_loads (opt : Low_level.op
           max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
         in
         let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
-        (* The emission scope, as the renderer picks it: a schedule-marked fragment accumulator
-           renders in its persistent fragment scope, every other statement on its own. *)
-        let scope =
-          if Set.mem opt.Low_level.simdgroup_fragments d_tn then Backend_intf.Mma_fragment_scope
-          else Backend_intf.Mma_per_statement
+        (* The emission scope. An unmarked statement renders on its own. A schedule-marked fragment
+           accumulator asks for the persistent fragment scope, but the renderer falls back to per
+           statement where the scope's arm declines its operands — a decision this walk does not
+           restate — so a marked statement is described only where both scopes' arms describe it
+           alike, and otherwise has no count. *)
+        let describe scope =
+          ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:(operand_place opt a_tn)
+              ~b:(operand_place opt b_tn),
+            operand_fragments ~a_prec ~b_prec ~d_prec ~scope )
         in
-        let a_ldm, b_ldm =
-          operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:(operand_place opt a_tn)
-            ~b:(operand_place opt b_tn)
+        let description =
+          let statement = describe Backend_intf.Mma_per_statement in
+          if not (Set.mem opt.Low_level.simdgroup_fragments d_tn) then Some statement
+          else
+            let fragment = describe Backend_intf.Mma_fragment_scope in
+            Option.some_if (Poly.equal statement fragment) statement
         in
         (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
            [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm. *)
@@ -790,8 +797,8 @@ let tile_mma_operand_loads ~operand_fragments ~operand_loads (opt : Low_level.op
            too. A statement the backend does not describe, or whose extents the tile does not divide
            (the arm declines it), has no count. *)
         let site =
-          match operand_fragments ~a_prec ~b_prec ~d_prec ~scope with
-          | Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads }
+          match description with
+          | Some ((a_ldm, b_ldm), Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads })
             when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
               let mt = m / tm and nt = n / tn and kt = k / tk in
               let a_frags, b_frags =
@@ -804,7 +811,7 @@ let tile_mma_operand_loads ~operand_fragments ~operand_loads (opt : Low_level.op
                     (b_tn, tk * tn, b_frags, classify b_tn b_ldm ~lane_bytes:8);
                   ],
                   lanes )
-          | Some _ | None -> None
+          | Some (_, _) | None -> None
         in
         sites := site :: !sites
     | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
