@@ -6332,8 +6332,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
            it carries — the outer catch-all would otherwise record every one of them as [Transform],
            which for a link failure is simply wrong. The exception the caller sees is unchanged:
            [emit_partial_and_raise] ends in [raise_failure], exactly as [Context.compile] does. *)
-        let untuned_default_or_raise () =
-          progress_stage "untuned_default_compile";
+        let plain_default_or_raise () =
           match
             Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
               bindings
@@ -6343,6 +6342,27 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           | Error (Outcome.Classified classified) ->
               emit_partial_and_raise
                 (Outcome.fatal_of_classified ~candidate:"untuned default fallback" classified)
+        in
+        (* gh-ocannl-1253: where the search derived a seeded plan, the untuned step the caller would
+           have shipped is that plan, so the fallbacks compile it -- replayed as its [F_seeded]
+           candidate is, from the plan already in the trajectory identity -- and keep the seeded
+           floor. A replay that fails or degenerates ends on the plain default. *)
+        let untuned_default_or_raise () =
+          progress_stage "untuned_default_compile";
+          match Lazy.force seeded_plan_value with
+          | None -> plain_default_or_raise ()
+          | Some plan -> (
+              let spec = Fiss (F_seeded plan) in
+              match compile_spec_real ~label:(spec_label spec) Outcome.Candidate spec with
+              | Ok c when dispatchable ~is_gpu c.all_opts -> (c.cctx, c.routine)
+              | Ok c ->
+                  release_quietly ~what:"the degenerate seeded fallback" c.cctx;
+                  plain_default_or_raise ()
+              | Error (Outcome.Classified classified) ->
+                  logf "the seeded untuned fallback FAILED (%s); compiling the plain default"
+                    (Outcome.detail_of_cause classified.cause);
+                  plain_default_or_raise ()
+              | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal)
         in
         let exception Abandon_now of abandonment in
         let search () =
@@ -7317,8 +7337,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             if nothing_timed then (
               (* Returning the incumbent here would hand the caller the very serial routine this
                  search refused to dispatch (gh-ocannl-532) — slower than not tuning at all, and on
-                 GPU unbounded. The untuned default pipeline is the honest fallback: the same code
-                 the caller would have compiled without the tuner. *)
+                 GPU unbounded. The untuned compile is the honest fallback: the same code the caller
+                 would have compiled without the tuner, the seeded plan where there is one. *)
               logf "nothing was timed: falling back to the untuned default compile (gh-ocannl-532)";
               release_all_candidates ();
               untuned_default_or_raise ())

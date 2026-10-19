@@ -321,3 +321,22 @@ let () =
       | [ (label, _, ms) ] ->
           String.equal r.Autotune.best_label label && Option.equal Float.equal r.seeded_ms (Some ms)
       | _ -> false)
+
+(* gh-ocannl-1253: a search that times nothing -- every window refused, the seeded plan's retry
+   included -- falls back to the untuned compile the caller would have shipped, which on CUDA/HIP is
+   the seeded plan, not the plain default pipeline: its gradients are bitwise the untuned compile's
+   (on CUDA the control above shows the plain default differs in the bias gradient). *)
+let () =
+  let (w_untuned, b_untuned), _, _ = untuned () in
+  let label = "a search that times nothing returns the untuned compile's gradients, bitwise" in
+  Verdict.gate ~when_:seeds_here ~on:backend_name label (fun () ->
+      let (w_fallback, b_fallback), _, windows, r, _, _ =
+        scripted_search ~reading:(fun ~index:_ ~label:_ _ -> Float.nan)
+      in
+      p_all "in the all-refused search, every window was refused" windows ~f:(fun (_, _, ms) ->
+          Float.is_nan ms);
+      p "so nothing was timed" (Float.is_inf r.Autotune.best_ms);
+      p_all2 label
+        (Array.append w_fallback b_fallback)
+        (Array.append w_untuned b_untuned)
+        ~f:bitwise)
