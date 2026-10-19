@@ -482,19 +482,29 @@ let embedded_nodes loss =
 
 let placement_problem ?name ?timing_ctx ctx loss comp bindings =
   let embedded = Set.of_list (module Tn) (embedded_nodes loss) in
+  let static_indices = Ir.Indexing.bound_symbols bindings in
+  let lowered = Context.lowered_for_decisions ?name ctx comp bindings in
+  let structural opt =
+    Ir.Schedule_cache.digest
+      (Ir.Schedule_cache.canonicalize ~static_indices ~with_placements:false opt)
+  in
   let timing =
     Option.map timing_ctx ~f:(fun tctx ->
+        let tlowered = Context.lowered_for_decisions ?name tctx comp bindings in
         ( Context.placements tctx,
-          (Context.lowered_for_decisions ?name tctx comp bindings).Ir.Low_level.optimize_ctx ))
+          tlowered.Ir.Low_level.optimize_ctx,
+          (* gh-ocannl-1421: both lineages' lowered programs, which the tags above do not pin (an
+             inherited computation changes the program, not a placement tag). Whether a search is
+             [Lineage_refused] is a function of the two, so a decision recorded beside such a search
+             applies only where they are the same programs. *)
+          ";ts=" ^ structural tlowered ^ ";cs=" ^ structural lowered ))
   in
-  Ir.Schedule_cache.canonicalize_source
-    ~static_indices:(Ir.Indexing.bound_symbols bindings)
+  Ir.Schedule_cache.canonicalize_source ~static_indices
     ~node_tag:(fun tn ->
       (if Set.mem embedded tn then ";e" else "")
-      ^ Option.value_map timing ~default:"" ~f:(fun (plc, octx) ->
-          ";t" ^ Ir.Schedule_cache.lineage_tag plc octx tn))
-    ~lineage:(Context.placements ctx)
-    (Context.lowered_for_decisions ?name ctx comp bindings)
+      ^ Option.value_map timing ~default:"" ~f:(fun (plc, octx, programs) ->
+          ";t" ^ Ir.Schedule_cache.lineage_tag plc octx tn ^ programs))
+    ~lineage:(Context.placements ctx) lowered
 
 (** A recorded placement decision as the three lists the context API takes — materialized, inlined,
     footprint-scoped — resolved against [problem]'s numbering ({!Ir.Schedule_cache.tn_of_ref} raises
@@ -1510,6 +1520,19 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       in
       propagate_if_poisoned what r;
       match r with
+      | Ok compiled when Autotune.shipped_substitute compiled ->
+          (* The replay validated, but its compile shipped the untuned default in place of the
+             schedule the decision was recorded for: a failed replay like the one below, so the
+             decision is treated as stale and the arms are searched. *)
+          (try Context.release (fst (Autotune.compile_deferred compiled))
+           with exn when not (must_propagate exn) ->
+             logf "release of a substituted replay failed: %s" (Exn.to_string exn));
+          logf
+            "placement store: the replayed decision %s shipped the untuned default in place of its \
+             schedule; treating it as stale and searching the arms"
+            what;
+          observed := [];
+          cold ()
       | Ok compiled ->
           (* The caller's callback, with the caller's exception: it propagates, and nothing ships
              (gh-ocannl-550), so the routine compiled for it is released first. *)
