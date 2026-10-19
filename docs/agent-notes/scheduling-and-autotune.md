@@ -580,29 +580,41 @@ files.
   unseeded GPU ones keep their candidate order. The floor is the step the untuned compile ships
   only where that compile IS `seeded_default`: under `model_default_schedule=true` (the
   `performance` and `approximate` profiles) it is `model_default`'s pick, whose placement pre-search
-  changes the program, so no candidate reproduces it (gh-ocannl-1253's defaults flip starts the
-  model from this plan). A refused window does not lose the floor: a contended digest leaves
+  changes the program, so no candidate reproduces it (the model starts from this plan, next
+  bullet but one). A refused window does not lose the floor: a contended digest leaves
   `seen` for an equivalent later seed to measure, and since no later seed reproduces the plan, the
   seed pass ends with one retry of it. `placement_entry_version` 2 retired the recorded arm
   decisions that compared searches without the floor. The three `gpu_default_*` keys are `Search_shaping`
-  (registered defaults 32, 1024, true), the report's `seeded_ms` is the seed's time beside
+  (registered defaults `auto`, 1024, true), the report's `seeded_ms` is the seed's time beside
   `default_ms` (not stored, so `None` on a cache hit), and `entry_version` 16 retired the crowns
   searched without this floor. `seeded_plan_digest` names the plan from its content alone (split
-  sites by target name and extents, not by node id or symbol), for the trajectory identity
-  gh-ocannl-1253 adds once an untimed input steers the plan.
-- **`gpu_default_sketch_min_reduction=auto` replaces the threshold by the ranking score**
-  (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks strictly
-  below the same segment's preset, scored alone under the device's capacity and cache bandwidth —
-  so it seeds where the cross-block re-reads the sketch removes cost more than its staging adds;
-  without the cache tier, never within capacity, where under the distinct-cell roofline a staged
-  sketch only adds traffic. Geometry and the numerics-preserving candidate set are
-  `seeded_params`' either way, and a device publishing neither constant falls back to 32. The
-  search's seeded-plan candidate (`seeded_plan`, previous bullet) reads `auto` as 32
-  (`seeded_search_gate`, `no_ranker`): a ranked gate reads `Untimed` fields, which nothing `tune`
-  reaches may read until the resolved plan's digest joins the trajectory identity — so under
-  `auto` the search's floor is the threshold plan, not the shipped one, until that follow-up.
-  Its census claim (`test/operations/seeded_default`) pins capacity 0, no cache tier, against
-  threshold 32 and is CUDA/HIP only; on cc the seeded default is off altogether.
+  sites by target name and extents, not by node id or symbol), and `tune` appends it to
+  `trajectory.search_shape` (`|seed=<digest>`, `|seed=none` without a plan, never the cache key): the
+  plan reads `Untimed` fields under `auto`, so a crown searched under a different seed is a
+  different trajectory and never stops this search early. Deriving it costs one detection pass over
+  the pristine program, forced lazily (the search, or a trajectory-matched warm hit, forces it; the
+  `seeded untuned plan derived in` log line times it). `limits_field_classes` sanctions exactly
+  this one path to `Untimed` fields from `tune` (`seeded_plan`), and pins that a definition `tune`
+  reaches through it records the digest.
+- **`gpu_default_sketch_min_reduction=auto` (the default) replaces the threshold by the ranking
+  score** (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks
+  strictly below the same segment's preset, scored alone under the device's capacity and cache
+  bandwidth — so it seeds where the cross-block re-reads the sketch removes cost more than its
+  staging adds; without the cache tier, never within capacity, where under the distinct-cell
+  roofline a staged sketch only adds traffic. Geometry and the numerics-preserving candidate set are
+  `seeded_params`' either way (`scalar_blocktile`: no mma, conv, epilogue, coalesce, batch-inner,
+  swizzle or pipelining; `accumulates_at_storage`: the site's accumulator precision IS its storage
+  precision), and a device publishing neither constant (Metal, cc, an uncalibrated GPU) falls back
+  to threshold 32 — integers stay the fallback. `tune`'s seeded candidate is the same resolved plan
+  (its digest in the trajectory identity, previous bullet). `model_default` starts from it wherever
+  the untuned compile seeds (CUDA and HIP, seeding on: the same `seeded_settings` decides both):
+  its incumbent is the seeded plan (`mc_label` `"seeded"`), its candidates compete on the program
+  after the plan's split prelude, and its sketch candidates are restricted to the same
+  numerics-preserving forms (counted as `mc_excluded`), so the model's pick never changes a value
+  the untuned default computes. Elsewhere — Metal, cc, or CUDA/HIP with the seeding off — the
+  incumbent stays the default pipeline and the whole family competes. The census claim
+  (`test/operations/seeded_default`) pins capacity 0, no cache tier, against threshold 32 and is
+  CUDA/HIP only; on cc the seeded default is off altogether.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only

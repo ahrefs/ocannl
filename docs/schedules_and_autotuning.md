@@ -299,12 +299,18 @@ the retained procedural analyses alongside the affine engine and raises on diver
   timing runs. Counts are deliberately conservative upper bounds; exactness is tracked per
   kernel.
 - **Seeded default** (gh-ocannl-1324): with `model_default_schedule` off, those same recipe-level
-  untuned compiles go through `Autotune.seeded_default` on CUDA and HIP. It schedules every
-  default fission segment that is a matmul site (backprop's gradients included) with a reduction
-  extent of at least `gpu_default_sketch_min_reduction` (32) using the matmul family's
-  register-blocktiled sketch. The geometry is a fixed rule over the family tree's own leaves, and
-  nothing is timed. Each output's summation order is kept, so results are bitwise those of the
-  plain default. The search still reports against, and seeds from, the plain default pipeline.
+  untuned compiles go through `Autotune.seeded_default` on CUDA and HIP. It schedules each
+  default fission segment that is a matmul site (backprop's gradients included) and passes the
+  seeding gate using the matmul family's register-blocktiled sketch. The gate,
+  `gpu_default_sketch_min_reduction`, defaults to `auto` (gh-ocannl-1253): a segment seeds where
+  the cost model's ranking score puts the sketch strictly below the segment's preset, falling back
+  to a reduction-extent threshold of 32 on a device that publishes no cache capacity or cache
+  bandwidth; an integer sets that threshold instead. The geometry is a fixed rule over the family
+  tree's own leaves, and nothing is timed. Each output's summation order is kept, so results are
+  bitwise those of the plain default. The search seeds this same plan as its first candidate
+  (gh-ocannl-1388), with the plan's digest in its trajectory identity, and with
+  `model_default_schedule` on, the model starts from it and ranks only numerics-preserving
+  sketches against it.
   Every segment it does not seed has its accumulations' reduction loops sunk below their write
   loops first (`Autotune.reduction_sink`, gh-ocannl-1348; `gpu_default_reduction_sink`), so a
   bias or layer-norm parameter gradient reduced over the batch keeps its accumulator in a register

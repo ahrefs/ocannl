@@ -122,3 +122,23 @@ let () =
     ~f:bitwise;
   let _, r_off = seeded ~min_serial:0 in
   p "a threshold of 0 disables the split" (List.is_empty r_off.sd_split)
+
+(* gh-ocannl-1253: [model_default] starts from the seeded plan, split prelude included. On CUDA and
+   HIP its pick computes the bias gradient bitwise as the seeded default does at the configured
+   threshold (1024 unless the configuration says otherwise, below this fixture's 8192-row chain): on
+   CUDA that is the split order, which a pick dropping the prelude would not reproduce. *)
+let () =
+  let report = ref None in
+  let model =
+    run (fun ctx comp bindings ->
+        Autotune.model_default ~report:(fun r -> report := Some r) ctx comp bindings)
+  in
+  let configured = run (fun ctx comp bindings -> Autotune.seeded_default ctx comp bindings) in
+  Stdio.eprintf "model_default picked: %s (not part of the golden)\n"
+    (Option.value_map !report ~default:"nothing reported" ~f:(fun r -> r.Autotune.mc_label));
+  Verdict.gated_all
+    ~when_:(Autotune.seeded_default_backend backend_name)
+    ~on:backend_name
+    "on CUDA/HIP the model's bias gradient is bitwise the seeded default's, split order included"
+    (List.zip_exn (Array.to_list model) (Array.to_list configured))
+    ~f:(fun (a, b) -> bitwise a b)

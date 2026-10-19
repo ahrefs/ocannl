@@ -7350,7 +7350,16 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
+  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_MODEL_DEFAULT_PLACEMENTS)
+  (env_var OCANNL_MODEL_DEFAULT_GEOMETRY_LATTICE))
  (modules seeded_default)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
@@ -7387,7 +7396,16 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
+  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_MODEL_DEFAULT_PLACEMENTS)
+  (env_var OCANNL_MODEL_DEFAULT_GEOMETRY_LATTICE))
  (modules seeded_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -9249,7 +9267,8 @@
 ; candidate (every later window refused through the measurement seam) crowns the step the untuned
 ; compile ships: the same code, digest for digest, computing bitwise the same gradients; a refused
 ; seeded window is retried once and still crowns. CUDA/HIP
-; legs, skipped elsewhere, where the search must derive no plan. Every threshold is the config's.
+; legs, skipped elsewhere, where the search must derive no plan. Every threshold is the config's
+; but the seeding gate, which the test pins at threshold 32 so the plan seeds on every device.
 
 (test
  (name autotune_seeded_seed)
@@ -9264,6 +9283,6 @@
   (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
   (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
  (modules autotune_seeded_seed)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

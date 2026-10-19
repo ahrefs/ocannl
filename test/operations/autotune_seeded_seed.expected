@@ -12,3 +12,4 @@ the control: the plain default pipeline's bias gradient differs in some cell: tr
 in the refused-seed search too, every seeded attempt compiled and was timed: true
 a refused seeded window is retried after the seed pass: true
 the retried seeded plan is crowned and reported as seeded_ms: true
+a search that times nothing returns the untuned compile's gradients, bitwise: true

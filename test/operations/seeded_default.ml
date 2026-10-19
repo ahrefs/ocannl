@@ -165,3 +165,39 @@ let () =
     ~f:bitwise;
   p_all2 "the auto-gated bias gradient is bitwise the default pipeline's" b_auto b_default
     ~f:bitwise
+
+(* gh-ocannl-1253: the analytic model starts from the seeded plan. On CUDA/HIP [model_default]'s
+   incumbent is the seeded untuned plan under the configured gate ([auto] unless the test config
+   says otherwise), and its sketch candidates are the seeding's numerics-preserving forms, so its
+   pick -- whichever it is -- computes both gradients bitwise as the default pipeline does, on the
+   same order-sensitive inputs. Elsewhere the model starts from the default pipeline, and its pick
+   may round differently (the C backends' packed mma sketches), so only the report is checked. *)
+let () =
+  let report = ref None in
+  let w_model, b_model =
+    run (fun ctx comp bindings ->
+        Autotune.model_default ~report:(fun r -> report := Some r) ctx comp bindings)
+  in
+  let w_default, b_default = run Context.compile in
+  let r = Option.value_exn ~here:[%here] !report in
+  Stdio.eprintf
+    "model_default picked: %s, %d candidates not numerics-preserving (not part of the golden)\n"
+    r.Autotune.mc_label r.Autotune.mc_excluded;
+  p "the model reports a pick" (not (String.is_empty r.Autotune.mc_label));
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model starts from the seeded plan: its pick is the seeded plan or beats it, \
+     never the plain default pipeline"
+    (not (String.equal r.Autotune.mc_label "default"));
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model's pick is no tensor-core or conv form"
+    (not
+       (String.is_substring r.Autotune.mc_label ~substring:"mma-"
+       || String.is_substring r.Autotune.mc_label ~substring:"conv-"));
+  Verdict.gated_all ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model's weight gradient is bitwise the default pipeline's"
+    (List.zip_exn (Array.to_list w_model) (Array.to_list w_default))
+    ~f:(fun (m, d) -> bitwise m d);
+  Verdict.gated_all ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model's bias gradient is bitwise the default pipeline's"
+    (List.zip_exn (Array.to_list b_model) (Array.to_list b_default))
+    ~f:(fun (m, d) -> bitwise m d)

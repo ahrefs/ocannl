@@ -9,3 +9,4 @@ on CUDA the split changed the summation order: some cell differs from the defaul
 a threshold above every serial chain splits nothing: true
 that routine computes the default pipeline's bias gradient bitwise: true
 a threshold of 0 disables the split: true
+on CUDA/HIP the model's bias gradient is bitwise the seeded default's, split order included: true

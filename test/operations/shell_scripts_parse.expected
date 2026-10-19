@@ -503,6 +503,7 @@ benchmarks/gh1051_boundary_split.sh parses: true
 benchmarks/gh1133_cells.sh parses: true
 benchmarks/gh1180_tie_ab.sh parses: true
 benchmarks/gh1253_cells.sh parses: true
+benchmarks/gh1253_flip_cells.sh parses: true
 benchmarks/gh1279_cells.sh parses: true
 benchmarks/gh514_cells.sh parses: true
 benchmarks/gh612_cells.sh parses: true
