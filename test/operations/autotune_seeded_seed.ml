@@ -133,7 +133,7 @@ let is_seeded label = String.is_prefix label ~prefix:"F_seeded["
 (* A search whose admitted windows are scripted: [reading ~index ~label ms] is what the [index]th
    admitted window (from 0) records, [nan] refusing it. *)
 let scripted_search ~reading =
-  let windows = ref [] and attempts = ref [] and report = ref None in
+  let windows = ref [] and attempts = ref [] and timed = ref [] and report = ref None in
   let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
   and old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   let ctx, routine =
@@ -144,6 +144,11 @@ let scripted_search ~reading =
       ~f:(fun () ->
         ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
           if not (String.equal label "baseline") then attempts := label :: !attempts );
+        (* Each timing call that returns, under the attempt it timed: a window the host refused
+           still returns one, a candidate that failed before timing never does. *)
+        Autotune.with_timing_call_observer (fun (_ : Autotune.timing_call) ->
+            Option.iter (List.hd !attempts) ~f:(fun label -> timed := label :: !timed))
+        @@ fun () ->
         ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
           let ms = reading ~index:(List.length !windows) ~label ms in
           windows := (label, digest, ms) :: !windows;
@@ -156,13 +161,15 @@ let scripted_search ~reading =
   in
   let report = Option.value_exn ~here:[%here] !report in
   let windows = List.rev !windows in
-  (* A window the host refuses (queued calibration that measured no batch, routine on a shared box)
-     never reaches the seam. What the claims read is the seeded plan's: every attempt of it must
-     have reached the seam, so the host refused none of its windows. *)
+  (* Every attempt of the seeded plan must compile and reach a timing window ([reached], a claim: a
+     candidate failure is a failure), and a window the host refuses (queued calibration that
+     measured no batch, routine on a shared box) never reaches the seam: what the window claims read
+     is the seeded plan's, so they are gated on the host having refused none of its windows
+     ([quiet]). *)
   let attempts = List.rev !attempts in
-  let quiet =
-    List.count attempts ~f:is_seeded = List.count windows ~f:(fun (label, _, _) -> is_seeded label)
-  in
+  let seeded_timed = List.count !timed ~f:is_seeded in
+  let reached = List.count attempts ~f:is_seeded = seeded_timed && seeded_timed > 0 in
+  let quiet = seeded_timed = List.count windows ~f:(fun (label, _, _) -> is_seeded label) in
   Stdio.eprintf
     "scripted search (not part of the golden): %d windows, %d refused by the script, %d refused in \
      all\n\
@@ -170,7 +177,7 @@ let scripted_search ~reading =
     (List.length windows)
     (List.count windows ~f:(fun (_, _, ms) -> Float.is_nan ms))
     report.timings_contended;
-  (run ctx routine, attempts, windows, report, quiet)
+  (run ctx routine, attempts, windows, report, quiet, reached)
 
 (* The search cut to its first candidate, the seeded plan: every other window refused. *)
 let cut_search () =
@@ -226,7 +233,7 @@ let () =
     claim label (fun () ->
         match tuned with
         | None -> p (label ^ " (no search ran)") false
-        | Some ((_, _, _, _, quiet) as t) ->
+        | Some ((_, _, _, _, quiet, _) as t) ->
             quiet_note "cut search" quiet;
             gated ~aggregation:`Environment ~when_:((not scripted) || quiet) ~on:quiet_host label
               (f t))
@@ -235,21 +242,23 @@ let () =
     List.filter windows ~f:(fun (label, _, ms) -> is_seeded label && not (Float.is_nan ms))
   in
   with_tuned ~scripted:false "the search's first candidate is the seeded untuned plan"
-    (fun (_, attempts, _, _, _) ->
+    (fun (_, attempts, _, _, _, _) ->
       Option.iter (List.hd attempts) ~f:(fun label ->
           Stdio.eprintf "first candidate: %s (not part of the golden)\n%!" label);
       match attempts with label :: _ :: _ -> is_seeded label | _ -> false);
+  with_tuned ~scripted:false "every attempt of the seeded plan compiled and reached a timing window"
+    (fun (_, _, _, _, _, reached) -> reached);
   with_tuned "its timed code is the untuned compile's, segment for segment"
-    (fun (_, _, windows, _, _) ->
+    (fun (_, _, windows, _, _, _) ->
       match (seeded_windows windows, untuned_digest) with
       | [ (_, digest, _) ], Some d -> String.equal digest d
       | _ -> false);
   with_tuned "the search went on to time later candidates, every one of them refused"
-    (fun (_, _, windows, _, _) ->
+    (fun (_, _, windows, _, _, _) ->
       List.exists windows ~f:(fun (label, _, _) -> not (is_seeded label))
       && List.for_all windows ~f:(fun (label, _, ms) -> is_seeded label || Float.is_nan ms));
   with_tuned "the search crowned the seeded plan, its reading the report's seeded_ms and best_ms"
-    (fun (_, _, windows, r, _) ->
+    (fun (_, _, windows, r, _, _) ->
       match seeded_windows windows with
       | [ (label, _, ms) ] ->
           String.equal r.Autotune.best_label label
@@ -260,7 +269,7 @@ let () =
    claim label (fun () ->
        match tuned with
        | None -> p (label ^ " (no search ran)") false
-       | Some ((w_tuned, b_tuned), _, _, _, quiet) ->
+       | Some ((w_tuned, b_tuned), _, _, _, quiet, _) ->
            Verdict.gate ~aggregation:`Environment ~when_:quiet ~on:quiet_host label (fun () ->
                p_all2 label (Array.append w_tuned b_tuned)
                  (Array.append w_untuned b_untuned)
@@ -276,17 +285,20 @@ let () =
     claim label (fun () ->
         match retried with
         | None -> p (label ^ " (no search ran)") false
-        | Some ((_, _, _, _, quiet) as t) ->
+        | Some ((_, _, _, _, quiet, _) as t) ->
             quiet_note "refused-seed search" quiet;
             gated ~aggregation:`Environment ~when_:quiet ~on:quiet_host label (f t))
   in
+  claim "in the refused-seed search too, every seeded attempt compiled and was timed" (fun () ->
+      p "in the refused-seed search too, every seeded attempt compiled and was timed"
+        (match retried with Some (_, _, _, _, _, reached) -> reached | None -> false));
   with_retried "a refused seeded window is retried after the seed pass"
-    (fun (_, _, windows, _, _) ->
+    (fun (_, _, windows, _, _, _) ->
       match List.filter windows ~f:(fun (label, _, _) -> is_seeded label) with
       | [ (_, _, first); (_, _, retry) ] -> Float.is_nan first && Float.(retry < 1e6)
       | _ -> false);
   with_retried "the retried seeded plan is crowned and reported as seeded_ms"
-    (fun (_, _, windows, r, _) ->
+    (fun (_, _, windows, r, _, _) ->
       match seeded_windows windows with
       | [ (label, _, ms) ] ->
           String.equal r.Autotune.best_label label && Option.equal Float.equal r.seeded_ms (Some ms)
