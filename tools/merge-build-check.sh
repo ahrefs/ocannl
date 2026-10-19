@@ -7,8 +7,9 @@
 # HEAD is read as the merge to judge: first parent the base, second parent the PR head (the
 # order `git merge` and ship-pr's `commit-tree -p <base tip> -p <head>` give). Two tiers:
 #   compile  always: `dune build @check @test/operations/scans` (about 40 s from a fresh tree
-#            on mac-studio: the compile and the repository scans, which read the dune stanzas,
-#            sources and scripts both sides edit).
+#            on mac-studio: the compile and the repository scans, which read the repository
+#            itself -- dune stanzas, sources, scripts, Markdown notes and docs, goldens -- so
+#            the config makes every shared path an input).
 #   shell    `tools/test-harnesses.sh --shell`, the toolchain-free harness tier CI runs (about
 #            470 s on mac-studio), only when a path BOTH sides changed since their merge base
 #            matches `*.sh`: the whole path, `*` crossing `/`, as the config's `input` globs read,
