@@ -4568,7 +4568,10 @@ else
   printf '(rule\n (with-stdout-to slow.txt (run sh -c "touch %s; sleep 4; echo slow")))\n(rule\n (with-stdout-to quick.txt (run sh -c "echo quick")))\n' \
     "$TMP/live-trace.started" >"$live_root/dune"
   live_detail=
-  (cd "$live_root" && exec "$live_real" build --cache=disabled ./slow.txt) >"$TMP/live-manual.out" 2>&1 &
+  # Both builds get dune's own directory first on PATH: a dune found only
+  # through tools/opam-env.sh finds its switch's ocamlc there and nowhere else.
+  (cd "$live_root" && PATH=$(dirname "$live_real"):$PATH exec "$live_real" build --cache=disabled ./slow.txt) \
+    >"$TMP/live-manual.out" 2>&1 &
   live_pid=$!
   if ! await_fixture_ready "$TMP/live-trace.started" 300; then
     live_detail="the manual build never started its slow rule: $(tail -5 "$TMP/live-manual.out")"
