@@ -956,15 +956,15 @@ let compile_failure_detail ~exit_code ~source_note ~command ~compiler_output =
     command compiler_output
 
 (* The flags every kernel compile passes after the compiler command (output, link and log
-   redirections aside). One definition, because [test/operations/bridge_arm_coverage] preprocesses
-   the retained kernel sources under them to read which bridge arm each kernel compiled into
-   (gh-ocannl-1145): a reading under any other flags would describe a target no kernel was built
-   for. *)
-let kernel_compiler_flags () =
+   redirections aside), each paired with the setting it comes from. One definition, because
+   [test/operations/bridge_arm_coverage] preprocesses the retained kernel sources under them to read
+   which bridge arm each kernel compiled into (gh-ocannl-1145): a reading under any other flags
+   would describe a target no kernel was built for; and because a failed compile names the setting
+   whose flag the toolchain rejects (gh-ocannl-1350, [toolchain_fault]). *)
+let kernel_compiler_flag_settings () =
   let optimization_flag = "-O" ^ Int.to_string (optimization_level ()) in
   let arch_flag = String.strip (arch_flags ()) in
   let simd_flag = String.strip (simd_flags ()) in
-  let fast_math_flag = fast_math_flag () in
   (* [-fopenmp] must also reach the link step (this command compiles and links); harmless for
      kernels without parallel Grid loops. *)
   let parallel_flag =
@@ -973,31 +973,156 @@ let kernel_compiler_flags () =
     | `Dispatch | `None -> None
   in
   [
-    Some optimization_flag;
-    Option.some_if (not (String.is_empty arch_flag)) arch_flag;
-    Option.some_if (not (String.is_empty simd_flag)) simd_flag;
-    fast_math_flag;
+    Some ("cc_backend_optimization_level", optimization_flag);
+    Option.some_if (not (String.is_empty arch_flag)) ("cc_backend_arch_flags", arch_flag);
+    Option.some_if (not (String.is_empty simd_flag)) ("cc_backend_simd_flags", simd_flag);
+    Option.map (fast_math_flag ()) ~f:(fun flag -> ("cc_backend_fast_math", flag));
     (* AFTER [-ffast-math], which itself sets contraction to fast: clang documents that the last of
        the two wins, so the explicit knob has to come last or [cc_backend_fp_contract=off] would
        silently do nothing in the one combination where it is load-bearing (Codex P2 on PR #291). *)
-    fp_contract_flag ();
-    parallel_flag;
+    Option.map (fp_contract_flag ()) ~f:(fun flag -> ("cc_backend_fp_contract", flag));
+    Option.map parallel_flag ~f:(fun flag -> ("cc_parallel_grid", flag));
   ]
-  |> List.filter_opt |> String.concat ~sep:" "
+  |> List.filter_opt
 
-let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
+let kernel_compiler_flags () =
+  String.concat ~sep:" " (List.map (kernel_compiler_flag_settings ()) ~f:snd)
+
+(* gh-ocannl-1350: a kernel compile can fail for a reason that has nothing to do with the generated
+   code -- an explicit [cc_backend_arch_flags] the compiler does not know, a
+   [cc_backend_compiler_command] that names no compiler, a broken local toolchain -- and the report
+   would still call it a bug in OCANNL. So a failed compile first compiles a trivial kernel the same
+   way: the same command, flags and link flags. If that fails too, the configuration is at fault,
+   and narrowing it down costs a few more probes: the command alone with the link flags, then each
+   setting's flag on its own. Asking the toolchain rather than reading its stderr keeps this
+   independent of which compiler is installed and how it words its errors. Failures are the rare
+   path, but an autotune search can fail many candidates, so the diagnosis is computed once per
+   process per configuration. *)
+type toolchain_probe = Probe_compiles | Probe_fails of { command : string; output : string }
+
+let probe_kernel_toolchain ~flags =
+  (* Every temporary is allocated inside the guard, and only the allocated ones are removed: a temp
+     directory that fails here (full, gone) must leave the original rejection standing. *)
+  let allocated = ref [] in
+  let temp suffix =
+    let path = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" suffix in
+    allocated := path :: !allocated;
+    path
+  in
+  let result =
+    try
+      let src = temp ".c" in
+      let lib = temp Utils.dynamic_library_extension in
+      let log = temp ".log" in
+      (* The command must write its output, not merely exit 0, so the placeholder goes first. *)
+      Stdlib.Sys.remove lib;
+      Stdio.Out_channel.write_all src ~data:"int ocannl_toolchain_probe(void) { return 0; }\n";
+      let command =
+        Printf.sprintf "%s %s %s -o %s %s" (compiler_command ()) (Stdlib.Filename.quote src) flags
+          (Stdlib.Filename.quote lib) (Lazy.force kernel_link_flags)
+      in
+      if
+        Stdlib.Sys.command (Printf.sprintf "%s > %s 2>&1" command (Stdlib.Filename.quote log)) = 0
+        && Stdlib.Sys.file_exists lib
+      then Some Probe_compiles
+      else
+        let output =
+          try Stdio.In_channel.read_all log with _ -> "(unable to read probe output)"
+        in
+        Some (Probe_fails { command; output })
+    with _ -> None
+  in
+  List.iter !allocated ~f:(fun f -> try Stdlib.Sys.remove f with _ -> ());
+  result
+
+type toolchain_fault = {
+  culprits : (string * string) list;
+      (** The settings the probes isolate, each with the value the compile passed for it. *)
+  alone : bool;  (** Whether each culprit fails on its own, rather than only in combination. *)
+  probe_command : string;
+  probe_output : string;
+}
+
+let diagnose_toolchain () =
+  let flag_settings = kernel_compiler_flag_settings () in
+  let fails ~flags =
+    match probe_kernel_toolchain ~flags with Some (Probe_fails _) -> true | _ -> false
+  in
+  (* A probe that could not even run (no temp directory) attributes nothing: the generated code
+     keeps the blame, as it did before. *)
+  match probe_kernel_toolchain ~flags:(kernel_compiler_flags ()) with
+  | None | Some Probe_compiles -> None
+  | Some (Probe_fails { command = probe_command; output = probe_output }) ->
+      let culprits, alone =
+        if fails ~flags:"" then
+          let command =
+            match Utils.get_global_arg ~default:"" ~arg_name:"cc_backend_compiler_command" with
+            | "" -> compiler_command () ^ " (unset: resolved from `ocamlc -config`)"
+            | command -> command
+          in
+          ([ ("cc_backend_compiler_command", command) ], true)
+        else
+          match List.filter flag_settings ~f:(fun (_, flag) -> fails ~flags:flag) with
+          | [] -> (flag_settings, false)
+          | culprits -> (culprits, true)
+      in
+      Some { culprits; alone; probe_command; probe_output }
+
+let toolchain_fault =
+  let mutex = Stdlib.Mutex.create () in
+  let diagnoses = Hashtbl.create (module String) in
+  fun () ->
+    let key =
+      String.concat ~sep:"\000"
+        [
+          compiler_command ();
+          (* What the command resolves to: an executable replaced in place, or a PATH change, is
+             another toolchain under the same spelling. *)
+          compiler_executable_identity (compiler_command ());
+          kernel_compiler_flags ();
+          Lazy.force kernel_link_flags;
+        ]
+    in
+    Stdlib.Mutex.protect mutex (fun () ->
+        Hashtbl.find_or_add diagnoses key ~default:diagnose_toolchain)
+
+let toolchain_failure_detail { culprits; alone; probe_command; probe_output } ~exit_code ~command
+    ~compiler_output =
+  let named =
+    String.concat ~sep:", "
+      (List.map culprits ~f:(fun (setting, value) -> Printf.sprintf "%s (%S)" setting value))
+  in
+  Printf.sprintf
+    "OCANNL cc backend: the C toolchain configuration fails to compile even a trivial kernel, so \
+     the generated code is not what failed (exit code %d).\n\
+     %s: %s\n\
+     Probe command: %s\n\
+     Probe output:\n\
+     %s\n\
+     Kernel compilation command: %s\n\
+     Kernel compiler output:\n\
+     %s"
+    exit_code
+    (if alone then "The setting the toolchain rejects"
+     else "No single setting fails alone; the toolchain rejects these together")
+    named probe_command probe_output command compiler_output
+
+let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
   (* The pool restriction (gh-ocannl-530) must be in force before the first [-fopenmp] kernel is
      dlopened, not merely before its first parallel region: libgomp computes its default team size
      from the affinity mask in its ELF/PE constructor, which runs at dlopen. Forced unconditionally
      — the decision itself no-ops under [`Dispatch]/[`None], and re-reading the syntax setting here
      would re-scan argv per kernel compile just to guard an already-memoized force. *)
   ignore (Lazy.force pool_restriction : Utils.Cpu_topology.pool_decision);
-  (* Temporary-file ownership (gh-ocannl-1197). [f_path] is handed over by [compile_source]: a
-     temporary that only the compiler reads. This compilation also creates the compiler log and,
-     unless library output was requested, the library. The log is always removed; the source and the
-     library are removed on every path, success included, unless a setting asks for them: debug
-     files retain both, library output keeps the library in [build_files/] (gh-ocannl-1247). The
-     [build_files/] copy of the source is a debug output written elsewhere, never one of these. *)
+  (* File ownership (gh-ocannl-1197). [f_path] is handed over by [compile_source]: a file that only
+     the compiler reads -- a temporary, or under debug files a private copy in [build_files/] (see
+     [compilation_copy]). This compilation also creates the compiler log and the library. The log is
+     always removed. The source is removed once the library is loaded, and on every failure path too
+     unless debug files are requested: then a failed compile keeps it, as the source its report
+     names. The library is a temporary removed once it is loaded, unless a setting asks for it:
+     library output or debug files keep it in [build_files/] (gh-ocannl-1247, gh-ocannl-1335), so a
+     debug run leaves nothing in the system temp directory. The informational [build_files/] copy of
+     the source is a debug output written elsewhere, never one of these. *)
   let retain_debug = Utils.settings.output_debug_files_in_build_directory in
   let library_requested =
     Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory"
@@ -1014,33 +1139,19 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
     | Unix.Unix_error _ -> false
   in
   let remove path = ignore (removed path : bool) in
-  (* The run id makes every library path unique within the process, even once the file is gone. A
-     dynamic loader (glibc, dyld, LoadLibrary) answers a [dlopen] of a path it already has mapped
-     with that mapping, without reading the file; the library is unlinked while still mapped (below)
-     and [Dl.dlclose] need not unload it, so a later [temp_file] landing on the freed name would
-     otherwise run the earlier kernel. *)
-  let run_id = Utils.get_global_run_id () in
   let libname =
-    if library_requested then
-      (* Not beside [f_path]: that is a private temporary even under debug files (see
-         [compilation_copy]). The kept library goes beside the kernel's [build_files/] source, named
-         apart per process as well as per compile, since concurrent processes of one executable
-         share that directory (gh-ocannl-1247). *)
-      Utils.kept_library_file ~run_id base_name
+    if library_owned then
+      (* Named after its owner: where the removal below fails -- Windows, for a routine alive at
+         exit -- a later process's startup removes it once this process is gone (gh-ocannl-1268). *)
+      Stdlib.Filename.temp_file
+        (Utils.temp_library_prefix ~pid:(Utils.os_process_id ()) ~nonce:(Utils.process_nonce ())
+           ~run_id base_name)
+        Utils.dynamic_library_extension
     else
-      let prefix =
-        if library_owned then
-          (* Named after its owner: where the removal below fails -- Windows, for a routine alive at
-             exit -- a later process's startup removes it once this process is gone
-             (gh-ocannl-1268). *)
-          Utils.temp_library_prefix ~pid:(Utils.os_process_id ()) ~nonce:(Utils.process_nonce ())
-            ~run_id base_name
-        else
-          (* Retained by request (debug files), so its name records no owner for that sweep. *)
-          let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
-          file_stem ^ "_run_id_" ^ Int.to_string run_id ^ "_"
-      in
-      Stdlib.Filename.temp_file prefix Utils.dynamic_library_extension
+      (* Kept beside the kernel's [build_files/] source, named apart per process as well as per
+         compile, since concurrent processes of one executable share that directory
+         (gh-ocannl-1247). *)
+      Utils.kept_library_file ~run_id base_name
   in
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags = Lazy.force kernel_link_flags in
@@ -1057,7 +1168,7 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
   (* Debug: log the command if debugging is enabled *)
   [%log3 "command", _cmdline];
   let _rc : int = Stdlib.Sys.command _cmdline in
-  (* The compiler was the source's only reader. *)
+  (* The compiler was the source's only reader: without debug files nothing else needs it. *)
   if not retain_debug then remove f_path;
   let source_note =
     if retain_debug then "the generated .c file at " ^ f_path
@@ -1072,30 +1183,50 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
     remove temp_log;
     (* A compiler can exit non-zero after writing part of its output. *)
     if library_owned then remove libname;
-    (* A header the compiler could not open is the toolchain's fault, and fails every kernel alike:
-       it propagates untyped rather than as a decline of this kernel (ahrefs/ocannl#1387). *)
-    if C_syntax.missing_include compiler_output then
-      failwith
-        (Printf.sprintf
-           "OCANNL cc backend: the compiler could not open a header (exit code %d); check the C \
-            compiler installation.\n\
-            Compilation command: %s\n\
-            Compiler output:\n\
-            %s"
-           _rc _cmdline compiler_output);
-    let detail =
-      compile_failure_detail ~exit_code:_rc ~source_note ~command:_cmdline ~compiler_output
-    in
-    raise
-      (Schedule_outcome.Cause_at
-         ( Schedule_outcome.Backend_compile,
-           Schedule_outcome.Backend_rejected
-             {
-               backend = name;
-               stage = "compiler";
-               severity = Schedule_outcome.Compiler_bug;
-               detail;
-             } )))
+    (* gh-ocannl-1350: before blaming the generated code, ask whether this toolchain configuration
+       compiles anything at all. *)
+    match toolchain_fault () with
+    | Some fault ->
+        raise
+          (Schedule_outcome.Cause_at
+             ( Schedule_outcome.Backend_compile,
+               Schedule_outcome.Backend_rejected
+                 {
+                   backend = name;
+                   stage = Schedule_outcome.toolchain_stage;
+                   severity = Schedule_outcome.Configuration;
+                   detail =
+                     toolchain_failure_detail fault ~exit_code:_rc ~command:_cmdline
+                       ~compiler_output;
+                 } ))
+    | None ->
+        (* A header the compiler could not open is the toolchain's fault, and fails every kernel
+           alike: it propagates untyped rather than as a decline of this kernel
+           (ahrefs/ocannl#1387). Asked only after the probe, which can name a setting that injects
+           the header (an [-include] in the flags); a header only the generated code includes is
+           this case. *)
+        if C_syntax.missing_include compiler_output then
+          failwith
+            (Printf.sprintf
+               "OCANNL cc backend: the compiler could not open a header (exit code %d); check the \
+                C compiler installation.\n\
+                Compilation command: %s\n\
+                Compiler output:\n\
+                %s"
+               _rc _cmdline compiler_output);
+        let detail =
+          compile_failure_detail ~exit_code:_rc ~source_note ~command:_cmdline ~compiler_output
+        in
+        raise
+          (Schedule_outcome.Cause_at
+             ( Schedule_outcome.Backend_compile,
+               Schedule_outcome.Backend_rejected
+                 {
+                   backend = name;
+                   stage = "compiler";
+                   severity = Schedule_outcome.Compiler_bug;
+                   detail;
+                 } )))
   else remove temp_log;
   (* All three post-compile host-boundary failures are typed, uncontainable link rejections. *)
   let reject_link stage detail =
@@ -1162,6 +1293,9 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
       in
       reject_link Schedule_outcome.dlopen_stage detail
   in
+  (* Loaded: a debug run's private source copy has served its purpose, the informational
+     [build_files/] copy being the one a reader looks at. *)
+  if retain_debug then remove f_path;
   let result = { lib; libname } in
   (* The kernel now executes from the mapping, not from the path. POSIX unlinks a mapped file's name
      and keeps the mapping alive; Windows refuses to delete a mapped DLL, and then the removal waits
@@ -1439,14 +1573,17 @@ let codegen_capabilities () =
 (* Under [output_debug_files_in_build_directory] the generated source lives at the predictable
    shared path [build_files/<name>.c], which a concurrently running process compiling a same-named
    kernel can rewrite while our C compiler reads it — macOS CI hit this as an "extraneous closing
-   brace" in a torn sum_serial.c (two tests, one base name). Compile from a private unique copy; the
-   [build_files/] copy stays purely informational. Without debug files, [open_build_file] already
-   returned a unique temp path — use it directly. *)
-let compilation_copy ~name (build_file : Utils.build_file_channel) filtered_code =
+   brace" in a torn sum_serial.c (two tests, one base name). Compile from a private copy, named
+   after this process and this compile beside the kept library ([Utils.owned_artifact_file]), so
+   that a failed compile can keep it as the exact source its report names, and the debug run leaves
+   nothing in the system temp directory (gh-ocannl-1335); the [build_files/] copy stays purely
+   informational. Without debug files, [open_build_file] already returned a unique temp path — use
+   it directly. *)
+let compilation_copy ~name ~run_id (build_file : Utils.build_file_channel) filtered_code =
   if Utils.settings.output_debug_files_in_build_directory then (
-    let tmp = Stdlib.Filename.temp_file (name ^ "_") ".c" in
-    Stdio.Out_channel.write_all tmp ~data:filtered_code;
-    tmp)
+    let copy = Utils.owned_artifact_file ~run_id ~extension:".c" name in
+    Stdio.Out_channel.write_all copy ~data:filtered_code;
+    copy)
   else build_file.f_path
 
 module Compile = C_syntax.Compile_driver (CC_syntax_config)
@@ -1455,7 +1592,13 @@ let compile_source ~name source =
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   Out_channel.output_string build_file.oc source;
   build_file.finalize ();
-  c_compile_and_load ~name ~f_path:(compilation_copy ~name build_file source)
+  (* The run id makes every library path unique within the process, even once the file is gone. A
+     dynamic loader (glibc, dyld, LoadLibrary) answers a [dlopen] of a path it already has mapped
+     with that mapping, without reading the file; the library is unlinked while still mapped and
+     [Dl.dlclose] need not unload it, so a later [temp_file] landing on the freed name would
+     otherwise run the earlier kernel. *)
+  let run_id = Utils.get_global_run_id () in
+  c_compile_and_load ~name ~run_id ~f_path:(compilation_copy ~name ~run_id build_file source)
 
 let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
   let result, kparams, name, _launch =

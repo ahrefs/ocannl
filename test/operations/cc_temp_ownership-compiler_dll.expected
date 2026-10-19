@@ -4,9 +4,10 @@ debug artifacts requested: no
 backend: cc
 the C compiler rejected the generated code: true
 the rejection says the source was removed exactly when debug files are not requested: true
+the rejection names a kept source outside the temp directory exactly under debug files: true
 the compiler log is removed: true
-the source is retained exactly when debug files are requested: true
-the temp directory retains the library exactly when debug files alone request it: true
+the temp directory gains no source: true
+the temp directory gains no library: true
 nothing else is added: true
 no file present before the compile is removed: true
 every unrelated sentinel keeps its content: true

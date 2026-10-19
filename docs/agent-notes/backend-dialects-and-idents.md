@@ -289,18 +289,23 @@ configuration.
   what ran -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for that
   disassembly rather than for the `build_files/` source, whose same-named copy is overwritten by the
   next candidate; the kept library is not, since its name carries the pid and the run id.
-- A cc compilation removes its temporary source, log and library on every path, success and
-  compiler rejection included, unless `output_debug_files_in_build_directory` (source and library)
-  or `output_dlls_in_build_directory` (library) asks for them (gh-ocannl-1197,
-  `test/operations/cc_temp_ownership`). Library output does not keep the library beside the source
-  the compiler read, which is a private temporary even under debug files: it writes
-  `build_files/<exe>/<kernel>_pid<P>_n<nonce>_run<N>.so` (`Utils.kept_library_file`,
-  gh-ocannl-1247), the pid because concurrent processes of one executable share that directory --
-  the OS id (`Utils.os_process_id`), never `Unix.getpid`, which on Windows answers a process-local
-  handle -- and the per-process random nonce because an OS id is not unique across PID namespaces.
-  For the same reason the startup cleanup spares a kept library whose process is still running,
-  and empties its directory without removing it: that process may be between choosing the path and
-  linking or loading it. Tests list them with
+- A cc compilation leaves nothing in the system temp directory on any path, success and compiler
+  rejection included (gh-ocannl-1197, `test/operations/cc_temp_ownership`): its temporary source,
+  log and library are removed, and what a setting asks for is kept in `build_files/<exe>/`
+  instead. Library output (`output_dlls_in_build_directory`) and debug files
+  (`output_debug_files_in_build_directory`) alike keep the library there, as
+  `<kernel>_pid<P>_n<nonce>_run<N>.so` (`Utils.kept_library_file`, gh-ocannl-1247, gh-ocannl-1335);
+  under debug files the compiler reads a private copy of the source under the same name with `.c`
+  (`Utils.owned_artifact_file`), removed once the library loads and kept on any failure as the
+  source the report names -- the informational `build_files/<exe>/<kernel>.c` can be rewritten
+  mid-compile by a concurrent same-named kernel. The pid, because concurrent processes of one
+  executable share that directory -- the OS id (`Utils.os_process_id`), never `Unix.getpid`, which
+  on Windows answers a process-local handle -- and the per-process random nonce because an OS id is
+  not unique across PID namespaces. The kernel name in such a name, and in the temporary source's,
+  is cut within `Utils.library_kernel_name_limit` bytes at a character boundary and suffixed with a
+  digest of the whole name, so two long names sharing their opening bytes stay apart
+  (`Utils.library_kernel_name`): a routine name has no length limit, a file-name component does,
+  and clang names its own temporaries after the source. Tests list kept libraries with
   `Test_utils.Generated.kept_libraries` (`test/operations/cc_kept_library`). The library is unlinked right after `dlopen`: the kernel
   runs from the mapping, which POSIX keeps alive past the unlink. Windows refuses to delete a
   mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it. OCaml
@@ -308,23 +313,53 @@ configuration.
   collected mid-run (autotune candidates, mostly) get their library removed; the libraries of
   routines alive at exit, and of every OpenMP kernel, stay past exit. So a temporary library's name
   records its owner too, `ocannl_cc_<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>` (the marker
-  keeps another program's same-shaped file in the shared directory out of the sweep; the kernel
-  name is cut to `Utils.temp_library_kernel_name_limit` bytes there, so a long routine name cannot
-  push the file name past a component limit) (`Utils.temp_library_prefix`/
+  keeps another program's same-shaped file in the shared directory out of the sweep)
+  (`Utils.temp_library_prefix`/
   `parse_temp_library_name`), and every process's startup (the `Utils` cleanup block, ungated) removes the temp directory's libraries whose owner is gone, with
   the same liveness test that spares the kept libraries, once they are older than
   `Utils.temp_library_sweep_min_age` (gh-ocannl-1268, `test/operations/cc_temp_library_sweep`,
   whose end-to-end leg is gated to Windows). The age guard is what makes an ungated sweep of a
   SHARED directory safe: liveness answers only within this PID namespace, and a container's
   process may even report this process's own id (two PID-1 entrypoints), but a library is at risk
-  only between its link and its `dlopen`. A library
-  retained by debug files keeps its owner-free name, so the sweep never takes it. Unlinking a
+  only between its link and its `dlopen`. Unlinking a
   still-mapped library frees its name, and a loader answers a `dlopen` of a path it has mapped with that mapping without reading the file, which is why every library path
   carries the process-unique run id: drop it and a later `temp_file` landing on the freed name runs
   the earlier kernel. Only a FAILED removal is retried (a path already gone counts as removed),
   because a freed name may already belong to another process. Profilers and crash symbolication
   that read a kernel's `.so` after the process (`perf report`, macOS crash reports) need
   `output_dlls_in_build_directory=true` too.
+- The startup cleanup of `build_files/<exe>/` and `log_files/<exe>/` cannot tell a running sibling's
+  ownerless artifacts (debug sources, logs) from a finished run's, so it asks a lock
+  (gh-ocannl-1335): a process takes a SHARED `Unix.lockf` on `<base>/<exe>.ocannl-lock` the first
+  time it names a path to write there (`Utils.build_file`, `Utils.diagn_log_file`, so in practice
+  every process holds the `log_files` one), for its lifetime -- one per lock file's absolute path,
+  so a process that changes directory holds each directory's -- and a starting process tries it
+  EXCLUSIVELY without waiting. Held means a sibling runs, and the cleanup then removes NOTHING: it
+  cannot tell the sibling's ownerless artifacts from a finished run's, and not even a gone-looking
+  owner-named one is safe, since the lock reaches across PID namespaces where liveness
+  (`Utils.process_alive`) does not; the stale ones go at the next startup that finds no sibling.
+  Without a sibling, the kept libraries of a RUNNING process (`Utils.parse_kept_library_name`; a
+  source copy is never read for an owner, since a routine may be NAMED owner-shaped) still stay, and the root is emptied, never
+  removed, since a sibling may hold a path inside it it has yet to write. A lock dies with its
+  process, which is why it is not a marker file. Two traps: POSIX drops all of a process's locks on
+  a file when ANY descriptor of it closes, so nothing else may open the lock file (it sits beside
+  the subdirectory, out of every listing; under the flat layout the cleanup skips it by its
+  suffix, and it is created 0666 so every account sharing the directory can lock it -- one that
+  cannot open it for writing reads it as held); and two dune rules running ONE executable share its subdirectory and so sweep each
+  other, which `cc_kept_library`'s rules serialize with a dune lock.
+
+- A failed cc kernel compile blames the generated code only after a trivial kernel compiles under
+  the same command, flags and link flags (gh-ocannl-1350, `Cc_backend.toolchain_fault`,
+  `test/operations/cc_toolchain_attribution`). When it does not, the failure is a
+  `Backend_rejected` at `Schedule_outcome.toolchain_stage` with severity `Configuration`:
+  uncontainable, since a toolchain that compiles nothing rejects every candidate alike, and
+  rendered as `Utils.User_error`, never with `C_syntax.codegen_bug_claim`, and
+  `C_syntax.attribute_routine_name_failure` passes it through untouched (a configuration-wide
+  `-Werror` echoes the routine's declaration, which would otherwise read as a name collision). It names the setting
+  whose flag fails on its own (`Cc_backend.kernel_compiler_flag_settings` pairs each flag with its
+  setting), the compiler command when even the bare command fails, and every flag setting when
+  only their combination does. Probing rather than matching compiler stderr keeps it independent of
+  the compiler's wording; it runs only on a failure, once per process per configuration.
 
 - Repeated inner CPU `Grid` loops require at least 16,384 scalar updates per native dispatch
   (gh-ocannl-933, `C_syntax.grid_update_count`). The estimate multiplies only the Grid and its

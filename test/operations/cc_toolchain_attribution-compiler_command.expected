@@ -1,0 +1,13 @@
+mode: compiler_command
+a configuration fault echoing the routine's declaration is not taken for its name's failure: true
+the same report under Compiler_bug is attributed to the routine name: true
+backend: cc
+the compile fails with a typed cc rejection: true
+the failure ends a search: it is fatal, not a candidate decline: true
+the stage is the toolchain's: true
+the severity is Configuration: true
+the detail names the broken setting: true
+the detail names no other setting: true
+the detail carries the probe's compiler output: true
+the detail does not call it a bug in OCANNL: true
+Context.compile raises a user error naming the setting: true

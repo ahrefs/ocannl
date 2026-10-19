@@ -318,6 +318,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cc_dlopen_cause_debug
   test/operations/dune                     @runtest-cc_dlopen_cause_dll
   test/operations/dune                     @runtest-cc_kept_library
+  test/operations/dune                     @runtest-cc_kept_library-debug
   test/operations/dune                     @runtest-cc_post_compile_cause-artifact_missing
   test/operations/dune                     @runtest-cc_post_compile_cause-artifact_missing_debug
   test/operations/dune                     @runtest-cc_post_compile_cause-artifact_missing_dll
@@ -331,6 +332,10 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cc_temp_ownership-success
   test/operations/dune                     @runtest-cc_temp_ownership-success_debug
   test/operations/dune                     @runtest-cc_temp_ownership-success_dll
+  test/operations/dune                     @runtest-cc_toolchain_attribution-arch_flags
+  test/operations/dune                     @runtest-cc_toolchain_attribution-codegen
+  test/operations/dune                     @runtest-cc_toolchain_attribution-compiler_command
+  test/operations/dune                     @runtest-cc_toolchain_attribution-include_flag
   test/operations/dune                     @runtest-census_total_ratchet
   test/operations/dune                     @runtest-changelog_unreleased_scan
   test/operations/dune                     @runtest-codegen_text_inventory

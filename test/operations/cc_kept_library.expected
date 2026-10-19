@@ -1,10 +1,19 @@
-library output is requested: true
+a library is kept: library output or debug files are requested: true
+a finished process of this executable left a debug source: true
+a process starting while no other runs ran: true
+its startup removed the finished process's debug source and a gone process's library: true
 backend: cc
 the routine computes 3x + 1 from its kept library: true
+a routine with a 240-byte name computes 3x + 1 from its kept library: true
+the long-named routine's library is kept, under its cut name: true
+the long-named routine's library name fits a file-name component: true
+no library is found for another routine sharing the long name's opening bytes: true
+a kept library's name carries a whole-character prefix and a digest within the limit: true
 this process is seen as running: true
 the stale library's process is seen as gone: true
 the child process compiled and ran the same routine name: true
 this process's library stays in build_files through the child's startup cleanup: true
 the child kept its own library, under a name apart from this process's: true
-the child's startup cleanup removed the library of a process no longer running: true
-each kept library holds the routine's symbol: true
+the child's startup kept the library naming a gone process too, while this process runs: true
+each compiled library holds the routine's symbol: true
+this process's log stays through the child's startup cleanup: true

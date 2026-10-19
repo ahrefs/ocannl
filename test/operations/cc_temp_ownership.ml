@@ -1,17 +1,15 @@
 (* gh-ocannl-1197: which temporary files one cc compilation leaves in the system temp directory, on
    a successful compile and on a compile the C compiler rejects.
 
-   A compilation owns three temporaries there: the source it hands the compiler (written by
-   [Utils.open_build_file], or under debug files a private copy beside the informational
-   [build_files/] one), the compiler log, and the library the compiler writes. The log was always
-   removed; this test pins that the source and the library are too, unless a setting asks for them:
-   [output_debug_files_in_build_directory] retains the source and the library on every path, and
-   [output_dlls_in_build_directory] retains the library. The [build_files/] copy is a debug output,
-   never a temporary, and stays.
-
-   Under [output_dlls_in_build_directory] the library is not a temporary either: it is kept in
-   [build_files/] (gh-ocannl-1247, [test/operations/cc_kept_library]), so the temp directory gains a
-   library only when debug files alone ask for one.
+   A compilation owns up to three temporaries there: the source it hands the compiler (written by
+   [Utils.open_build_file]), the compiler log, and the library the compiler writes. The log was
+   always removed; this test pins that the source and the library are too, on every path. A setting
+   that asks for either keeps it in [build_files/], never here: under
+   [output_debug_files_in_build_directory] the compiler reads a private copy of the source there,
+   which a failed compile keeps as the source its report names (gh-ocannl-1335), and under that
+   setting or [output_dlls_in_build_directory] the library is kept there too (gh-ocannl-1247,
+   gh-ocannl-1335, [test/operations/cc_kept_library]). So no mode leaves anything in the temp
+   directory.
 
    The test runs in a private temp directory holding an unrelated sentinel per artifact suffix, and
    counts what a compile adds there. The success mode then RUNS the routine and checks its values:
@@ -105,18 +103,29 @@ let run directory =
     p "the rejection says the source was removed exactly when debug files are not requested"
       (Option.exists rejection ~f:(fun (_, detail) ->
            Bool.equal (not debug)
-             (String.is_substring detail ~substring:"removed its temporary copy"))));
+             (String.is_substring detail ~substring:"removed its temporary copy")));
+    (* The source a debug compile's report names is the very file the compiler read, kept. *)
+    let named_source =
+      Option.bind rejection ~f:(fun (_, detail) ->
+          List.find_map (String.split_lines detail) ~f:(fun line ->
+              Option.map (String.substr_index line ~pattern:"the generated .c file at ")
+                ~f:(fun i ->
+                  String.drop_prefix line (i + String.length "the generated .c file at "))))
+    in
+    Stdio.eprintf "source named by the rejection (not part of the golden): %s\n%!"
+      (Option.value named_source ~default:"(none)");
+    p "the rejection names a kept source outside the temp directory exactly under debug files"
+      (Bool.equal debug
+         (Option.exists named_source ~f:(fun path ->
+              Stdlib.Sys.file_exists path && not (String.is_prefix path ~prefix:directory)))));
   p "the compiler log is removed" (logs = 0);
-  p "the source is retained exactly when debug files are requested"
-    (sources = if debug then 1 else 0);
-  (* A rejected compile produced no library; a successful one's is retained here exactly when debug
-     files ask for it and library output does not take it to [build_files/]. *)
-  let expected_libraries = if success && debug && not dll_output then 1 else 0 in
+  p "the temp directory gains no source" (sources = 0);
+  (* A rejected compile produced no library; a successful one's is removed once loaded, unless a
+     setting keeps it in [build_files/]. *)
   gated ~aggregation:`Environment
-    ~when_:(not (success && Sys.win32))
-    ~on:"Windows, which refuses to delete a mapped DLL"
-    "the temp directory retains the library exactly when debug files alone request it"
-    (libraries = expected_libraries);
+    ~when_:(not (success && Sys.win32 && not (debug || dll_output)))
+    ~on:"Windows, which refuses to delete a mapped DLL" "the temp directory gains no library"
+    (libraries = 0);
   p "nothing else is added" (List.length added = sources + libraries + logs);
   p_empty "no file present before the compile is removed" ~over:before removed;
   p_all "every unrelated sentinel keeps its content" sentinels ~f:(fun f ->

@@ -1746,18 +1746,89 @@ let ensure_artifacts_dir base subdir =
      if Option.is_some subdir then try Stdlib.Sys.mkdir dir 0o777 with Stdlib.Sys_error _ -> ()));
   dir
 
+external os_process_id : unit -> int = "ocannl_os_process_id"
+(** The operating system's id of this process. Not [Unix.getpid], which on Windows answers a
+    process-local handle that need not differ between two processes. *)
+
+(* Concurrently running processes of one executable share its artifact subdirectories, and each
+   process's startup empties them (the cleanup block below). So a process that writes into one first
+   takes a SHARED advisory lock on a lock file beside it, held until the process ends, and the
+   startup cleanup tries the lock EXCLUSIVELY, without waiting, for its own duration. When that
+   fails a sibling is running, and the cleanup removes only the artifacts whose names record an
+   owner that is gone (gh-ocannl-1335). The operating system releases a lock when its process ends,
+   killed or not, so a crashed sibling never holds a later cleanup back -- which is why this is a
+   lock and not a marker file.
+
+   The lock file sits beside the subdirectory, [build_files/<prefix>.ocannl-lock], not in it, so
+   nothing that lists or empties the subdirectory meets it; under the flat layout it is
+   [build_files/.ocannl-lock], which the cleanup skips by its suffix. POSIX drops a process's lock
+   on a file when ANY descriptor of that file is closed, so the descriptor stays open for the life
+   of the process and nothing else opens the file. *)
+module Artifacts_lock = struct
+  let suffix = ".ocannl-lock"
+
+  (* Absolute, so that a process that changes its working directory between writes holds the lock of
+     each directory it writes in, not only the first one's. *)
+  let path base =
+    let path =
+      match artifacts_subdir () with
+      | Some p -> filename_concat base (p ^ suffix)
+      | None -> filename_concat base suffix
+    in
+    if Stdlib.Filename.is_relative path then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) path
+    else path
+
+  (* World-writable before the umask: every account that writes artifacts here needs to open it. *)
+  let open_ base = Unix.openfile (path base) [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC ] 0o666
+
+  (* Best effort: where the lock cannot be taken (a file system without locks) the process goes
+     unprotected, as every process did before gh-ocannl-1335. Blocking: a starting sibling holds the
+     lock exclusively only while it empties the directory, and what this process is about to write
+     there must not land in the middle of that. The descriptors are kept, not just the fact: an
+     unreachable descriptor would be free to close. *)
+  let hold =
+    let mutex = Stdlib.Mutex.create () in
+    let holds : (string, Unix.file_descr option) Hashtbl.t = Hashtbl.create (module String) in
+    fun base ->
+      (* With this process's id: POSIX does not carry record locks across [fork], so a forked child,
+         inheriting the table, takes the lock afresh. *)
+      let key = Printf.sprintf "%d:%s" (os_process_id ()) (path base) in
+      Stdlib.Mutex.protect mutex (fun () ->
+          if not (Hashtbl.mem holds key) then
+            let fd =
+              try
+                let fd =
+                  (* A shared lock needs only read access: an account that cannot write another's
+                     lock file still holds it. *)
+                  try open_ base
+                  with Unix.Unix_error ((Unix.EACCES | Unix.EPERM), _, _) ->
+                    Unix.openfile (path base) [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+                in
+                try
+                  Unix.lockf fd Unix.F_RLOCK 0;
+                  Some fd
+                with Unix.Unix_error _ ->
+                  Unix.close fd;
+                  None
+              with Unix.Unix_error _ -> None
+            in
+            Hashtbl.set holds ~key ~data:fd)
+end
+
 (** The directory generated-code debug files are written to (created if missing):
     [build_files/<prefix>/], where the prefix defaults to the executable's base name. *)
 let build_files_dir () = ensure_artifacts_dir "build_files" (artifacts_subdir ())
 
-let build_file fname = filename_concat (build_files_dir ()) @@ clean_filename fname
+(** [build_file fname] is the path of the artifact [fname] in {!build_files_dir}. Asking for it
+    declares that this process writes there: from then on, the startup cleanup of a concurrently
+    starting process of the same executable leaves this process's artifacts alone. *)
+let build_file fname =
+  let dir = build_files_dir () in
+  Artifacts_lock.hold "build_files";
+  filename_concat dir @@ clean_filename fname
 
 (** The file extension of a dynamically loaded library on this platform. *)
 let dynamic_library_extension = if Sys.win32 then ".dll" else ".so"
-
-external os_process_id : unit -> int = "ocannl_os_process_id"
-(** The operating system's id of this process. Not [Unix.getpid], which on Windows answers a
-    process-local handle that need not differ between two processes. *)
 
 external process_alive : int -> bool = "ocannl_process_alive"
 (** Whether a process with the given OS id is running now; one that exists but cannot be queried
@@ -1776,16 +1847,43 @@ let process_nonce =
   in
   fun () -> Lazy.force nonce
 
-(** [kept_library_name ~pid ~nonce ~run_id base_name] is the file name of the library that the
-    process [pid] (with {!process_nonce} [nonce]) keeps in {!build_files_dir} for the kernel
-    [base_name]'s compile [run_id] under [output_dlls_in_build_directory] (gh-ocannl-1247). The pid
-    and the nonce keep apart the processes that share that directory -- concurrently running ones of
-    one executable, and those in other PID namespaces -- and the pid is what the startup cleanup
-    asks about; the run id keeps the compiles of one process apart. {!parse_kept_library_name}
-    inverts it. *)
+(** The most bytes of a kernel's name that the file name of an artifact recording its owner carries:
+    a kept library's ({!kept_library_name}), a temporary library's ({!temp_library_prefix}), the
+    private source copy a debug compile keeps when it fails. The kernel name is informational there
+    (the owner fields and the run id make the name unique), and a routine's name has no length
+    limit, while a file-name component has one (255 bytes on the common file systems). *)
+let library_kernel_name_limit = 64
+
+(** [library_kernel_name base_name] is the kernel name such a file name carries:
+    {!clean_filename}[ base_name] when it fits in {!library_kernel_name_limit} bytes; otherwise a
+    prefix of it cut at a UTF-8 character boundary, then ['-'] and 8 hex digits of the whole name's
+    digest, within the same limit. The digest keeps apart two long names sharing their opening
+    bytes, so that a reader matching artifacts by kernel name never takes one routine's for
+    another's. *)
+let library_kernel_name base_name =
+  let name = clean_filename base_name in
+  if String.length name <= library_kernel_name_limit then name
+  else
+    let digest = String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string name)) 8 in
+    (* Back off from a UTF-8 continuation byte, so no character is split. *)
+    let rec cut i = if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then cut (i - 1) else i in
+    String.prefix name (cut (library_kernel_name_limit - 1 - String.length digest)) ^ "-" ^ digest
+
+(** [owned_artifact_name ~pid ~nonce ~run_id ~extension base_name] is the file name of an artifact
+    of the kernel [base_name]'s compile [run_id] that the process [pid] (with {!process_nonce}
+    [nonce]) keeps in {!build_files_dir}. The pid and the nonce keep apart the processes that share
+    that directory -- concurrently running ones of one executable, and those in other PID namespaces
+    -- and the pid is what the startup cleanup asks about; the run id keeps the compiles of one
+    process apart. *)
+let owned_artifact_name ~pid ~nonce ~run_id ~extension base_name =
+  Printf.sprintf "%s_pid%d_n%s_run%d%s" (library_kernel_name base_name) pid nonce run_id extension
+
+(** [kept_library_name ~pid ~nonce ~run_id base_name] is the {!owned_artifact_name} of the library
+    the process keeps under [output_dlls_in_build_directory] (gh-ocannl-1247) or
+    [output_debug_files_in_build_directory] (gh-ocannl-1335). {!parse_kept_library_name} inverts it.
+*)
 let kept_library_name ~pid ~nonce ~run_id base_name =
-  Printf.sprintf "%s_pid%d_n%s_run%d%s" (clean_filename base_name) pid nonce run_id
-    dynamic_library_extension
+  owned_artifact_name ~pid ~nonce ~run_id ~extension:dynamic_library_extension base_name
 
 type kept_library = {
   kernel_name : string;
@@ -1807,24 +1905,12 @@ type kept_library = {
 
     The temp directory is shared with every other program, so the name opens with
     {!temp_library_marker}, which the sweep requires: an owner-shaped name another program chose is
-    never taken for OCANNL's. The kernel name is informational there (the owner fields and the run
-    id make the name unique), so it is cut to {!temp_library_kernel_name_limit} bytes, at a UTF-8
-    character boundary, to keep the whole name within a file-name component's limit however long the
-    routine's name is. *)
+    never taken for OCANNL's. The kernel name is {!library_kernel_name}'s. *)
 let temp_library_marker = "ocannl_cc_"
 
-let temp_library_kernel_name_limit = 64
-
 let temp_library_prefix ~pid ~nonce ~run_id base_name =
-  let name = clean_filename base_name in
-  let name =
-    if String.length name <= temp_library_kernel_name_limit then name
-    else
-      (* Back off from a UTF-8 continuation byte, so no character is split. *)
-      let rec cut i = if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then cut (i - 1) else i in
-      String.prefix name (cut temp_library_kernel_name_limit)
-  in
-  Printf.sprintf "%s%s_pid%d_n%s_run_id_%d_" temp_library_marker name pid nonce run_id
+  Printf.sprintf "%s%s_pid%d_n%s_run_id_%d_" temp_library_marker (library_kernel_name base_name) pid
+    nonce run_id
 
 (** How old, in seconds since its last write, a temporary library of a process that is gone must be
     before a startup removes it (gh-ocannl-1268). Liveness alone cannot protect a library whose
@@ -1836,9 +1922,9 @@ let temp_library_sweep_min_age = 3600.
 
 (** [parse_kept_library_name fname] inverts {!kept_library_name} on a file name, and
     [parse_temp_library_name fname] reads the owner and the compile from the name of a temporary
-    library that {!temp_library_prefix} named; each is [None] for any other file name. That includes
-    the library [output_debug_files_in_build_directory] retains in the temp directory, whose name
-    records no owner since it is kept on request rather than left behind. The two shapes are
+    library that {!temp_library_prefix} named; each is [None] for any other file name. Only
+    libraries are read so, never an owned source copy: the informational debug source of a routine
+    whose NAME is owner-shaped would otherwise pass for another process's. The two shapes are
     disjoint: a kept name ends in [_run<N>], a temporary one in [temp_file]'s hex suffix. Fields are
     read from the right, so a kernel name may itself contain underscores and field-like words. *)
 let parse_kept_library_name, parse_temp_library_name =
@@ -1854,7 +1940,7 @@ let parse_kept_library_name, parse_temp_library_name =
     else None
   in
   let field ~prefix ~f s = Option.bind (String.chop_prefix s ~prefix) ~f in
-  (* [<kernel>_pid<P>_n<nonce>], the owner part both names share. *)
+  (* [<kernel>_pid<P>_n<nonce>], the owner part every name shares. *)
   let owner ~library_run_id owner =
     match String.rsplit2 owner ~on:'_' with
     | None -> None
@@ -1867,15 +1953,17 @@ let parse_kept_library_name, parse_temp_library_name =
             | _ -> None)
         | Some _ | None -> None)
   in
-  let stem fname = String.chop_suffix fname ~suffix:dynamic_library_extension in
+  let owned_stem stem =
+    Option.bind (String.rsplit2 stem ~on:'_') ~f:(fun (rest, run) ->
+        Option.bind (field ~prefix:"run" ~f:number run) ~f:(fun library_run_id ->
+            owner ~library_run_id rest))
+  in
   let kept fname : kept_library option =
-    Option.bind (stem fname) ~f:(fun stem ->
-        Option.bind (String.rsplit2 stem ~on:'_') ~f:(fun (rest, run) ->
-            Option.bind (field ~prefix:"run" ~f:number run) ~f:(fun library_run_id ->
-                owner ~library_run_id rest)))
+    Option.bind (String.chop_suffix fname ~suffix:dynamic_library_extension) ~f:owned_stem
   in
   let temp fname : kept_library option =
-    Option.bind (String.chop_prefix fname ~prefix:temp_library_marker) ~f:stem
+    Option.bind (String.chop_prefix fname ~prefix:temp_library_marker) ~f:(fun name ->
+        String.chop_suffix name ~suffix:dynamic_library_extension)
     |> Option.bind ~f:(fun stem ->
         Option.bind (String.rsplit2 stem ~on:'_') ~f:(fun (rest, random) ->
             Option.bind (hex random) ~f:(fun _ ->
@@ -1887,18 +1975,30 @@ let parse_kept_library_name, parse_temp_library_name =
   in
   (kept, temp)
 
+(** [owned_artifact_file ~run_id ~extension base_name] is where this process keeps an artifact of
+    [base_name]'s compile number [run_id]: beside [base_name]'s debug source, under the
+    {!owned_artifact_name} no other compile, in this process or a concurrent one, uses. *)
+let owned_artifact_file ~run_id ~extension base_name =
+  build_file
+    (owned_artifact_name ~pid:(os_process_id ()) ~nonce:(process_nonce ()) ~run_id ~extension
+       base_name)
+
 (** [kept_library_file ~run_id base_name] is where this process keeps the library of [base_name]'s
-    compile number [run_id] under [output_dlls_in_build_directory]: beside [base_name]'s debug
-    source, under a name no other compile, in this process or a concurrent one, uses. *)
+    compile number [run_id] under [output_dlls_in_build_directory] or
+    [output_debug_files_in_build_directory]. *)
 let kept_library_file ~run_id base_name =
-  filename_concat (build_files_dir ())
-    (kept_library_name ~pid:(os_process_id ()) ~nonce:(process_nonce ()) ~run_id base_name)
+  owned_artifact_file ~run_id ~extension:dynamic_library_extension base_name
 
 (** The directory diagnostic and routine-debug logs are written to (created if missing):
     [log_files/<prefix>/], sharing the prefix resolution of {!build_files_dir}. *)
 let log_files_dir () = ensure_artifacts_dir "log_files" (artifacts_subdir ())
 
-let diagn_log_file fname = filename_concat (log_files_dir ()) @@ clean_filename fname
+(** [diagn_log_file fname] is the path of the log [fname] in {!log_files_dir}; like {!build_file},
+    asking for it protects this process's logs from a concurrently starting sibling's cleanup. *)
+let diagn_log_file fname =
+  let dir = log_files_dir () in
+  Artifacts_lock.hold "log_files";
+  filename_concat dir @@ clean_filename fname
 
 let () =
   (* Cleanup needs to happen before get_local_debug_runtime (or any other code is run). *)
@@ -1907,21 +2007,22 @@ let () =
      the tree would cause recursion to delete unrelated files. We unlink the link
      itself instead of descending. *)
   let lstat_kind path = try Some (Unix.lstat path).st_kind with Unix.Unix_error _ -> None in
-  (* A library kept by another process that is still running (gh-ocannl-1247): two processes of one
-     executable share its subdirectory, and the running one may be between linking such a library
-     and loading it, or a profiler may still need it. A library whose process is gone is stale like
-     any other artifact. *)
+  (* An artifact whose name records its owner (a kept library, gh-ocannl-1247) goes by that owner's
+     liveness: another process that is still running may be between choosing the path and linking or
+     loading it, or a profiler may still need it. At startup, one under this process's own OS id was
+     left by a predecessor that had the id. *)
   let library_owner_running { owner_pid; _ } =
     owner_pid <> os_process_id () && process_alive owner_pid
   in
-  let live_foreign_library fname =
+  let owner_running fname =
     Option.exists (parse_kept_library_name fname) ~f:library_owner_running
   in
-  (* Answers whether [dirname] is gone: a directory keeping a live process's library stays. The
-     cleanup's own root is emptied but kept ([~keep_root]): a concurrent process of the same
-     executable may already hold a path inside it that it has yet to write -- a kept library its
-     compiler is about to link (gh-ocannl-1247), a debug source -- and removing the directory would
-     fail that write. *)
+  (* What the cleanup keeps: the lock files, and the kept libraries of a running owner. *)
+  let keep fname = String.is_suffix fname ~suffix:Artifacts_lock.suffix || owner_running fname in
+  (* Answers whether [dirname] is gone: a directory keeping something stays. The cleanup's own root
+     is emptied but kept ([~keep_root]): a concurrent process of the same executable may already
+     hold a path inside it that it has yet to write -- a kept library its compiler is about to link
+     (gh-ocannl-1247), a debug source -- and removing the directory would fail that write. *)
   let rec remove_dir_if_exists ?(keep_root = false) dirname =
     match lstat_kind dirname with
     | None -> true
@@ -1932,7 +2033,7 @@ let () =
                 let path = Stdlib.Filename.concat dirname fname in
                 match lstat_kind path with
                 | Some Unix.S_DIR -> remove_dir_if_exists path && emptied
-                | Some Unix.S_REG when live_foreign_library fname -> false
+                | Some Unix.S_REG when keep fname -> false
                 | Some _ | None -> (
                     (* Regular file, symlink (to file or dir), socket, etc.: unlink the entry, do
                        not follow. *)
@@ -1956,17 +2057,60 @@ let () =
             (Exn.to_string exn);
           false)
   in
+  (* Empties [root] under the exclusive side of [base]'s artifact lock, taken without waiting. A
+     lock that is held means a running sibling, and then nothing is removed (gh-ocannl-1335): the
+     cleanup cannot tell the sibling's ownerless artifacts -- debug sources, logs -- from a finished
+     run's, and not even an owner-named artifact whose owner looks gone is safe, since the lock
+     reaches across PID namespaces (containers sharing the directory) where liveness does not. The
+     stale ones go at the next startup that finds no sibling. A lock that cannot be taken at all --
+     no lock file can be created, or the file system has no locks -- leaves the cleanup as it was
+     before: owner-named artifacts of running owners stay, everything else goes. *)
+  let remove_root ~base root =
+    (* Tried whenever [base] is a directory, [root] or not: a root absent now may be created, and
+       written into under its lock, by a sibling before the removal below reads it. *)
+    let lock =
+      match lstat_kind base with
+      | None ->
+          (* Nothing to remove; whatever appears here from now on is a sibling's. *)
+          `Absent
+      | Some Unix.S_DIR -> (
+          match Artifacts_lock.open_ base with
+          | exception Unix.Unix_error ((Unix.EACCES | Unix.EPERM), _, _) ->
+              (* A lock file another account created, which this one cannot open for writing:
+                 whoever shares the directory may hold it, so take it as held. *)
+              `Held
+          | exception Unix.Unix_error _ -> `Unlockable
+          | fd -> (
+              match Unix.lockf fd Unix.F_TLOCK 0 with
+              | () -> `Exclusive fd
+              | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EACCES | Unix.EWOULDBLOCK), _, _) ->
+                  Unix.close fd;
+                  `Held
+              | exception Unix.Unix_error _ ->
+                  Unix.close fd;
+                  `Unlockable))
+      | Some _ -> `Unlockable
+    in
+    Exn.protect
+      ~f:(fun () ->
+        match lock with
+        | `Held | `Absent -> ()
+        | `Exclusive _ | `Unlockable -> ignore (remove_dir_if_exists ~keep_root:true root : bool))
+      ~finally:(fun () ->
+        match lock with
+        | `Exclusive fd -> ( try Unix.close fd with Unix.Unix_error _ -> ())
+        | `Held | `Absent | `Unlockable -> ())
+  in
   (* Cleanup is scoped to this process's own subdirectory (see [artifacts_subdir]), so a starting
      test cannot delete the in-flight artifacts of a concurrently running one. If the artifact root
      itself is a symlink, skip the scoped cleanup rather than follow it: appending the subdirectory
      would resolve through the link, deleting files outside the working tree. *)
   let remove_scoped_dir base =
     match artifacts_subdir () with
-    | None -> ignore (remove_dir_if_exists ~keep_root:true base : bool)
+    | None -> remove_root ~base base
     | Some p -> (
         match lstat_kind base with
-        | Some Unix.S_DIR ->
-            ignore (remove_dir_if_exists ~keep_root:true (filename_concat base p) : bool)
+        | Some Unix.S_DIR -> remove_root ~base (filename_concat base p)
         | Some _ | None -> ())
   in
   let clean_up_log_files_on_startup =
@@ -2757,7 +2901,11 @@ type build_file_channel = { f_path : string; oc : Stdlib.out_channel; finalize :
 let open_build_file ~base_name ~extension : build_file_channel =
   let f_path =
     if settings.output_debug_files_in_build_directory then build_file @@ base_name ^ extension
-    else Stdlib.Filename.temp_file (base_name ^ "_") extension
+    else
+      (* The kernel name cut as an owned artifact's is: a routine's name has no length limit, and a
+         compiler names its own temporaries after the source, so an uncut name fails the compile
+         with "File name too long" (gh-ocannl-1335). *)
+      Stdlib.Filename.temp_file (library_kernel_name base_name ^ "_") extension
   in
   (* (try Stdlib.Sys.remove f_path with _ -> ()); *)
   let oc = Out_channel.open_text f_path in

@@ -13,8 +13,8 @@
    The parent plants, in a private temp directory, the temporary library of a process that is gone
    (an OS id no process can have), one of its own (a running process) -- both aged past the minimum
    age -- a fresh library of the gone process, an aged one of it named after a routine whose name is
-   too long for a file name, a library retained by debug files (whose name records no owner), a file
-   of the same shape as the first but without OCANNL's marker (another program's), and an unrelated
+   too long for a file name, a library whose run-id-bearing name records no owner, a file of the
+   same shape as the first but without OCANNL's marker (another program's), and an unrelated
    library. It then starts a child with that directory as its temp directory; the child compiles and
    runs a routine. The child's startup must remove exactly the first. The child's own library is
    still loaded at its exit: on POSIX the compile already unlinked it, on Windows it stays; the
@@ -81,7 +81,7 @@ let parent () =
   in
   (* A routine name past every file-name component limit (255 bytes), of two-byte characters placed
      so that the kernel-name cut falls inside one. *)
-  let long_routine = "kernel_" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
+  let long_routine = "kernel" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
   let departed_long =
     plant_temp_library ~routine:long_routine ~pid:departed_pid ~nonce:"0badf00d" ()
   in
@@ -90,23 +90,28 @@ let parent () =
   let foreign = String.chop_prefix_exn departed ~prefix:Utils.temp_library_marker in
   Stdio.Out_channel.write_all (Stdlib.Filename.concat dir foreign) ~data:foreign;
   List.iter [ departed; running; departed_long; foreign ] ~f:age;
-  (* The name shape of a library that [output_debug_files_in_build_directory] retains: the stem of
-     the source's private copy, then the run id and [temp_file]'s random suffix. *)
-  let retained = routine ^ "_1a2b3c_run_id_1_4d5e6f" ^ library_extension in
+  (* A name with the run id and [temp_file]'s random suffix but neither the marker nor the owner
+     fields: nothing says whose it is, so the sweep must leave it. *)
+  let ownerless = routine ^ "_1a2b3c_run_id_1_4d5e6f" ^ library_extension in
   let unrelated = "unrelated" ^ library_extension in
-  List.iter [ retained; unrelated ] ~f:(fun f ->
+  List.iter [ ownerless; unrelated ] ~f:(fun f ->
       Stdio.Out_channel.write_all (Stdlib.Filename.concat dir f) ~data:f);
   let owner_of name = Utils.parse_temp_library_name name in
   p_all "the planted temporary libraries name their owners"
     [ departed; departed_fresh; running; departed_long ] ~f:(fun f -> Option.is_some (owner_of f));
-  p_none "the retained, the unmarked and the unrelated library name no owner"
-    [ retained; foreign; unrelated ] ~f:(fun f -> Option.is_some (owner_of f));
-  p "a long routine name is cut to a whole-character prefix within the kernel-name limit"
+  p_none "the ownerless, the unmarked and the unrelated library name no owner"
+    [ ownerless; foreign; unrelated ] ~f:(fun f -> Option.is_some (owner_of f));
+  p "a long routine name is cut to a whole-character prefix and a digest within the limit"
     (Option.exists (owner_of departed_long) ~f:(fun { Utils.kernel_name; _ } ->
-         String.length kernel_name <= Utils.temp_library_kernel_name_limit
-         && String.length kernel_name > Utils.temp_library_kernel_name_limit - 2
-         && String.is_prefix long_routine ~prefix:kernel_name
-         && Stdlib.String.is_valid_utf_8 kernel_name));
+         String.length kernel_name <= Utils.library_kernel_name_limit
+         && Stdlib.String.is_valid_utf_8 kernel_name
+         &&
+         match String.rsplit2 kernel_name ~on:'-' with
+         | Some (prefix, digest) ->
+             String.length digest = 8
+             && String.length prefix >= Utils.library_kernel_name_limit - 10
+             && String.is_prefix long_routine ~prefix
+         | None -> false));
   p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
   p "the departed library's process is seen as gone" (not (Utils.process_alive departed_pid));
   let exe = Stdlib.Sys.executable_name in
@@ -134,7 +139,7 @@ let parent () =
     match Unix.waitpid [] pid with _, Unix.WEXITED 0 -> true | _ -> false
   in
   let planted =
-    [ departed; departed_fresh; running; departed_long; retained; foreign; unrelated ]
+    [ departed; departed_fresh; running; departed_long; ownerless; foreign; unrelated ]
   in
   Exn.protect
     ~finally:(fun () ->
@@ -151,8 +156,8 @@ let parent () =
       p "the child's startup kept the temporary library of a running process" (present running);
       p "the child's startup kept a gone process's library written too recently to be past loading"
         (present departed_fresh);
-      p_all "the child's startup left the retained, the unmarked and the unrelated library alone"
-        [ retained; foreign; unrelated ] ~f:present;
+      p_all "the child's startup left the ownerless, the unmarked and the unrelated library alone"
+        [ ownerless; foreign; unrelated ] ~f:present;
       let first_child_left =
         List.filter after_first ~f:(fun f ->
             (not (List.mem planted f ~equal:String.equal)) && Option.is_some (owner_of f))

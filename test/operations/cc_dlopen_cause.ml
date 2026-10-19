@@ -135,16 +135,13 @@ let run () =
   let added =
     List.filter !artifacts ~f:(fun path -> not (List.mem before path ~equal:String.equal))
   in
-  let sources = List.filter added ~f:(String.is_suffix ~suffix:".c") in
-  let libraries = List.filter added ~f:(String.is_suffix ~suffix:".so") in
-  (* Library output keeps the library in [build_files/], not here (gh-ocannl-1247). *)
-  claim "the rejected compile retains exactly its requested temporary artifacts"
-    ((List.length sources = if debug then 1 else 0)
-    && (List.length libraries
-       =
-       if debug && (not dll_output) && not (String.equal expected_stage "artifact_missing") then 1
-       else 0)
-    && List.length added = List.length sources + List.length libraries);
+  (* Library output and debug files keep what they ask for in [build_files/], not here
+     (gh-ocannl-1247, gh-ocannl-1335). *)
+  Stdio.eprintf "added to the temp directory (not part of the golden): %s\n%!"
+    (String.concat ~sep:" " added);
+  gated_all ~aggregation:`Environment ~when_:(not Sys.win32) ~on:skip_reason
+    "every file in the temp directory after the rejected compile was there before it" !artifacts
+    ~f:(fun path -> List.mem before path ~equal:String.equal);
   claim "the unrelated temporary file is preserved"
     (String.equal
        (Stdio.In_channel.read_all (Stdlib.Filename.concat directory "unrelated.so"))

@@ -50,7 +50,15 @@ type resource =
   | Device_memory
 [@@deriving sexp_of, compare, equal]
 
-type severity = Expected | Compiler_bug [@@deriving sexp_of, compare, equal]
+type severity =
+  | Expected
+  | Compiler_bug
+  | Configuration
+      (** The toolchain configuration rejects any code, not this code (gh-ocannl-1350): an explicit
+          compiler setting the compiler does not accept, a compiler command that names no compiler,
+          a broken local toolchain. A user error, so {!exception_of_cause} renders it as
+          [Utils.User_error]. *)
+[@@deriving sexp_of, compare, equal]
 
 type execution_effect = No_device_writes | Writes_may_have_occurred
 [@@deriving sexp_of, compare, equal]
@@ -107,6 +115,10 @@ val artifact_missing_stage : string
 val codesign_stage : string
 (** The requested host signing step rejected the compiled library. *)
 
+val toolchain_stage : string
+(** The stage of a {!Configuration} rejection at [Backend_compile]: the kernel failed to compile,
+    and so did a trivial kernel under the same command and flags (gh-ocannl-1350). *)
+
 val uncontainable : phase -> cause -> bool
 (** Whether a typed cause must end a search rather than decline one candidate: {!protect} makes it
     {!Fatal} although it is typed. Exactly three post-compile host-boundary stages at [Backend_link]
@@ -116,7 +128,8 @@ val uncontainable : phase -> cause -> bool
     (gh-ocannl-1142). The third can correlate with candidates: gh-ocannl-1045's missing [-lm] broke
     only kernels referencing libmvec, so absorbing it quietly favored slower candidates avoiding
     those symbols (gh-ocannl-1077). A JIT rejecting one candidate's PTX remains a counted decline.
-*)
+    So is a compiler rejecting one candidate's source, except at {!toolchain_stage}: a toolchain
+    that compiles nothing would reject every candidate alike (gh-ocannl-1350). *)
 
 type fatal = {
   exn : exn;
