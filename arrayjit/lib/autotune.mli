@@ -688,11 +688,16 @@ val sketch_schedule :
   Ir.Low_level.optimized ->
   Ir.Schedule.schedule
 (** The composed pipeline a seed parameterizes, built against the given lowering (the site is
-    re-detected). Raises [Invalid_argument] when no site is detected or the parameters do not fit
-    the segment. [accum_prec] is the rendering backend's accumulator resolution
+    re-detected). Refuses typed when no site is detected or the parameters do not fit the segment
+    ({!Sketch_families.sketch_schedule}: [Ir.Schedule_outcome.Cause_at (Transform, _)]); any other
+    exception escaping the builder is a builder bug, fatal under [strict_failure_classification]
+    (gh-ocannl-1390). [accum_prec] is the rendering backend's accumulator resolution
     ([(Context.codegen_capabilities ctx).accum_prec]): the scalar pipelines' [Privatize] mints its
     tile at it ({!Ir.Schedule.privatize}, gh-ocannl-1116). Exposed for tests (the pad-composition
     seeding of gh-ocannl-485 is executed directly). *)
+
+val with_sketch_builder_fault : (sketch_params -> unit) -> (unit -> 'a) -> 'a
+(** Test seam: see {!Sketch_families.with_sketch_builder_fault} (gh-ocannl-1390). *)
 
 val extend_with_privatize :
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->

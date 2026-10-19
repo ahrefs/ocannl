@@ -546,9 +546,20 @@ val sketch_schedule :
   p:sketch_params ->
   Ir.Low_level.optimized ->
   Ir.Schedule.schedule
-(** Re-detect the site and instantiate the composed pipeline. Raises [Invalid_argument] if no site
-    is recognized or the parameters do not fit. [accum_prec] is the rendering backend's accumulator
-    resolution, used for scalar privatization. *)
+(** Re-detect the site and instantiate the composed pipeline. A builder precondition that does not
+    hold -- no site of the family's kind is recognized, or the parameters do not fit -- is refused
+    typed, as [Ir.Schedule_outcome.Cause_at (Transform, cause)] ([Illegal_schedule] at check
+    ["Autotune.sketch"], or [Unsupported] for a companion-coverage or output-rank limitation); any
+    other exception escaping the builder is a builder bug and propagates untyped, fatal under
+    [strict_failure_classification] (gh-ocannl-1390). [accum_prec] is the rendering backend's
+    accumulator resolution, used for scalar privatization. *)
+
+val with_sketch_builder_fault : (sketch_params -> unit) -> (unit -> 'a) -> 'a
+(** Test seam (gh-ocannl-1390), the sketch-level twin of {!Ir.Schedule.with_transform_fault}:
+    [with_sketch_builder_fault fault body] runs [body] with [fault] called on the parameters at the
+    start of each {!sketch_schedule}, inside the builder, so a test can make the builder raise what
+    a builder bug raises. The calling domain's previous fault is restored on return or exception;
+    the default is a no-op. *)
 
 val collect_gets : Ir.Low_level.scalar_t -> (Ir.Tnode.t * Ir.Indexing.axis_index array) list
 (** Collect ordinary reads through scalar arithmetic, retaining their index maps. Dynamic reads

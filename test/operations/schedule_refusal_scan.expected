@@ -10,5 +10,7 @@ control: a marker beyond the window leaves 1 unmarked site(s): true
 control: a site after the bound leaves 0 unmarked site(s): true
 control: a comment naming invalid_arg leaves 0 unmarked site(s): true
 control: a source without the bound is refused: true
-every untyped raise schedule application can reach carries its own invariant marker: true
+schedule.ml: every untyped raise bound before apply_typed carries its own invariant marker: true
 schedule.ml binds refuse, the typed alternative, before apply_typed: true
+sketch_families.ml: every untyped raise bound before sketch_schedule carries its own invariant marker: true
+sketch_families.ml binds refuse, the typed alternative, before sketch_schedule: true

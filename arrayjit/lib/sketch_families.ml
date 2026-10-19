@@ -22,6 +22,20 @@ module LL = Ir.Low_level
 module Idx = Ir.Indexing
 module Outcome = Ir.Schedule_outcome
 
+(* gh-ocannl-1390: a deliberate sketch-builder precondition refusal -- no site of the family's kind,
+   a companion nest the family's geometry cannot cover -- is a statement about the candidate, so it
+   is raised typed at its own site, as [Schedule.refuse] is one level down: a search reads it as a
+   declined candidate. Any OTHER exception escaping the builder (an array bound, a [List.zip_exn], a
+   bare [invalid_arg]) is a builder bug and stays untyped, fatal under
+   [strict_failure_classification]. The cause and census key are the ones the builder's former
+   blanket [Invalid_argument] conversion produced. Every [invalid_arg]/[failwith] bound before
+   [sketch_schedule] in this file is either this or carries an [(* invariant: ... *)] marker, which
+   [test/operations/schedule_refusal_scan] enforces. *)
+let refuse detail =
+  raise
+    (Outcome.Cause_at
+       (Outcome.Transform, Outcome.Illegal_schedule { check = "Autotune.sketch"; detail }))
+
 (** {2 Matmul detection and sketch schedules}
 
     Sketch candidates instantiate the composed matmul pipelines pinned by
@@ -633,6 +647,8 @@ let detect_matmul (llc : LL.t) : matmul_site option =
      | None, None -> ()
      | Some p, Some n when matmul_site_equal p n -> ()
      | _ ->
+         (* invariant: the two matchers are one relation spelled twice; a divergence is a detection
+            bug, never a property of the code being detected. *)
          invalid_arg
            "Autotune.detect_matmul crosscheck: the relation-based and procedural matchers diverge \
             — detection must be behavior-preserving");
@@ -1137,6 +1153,8 @@ let detect_conv (llc : LL.t) : conv_site option =
      | None, None -> ()
      | Some p, Some n when conv_site_equal p n -> ()
      | _ ->
+         (* invariant: the two matchers are one relation spelled twice; a divergence is a detection
+            bug, never a property of the code being detected. *)
          invalid_arg
            "Autotune.detect_conv crosscheck: the relation-based and procedural matchers diverge — \
             detection must be behavior-preserving");
@@ -2325,12 +2343,17 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
 let reorder_swaps ~current ~target : Sched.schedule =
   let cur = Array.of_list current in
   let swaps = ref [] in
+  let not_a_permutation () =
+    (* invariant: every caller derives [current] and [target] from one detected site's loops, so a
+       loop of [target] missing from [current], or wanted twice, is a builder bug. *)
+    invalid_arg "Autotune.reorder_swaps: not a permutation"
+  in
   List.iteri target ~f:(fun p want ->
       match Array.findi cur ~f:(fun _ s -> Idx.equal_symbol s want) with
-      | (None | Some (0, _)) when p > 0 -> invalid_arg "Autotune.reorder_swaps: not a permutation"
-      | None -> invalid_arg "Autotune.reorder_swaps: not a permutation"
+      | (None | Some (0, _)) when p > 0 -> not_a_permutation ()
+      | None -> not_a_permutation ()
       | Some (q, _) ->
-          if q < p then invalid_arg "Autotune.reorder_swaps: not a permutation";
+          if q < p then not_a_permutation ();
           for r = q downto p + 1 do
             swaps := Sched.Swap { outer = cur.(r - 1); inner = cur.(r) } :: !swaps;
             let tmp = cur.(r - 1) in
@@ -2451,7 +2474,7 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
       if List.length (conv_real_stmts site opt) > 2 then
         match conv_aligned_grid site opt with
         | Some sched -> (drop_tail_retypes sched, LL.Serial)
-        | None -> invalid_arg "Autotune conv sketch: companion nests do not align for Grid"
+        | None -> refuse "Autotune conv sketch: companion nests do not align for Grid"
       else ([], LL.Grid)
     in
     let sp_row, row_o, row_i =
@@ -2475,10 +2498,10 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
       else if List.length (conv_real_stmts site opt) > 2 then
         match conv_aligned_grid site opt with
         | Some sched -> ([], drop_tail_retypes sched)
-        | None -> invalid_arg "Autotune conv sketch: companion nests do not align for Grid"
+        | None -> refuse "Autotune conv sketch: companion nests do not align for Grid"
       else
         match site.c_outer with
-        | [] -> invalid_arg "Autotune conv sketch: no outer loop to Grid-parallelize"
+        | [] -> refuse "Autotune conv sketch: no outer loop to Grid-parallelize"
         | (outermost, _) :: _ ->
             let zops =
               if not site.c_zeroed then []
@@ -2591,26 +2614,28 @@ let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     @ reorder_swaps ~current:site.c_loops ~target:loop_syms
     @ [ stage site.c_a [ site.c_row; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
 
-(* Building a sketch is a narrow phase seam of its own (gh-ocannl-536). Every [invalid_arg] above is
-   an applicability precondition — no matmul site, a companion nest whose geometry the family cannot
-   cover — i.e. the same verdict as a [Schedule.apply] precondition: this candidate is not
-   applicable, and the search is better off recording a decline. Escaping untyped they were
-   unclassified and therefore FATAL under strict classification, so a single inapplicable GPU sketch
-   family ended the whole search (reproducible on Metal with test/operations/autotune_fission_sketch
-   before this). Typing them here rather than around the whole transform closure keeps the boundary
-   narrow, which is the point: an arbitrary exception escaping a transform stays fatal. *)
+(* Building a sketch is a narrow phase seam of its own (gh-ocannl-536). An applicability
+   precondition -- no matmul site, a companion nest whose geometry the family cannot cover -- is the
+   same verdict as a [Schedule.apply] precondition: this candidate is not applicable, and the search
+   is better off recording a decline. Escaping untyped they were unclassified and therefore FATAL
+   under strict classification, so a single inapplicable GPU sketch family ended the whole search
+   (reproducible on Metal with test/operations/autotune_fission_sketch before gh-ocannl-536). Each
+   is raised typed at its own site ([refuse], [companion_coverage_unsupported], [zero_geometry]'s
+   [Unsupported]) since gh-ocannl-1390, rather than by converting every [Invalid_argument] escaping
+   the builder: an arbitrary exception escaping a builder stays fatal, as one escaping a transform
+   does. *)
 let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
   let sched, d =
     if p.sk_conv then
       match detect_conv opt.LL.llc with
-      | None -> invalid_arg "Autotune sketch: no convolution site detected"
+      | None -> refuse "Autotune sketch: no convolution site detected"
       | Some site ->
           ( (if p.sk_gpu then gpu_conv_sketch_schedule ~opt site p
              else cpu_conv_sketch_schedule ~opt site p),
             site.c_d )
     else
       match detect_matmul_canonical opt with
-      | None -> invalid_arg "Autotune sketch: no matmul micro-kernel detected"
+      | None -> refuse "Autotune sketch: no matmul micro-kernel detected"
       | Some (site, prefix, opt) ->
           (* [opt] is now the code the site was detected on; [prefix] (the enabling interchange,
              empty for a site the plain matcher finds) takes the caller's code there. *)
@@ -2757,21 +2782,25 @@ let coalesce_layout_name = function
   | Coalesce_columns -> "interior batch loop coalesces into the column role (gh-ocannl-1165)"
   | Coalesce_contraction -> "two innermost contraction loops coalesce into one k (gh-ocannl-1279)"
 
-let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
+(* gh-ocannl-1390: the builder's fault-injection seam, the sketch-level twin of
+   [Schedule.with_transform_fault]: a test makes the builder raise what a builder bug raises, since
+   a genuine one has no stable trigger. Per domain; the default is a no-op. *)
+let builder_fault : (sketch_params -> unit) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () _ -> ())
+
+let with_sketch_builder_fault fault body =
+  let previous = Stdlib.Domain.DLS.get builder_fault in
+  Stdlib.Domain.DLS.set builder_fault fault;
+  Exn.protect ~f:body ~finally:(fun () -> Stdlib.Domain.DLS.set builder_fault previous)
+
+let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
+  Stdlib.Domain.DLS.get builder_fault p;
   match p.sk_coalesce with
   | None -> family_schedule ~accum_prec ~p opt
   | Some layout -> (
       match coalesced ~layout opt with
-      | None -> invalid_arg ("Autotune sketch: no matmul site whose " ^ coalesce_layout_name layout)
+      | None -> refuse ("Autotune sketch: no matmul site whose " ^ coalesce_layout_name layout)
       | Some (prefix, prepared) -> prefix @ family_schedule ~accum_prec ~p prepared)
-
-let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
-  match sketch_schedule_unchecked ~accum_prec ~p opt with
-  | sched -> sched
-  | exception Invalid_argument detail ->
-      raise
-        (Outcome.Cause_at
-           (Outcome.Transform, Outcome.Illegal_schedule { check = "Autotune.sketch"; detail }))
 
 (* Sketch seed parameters compatible with the site's extents. Fully staged tensorized pipelines no
    longer require dividing tiles: non-multiple extents seed [(pad, tensorize)] compositions

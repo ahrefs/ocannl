@@ -4578,19 +4578,22 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
 
 (* gh-ocannl-1253, the [auto] gate's test: the seeded sketch's ranking score strictly below the
    preset's, on the segment alone, under the gate's capacity and cache bandwidth. Either failing to
-   apply or to score keeps the preset. *)
+   build, to apply or to score keeps the preset. Only a typed refusal fails: any other exception is
+   a builder or transform bug and propagates (gh-ocannl-1390). *)
 let seeded_ranker ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth p pre =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let rank sched =
-    match Sched.apply_classified ~static_indices sched (scratch_of pre) with
-    | exception (Outcome.Cause_at _ | Invalid_argument _) -> None
+    match Sched.apply_classified ~static_indices (sched ()) (scratch_of pre) with
+    | exception Outcome.Cause_at _ -> None
     | post ->
         Option.map
           (segments_ranking ~capacity ~cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
              [ post ])
           ~f:fst
   in
-  match (rank (sketch_schedule ~accum_prec ~p pre), rank (seeded_preset ~limits pre)) with
+  match
+    (rank (fun () -> sketch_schedule ~accum_prec ~p pre), rank (fun () -> seeded_preset ~limits pre))
+  with
   | Some sketch, Some plain -> Float.(sketch < plain)
   | _ -> false
 
@@ -4630,16 +4633,13 @@ let seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_be
           ]
       with
       | _ -> Ok p
-      | exception ((Outcome.Cause_at _ | Invalid_argument _) as exn) ->
+      | exception Outcome.Cause_at (_, cause) ->
+          (* Typed refusals only (gh-ocannl-1390): an untyped exception from the builder or the
+             transforms is a bug, not this segment's decline. *)
           logf "seeded_default: %s declined on a segment; keeping the preset"
             (sketch_params_label p);
-          let detail =
-            match exn with
-            | Outcome.Cause_at (_, cause) -> Outcome.detail_of_cause cause
-            | Invalid_argument detail -> detail
-            | _ -> ""
-          in
-          Error (sketch_params_label p ^ " declined on the segment: " ^ detail))
+          Error
+            (sketch_params_label p ^ " declined on the segment: " ^ Outcome.detail_of_cause cause))
 
 let seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre =
   Result.ok (seeded_segment_judgment ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre)
@@ -4710,7 +4710,7 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
                 [ Sched.apply_classified ~static_indices sched (scratch_of pre) ]
             with
             | _ -> Some n_swaps
-            | exception (Outcome.Cause_at _ | Invalid_argument _) ->
+            | exception Outcome.Cause_at _ ->
                 logf "seeded_default: the reduction sink declined on a segment; keeping the preset";
                 None))
   in
@@ -7655,7 +7655,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                              candidate compile would decline it. *)
                           List.filter_map ps ~f:(fun p ->
                               match sketch_schedule ~accum_prec ~p pre with
-                              | exception (Invalid_argument _ | Outcome.Cause_at _) -> None
+                              | exception Outcome.Cause_at _ -> None
                               | sched -> model_score ~static_indices ~limits pre sched)
                           |> List.min_elt ~compare:Float.compare
                           |> Option.map ~f:(fun s -> Float.of_int (List.length key.key_units) *. s))
