@@ -160,6 +160,24 @@ let () =
          List.map keys ~f:(fun key -> Autotune.fiss_sketch_label ~fine [ (key, lo) ])))
     ~equal:String.equal ~to_string:Fn.id
 
+(* A staffed single (gh-ocannl-1138) is a single of its focus, timed against the running composite's
+   choices for the other keys: its label is the bare single's with the staff appended after [" |
+   staff "] -- so a reader that splits the focus off still reads the bare label -- and two staffs
+   print apart, so the singles of one key swept in two backgrounds never share a label. *)
+let () =
+  let key_a = { Autotune.key_units = [ 0 ]; key_digest = Stdlib.Digest.(to_hex (string "a")) }
+  and key_b = { Autotune.key_units = [ 2 ]; key_digest = Stdlib.Digest.(to_hex (string "b")) } in
+  let bare = Autotune.fiss_sketch_label ~fine:false [ (key_a, lo) ] in
+  let staffed staff = Autotune.fiss_sketch_label ~staff ~fine:false [ (key_a, lo) ] in
+  p "an empty staff prints the bare label" (String.equal (staffed []) bare);
+  p "a staffed label is the bare one's focus followed by its staff"
+    (String.is_prefix
+       (staffed [ (key_b, hi) ])
+       ~prefix:(String.chop_suffix_exn bare ~suffix:"]" ^ " | staff "));
+  p_pairwise_distinct "staffs of different parameters print apart"
+    [ bare; staffed [ (key_b, lo) ]; staffed [ (key_b, hi) ] ]
+    ~equal:String.equal ~to_string:Fn.id
+
 (* --- Part 1b: every field of a split-reduce site reaches its label --- *)
 
 (* Two targets of one debug name -- two nodes labeled alike: the label must tell them apart by more

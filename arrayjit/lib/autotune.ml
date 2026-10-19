@@ -2310,7 +2310,12 @@ type fiss_flavor =
           digest that differs, fails the candidate — for a cache entry, a re-search. Whichever mode
           derived the winner's segmentation (the finer [arity_cuts] one included, gh-ocannl-574) is
           in the data. *)
-  | F_sketch of { plan : Sched.segmentation; entries : (seg_key * sketch_params) list; fine : bool }
+  | F_sketch of {
+      plan : Sched.segmentation;
+      entries : (seg_key * sketch_params) list;
+      staff : (seg_key * sketch_params) list;
+      fine : bool;
+    }
       (** Per-segment matmul sketches over the segmentation the seed-time enumeration derived
           ([plan], replayed like [F_saved]'s, gh-ocannl-1243): each keyed segment gets the composed
           sketch pipeline instantiated with its entry's parameters, every other segment its kind's
@@ -2321,7 +2326,12 @@ type fiss_flavor =
           cache entry, so no loud drift guard is needed. [fine]: [plan] is the {e finer}
           [arity_cuts] segmentation, which frees a matmul site whose segment otherwise carries a
           companion that cannot follow the site's full arity (the lm_head's max-logits reduction,
-          gh-ocannl-574). *)
+          gh-ocannl-574). [staff] (gh-ocannl-1138): further keyed segments the candidate schedules
+          by their entries' parameters, as [entries]' are -- the running composite's choices for the
+          keys other than the one being swept, so a single is timed against the composite it would
+          join rather than against every other segment's preset. [entries] stays the candidate's
+          focus: what it is a single OF, what the search ranks it as, and the part of its label
+          before [" | staff "]; empty [staff] is the bare single. *)
   | F_split of { sites : (sr_site * int) list }
       (** Split-reduce seeds (gh-ocannl-484 task 3): per listed site, a
           [Sched.Split_reduce { axis = sr_axis; target = sr_target; num_blocks }] — applied
@@ -2600,7 +2610,8 @@ let emit_calibration ~backend ~device ~limits ~routine ~label ~digest ~timing_re
    census anomalies (gh-ocannl-479). *)
 let spec_expects_mma = function
   | Whole (W_sketch p) -> p.sk_mma
-  | Fiss (F_sketch { entries; _ }) -> List.exists entries ~f:(fun (_, p) -> p.sk_mma)
+  | Fiss (F_sketch { entries; staff; _ }) ->
+      List.exists (entries @ staff) ~f:(fun (_, p) -> p.sk_mma)
   | _ -> false
 
 (* A sketch's label renders EVERY field of its [sketch_params] (gh-ocannl-1230): the tuner seeds
@@ -2682,12 +2693,17 @@ let seg_key_tag { key_units; key_digest } =
 (* A per-segment sketch candidate's label: each keyed entry renders its parameters and its segment's
    key tag. Two segments can admit the same parameters -- two matmul segments sharing a tile
    geometry -- and their one-entry candidates schedule different kernels, so without the key they
-   would print alike (Codex P2 on PR #1108). *)
-let fiss_sketch_label ~fine entries =
-  Printf.sprintf "F_sketch[%s%s]"
+   would print alike (Codex P2 on PR #1108). A staffed candidate (gh-ocannl-1138) renders its staff
+   after [" | staff "], so the focus part reads as it does bare. *)
+let fiss_sketch_label ?(staff = []) ~fine entries =
+  let render entries =
+    String.concat ~sep:","
+      (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ seg_key_tag key))
+  in
+  Printf.sprintf "F_sketch[%s%s%s]"
     (if fine then "fine " else "")
-    (String.concat ~sep:","
-       (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ seg_key_tag key)))
+    (render entries)
+    (match staff with [] -> "" | _ -> " | staff " ^ render staff)
 
 (* A split-reduce candidate's label renders EVERY field of each [(site, num_blocks)] entry
    (post-wave task of gh-ocannl-1230), as {!sketch_params_label} does for a sketch: the target by
@@ -2765,7 +2781,7 @@ let spec_label = function
   | Fiss (F_saved (segs, move)) ->
       let from, extension = move_label move in
       Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
-  | Fiss (F_sketch { entries; fine; _ }) -> fiss_sketch_label ~fine entries
+  | Fiss (F_sketch { entries; staff; fine; _ }) -> fiss_sketch_label ~staff ~fine entries
   | Fiss (F_split { sites }) -> split_sites_label sites
   | Fiss (F_seeded plan) -> seeded_plan_label plan
   | Fiss (F_split_saved (prelude, segs, move)) ->
@@ -2963,11 +2979,11 @@ let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_
           let replay =
             match flavor with
             | F_preset _ | F_split _ | F_seeded _ -> None
-            | F_sketch { plan; entries; _ } ->
+            | F_sketch { plan; entries; staff; _ } ->
                 Some
                   (sketch_replay ~static_indices
                      ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
-                     plan entries)
+                     plan (entries @ staff))
             | F_saved (saved, _) | F_split_saved (_, saved, _) ->
                 let saved = Array.of_list saved in
                 let schedule i seg =
@@ -4129,7 +4145,7 @@ let model_default ?name ?report ctx comp bindings =
               match fiss with
               | Some (plan, entries, s) ->
                   [
-                    ( spec_label (Fiss (F_sketch { plan; entries; fine = false })),
+                    ( spec_label (Fiss (F_sketch { plan; entries; staff = []; fine = false })),
                       s,
                       `Fiss (plan, entries) );
                   ]
@@ -6509,10 +6525,14 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                recombining each segment's best-timed single into one composite candidate. *)
             List.concat_map fiss_sketch_entries ~f:(fun (key, ps) ->
                 List.map ps ~f:(fun p ->
-                    Fiss (F_sketch { plan = coarse_plan; entries = [ (key, p) ]; fine = false })))
+                    Fiss
+                      (F_sketch
+                         { plan = coarse_plan; entries = [ (key, p) ]; staff = []; fine = false })))
             @ List.concat_map fine_new_entries ~f:(fun (key, ps) ->
                 List.map ps ~f:(fun p ->
-                    Fiss (F_sketch { plan = fine_plan; entries = [ (key, p) ]; fine = true })))
+                    Fiss
+                      (F_sketch
+                         { plan = fine_plan; entries = [ (key, p) ]; staff = []; fine = true })))
           in
           n_fiss_sketch_candidates := List.length fiss_sketch_specs;
           (* Split-reduce seeds (gh-ocannl-484 task 3), detected on the base lowering — the prelude
@@ -6648,7 +6668,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              and its time. *)
           let try_composite ~fine entries =
             Option.map
-              (try_spec (Fiss (F_sketch { plan = plan_of ~fine; entries; fine })))
+              (try_spec (Fiss (F_sketch { plan = plan_of ~fine; entries; staff = []; fine })))
               ~f:(fun ((_, ms) as r) ->
                 admit r;
                 (entries, fine, ms))

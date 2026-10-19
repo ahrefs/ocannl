@@ -199,13 +199,16 @@ type seg_key = { key_units : int list; key_digest : string }
     pre-schedule digest. The digest leaves placements out, so it cannot name a segment on its own:
     segments of one structure share a key only when their placement-aware digests agree too. *)
 
-val fiss_sketch_label : fine:bool -> (seg_key * sketch_params) list -> string
+val fiss_sketch_label :
+  ?staff:(seg_key * sketch_params) list -> fine:bool -> (seg_key * sketch_params) list -> string
 (** The label of a per-segment sketch candidate ([F_sketch[...]]) over its [(segment key, params)]
     entries: each entry is {!sketch_params_label} followed by [" @"] and a tag of its segment key —
     a tag of the digest, then [":u"] and the keyed segments' first units joined by ["+u"] — so
     one-entry candidates of two segments that admit the same parameters print apart, structurally
     identical segments included. Entries are separated by [','] in key order; [fine] marks the finer
-    segmentation. *)
+    segmentation. A staffed candidate (gh-ocannl-1138) appends [" | staff "] and its [?staff]
+    entries rendered alike, so the part before it is the candidate's focus and reads as the bare
+    single's whole label does. *)
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;

@@ -95,11 +95,26 @@ let small_menu () =
       ("autotune_pad_waste_max", "inf");
     ]
 
-let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')
-let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem label ','
+(* A per-segment sketch label's focus (gh-ocannl-1138): what precedes [" | staff "], where a staffed
+   single lists the running composite's choices for the other keys. A bare label is all focus. *)
+let focus label =
+  match String.substr_index label ~pattern:" | staff " with
+  | Some i -> String.prefix label i
+  | None -> label
 
-(* A single's keyed segment: the tag its label ends with ([@<digests>:u<n>]). *)
-let segment_of label = List.last_exn (String.split label ~on:'@')
+(* Single or composite by the focus alone: a staffed single schedules several segments but is a
+   single of its focus key. *)
+let is_single label =
+  String.is_prefix label ~prefix:"F_sketch[" && not (String.mem (focus label) ',')
+
+let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem (focus label) ','
+
+let is_staffed label =
+  String.is_prefix label ~prefix:"F_sketch[" && String.is_substring label ~substring:" | staff "
+
+(* A single's keyed segment: the tag its focus ends with ([@<digests>:u<n>]). *)
+let segment_of label =
+  List.last_exn (String.split (String.chop_suffix_if_exists (focus label) ~suffix:"]") ~on:'@')
 
 (* The singles among [measured] (a search's timed labels, in attempt order), counted per keyed
    segment. *)
