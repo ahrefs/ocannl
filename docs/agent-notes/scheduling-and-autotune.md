@@ -1932,10 +1932,11 @@ files.
   unconditionally and ships the untuned default at `best_ms = infinity`. Up front, not at the
   winner compile: a refusal there left the arm ranked, and its decision recorded, by the crown it
   never shipped (the local review's P2). `Train.placement_evidence_clean` lets such an arm stand
-  beside a recording, since the problem key carries both lineages. Every compile into the caller
-  (`compile_spec_real`) still re-checks the fresh lowering as a backstop, refusing at `Transform`
-  as `Illegal_schedule "Autotune.caller_lineage"`. Structural, because placement classes
-  legitimately differ across lineages on identical code. It is conservative: a timing
+  beside a recording, since the problem key carries both lineages. Both lowerings are taken BEFORE
+  any timing run: a check at the winner compile would compare a post-timing fresh lowering, which
+  value-bounds drift can fold differently on equal lineages (the drift `rebase` exists for), so
+  no such backstop exists. Structural, because placement classes legitimately differ across
+  lineages on identical code (a node `Local` in one and on-device in the other is not refused). It is conservative: a timing
   lineage that inlines a computation the caller holds materialized (`flip_twins`' inheriting
   lineage) runs fine but is refused too. `placement_store` run 6 ranks fissioned candidates first
   through `Autotune.on_candidate_measured`, which reproduced the old failure deterministically.

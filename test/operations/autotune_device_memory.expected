@@ -21,3 +21,7 @@ the next call replays the recorded decision in one cached search, or the arms we
 nothing was refused for device memory in the next call: true
 it shipped the recorded arm: true
 the replayed arm computes the right values: true
+both arms searched, and the device refused exactly one allocation after they reported: true
+the arm whose shipping compile was substituted did not ship: the other arm did: true
+the arm shipped instead computes the right values: true
+nothing was recorded: the next call compares both arms again: true

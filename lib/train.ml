@@ -797,10 +797,12 @@ let placement_evidence_clean (r : Autotune.report) =
     leaves nothing it compiled on the device, and only the placement that ships is compiled from
     [ctx] -- once, after every search. Arm A's routine is therefore not resident while arm B
     searches: on a step over half the device it used to be, and arm B was refused at its base
-    compile, making every such A/B single-arm. A shipping compile that fails falls back to the next
-    completed result -- the other arm, or after a flip refinement the A/B winner and then the other
-    arm -- which ships unrecorded; under a forced arm it propagates. The replayed decision's one
-    search compiles at once, so a replay that does not compile is a failed replay like any other.
+    compile, making every such A/B single-arm. A shipping compile that fails, or that ships the
+    untuned default in place of the reported schedule ({!Autotune.shipped_substitute}), falls back
+    to the next completed result -- the other arm, or after a flip refinement the A/B winner and
+    then the other arm -- which ships unrecorded; under a forced arm a failure propagates and a
+    substitute ships unrecorded. The replayed decision's one search compiles at once, so a replay
+    that does not compile is a failed replay like any other.
 
     The arms differ in which candidates {e exist}, not only in how they rank: a tensorized candidate
     is seeded only when the matmul site's operand and destination storage precisions resolve to a
@@ -1325,7 +1327,33 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, the measured winner did not compile")
                   fallback
+            | compiled when Autotune.shipped_substitute deferred && not (List.is_empty fallbacks) ->
+                (* The compile shipped the untuned default in place of the schedule the search
+                   reported, so this placement won the ranking on a time nothing it ships was
+                   measured at: the next completed result ships instead, as for a failed compile. *)
+                (try Context.release (fst compiled)
+                 with exn when not (must_propagate exn) ->
+                   logf "release of a substituted compile failed: %s" (Exn.to_string exn));
+                let fallback_what, fallback = List.hd_exn fallbacks in
+                logf
+                  "%s's compile shipped the untuned default in place of its measured schedule: \
+                   shipping %s instead, unrecorded"
+                  what fallback_what;
+                ship ~fallbacks:(List.tl_exn fallbacks) ~what:fallback_what
+                  ~commit:(fun () ->
+                    logf "placement store: nothing recorded, the measured winner did not compile")
+                  fallback
             | compiled ->
+                (* Nothing to fall back to: it ships, but its decision is not recorded -- the
+                   recorded time would be a schedule's that this routine is not. *)
+                let commit =
+                  if Autotune.shipped_substitute deferred then fun () ->
+                    logf
+                      "placement store: nothing recorded, %s shipped the untuned default in place \
+                       of its measured schedule"
+                      what
+                  else commit
+                in
                 (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships.
 
                    A raising callback is the caller's failure and propagates, like [report]'s — but

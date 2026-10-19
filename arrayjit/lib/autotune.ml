@@ -3114,51 +3114,19 @@ let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimiz
    buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the lineage
    table anew. The traced store is copied from the base (schedule ops register their tiles in it).
 
-   gh-ocannl-1421: that is sound only while the fresh lowering IS the base's program. Within the
-   lineage the base was lowered in it is, up to the drift above, which is exactly what rebasing is
-   for. A compile into ANOTHER lineage -- the caller's, after a search on a [timing_ctx] -- can
-   lower differently: a node the timing lineage materialized and the caller's leaves virtual is
-   inlined there, so the base's code reads a buffer the caller's placements never allocate
-   (undeclared on a whole-routine winner, a [promote_local_to_device] on a virtual node on a
-   fissioned one), and in the converse case the base's code never computes a node the caller
-   materialized. [caller_structural], the base lowering's structural digest, is passed for exactly
-   those compiles, and a fresh lowering whose own structural digest differs is refused at
-   [Transform], typed, so the caller's untuned default ships instead. [tune] normally decides this
-   up front, from an analysis-only lowering of the caller ([Lineage_refused]), and then compiles
-   nothing tuned into the caller; this check is the compile-time backstop. Structural
-   ([with_placements:false]) because placement classes legitimately render differently across
-   lineages on byte-identical code; an inlining decision does not, it changes the code. *)
-let compile_candidate ?name ?label ?caller_structural ~static_indices ~base_opt ~canon ~limits
-    ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+   gh-ocannl-1421: that is sound only while the fresh lowering is the base's program up to that
+   drift. Within the lineage the base was lowered in it is. A compile into ANOTHER lineage -- the
+   caller's, after a search on a [timing_ctx] -- can lower to another program: a node the timing
+   lineage materialized and the caller's leaves virtual is inlined there, so the base's code reads a
+   buffer the caller's placements never allocate. [tune] refuses that case up front
+   ([Lineage_refused]), comparing the two lineages' structural digests BEFORE any timing run, so the
+   comparison is free of the drift; no check here could tell drift from a lineage difference, since
+   the fresh lowering is taken after the timing runs. *)
+let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+    ~provenance ctx comp bindings spec : compiled Outcome.outcome =
   let candidate = match label with Some l -> l | None -> spec_label spec in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let rebase (fresh : LL.optimized) =
-    Option.iter caller_structural ~f:(fun base_digest ->
-        let fresh_digest =
-          SC.digest (SC.canonicalize ~static_indices ~with_placements:false fresh)
-        in
-        if not (String.equal fresh_digest base_digest) then (
-          (* Unconditional, like the incomplete-canon warning: a tuned schedule that can never ship
-             into this caller is a misconfigured [timing_ctx], and the only other trace of it is a
-             slower routine. *)
-          Stdio.eprintf
-            "autotune: WARNING: %s: the caller's context lowers this routine differently from the \
-             timing context the search ran on (structural digest %s vs %s), so the tuned schedule \
-             is not compiled into it; the untuned default ships (gh-ocannl-1421)\n\
-             %!"
-            candidate fresh_digest base_digest;
-          raise
-            (Outcome.Cause_at
-               ( Outcome.Transform,
-                 Outcome.Illegal_schedule
-                   {
-                     check = "Autotune.caller_lineage";
-                     detail =
-                       Printf.sprintf
-                         "the caller's lineage lowers to structural digest %s, the timing \
-                          lineage's base to %s: a schedule of the one does not apply to the other"
-                         fresh_digest base_digest;
-                   } ))));
     {
       base_opt with
       LL.traced_store = Hashtbl.copy base_opt.LL.traced_store;
@@ -5676,10 +5644,12 @@ let resolve_cache_dir ?cache_dir ~search () =
 (* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk is
    already forced (it returns the routine [tune] compiled before reporting); with it
    (gh-ocannl-1408, {!tune_deferred}) the search has reported, released everything it compiled, and
-   the thunk compiles the shipped schedule on first call. *)
-let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
-    ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings
-    : unit -> Context.t * Context.routine =
+   the thunk compiles the shipped schedule on first call. [substituted] is set when that compile
+   ships the untuned default in place of the schedule the report named (a winner or cache replay
+   that failed or degenerated), which a deferred caller ranking by the report must hear about. *)
+let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?repeats ?timing
+    ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report
+    ctx comp bindings : unit -> Context.t * Context.routine =
   (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
      pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
      schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
@@ -5889,11 +5859,19 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
     let compiled = ref None in
     fun () ->
       match !compiled with
-      | Some result -> result
-      | None ->
-          let result = with_streams ~log ~progress compile in
-          compiled := Some result;
-          result
+      | Some (Ok result) -> result
+      | Some (Error (exn, backtrace)) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
+      | None -> (
+          (* A failure is kept too: the compile runs once, and a caller catching its exception and
+             asking again gets the same exception, not a second attempt's side effects. *)
+          match with_streams ~log ~progress compile with
+          | result ->
+              compiled := Some (Ok result);
+              result
+          | exception exn ->
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              compiled := Some (Error (exn, backtrace));
+              Stdlib.Printexc.raise_with_backtrace exn backtrace)
   in
   (* The end of every path that ships a routine: [compile] produces it. Eagerly, it is compiled
      first and reported after -- a report is a record of what the call achieved, and a compile that
@@ -6048,9 +6026,9 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
              break the exactly-once contract for direct [tune] callers. *)
           Seam.get on_candidate_attempt "baseline";
           base_capture := Some (opt, SC.canonicalize ~static_indices opt);
-          (* gh-ocannl-1421: the base lowering's structural identity, against which a compile into
-             the caller's lineage checks its own fresh lowering. Only with a [timing_ctx]: without
-             one the base was lowered in the caller's lineage. *)
+          (* gh-ocannl-1421: the base lowering's structural identity, which the caller's own
+             lowering must share for a schedule tuned here to apply to it ([Lineage_refused]). Only
+             with a [timing_ctx]: without one the base was lowered in the caller's lineage. *)
           if Option.is_some timing_ctx then
             base_structural :=
               Some (SC.digest (SC.canonicalize ~static_indices ~with_placements:false opt));
@@ -6155,11 +6133,11 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
         ~provenance:Outcome.Candidate search_ctx comp bindings
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
-       base lowering as the search's candidates -- provided the caller's lineage lowers to it
-       (gh-ocannl-1421, [?caller_structural]). *)
+       base lowering as the search's candidates, the caller's lineage lowering to it
+       ([Lineage_refused] below). *)
     let compile_spec_real ?label provenance =
-      compile_candidate ?name ?label ?caller_structural:!base_structural ~static_indices ~base_opt
-        ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings
+      compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+        ~provenance ctx comp bindings
     in
     let flat_schedule = function
       | Whole_saved saved -> saved
@@ -6230,12 +6208,13 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
             (Outcome.Classified classified)
       | Some _ | None -> ()
     in
-    refuse_if_device_memory baseline_decline;
     (* gh-ocannl-1421: a timing lineage that lowers the routine to another program than the caller's
        can tune nothing the caller can take: every candidate, cached entry and winner derives from
        the timing lineage's base lowering. Decided here, before the cache and the search, so the
        call reports what it ships -- the untuned default, timed at nothing -- rather than a crown
-       that a refused winner compile would leave a placement A/B ranking (and recording) by. *)
+       that a refused winner compile would leave a placement A/B ranking (and recording) by. And
+       before the device-memory refusal below: that is the TIMING lineage's base refused, which says
+       nothing about the caller's untuned routine, the one thing a refused lineage ships. *)
     let lineage_refusal =
       Option.bind !base_structural ~f:(fun timing_digest ->
           match
@@ -6246,7 +6225,6 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
           | caller_digest when String.equal caller_digest timing_digest -> None
           | caller_digest -> Some (caller_digest, timing_digest)
           | exception exn when not (process_fatal_exn exn) ->
-              (* The compiles into the caller check again ([compile_candidate]'s rebase). *)
               logf "the caller's analysis-only lowering failed (%s); not compared up front"
                 (Exn.to_string exn);
               None)
@@ -6265,6 +6243,7 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
         in
         finish reached (fun () -> compile_untuned_default ~base:reached ())
     | None -> (
+        refuse_if_device_memory baseline_decline;
         let cached =
           if use_cache then
             match SC.lookup ~dir:cache_dir ~key with
@@ -6443,12 +6422,14 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
                              | Ok c when dispatchable ~is_gpu c.all_opts -> (c.cctx, c.routine)
                              | Ok c ->
                                  release_quietly ~what:"a degenerate deferred cache replay" c.cctx;
+                                 substituted := true;
                                  compile_untuned_default ~base:(census ()) ()
                              | Error (Outcome.Classified classified) ->
                                  logf
                                    "the deferred cache replay FAILED (%s), compiling the untuned \
                                     default"
                                    (Outcome.detail_of_cause classified.cause);
+                                 substituted := true;
                                  compile_untuned_default ~base:(census ()) ()
                              | Error (Outcome.Fatal _ as failure) ->
                                  raise_pre_search ~base:(census ()) failure)))
@@ -8534,6 +8515,7 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
                            pre-replay sweep could not cover this context, which did not exist
                            yet. *)
                         release_quietly ~what:"the rejected winner replay" c.cctx;
+                        substituted := true;
                         untuned_default_or_raise ()
                     | Ok c ->
                         logf "winner replay ok: %s" label;
@@ -8542,6 +8524,7 @@ let tune_in_stream_scope ~defer ?name ?search ?beam_width ?rounds ?repeats ?timi
                         logf "winner replay FAILED (%s), falling back to the default compile: %s"
                           label
                           (Outcome.detail_of_cause classified.cause);
+                        substituted := true;
                         untuned_default_or_raise ()
                     | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
               in
@@ -8629,21 +8612,24 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
     bindings =
   with_streams ?log ?progress (fun () ->
-      tune_in_stream_scope ~defer:false ?name ?search ?beam_width ?rounds ?repeats ?timing
-        ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon
-        ?report ctx comp bindings ())
+      tune_in_stream_scope ~defer:false ~substituted:(ref false) ?name ?search ?beam_width ?rounds
+        ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites
+        ?timing_ctx ?abandon ?report ctx comp bindings ())
 
-type deferred = { compile : unit -> Context.t * Context.routine }
+type deferred = { compile : unit -> Context.t * Context.routine; substituted : bool ref }
 
 let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
     ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
     bindings =
+  let substituted = ref false in
   with_streams ?log ?progress (fun () ->
       {
+        substituted;
         compile =
-          tune_in_stream_scope ~defer:true ?name ?search ?beam_width ?rounds ?repeats ?timing
-            ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon
-            ?report ctx comp bindings;
+          tune_in_stream_scope ~defer:true ~substituted ?name ?search ?beam_width ?rounds ?repeats
+            ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx
+            ?abandon ?report ctx comp bindings;
       })
 
 let compile_deferred d = d.compile ()
+let shipped_substitute d = !(d.substituted)

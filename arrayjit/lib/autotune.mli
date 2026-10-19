@@ -2952,8 +2952,15 @@ val tune_deferred :
 
 val compile_deferred : deferred -> Context.t * Context.routine
 (** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]
-    that call ran under. At most once: a second call returns the same context and routine. A
-    [deferred] dropped without this call costs nothing on the device. *)
+    that call ran under. At most once: a second call returns the same context and routine, or raises
+    the same exception. A [deferred] dropped without this call costs nothing on the device. *)
+
+val shipped_substitute : deferred -> bool
+(** Whether {!compile_deferred} shipped the untuned default IN PLACE of the schedule the call's
+    report named -- the winner's or the cache entry's replay failed or degenerated, the fallbacks
+    {!tune} takes too. The report, delivered before the compile, still describes that schedule, so a
+    caller that ranked or recorded by it reads this before relying on the routine: what it got was
+    never measured. [false] before the compile. *)
 
 val budget_setting : unit -> float option
 (** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when

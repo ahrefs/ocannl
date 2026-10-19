@@ -274,4 +274,58 @@ let () =
     ((match reports with [ r ] -> replayed r | _ -> false) || not cacheable);
   p "nothing was refused for device memory in the next call" (refused = 0);
   p "it shipped the recorded arm" (match shipped with [ ("A" | "B") ] -> true | _ -> false);
-  Result.iter result ~f:(check_values "the replayed arm computes the right values")
+  Result.iter result ~f:(check_values "the replayed arm computes the right values");
+
+  (* --- 5. A shipping compile that substitutes (gh-ocannl-1408 review): the device refuses the
+     first allocation after both arms have reported -- the measured winner's deferred compile, at
+     link -- so that compile ships the untuned default in place of the schedule its report named
+     ([Autotune.shipped_substitute]). The A/B ranked the arm by a time nothing it would ship was
+     measured at, so the other arm ships instead, and nothing is recorded. --- *)
+  let cache_dir5 = "autotune_cache_device_memory_substitute" in
+  clean_cache cache_dir5;
+  let run5 ~arm =
+    let reports = ref [] and shipped = ref [] and armed = ref false and refused = ref 0 in
+    let refuse = function
+      | (FI.Delta_pool_allocated | FI.Transfer_pool_allocated) when !armed ->
+          armed := false;
+          Int.incr refused;
+          raise
+            (SO.Device_memory_exhausted
+               {
+                 backend = "simulated";
+                 requested = 1;
+                 free = Some 0;
+                 detail = "gh-ocannl-1408 simulated refusal of the shipping compile";
+               })
+      | _ -> ()
+    in
+    let result =
+      Result.try_with (fun () ->
+          FI.with_callback refuse ~f:(fun () ->
+              Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:cache_dir5
+                ~report:(fun r ->
+                  reports := r :: !reports;
+                  if arm && List.length !reports = 2 then armed := true)
+                ~on_ship:(fun what -> shipped := what :: !shipped)
+                (Context.auto ()) t2 comp Ir.Indexing.Empty))
+    in
+    (result, List.rev !reports, !shipped, !refused)
+  in
+  let result, reports, shipped, refused = run5 ~arm:true in
+  let measured_winner =
+    match reports with
+    | [ a; b ] when searched a && searched b ->
+        Some (if Float.(a.Autotune.best_ms <= b.Autotune.best_ms) then "A" else "B")
+    | _ -> None
+  in
+  Stdio.eprintf
+    "substitution (not part of the golden): measured winner %s, shipped %s, %d refused\n%!"
+    (Option.value measured_winner ~default:"-")
+    (String.concat ~sep:"," shipped) refused;
+  p "both arms searched, and the device refused exactly one allocation after they reported"
+    (Option.is_some measured_winner && refused = 1);
+  p "the arm whose shipping compile was substituted did not ship: the other arm did"
+    (match (measured_winner, shipped) with Some w, [ s ] -> not (String.equal w s) | _ -> false);
+  Result.iter result ~f:(check_values "the arm shipped instead computes the right values");
+  let _, reports, _, _ = run5 ~arm:false in
+  p "nothing was recorded: the next call compares both arms again" (List.length reports = 2)
