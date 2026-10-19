@@ -1774,7 +1774,7 @@ let main () =
           let items = Sources.initialization_items content in
           let paths = List.map vector_file_blessed ~f:(fun (m, v) -> [ m; v ]) in
           let sites = Sources.module_reference_sites content ~paths in
-          let all_paths = List.concat_map items ~f:snd in
+          let all_paths = List.concat_map items ~f:(fun item -> item.Sources.paths) in
           let resolves spelled =
             let resolved =
               List.count sites ~f:(fun (components, _) ->
@@ -3290,30 +3290,35 @@ let main () =
                            | Sexp.Atom value -> vector_file_pins key value
                            | Sexp.List _ -> false)
                        in
-                       (* A command-line `--ocannl_<key>` outranks both the environment and the
-                          configuration file (Codex P2, round 3): any in the run's stanza has to set
-                          a value that pins, and then it pins. *)
-                       let command_line runner ~key =
-                         let flag = "--ocannl_" ^ key in
+                       (* A command-line setting outranks both the environment and the configuration
+                          file (Codex P2, round 3), under any spelling the runtime reads
+                          ([Utils.cmdline_var_prefixes], round 4). The scan credits none: one
+                          anywhere in the run's stanza leaves the key to the command line, which
+                          needs the marker. *)
+                       let on_command_line runner ~key =
+                         let prefixes = Utils.cmdline_var_prefixes key in
                          let rec atoms = function
                            | Sexp.Atom atom -> [ atom ]
                            | Sexp.List items -> List.concat_map items ~f:atoms
                          in
-                         List.filter_map (atoms runner) ~f:(fun atom ->
-                             Option.map (String.chop_prefix atom ~prefix:flag) ~f:(fun rest ->
-                                 Option.value_map
-                                   (String.chop_prefix rest ~prefix:"=")
-                                   ~default:false ~f:(vector_file_pins key)))
+                         List.exists (atoms runner) ~f:(fun atom ->
+                             List.exists prefixes ~f:(fun prefix -> String.is_prefix atom ~prefix))
                        in
-                       (* Whether a program's initialization pins the file: one of its modules calls
-                          a blessed helper in a top-level item that runs at initialization, and
-                          every item before it names neither a search nor another of the program's
-                          modules -- a search seeds from whatever the file is when it starts, so a
-                          pin after it is no pin (round 3), and another module could start one
-                          first. No other module of the program names a search at all, since its
-                          initializers may run before the pinning one. *)
+                       (* Whether a program's initialization pins the file: one of its modules CALLS
+                          a blessed helper in statement position of a top-level item that runs at
+                          initialization (a helper in a closure or an argument is not a call, round
+                          4), every item before it names neither a search nor another of the
+                          program's modules -- a search seeds from whatever the file is when it
+                          starts, so a pin after it is no pin (round 3) -- and no item from the
+                          pinning one up to the first search spells a key of the file, which could
+                          reset it (round 4). No other module of the program names a search at all,
+                          since its initializers may run before the pinning one. *)
                        let init_pin modules =
                          let names_search m = Map.mem search_reach (in_here m) in
+                         let key_literals =
+                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
+                               vector_file_literals key)
+                         in
                          List.find_map modules ~f:(fun m ->
                              let others =
                                List.filter modules ~f:(fun m' -> not (String.equal m m'))
@@ -3326,49 +3331,54 @@ let main () =
                                    | first :: _ :: _ -> List.mem others first ~equal:String.equal
                                    | _ -> false
                                  in
-                                 let rec first_pin = function
-                                   | [] -> None
-                                   | (_, paths) :: _ when List.exists paths ~f:barrier -> None
-                                   | (true, paths) :: rest -> (
-                                       match List.filter_map paths ~f:helper_of with
-                                       | [] -> first_pin rest
-                                       | helpers ->
-                                           Some
-                                             (Printf.sprintf
-                                                "%s.ml calls %s at initialization, before any \
-                                                 search"
-                                                (String.lowercase m)
-                                                (String.concat ~sep:", "
-                                                   (List.map
-                                                      (List.dedup_and_sort helpers
-                                                         ~compare:String.compare) ~f:(fun helper ->
-                                                        "`" ^ helper ^ "`")))))
-                                   | (false, _) :: rest -> first_pin rest
+                                 let rec scan pinned = function
+                                   | [] -> pinned
+                                   | item :: _ when List.exists item.Sources.paths ~f:barrier ->
+                                       pinned
+                                   | item :: rest ->
+                                       let pinned =
+                                         match
+                                           if item.Sources.runs then
+                                             List.filter_map item.Sources.called ~f:helper_of
+                                           else []
+                                         with
+                                         | [] -> pinned
+                                         | helpers -> Some helpers
+                                       in
+                                       let pinned =
+                                         if
+                                           List.exists item.Sources.literals ~f:(fun literal ->
+                                               List.mem key_literals literal ~equal:String.equal)
+                                         then None
+                                         else pinned
+                                       in
+                                       scan pinned rest
                                  in
-                                 first_pin items
+                                 Option.map (scan None items) ~f:(fun helpers ->
+                                     Printf.sprintf
+                                       "%s.ml calls %s at initialization, before any search"
+                                       (String.lowercase m)
+                                       (String.concat ~sep:", "
+                                          (List.map
+                                             (List.dedup_and_sort helpers ~compare:String.compare)
+                                             ~f:(fun helper -> "`" ^ helper ^ "`"))))
                              | _ -> None)
                        in
                        (* How a subject pins the whole file on every cc run, or [None]. Per key and
-                          run, by precedence: a command-line flag in the run's stanza, then a
-                          `setenv` around the run -- a `-1` in either undoes the initializer's pin
-                          (rounds 2 and 3) -- and only without either, the initializer. *)
+                          run, by precedence: a command-line setting leaves it unpinned, then a
+                          `setenv` around the run decides -- a `-1` there undoes the initializer's
+                          pin (round 2) -- and only without either, the initializer. *)
                        let pinned_by modules =
                          let init = init_pin modules in
                          let answers =
                            List.concat_map vector_file_keys ~f:(fun (key, _) ->
                                let var = Utils.env_var_name key in
                                List.map cc_runs ~f:(fun (r, pins) ->
-                                   match command_line r ~key with
-                                   | _ :: _ as flags ->
-                                       Option.some_if (List.for_all flags ~f:Fn.id)
-                                         (Printf.sprintf
-                                            "every run that can select cc passes `--ocannl_%s`" key)
-                                   | [] ->
-                                       if Set.mem pins var then
-                                         Option.some_if (sets_a_value r ~key)
-                                           (Printf.sprintf "every run that can select cc pins `%s`"
-                                              var)
-                                       else init))
+                                   if on_command_line r ~key then None
+                                   else if Set.mem pins var then
+                                     Option.some_if (sets_a_value r ~key)
+                                       (Printf.sprintf "every run that can select cc pins `%s`" var)
+                                   else init))
                          in
                          Option.map (Option.all answers) ~f:(fun hows ->
                              String.concat ~sep:"; "
@@ -7213,6 +7223,25 @@ let search_control () =
       ( "command_line",
         refused
           (run ~action:"\n (action (run %{test} --ocannl_cc_vector_bytes=-1))" ~probe:helper ()) );
+      (* Round 4: any spelling the runtime reads, a call rather than a mention, and no reset before
+         the search; a conditional call is the supported `if is_cpu` shape. *)
+      ( "command_line_dashed",
+        refused
+          (run ~action:"\n (action (run %{test} --ocannl-cc-vector-bytes=-1))" ~probe:helper ()) );
+      ( "closure",
+        refused
+          (run ~probe:("let () = ignore (fun () -> Fissioned_chain.small_menu ())\n" ^ tune) ()) );
+      ( "reset",
+        refused
+          (run
+             ~probe:
+               (pin
+               ^ Printf.sprintf "let () = Hashtbl.set Utils.config_file_args ~key:%S ~data:\"-1\"\n"
+                   width_key
+               ^ tune)
+             ()) );
+      ( "conditional",
+        passed (run ~probe:("let () = if is_cpu then Fissioned_chain.small_menu ()\n" ^ tune) ()) );
       ("support_search", refused (run ~probe:"let () = Fissioned_chain.search ()\n" ()));
       ( "lapsed",
         refused ~why:unblessed
@@ -7281,6 +7310,12 @@ let search_control () =
   Verdict.p "nor does one under a command-line `--ocannl_cc_vector_bytes=-1`" (ok "command_line");
   Verdict.p "a search started through a support value reaching the entry point is a search too"
     (ok "support_search");
+  Verdict.p "a command-line setting in another spelling the runtime reads unpins too"
+    (ok "command_line_dashed");
+  Verdict.p "a helper in a closure the initializer builds but never calls pins nothing"
+    (ok "closure");
+  Verdict.p "nor does one whose key a later item spells again before the first search" (ok "reset");
+  Verdict.p "while a call under a condition, the `if is_cpu` shape, does" (ok "conditional");
   Verdict.p
     "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
      are both refused"

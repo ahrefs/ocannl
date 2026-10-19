@@ -1654,13 +1654,37 @@ let stating_reach ~literals ~tables ~table_writes ~env_writes ~pins content =
   in
   Set.to_list (fixpoint states_with)
 
-(** Each top-level item of [content], in source order: whether evaluating it runs code at module
-    initialization -- a bare expression, or a binding of anything but a function -- and every value
-    path it names, nested modules and function bodies included (gh-ocannl-1368: whether a program
-    pins the cc vector file before its first search). *)
+type initialization_item = {
+  runs : bool;
+      (** Whether evaluating the item runs code at module initialization: a bare expression, or a
+          binding of anything but a function. *)
+  paths : string list list;
+      (** Every value path the item names, nested modules and function bodies included. *)
+  called : string list list;
+      (** The functions the item CALLS in statement position, which a run of it reaches: the
+          elements of a sequence, a [let]'s bound expressions and body, the branches of an [if],
+          through type constraints and local [open]s. A path in a closure the item builds, or in an
+          argument, is not one. *)
+  literals : string list;  (** Every string literal the item spells. *)
+}
+
+(** Each top-level item of [content], in source order (gh-ocannl-1368: whether a program pins the cc
+    vector file before its first search, and keeps it pinned). *)
 let initialization_items content =
+  let rec statements expr =
+    match expr.pexp_desc with
+    | Pexp_sequence (first, rest) -> statements first @ statements rest
+    | Pexp_let (_, bindings, body) ->
+        List.concat_map bindings ~f:(fun b -> statements b.pvb_expr) @ statements body
+    | Pexp_ifthenelse (_, then_, else_) ->
+        statements then_ @ Option.value_map else_ ~default:[] ~f:statements
+    | Pexp_constraint (inner, _) | Pexp_open (_, inner) -> statements inner
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) ->
+        Option.to_list (flatten_module_path txt)
+    | _ -> []
+  in
   List.map (structure_of content) ~f:(fun item ->
-      let paths = ref [] in
+      let paths = ref [] and literals = ref [] in
       let iterator =
         object
           inherit Ast_traverse.iter as super
@@ -1669,20 +1693,25 @@ let initialization_items content =
             (match expr.pexp_desc with
             | Pexp_ident { txt; _ } ->
                 Option.iter (flatten_module_path txt) ~f:(fun path -> paths := path :: !paths)
-            | _ -> ());
+            | _ -> Option.iter (string_literal expr) ~f:(fun s -> literals := s :: !literals));
             super#expression expr
         end
       in
       iterator#structure_item item;
-      let runs =
+      let evaluated =
         match item.pstr_desc with
-        | Pstr_eval _ -> true
+        | Pstr_eval (expr, _) -> [ expr ]
         | Pstr_value (_, bindings) ->
-            List.exists bindings ~f:(fun b ->
-                match b.pvb_expr.pexp_desc with Pexp_function _ -> false | _ -> true)
-        | _ -> false
+            List.filter_map bindings ~f:(fun b ->
+                match b.pvb_expr.pexp_desc with Pexp_function _ -> None | _ -> Some b.pvb_expr)
+        | _ -> []
       in
-      (runs, List.rev !paths))
+      {
+        runs = not (List.is_empty evaluated);
+        paths = List.rev !paths;
+        called = List.concat_map evaluated ~f:statements;
+        literals = List.rev !literals;
+      })
 
 (** Every record type [content] declares at top level, with its labels:
     [type t = { a : int; b : int }] contributes [("t", ["a"; "b"])]. *)

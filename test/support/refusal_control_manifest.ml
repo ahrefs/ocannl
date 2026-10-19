@@ -554,6 +554,10 @@ let raw_entries =
         "[scanner-refusal:e1e7c11bf8ecfecb20b9031955b16937] helper called after";
         "[scanner-refusal:63423f2793604647b96a315b851f1859] ocannl_cc_vector_bytes=-1";
         "[scanner-refusal:48335fe342f8e4b1cdf081db8783e475] search started through";
+        "[scanner-refusal:0876bfabcf2ed9abc14e936d4ebd9018] command-line setting in";
+        "[scanner-refusal:25394c54f621666e9eb6b4419cee87fd] closure the initializer";
+        "[scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before";
+        "[scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu";
         "[scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
