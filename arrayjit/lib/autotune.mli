@@ -1702,7 +1702,11 @@ type seeded_choice = {
           loops ({!reduction_sink}, gh-ocannl-1348), in order: its first unit and the number of
           [Swap]s. *)
   sd_refined : int;
-      (** Default segments replaced by their finer [arity_cuts] pieces, because a piece seeds. *)
+      (** Default segments replaced by finer [arity_cuts] segments ({!refine_segments},
+          gh-ocannl-1413): every default segment of each block whose finer segments seed more than
+          its default ones -- an unseeded segment one of whose pieces seeds, a seeded one whose
+          other product sites seed once cut apart, or a run of segments whose finer cuts move a
+          boundary. *)
   sd_split : (Ir.Tnode.t * int) list;
       (** The reductions split before segmentation (gh-ocannl-1325), in detection order: each
           accumulated node and its block count. Empty when nothing was split. *)
@@ -1753,6 +1757,18 @@ val seeded_split_sites :
     1256 ms, gfx1151 unified memory) where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the
     unsplit plan; elsewhere the result is empty. Exposed for tests. *)
 
+val refine_segments :
+  coarse:(int * 'k * int * 'p) list ->
+  fine:(int * 'k * int * 'p) list option Lazy.t ->
+  seed:('k -> 'p -> 's option) ->
+  (int * 'k * int * 's option * 'p) list * int
+(** The site refinement of {!seeded_default} (gh-ocannl-1413): two segmentations of one routine,
+    given as [(first unit, kind, units, pre-schedule slice)] per segment, are compared block by
+    block, a block being a maximal run of units whose ends are segment boundaries in both. A block
+    takes its [fine] segments when more of them [seed] than of its [coarse] ones, and keeps its
+    coarse segments otherwise. Returns the result with each segment's seed, and the number of coarse
+    segments replaced. *)
+
 val seeded_transform :
   ?min_reduction:int ->
   ?min_serial:int ->
@@ -1782,17 +1798,21 @@ val seeded_default :
 (** A drop-in for {!Context.compile} that gives the untuned GPU default operand reuse on its large
     contractions (gh-ocannl-1324), without timing or scoring anything: the default pipeline's own
     fission segmentation, with each segment {!seeded_params} admits scheduled by that sketch instead
-    of the default preset. A default segment that seeds nothing but which the finer [arity_cuts]
-    segmentation ({!Ir.Schedule.fission_segmented}) splits into pieces of which one seeds — a weight
-    gradient sharing its kernel with the bias gradient over the same rows — is replaced by those
-    pieces; every other segment is exactly the default's. On CUDA and HIP only, with automatic
-    scheduling active and fission on; [min_reduction] (default: config
-    [gpu_default_sketch_min_reduction], 32; 0 disables) is the threshold. Every seeded segment is
-    probed alone first (the sketch must apply and pass {!Ir.Low_level.validate_parallel}); a segment
-    that fails keeps the preset, and a classified failure of the whole seeded compile recompiles the
-    default pipeline ({!compile_advisory}). The scalar blocktile pipeline keeps each output's
-    summation order, and only sites whose accumulator is at their storage precision are seeded, so
-    the seeded sketches leave the routine's results bitwise the default's.
+    of the default preset. The default segmentation is compared with the finer [arity_cuts] one
+    ({!Ir.Schedule.fission_segmented}) block by block ({!refine_segments}, gh-ocannl-1413): where a
+    run of default segments, between boundaries the two share, holds fewer seeding segments than the
+    finer segments covering the same units, the finer ones replace it — a weight gradient cut away
+    from the bias gradient over the same rows, a projection's data gradients cut away from its
+    weight gradient, attention's score product cut away from the row maximum's initialization (a
+    moved boundary). Such a replacement can change the launch count; every segment outside those
+    runs is exactly the default's. On CUDA and HIP only, with automatic scheduling active and
+    fission on; [min_reduction] (default: config [gpu_default_sketch_min_reduction], 32; 0 disables)
+    is the threshold. Every seeded segment is probed alone first (the sketch must apply and pass
+    {!Ir.Low_level.validate_parallel}); a segment that fails keeps the preset, and a classified
+    failure of the whole seeded compile recompiles the default pipeline ({!compile_advisory}). The
+    scalar blocktile pipeline keeps each output's summation order, and only sites whose accumulator
+    is at their storage precision are seeded, so the seeded sketches leave the routine's results
+    bitwise the default's.
 
     Before segmenting (on CUDA), the reductions {!seeded_split_sites} admits at [min_serial]
     (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split

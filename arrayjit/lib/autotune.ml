@@ -4389,6 +4389,56 @@ let seeded_split_sites ~backend ~min_serial ~static_indices (opt : LL.optimized)
           | Some b -> Some (s, b)
           | None -> Option.map (List.last fitting) ~f:(fun b -> (s, b)))
 
+(* The site refinement of a segmentation (gh-ocannl-574's [arity_cuts] pieces, gh-ocannl-1413):
+   [coarse] and [fine] are two segmentations of one routine as [(first unit, kind, units,
+   pre-schedule slice)] per segment, and [seed kind pre] decides a segment's seed. They are compared
+   block by block, a block being a maximal run of units whose two ends are segment boundaries in
+   both, and a block takes its fine segments when more of them seed than of its coarse ones; every
+   other block keeps its coarse segments, so no launch is added that buys no seed.
+
+   A kernel has one launch geometry, so a sketch tiles one product per segment and covers the others
+   only untiled ([companion_geometry]), and a companion that cannot follow the site's full arity
+   refutes every seed of the segment. Fission keeps a weight gradient with the bias gradient
+   reducing the same rows, and a projection's weight gradient with its input's data gradients
+   ([w_k.grad] with the two [x.grad] products and [w_q.grad] in a transformer layer): the fine
+   segments give each its own kernel. A block, not a single coarse segment, because the finer cuts
+   can also move a boundary: attention's score product shares its coarse segment with the row
+   maximum's initialization, which the fine segmentation keeps with the maximum instead -- the
+   segments [(qk, init) (max)] become [(qk) (init, max)], and no coarse segment is partitioned
+   exactly. Returns the refined segmentation, each segment with its decided seed, and the number of
+   coarse segments replaced. *)
+let refine_segments ~coarse ~(fine : _ list option Lazy.t) ~seed =
+  let decide (at, kind, n, pre) = (at, kind, n, seed kind pre, pre) in
+  let seeds segs = List.count segs ~f:(fun (_, _, _, s, _) -> Option.is_some s) in
+  let end_of (at, _, n, _) = at + n in
+  (* The blocks, as [(coarse segments, fine segments)] in order; [None] when the two do not cover
+     the same units. *)
+  let rec blocks acc cb fb coarse fine =
+    match (coarse, fine) with
+    | [], [] when List.is_empty cb && List.is_empty fb -> Some (List.rev acc)
+    | c :: cs, f :: fs ->
+        if end_of c = end_of f then
+          blocks ((List.rev (c :: cb), List.rev (f :: fb)) :: acc) [] [] cs fs
+        else if end_of c < end_of f then blocks acc (c :: cb) fb cs fine
+        else blocks acc cb (f :: fb) coarse fs
+    | _ -> None
+  in
+  match Option.bind (Lazy.force fine) ~f:(blocks [] [] [] coarse) with
+  | None -> (List.map coarse ~f:decide, 0)
+  | Some blocks ->
+      let segs, refined =
+        List.fold blocks ~init:([], 0) ~f:(fun (acc, refined) (cb, fb) ->
+            let whole = List.map cb ~f:decide in
+            match fb with
+            | [ _ ] when List.length cb = 1 -> (List.rev_append whole acc, refined)
+            | _ ->
+                let pieces = List.map fb ~f:decide in
+                if seeds pieces > seeds whole then
+                  (List.rev_append pieces acc, refined + List.length cb)
+                else (List.rev_append whole acc, refined))
+      in
+      (List.rev segs, refined)
+
 let no_seeded_choice =
   { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_split = []; sd_fell_back = false }
 
@@ -4540,44 +4590,18 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
         match derive ~arity_cuts:false with
         | None -> default_segs ()
         | Some coarse -> (
-            (* A default segment with no seed of its own can still hold a site: fission keeps
-               aligned nests together, so a weight gradient shares its kernel with the bias gradient
-               reducing the same rows, and two weight gradients of one input share theirs, and a
-               second reduction is a companion no sketch covers. The finer [arity_cuts] segmentation
-               (gh-ocannl-574) cuts those apart. Where it partitions exactly that segment's units
-               and one of the pieces seeds, the pieces replace the segment; elsewhere the default
-               segmentation stands, so no launch is added that buys no seed. *)
-            let fine = lazy (derive ~arity_cuts:true) in
-            let refined = ref 0 in
-            let hybrid =
-              List.concat_map coarse ~f:(fun (at, kind, n, pre) ->
-                  let decide (s, k, m, pre) =
-                    ( s,
-                      k,
-                      m,
-                      Option.map (seed_of k pre) ~f:(fun p ->
-                          (p, digest ~with_placements:false pre)),
-                      pre )
-                  in
-                  match decide (at, kind, n, pre) with
-                  | (_, _, _, Some _, _) as seeded -> [ seeded ]
-                  | unseeded -> (
-                      match (kind, Lazy.force fine) with
-                      | `Normal, Some fine ->
-                          let pieces =
-                            List.filter fine ~f:(fun (s, _, m, _) -> s >= at && s + m <= at + n)
-                          in
-                          if
-                            List.length pieces < 2
-                            || List.sum (module Int) pieces ~f:(fun (_, _, m, _) -> m) <> n
-                          then [ unseeded ]
-                          else
-                            let pieces = List.map pieces ~f:decide in
-                            if List.exists pieces ~f:(fun (_, _, _, s, _) -> Option.is_some s) then (
-                              Int.incr refined;
-                              pieces)
-                            else [ unseeded ]
-                      | _ -> [ unseeded ]))
+            (* A default segment can hold sites its own seed cannot reach: fission keeps aligned
+               nests together, so a weight gradient shares its kernel with the bias gradient
+               reducing the same rows, and a projection's weight gradient with its input's data
+               gradients, and only the first product is tiled. The finer [arity_cuts] segmentation
+               (gh-ocannl-574) cuts those apart; {!refine_segments} takes its pieces where more of
+               them seed (gh-ocannl-1413), and elsewhere the default segmentation stands, so no
+               launch is added that buys no seed. *)
+            let hybrid, refined =
+              refine_segments ~coarse
+                ~fine:(lazy (derive ~arity_cuts:true))
+                ~seed:(fun k pre ->
+                  Option.map (seed_of k pre) ~f:(fun p -> (p, digest ~with_placements:false pre)))
             in
             let seeds = Array.of_list (List.map hybrid ~f:(fun (_, _, _, s, _) -> s)) in
             (* The segments no sketch takes, one decision per distinct segment code like the
@@ -4630,11 +4654,11 @@ let seeded_transform ?min_reduction ?min_serial ?reduction_sink:sink_override
                   logf
                     "seeded_default: %d of %d segments seeded (%d default segments refined), %d \
                      with reductions sunk: %s"
-                    (List.length seeded) (List.length plan) !refined (List.length sunk)
+                    (List.length seeded) (List.length plan) refined (List.length sunk)
                     (String.concat ~sep:", "
                        (List.map seeded ~f:(fun (at, p) ->
                             Printf.sprintf "u%d %s" at (sketch_params_label p))));
-                  on_choice { none with sd_seeded = seeded; sd_sunk = sunk; sd_refined = !refined };
+                  on_choice { none with sd_seeded = seeded; sd_sunk = sunk; sd_refined = refined };
                   segs
               | exception Outcome.Cause_at (_, cause) ->
                   logf "seeded_default: the seeded pipeline FAILED to apply (%s); using the default"

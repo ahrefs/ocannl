@@ -474,11 +474,22 @@ files.
   (gh-ocannl-1324, `Autotune.seeded_default`). The tuner's per-segment sketches use a different
   segmentation: they fold each covering zero into its reduction's segment, and their other segments
   get the `min_parallel:1` presets. The seeded default instead derives `maybe_default_schedules`'
-  own plan and swaps the preset for a sketch only on segments that seed. Where a default segment
-  has no seed but its `arity_cuts` refinement partitions exactly its units into pieces of which one
-  seeds, it takes those pieces; that is how a weight gradient fused with its bias gradient (or
-  `w_q.grad` with `w_k.grad`) is reached. So every other kernel is byte-identical to the default's,
-  and a routine with no seed IS the default compile. Two traps that cost measurable time on
+  own plan and swaps the preset for a sketch only on segments that seed. It compares that plan with
+  its `arity_cuts` refinement block by block (`Autotune.refine_segments`, gh-ocannl-1413): a block
+  is a maximal run of units whose two ends are boundaries in both, and it takes the finer segments
+  where more of them seed. That is how a weight gradient fused with its bias gradient, or a
+  projection's `w_k.grad` with its input's data gradients and `w_q.grad`, is reached (the shared
+  segment's own seeds all decline on companion coverage). A block rather than a segment, because
+  the finer cuts can move a boundary: attention's score product shares its default segment with
+  the row max's `-inf` initialization, which the finer plan keeps with the max instead, so before
+  gh-1413 gpt2_mini_train's four score products were never seeded (95 → 99 of its 99 matmul sites,
+  same launch count). So every other kernel is byte-identical to the default's, and a routine with
+  no seed IS the default compile. **A site census is not a seed census**: `bench_gpt_diag
+  BENCH_SITE_CENSUS=1` lists each segment's product accumulations, its site, and the search's
+  seed count, and its seeded-default line counts the sketches actually taken. gh-1413 was filed
+  from the site column alone ("only the first product site is seeded") while both pipelines already
+  seeded every one of those products through the refinement; 17 of the step's 116 products are not
+  matmuls even alone (row sums, the attention row max, loss terms). Two traps that cost measurable time on
   gpt2_mini. First, geometry must be padding-aware: attention's value product (32 columns) under a
   64-column tile wasted half its threads and made threshold 128 slower than 256. With padding at
   most 1/8 preferred, threshold 32 gave b8 15.4 ms (the tuned step was 15.3) and b256 565 ms
