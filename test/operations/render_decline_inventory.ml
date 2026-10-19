@@ -421,4 +421,5 @@ let () =
     ~over:sources
     (of_kinds [ "unreadable"; "off-phase" ]);
   p_exists "some decline is paired with an oracle constructor" sites ~f:(fun s ->
-      match s.origin with Oracle _ -> true | Literal -> false)
+      match s.origin with Oracle _ -> true | Literal -> false);
+  Test_utils.Refusal_control_manifest.print "render_decline_inventory.ml"

@@ -21,6 +21,16 @@ let raw_entries =
     ("refused_action_streams.ml", []);
     ("operand_key_ratchet.ml", []);
     ("provenance_tag_inventory.ml", []);
+    ( "render_decline_inventory.ml",
+      [
+        "[scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control";
+        "[scanner-refusal:93267baf53efdf52a09d9a689b122ee2] render-time typed declines";
+        "[scanner-refusal:088c4ae45b34730d522c2b57bb9d8963] render-time typed declines";
+        "[scanner-refusal:dd8e45f07b3a48f23ebf2b744ace13cf] every entry's classification";
+        "[scanner-refusal:820965bd005837e9b9226c12de25898a] paired or render-only";
+        "[scanner-refusal:d5a3d0a93c03dd4c310fea6768cacf86] Backend_codegen";
+        "[scanner-refusal:b8d04b43e856d40dadc6df2ae5eb1951] an oracle constructor";
+      ] );
     ( "atomic_file_rename_scan.ml",
       [
         "[scanner-refusal:7191f5e19a3640926ad61aeb2d7a349e] source-generation input has";

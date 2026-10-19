@@ -24,3 +24,12 @@ every entry's classification is how its site builds the decline: paired iff orac
 every entry names a decline some site raises, once, as paired or render-only: true
 every Backend_codegen cause is readable, and the renderer raises typed declines only there: true
 some decline is paired with an oracle constructor: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control
+  [scanner-refusal:93267baf53efdf52a09d9a689b122ee2] render-time typed declines
+  [scanner-refusal:088c4ae45b34730d522c2b57bb9d8963] render-time typed declines
+  [scanner-refusal:dd8e45f07b3a48f23ebf2b744ace13cf] every entry's classification
+  [scanner-refusal:820965bd005837e9b9226c12de25898a] paired or render-only
+  [scanner-refusal:d5a3d0a93c03dd4c310fea6768cacf86] Backend_codegen
+  [scanner-refusal:b8d04b43e856d40dadc6df2ae5eb1951] an oracle constructor

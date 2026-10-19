@@ -787,7 +787,7 @@ files.
   `Schedule.op_legality`. "paired (`Schedule.X`)" means the renderer builds the decline from the
   oracle's own reason `X` through a `Schedule.*_cause` function, so the oracle refuses the moves
   that produce it and the renderer is the backstop. "render-only, because" says why no op verdict
-  can state the fact. `render_decline_inventory` parses every `arrayjit/lib` source
+  can state the fact. `render_decline_inventory` (in `@scans`) parses every `arrayjit/lib` source
   and this section, and fails on a decline no entry classifies, an entry no site raises, a
   "paired" entry over a literal site or a "render-only" one over an oracle-built site, a cause it
   cannot read, and a `C_syntax` `Cause_at` at any other phase. So a new typed decline lands with

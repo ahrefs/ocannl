@@ -156,7 +156,8 @@
   (alias runtest-provenance_tag_inventory)
   (alias runtest-provenance_tag_scan_cases)
   (alias runtest-slot_kind_cases)
-  (alias runtest-slot_kind_live)))
+  (alias runtest-slot_kind_live)
+  (alias runtest-render_decline_inventory)))
 
 ; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
@@ -270,6 +271,7 @@
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
   (alias runtest-test_config_consistency)
+  (alias runtest-render_decline_inventory)
   (alias runtest-digest_completeness)
   (alias runtest-env_var_deps)
   (alias runtest-env_var_deps_control)
@@ -2196,18 +2198,32 @@
 ; the agent note's inventory, classified paired-with-the-oracle or render-only by how its site
 ; builds it. The sources are globbed, so a decline added in any arrayjit module is seen.
 
-(test
- ; ocannl-backend: none -- parses the arrayjit sources and one agent note as text; links no backend.
+(executable
  (name render_decline_inventory)
- (package neural_nets_lib)
- (deps
-  ocannl_config
-  ../../docs/agent-notes/scheduling-and-autotune.md
-  (glob_files ../../arrayjit/lib/*.ml))
- (action
-  (run %{test} ../../docs/agent-notes/scheduling-and-autotune.md %{deps}))
  (modules render_decline_inventory)
  (libraries base stdio ppxlib test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses the arrayjit sources and one agent note as text; links no backend.
+ (target render_decline_inventory.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (glob_files_rec ../../arrayjit/lib/*.ml))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:render_decline_inventory.exe}
+    %{dep:../../docs/agent-notes/scheduling-and-autotune.md}
+    %{deps}))))
+
+(rule
+ (alias runtest-render_decline_inventory)
+ (package neural_nets_lib)
+ (action
+  (diff render_decline_inventory.expected render_decline_inventory.actual)))
 
 ; gh-ocannl-817: real-graph reachability probe plus the explicit Set_vec_unop lowering boundary.
 
@@ -3426,6 +3442,8 @@
   provenance_tag_inventory.ml
   provenance_tag_inventory.expected
   provenance_tag_scan_cases.expected
+  render_decline_inventory.ml
+  render_decline_inventory.expected
   ocamlformat_ignore_scan.ml
   ocamlformat_ignore_scan.expected
   optional_arg_inventory.ml
@@ -3483,6 +3501,8 @@
    operand_key_ratchet.expected,operand_key_scan_cases.expected
    provenance_tag_inventory.ml
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
+   render_decline_inventory.ml
+   render_decline_inventory.expected
    ocamlformat_ignore_scan.ml
    ocamlformat_ignore_scan.expected
    optional_arg_inventory.ml
