@@ -11,10 +11,10 @@
    distinct rates, and the ranking score's prediction under the capacity in force (rank) beside the
    distinct-cell roofline (bound) -- then a config-pasteable [model_cache_capacity=] line under [#]
    comment lines, with the [model_cache_bandwidth=] the below-capacity plateau implies -- or a [#]
-   line saying why the sweep implies none. [model_cache_capacity=none] is printed, honestly, when no
-   point of the sweep reaches DRAM. Calibrate on an otherwise idle device: the fit reads rates.
-   Backend and device follow the ordinary config (--ocannl_backend=...); startup chatter goes to
-   stderr. *)
+   line saying why the sweep implies none. When no point of the sweep reaches DRAM only the cache
+   bandwidth is printed: the capacity is then a lower bound, which no config value expresses.
+   Calibrate on an otherwise idle device: the fit reads rates. Backend and device follow the
+   ordinary config (--ocannl_backend=...); startup chatter goes to stderr. *)
 
 open Base
 module Cal = Ocannl.Calibrate
@@ -77,11 +77,13 @@ let () =
       Stdio.printf "model_cache_capacity=%d\nmodel_cache_bandwidth=%.6e\n" capacity cache_rate;
       if not monotone then Stdlib.exit 1
   | Cal.All_cached { largest_ws; cache_rate } ->
+      (* A lower bound is not a capacity: no [model_cache_capacity] line, so nothing downstream
+         reads "at least this" as "unlimited" (which [none] means) or as "exactly this". *)
       Stdio.printf
         "# every point is cache-served: the capacity is at least %d bytes, the largest swept \
-         working set -- extend --ks to find it; none is invented\n"
+         working set -- extend --ks to find it; no capacity is printed\n"
         largest_ws;
-      Stdio.printf "model_cache_capacity=none\nmodel_cache_bandwidth=%.6e\n" cache_rate
+      Stdio.printf "model_cache_bandwidth=%.6e\n" cache_rate
   | Cal.All_spilled { smallest_ws } ->
       Stdio.printf
         "# every point is DRAM-bound: the capacity is below %d bytes -- extend --ks downward\n"

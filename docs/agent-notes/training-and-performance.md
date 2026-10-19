@@ -130,9 +130,10 @@ files.
   over reduction extents on the plain default pipeline and splits the requested-bytes rate against
   the STREAM-calibrated DRAM bandwidth (pass it: the advisory is a class ceiling): the boundary is
   the capacity, the cached plateau's median the cache bandwidth. Drop launch-bound points first
-  (the fit does: below the fastest point's working set), and print `none` rather than invent a
-  capacity when no point reaches DRAM — minix's unified gfx1151 stayed at 1.7 TB/s requested to
-  5.4 GB. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
+  (the fit does: below the fastest point's working set), and print no capacity rather than invent
+  one when no point reaches DRAM — a lower bound is neither `none` (unlimited) nor a value; minix's
+  unified gfx1151 stayed at 1.7 TB/s requested to 10.8 GB, and its class constant is a separate,
+  documented per-class decision. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
   distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate

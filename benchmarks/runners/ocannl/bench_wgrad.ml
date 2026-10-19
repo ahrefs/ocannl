@@ -117,19 +117,15 @@ let () =
     |> String.concat ~sep:","
   in
   let predict plan transform =
-    let segments = ref [] in
     match
-      Context.compile_outcome
-        ~lowered_transform:(fun opt ->
-          let segs = transform opt in
-          segments := segs;
-          segs)
+      Context.compile_outcome ~lowered_transform:transform
         ~provenance:Ir.Schedule_outcome.User_schedule ctx comp Ir.Indexing.Empty
     with
     | Error _ -> Stdio.printf "wgrad-model: plan=%s did not compile\n" plan
-    | Ok (plan_ctx, _) ->
+    | Ok (plan_ctx, plan_routine) ->
         Context.release plan_ctx;
-        List.iter !segments ~f:(fun o ->
+        (* The shipped kernels, after codegen's own rewrites of the list (GPU zero elision). *)
+        List.iter plan_routine.Context.segments ~f:(fun o ->
             match Autotune.ranking_ms ~limits [ o ] with
             | Some (rank, bound) ->
                 Stdio.printf "wgrad-model: plan=%s kernel=[%s] rank_ms=%.4f bound_ms=%.4f\n" plan

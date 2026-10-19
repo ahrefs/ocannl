@@ -141,7 +141,7 @@ let working_set ?(m = 256) ?(n = 1024)
       let x = NTDSL.ndarray (cyc (k * n) 5 0.125) ~label:[ tag ^ "_x" ] ~output_dims:[ k; n ] () in
       let%op dw = dy +* "ko; ki => oi" x in
       Train.set_materialized dw.Tensor.value;
-      let segments = ref [] and loops = ref [] in
+      let loops = ref [] in
       let lowered_transform opt =
         (let rec writes = function
            | Ir.Low_level.For_loop { body; _ } | Ir.Low_level.If { body; _ } -> writes body
@@ -155,11 +155,7 @@ let working_set ?(m = 256) ?(n = 1024)
          in
          List.iter (Ir.Low_level.flat_lines [ opt.Ir.Low_level.llc ]) ~f:(fun stmt ->
              if List.is_empty !loops && writes stmt then loops := nest [] stmt));
-        let segs =
-          Ir.Schedule.maybe_default_schedules ~backend_name ~limits ~static_indices:[] opt
-        in
-        segments := segs;
-        segs
+        Ir.Schedule.maybe_default_schedules ~backend_name ~limits ~static_indices:[] opt
       in
       let comp = named (tag ^ "_wgrad") (Train.forward dw) in
       let run_ctx, routine =
@@ -173,9 +169,12 @@ let working_set ?(m = 256) ?(n = 1024)
               o.Ir.Low_level.llc
           in
           let requested r = List.sum (module Int) r.Ir.Cost_model.ru_requested ~f:snd in
-          (* The contraction's kernel: the segment requesting the most, beside its zero fill. *)
+          (* The contraction's kernel: the shipped segment requesting the most. Read off the
+             routine, after codegen's own rewrites of the kernel list (GPU zero elision drops the
+             output's zero fill and folds it into the first accumulation), so the bytes charged are
+             the code timed. *)
           let seg =
-            List.max_elt !segments ~compare:(fun a b ->
+            List.max_elt routine.Context.segments ~compare:(fun a b ->
                 Int.compare (requested (reuse_of a)) (requested (reuse_of b)))
           in
           let r, distinct, scores =
