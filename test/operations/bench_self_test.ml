@@ -70,6 +70,29 @@ let late_probe_marker = "bench_self_test: late probe reached; ending this proces
 (* 128 + SIGKILL, as a shell reports a killed process; any other status is some other exit. *)
 let killed_status = 137
 
+(* gh-ocannl-1337: what the killed child inherits and is told, so its checkpoints show where each
+   inherited key resolved from -- the observation [orchestrate.py] checks its
+   [ambient_ocannl_shadowed] stamp against. One variable the commandline-picked profile outranks,
+   one an explicit argument outranks, and one that applies; keys an untuned cell never reads (or
+   only prints with), so the child's protocol is the one the claims above describe. *)
+let child_ambient =
+  [
+    ("OCANNL_TUNE_INLINE_FLIPS", "5");
+    ("OCANNL_PRINT_DECIMALS_PRECISION", "4");
+    ("OCANNL_AUTOTUNE_BEAM_WIDTH", "3");
+  ]
+
+let child_args = [ "--ocannl_profile=reproducible"; "--ocannl_print_decimals_precision=3" ]
+
+(* Variable, value and source each of [child_ambient] resolves to in the child: the profile's
+   payload value, the argument's, and the environment's own. *)
+let child_resolutions =
+  [
+    ("OCANNL_TUNE_INLINE_FLIPS", "0", "profile 'reproducible' via the commandline");
+    ("OCANNL_PRINT_DECIMALS_PRECISION", "3", "commandline");
+    ("OCANNL_AUTOTUNE_BEAM_WIDTH", "3", "environment");
+  ]
+
 let () =
   if Array.exists Stdlib.Sys.argv ~f:(String.equal killed_in_diagnostics_arg) then (
     ignore
@@ -89,7 +112,19 @@ let () =
   let out_path = capture_file ".out" and err_path = capture_file ".err" in
   let open_capture path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
   let out = open_capture out_path and err = open_capture err_path in
-  let pid = Unix.create_process exe [| exe; killed_in_diagnostics_arg |] Unix.stdin out err in
+  let env =
+    Array.append
+      (Array.filter (Unix.environment ()) ~f:(fun binding ->
+           not
+             (List.exists child_ambient ~f:(fun (var, _) ->
+                  String.is_prefix binding ~prefix:(var ^ "=")))))
+      (Array.of_list (List.map child_ambient ~f:(fun (var, value) -> var ^ "=" ^ value)))
+  in
+  let pid =
+    Unix.create_process_env exe
+      (Array.of_list ((exe :: child_args) @ [ killed_in_diagnostics_arg ]))
+      env Unix.stdin out err
+  in
   let _, status = Unix.waitpid [] pid in
   Unix.close out;
   Unix.close err;
@@ -128,7 +163,13 @@ let () =
         (List.length losses = protocol.H.parity_steps);
       Verdict.p_all "every loss the kill kept is finite" losses ~f:(function
         | `Float _ | `Int _ -> true
-        | _ -> false)
+        | _ -> false);
+      let resolved = Option.value (field last "ambient_ocannl_resolved") ~default:`Null in
+      Verdict.p_all
+        "its checkpoint records where each inherited key resolved: profile, argument, environment"
+        child_resolutions ~f:(fun (var, value, source) ->
+          let entry = Option.value (field resolved var) ~default:`Null in
+          is_str entry "value" value && is_str entry "source" source)
 
 let () =
   (* Emitted to stderr rather than stdout: the line carries wall-clock digits, and the golden is

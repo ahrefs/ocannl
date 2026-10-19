@@ -1761,6 +1761,31 @@ let profile_payload_sources name =
       parse_config_lines ~source:("profile " ^ name) (String.split_lines text)
       |> List.map ~f:(fun (key, _) -> (key, profile_key_source key))
 
+(** Every configuration key this process INHERITED a value for from its environment, with where the
+    key actually resolved from (gh-ocannl-1337): [(variable, key, resolution)] per non-empty
+    environment variable that {!classify_env_var} calls a spelling of a key, sorted by variable, the
+    resolution as {!profile_key_source} gives it. Inherited is not applied: the commandline and a
+    commandline-picked profile's payload both outrank the environment, so a variable resolved from
+    anything but [From_env] was in the environment and decided nothing. The benchmark runners report
+    this beside [regime_knobs], so the driver's stamp of which inherited variables a cell's command
+    line outranks -- a prediction from the argv it built -- is checked against the process that ran.
+    A variable in a reserved namespace, or naming no key, is no setting and is left out; an unread
+    spelling of a key never gets here, being fatal at startup. Not logged and not recorded as an
+    access, like [profile_key_source]. *)
+let inherited_env_key_sources () =
+  Unix.environment () |> Array.to_list
+  |> List.filter_map ~f:(fun binding ->
+      match String.lsplit2 binding ~on:'=' with
+      | Some (_, "") | None -> None
+      | Some (name, _) -> Some name)
+  |> List.dedup_and_sort ~compare:String.compare
+  |> List.filter_map ~f:(fun name ->
+      match classify_env_var name with
+      | Env_config_key key -> Some (name, key, profile_key_source key)
+      | Env_not_addressed | Env_reserved _ | Env_unread_spelling _ | Env_unread_reserved _
+      | Env_unknown_key _ ->
+          None)
+
 let get_global_flag ~default ~arg_name:n =
   bool_of_config_string ~arg_name:n
   @@ get_global_arg ~default:(if default then "true" else "false") ~arg_name:n
