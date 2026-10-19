@@ -1071,6 +1071,17 @@ type report = {
           rejection is in [declines] like any candidate's. The HIP scratch validator declining the
           unscheduled serial form of a large softmax/cross-entropy head at [Backend_link] is the
           case this exists for — before it was contained, that one rejection ended the search. *)
+  baseline_refused : bool;
+      (** The dispatched serial baseline ran its timing window and the window was refused
+          (gh-ocannl-1423): contention, a queued calibration that measured no batch within its
+          target, or a degenerate clock reading. [baseline_ms] is then [infinity] although the
+          baseline ran, and the window counts in [timings_contended]. This is the baseline's own
+          record, where [timings_contended] counts every refused window: a claim about the
+          baseline's measurement gates on it, so a loaded host reads as a skip and every other
+          [infinity] (a baseline never relinked, never dispatched, declined) still fails the claim.
+          An identical seed may time the same code later, which [default_ms] attributes by digest;
+          [baseline_ms] stays the baseline's own reading. [false] on cache replay and
+          search-disabled calls, which time nothing, and on a declined or undispatched baseline. *)
   declines : decline_summary list;
       (** Candidate rejections aggregated by stable cause key. Their counts sum to
           [candidates_failed]. Cache-entry replay failures are excluded: they are
@@ -1224,7 +1235,7 @@ type report = {
       (** The unscheduled serial baseline's measured time, or [infinity] when it was not dispatched:
           on a GPU backend an unparallelized candidate is never run (gh-ocannl-532 — the whole
           routine in one work-item, unbounded in cost and uninterruptible), so it has no measurement
-          and cannot win. Also [infinity] when [baseline_declined]. *)
+          and cannot win. Also [infinity] when [baseline_declined] or [baseline_refused]. *)
   default_ms : float option;
       (** The untuned default pipeline's measured time (gh-ocannl-552): the [config_thresholds]
           fissioned-preset seed reproduces {!Ir.Schedule.maybe_default_schedules} exactly, so this

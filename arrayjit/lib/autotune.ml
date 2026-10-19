@@ -246,6 +246,8 @@ type report = {
   default_refused : bool;
   candidates_failed : int;
   baseline_declined : bool;
+  baseline_refused : bool;
+      (** The baseline's own timing window was refused (gh-ocannl-1423). See the interface. *)
   declines : decline_summary list;
   cache_replay_refusal : Outcome.classified_cause option;
   rounds_run : int;
@@ -332,6 +334,7 @@ let no_search_report ~timing =
     default_refused = false;
     candidates_failed = 0;
     baseline_declined = false;
+    baseline_refused = false;
     declines = [];
     cache_replay_refusal = None;
     rounds_run = 0;
@@ -6263,6 +6266,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     (* No search ran, so the only rejection this can carry is the baseline's. *)
                     candidates_failed = failed_count declines;
                     baseline_declined = Option.is_some baseline_decline;
+                    (* Nothing is timed on a replay, the baseline included. *)
+                    baseline_refused = false;
                     declines = decline_summaries declines;
                     cache_replay_refusal = None;
                     rounds_run = 0;
@@ -6779,6 +6784,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             default_refused = default_refused ();
             candidates_failed = failed_count declines;
             baseline_declined = Option.is_some baseline_decline;
+            baseline_refused = !baseline_contended;
             declines = summaries;
             cache_replay_refusal = !cache_replay_refusal;
             rounds_run = !rounds_run;
@@ -8206,6 +8212,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               default_refused = default_refused ();
               candidates_failed = failed_count declines;
               baseline_declined = Option.is_some baseline_decline;
+              baseline_refused = !baseline_contended;
               declines = decline_summaries declines;
               cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;

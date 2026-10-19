@@ -23,6 +23,14 @@
    environment skip, never a pass) where the plant's store or the call's lookup was refused, and one
    unwaived claim keeps a deterministic refusal from turning them into a permanent skip.
 
+   A loaded host refuses timing windows too (gh-ocannl-1423), so the claim that the re-search times
+   the baseline it relinked reads the search's own record of the baseline's window,
+   [baseline_refused]: the re-search is retried a bounded number of times while that window is
+   refused, and the claim is an environment skip only when every attempt's was, must-pass whenever
+   one was admitted. A control (leg 4) refuses the window through [Autotune.on_candidate_measured]
+   and pins that the record says so and that the claim it gates would have failed -- a skip, not a
+   pass.
+
    Pinned to cc ([Context.cpu]): the refusal is backend-independent, and cc is always available. It
    is also a backend whose baseline is timed, which is what makes the re-search's relink of the
    baseline a replay released (gh-ocannl-1326) observable. *)
@@ -151,6 +159,25 @@ let refused_by ~check (r : Autotune.report) =
 
 let outcome_is name (r : Autotune.report) = String.equal (Autotune.outcome_name r.outcome) name
 
+(* gh-ocannl-1326: what the re-search did with the baseline it relinked -- on cc, where it is
+   dispatched, timed it. *)
+let baseline_timed (r : Autotune.report) =
+  (not r.Autotune.baseline_declined) && Float.is_finite r.Autotune.baseline_ms
+
+(* gh-ocannl-1423: how many times a re-search whose baseline window the host refused is re-run
+   before the claim on that window is skipped, and the skip's reason. *)
+let baseline_attempts = 3
+let baseline_refused_on = "baseline timing refused under contention"
+
+(* A claim on the baseline's timing: skipped where the search recorded the baseline's own window as
+   refused, otherwise a replay claim like the others. The gate is the record of the window, never
+   [baseline_ms]: a baseline the re-search never relinked or never timed has no refused window, and
+   fails. *)
+let baseline_claim (r : Autotune.report) ios label b =
+  if r.Autotune.baseline_refused then
+    Verdict.skipped ~aggregation:`Environment ~backend:baseline_refused_on label
+  else replay_claim ios label b
+
 let () =
   (* --- 1. A whole-routine winner with a dangling minted-symbol reference. --- *)
   let dangling = [ SC.Swap { outer = SC.Minted (0, SC.Split_outer); inner = SC.Base 0 } ] in
@@ -162,17 +189,27 @@ let () =
   replay_claim ios "with search off, the call compiles the untuned default"
     (outcome_is "search-disabled" r);
   p_all2 "with search off, the untuned default computes the right values" values expected ~f:approx;
-  let planted_io = plant ~saved:dangling ~segments:None in
-  let values, r, lookups = tune ~search:true in
-  let ios = planted_io @ lookups in
+  (* Re-run, from a fresh plant, while the host refuses the relinked baseline's window. *)
+  let rec re_search attempt =
+    let planted_io = plant ~saved:dangling ~segments:None in
+    let values, r, lookups = tune ~search:true in
+    if r.Autotune.baseline_refused && attempt < baseline_attempts then (
+      Stdio.eprintf
+        "re-search attempt %d of %d (not part of the golden): the baseline's timing window was \
+         refused; retrying\n\
+         %!"
+        attempt baseline_attempts;
+      re_search (attempt + 1))
+    else (planted_io @ lookups, values, r)
+  in
+  let ios, values, r = re_search 1 in
   replay_claim ios "the corrupt winner's replay is refused with a typed cause"
     (refused_by ~check:"Schedule_cache.of_saved" r);
   replay_claim ios "the refused replay re-searches" (outcome_is "searched" r);
   (* gh-ocannl-1326: the baseline is released before a replay compile, so that the two are never
      resident together; the re-search a refused replay leads to relinks it, and on cc, where it is
      dispatched, times it. *)
-  replay_claim ios "the re-search times the baseline the replay released"
-    ((not r.Autotune.baseline_declined) && Float.is_finite r.Autotune.baseline_ms);
+  baseline_claim r ios "the re-search times the baseline the replay released" (baseline_timed r);
   p_all2 "the re-searched routine computes the right values" values expected ~f:approx;
 
   (* --- 2. A split-reduce winner whose prelude names a tensor node the routine lacks. --- *)
@@ -239,6 +276,21 @@ let () =
            (Outcome.Resource_exceeded_key Outcome.Device_memory)));
   replay_claim ios "no candidate is compiled after the refused relink"
     (List.equal String.equal !attempts [ "baseline" ]);
+  (* --- 4. gh-ocannl-1423's control: the relinked baseline's window refused at admission, as a
+     loaded host refuses it, here on every host. The record names the baseline's refusal, and the
+     claim that record gates would have failed, so leg 1 skips it rather than passing it. Waived
+     like the other replay claims: where the plant was refused, an earlier leg's winner can replay
+     and time nothing. --- *)
+  let planted_io = plant ~saved:dangling ~segments:None in
+  let _values, r, lookups =
+    Autotune.Seam.with_value Autotune.on_candidate_measured
+      (fun ~label ~digest:_ ms -> if String.equal label "baseline" then Float.nan else ms)
+      (fun () -> tune ~search:true)
+  in
+  let ios = planted_io @ lookups in
+  replay_claim ios "a refused baseline window is recorded as the baseline's refusal"
+    r.Autotune.baseline_refused;
+  replay_claim ios "a refused baseline window leaves the baseline untimed" (not (baseline_timed r));
   (* A keyed plant always attempts its store. *)
   Cache_plant.not_every_store_refused ~expected:cache_available
     "not every planted entry's store was refused" !planted
