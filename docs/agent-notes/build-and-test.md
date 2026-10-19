@@ -1923,7 +1923,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   item -- or a top-level helper of the file it references -- JUDGES the census
   (`Ll_test.rendered_tensorized`/`all_tensorized`/`census_agrees_with_capability`/..., a
   `C_syntax` tensorization comparison, constructor or field). Binding the census and discarding it
-  does not count. The closed lists and the boundary are in `Test_utils.Tensorized_census_scan`'s
+  does not count, and a claim in a check helper is also each executing caller's, which must judge
+  too. The closed lists and the boundary are in `Test_utils.Tensorized_census_scan`'s
   header; the two that matter when writing a test: the granularity is the top-level item, so one
   judgment covers every leg in a big `let () =`, and a label whose tensorization word arrives
   through a function parameter is not read -- name the claim's tensorized leg in its literal text

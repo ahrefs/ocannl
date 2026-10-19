@@ -13,9 +13,12 @@
     A [Verdict] claim whose label names tensorization AND asserts parity, in a top-level structure
     item that executes a routine, needs a census JUDGMENT in that item. "In that item" includes the
     file's own top-level bindings the item references, transitively, so a helper that executes (or
-    judges) on the item's behalf counts for it. A tensorized claim that asserts no parity -- "the
-    tensorized seeds are proposed", "the twin constructs and validates" -- is about structure, which
-    the census does not decide, and is not read.
+    judges) on the item's behalf counts for it. A claim in a top-level helper is ALSO executed by
+    every item that references the helper, transitively ([let check got = Verdict.p …] called as
+    [check got] after an execution), and each such executing item must judge within its own reach
+    (which includes the helper's). A tensorized claim that asserts no parity -- "the tensorized
+    seeds are proposed", "the twin constructs and validates" -- is about structure, which the census
+    does not decide, and is not read.
 
     {1 The closed lists of recognised forms}
 
@@ -34,8 +37,10 @@
     - {b A label asserts parity} by a word starting [match], [bitwise], [parity] or [reference], or
       the phrases [within tolerance] or [same values].
     - {b An item executes} when it references one of: [Ll_test.execute], [execute_with_census],
-      [run], [run_linked], [optimize_and_execute]; [Context.run]; [Train.run], [run_once],
-      [forward_once], [update_once].
+      [run], [run_linked], [run_routine], [optimize_and_execute]; [Context.run]; [Train.run],
+      [run_once], [forward_once], [update_once]. The [Ll_test] ones are pinned to the harness: the
+      ratchet derives the top-level bindings of [test/support/ll_test.ml] that reach [Context.run]
+      ({!executors_of_harness}) and fails when the two sets differ.
     - {b An item judges the census} when it references one of the census PREDICATES --
       [Ll_test.rendered_tensorized], [all_tensorized], [all_declined], [all_rendered],
       [none_emitted], [census_all], [census_agrees_with_capability]; [C_syntax.equal_tensorization],
@@ -99,6 +104,7 @@ let forms =
         ("run", Execution);
         ("run_linked", Execution);
         ("optimize_and_execute", Execution);
+        ("run_routine", Execution);
         ("rendered_tensorized", Judgment);
         ("all_tensorized", Judgment);
         ("all_declined", Judgment);
@@ -221,6 +227,7 @@ type item = {
   mutable executes : bool;
   mutable judges : bool;
   mutable refs : int list;
+  mutable names : string list;  (** The value names a top-level binding group defines. *)
 }
 
 type census = { claims : claim list; items : item list }
@@ -267,7 +274,7 @@ let read content =
   let enter id line =
     let item =
       Hashtbl.find_or_add items id ~default:(fun () ->
-          { id; item_line = line; executes = false; judges = false; refs = [] })
+          { id; item_line = line; executes = false; judges = false; refs = []; names = [] })
     in
     current := Some item
   in
@@ -374,6 +381,8 @@ let read content =
         if top then (
           let first = List.hd_exn bindings in
           enter first.pvb_loc.loc_start.pos_cnum first.pvb_loc.loc_start.pos_lnum;
+          note (fun item ->
+              item.names <- Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)));
           let saved = !top_group in
           top_group := Some (first.pvb_loc.loc_start.pos_cnum, bindings);
           let result = super#define ~top env rec_flag bindings ~walk in
@@ -492,20 +501,77 @@ let reaches (census : census) ~holds =
   in
   go (Set.empty (module Int))
 
-(** The tensorized claims of a source whose item executes a routine, each with whether that item
-    judges the census. *)
+(* The items that reference [id], transitively, through the file's own top-level names. *)
+let callers (census : census) =
+  let reverse = Hashtbl.create (module Int) in
+  List.iter census.items ~f:(fun item ->
+      List.iter item.refs ~f:(fun target -> Hashtbl.add_multi reverse ~key:target ~data:item.id));
+  fun id ->
+    let rec go seen = function
+      | [] -> seen
+      | x :: rest ->
+          let next =
+            List.filter (Hashtbl.find_multi reverse x) ~f:(fun c -> not (Set.mem seen c))
+          in
+          go (List.fold next ~init:seen ~f:Set.add) (next @ rest)
+    in
+    Set.to_list (go (Set.empty (module Int)) [ id ])
+
+type reading = {
+  claim : claim;
+  judged : bool;
+  via : int option;
+      (** The line of the calling item whose execution leaves the claim unjudged, when it is not the
+          claim's own item. *)
+}
+
+(** The tensorized parity claims of a source that some execution reaches, each with whether every
+    such execution judges the census. A claim is executed from its own item and from every item that
+    references that item, transitively -- a check helper called with the values its caller executed
+    is the caller's claim too -- and each executing context must judge the census within its own
+    reach (which includes the helper's). *)
 let tensorized_executed content =
   let census = read content in
   let executes = reaches census ~holds:(fun i -> i.executes) in
   let judges = reaches census ~holds:(fun i -> i.judges) in
+  let callers = callers census in
+  let line =
+    let by_id = Hashtbl.of_alist_exn (module Int) (List.map census.items ~f:(fun i -> (i.id, i))) in
+    fun id -> (Hashtbl.find_exn by_id id).item_line
+  in
   List.filter_map census.claims ~f:(fun claim ->
-      if claim.tensorized && executes claim.item then Some (claim, judges claim.item) else None)
+      if not claim.tensorized then None
+      else
+        let contexts = List.filter (claim.item :: callers claim.item) ~f:executes in
+        match contexts with
+        | [] -> None
+        | _ -> (
+            match List.find contexts ~f:(fun c -> not (judges c)) with
+            | None -> Some { claim; judged = true; via = None }
+            | Some c ->
+                Some
+                  { claim; judged = false; via = (if c = claim.item then None else Some (line c)) }))
 
 (** The claims a source must not ship: tensorized, executed, and with no census judgment in reach.
 *)
 let unjudged content =
-  List.filter_map (tensorized_executed content) ~f:(fun (claim, judged) ->
-      Option.some_if (not judged) claim)
+  List.filter (tensorized_executed content) ~f:(fun reading -> not reading.judged)
+
+(** The [Ll_test] functions that execute a routine, derived from the harness source itself: the
+    names of its top-level bindings that reach [Context.run]. The ratchet holds the executor forms
+    of {!forms} equal to this set, so a new executor in the harness is not a way around the rule. *)
+let executors_of_harness content =
+  let census = read content in
+  let executes = reaches census ~holds:(fun i -> i.executes) in
+  List.concat_map census.items ~f:(fun item -> if executes item.id then item.names else [])
+  |> List.dedup_and_sort ~compare:String.compare
+
+(** The executor forms {!forms} lists for [Ll_test]. *)
+let ll_test_executors =
+  List.filter_map
+    (Option.value (List.Assoc.find forms "Ll_test" ~equal:String.equal) ~default:[])
+    ~f:(fun (name, form) -> match form with Execution -> Some name | Judgment -> None)
+  |> List.dedup_and_sort ~compare:String.compare
 
 type exemption = { path : string; label : string; reason : string }
 
@@ -516,7 +582,7 @@ let violations ~exemptions sources =
   let used = Hash_set.create (module Int) in
   let refused =
     List.concat_map sources ~f:(fun (path, content) ->
-        List.filter_map (unjudged content) ~f:(fun claim ->
+        List.filter_map (unjudged content) ~f:(fun { claim; via; _ } ->
             match
               List.findi exemptions ~f:(fun _ e ->
                   String.equal e.path path && String.equal e.label claim.label)
@@ -527,13 +593,16 @@ let violations ~exemptions sources =
             | None ->
                 Some
                   (Printf.sprintf
-                     "%s:%d: the tensorized claim %s (%s) sits in an item that executes a routine \
-                      but judges no mma census: parity alone also passes for a Tile_mma that \
-                      declined to the scalar fallback. Read the routine's census \
+                     "%s:%d: the tensorized claim %s (%s) sits in an item that executes a \
+                      routine%s but judges no mma census: parity alone also passes for a Tile_mma \
+                      that declined to the scalar fallback. Read the routine's census \
                       (Ll_test.execute_with_census, routine.Context.mma) and claim on it \
                       (Ll_test.rendered_tensorized, all_tensorized, census_agrees_with_capability) \
                       in the same item (gh-ocannl-1309)."
-                     path claim.line claim.label claim.member)))
+                     path claim.line claim.label claim.member
+                     (match via with
+                     | None -> ""
+                     | Some l -> Printf.sprintf " (executed from the item at line %d)" l))))
   in
   let stale =
     List.filter_mapi exemptions ~f:(fun index e ->

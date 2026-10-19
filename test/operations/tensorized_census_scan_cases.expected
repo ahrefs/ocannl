@@ -6,6 +6,7 @@ every census predicate, constructor and field form is a judgment: true
 a constructor of another module is not the census's: true
 a top-level helper that judges counts for the item that references it: true
 a top-level helper that executes makes its caller an executing item: true
+a check helper's claim is executed by the item that calls it, which must judge: true
 a judgment in ANOTHER item does not reach this one: true
 every executor form makes an item executing: true
 a module alias of Ll_test is followed: true

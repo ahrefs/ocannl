@@ -72,12 +72,24 @@ let () =
         let () = Verdict.p \"tensorized matmul matches the serial twin\" (Poly.equal (run_it o) \
         want)\n"
     = 1);
+  (let check_helper body =
+     "let check got = Verdict.p \"tensorized matmul matches the serial twin\" (Poly.equal got want)\n\
+      let () =\n\
+     \  let got, census = Ll_test.execute_with_census ~name:\"t\" o ~seed ~read:[ c ] in\n\
+     \  check got" ^ body ^ "\n"
+   in
+   p "a check helper's claim is executed by the item that calls it, which must judge"
+     (refused (check_helper "") = 1
+     && read (check_helper ";\n  Verdict.p \"rendered\" (Ll_test.rendered_tensorized census)") = 1
+     && refused (check_helper ";\n  Verdict.p \"rendered\" (Ll_test.rendered_tensorized census)")
+        = 0));
   p "a judgment in ANOTHER item does not reach this one"
     (refused ("let () = Verdict.p \"x\" (Ll_test.rendered_tensorized census)\n" ^ parity_only) = 1);
   (* The executor forms, and their spellings. *)
   p_all "every executor form makes an item executing"
     [
       "Ll_test.run ~name:\"t\" o ~seed";
+      "Ll_test.run_routine ~name:\"t\" o ~seed";
       "Ll_test.run_linked (ctx, routine) ~seed";
       "Ll_test.optimize_and_execute ~name:\"t\" llc ~seed ~read";
       "Train.forward_once ctx t";

@@ -13,7 +13,7 @@ module Inventory = Test_utils.Source_inventory
    answers to is stale and fails. The tree needs none today. *)
 let exemptions : Scan.exemption list = []
 
-let scan ~exemptions root generated =
+let scan ?(pin_harness = true) ~exemptions root generated =
   let inventory = Inventory.of_dune_sandbox ~workspace_root:root ~generated in
   let sources =
     Inventory.select inventory ~f:Test_utils.Ll_test_scan.test_source
@@ -21,8 +21,8 @@ let scan ~exemptions root generated =
   in
   let read =
     List.concat_map sources ~f:(fun (path, content) ->
-        List.map (Scan.tensorized_executed content) ~f:(fun (claim, judged) ->
-            (path, claim, judged)))
+        List.map (Scan.tensorized_executed content) ~f:(fun (r : Scan.reading) ->
+            (path, r.claim, r.judged)))
   in
   (* The population, for a reader of the log; a count on stdout would move with every addition. *)
   eprintf "executed tensorized parity claims read: %d\n" (List.length read);
@@ -33,14 +33,28 @@ let scan ~exemptions root generated =
   List.iter (Scan.violations ~exemptions sources) ~f:Verdict.fail;
   p_exists "the scan read an executed tensorized parity claim whose item judges the census" read
     ~f:(fun (_, _, judged) -> judged);
+  (* The executor table pinned to the harness it names: a new Ll_test function reaching Context.run
+     is an executor whether or not anyone remembered to list it. *)
+  if pin_harness then (
+    (* A harness missing from the inventory derives no executor, which the claim refuses. *)
+    let derived =
+      Option.value_map ~default:[] ~f:Scan.executors_of_harness
+        (List.Assoc.find sources "test/support/ll_test.ml" ~equal:String.equal)
+    in
+    if not (List.equal String.equal derived Scan.ll_test_executors) then
+      eprintf "Ll_test executors: listed %s, derived from test/support/ll_test.ml %s\n"
+        (String.concat ~sep:" " Scan.ll_test_executors)
+        (String.concat ~sep:" " derived);
+    p "the Ll_test executor forms are exactly the harness functions that reach Context.run"
+      (List.equal String.equal derived Scan.ll_test_executors));
   List.iter exemptions ~f:(fun (e : Scan.exemption) ->
       printf "%s -- `%s`: %s\n" e.path e.label e.reason)
 
 let () =
   match Array.to_list Stdlib.Sys.argv with
-  | [ _; "--fixture"; root ] -> scan ~exemptions:[] root []
+  | [ _; "--fixture"; root ] -> scan ~pin_harness:false ~exemptions:[] root []
   | [ _; "--fixture-exempt"; root ] ->
-      scan
+      scan ~pin_harness:false
         ~exemptions:
           [
             {
