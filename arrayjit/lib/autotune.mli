@@ -1839,9 +1839,9 @@ val seeded_default_backend : string -> bool
 (** Whether {!seeded_default} seeds on this backend ({!Context.backend_name}): CUDA and HIP. *)
 
 val seeded_split_backend : string -> bool
-(** Whether {!seeded_default} splits long reductions on this backend: CUDA only (see
-    {!seeded_split_sites}). A test states what each backend promises through these, never a restated
-    list. *)
+(** Whether {!seeded_default} splits long reductions on this backend: wherever it seeds, CUDA and
+    HIP (see {!seeded_split_sites}). A test states what each backend promises through these, never a
+    restated list. *)
 
 val seeded_split_sites :
   backend:string ->
@@ -1856,10 +1856,11 @@ val seeded_split_sites :
     most half the split loop's extent and at most the square root of the chain, gh-ocannl-1414)
     giving the most first-pass threads up to 32768, else the smallest such; a chain too short for
     every count is not split. The choice reads no device property, so the split, and the summation
-    order it fixes, depend on the routine alone. CUDA only ([backend] is the
-    {!Context.backend_name}): on HIP the split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to
-    1256 ms, gfx1151 unified memory) where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the
-    unsplit plan; elsewhere the result is empty. Exposed for tests. *)
+    order it fixes, depend on the routine alone. Empty where {!seeded_split_backend} is false
+    ([backend] is the {!Context.backend_name}). The split was CUDA's alone until its first pass ran
+    the block loop outside the cell loops ([sr_block_hoist], gh-ocannl-1412): before that, HIP's
+    gpt2_mini_train b256 step measured 1.42x SLOWER split (885 to 1256 ms, gfx1151 unified memory)
+    where CUDA gained 1.39x. Exposed for tests. *)
 
 (** Which segments {!seeded_default} seeds (gh-ocannl-1253). *)
 type seed_gate =
@@ -2010,7 +2011,7 @@ val seeded_default :
     summation order, and only sites whose accumulator is at their storage precision are seeded, so
     the seeded sketches leave the routine's results bitwise the default's.
 
-    Before segmenting (on CUDA), the reductions {!seeded_split_sites} admits at [min_serial]
+    Before segmenting (on CUDA and HIP), the reductions {!seeded_split_sites} admits at [min_serial]
     (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split
     whole-routine, as the search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm
     parameter gradient, which the default runs as one thread per output cell walking every batch row

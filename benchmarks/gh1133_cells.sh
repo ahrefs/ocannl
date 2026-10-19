@@ -74,7 +74,7 @@
 #             2 gives a head of 64 lanes, 4 a head of 128) -- meaningful with a d1 <T> on a
 #             fixture whose head is wider than 32
 #   sr<N>     this checkout's runner, --ocannl_gpu_default_split_reduce_min_serial=<N>, N a
-#             non-negative count: the serial chain per output cell from which the untuned CUDA plan
+#             non-negative count: the serial chain per output cell from which the untuned CUDA/HIP plan
 #             splits a reduction (gh-ocannl-1325; 0 splits nothing) -- the same-binary threshold
 #             A/B of gh-ocannl-1414, whose two-loop batch reductions chain 1024 rows at batch 8
 #   fold<T>   treatment <T> plus --ocannl_online_softmax_block=16 (the single-pass block fold of

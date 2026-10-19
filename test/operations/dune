@@ -7468,7 +7468,7 @@
 ; gradient, a small-output contraction over two axes -- is split with the pair coalesced, or
 ; interchanged where an operand read along one loop declines the coalescing. Detection, executed
 ; parity on dyadic inputs (bitwise the default and the exact sum on every backend), the saved-form
-; round trip, and the untuned CUDA split at an explicit threshold; backend-uniform.
+; round trip, and the untuned CUDA/HIP split at an explicit threshold; backend-uniform.
 
 (test
  (name split_reduce_pair)

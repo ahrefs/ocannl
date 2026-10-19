@@ -4268,12 +4268,11 @@ let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sket
               List.fold ranked ~init:None ~f:(fun best p ->
                   match best with Some b when threads b >= threads p -> best | _ -> Some p)))
 
-(* The untuned split is CUDA's alone (gh-ocannl-1325). On gpt2_mini_train b256 it took the CUDA step
-   from 543 to 391 ms, but HIP's from 885 to 1256 ms (minix, gfx1151, unified memory): HIP's
-   compiler does not register-promote such accumulators (gh-ocannl-1348), so the first pass
-   presumably round-trips its partials cell through device memory on every row. A HIP-safe first
-   pass is a follow-up; until then HIP keeps the unsplit plan. *)
-let seeded_split_backend backend = String.is_substring backend ~substring:"cuda"
+(* The untuned split runs wherever the seeded default does (gh-ocannl-1325, gh-ocannl-1412). It was
+   CUDA's alone until its first pass ran the block loop outside the cell loops ([sr_block_hoist]):
+   with the lanes walking the blocks, the HIP b256 step went from 885 to 1256 ms on gfx1151's
+   unified memory where CUDA's caches absorbed the scattered loads. *)
+let seeded_split_backend backend = seeded_default_backend backend
 
 let seeded_split_min_serial () =
   let raw =
@@ -4389,8 +4388,7 @@ let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_o
     | None, None -> configured_gate ()
   in
   let gate_off () = match gate () with Min_reduction n -> n <= 0 | Ranked _ -> false in
-  (* Resolved on CUDA only: the threshold is a CUDA setting, so a malformed value must not break a
-     HIP compile that ignores it. *)
+  (* Resolved only where the split runs, so a malformed value breaks no compile that ignores it. *)
   let min_serial () =
     if not (seeded_split_backend backend) then 0
     else match min_serial with Some n -> n | None -> seeded_split_min_serial ()
