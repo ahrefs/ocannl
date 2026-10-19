@@ -1001,7 +1001,7 @@ let width_limits_home = "arrayjit/lib/schedulers.ml"
 let width_limits_type_home = "arrayjit/lib/backend_intf.ml"
 
 (* The library's synthetic limits, by its home module and name. *)
-let width_constant_base = ("Backend_intf", "no_hardware_limits")
+let width_constant_base = ([ "Ir"; "Backend_intf" ], "no_hardware_limits")
 let width_compiler_roots = [ "arrayjit/lib/"; "tensor/"; "lib/" ]
 
 (* The spellings a program names a `Cc_backend` value by: through the `Context` re-export, or
@@ -5678,6 +5678,18 @@ let width_control () =
       ~probe:"let () = ignore (Context.Cc_backend.Width.registers ())\n" `Neither
   in
   let via_default_impl = run ~links:" vlib" ~probe:"let () = ()\n" `Neither in
+  let foreign_alias =
+    run
+      ~probe:
+        "module Local = struct\n\
+        \  module Backend_intf = struct\n\
+        \    let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+        \  end\n\
+         end\n\
+         module BI = Local.Backend_intf\n\
+         let narrow = { BI.no_hardware_limits with BI.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
   let via_aliased_include =
     run
       ~backend:
@@ -5816,6 +5828,9 @@ let width_control () =
   let via_destructuring_ok =
     refused via_destructuring && says "`Cc_backend.registers`" via_destructuring
   in
+  let foreign_alias_ok =
+    refused foreign_alias && says "leaving `simd_vector_bytes` to its base" foreign_alias
+  in
   let via_default_impl_ok =
     refused via_default_impl && says "library vimpl (vm.ml)" via_default_impl
   in
@@ -5863,6 +5878,7 @@ let width_control () =
   if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
   if not via_nested_include_ok then report "via-nested-include" via_nested_include;
   if not via_default_impl_ok then report "via-default-impl" via_default_impl;
+  if not foreign_alias_ok then report "foreign-alias" foreign_alias;
   if not via_aliased_include_ok then report "via-aliased-include" via_aliased_include;
   if not via_destructuring_ok then report "via-destructuring" via_destructuring;
   if not via_local_alias_ok then report "via-local-alias" via_local_alias;
@@ -5978,6 +5994,10 @@ let width_control () =
     "a `Cc_backend` value re-exported by `include` of an alias of a structure is a width value"
     via_aliased_include_ok;
   Verdict.p "and so is one bound by a destructuring top-level `let`" via_destructuring_ok;
+  Verdict.p
+    "an alias of some other module's `Backend_intf` does not name the library's synthetic limits, \
+     and an update through it is a read"
+    foreign_alias_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)

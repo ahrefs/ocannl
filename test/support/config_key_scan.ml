@@ -1535,6 +1535,17 @@ let field_reads_in_source content ~fields ~record_fields ~constant_base:(base_ho
          [no_hardware_limits] bound to a device's limits is not the library's constant (Codex P2,
          round 4). A qualified path, or a bare name the file never binds, is judged by
          [constant_bases]. *)
+      (* A module path naming the home: a non-empty suffix of [base_home] ([Ir.Backend_intf], or
+         [Backend_intf] under an [open Ir]), none of whose modules the file rebinds --
+         [module Ir = Local] or [module BI = Local.Backend_intf] name Local's (Codex P2, rounds 6
+         and 11). *)
+      let canonical_home path =
+        (not (List.is_empty path))
+        && List.length path <= List.length base_home
+        && List.equal String.equal path
+             (List.drop base_home (List.length base_home - List.length path))
+        && not (List.exists path ~f:(fun m -> Map.mem module_aliases m))
+      in
       let constant_ident txt =
         match flatten_module_path txt with
         | Some [ name ] when List.exists bindings ~f:(fun (n, _) -> String.equal n name) ->
@@ -1543,24 +1554,14 @@ let field_reads_in_source content ~fields ~record_fields ~constant_base:(base_ho
            may be anything (Codex P2, round 7). *)
         | Some [ _ ] -> false
         | Some path -> (
-            match List.rev path with
-            (* Unless the file rebinds a module the path goes through: [module Ir = Local] makes
-               [Ir.Backend_intf.no_hardware_limits] Local's (Codex P2, round 6). *)
-            | value :: home :: _
-              when String.equal value base_value && String.equal home base_home
-                   && not
-                        (List.exists (List.drop_last_exn path) ~f:(fun m ->
-                             Map.mem module_aliases m)) ->
-                true
-            | [ value; alias ] when String.equal value base_value -> (
-                match Map.find_multi module_aliases alias with
-                | [] -> false
-                | targets ->
-                    List.for_all targets ~f:(fun target ->
-                        match List.last target with
-                        | Some m -> String.equal m base_home
-                        | None -> false))
-            | _ -> false)
+            let value = List.last_exn path and prefix = List.drop_last_exn path in
+            String.equal value base_value
+            &&
+            match prefix with
+            (* Through a module alias the file defines: every binding of it must name the home. *)
+            | [ alias ] when Map.mem module_aliases alias ->
+                List.for_all (Map.find_multi module_aliases alias) ~f:canonical_home
+            | _ -> canonical_home prefix)
         | None -> false
       in
       let is_constant_base base =
