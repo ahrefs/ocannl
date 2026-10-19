@@ -5440,6 +5440,27 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1254: exact ranking ties go to fewer tile-MMA operand loads: the search's tie semantics,
+; and the gh-ocannl-1190 fp8 twins under a CUDA-shaped record with CUDA's pure load rule. Compiles
+; nothing.
+
+(test
+ (name model_load_tiebreak)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL))
+ (modules model_load_tiebreak)
+ (libraries base stdio ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-1254: the mma_operand_loads capability answers with the emission's own ldmatrix rule:
 ; per staged operand place, what the capability names is what the kernel loads through ldmatrix.
 

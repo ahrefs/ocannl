@@ -681,8 +681,8 @@ let spills ?cache_capacity_bytes (r : reuse) =
   | Some capacity -> r.ru_working_set_bytes > capacity
   | None -> false
 
-let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    (s : summary) (r : reuse option) : float option =
+let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    (s : summary) (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun dram ->
@@ -698,10 +698,16 @@ let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes 
                   (* A cache slower than DRAM would make raising the capacity raise the score. *)
                   Float.max (total /. dram) (requested /. Float.max cache dram)))
   in
-  let legs =
-    List.filter_opt [ Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p); memory ]
+  (Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p), memory)
+
+let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    (s : summary) (r : reuse option) : float option =
+  let compute, memory =
+    ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
   in
-  match legs with [] -> None | l -> Some (List.reduce_exn l ~f:Float.max)
+  match List.filter_opt [ compute; memory ] with
+  | [] -> None
+  | l -> Some (List.reduce_exn l ~f:Float.max)
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?max_resident_threads ~is_global (code : Low_level.t) : float option =
@@ -712,6 +718,89 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
     | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
+
+(* {2 Tile-MMA operand loads — gh-ocannl-1254}
+
+   Not a priced term: a count the untimed choosers break exact ranking ties with. Twins that differ
+   only in a staged tile's physical layout touch the same cells with the same operations, so every
+   score above ties them; what differs is how many instructions a lane issues to bring the operand
+   tiles into registers, which the backend's own load rule decides. *)
+
+type operand_load = Ldmatrix | Gather of { elt_bytes : int } [@@deriving sexp_of, equal]
+
+let operand_place (opt : Low_level.optimized) (tn : Tn.t) : Backend_intf.mma_operand_place =
+  let space =
+    if Set.mem opt.Low_level.workgroup_shared tn then `Shared
+    else if Tn.Placements.is_local_peek opt.Low_level.optimize_ctx.Low_level.placements tn then
+      `Thread
+    else `Device
+  in
+  let layout =
+    match Map.find opt.Low_level.swizzled tn with
+    | Some Low_level.Swizzle_b128 -> `Swizzled_b128
+    | Some Low_level.Swizzle_elem | None -> `Plain
+  in
+  (space, layout)
+
+let operand_load_instructions ~lanes ~elements ~elt_bytes = function
+  (* One [ldmatrix.x4] delivers 16 bytes to each lane; a narrower form still costs an
+     instruction. *)
+  | Ldmatrix -> ((elements * elt_bytes) + (16 * lanes) - 1) / (16 * lanes)
+  (* One load per element a lane gathers, whatever its width. *)
+  | Gather _ -> (elements + lanes - 1) / lanes
+
+let tile_mma_operand_loads ~operand_loads (opt : Low_level.optimized) =
+  let prec tn = Lazy.force tn.Tn.storage_prec in
+  let sites = ref [] in
+  let rec go ~scale ~env (c : Low_level.t) =
+    match c with
+    | Low_level.Seq (c1, c2) ->
+        go ~scale ~env c1;
+        go ~scale ~env c2
+    | For_loop { index; from_; to_; body; _ } | Scan_loop { index; from_; to_; body; _ } ->
+        let extent = max 0 (to_ - from_ + 1) in
+        go ~scale:(scale * extent) ~env:((index, extent) :: env) body
+    | If { body; _ } -> go ~scale ~env body
+    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; ta; tb; m; n; k; lane; _ } ->
+        let lanes =
+          max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
+        in
+        let a_ldm, b_ldm =
+          operand_loads ~a_prec:(prec a_tn) ~b_prec:(prec b_tn) ~d_prec:(prec d_tn) ~ta ~tb
+            ~a:(operand_place opt a_tn) ~b:(operand_place opt b_tn)
+        in
+        let classify tn ldm =
+          if ldm then Ldmatrix else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
+        in
+        sites :=
+          ( scale / lanes,
+            [ (a_tn, m * k, classify a_tn a_ldm); (b_tn, k * n, classify b_tn b_ldm) ],
+            lanes )
+          :: !sites
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+    | Set_local _ | Declare_local _ | Workgroup_barrier ->
+        ()
+  in
+  go ~scale:1 ~env:[] opt.Low_level.llc;
+  List.rev !sites
+
+let operand_classes ~operand_loads opt =
+  List.concat_map (tile_mma_operand_loads ~operand_loads opt) ~f:(fun (_, operands, _) ->
+      List.map operands ~f:(fun (tn, _, cls) -> (tn, cls)))
+
+let operand_load_count ~operand_loads opt =
+  List.sum
+    (module Int)
+    (tile_mma_operand_loads ~operand_loads opt)
+    ~f:(fun (executions, operands, lanes) ->
+      executions
+      * List.sum
+          (module Int)
+          operands
+          ~f:(fun (tn, elements, cls) ->
+            operand_load_instructions ~lanes ~elements
+              ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
+              cls))
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 

@@ -2224,13 +2224,13 @@ let ranking_cache_bandwidth ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve cache_bandwidth_override u.cache_rate
 
-(* The ranking score summed over a candidate's kernels, beside the roofline lower bound of the same
-   kernels ([summaries_roofline]'s): [(rank, bound)], [rank >= bound] by
-   {!Ir.Cost_model.ranking_seconds_of}' contract. [None] exactly where [summaries_roofline] is. Read
-   by the untimed choosers only — [model_default] and the [auto] seeding gate. An explicit
-   [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
-let segments_ranking ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
-    (segs : LL.optimized list) : (float * float) option =
+type kernel_legs = { kl_compute : float option; kl_memory : float option; kl_spilled : bool }
+
+(* Per kernel, the ranking score's two legs and whether its working set left the cache, beside the
+   candidate's roofline lower bound ([summaries_roofline]'s). [None] exactly where
+   [summaries_roofline] is. *)
+let segments_legs ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
+    (segs : LL.optimized list) : (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
   let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
@@ -2244,20 +2244,43 @@ let segments_ranking ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwid
   match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
   | None -> None
   | Some bound ->
-      let rank =
-        List.fold summaries ~init:0. ~f:(fun acc (o, s) ->
-            let reuse =
-              match (cache_capacity_bytes, cache_bandwidth) with
-              | None, None -> None
-              | _ ->
-                  Some (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
-            in
-            acc
-            +. Option.value ~default:0.
-                 (CM.ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
-                    ?cache_bandwidth s reuse))
-      in
-      Some (rank, bound)
+      Some
+        ( bound,
+          List.map summaries ~f:(fun (o, s) ->
+              let reuse =
+                match (cache_capacity_bytes, cache_bandwidth) with
+                | None, None -> None
+                | _ ->
+                    Some
+                      (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
+              in
+              let kl_compute, kl_memory =
+                CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
+                  ?cache_bandwidth s reuse
+              in
+              {
+                kl_compute;
+                kl_memory;
+                kl_spilled = Option.exists reuse ~f:(CM.spills ?cache_capacity_bytes);
+              }) )
+
+(* A kernel's ranking score: the larger leg ({!Ir.Cost_model.ranking_seconds_of}). *)
+let kernel_rank { kl_compute; kl_memory; _ } =
+  match List.filter_opt [ kl_compute; kl_memory ] with
+  | [] -> 0.
+  | legs -> List.reduce_exn legs ~f:Float.max
+
+(* The ranking score summed over a candidate's kernels, beside the roofline lower bound of the same
+   kernels ([summaries_roofline]'s): [(rank, bound)], [rank >= bound] by
+   {!Ir.Cost_model.ranking_seconds_of}' contract. [None] exactly where [summaries_roofline] is. Read
+   by the untimed choosers only — [model_default], [model_explain] and the [auto] seeding gate. An
+   explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
+let segments_ranking ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
+    (segs : LL.optimized list) : (float * float) option =
+  Option.map
+    (segments_legs ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits segs)
+    ~f:(fun (bound, legs) ->
+      (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ~limits segs =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
@@ -4005,6 +4028,68 @@ let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp 
       Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
       Context.compile ?name ctx comp bindings
 
+(* The branch-and-bound walk over the factored matmul family (gh-ocannl-514 phase 4), shared by
+   [model_default] and the tests that drive it with stand-in limits and load rules: verdict-carrying
+   children are the construction-time fathoms, and the bound is the schedule-invariant roofline
+   floor — sketch completions share the base program's semantics, so [completion_floor] lower-bounds
+   every one; it fathoms the whole family exactly when the incumbent already achieves it (the
+   memory-bound kernels where the default preset is optimal) — raised per subtree by the committed
+   staging decisions' certain traffic (phase 5, [sketch_path_traffic_floor]). The epilogue twins are
+   the tree's root level (gh-ocannl-613), so they compete inside the walk, after the unfused leaves
+   and at the threshold those tightened to, with the same bound and on the same stats ledger. Leaves
+   whose scores tie exactly are ordered by their tile-MMA operand loads under [operand_loads]
+   (gh-ocannl-1254, {!Ir.Cost_model.operand_load_count}): fewer load instructions win, so a staged
+   twin that brings its operands in through [ldmatrix] beats its gathering twin of equal flops and
+   bytes; the incumbent still wins every tie. [None] = no matmul site: the caller keeps the flat
+   path (conv seeds, which factor as a follow-up). *)
+let model_family_search ?(on_rejected = fun () -> ()) ~operand_loads ~is_gpu ~is_cpu ~limits
+    ~accum_prec ~static_indices ~peak_flops ~peak_memory_bandwidth ~score ~incumbent
+    (base_opt : LL.optimized) =
+  match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base_opt with
+  | None -> None
+  | Some tree ->
+      (* gh-ocannl-514 phase 5: the tile-size lattice beyond the curated menus enters the searched
+         space when lifted (config [model_default_geometry_lattice]), and the bound is no longer
+         uniform across the family — each subtree's committed staging decisions contribute their
+         certain traffic ([sketch_path_traffic_floor]) on top of the schedule-invariant floor, so
+         whole boxes of the lattice fathom without expansion. *)
+      let tree = if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree in
+      let f = CM.completion_floor base_opt.LL.llc in
+      let path_inc = sketch_path_traffic_floor ~limits base_opt in
+      let bound_at inc =
+        CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops
+          ~bytes:(f.CM.fr_bytes + inc) ()
+      in
+      let applied p =
+        match
+          Sched.apply_classified ~static_indices
+            (sketch_schedule ~accum_prec ~p base_opt)
+            (scratch_of base_opt)
+        with
+        | exception Outcome.Cause_at _ -> None
+        | post -> Some post
+      in
+      let score_sketch p =
+        match applied p with
+        | None ->
+            on_rejected ();
+            None
+        | Some post -> score [ post ]
+      in
+      (* Computed only for leaves that tie; a leaf that cannot be applied scored nothing, so never
+         reaches a tie. *)
+      let tie_break p =
+        match applied p with
+        | None -> Int.max_value
+        | Some post -> CM.operand_load_count ~operand_loads post
+      in
+      let best, stats =
+        Sspace.search
+          ~bound:(fun ~path _sub -> bound_at (path_inc path))
+          ~incumbent ~tie_break ~score:score_sketch tree
+      in
+      Some (best, stats, bound_at 0)
+
 let model_default ?name ?report ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
@@ -4074,45 +4159,22 @@ let model_default ?name ?report ctx comp bindings =
           None
       | post -> score_valid [ post ]
     in
-    (* The branch-and-bound walk over the factored matmul family (gh-ocannl-514 phase 4):
-       verdict-carrying children are the construction-time fathoms, and the bound is the
-       schedule-invariant roofline floor — sketch completions share the base program's semantics, so
-       [completion_floor] lower-bounds every one; it fathoms the whole family exactly when the
-       incumbent already achieves it (the memory-bound kernels where the default preset is optimal)
-       — raised per subtree by the committed staging decisions' certain traffic (phase 5,
-       [sketch_path_traffic_floor]). The epilogue twins are the tree's root level (gh-ocannl-613),
-       so they compete inside the walk, after the unfused leaves and at the threshold those
-       tightened to, with the same bound and on the same stats ledger. [None] = no matmul site: the
-       caller keeps the flat path (conv seeds, which factor as a follow-up). Returns the first leaf
-       strictly better than [incumbent]. *)
+    let operand_loads = (Context.codegen_capabilities ctx).Ir.Backend_intf.mma_operand_loads in
+    (* [model_family_search] with the default as incumbent, logging its ledger. Returns the first
+       leaf strictly better than [incumbent] (exact ties broken by operand loads). *)
     let tree_search ~incumbent base_opt =
-      match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base_opt with
+      (* Snapshot the caller-side counters so the log can split the driver's unscored leaves into
+         compiler rejections vs genuine no-coverage — st_unscored alone would misclassify rejections
+         as cost-model gaps in the phase-6 ledger. *)
+      let r0 = !n_rejected and k0 = !n_skipped in
+      match
+        model_family_search
+          ~on_rejected:(fun () -> Int.incr n_rejected)
+          ~operand_loads ~is_gpu ~is_cpu ~limits ~accum_prec ~static_indices ~peak_flops
+          ~peak_memory_bandwidth ~score:score_valid ~incumbent base_opt
+      with
       | None -> None
-      | Some tree ->
-          (* gh-ocannl-514 phase 5: the tile-size lattice beyond the curated menus enters the
-             searched space when lifted (config [model_default_geometry_lattice]), and the bound is
-             no longer uniform across the family — each subtree's committed staging decisions
-             contribute their certain traffic ([sketch_path_traffic_floor]) on top of the
-             schedule-invariant floor, so whole boxes of the lattice fathom without expansion. *)
-          let tree =
-            if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree
-          in
-          let f = CM.completion_floor base_opt.LL.llc in
-          let path_inc = sketch_path_traffic_floor ~limits base_opt in
-          let bound_at inc =
-            CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops
-              ~bytes:(f.CM.fr_bytes + inc) ()
-          in
-          let fb = bound_at 0 in
-          (* Snapshot the caller-side counters so the log can split the driver's unscored leaves
-             into compiler rejections vs genuine no-coverage — st_unscored alone would misclassify
-             rejections as cost-model gaps in the phase-6 ledger. *)
-          let r0 = !n_rejected and k0 = !n_skipped in
-          let best, stats =
-            Sspace.search
-              ~bound:(fun ~path _sub -> bound_at (path_inc path))
-              ~incumbent ~score:(score_sketch base_opt) tree
-          in
+      | Some (best, stats, fb) ->
           logf
             "model_default: family search: %d expanded, %d scored, %d unscored (%d rejected, %d \
              without coverage), %d fathomed (bound %s), %d refuted, %d excluded"
@@ -4461,6 +4523,82 @@ let model_default ?name ?report ctx comp bindings =
     result
 
 (** {2 The seeded untuned default (gh-ocannl-1324)} *)
+
+(* gh-ocannl-1254, the #1269 interface: what the model sees of each candidate [model_default] ranks
+   for one computation — the default pipeline and every whole-routine sketch leaf it would score —
+   without choosing. *)
+type explain = {
+  ex_floor_ms : float option;
+  ex_rank_ms : float option;
+  ex_compute_ms : float option;
+  ex_memory_ms : float option;
+  ex_spilled : bool;
+  ex_operand_loads : int;
+}
+
+let model_explain ?name ctx comp bindings =
+  let backend = Context.backend_name ctx in
+  let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
+  let limits = Context.hardware_limits ctx in
+  let caps = Context.codegen_capabilities ctx in
+  let accum_prec = caps.Ir.Backend_intf.accum_prec in
+  let operand_loads = caps.Ir.Backend_intf.mma_operand_loads in
+  let static_indices = Idx.bound_symbols bindings in
+  let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  let opt = Context.lowered_for_decisions ?name ctx comp bindings in
+  let ms = Option.map ~f:(fun s -> s *. 1e3) in
+  let explain segs =
+    let ex_operand_loads =
+      List.sum (module Int) segs ~f:(fun o -> CM.operand_load_count ~operand_loads o)
+    in
+    match segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs with
+    | None ->
+        {
+          ex_floor_ms = None;
+          ex_rank_ms = None;
+          ex_compute_ms = None;
+          ex_memory_ms = None;
+          ex_spilled = false;
+          ex_operand_loads;
+        }
+    | Some (bound, legs) ->
+        (* A leg is present on every kernel or on none: its peak is one constant. *)
+        let total leg =
+          List.fold legs ~init:(Some 0.) ~f:(fun acc l -> Option.map2 acc (leg l) ~f:Float.( + ))
+        in
+        {
+          ex_floor_ms = Some (bound *. 1e3);
+          ex_rank_ms = Some (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l) *. 1e3);
+          ex_compute_ms = ms (total (fun l -> l.kl_compute));
+          ex_memory_ms = ms (total (fun l -> l.kl_memory));
+          ex_spilled = List.exists legs ~f:(fun l -> l.kl_spilled);
+          ex_operand_loads;
+        }
+  in
+  let default =
+    Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices (scratch_of opt)
+  in
+  let leaves =
+    match matmul_sketch_tree ~is_gpu ~is_cpu ~limits opt with
+    | Some tree ->
+        Sspace.leaves
+          (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+    | None -> sketch_seed_params ~is_gpu ~is_cpu ~limits opt
+  in
+  (* Exactly the leaves [model_default] can score: a schedule that fails to apply, or whose
+     scheduled form fails validation, is excluded from its ranking too. *)
+  ("default", explain default)
+  :: List.filter_map leaves ~f:(fun p ->
+      match
+        validate_segments_for_model ~limits
+          [
+            Sched.apply_classified ~static_indices
+              (sketch_schedule ~accum_prec ~p opt)
+              (scratch_of opt);
+          ]
+      with
+      | exception Outcome.Cause_at _ -> None
+      | segs -> Some (spec_label (Whole (W_sketch p)), explain segs))
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;

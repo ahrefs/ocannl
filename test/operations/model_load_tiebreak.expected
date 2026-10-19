@@ -1,0 +1,29 @@
+without a tie-break the first of the tied leaves wins: true
+with a tie-break the tied leaf with the smallest key wins, the first among equal keys: true
+a tie never displaces the incumbent: true
+keys are computed only for leaves that tie: true
+each best leaf's key is computed once: true
+without a tie-break a subtree bounded at the threshold is fathomed: true
+with a tie-break a subtree bounded at the threshold is entered, and its tie wins: true
+stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
+stand-in: each pair has equal bytes: true
+stand-in: each pair has exactly equal ranking scores: true
+stand-in: under CUDA's load rule each swizzled twin issues fewer operand loads: true
+stand-in: under a rule without ldmatrix each pair issues equal operand loads: true
+stand-in: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
+stand-in: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
+stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
+stand-in: some leaf ties the pick under CUDA's rule with more operand loads: true
+backend record: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
+backend record: each pair has equal bytes: true
+backend record: each pair has exactly equal ranking scores: true
+backend record: under CUDA's load rule each swizzled twin issues fewer operand loads: true
+backend record: under a rule without ldmatrix each pair issues equal operand loads: true
+backend record: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
+backend record: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
+backend record: the tie-break moves no score: both rules' picks score exactly alike: true
+backend record: some leaf ties the pick under CUDA's rule with more operand loads: true
+model_explain lists the default pipeline first: true
+model_explain's labels are distinct: true
+every explained ranking score is at least its bound: true
+model_explain shows two candidates tied exactly on the ranking score with different operand loads: true

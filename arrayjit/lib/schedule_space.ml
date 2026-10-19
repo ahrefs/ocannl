@@ -82,15 +82,22 @@ let no_search_stats =
     st_unknown = 0;
   }
 
-let search ?bound ?incumbent ~score tree =
+let search ?bound ?incumbent ?tie_break ~score tree =
   let stats = ref no_search_stats in
   let best = ref None in
+  (* The running best leaf's tie-break key, computed on the first tie it meets. *)
+  let best_key = ref None in
   let threshold = ref (Option.value incumbent ~default:Float.infinity) in
   let fathoms rev_path sub =
     (* An optimistic bound at or above the threshold refutes strict improvement for every completion
-       below — equality fathoms because displacing the incumbent needs [<]. *)
+       below — equality fathoms because displacing the incumbent needs [<]. Once a leaf holds the
+       threshold under a tie-break, a completion AT it can still displace that leaf, so only a bound
+       strictly above it fathoms; the incumbent itself is never displaced by a tie. *)
     match Option.bind bound ~f:(fun b -> b ~path:(List.rev rev_path) sub) with
-    | Some b -> Float.(b >= !threshold)
+    | Some b -> (
+        match (tie_break, !best) with
+        | Some _, Some _ -> Float.(b > !threshold)
+        | _ -> Float.(b >= !threshold))
     | None -> false
   in
   let rec leaf_or_choice rev_path t =
@@ -101,7 +108,25 @@ let search ?bound ?incumbent ~score tree =
             stats := { !stats with st_scored = !stats.st_scored + 1 };
             if Float.(s < !threshold) then (
               best := Some (a, s);
+              best_key := None;
               threshold := s)
+            else
+              Option.iter tie_break ~f:(fun key ->
+                  match !best with
+                  | Some (b, bs) when Float.(s = bs) ->
+                      let kb =
+                        match !best_key with
+                        | Some kb -> kb
+                        | None ->
+                            let kb = key b in
+                            best_key := Some kb;
+                            kb
+                      in
+                      let ka = key a in
+                      if ka < kb then (
+                        best := Some (a, s);
+                        best_key := Some ka)
+                  | Some _ | None -> ())
         | None -> stats := { !stats with st_unscored = !stats.st_unscored + 1 })
     | Choice { level; children } ->
         stats := { !stats with st_expanded = !stats.st_expanded + 1 };

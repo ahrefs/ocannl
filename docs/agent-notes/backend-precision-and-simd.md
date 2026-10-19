@@ -735,8 +735,9 @@ files.
   Timed (gh-ocannl-1190, sm_120, 16x32x32 tile, 128 k_o blocks): in the resident scope the
   swizzled fp8 twin is 12.2% faster than the plain one (paired ratio 0.8775, every replicate
   under 0.883), unlike the neutral bf16 twin of gh-481. `tune` times both twins, so it needs no
-  change. `model_default` does: its cost model cannot see the swizzle map, so the twins tie, and
-  its first-strictly-better rule keeps plain. Re-time a layout change with
+  change. `model_default`'s cost model cannot see the swizzle map, so the twins tie; since
+  gh-ocannl-1254 its family search breaks exact ties by operand loads, so the swizzled twin wins
+  that tie (training-and-performance.md owns the tie-break). Re-time a layout change with
   the CUDA-only `@benchmarks/runners/ocannl/mma-register-scope-probe` alias, which exports both
   layouts and runs `mma_register_scope_probe_build.sh` plainly and under both
   `--negative-control=a|b` (the swizzled arm with its ldmatrix A, resp. B gather, XOR dropped),

@@ -1729,8 +1729,10 @@ val model_default :
     exceeds the cache capacity, at the cache bandwidth within it — {!ranking_capacity},
     {!ranking_cache_bandwidth}), and the argmin schedule is applied — zero measurement, one backend
     compile. The family search's bound stays the distinct-cell floor, below every ranking score.
-    Advisory by construction: a candidate without model coverage is never picked over the default,
-    ties go to the default, and missing envelope constants, a disabled default annotator
+    Sketch leaves whose scores tie exactly are ordered by their tile-MMA operand loads under the
+    backend's [mma_operand_loads] capability ({!model_family_search}, gh-ocannl-1254). Advisory by
+    construction: a candidate without model coverage is never picked over the default, ties go to
+    the default, and missing envelope constants, a disabled default annotator
     ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
     validation, or compilation failure fall back to the ordinary default pipeline — the reported
     {!model_choice} then says ["default"]. Fatal failures propagate without retrying. Once the
@@ -1743,6 +1745,71 @@ val model_default :
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic
     lowerings of the placement search alike — and, as there, a comp carrying no
     {!Ir.Assignments.Block_comment} requires it. *)
+
+val model_family_search :
+  ?on_rejected:(unit -> unit) ->
+  operand_loads:
+    (a_prec:Ir.Ops.prec ->
+    b_prec:Ir.Ops.prec ->
+    d_prec:Ir.Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    a:Ir.Backend_intf.mma_operand_place ->
+    b:Ir.Backend_intf.mma_operand_place ->
+    bool * bool) ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  peak_flops:float option ->
+  peak_memory_bandwidth:float option ->
+  score:(Ir.Low_level.optimized list -> float option) ->
+  incumbent:float ->
+  Ir.Low_level.optimized ->
+  ((sketch_params * float) option * Ir.Schedule_space.search_stats * float option) option
+(** {!model_default}'s branch-and-bound walk over the factored matmul family ({!matmul_sketch_tree})
+    of one lowering: [(best, stats, bound)], where [best] is the first leaf whose [score] (of its
+    scheduled form) is strictly below [incumbent], the threshold tightening as leaves improve on it,
+    and [bound] the family's schedule-invariant roofline floor under the envelope. Exact ties
+    between leaves go to fewer tile-MMA operand load instructions
+    ({!Ir.Cost_model.operand_load_count} under [operand_loads] — {!model_default} passes the
+    backend's [mma_operand_loads] capability; gh-ocannl-1254), then to the first; a tie never
+    displaces [incumbent]. [on_rejected] is called for each leaf whose schedule fails to apply.
+    [None] for a lowering with no matmul site. Exposed so a test can drive the walk with stand-in
+    limits and load rules on any backend. *)
+
+type explain = {
+  ex_floor_ms : float option;
+      (** The candidate's roofline lower bound ({!Ir.Cost_model.analyze}'s counts), as
+          [mc_model_ms]. *)
+  ex_rank_ms : float option;
+      (** Its ranking score ({!Ir.Cost_model.ranking_seconds}), the quantity {!model_default}
+          minimizes: per kernel the larger of the two legs below, summed. *)
+  ex_compute_ms : float option;  (** The compute leg, summed over the kernels. *)
+  ex_memory_ms : float option;
+      (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
+  ex_spilled : bool;  (** Some kernel's working set exceeds the cache capacity. *)
+  ex_operand_loads : int;
+      (** Tile-MMA operand load instructions under the backend's load rule
+          ({!Ir.Cost_model.operand_load_count}): not a price, the count {!model_default}'s family
+          search breaks exact score ties with (gh-ocannl-1254). *)
+}
+(** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
+
+val model_explain :
+  ?name:string ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  (string * explain) list
+(** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
+    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): ["default"] — the untuned
+    default pipeline — first, then every whole-routine sketch leaf it can score, labeled as
+    {!tune}'s [autotune_log] labels them, in the family search's visiting order. The lowering is
+    {!Context.lowered_for_decisions}', so the context is untouched. Per-fission-segment
+    substitutions and the placement pre-search are not listed. Candidates whose scheduled form fails
+    to apply or validate are omitted, as {!model_default} excludes them. *)
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;

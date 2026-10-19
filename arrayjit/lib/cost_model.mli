@@ -223,6 +223,18 @@ val ranking_seconds_of :
     two-tier memory leg (section contract; [None] for the reuse means no per-block charge, the
     roofline). Bandwidths in bytes/s. [None] when neither peak is given. *)
 
+val ranking_legs_of :
+  ?peak_flops:float ->
+  ?peak_memory_bandwidth:float ->
+  ?cache_capacity_bytes:int ->
+  ?cache_bandwidth:float ->
+  summary ->
+  reuse option ->
+  float option * float option
+(** The two legs {!ranking_seconds_of} takes the larger of: [(compute, memory)] in seconds, each
+    [None] when its peak is not given. For reports that explain a score ([Autotune.model_explain]).
+*)
+
 val ranking_seconds :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
@@ -235,6 +247,65 @@ val ranking_seconds :
 (** {!ranking_seconds_of} over {!analyze} and, when a capacity or a cache bandwidth is given,
     {!reuse_traffic}. A ranking score, not a runtime prediction — and, unlike {!roofline_seconds},
     not a lower bound either. *)
+
+(** {2 Tile-MMA operand loads (gh-ocannl-1254)}
+
+    Not a priced term and not part of any score: a count the untimed choosers break {e exact}
+    ranking ties with ([Autotune.model_default]'s family search, through {!Schedule_space.search}'s
+    [tie_break]). Twins that differ only in a staged tile's physical layout — the plain and
+    [Swizzle_b128] staged fp8 twins of gh-ocannl-1190 — touch the same cells with the same
+    operations, so {!analyze} and the ranking score tie them; what differs is how a lane brings each
+    operand tile into registers, which the backend's load rule decides
+    ({!Backend_intf.codegen_capabilities.mma_operand_loads}, the rule its emission applies).
+
+    Each [Tile_mma] operand is classified from its place — workgroup-shared, per-thread ([Local]) or
+    device, and its [optimized.swizzled] layout — by that rule. The count, per execution of the
+    statement (the enclosing loop extents over its lane extent), is per lane: an [ldmatrix] operand
+    costs one instruction per 16 bytes it delivers to each lane (an [.x4] form), a gathered one one
+    load per element (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32 32-bit words). It counts
+    each operand tile once per statement, not the per-intrinsic reloads an emission may repeat:
+    twins share the statement shape, which is all a tie between them needs. A statement the backend
+    then declines (extents, the device's floor) renders scalar code whatever the class says. *)
+
+type operand_load =
+  | Ldmatrix  (** A warp-cooperative matrix load ([ldmatrix] on CUDA). *)
+  | Gather of { elt_bytes : int }  (** Per-lane gathers of [elt_bytes]-wide elements. *)
+[@@deriving sexp_of, equal]
+
+val operand_place : Low_level.optimized -> Tnode.t -> Backend_intf.mma_operand_place
+(** A [Tile_mma] operand's space and layout as the renderer classifies them: workgroup-shared when
+    the schedule placed the node there, per-thread when its placement is [Local], device otherwise;
+    [`Swizzled_b128] for a [Swizzle_b128] entry of [optimized.swizzled]. *)
+
+val operand_classes :
+  operand_loads:
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    a:Backend_intf.mma_operand_place ->
+    b:Backend_intf.mma_operand_place ->
+    bool * bool) ->
+  Low_level.optimized ->
+  (Tnode.t * operand_load) list
+(** Each [Tile_mma]'s [a] then [b] operand with its class, in program order, under the given load
+    rule (a backend's [mma_operand_loads], or a test's stand-in). *)
+
+val operand_load_count :
+  operand_loads:
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    a:Backend_intf.mma_operand_place ->
+    b:Backend_intf.mma_operand_place ->
+    bool * bool) ->
+  Low_level.optimized ->
+  int
+(** The per-lane load instructions of every [Tile_mma] operand, summed over the statements'
+    executions (see the section contract); [0] for code with no [Tile_mma]. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 
