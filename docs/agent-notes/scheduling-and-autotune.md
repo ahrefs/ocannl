@@ -970,12 +970,18 @@ files.
   `Backend_link` declines — but after the search concluded, when the exhausted device defeated both
   the winner replay and the untuned-default fallback compile behind it. Containment tests do not
   need a device that can fail: `Autotune.on_candidate_attempt` injects one
-  (`test/operations/autotune_arm_containment`). An arm the device cannot hold BESIDE the other
-  arm's shipped routine (materialize-all next to arm A's 6.6 GiB at b256 on 12 GiB) is refused at
-  its base compile, typed, as a `Pre_search_failure` (gh-ocannl-1326; backend-memory.md has the
-  mechanism). The placement store records no decision over a failed arm, so a warm process
-  replays arm A and re-refuses arm B, and a benchmark harness counts that call as a replay
-  (`no_searches`), not a search.
+  (`test/operations/autotune_arm_containment`). An arm whose base compile the device refuses is
+  refused before its search, typed, as a `Pre_search_failure` (gh-ocannl-1326; backend-memory.md
+  has the mechanism), and the placement store records no decision over a failed arm.
+  **No arm's routine is resident while another arm searches** (gh-ocannl-1408): the arms and
+  flips search through `Autotune.tune_deferred`, which reports, releases everything it compiled
+  and hands back the compile of what it ships; `tune_placements` compiles only the placement that
+  ships, after every search, falling back to the next completed result if that compile fails.
+  Before, arm A's winner was compiled as its search ended, and at b256 on 12 GiB its 6.6 GiB
+  refused arm B's base compile, so every such A/B was single-arm. Measure residency where the
+  next search begins (`Autotune.on_candidate_attempt`'s second `"baseline"`), not at the previous
+  search's report: a deferred report precedes the compile, so report time cannot tell the two
+  orders apart (`test/operations/autotune_device_memory` scenario 4).
 ## Failure phases and lineage containment
 - A timing failure's *phase* decides whether the lineage is condemned, so pre-dispatch validation
   needs its own. `Context.run` validates (poisoned lineage, uninitialized inputs, unsatisfied

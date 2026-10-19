@@ -16,9 +16,9 @@
    (its incumbents are not resident beside a challenger) and a warm search replays its winner (the
    replay is not co-resident with the base compile); under room for half a footprint, the search is
    refused before any candidate is compiled, with a typed [Pre_search_failure]; and, through
-   [Train.tune_placements], an arm that does not fit beside the other arm's shipped routine is
-   refused the same way while that arm ships, is cached, and replays in the next call without a
-   single search. *)
+   [Train.tune_placements], arm A's search leaves nothing resident when it reports, so both arms
+   search in room for one and a half footprints, and the recorded decision replays in one cached
+   search (gh-ocannl-1408). *)
 
 open Base
 open Ocannl
@@ -194,77 +194,84 @@ let () =
   p "only the base compile was attempted" (List.equal String.equal !attempts [ "baseline" ]);
   p "the device refused exactly one allocation" (refused = 1);
 
-  (* --- 4. Through the placement A/B: the materialize-all arm cannot fit beside the default arm's
-     shipped routine. It is refused; the default arm ships, is cached, and replays. The placement
-     store records no decision over a failed arm, so the second call compares the arms again, which
-     is the path a warm process takes.
+  (* --- 4. Through the placement A/B (gh-ocannl-1408): arm A's searched routine is not resident
+     while arm B searches. Arm A's search hands back a deferred compile and releases everything it
+     compiled, so when arm B's base compile starts the working bytes are back where the scenario
+     started -- the regression gh-ocannl-1424 asked for, which the previous behavior failed by at
+     least the unscheduled footprint (arm A's winner, compiled before arm B began). With that, a
+     device with room for one candidate of either arm searches BOTH arms, where the resident winner
+     used to refuse arm B's base compile (b256 gpt2_mini on a 12 GiB card: 4.16 GB asked, 0.85 GB
+     free), and only the shipped placement is compiled.
 
-     The room is the smallest routine arm A can ship beside arm B's base compile, less one byte.
-     That smallest routine is the unscheduled form: scheduling only adds device buffers to the base
-     lowering, which is what makes the up-front refusal sound. So arm B is refused beside whichever
-     of arm A's candidates wins, and the claims do not depend on the timings. The default compile's
-     footprint is no stand-in for arm A's routine (gh-ocannl-1415). On a GPU backend the default
-     carries fission's promoted locals, and a winner such as an epilogue-fused sketch need not. A
-     room read off the default compile let arm B fit beside a lean winner whenever the timings
-     crowned one, so the scenario passed or failed by the timing draw. --- *)
-  let room4 = fp_base + fp_b_base - 1 in
-  p "the room holds the default compile alone" (fp <= room4);
+     The room is the larger arm's default footprint plus half the smaller unscheduled one: a
+     candidate of either arm fits alone, and no routine of arm A fits beside arm B's base compile --
+     the smallest routine arm A can ship is the unscheduled form (scheduling only adds device
+     buffers to the base lowering), so the previous behavior refuses arm B whichever of arm A's
+     candidates wins. --- *)
+  let fp_b = footprint ~decide:materialize_all comp in
   let cache_dir4 = "autotune_cache_device_memory_arms" in
   clean_cache cache_dir4;
   let run_arms () =
     let reports = ref [] and shipped = ref [] in
     let start = live_working () in
     let peak = ref start in
-    (* The working bytes live when arm A's report arrives, above the scenario's start: arm A's
-       shipped routine, which {!Autotune.tune} compiles before it reports. *)
-    let a_resident = ref None in
+    (* The working bytes live as the second search's base compile starts (its "baseline" attempt,
+       ahead of its allocation), above the scenario's start: what arm A left behind as arm B
+       begins. *)
+    let baselines = ref 0 and a_resident = ref None in
+    let room = start + Int.max fp fp_b + (Int.min fp_base fp_b_base / 2) in
     let result, refused =
-      with_capacity ~peak ~capacity:(start + room4) (fun () ->
-          Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:cache_dir4
-            ~report:(fun r ->
-              if List.is_empty !reports then a_resident := Some (live_working () - start);
-              reports := r :: !reports)
-            ~on_ship:(fun what -> shipped := what :: !shipped)
-            (Context.auto ()) t2 comp Ir.Indexing.Empty)
+      Autotune.Seam.with_value Autotune.on_candidate_attempt
+        (fun label ->
+          if String.equal label "baseline" then (
+            Int.incr baselines;
+            if !baselines = 2 then a_resident := Some (live_working () - start)))
+        (fun () ->
+          with_capacity ~peak ~capacity:room (fun () ->
+              Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:cache_dir4
+                ~report:(fun r -> reports := r :: !reports)
+                ~on_ship:(fun what -> shipped := what :: !shipped)
+                (Context.auto ()) t2 comp Ir.Indexing.Empty))
     in
     let reports = List.rev !reports in
     Stdio.eprintf
       "placement A/B (not part of the golden): room %d B, arm A resident %s, peak %d B above the \
-       start, %d refused; arms %s\n\
+       start, %d refused; arms %s; shipped %s\n\
        %!"
-      room4
+      (room - start)
       (Option.value_map !a_resident ~default:"-" ~f:(Printf.sprintf "%d B"))
       (!peak - start) refused
       (String.concat ~sep:", "
          (List.map reports ~f:(fun r ->
+              Autotune.outcome_name r.Autotune.outcome
+              ^ " "
+              ^
               if String.is_empty r.Autotune.best_label then "nothing timed"
-              else r.Autotune.best_label)));
-    (result, !a_resident, reports, !shipped)
+              else r.Autotune.best_label)))
+      (String.concat ~sep:"," !shipped);
+    (result, !a_resident, reports, !shipped, refused)
   in
   (* A missing report is a failed claim, never a crash: every claim about an arm holds of a report
      that arrived. *)
   let arm_holds what report ~f = p what (Option.exists report ~f) in
-  let a_fills_room what a_resident =
-    p
-      (what ^ " holds at least the unscheduled footprint, leaving arm B no room")
-      (Option.exists a_resident ~f:(fun a -> a >= fp_base))
-  in
-  let result, a_resident, reports, shipped = run_arms () in
+  let result, a_resident, reports, shipped, refused = run_arms () in
+  p "nothing of arm A is resident when arm B's base compile starts"
+    (Option.exists a_resident ~f:(fun a -> a <= 0));
   p "both arms reported, in position" (List.length reports = 2);
   let arm_a = List.nth reports 0 and arm_b = List.nth reports 1 in
   arm_holds "arm A searched without a device-memory decline" arm_a ~f:(fun a ->
       searched a && memory_declines a = 0);
-  a_fills_room "arm A's shipped routine" a_resident;
-  arm_holds "arm B was refused for device memory before its search" arm_b ~f:refused_for_memory;
-  p "arm A shipped" (List.equal String.equal shipped [ "A" ]);
+  arm_holds "arm B searched too, without a device-memory decline" arm_b ~f:(fun b ->
+      searched b && memory_declines b = 0);
+  p "nothing was refused for device memory" (refused = 0);
+  p "exactly one arm shipped" (match shipped with [ ("A" | "B") ] -> true | _ -> false);
   Result.iter result ~f:(check_values "the shipped arm computes the right values");
-  let cacheable = Option.exists arm_a ~f:(fun a -> a.Autotune.timings_contended = 0) in
-  let result, a_resident, reports, shipped = run_arms () in
-  p "the next call reports both arms again" (List.length reports = 2);
-  let arm_a2 = List.nth reports 0 and arm_b2 = List.nth reports 1 in
-  p "the next call replays arm A's winner, or its search was contended"
-    (Option.exists arm_a2 ~f:replayed || not cacheable);
-  a_fills_room "arm A's replayed routine" a_resident;
-  arm_holds "and searches nothing: arm B is refused again" arm_b2 ~f:refused_for_memory;
-  p "arm A shipped again" (List.equal String.equal shipped [ "A" ]);
+  (* The decision is recorded only from clean evidence (no contention-refused window); recorded, the
+     next call replays it in one search, itself a schedule-cache replay. *)
+  let cacheable = List.for_all reports ~f:(fun r -> r.Autotune.timings_contended = 0) in
+  let result, _, reports, shipped, refused = run_arms () in
+  p "the next call replays the recorded decision in one cached search, or the arms were contended"
+    ((match reports with [ r ] -> replayed r | _ -> false) || not cacheable);
+  p "nothing was refused for device memory in the next call" (refused = 0);
+  p "it shipped the recorded arm" (match shipped with [ ("A" | "B") ] -> true | _ -> false);
   Result.iter result ~f:(check_values "the replayed arm computes the right values")

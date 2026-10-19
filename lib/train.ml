@@ -762,8 +762,8 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     stays cached, and the failed arm's own report — [Autotune.Search_died], carrying the failure —
     still reaches [report] in position, so the failure is recorded rather than downgraded to "that
     arm merely lost". A failed arm's [best_ms] is deliberately {e not} shippable and not compared:
-    {!Autotune.tune} raised, so no routine was compiled from [ctx] for it. Only when every arm fails
-    does [tune_placements] propagate, with the first failure's original backtrace — with two
+    its search raised, so there is no routine to compile from [ctx] for it. Only when every arm
+    fails does [tune_placements] propagate, with the first failure's original backtrace — with two
     exceptions that are not the arm's to absorb and propagate at once: process-level failures
     ([Out_of_memory], [Sys.Break]) and compiler invariant violations ([Assert_failure],
     [Stack_overflow]), the same classes {!Ir.Schedule_outcome.classify_raw} refuses to classify. A
@@ -778,6 +778,15 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     carve-out: an argument-precondition violation (an incompatible [timing_ctx]) is detected before
     the call reaches any phase, so it reports nothing and propagates. Both arms are given the same
     contexts, so both raise it; there is no surviving arm to misattribute.
+
+    gh-ocannl-1408: every arm and flip searches through {!Autotune.tune_deferred}, so a search
+    leaves nothing it compiled on the device, and only the placement that ships is compiled from
+    [ctx] -- once, after every search. Arm A's routine is therefore not resident while arm B
+    searches: on a step over half the device it used to be, and arm B was refused at its base
+    compile, making every such A/B single-arm. A shipping compile that fails falls back to the next
+    completed result -- the other arm, or after a flip refinement the A/B winner and then the other
+    arm -- which ships unrecorded; under a forced arm it propagates. The replayed decision's one
+    search compiles at once, so a replay that does not compile is a failed replay like any other.
 
     The arms differ in which candidates {e exist}, not only in how they rank: a tensorized candidate
     is seeded only when the matmul site's operand and destination storage precisions resolve to a
@@ -968,7 +977,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      the default exception printer when it swallows it, and that printer shows string fields
      only. *)
   let exception Report_callback_failed of string * exn * Stdlib.Printexc.raw_backtrace in
-  let tune ?to_report ?(progress_note = "") ?abandon arm ctx timing_ctx =
+  (* gh-ocannl-1408: a search's result is its DEFERRED compile ({!Autotune.tune_deferred}): nothing
+     an arm or a flip compiled stays resident while the next one searches, and only the placement
+     that ships is compiled ([ship]). [eager] compiles at once, inside the failure containment: the
+     replayed decision's one search uses it, since a compile failure there is a failed replay and
+     sends the call to the arms. *)
+  let tune ?to_report ?(progress_note = "") ?abandon ?(eager = false) arm ctx timing_ctx =
     let to_report = Option.value to_report ~default:report in
     let capture r =
       last := Some r;
@@ -993,10 +1007,14 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     last := None;
     let result =
       match
-        Autotune.tune ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?abandon
-          ~report:capture ctx comp bindings
+        let deferred =
+          Autotune.tune_deferred ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?abandon
+            ~report:capture ctx comp bindings
+        in
+        if eager then ignore (Autotune.compile_deferred deferred : Context.t * Context.routine);
+        deferred
       with
-      | compiled -> Ok compiled
+      | deferred -> Ok deferred
       (* Unwrapped, so the caller sees its own exception with its own backtrace: the wrapper is an
          internal marker, not part of this function's contract. *)
       | exception Report_callback_failed (_, callback_exn, callback_backtrace) ->
@@ -1072,28 +1090,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   else Printf.sprintf "%.4f ms" r.Autotune.mma_best_ms))));
     (result, best_ms, r)
   in
-  (* gh-ocannl-550: every arm and every flip that SUCCEEDS produces a compiled routine, and exactly
-     one of them ships. Dropping the OCaml value does not free anything — the backend's pool table
-     roots the slabs (see {!Context.release}) — so an unshipped result is a permanently rooted
-     routine footprint, once per [tune_placements] call, plus one per attempted flip. Bounded per
-     call, and therefore not the per-candidate growth {!Autotune.tune} fixes, but a
-     repeatedly-tuning process (a benchmark sweep, a script tuning several routines) accumulates
-     them without limit.
-
-     Collected here rather than released at each decision point, because "may still ship" is not a
-     local property: the flip chain bases on arm A's result, so A stays alive while the chain runs
-     even when B won the A/B, and the chain's incumbent stays alive until the final comparison. One
-     sweep at the single point where the answer is known avoids having to re-derive that per
-     branch. *)
-  let produced = ref [] in
-  let record = function Ok compiled -> produced := compiled :: !produced | Error _ -> () in
-  let release_unshipped ?keep () =
-    List.iter !produced ~f:(fun ((cctx, _) as compiled) ->
-        if not (Option.exists keep ~f:(phys_equal compiled)) then
-          try Context.release cctx
-          with exn when not (must_propagate exn) ->
-            logf "release of an unshipped tune result failed: %s" (Exn.to_string exn))
-  in
+  (* gh-ocannl-550 asked what becomes of every arm and flip result that does not ship: dropping the
+     OCaml value frees nothing (the backend's pool table roots the slabs, see {!Context.release}).
+     Since gh-ocannl-1408 there is nothing to drop: a result is a deferred compile, holding no device
+     resources, and only the one that ships is compiled. So arm A's routine is not resident while
+     arm B searches -- on a step over half the device, that residency refused arm B's base compile
+     and made every placement A/B single-arm -- and no routine is compiled for a losing arm or
+     flip. *)
   (* The arms are independent experiments but they are not independent lineages: the B arm searches
      in a {!Context.decide_materialized} sibling, which shares the execution ledger. A failure whose
      damage the backend could not bound ([Writes_may_have_occurred], or an unattributed launch/sync
@@ -1108,24 +1111,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     | Error (exn, backtrace) when lineage_poisoned () ->
         logf "arm %s poisoned the shared %s lineage, so no sibling arm can run: propagating" who
           (if Option.is_some timing_ctx then "timing" else "caller's");
-        (* Nothing will ship (gh-ocannl-550): a sibling arm that already succeeded has no reader
-           left. *)
-        release_unshipped ();
         Stdlib.Printexc.raise_with_backtrace exn backtrace
     | _ -> ()
-  in
-  (* A [report] callback exception propagates by design (it is the caller's failure, not the
-     search's), which means it exits [tune_placements] without reaching any of the ship paths below
-     — so results already collected would be abandoned rooted. Every call after the first goes
-     through this (gh-ocannl-550, round-four review); the first needs nothing, since [produced] is
-     still empty. *)
-  let tune_or_release ?to_report ?progress_note ?abandon arm c t =
-    match tune ?to_report ?progress_note ?abandon arm c t with
-    | r -> r
-    | exception exn ->
-        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        release_unshipped ();
-        Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
   let embedded = embedded_nodes loss in
   (* [decide_materialized] skips the nodes constrained away from materialization (constants,
@@ -1299,70 +1286,80 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      it: on the cold path both arms [Error] propagated, [a_wins] never picks a failed arm, and the
      flip chain only ever replaces its incumbent with a strictly faster {e completed} search
      ([infinity] ranks a failed one); on the replay path the one search's failure propagates like a
-     forced arm's. *)
-  let ship ~what ~commit = function
-    | Ok compiled -> (
-        (* The poisoned check comes FIRST, and the retention decision after it (gh-ocannl-550,
-           round-four review): retaining [compiled] and then raising would leave the one artifact
-           nobody can reach. Whether this returns or raises, exactly one of the two calls below runs. *)
+     forced arm's.
+
+     gh-ocannl-1408: shipping is where the one compile from [ctx] happens. A compile that fails is
+     that placement failing after all, which the arms' containment (gh-ocannl-550) answers by
+     shipping the next completed result: [fallbacks], in order, each shipped under its own name and
+     never recorded -- the evidence the recording would rest on includes a placement that did not
+     compile. A forced arm passes none, so its failure propagates. *)
+  let rec ship ?(fallbacks = []) ~what ~commit = function
+    | Ok deferred -> (
         (* A later arm can poison the lineage after this one succeeded. With a [timing_ctx] that is
            the scratch lineage and the winner — compiled from [ctx] — is unaffected. WITHOUT one the
            arms search in the caller's own lineage, so the winner's first [Context.run] is
            guaranteed to raise: handing it back would report success for a routine that cannot
            execute, and blame it on whichever routine poisoned the ledger. The poisoning failure is
-           the honest answer, at the point where it is known. *)
+           the honest answer, at the point where it is known -- and before the compile, which would
+           only be wasted. *)
         match if Option.is_none timing_ctx then Context.poisoned_failure ctx else None with
-        | None ->
-            release_unshipped ~keep:compiled ();
-            (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships.
-
-               A raising callback is the caller's failure and propagates, like [report]'s — but it
-               propagates INSTEAD of returning [compiled], and by then [compiled] is the one result
-               deliberately not released. Dropping the OCaml value frees nothing (the backend's pool
-               table roots the slabs), and the caller never received a handle, so the routine would
-               be permanently unreachable and unreleasable: a repeatedly-tuning process with a flaky
-               callback accumulates one routine footprint per call. Release it here, then re-raise
-               the caller's own exception with its original backtrace. *)
-            (match on_ship with
-            | None -> ()
-            | Some f -> (
-                try f what
-                with exn ->
-                  let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                  (try Context.release (fst compiled)
-                   with exn2 when not (must_propagate exn2) ->
-                     logf "release after a failing on_ship callback failed: %s" (Exn.to_string exn2));
-                  Stdlib.Printexc.raise_with_backtrace exn backtrace));
-            (* gh-ocannl-786: recorded once the artifact has actually shipped -- after the callback,
-               whose failure means nothing shipped -- and protected like it: a process-level failure
-               while the entry is written would otherwise leave the one retained routine
-               unreachable. *)
-            (try commit ()
-             with exn ->
-               let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-               (try Context.release (fst compiled)
-                with exn2 when not (must_propagate exn2) ->
-                  logf "release after a failing placement recording failed: %s" (Exn.to_string exn2));
-               Stdlib.Printexc.raise_with_backtrace exn backtrace);
-            compiled
         | Some poisoned ->
             logf "the winner cannot ship: a later arm poisoned the caller's lineage";
-            (* Nothing ships, so nothing is retained -- including this arm's own winner. *)
-            release_unshipped ();
-            raise poisoned)
-    | Error (exn, backtrace) ->
-        (* Nothing ships, so nothing is retained. *)
-        release_unshipped ();
-        Stdlib.Printexc.raise_with_backtrace exn backtrace
+            raise poisoned
+        | None -> (
+            match Autotune.compile_deferred deferred with
+            | exception exn when (not (must_propagate exn)) && not (List.is_empty fallbacks) ->
+                let fallback_what, fallback = List.hd_exn fallbacks in
+                logf "%s's compile failed (%s): shipping %s instead, unrecorded" what
+                  (Exn.to_string exn) fallback_what;
+                ship ~fallbacks:(List.tl_exn fallbacks) ~what:fallback_what
+                  ~commit:(fun () ->
+                    logf "placement store: nothing recorded, the measured winner did not compile")
+                  fallback
+            | compiled ->
+                (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships.
+
+                   A raising callback is the caller's failure and propagates, like [report]'s — but
+                   it propagates INSTEAD of returning [compiled]. Dropping the OCaml value frees
+                   nothing (the backend's pool table roots the slabs), and the caller never received
+                   a handle, so the routine would be permanently unreachable and unreleasable: a
+                   repeatedly-tuning process with a flaky callback accumulates one routine footprint
+                   per call. Release it here, then re-raise the caller's own exception with its
+                   original backtrace. *)
+                (match on_ship with
+                | None -> ()
+                | Some f -> (
+                    try f what
+                    with exn ->
+                      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                      (try Context.release (fst compiled)
+                       with exn2 when not (must_propagate exn2) ->
+                         logf "release after a failing on_ship callback failed: %s"
+                           (Exn.to_string exn2));
+                      Stdlib.Printexc.raise_with_backtrace exn backtrace));
+                (* gh-ocannl-786: recorded once the artifact has actually shipped -- after the
+                   callback, whose failure means nothing shipped -- and protected like it: a
+                   process-level failure while the entry is written would otherwise leave the
+                   shipped routine unreachable. *)
+                (try commit ()
+                 with exn ->
+                   let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                   (try Context.release (fst compiled)
+                    with exn2 when not (must_propagate exn2) ->
+                      logf "release after a failing placement recording failed: %s"
+                        (Exn.to_string exn2));
+                   Stdlib.Printexc.raise_with_backtrace exn backtrace);
+                compiled))
+    | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
+  (* The completed results among [candidates], as [ship]'s fallbacks. *)
+  let completed candidates = List.filter candidates ~f:(fun (_, r) -> Result.is_ok r) in
   let cold () =
     let a, a_ms, a_report = tune "A (default placements)" ctx timing_ctx in
-    record a;
     propagate_if_poisoned "A" a;
     let b, b_ms, b_report =
-      tune_or_release "B (materialize-all)" (materialize ctx) (Option.map timing_ctx ~f:materialize)
+      tune "B (materialize-all)" (materialize ctx) (Option.map timing_ctx ~f:materialize)
     in
-    record b;
     (* Both arms gone: there is no winner to ship, and the first failure is the one that has not
        been cascaded from — a device the other arm's failure exhausted or a lineage it poisoned
        would otherwise be reported as the cause. *)
@@ -1482,7 +1479,15 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     let commit_winner () =
       persist ~decision:winner_decision ~shipped:winner_report ~shipped_ms:winner_ms ~a_ms ~b_ms
     in
-    if inline_flips <= 0 then ship ~what:winner_arm ~commit:commit_winner winner
+    (* gh-ocannl-1408: the other arm, should the winner fail to compile -- never under a forced arm,
+       whose failure propagates. *)
+    let winner_fallbacks =
+      if forced then [] else completed [ (if a_wins then ("B", b) else ("A", a)) ]
+    in
+    let ship_winner () =
+      ship ~fallbacks:winner_fallbacks ~what:winner_arm ~commit:commit_winner winner
+    in
+    if inline_flips <= 0 then ship_winner ()
     else
       let (* gh-555: greedy per-node refinement over the inlining decision vector. The vector lives
              on the default-policy arm (arm B's placements are caller-seeded wholesale, so its
@@ -1532,43 +1537,24 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
            silently skip the refinement and ship the A/B winner as though the setting had been
            honored. The two process-level classes are not this containment's either, for the same
            reasons they are not the arms'; nor is a malformed registered setting, which the surface
-           can be the first to read ([must_propagate]). Each propagates after releasing the arms'
-           results, as the abandon ratio's below does: a caller that catches it and retries would
-           otherwise keep both compiled arms rooted in the backend pool. *)
+           can be the first to read ([must_propagate]). *)
         | exception exn when match exn with Utils.User_error _ -> true | _ -> must_propagate exn ->
-            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-            release_unshipped ();
-            Stdlib.Printexc.raise_with_backtrace exn backtrace
+            Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
         | exception exn ->
             logf "flip refinement skipped: the decision-surface lowering failed: %s"
               (Exn.to_string exn);
             None
       in
       match surface with
-      | None -> ship ~what:winner_arm ~commit:commit_winner winner
+      | None -> ship_winner ()
       | Some surface ->
-          (* Released before a malformed value propagates, as for the abandon ratio below. *)
-          let bound_pruning =
-            match Utils.registered_flag ~arg_name:"autotune_bound_pruning" with
-            | enabled -> enabled
-            | exception exn ->
-                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                release_unshipped ();
-                Stdlib.Printexc.raise_with_backtrace exn backtrace
-          in
+          let bound_pruning = Utils.registered_flag ~arg_name:"autotune_bound_pruning" in
           (* gh-ocannl-1110: a flip is abandoned once its best after its first [beam_width] timed
              candidates trails the incumbent's best at the same depth by more than this ratio
              ({!Autotune.flip_abandon_ratio}). Read once, here, so a malformed margin fails the
              chain before any flip rather than midway. It propagates, like the surface's own reading
-             of it above, after releasing the arms' results (gh-ocannl-550). *)
-          let abandon_ratio =
-            match Autotune.flip_abandon_ratio () with
-            | ratio -> ratio
-            | exception exn ->
-                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                release_unshipped ();
-                Stdlib.Printexc.raise_with_backtrace exn backtrace
-          in
+             of it above. *)
+          let abandon_ratio = Autotune.flip_abandon_ratio () in
           (* Against the incumbent's own timed record, which a report without one (an entry cached
              before the field) leaves empty: no comparison, so the flip runs its full search. *)
           let abandon_against (incumbent : Autotune.report option) =
@@ -1652,11 +1638,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                             | None -> ";td=u"
                             | Some (m, _) -> ";td=" ^ Sexp.to_string (Tn.sexp_of_memory_mode m)))
                 | exception exn when must_propagate exn ->
-                    (* A process-level class propagates, after releasing the arms' results like
-                       every other propagation out of the chain (gh-ocannl-550). *)
-                    let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                    release_unshipped ();
-                    Stdlib.Printexc.raise_with_backtrace exn backtrace
+                    (* A process-level class propagates. *)
+                    Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
                 | exception exn ->
                     logf "structural-twin rule off: the timing lineage's lowering failed: %s"
                       (Exn.to_string exn);
@@ -1719,12 +1702,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                           let ctx' = apply base_ctx in
                           let timing' = Option.map base_timing ~f:apply in
                           let r, ms, rep =
-                            tune_or_release ~to_report:flip_report
+                            tune ~to_report:flip_report
                               ~progress_note:
                                 (Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
                               ?abandon arm ctx' timing'
                           in
-                          record r;
                           (* An abandoned flip spent a budget slot: it was measured, briefly, and
                              lost. *)
                           Int.incr measured;
@@ -1815,11 +1797,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                     "placement store: the refined vector names a node outside the decision \
                      problem, so it is not recorded"
             in
-            ship ~what:"flip" ~commit chain_result)
+            ship
+              ~fallbacks:(completed [ (winner_arm, winner) ] @ winner_fallbacks)
+              ~what:"flip" ~commit chain_result)
           else (
             logf "flip refinement did not improve on the A/B winner (%.4f ms vs %.4f ms)" chain_ms
               winner_ms;
-            ship ~what:winner_arm ~commit:commit_winner winner)
+            ship_winner ())
   in
   match replay with
   | Some (e, decisions) -> (
@@ -1833,24 +1817,27 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       logf "placement store: replaying decision %s (recorded at %.4f ms; A %.4f ms vs B %.4f ms)"
         what e.SC.shipped_ms e.SC.arm_a_ms e.SC.arm_b_ms;
       let deferred = ref None in
+      (* Compiled eagerly: a replayed decision that does not compile is a failed replay, which the
+         arms below answer. *)
       let r, _ms, _report =
-        tune
+        tune ~eager:true
           ~to_report:(Some (fun r -> deferred := Some r))
           (what ^ " (replayed placement)") (apply decisions ctx)
           (Option.map timing_ctx ~f:(apply decisions))
       in
-      record r;
       propagate_if_poisoned what r;
       match r with
-      | Ok _ ->
+      | Ok compiled ->
           (* The caller's callback, with the caller's exception: it propagates, and nothing ships
-             (gh-ocannl-550), so the results collected so far are released first. *)
+             (gh-ocannl-550), so the routine compiled for it is released first. *)
           (match (report, !deferred) with
           | Some f, Some rep -> (
               try f rep
               with exn ->
                 let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                release_unshipped ();
+                (try Context.release (fst (Autotune.compile_deferred compiled))
+                 with exn2 when not (must_propagate exn2) ->
+                   logf "release after a failing report callback failed: %s" (Exn.to_string exn2));
                 Stdlib.Printexc.raise_with_backtrace exn backtrace)
           | _ -> ());
           ship ~what ~commit:(fun () -> ()) r

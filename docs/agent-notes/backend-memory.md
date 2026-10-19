@@ -81,7 +81,10 @@ files.
   and recompiles the winner from `ctx` on both paths (one compile; the `timing_ctx` path always
   paid it). The issue read the warm-run re-search as "nothing cached"; the entry WAS stored, and
   the replay compile was refused because the base compile's 6.6 GiB was still resident, so the
-  baseline is now released before any replay and relinked if the entry is stale.
+  baseline is now released before any replay and relinked if the entry is stale. One level up,
+  `Autotune.tune_deferred` leaves even the winner uncompiled, so a caller running several searches
+  (`Train.tune_placements`' arms and flips) holds no searched routine while the next one searches
+  (gh-ocannl-1408).
   `test/operations/autotune_device_memory` simulates a capacity at the `Delta_pool_allocated`
   fault-injection seam; `autotune_candidate_release` pins zero working pools between candidates.
 - Device allocation refusals are typed at the GPU pool allocators

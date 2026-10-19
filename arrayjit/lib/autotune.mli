@@ -2900,6 +2900,51 @@ val tune :
     the search trajectory's identity, so a cut search's [best_steps] serve early stopping only under
     the same budget. *)
 
+type deferred
+(** The outcome of a {!tune_deferred} search: the compile of what it ships, not yet run. Holds no
+    device resources. *)
+
+val tune_deferred :
+  ?name:string ->
+  ?search:bool ->
+  ?beam_width:int ->
+  ?rounds:int ->
+  ?repeats:int ->
+  ?timing:timing_mode ->
+  ?seed_block_sizes:int list ->
+  ?cache_dir:string ->
+  ?keep_fraction:float ->
+  ?max_split_reduce_sites:int ->
+  ?timing_ctx:Context.t ->
+  ?abandon:abandon_rule ->
+  ?log:bool ->
+  ?progress:bool ->
+  ?report:(report -> unit) ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  deferred
+(** {!tune}, except that the routine it ships is not compiled: {!compile_deferred} compiles it
+    (gh-ocannl-1408). The search, its cache store and its report happen here, with {!tune}'s
+    arguments, failures and reporting contract; then nothing the call compiled is left resident --
+    every candidate, the baseline and a validating cache replay are released -- so a caller running
+    several searches before choosing one, as [Train.tune_placements] does with its placement arms
+    and flips, holds no searched routine while the next one searches, and compiles only the one that
+    ships.
+
+    The difference from {!tune} is the order of the report and the compile: the report is delivered
+    before the compile, so a failure of {!compile_deferred} raises without a report of its own -- it
+    comes after the search has reported its outcome. What the compile runs is what {!tune} would
+    have: the winner's saved schedule replayed from [ctx] (falling back to the untuned default where
+    {!tune}'s winner replay would), the untuned default where the search shipped that, and for a
+    cache hit the entry's replay -- compiled twice in all, since the first replay (the one that
+    tells a stale entry from a sound one, and supplies the report's emission census) is released. *)
+
+val compile_deferred : deferred -> Context.t * Context.routine
+(** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]
+    that call ran under. At most once: a second call returns the same context and routine. A
+    [deferred] dropped without this call costs nothing on the device. *)
+
 val budget_setting : unit -> float option
 (** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
     the setting is a positive number, [None] (no budget) when it is empty, zero or negative; text
