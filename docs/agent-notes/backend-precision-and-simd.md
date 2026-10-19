@@ -1731,11 +1731,10 @@ files.
   render at 32 (AVX2) or 64 (AVX-512). A claim that silently depends on the width agrees with the
   device by coincidence on ARM and meets the disagreement first in CI. staging#1094 is
   the worked case: on cc, `schedule_strided_1x1` adds a seed population minted under a pinned
-  16-byte `simd_vector` width, codegen renders those seeds at the configured width, and at 32
-  bytes their widest register tiles (128x128x128, 64x128x256) decline to the scalar fallback. Its
-  new census claim (every tensorized seed renders tensorized) passed locally and failed four claims
-  on the ubuntu leg; rerun on ARM at that pre-fix commit (18307f22b), it passes unforced and fails
-  the same four at `OCANNL_CC_VECTOR_BYTES=32` (whether the decline is intended: gh-ocannl-1317).
+  16-byte width, and codegen renders those seeds at the configured one. Its census claim (every
+  tensorized seed renders tensorized) passed on ARM and failed four claims on the ubuntu leg, where
+  a 16-byte geometry was not then a width the 32-byte file rendered; the same four failed on ARM at
+  `OCANNL_CC_VECTOR_BYTES=32`. (Since gh-ocannl-1317 it is, and the claim covers that population.)
   So a change to a cc mma or register-tile census claim, a `Register_tile` geometry claim or a SIMD
   rendering test gets one more targeted run of the affected aliases at 32. Pinning a
   `hardware_limits` record in the test does not make it width-independent, as staging#1094 shows:
@@ -1762,7 +1761,12 @@ files.
   cosmetic — degrading below the machine's pre-widening width would newly vectorize loops that
   render serially today, and a vector accumulation reassociates, so that is a numerics change
   rather than a scheduling one. Autotune's seeding pre-filter calls the same function, or it would
-  withhold candidates the renderer would in fact tile.
+  withhold candidates the renderer would in fact tile. The ladder is what the MODEL ranks; a
+  register-tile geometry a schedule REQUESTS may name any narrower file's width too
+  (`Register_tile.renderable_lanes`, gh-ocannl-1317): a seed or a tuned schedule minted at 16 bytes
+  keeps its tile on a 32- or 64-byte machine instead of declining to the scalar fallback, under
+  the same register budget, since a narrower vector is the low part of the same register. The
+  converse declines: a wider width than the file's is no width it renders.
 - **The register tile's column cap is fitted to the register COUNT, by the resident floor**
   (gh-ocannl-1285). `Register_tile.live_registers` (`rm*rn + rm + rn`) is the model's pressure
   proxy and over-counts: no allocation holds every A splat and every B row of a k step at once.

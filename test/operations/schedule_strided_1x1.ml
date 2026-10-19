@@ -35,10 +35,10 @@
 
    Parity cannot say a tensorized ([sk_mma]) seed ran tensorized: a [Tile_mma] that declines at
    codegen renders its scalar fallback, which computes the same values. So each leg also claims,
-   over the [sk_mma] seeds the device's own limits propose, that every executed one renders
-   tensorized per its routine's mma census (gh-ocannl-1283) — gated on the backend's tensorized
-   capability for the site (the register tiling on cc, an advertised fragment format on a GPU),
-   never on the seeds proposed.
+   over every executed [sk_mma] seed — on cc the pinned 16-byte population's included, which a wider
+   device renders at its minted width (gh-ocannl-1317) — that it renders tensorized per its
+   routine's mma census (gh-ocannl-1283) — gated on the backend's tensorized capability for the site
+   (the register tiling on cc, an advertised fragment format on a GPU), never on the seeds proposed.
 
    Every seed the tuner would propose on this box is executed, in both of [Autotune.tune]'s flavors:
    whole-routine seeds under the device's own limits (and, on the C backends, also under
@@ -372,8 +372,7 @@ type probed = {
   device_segs : (bool * string * Autotune.sketch_params list) list option;
       (** The whole-routine and keyed per-segment seeds under the device's own limits alone — what
           [Autotune.tune] proposes; on the C backends the lists above also carry the pinned
-          16-byte-vector population, whose geometry codegen does not render at the device's own
-          vector width. *)
+          16-byte-vector population. *)
 }
 
 (* The probe: the site and whole-routine seeds on the optimized routine, and the keyed per-segment
@@ -641,31 +640,20 @@ let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
   let values runs = List.map runs ~f:(fun (_, _, r) -> r) in
   (* A tensorized seed whose [Tile_mma] declines at codegen renders the scalar fallback, which
      computes the same values, so parity cannot say it ran tensorized: every executed [sk_mma] seed
-     the device's own limits propose also answers for its routine's mma census (gh-ocannl-1283). The
-     claims are over that subset only: the block-tile seeds request no tensorization, and the pinned
-     16-byte population on the C backends is tiled for a vector file codegen does not use where the
-     device's is wider (on AVX2/AVX-512 its widest register tiles decline, correctly). Gated on
-     {!capability}, judged under the same device limits, never on the seeds proposed: where the
-     capability holds, a flavor that proposes no tensorized seed fails the population floor. *)
-  let mem_seed qs q = List.mem qs q ~equal:Poly.equal in
-  let device_seg_seeds key =
-    Option.value_map o.device_segs ~default:[] ~f:(fun l ->
-        List.concat_map l ~f:(fun (_, k, qs) -> if String.equal k key then qs else []))
-  in
-  let whole_census =
-    List.map whole_runs ~f:(fun (name, q, r) ->
-        (name, q, mem_seed o.device_whole q, Option.map r ~f:snd))
+     also answers for its routine's mma census (gh-ocannl-1283). The block-tile seeds request no
+     tensorization. On the C backends the claims cover the pinned 16-byte population too: its
+     register-tile geometries are minted for a narrower file than the device's where the device is
+     wider (AVX2, AVX-512), and a narrower file's widths render on a wider one
+     ([Register_tile.renderable_lanes], gh-ocannl-1317) -- which is what lets a seed or a tuned
+     schedule cross to a wider machine without silently losing its tile. Gated on {!capability},
+     judged under the device limits, never on the seeds proposed: where the capability holds, a
+     flavor that proposes no tensorized seed fails the population floor. *)
+  let whole_census = List.map whole_runs ~f:(fun (name, q, r) -> (name, q, Option.map r ~f:snd))
   and seg_census =
-    List.map seg_runs ~f:(fun (name, (key, q), r) ->
-        ( name,
-          q,
-          mem_seed (device_seg_seeds key) q,
-          Option.map r ~f:(fun (_, _, _, census) -> census) ))
+    List.map seg_runs ~f:(fun (name, (_, q), r) ->
+        (name, q, Option.map r ~f:(fun (_, _, _, census) -> census)))
   in
-  let tensorized =
-    List.filter_map ~f:(fun (name, q, device, census) ->
-        Option.some_if (q.Autotune.sk_mma && device) (name, q, census))
-  in
+  let tensorized = List.filter ~f:(fun (_, q, _) -> q.Autotune.sk_mma) in
   let advertised, aggregation =
     match capability s o with `Advertised -> (true, None) | `Withheld a -> (false, Some a)
   in

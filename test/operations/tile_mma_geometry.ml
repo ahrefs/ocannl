@@ -243,7 +243,44 @@ let () =
     (RT.budget ~vector_registers:16 = RT.live_registers { rm = 4; rn = 3; lanes = 8 }
     && RT.budget ~vector_registers:32 = RT.live_registers { rm = 4; rn = 6; lanes = 4 });
   p "a file that holds no four-row tile has no default"
-    (Option.is_none (RT.default ~file:(vf 16 4) ~elt_bytes:4 ~m:64 ~n:512))
+    (Option.is_none (RT.default ~file:(vf 16 4) ~elt_bytes:4 ~m:64 ~n:512));
+  (* A geometry minted under a narrower vector file renders on a wider one of the same register
+     count (gh-ocannl-1317): a seed population or a tuned schedule from a 16-byte file keeps its
+     register tile at 32 or 64 bytes instead of declining to the scalar fallback. Every geometry the
+     narrower file proposes -- the default, the alternatives, the two-row twin -- over the model's
+     shapes, at both element sizes and both register counts, is one the wider file's fit rules
+     accept. The converse is refused: the wider file's own widths do not fit the narrower one. *)
+  let nested = [ (8, 16); (16, 32); (16, 64); (32, 64) ] in
+  let minted =
+    List.concat_map nested ~f:(fun (narrow, wide) ->
+        List.concat_map [ 16; 32 ] ~f:(fun registers ->
+            List.concat_map [ 4; 2 ] ~f:(fun elt_bytes ->
+                List.concat_map shapes ~f:(fun (_, _, _, m, n) ->
+                    let file = vf narrow registers in
+                    Option.to_list (RT.default ~file ~elt_bytes ~m ~n)
+                    @ RT.alternatives ~file ~elt_bytes ~m ~n
+                    @ Option.to_list (RT.rm_twin ~file ~elt_bytes ~m ~n)
+                    |> List.map ~f:(fun t -> (vf wide registers, elt_bytes, m, n, t))))))
+  in
+  p_all ~min:(List.length shapes)
+    "every geometry a narrower vector file proposes passes the fit rules of a wider one" minted
+    ~f:(fun (file, elt_bytes, m, n, t) -> Result.is_ok (RT.check ~file ~elt_bytes ~m ~n t));
+  let wide_defaults =
+    List.concat_map nested ~f:(fun (narrow, wide) ->
+        List.filter_map shapes ~f:(fun (_, registers, elt_bytes, m, n) ->
+            Option.bind
+              (RT.default ~file:(vf wide registers) ~elt_bytes ~m ~n)
+              ~f:(fun t ->
+                Option.some_if
+                  (t.lanes * elt_bytes > narrow)
+                  (vf narrow registers, elt_bytes, m, n, t))))
+  in
+  p_all ~min:(List.length shapes)
+    "a wider file's default whose vector exceeds a narrower file is refused by it, naming the width"
+    wide_defaults ~f:(fun (file, elt_bytes, m, n, t) ->
+      match RT.check ~file ~elt_bytes ~m ~n t with
+      | Error why -> String.is_substring why ~substring:"is not a width"
+      | Ok () -> false)
 
 (* === The emission === *)
 let n = 64
@@ -312,6 +349,8 @@ let () =
         "a requested geometry renders register-tiled";
         "the emitted header names the requested geometry and its provenance";
         "the requested-geometry rendering matches the serial twin bitwise";
+        "a geometry minted for a narrower vector file renders register-tiled under its own header";
+        "the narrower-file rendering matches the serial twin bitwise";
         "an over-budget request is refused by the fit rules";
         "an over-budget request declines to the scalar fallback";
         "the declined routine is labeled scalar-fallback, not tensorized";
@@ -328,9 +367,12 @@ let () =
     let file = limits.Ir.Backend_intf.simd_vector in
     let ladder = RT.simd_lane_ladder ~vector_bytes:file.bytes ~elt_bytes in
     let lanes = List.hd_exn ladder in
-    (* Two vector columns: within the budget on every file (4*2 + 4 + 2 = 14 <= 19) and, at 16
-       lanes, still no wider than n = 64. *)
-    let req = { RT.rm = 4; rn = 2; lanes } in
+    (* Two vector columns where the file holds them (4*2 + 4 + 2 = 14 <= 19, the 16-register budget)
+       and, at 16 lanes, still no wider than n = 64; one where it holds only one -- a configured
+       width wider than a native register divides the count, e.g. 8 registers for 64-byte vectors on
+       NEON. *)
+    let rn = min 2 (RT.rn_cap ~vector_registers:file.registers) in
+    let req = { RT.rm = 4; rn; lanes } in
     (* Forward code is consumed once per compile: one tensor per leg. *)
     let%op honoured = ma * mb in
     let%op ob_t = ma * mb in
@@ -344,8 +386,30 @@ let () =
       && String.is_substring src ~substring:provenance);
     p_all2 "the requested-geometry rendering matches the serial twin bitwise" got want
       ~f:Float.equal;
+    (* A geometry minted for a narrower file (gh-ocannl-1317): half the narrowest width the file's
+       own ladder ranks -- 16 bytes on a 32- or 64-byte file, 8 on a 16-byte one -- a width the
+       renderer's model never picks here, which only a request minted elsewhere names. An 8-byte
+       file, the narrowest the renderer accepts, contains no narrower one. *)
+    let narrower = List.last_exn ladder / 2 in
+    let n_tiled =
+      "a geometry minted for a narrower vector file renders register-tiled under its own header"
+    and n_parity = "the narrower-file rendering matches the serial twin bitwise" in
+    if narrower * elt_bytes < 8 then (
+      skipped n_tiled;
+      skipped n_parity)
+    else begin
+      let minted = { RT.rm = 4; rn; lanes = narrower } in
+      let%op minted_t = ma * mb in
+      let got_n, census_n =
+        compile_run ~name:"tmg_narrower" ~leg:(Tensorized (Some minted)) minted_t
+      in
+      p n_tiled
+        (register_tiled census_n
+        && String.is_substring (Generated.read "tmg_narrower") ~substring:(header minted));
+      p_all2 n_parity got_n want ~f:Float.equal
+    end;
     (* One vector column past what the budget admits beside four rows, at the narrowest width the
-       file renders, so that the budget rule — not the width rule — is the one that fires. *)
+       file's ladder ranks, so that the budget rule — not the width rule — is the one that fires. *)
     let over_budget =
       {
         RT.rm = 4;

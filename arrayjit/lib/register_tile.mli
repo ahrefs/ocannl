@@ -51,6 +51,19 @@ val simd_lane_ladder : vector_bytes:int -> elt_bytes:int -> int list
     lanes are dropped. Re-exported by [Backend_intf.simd_lane_ladder], where the [Vectorized]
     renderings' width choices ([simd_lanes_for] and its accumulating variants) build on it. *)
 
+val renderable_lanes : vector_bytes:int -> elt_bytes:int -> int list
+(** The widths (in lanes, widest first) a requested geometry may name on a [vector_bytes]-wide file
+    at [elt_bytes]-wide elements: the file's own {!simd_lane_ladder}, and that of every narrower
+    file it contains -- each halving of the width down to the 8-byte floor every rendering file
+    meets. So a geometry minted for a 16-byte file renders on a 32- or 64-byte one (gh-ocannl-1317):
+    a seed population or a schedule tuned at the narrower width keeps its register tile on the wider
+    machine instead of declining to the scalar fallback. Sound because a narrower vector takes no
+    more of the file than a full one (the low part of the same register: [xmm] of [ymm]/[zmm], a
+    NEON [D] of its [Q]), so the file's count, and the {!budget} it sets, holds for it; where the
+    count was divided for a configured width wider than a native register it only under-counts.
+    {!default} and {!alternatives} still rank only the file's own ladder: below it the renderer
+    would trade throughput for nothing, which is a request's choice to make, never the model's. *)
+
 val budget : vector_registers:int -> int
 (** The live-register budget a requested geometry must fit: the {!live_registers} of the widest
     default tile, [rm_cap x rn_cap] -- tinyBLAS's [4 x 3] on 16-register files (AVX2, SSE) and
@@ -109,10 +122,10 @@ val default : file:Vector_file.t -> elt_bytes:int -> m:int -> n:int -> t option
     exceeds [n] (or [m], [n] < 1). *)
 
 val check : file:Vector_file.t -> elt_bytes:int -> m:int -> n:int -> t -> (unit, string) Result.t
-(** Whether the renderer can honour [t] on an [m x n] site: [lanes] is a width the file renders and
-    [n] fills, the register file holds some {!rm_cap}-row tile at all, [rm <= m], [rn * lanes <= n],
-    and {!live_registers} within {!budget}. The [Error] names the violated rule — it becomes the
-    decline diagnostic. *)
+(** Whether the renderer can honour [t] on an [m x n] site: [lanes] is one of the
+    {!renderable_lanes} and [n] fills it, the register file holds some {!rm_cap}-row tile at all,
+    [rm <= m], [rn * lanes <= n], and {!live_registers} within {!budget}. The [Error] names the
+    violated rule — it becomes the decline diagnostic. *)
 
 val alternatives : file:Vector_file.t -> elt_bytes:int -> m:int -> n:int -> t list
 (** The geometries the sketch seeding proposes beside the renderer's {!default}, for the tuner to

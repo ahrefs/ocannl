@@ -115,19 +115,26 @@ let default ~(file : Vector_file.t) ~elt_bytes ~m ~n =
             | c -> c)
         | c -> c)
 
+(* Every file the renderer accepts at all is at least 8 bytes wide (the [vector_bytes < 8] decline),
+   and a file contains every narrower one down to it: each halving of the width. *)
+let renderable_lanes ~vector_bytes ~elt_bytes =
+  let rec widths bytes = if bytes < 8 then [] else bytes :: widths (bytes / 2) in
+  List.concat_map (widths vector_bytes) ~f:(fun bytes ->
+      simd_lane_ladder ~vector_bytes:bytes ~elt_bytes)
+  |> List.dedup_and_sort ~compare:(fun a b -> Int.compare b a)
+
 let check ~(file : Vector_file.t) ~elt_bytes ~m ~n t =
   let { Vector_file.bytes = vector_bytes; registers = vector_registers } = file in
-  let ladder = ladder_for ~vector_bytes ~elt_bytes ~n in
-  let full_ladder = simd_lane_ladder ~vector_bytes ~elt_bytes in
+  let renderable = renderable_lanes ~vector_bytes ~elt_bytes in
   if t.rm < 1 || t.rn < 1 || t.lanes < 1 then
     Error (Printf.sprintf "degenerate geometry %s" (to_string t))
-  else if not (List.mem full_ladder t.lanes ~equal:Int.equal) then
+  else if not (List.mem renderable t.lanes ~equal:Int.equal) then
     Error
       (Printf.sprintf
          "lanes=%d is not a width a %d-byte vector file renders at %d-byte elements (%s)" t.lanes
          vector_bytes elt_bytes
-         (String.concat ~sep:"/" (List.map full_ladder ~f:Int.to_string)))
-  else if not (List.mem ladder t.lanes ~equal:Int.equal) then
+         (String.concat ~sep:"/" (List.map renderable ~f:Int.to_string)))
+  else if n < t.lanes then
     Error (Printf.sprintf "n = %d below the vector width (lanes = %d)" n t.lanes)
   else if rn_cap ~vector_registers < 1 then
     Error
