@@ -12,8 +12,10 @@
    (y *. dy)] over [nb * ns] = 4096 rows: the weight gradient's reduction (4096) and the forward
    product's (96) both reach the default seeding threshold (32), and the bias gradient's serial
    chain (4096 rows per output cell) and the loss sum's reach the default split threshold (1024), so
-   the plan seeds AND splits. Every setting is the configuration's default: the search reads them,
-   as the untuned compile does.
+   on CUDA the plan seeds AND splits; HIP never splits untuned (gh-ocannl-1325), so there it seeds
+   only. Which backend promises what is read off [Autotune.seeded_default_backend] and
+   [seeded_split_backend], the predicates the untuned compile consults. Every setting is the
+   configuration's default: the search reads them, as the untuned compile does.
 
    The search's measurements are scripted through [Autotune.on_candidate_measured] (gh-ocannl-1027)
    with the windows opted out of host contention ([with_uncontended_test_windows], gh-ocannl-1156):
@@ -23,8 +25,10 @@
    by), the search did time later candidates, it crowned the seeded plan, and the crowned routine
    computes bitwise what the untuned compile computes, on inputs whose every partial sum rounds --
    and which tell the plans apart: the split reassociates the bias gradient, so the plain default
-   pipeline computes it differently in some cell, which is claimed as the control. Off CUDA/HIP the
-   untuned compile is the plain default and the search seeds no plan, which is claimed instead.
+   pipeline computes it differently in some cell, which is claimed as the control where the plan
+   splits (elsewhere the plan is bitwise the default by construction, and only the digest claim
+   tells them apart). Off CUDA/HIP the untuned compile is the plain default and the search seeds no
+   plan, which is claimed instead.
 
    A window the host refuses anyway (queued calibration that measured no batch, routine on a shared
    box) never reaches the seam, so the claims that read the scripted windows are gated on every
@@ -46,9 +50,10 @@ module SC = Ir.Schedule_cache
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
-let seeds_here =
-  String.is_substring backend_name ~substring:"cuda"
-  || String.is_substring backend_name ~substring:"hip"
+(* What the untuned compile promises here, read off the predicates it consults: seeding on CUDA and
+   HIP, the split on CUDA alone (gh-ocannl-1325: HIP keeps the unsplit plan). *)
+let seeds_here = Autotune.seeded_default_backend backend_name
+let splits_here = Autotune.seeded_split_backend backend_name
 
 (* The batch axis outermost and long: the split detector splits a reduction over its outermost loop,
    which at [nb = 4] would be too short to propose (the gpt2_mini_train b8 case). *)
@@ -197,11 +202,13 @@ let refused_seed_search () =
 let () =
   let (w_untuned, b_untuned), untuned_digest, choice = untuned () in
   let claim label evaluate = Verdict.gate ~when_:seeds_here ~on:backend_name label evaluate in
-  claim "on CUDA/HIP the untuned plan seeds a contraction and splits a reduction" (fun () ->
-      p "on CUDA/HIP the untuned plan seeds a contraction and splits a reduction"
-        (match choice with
-        | Some c -> (not (List.is_empty c.Autotune.sd_seeded)) && not (List.is_empty c.sd_split)
-        | None -> false));
+  claim "on CUDA/HIP the untuned plan seeds a contraction" (fun () ->
+      p "on CUDA/HIP the untuned plan seeds a contraction"
+        (match choice with Some c -> not (List.is_empty c.Autotune.sd_seeded) | None -> false));
+  Verdict.gate ~when_:splits_here ~on:backend_name
+    "where the untuned compile splits (CUDA), the plan splits a reduction" (fun () ->
+      p "where the untuned compile splits (CUDA), the plan splits a reduction"
+        (match choice with Some c -> not (List.is_empty c.Autotune.sd_split) | None -> false));
   Verdict.gated ~when_:(not seeds_here) ~on:backend_name
     "off CUDA/HIP the untuned compile is the plain default" (Option.is_none untuned_digest);
   Verdict.gate ~when_:(not seeds_here) ~on:backend_name
@@ -274,7 +281,10 @@ let () =
                p_all2 label (Array.append w_tuned b_tuned)
                  (Array.append w_untuned b_untuned)
                  ~f:bitwise)));
-  claim "the control: the plain default pipeline's bias gradient differs in some cell" (fun () ->
+  (* Only the split reassociates anything: where the plan does not split, it is bitwise the default
+     pipeline by construction, and the digest claim is what tells the two apart. *)
+  Verdict.gate ~when_:splits_here ~on:backend_name
+    "the control: the plain default pipeline's bias gradient differs in some cell" (fun () ->
       let ctx, routine = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
       let _, b_default = run ctx routine in
       p_exists "the control: the plain default pipeline's bias gradient differs in some cell"

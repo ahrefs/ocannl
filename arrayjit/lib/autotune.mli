@@ -1763,6 +1763,14 @@ val seeded_params :
     launch has 128 blocks, else the one putting the most threads on the output — among the
     geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
 
+val seeded_default_backend : string -> bool
+(** Whether {!seeded_default} seeds on this backend ({!Context.backend_name}): CUDA and HIP. *)
+
+val seeded_split_backend : string -> bool
+(** Whether {!seeded_default} splits long reductions on this backend: CUDA only (see
+    {!seeded_split_sites}). A test states what each backend promises through these, never a restated
+    list. *)
+
 val seeded_split_sites :
   backend:string ->
   min_serial:int ->

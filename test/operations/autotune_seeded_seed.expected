@@ -1,4 +1,5 @@
-on CUDA/HIP the untuned plan seeds a contraction and splits a reduction: true
+on CUDA/HIP the untuned plan seeds a contraction: true
+where the untuned compile splits (CUDA), the plan splits a reduction: true
 off CUDA/HIP the untuned compile is the plain default: true
 off CUDA/HIP the search derives no seeded plan: true
 the search's first candidate is the seeded untuned plan: true
