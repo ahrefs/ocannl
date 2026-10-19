@@ -598,7 +598,7 @@ tools/mutation-run.sh on the named module and the focused verdict_ratchet alias,
 exactly the listed false claims, and restored the source byte-for-byte with cmp. The runs came in
 four batches, controls being added between them; each batch's baseline exited 0
 (`20261019T120541Z-43268`, `20261019T121617Z-58901`, `20261019T122119Z-22070`,
-`20261019T123158Z-40198`, review round 1's `20261019T124720Z-1529` and round 2's `20261019T131053Z-13186`). The two rows marked "local review" answer the pre-PR codex review, which
+`20261019T123158Z-40198`, review round 1's `20261019T124720Z-1529` round 2's `20261019T131053Z-13186`, and round 3's `20261019T132946Z-99721` and `20261019T133110Z-38406`). The two rows marked "local review" answer the pre-PR codex review, which
 found that a structure's own `Verdict` module was resolved outside the structure.
 
 | Mechanism | Mutation | Controls | Run |
@@ -625,6 +625,9 @@ found that a structure's own `Verdict` module was resolved outside the structure
 | A connective or operator the source rebinds is not the standard one (review round 1) | `verdict_scan.ml`: the boolean side ignores a binding of the connective | Failed: `does not read a connective the source rebinds as the standard one` | `20261019T124744Z-16999` |
 | An unreadable include keeps a structure's earlier Verdict names, ambiguously (review round 2) | `verdict_callee.ml`: an unreadable include replaces every claim name | Failed: `the readers agree that a structure's later unreadable include leaves its Verdict names ambiguous` | `20261019T131102Z-20342` |
 | A quantifier nested in a predicate is read on the boolean side (review round 2) | `verdict_scan.ml`: a quantifier's arguments not read as booleans | Failed: `refuses a gated boolean whose quantifier's predicate quantifies the gated population` | `20261019T131118Z-27931` |
+| A module a structure's pattern unpacks shadows its name for the items after it (review round 3) | `verdict_callee.ml`: unpacks not forgotten in a structure | Failed: `the readers agree that a structure's unpacked Verdict module is not Verdict` | `20261019T132955Z-7745` |
+| A structure that includes an unreadable module carries that open's ambiguity into an open of it (review round 3) | `verdict_callee.ml`: no marker left in the structure's modules | Failed: `the readers agree that an opened structure including an unreadable module leaves Verdict ambiguous` | `20261019T133010Z-15280` |
+| Collapsed alternative claims keep the ambiguity of either (review round 3) | `verdict_provenance.ml`: ambiguity not merged on deduplication | Failed: `names the qualified remedy when either alternative claim function is ambiguous` (it now tries both branch orders: with one it survived, run `20261019T133025Z-23067`) | `20261019T133119Z-45626` |
 | The ambiguity remedy is named in the refusal | `verdict_ratchet.ml`: the remedy never added | Failed: names the qualified remedy for a quantified claim past an open of another module | `20261019T121413Z-15477` |
 
 The shipped shape, re-seeded into the corpus: in `test/operations/placement_store.ml`, run 8's gate

@@ -2659,11 +2659,23 @@ let claims structure =
     }
   in
   ignore (scan_structure ctx structure : binding list * binding list);
+  (* Two alternatives of one call -- a definite Verdict function and an ambiguous one -- fire claims
+     that differ only in their ambiguity; the one kept is ambiguous if either was. *)
+  let ambiguous_keys =
+    List.filter_map !(ctx.found) ~f:(fun (claim : claim) ->
+        if claim.ambiguous then Some (claim.fired.position, claim_key claim) else None)
+    |> Set.Poly.of_list
+  in
   List.rev !(ctx.found)
   |> List.dedup_and_sort ~compare:(fun a b ->
       match Int.compare a.fired.position b.fired.position with
       | 0 -> String.compare (claim_key a) (claim_key b)
       | order -> order)
+  |> List.map ~f:(fun (claim : claim) ->
+      {
+        claim with
+        ambiguous = claim.ambiguous || Set.mem ambiguous_keys (claim.fired.position, claim_key claim);
+      })
 
 (** How a claim's label reads: the literal, or the expression that computes it. *)
 let label_text = function

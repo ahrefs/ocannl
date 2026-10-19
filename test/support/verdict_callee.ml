@@ -211,8 +211,11 @@ let of_structure ast : t =
                   in
                   match item.pstr_desc with
                   | Pstr_value (_, bindings) ->
-                      ( scope,
-                        own (Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat))),
+                      let patterns = List.map bindings ~f:(fun b -> b.pvb_pat) in
+                      (* A module a pattern unpacks shadows its name for the items after it, as the
+                         lexical walk has it. *)
+                      ( self#forget scope (Lexical_scope.pattern_unpacks patterns),
+                        own (Lexical_scope.pattern_vars patterns),
                         structure_modules )
                   | Pstr_primitive { pval_name = { txt; _ }; _ } ->
                       (scope, own [ txt ], structure_modules)
@@ -257,7 +260,12 @@ let of_structure ast : t =
                                        match Map.find values name with
                                        | Some (From_verdict _) -> From_verdict { ambiguous = true }
                                        | Some (Source | From_elsewhere) | None -> From_elsewhere ))),
-                              Map.map structure_modules ~f:ambiguate )
+                              (* ...and it may bring a [Verdict] of its own: the marker an
+                                 unreadable open leaves, which an open of this structure carries
+                                 on. *)
+                              Map.set
+                                (Map.map structure_modules ~f:ambiguate)
+                                ~key:opened_elsewhere ~data:Unknown )
                       in
                       ( self#opened ~top:false ~include_:true scope denotes,
                         values,
@@ -286,7 +294,14 @@ let of_structure ast : t =
             Lexical_scope.push_frame env (all_members (From_verdict { ambiguous }))
         | Some (Structure { values; modules }) ->
             let env = Lexical_scope.push_frame env values in
-            { env with Lexical_scope.modules = later_wins env.Lexical_scope.modules modules }
+            (* A structure that included an unreadable module may bring a [Verdict] of its own:
+               every module denoting Verdict in scope becomes ambiguous, as under that open. *)
+            let outer =
+              if Map.mem modules opened_elsewhere then
+                Map.map env.Lexical_scope.modules ~f:ambiguate
+              else env.Lexical_scope.modules
+            in
+            { env with Lexical_scope.modules = later_wins outer modules }
         | Some Standard -> env
         | Some Unknown | None ->
             let env = Lexical_scope.push_frame env (all_members From_elsewhere) in

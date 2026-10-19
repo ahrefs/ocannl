@@ -612,10 +612,13 @@ the readers agree that a path through another module's Verdict is not Verdict: t
 the readers agree that a structure including its own Verdict module does not include Verdict: true
 the readers agree that a Verdict module an opened structure binds is not Verdict: true
 the readers agree that a structure's later unreadable include leaves its Verdict names ambiguous: true
+the readers agree that a structure's unpacked Verdict module is not Verdict: true
+the readers agree that an opened structure including an unreadable module leaves Verdict ambiguous: true
 the readers agree that a claim name a local structure binds is its own: true
 the readers agree that a claim name the source binds is its own: true
 names the qualified remedy for a quantified claim past an open of another module: true
 omits the qualified remedy for a quantified claim past an open of a standard library: true
+names the qualified remedy when either alternative claim function is ambiguous: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true
 synthetic control labels are pairwise distinct: true

@@ -4232,6 +4232,15 @@ let agreement_controls =
       "module C = struct include Verdict.Claims include Other end\n",
       "C.gated",
       Read_ambiguous );
+    ( "the readers agree that a structure's unpacked Verdict module is not Verdict",
+      "module C = struct let (module Verdict : S) = packed include Verdict end\n",
+      "C.gated",
+      Unread );
+    ( "the readers agree that an opened structure including an unreadable module leaves Verdict \
+       ambiguous",
+      "module C = struct include Other end\nopen C\n",
+      "Verdict.gated",
+      Read_ambiguous );
     ( "the readers agree that a claim name a local structure binds is its own",
       "open Verdict.Claims\n\
        module Checks = struct let gated ~when_:_ ~on:_ _ _ = () end\n\
@@ -4303,6 +4312,17 @@ let run_ambiguous_remedy_controls () =
       List.equal Bool.equal (remedy "open Other\n") [ true ] );
     ( "omits the qualified remedy for a quantified claim past an open of a standard library",
       List.equal Bool.equal (remedy "open Base\n") [ false ] );
+    (* Control flow choosing between a definite claim function and an ambiguous one fires one claim
+       per alternative; collapsed into one, it stays ambiguous. *)
+    ( "names the qualified remedy when either alternative claim function is ambiguous",
+      List.for_all [ "definite else Verdict.p"; "Verdict.p else definite" ] ~f:(fun branches ->
+          List.equal Bool.equal
+            (quantified_claims
+               (Sources.structure_of
+                  ("let definite = Verdict.p\nopen Other\nlet () = (if c then " ^ branches
+                 ^ ") \"all rows pass\" (List.for_all rows ~f:Fn.id)"))
+            |> List.map ~f:(fun claim -> claim.ambiguous))
+            [ true ]) );
   ]
 
 let base_dir = Dune.base_dir
