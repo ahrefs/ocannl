@@ -12,7 +12,7 @@
 # Each leg's body is gated by `harness_leg 'N: what it pins #group'`
 # (scripts/harness-support.sh), its name led by the leg numbers below and
 # closed by the one group it belongs to (gh-ocannl-1202): #group-alive (1-5),
-# #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83), #options (26-28,
+# #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-84), #options (26-28,
 # 37), #width (29-34, 48-52, 64, 70), #digest (35-36, 68-69, 71-73, 80),
 # #fresh (81), #lifecycle (40-47, 65, 74: the run/start lifecycle with its
 # signal legs, and both fork-window negative controls), #source (59-63, 66),
@@ -162,6 +162,16 @@
 #      device ends it as DEVICE UNHEALTHY (69) before any dune; the default is
 #      run's (1500s on a GPU batch, none on a CPU one), and a test inside the
 #      cap or an answering device lets every iteration run.
+#  84. `repeat --direct` (gh-ocannl-1377), against a real dune: one build,
+#      then each named test's own rules replayed once per iteration -- a
+#      `(test)` stanza's run and a target rule counted, the environment and
+#      output dune's own run had, an alias action left to dune's --force, no
+#      iteration compiling -- with DIFFERING for an output that moves, REPLAY
+#      DIVERGED when the replay can be told from dune, a sandboxed rule and an
+#      unreplayable action refused before any iteration, BUILD FAILED for a
+#      test that does not build, the per-test cap timing and killing a
+#      replayed test, and non-alias operands refused; a mutant without the
+#      replay shows dune alone does not re-run a target-producing test.
 #  64-65 sit between legs 51 and 52: `plan`, and the run's first phase, in
 #      which the supervisor's child resolves the backends (gh-ocannl-1066,
 #      gh-ocannl-1106).
@@ -2367,23 +2377,28 @@ if kill -0 "$escape_pid" 2>/dev/null; then kill -KILL "$escape_pid" 2>/dev/null;
 escape_pid=
 escape_release=
 
-pre_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || break$' "$SRC" | head -1 | cut -d: -f1)
-launch_line=$(grep -n '^        perl -e "$supervisor_perl" -- "$cap" "${iter_cmd\[@\]}" \\$' "$SRC" | head -1 | cut -d: -f1)
-supervisor_line=$(grep -n '^      repeat_sup=\$!$' "$SRC" | cut -d: -f1)
-post_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || kill "-\$repeat_cancelled" "\$repeat_sup" 2>/dev/null$' "$SRC" | cut -d: -f1)
-if [ -n "$pre_launch_line" ] && [ -n "$launch_line" ] \
+# Every step is one launch (repeat_launch), so the bracket is: the loop refuses a cancelled
+# launch right before calling it, and the launch rechecks right after starting the supervisor.
+sed -n '/^    repeat_launch() {/,/^    }/p' "$SRC" >"$TMP/repeat-launch.sh"
+call_line=$(grep -n '^      repeat_launch "$iter" "iteration $i"$' "$SRC" | head -1 | cut -d: -f1)
+pre_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || break$' "$SRC" | cut -d: -f1 |
+  awk -v call="${call_line:-0}" '$1 < call { last = $1 } END { if (last) print last }')
+launch_line=$(grep -n '^        perl -e "$supervisor_perl" -- "$cap" "${step_cmd\[@\]}" \\$' "$TMP/repeat-launch.sh" | head -1 | cut -d: -f1)
+supervisor_line=$(grep -n '^      repeat_sup=\$!$' "$TMP/repeat-launch.sh" | cut -d: -f1)
+post_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || kill "-\$repeat_cancelled" "\$repeat_sup" 2>/dev/null$' "$TMP/repeat-launch.sh" | cut -d: -f1)
+if [ -n "$pre_launch_line" ] && [ -n "$call_line" ] && [ -n "$launch_line" ] \
    && [ -n "$supervisor_line" ] && [ -n "$post_launch_line" ] \
-   && [ "$pre_launch_line" -lt "$launch_line" ] \
+   && [ "$pre_launch_line" -lt "$call_line" ] \
    && [ "$launch_line" -lt "$supervisor_line" ] \
    && [ "$supervisor_line" -lt "$post_launch_line" ]; then
   report 0 "repeat: cancellation brackets supervisor launch"
 else
   report 1 "repeat: cancellation brackets supervisor launch" \
-    "pre=${pre_launch_line:-missing} launch=${launch_line:-missing} supervisor=${supervisor_line:-missing} post=${post_launch_line:-missing}"
+    "pre=${pre_launch_line:-missing} call=${call_line:-missing} launch=${launch_line:-missing} supervisor=${supervisor_line:-missing} post=${post_launch_line:-missing}"
 fi
 
-clear_supervisor_line=$(grep -n '^      repeat_sup=$' "$SRC" | tail -1 | cut -d: -f1)
-reap_group_line=$(grep -n '^      reap_repeat_group "$iter"$' "$SRC" | cut -d: -f1)
+clear_supervisor_line=$(grep -n '^      repeat_sup=$' "$TMP/repeat-launch.sh" | tail -1 | cut -d: -f1)
+reap_group_line=$(grep -n '^      reap_repeat_group "$sdir"$' "$TMP/repeat-launch.sh" | cut -d: -f1)
 if [ -n "$clear_supervisor_line" ] && [ -n "$reap_group_line" ] \
    && [ "$clear_supervisor_line" -lt "$reap_group_line" ]; then
   report 0 "repeat: dead supervisor pid is cleared before group reap"
@@ -6023,6 +6038,208 @@ else
   if [ -z "$rb_detail" ]; then report 0 "$rb_label"; else report 1 "$rb_label" "$rb_detail"; fi
 fi
 fi # leg 83
+
+# ---------------------------------------------------------------------------
+# Leg 84: repeat --direct builds once and replays the rules (gh-ocannl-1377)
+# ---------------------------------------------------------------------------
+# Against a real dune, since what a replay owes is dune's own execution of the
+# same rules: a fixture project whose one program counts its runs in a file
+# outside the build tree, and prints the environment it was given. A direct set
+# builds once and re-executes each named test once per iteration (the counts --
+# which dune's --force alone never moves for a target-producing rule, the
+# negative control below), with the environment, directory and output dune's
+# own run had (the build phase's snapshot equals the first replay's outputs); an
+# alias action is dune's to re-run; no iteration's dune compiles anything. A test
+# whose output moves is DIFFERING; one whose output tells the replay from dune
+# (an action's DUNE_ACTION_TRACE_DIR, which dune alone sets) is REPLAY DIVERGED
+# -- the witness's own negative control; a sandboxed rule and an action form
+# outside the replayed subset are refused before any iteration, a test the
+# build phase could not build is BUILD FAILED, a replayed test past the
+# per-test cap ends the set as TIMEOUT and is killed, and operands other than
+# per-test aliases are refused. A host with no dune or no python3 skips it.
+if harness_leg '84: repeat --direct builds once and replays the rules #repeat'; then
+direct_label="repeat --direct: one build, then each test's own rules replayed as dune ran them (real dune)"
+direct_nc_label="negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)"
+direct_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
+  command -v dune) 2>/dev/null) || direct_real=
+if [ -z "$direct_real" ] || ! command -v python3 >/dev/null 2>&1; then
+  skip "$direct_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
+  skip "$direct_nc_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
+else
+  direct_root=$TMP/direct-repo
+  mkdir -p "$direct_root/tools" "$direct_root/scripts" "$direct_root/t"
+  cp "$SRC" "$direct_root/tools/test-run.sh"
+  stage_sourced "$direct_root"
+  cp "$HERE/action-durations.sh" "$HERE/replay-rules.sh" "$direct_root/tools/"
+  chmod +x "$direct_root/tools/test-run.sh"
+  printf '(lang dune 3.20)\n' >"$direct_root/dune-project"
+  cat >"$direct_root/t/dune" <<'DUNE'
+(test
+ (name det)
+ (modules det)
+ (deps cfg)
+ (libraries unix))
+(rule
+ (target envp.actual)
+ (deps cfg)
+ (action (with-stdout-to envp.actual (progn (echo "a" "b\n") (run %{dep:det.exe} env)))))
+(rule (alias runtest-envp) (action (diff envp.actual envp.actual)))
+(rule (alias runtest-inalias) (action (run %{dep:det.exe} inalias)))
+(rule (target flaky.actual) (action (with-stdout-to flaky.actual (run %{dep:det.exe} flaky))))
+(rule (alias runtest-flaky) (action (diff flaky.actual flaky.actual)))
+(rule (target leak.actual) (action (with-stdout-to leak.actual (run %{dep:det.exe} leak))))
+(rule (alias runtest-leak) (action (diff leak.actual leak.actual)))
+(rule (target slow.actual) (action (with-stdout-to slow.actual (run %{dep:det.exe} slow))))
+(rule (alias runtest-slow) (action (diff slow.actual slow.actual)))
+(rule
+ (target sb.actual)
+ (deps (sandbox always))
+ (action (with-stdout-to sb.actual (run %{dep:det.exe} sb))))
+(rule (alias runtest-sb) (action (diff sb.actual sb.actual)))
+(rule (target sys.actual) (action (with-stdout-to sys.actual (system "echo sys"))))
+(rule (alias runtest-sys) (action (diff sys.actual sys.actual)))
+(executable (name broken) (modules broken))
+(rule (target broken.actual) (action (with-stdout-to broken.actual (run %{dep:broken.exe}))))
+(rule (alias runtest-broken) (action (diff broken.actual broken.actual)))
+DUNE
+  # The counter lives outside the build tree, so a run is counted wherever it happens.
+  cat >"$direct_root/t/det.ml" <<'ML'
+let count tag =
+  let f = Sys.getenv "DIRECT_COUNTER" ^ "." ^ tag in
+  let n = try List.length (In_channel.with_open_text f In_channel.input_lines) with Sys_error _ -> 0 in
+  Out_channel.with_open_gen [ Open_append; Open_creat ] 0o644 f (fun oc -> output_string oc "run\n");
+  n + 1
+
+let () =
+  match Sys.argv with
+  | [| _ |] -> ignore (count "det"); print_endline "det"
+  | [| _; "env" |] ->
+    ignore (count "env");
+    (* Each step's supervisor names its own directory, and dune gives each action a TMPDIR and
+       a trace directory of its own: everything else is what the replay owes. *)
+    let mine k = List.mem k [ "TMPDIR"; "DUNE_ACTION_TRACE_DIR"; "OCANNL_TOOL_TESTRUN_RD" ] in
+    Unix.environment () |> Array.to_list
+    |> List.filter (fun kv -> not (mine (List.hd (String.split_on_char '=' kv))))
+    |> List.sort compare |> List.iter print_endline;
+    print_endline (Sys.getcwd ())
+  | [| _; "inalias" |] -> ignore (count "inalias")
+  | [| _; "flaky" |] -> Printf.printf "run %d\n" (count "flaky")
+  | [| _; "leak" |] ->
+    print_endline (if Sys.getenv_opt "DUNE_ACTION_TRACE_DIR" = None then "replayed" else "dune")
+  | [| _; "slow" |] -> if count "slow" > 1 then Unix.sleep 60; print_endline "slow"
+  | _ -> print_endline "sb"
+ML
+  printf 'let () = print_endline (1 + "broken")\n' >"$direct_root/t/broken.ml"
+  printf 'det\n' >"$direct_root/t/det.expected"
+  printf 'cfg\n' >"$direct_root/t/cfg"
+  direct_detail=
+  direct_probe() { # tag script repeat-args... -> direct_rc, direct_out, direct_dir
+    local tag=$1 script=$2
+    shift 2
+    rm -rf "$TMP/direct-runs-$tag"
+    direct_out=$(cd "$direct_root" && PATH=$(dirname "$direct_real"):$PATH \
+      DIRECT_COUNTER=$TMP/direct-count-$tag OCANNL_TOOL_TEST_RUNS=$TMP/direct-runs-$tag \
+      "${BASH:-bash}" "$script" repeat "$@" 2>&1)
+    direct_rc=$?
+    direct_dir=$(ls -d "$TMP/direct-runs-$tag"/2*/ 2>/dev/null | head -n 1)
+    direct_dir=${direct_dir%/}
+  }
+  direct_count() { grep -c . "$TMP/direct-count-$1.$2" 2>/dev/null || echo 0; }
+  # Three iterations of a (test) stanza's run, a target rule reading the environment, and an
+  # alias action: each test ran in the build phase and once per iteration, the replay did what
+  # dune's own run did, and no iteration's dune compiled anything.
+  direct_probe green "$direct_root/tools/test-run.sh" --direct 3 @t/runtest-det @t/runtest-envp @t/runtest-inalias
+  { [ "$direct_rc" = 0 ] &&
+    grep -qF "repeat: dune's own run vs replay 1: identical" <<<"$direct_out" &&
+    grep -q '^repeat result: IDENTICAL -- the replayed outputs' <<<"$direct_out"; } ||
+    direct_detail="green: exit $direct_rc: $direct_out"
+  for direct_tag in det env inalias; do
+    [ -n "$direct_detail" ] || [ "$(direct_count green "$direct_tag")" = 4 ] ||
+      direct_detail="green: $direct_tag ran $(direct_count green "$direct_tag") times, not once in the build and once per iteration"
+  done
+  [ -n "$direct_detail" ] || { grep -q '^== t/envp.actual' "$direct_dir/iteration-3/outputs" &&
+    grep -q '^a b$' "$direct_dir/iteration-3/outputs" && grep -q '^INSIDE_DUNE=' "$direct_dir/iteration-3/outputs" &&
+    grep -q '^== t/det.exe.output' "$direct_dir/iteration-3/outputs"; } ||
+    direct_detail="green: the replayed outputs are not recorded: $(head -c 400 "$direct_dir/iteration-3/outputs" 2>&1)"
+  [ -n "$direct_detail" ] || ! grep -qF 'inalias' "$direct_dir/plan.json" ||
+    direct_detail="green: the alias action was planned for a replay, not left to dune: $(cat "$direct_dir/plan.json")"
+  # A compile is a process making a compile artifact (`ocamlc.opt (in .)` is dune asking the
+  # compiler for its configuration, which every dune invocation does).
+  [ -n "$direct_detail" ] || ! cut -f2 "$direct_dir/iteration-2/dune-processes" | grep -qE '\.(cm[a-z]*|o|a|exe)( \+[0-9]+)?$' ||
+    direct_detail="green: an iteration's dune compiled: $(cat "$direct_dir/iteration-2/dune-processes")"
+  [ -n "$direct_detail" ] || [ ! -e "$direct_dir/build" ] ||
+    direct_detail="green: the build directory survived the set"
+  # An output that moves between runs.
+  if [ -z "$direct_detail" ]; then
+    direct_probe flaky "$direct_root/tools/test-run.sh" --direct 2 @t/runtest-flaky
+    { [ "$direct_rc" = 1 ] && grep -q '^repeat result: DIFFERING -- ' <<<"$direct_out" &&
+      grep -q '^+run 3$' "$direct_dir/diffs/1-2.outputs"; } || direct_detail="flaky: exit $direct_rc: $direct_out"
+  fi
+  # The witness's negative control: replays that agree with each other but not with dune.
+  if [ -z "$direct_detail" ]; then
+    direct_probe leak "$direct_root/tools/test-run.sh" --direct 2 @t/runtest-leak
+    { [ "$direct_rc" = 1 ] && grep -q '^repeat result: REPLAY DIVERGED -- ' <<<"$direct_out" &&
+      grep -q '^-dune$' "$direct_dir/diffs/build-1.outputs"; } || direct_detail="leak: exit $direct_rc: $direct_out"
+  fi
+  # What a replay cannot reproduce is refused before any iteration.
+  if [ -z "$direct_detail" ]; then
+    direct_probe sb "$direct_root/tools/test-run.sh" --direct 2 @t/runtest-sb
+    { [ "$direct_rc" = 2 ] && grep -q '^repeat result: DIRECT REFUSED -- @t/runtest-sb runs t/sb.actual in a dune sandbox' <<<"$direct_out" &&
+      [ ! -e "$direct_dir/iteration-1" ]; } || direct_detail="sandbox: exit $direct_rc: $direct_out"
+  fi
+  if [ -z "$direct_detail" ]; then
+    direct_probe sys "$direct_root/tools/test-run.sh" --direct 2 @t/runtest-sys
+    { [ "$direct_rc" = 2 ] && grep -q '^repeat result: DIRECT REFUSED -- the rule for t/sys.actual uses `system`' <<<"$direct_out" &&
+      [ ! -e "$direct_dir/iteration-1" ]; } || direct_detail="system: exit $direct_rc: $direct_out"
+  fi
+  if [ -z "$direct_detail" ]; then
+    direct_probe broken "$direct_root/tools/test-run.sh" --direct 2 @t/runtest-broken
+    { [ "$direct_rc" = 1 ] && grep -q '^repeat result: BUILD FAILED -- the build phase exited 1, and no process' <<<"$direct_out" &&
+      [ ! -e "$direct_dir/iteration-1" ]; } || direct_detail="broken: exit $direct_rc: $direct_out"
+  fi
+  # A replayed test past the per-test cap ends the set, killed (the watcher times the replay's
+  # processes as it times dune's).
+  if [ -z "$direct_detail" ]; then
+    direct_start=$SECONDS
+    direct_probe slow "$direct_root/tools/test-run.sh" --direct --test-cap 2 2 @t/runtest-slow
+    { [ "$direct_rc" = 142 ] && [ $((SECONDS - direct_start)) -lt 40 ] &&
+      grep -q '^repeat result: TIMEOUT -- in iteration 1 a test outlived the per-test cap (.*det.exe slow)' <<<"$direct_out"; } ||
+      direct_detail="slow: exit $direct_rc after $((SECONDS - direct_start))s: $direct_out"
+    direct_left=$(ps -A -o pid= -o args= 2>/dev/null | grep -F 'det.exe slow' | grep -v grep)
+    [ -z "$direct_left" ] || { direct_detail="slow: the test survived the set: $direct_left"
+      kill -KILL $(awk '{print $1}' <<<"$direct_left") 2>/dev/null; }
+  fi
+  if [ -z "$direct_detail" ]; then
+    direct_probe usage "$direct_root/tools/test-run.sh" --direct 2 runtest
+    { [ "$direct_rc" = 2 ] && grep -qF 'repeat --direct takes per-test aliases and -j N only, not: runtest' <<<"$direct_out"; } ||
+      direct_detail="usage: exit $direct_rc: $direct_out"
+  fi
+  if [ -z "$direct_detail" ]; then
+    direct_probe misplaced "$direct_root/tools/test-run.sh" 2 @t/runtest-det --direct
+    { [ "$direct_rc" = 2 ] && grep -qF -- '--direct belongs before the dune arguments' <<<"$direct_out"; } ||
+      direct_detail="misplaced: exit $direct_rc: $direct_out"
+  fi
+  if [ -z "$direct_detail" ]; then report 0 "$direct_label"; else report 1 "$direct_label" "$direct_detail"; fi
+  # The counts are what an iteration re-executing the test means: with the replay cut out of the
+  # step, the iterations' dune --force re-runs the alias action alone, and the test stanza's run
+  # and the target rule stay at their build-phase run.
+  direct_mutant=$(mutant no-direct-replay '
+    /^        if \[ "\$pre" = replay \]; then$/ && !done { sub(/"\$pre" = replay/, "\"$pre\" = none"); done = 1 }
+    { print }')
+  if [ -z "$direct_mutant" ] || ! grep -q '"$pre" = none' "$direct_mutant"; then
+    report 1 "$direct_nc_label" "the mutant was not made"
+  else
+    cp "$direct_mutant" "$direct_root/tools/test-run-mutant.sh"
+    direct_probe mutant "$direct_root/tools/test-run-mutant.sh" --direct 2 @t/runtest-det @t/runtest-envp @t/runtest-inalias
+    if [ "$(direct_count mutant det)" = 1 ] && [ "$(direct_count mutant env)" = 1 ] &&
+       [ "$(direct_count mutant inalias)" = 3 ]; then
+      report 0 "$direct_nc_label"
+    else
+      report 1 "$direct_nc_label" "counts det=$(direct_count mutant det) env=$(direct_count mutant env) inalias=$(direct_count mutant inalias): $direct_out"
+    fi
+  fi
+fi
+fi # leg 84
 
 # ---------------------------------------------------------------------------
 # Leg 79: credentials never reach dune (gh-ocannl-1280)
