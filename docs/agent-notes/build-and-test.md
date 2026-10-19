@@ -53,8 +53,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   emitted-text matching to the mma census dropped two inventory lines and gave
   `C_syntax.is_tensorized_rendering` its first caller. Neither shows in the diff's file list, so
   the `AGENTS.md` trigger names the edit's effect, as broadly as "touches", rather than its
-  location or an enumeration of the ways an inventory line can move; the scans run in seconds,
-  which is what makes running them on that trigger cheap.
+  location or an enumeration of the ways an inventory line can move. Each review round on
+  lukstafi/ocannl-staging#1097 found another kind of edit that wording missed, so since
+  gh-ocannl-1321 the trigger is explanation rather than gate: `tools/fmt-check.sh`, the format
+  rule's last step before every push, builds `@test/operations/scans` after the formatter, whatever
+  the edit was.
 - `AGENTS.md` stays under 32 KiB, and `test/operations/agents_md_size` holds it there. Claude Code
   truncates an imported instructions file at that size -- silently, from the end, which is where
   the PR, configuration and syntax sections sit -- and the guide crossed the line one review-fix
@@ -1140,7 +1143,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/test-run.sh` scrubs at startup and again in `select_dune` after sourcing
   `tools/opam-env.sh`; `tools/promote.sh` and `tools/dune-quiet.sh` after their own opam-env
   fallback; `tools/api-drift.sh` at startup; `tools/ci-shard.sh` in the subshells of its `dune show`
-  calls; `tools/fmt-check.sh` at startup and inside its default `opam exec`; `tools/sweep.sh` starts
+  calls; `tools/fmt-check.sh` at startup and inside each `opam exec` of its default command (the
+  formatter, then the scans); `tools/sweep.sh` starts
   every leg's dune as `opam exec -- sh -c <scrub; exec "$@"> dune ...` (`switch_dune_cmd`), in the
   text the far side of the ssh runs, whose login environment holds that box's own token;
   `tools/machine-verify.sh` passes the text to the far side, which applies it the same way inside
@@ -1219,6 +1223,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   setup-ocaml's switch is local to the checkout: `opam exec` from a scratch directory exits
   50 (no switch) unless the harness first exports `OPAMSWITCH=$(cd <repo> && opam switch show)`.
   Resolve the switch before leaving the checkout, as `test-fmt-check.sh` does (gh-ocannl-1178).
+  The default command then builds `@test/operations/scans` (gh-ocannl-1321) and prints how long
+  it took. Measured on mac-studio: about 1 s when nothing changed, and 50-55 s after a test-source
+  edit, of which `env_var_deps` alone is 47 s (it re-reads every source and dune file), the other
+  scans running beside it in under 8 s each. `OCANNL_TOOL_FMT_CHECK_SCANS=0` skips the step and
+  says so in the verdict line; CI's `fmt` job sets it, since its switch holds no project
+  dependency and the build matrix runs the scans anyway. A command given as arguments runs alone,
+  which is the form `tools/test-fmt-check.sh` drives with a fake switch: the scans build after a
+  clean formatter run only, their failure is the verdict, and any other setting is refused.
   Two files a formatter cannot handle are refused at the site rather than
   discovered in CI:
   a misplaced doc comment (ocamlformat declines the whole file) is a compile error under the root
