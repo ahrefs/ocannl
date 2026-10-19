@@ -790,7 +790,7 @@ let print_split_reduce_verdicts opt =
     | LL.If { body; _ } -> walk enclosing body
     | LL.For_loop { index; from_; to_; body; axis; _ } ->
         walk (enclosing @ [ (index, to_ - from_ + 1, axis) ]) body
-    | LL.Set { tn; _ } | LL.Set_dynamic { tn; _ } ->
+    | (LL.Set { tn; _ } | LL.Set_dynamic { tn; _ }) as stmt ->
         let cells = try Tn.num_elems tn with _ -> 0 in
         if cells >= 1 && cells <= out_max then (
           Stdio.printf "  w:%s(%d) loops[%s]\n" (Tn.debug_name tn) cells
@@ -820,7 +820,27 @@ let print_split_reduce_verdicts opt =
                   | exception Invalid_argument m -> "raised: " ^ m
                 in
                 Stdio.printf "      axis %s extent %d -> %s\n" (Idx.symbol_ident s) n
-                  (String.substr_replace_all verdict ~pattern:"\n" ~with_:" ")))
+                  (String.substr_replace_all verdict ~pattern:"\n" ~with_:" "));
+          (* gh-ocannl-1414: the detector's fallback merges the two outermost reduction loops (the
+             loops the cell does not mention); the coalescing's own verdict on them, as lowered. *)
+          let idcs =
+            match stmt with LL.Set { idcs; _ } | LL.Set_dynamic { idcs; _ } -> idcs | _ -> [||]
+          in
+          match
+            List.filter enclosing ~f:(fun (s, _, _) ->
+                not (Array.exists idcs ~f:(Idx.axis_index_mentions_symbol s)))
+          with
+          | (o, p, _) :: (i, q, _) :: _ ->
+              let verdict =
+                match Sched.op_legality opt (fst (Sched.coalesce ~outer:o ~inner:i)) with
+                | Sched.Op_legal -> "LEGAL"
+                | Sched.Op_illegal m -> "illegal: " ^ m
+                | Sched.Op_unknown m -> "unknown: " ^ m
+              in
+              Stdio.printf "      coalesce %s*%s extent %d -> %s\n" (Idx.symbol_ident o)
+                (Idx.symbol_ident i) (p * q)
+                (String.substr_replace_all verdict ~pattern:"\n" ~with_:" ")
+          | _ -> ())
     | _ -> ()
   in
   walk [] opt.LL.llc;

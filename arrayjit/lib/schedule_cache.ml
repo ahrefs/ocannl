@@ -754,8 +754,9 @@ type entry = {
    12: gh-ocannl-1175 -- a reduction's zero folds into its own segment's sketches
    13: gh-ocannl-1165 -- the coalesced layout's seeds, a search branch beside the sketch families
    14: gh-ocannl-1325 -- wte.grad / v.grad become matmul sites; the scalar blocktile ep twins compile
+   15: gh-ocannl-1414 -- two-loop reduction bands become split-reduce sites, coalesced or interchanged
 *)
-let entry_version = 14
+let entry_version = 15
 
 let sanitize name =
   String.map name ~f:(fun c ->
@@ -1083,6 +1084,11 @@ let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 
 let lookup ~dir ~key =
   lookup_sexp ~dir ~key ~of_sexp:entry_of_sexp ~current:(fun e -> e.version = entry_version)
+
+let read_entry_file file =
+  match stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) with
+  | { key; payload } -> Some (key, payload)
+  | exception exn when not (process_level exn) -> None
 
 (** {2 Abandoned searches} *)
 

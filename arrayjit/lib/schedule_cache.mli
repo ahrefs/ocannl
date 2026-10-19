@@ -469,6 +469,15 @@ val lookup : dir:string -> key:string option -> entry option
     race. A binary predating this protocol does not participate and must not share a live directory
     during an upgrade. *)
 
+val read_entry_file : string -> (string * Sexp.t) option
+(** The key and undecoded payload stored in one entry file of a cache directory (any kind: a
+    schedule {!entry}, or one under the ["placements-"] or ["abandonment-"] prefix), [None] when the
+    file is not a readable entry of this format. Unlike {!lookup} it creates, locks and changes
+    nothing -- {!lookup}'s cache-open sweeps a directory whose regime stamp is older -- and it
+    applies no version check: what a tool reading a cache another binary wrote needs (the
+    splice-segments A/B, gh-ocannl-1277, [benchmarks/runners/ocannl/bench_splice.ml]). Best-effort
+    like {!entry_keys}: run it over a cache no process is writing. *)
+
 (** {2 The cache-I/O record}
 
     gh-ocannl-1040. The refusals {!store} and {!lookup} absorb are invisible by design, which is
