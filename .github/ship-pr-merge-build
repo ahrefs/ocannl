@@ -6,22 +6,22 @@
 # file a merge builds nothing.
 #
 # Inputs -- the boundary. A path is an input when one glob matches the WHOLE repository path
-# (fnmatch, case-sensitive, `*` crossing `/`): `*.ml` is every OCaml source at any depth, `dune`
-# the root file only and `*/dune` every nested one, `*.sh` every shell script (the trigger of the
-# command's shell tier). A shared path renamed on either side counts by its other name too.
-# Nothing else is an input: a clash confined to Markdown, YAML, goldens or Python is not built
-# here, nor one across paths only ONE side changed; both stay the integration loop's, on master.
+# (fnmatch, case-sensitive, `*` crossing `/`); a shared path renamed on either side counts by its
+# other name too. The one glob below makes EVERY path an input (gh-ocannl-1382): the command's
+# compile tier runs `@test/operations/scans`, which read the repository itself -- Markdown notes
+# and docs (agent_notes_structure, agents_md_size, doc_examples), goldens, workflow YAML, Python,
+# scripts -- so a narrower list would be a second copy of the scans' corpora, stale the day a scan
+# reads a new kind of file; the few paths nothing reads (editor settings) cost a build only when
+# both sides change one. Replayed over the 474 first-parent merges on master from 2026-09-19 to
+# 2026-10-19, the OCaml-and-scripts list this replaced built 166 of them, adding `*.md` would
+# build 238 and every path builds 245, at about 40 s each. What stays outside: a clash across
+# paths only ONE side changed, and one the compile tier cannot see (a runtime test's verdict);
+# both are the integration loop's, on master.
 #
 # Trust. The command is this repository's own code, trusted as a developer's build is: the
 # scratch repository is a place to build, not a sandbox. It runs from whatever environment
 # `merge` has; tools/merge-build-check.sh states its tiers, what selects them, their measured
 # cost and how it finds dune when that environment lacks the opam switch.
 command tools/merge-build-check.sh
-input *.ml
-input *.mli
-input dune
-input */dune
-input dune-project
-input *.opam
-input *.sh
+input *
 timeout 1200

@@ -61,6 +61,8 @@ let () =
       in
       output_config "backend" backend output_dest
   | Some config ->
-      let value = Utils.get_global_arg ~default:"" ~arg_name:config in
+      (* The raw resolved text, or nothing: a registered key's plain read is refused
+         (gh-ocannl-1332), and this tool reports what is stated, not a parse of it. *)
+      let value = Option.value_map (Utils.profile_key_source config) ~default:"" ~f:fst in
       output_config config value output_dest
   | None -> printf "No --read=<config>, --read-<config>, or --read_<config> argument found.\n"

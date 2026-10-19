@@ -124,21 +124,17 @@ let () =
   (* [narrow_compute_f32] is a C-backend policy: the GPU backends have native 16-bit arithmetic and
      ignore it, so both legs above are the same computation there and the accuracy comparison has
      nothing to compare. That is the same reason the structural checks at the end are CPU-only —
-     said on stderr, as the sibling schedule tests do, so a vacuous pass is not read as coverage.
-     The parity checks in section 2 do hold on every backend and stay ungated. *)
-  if not on_cpu then
-    Stdio.eprintf
-      "narrow-compute: %s ignores narrow_compute_f32 (native 16-bit arithmetic) — the accuracy \
-       checks are vacuous here\n"
-      backend_name;
-  p "f32 compute over bf16 storage beats per-operator rounding"
-    ((not on_cpu) || Float.(err_wide < err_per_op));
+     gated, so a GPU run reports them skipped rather than passed (gh-ocannl-1310). The parity checks
+     in section 2 do hold on every backend and stay ungated. *)
+  gated ~when_:on_cpu ~on:backend_name "f32 compute over bf16 storage beats per-operator rounding"
+    Float.(err_wide < err_per_op);
   (* The wide leg's only rounding is the final store, so its relative error is bounded by bf16's
      half-ulp (2^-9); the per-operator leg compounds five of them. *)
   let rel arr =
     max_err reference arr /. Array.fold reference ~init:0. ~f:(fun m v -> Float.max m (Float.abs v))
   in
-  p "wide-compute relative error within one bf16 ulp" ((not on_cpu) || Float.(rel wide < 0.004));
+  gated ~when_:on_cpu ~on:backend_name "wide-compute relative error within one bf16 ulp"
+    Float.(rel wide < 0.004);
   p "per-operator relative error exceeds it" Float.(rel per_op > 0.004);
 
   (* --- 2. Bitwise parity of the vectorized rendering against the serial twin. --- *)
@@ -229,13 +225,11 @@ let () =
           p_all2
             (storage ^ " serial " ^ name ^ " preserves NaNs' extrema and IEEE classes")
             twin (Array.map cases ~f:snd) ~f:same_bits;
-          p
+          gated ~when_:on_cpu ~on:backend_name
             (storage ^ " " ^ name ^ " uses the widened integer NaN test")
-            ((not on_cpu)
-            ||
-            let src = read_on_cpu ("nsc_" ^ name ^ "_" ^ storage ^ "_vec") in
-            src_has src "Vectorized reduction rendering"
-            && src_has src "0x7fffffff" && src_has src "0x7f800000")));
+            (let src = read_on_cpu ("nsc_" ^ name ^ "_" ^ storage ^ "_vec") in
+             src_has src "Vectorized reduction rendering"
+             && src_has src "0x7fffffff" && src_has src "0x7f800000")));
   let bf16_value c =
     if c land 0x7F80 = 0x7F80 && c land 0x7F <> 0 then Float.nan
     else Int32.float_of_bits (Int32.of_int_trunc (c lsl 16))
@@ -398,11 +392,10 @@ let () =
   (* Same gate as the bf16 accuracy legs: both policies are C-backend knobs, so on a GPU backend
      both [overflow_leg] calls compute [exp 12.] in half and overflow — a property of the target's
      native arithmetic, not of the policy this pair exists to pin. *)
-  p "f32 compute over half storage keeps the intermediate finite"
-    ((not on_cpu) || Float.(is_finite ovf_wide));
-  p "fp16 compute applies fp16's ceiling to the intermediate"
-    ((not on_cpu)
-    || if native_fp16 then not Float.(is_finite ovf_native) else Float.(is_finite ovf_native));
+  gated ~when_:on_cpu ~on:backend_name "f32 compute over half storage keeps the intermediate finite"
+    Float.(is_finite ovf_wide);
+  gated ~when_:on_cpu ~on:backend_name "fp16 compute applies fp16's ceiling to the intermediate"
+    (if native_fp16 then not Float.(is_finite ovf_native) else Float.(is_finite ovf_native));
 
   Ir.Numerics.set_policy { base with narrow_compute_f32 = true; fp16_arithmetic = Fp16_auto };
 
@@ -437,9 +430,8 @@ let () =
   p "per-operator half FMA computes 1.5 * 2 + 1.5" Float.(abs (fma_v - 4.5) < 0.01);
   (let src = read_on_cpu "nsc_half_fma" in
    let has t = String.is_substring src ~substring:t in
-   p "the shared half FMA converts rather than bit-casting"
-     ((not on_cpu)
-     || (has "OCANNL_HALF_FMA" && has "HALF_TO_FLOAT(a)" && not (has "fmaf((float)(a)"))));
+   gated ~when_:on_cpu ~on:backend_name "the shared half FMA converts rather than bit-casting"
+     (has "OCANNL_HALF_FMA" && has "HALF_TO_FLOAT(a)" && not (has "fmaf((float)(a)")));
 
   (* --- 3. Structure of the bf16 vectorized source. ---
 
@@ -447,33 +439,31 @@ let () =
      backend: the golden is shared, so a GPU run that emitted fewer lines than cc could never match
      it however it behaved. *)
   let vec_source = read_on_cpu "nsc_vec_bf16" in
-  p "bf16 loop vectorizes with a converting load/store"
-    ((not on_cpu)
-    || src_has vec_source "vector_size"
-       && src_has vec_source "OCANNL_VEC_WIDEN_BFLOAT16"
-       && src_has vec_source "OCANNL_VEC_NARROW_BFLOAT16");
+  gated ~when_:on_cpu ~on:backend_name "bf16 loop vectorizes with a converting load/store"
+    (src_has vec_source "vector_size"
+    && src_has vec_source "OCANNL_VEC_WIDEN_BFLOAT16"
+    && src_has vec_source "OCANNL_VEC_NARROW_BFLOAT16");
   (* Section 2a's sweep is about the bridge, so its vectorized kernels must have taken it: an input
      the rendering folded or converted per lane would pass the parity vacuously. *)
-  p "the every-code sweep loads through the widening bridge"
-    ((not on_cpu)
-    || src_has (read_on_cpu "nsc_wvec_bf16") "OCANNL_VEC_WIDEN_BFLOAT16"
-       && src_has (read_on_cpu "nsc_wvec_half") "OCANNL_VEC_WIDEN_HALF");
+  gated ~when_:on_cpu ~on:backend_name "the every-code sweep loads through the widening bridge"
+    (src_has (read_on_cpu "nsc_wvec_bf16") "OCANNL_VEC_WIDEN_BFLOAT16"
+    && src_has (read_on_cpu "nsc_wvec_half") "OCANNL_VEC_WIDEN_HALF");
   (* And section 2c's vectorized kernel must have stored through the narrowing bridge. *)
-  p "the rounding-boundary sweep stores through the narrowing bridge"
-    ((not on_cpu) || src_has (read_on_cpu "nsc_nvec_half") "OCANNL_VEC_NARROW_HALF");
+  gated ~when_:on_cpu ~on:backend_name
+    "the rounding-boundary sweep stores through the narrowing bridge"
+    (src_has (read_on_cpu "nsc_nvec_half") "OCANNL_VEC_NARROW_HALF");
   (* [narrow(op(...))] immediately re-widened is the signature of per-operator rounding; the seam
      makes it unspellable, in the vector body and in the serial remainder alike. *)
-  p "no operator narrows only to be widened again"
-    ((not on_cpu) || not (src_has vec_source "bfloat16_to_single(single_to_bfloat16("));
+  gated ~when_:on_cpu ~on:backend_name "no operator narrows only to be widened again"
+    (not (src_has vec_source "bfloat16_to_single(single_to_bfloat16("));
   (* f32 arithmetic reached a bf16 kernel: the fused multiply-add is the f32 one. *)
-  p "arithmetic is f32"
-    ((not on_cpu) || src_has vec_source "fmaf(" || src_has vec_source "__builtin_elementwise_fma");
+  gated ~when_:on_cpu ~on:backend_name "arithmetic is f32"
+    (src_has vec_source "fmaf(" || src_has vec_source "__builtin_elementwise_fma");
   (* Under the fp16-arithmetic policy the half kernel's vector element type is HALF_T rather than
      float -- the lane count doubles and no conversion appears at all. On a target without native
      16-bit arithmetic the policy is correctly ignored, and the kernel is the widening one. *)
-  p "fp16 policy is honored exactly where the target reports the capability"
-    ((not on_cpu)
-    ||
-    let nhas t = String.is_substring native_source ~substring:t in
-    if native_fp16 then nhas "HALF_T ocannl_vec" && not (nhas "OCANNL_VEC_WIDEN_HALF")
-    else nhas "OCANNL_VEC_WIDEN_HALF" || nhas "HALF_TO_FLOAT")
+  gated ~when_:on_cpu ~on:backend_name
+    "fp16 policy is honored exactly where the target reports the capability"
+    (let nhas t = String.is_substring native_source ~substring:t in
+     if native_fp16 then nhas "HALF_T ocannl_vec" && not (nhas "OCANNL_VEC_WIDEN_HALF")
+     else nhas "OCANNL_VEC_WIDEN_HALF" || nhas "HALF_TO_FLOAT")

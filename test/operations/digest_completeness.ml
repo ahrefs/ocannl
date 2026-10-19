@@ -19,7 +19,10 @@
 
    The exemptions (search-shaping, placement-shaping, untimed-model and execution-neutral) are
    deliberately not machine-checkable: they are the reviewable text the issue asks for, printed
-   below so that a diff shows when one changes. *)
+   below so that a diff shows when one changes. One edge of them is (gh-ocannl-1331): the
+   search-shaping class keys [Autotune.tune]'s cached trajectory, so each of its keys must be read
+   within [tune]'s static reach, and each key of the two classes that left that identity because no
+   [tune] call reads them (placement-shaping, untimed-model) must not be -- check 4. *)
 
 open Base
 open Stdio
@@ -57,6 +60,29 @@ let codegen_stage_modules =
    leave them well below that. *)
 let known_key_floor = 60
 let codegen_read_floor = 15
+
+(* gh-ocannl-1331: the search whose trajectory the [Search_shaping] class keys, as a path into the
+   library [library_root] holds, whose dune wrappers [library_wrappers] are dropped from the paths
+   its modules name each other by ([Ir.Schedule.f] is [Schedule.f]). Floors under the two key sets
+   the check holds, as above: 30 and 16 keys on 2026-10-19. *)
+let tune_entry = [ "Autotune"; "tune" ]
+let library_root = "arrayjit/lib"
+let library_wrappers = [ "Ir" ]
+let search_key_floor = 20
+let unread_class_floor = 6
+
+(* The keys of the two classes that DO lie within [tune]'s reach, each with why it stays out of the
+   trajectory identity anyway. A judgment list, held to staying true below: an entry [tune] stops
+   reaching is stale. *)
+let reached_unread_exemptions =
+  [
+    ( "model_cache_capacity",
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest (gh-ocannl-1253)" );
+    ( "model_cache_bandwidth",
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest (gh-ocannl-1253)" );
+  ]
 
 let class_name : Utils.config_key_class -> string = function
   | Utils.Aggregate -> "aggregate"
@@ -148,6 +174,54 @@ let () =
          "keys read at codegen but classified code-borne: %s -- a codegen read happens after the \
           lowered code the canonical digest names, so it cannot reach the digest"
          (listing miscl));
+  (* 4. gh-ocannl-1331: the search-shaping keys are read within [Autotune.tune]'s reach, and the
+     classes that left its trajectory identity are not. The reach is static -- the literal reads in
+     [tune]'s body and in every top-level value of the library it names, transitively
+     ([Config_key_scan.library_reach]) -- so it errs on the side of reading MORE: a key it does not
+     find is one no path from [tune] can read, and keying the trajectory by it re-searches for
+     nothing (gh-ocannl-572: over-keying is a defect too). The converse claim is the control that
+     the reach discriminates at all: the [model_default_*] keys are read in the same module, by
+     [Autotune.model_default], which [tune] never names. The two cache-model keys the seeded plan
+     reads are the exception, with their reason ([reached_unread_exemptions]). *)
+  let library_modules =
+    List.filter_map source_files ~f:(fun path ->
+        if String.equal (Test_utils.Scan_floors.directory_of path) library_root then
+          Some
+            ( String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)),
+              path )
+        else None)
+  in
+  let { Config_key_scan.external_keys; _ } =
+    Config_key_scan.library_reach ~wrappers:library_wrappers ~library_modules ()
+  in
+  let tune_reach = Set.of_list (module String) (external_keys tune_entry) in
+  let class_keys cls =
+    List.concat_map Utils.config_key_classification ~f:(fun (c, _, keys) ->
+        if Poly.equal c cls then keys else [])
+  in
+  let search_keys = class_keys Utils.Search_shaping in
+  let exempt key = List.Assoc.mem reached_unread_exemptions key ~equal:String.equal in
+  let unread_class_keys =
+    List.filter
+      (class_keys Utils.Placement_shaping @ class_keys Utils.Untimed_model)
+      ~f:(Fn.non exempt)
+  in
+  (* A key it misses is named on stderr: classify it where its readers are (placement- or
+     untimed-model-shaping), or read it where the search can. *)
+  p_all ~min:search_key_floor "every search-shaping key is read within Autotune.tune's reach"
+    search_keys ~f:(fun key ->
+      let reached = Set.mem tune_reach key in
+      if not reached then eprintf "%s is search-shaping but outside Autotune.tune's reach\n" key;
+      reached);
+  p_none ~min:unread_class_floor
+    "no placement-shaping or untimed-model key outside the exemptions is read within \
+     Autotune.tune's reach"
+    unread_class_keys ~f:(fun key ->
+      let reached = Set.mem tune_reach key in
+      if reached then eprintf "%s is read within Autotune.tune's reach\n" key;
+      reached);
+  p_all ~min:1 "each exempted placement-shaping or untimed-model key is still within tune's reach"
+    reached_unread_exemptions ~f:(fun (key, _) -> Set.mem tune_reach key);
   (* Which directories the census came from is part of the golden, so that a glob which stops
      matching -- a renamed directory, a source layout change -- reads as a diff rather than as a
      quietly smaller census (gh-ocannl-592). By NAME: the file count was a tally of the repository,

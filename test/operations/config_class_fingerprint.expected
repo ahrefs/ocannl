@@ -4,16 +4,23 @@ the registry names no key outside the Search_shaping class: true
 with every Search_shaping key unset or at its default, the identity is empty: true
 each Search_shaping key stated at its default, spelled otherwise, leaves the identity alone: true
 each Search_shaping key stated off its default renders, canonically spelled: true
-each clamped key stated unparsable or NaN renders as its fallback: true
 each clamped key stated below its floor renders as the floor: true
 an unparsable value renders as stated: true
+each clamped key stated unparsable or NaN renders as stated: true
+a key the process does not read renders nothing, unparsable or not, beside one it reads: true
 where the lanes' scalar recompute is cheap, auto is the cooperative preamble and cut lanes: true
 and there the refused preamble, admitted lanes and one simdgroup are not the default: true
 where it is costly, auto is the refused preamble and admitted lanes, and the reverse renders: true
 a block size the device clamps to the default's clamp is the default, unclamped it renders: true
 an explicit mode renders as the device resolves it: true
-a read whose default means the registered value is served, in any spelling: true
-a read whose default means another value is refused: true
+every registered key is read through its kind's getter at its default: true
+autotune_rounds=two is refused, by an error naming the key: true
+one key of each kind that can refuse, stated unparsable, is refused naming the key: true
+a keyword its read site has no mode for is refused, naming the key: true
+a plain read of a registered key is refused, whatever default it passes: true
+a read through another kind's getter is refused: true
+a malformed setting met in a candidate is fatal where an unknown failure is a decline: true
+a getter refuses a key with no registered row: true
 Under the commandline-picked profile performance:
 the performance profile sets the beam width off its default and the search at it: true
 the commandline restores the rounds the profile raises to their built-in default: true

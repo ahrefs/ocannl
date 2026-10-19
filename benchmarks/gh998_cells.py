@@ -41,6 +41,7 @@ import fixture_digest
 import cell_group
 import bench_venv
 import strict_json
+from display_safe import display_value, log_line, table_lines
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / 'benchmarks'
@@ -249,10 +250,14 @@ def summarize(out):
     preflight = json.loads((out / 'preflight.json').read_text())
     if matrix['rounds'] < 2 or matrix['rounds'] % 2:
         raise RuntimeError('summary requires complete forward/reverse round pairs')
-    print(f"Host: {preflight['host']['host']}; CPU: {preflight['host']['cpu']}; revision: {preflight['revision']}; rounds: {matrix['rounds']}; reverse pairs: {matrix['rounds'] // 2}.")
+    # The host's own words, as it reported them: raw, the line refusal guards them.
+    print(log_line(f"Host: {preflight['host']['host']}; "
+                   f"CPU: {preflight['host']['cpu']}; revision: {preflight['revision']}; "
+                   f"rounds: {matrix['rounds']}; reverse pairs: {matrix['rounds'] // 2}."))
     for workload in matrix['workloads']:
         fixture = preflight['fixtures'][workload]
-        print(f"Fixture {workload}: SHA-256 {fixture['sha256']}; {fixture['size']} bytes; recorded origins: {fixture['origins']}.")
+        print(log_line(f"Fixture {display_value(workload)}: SHA-256 {fixture['sha256']}; "
+                       f"{fixture['size']} bytes; recorded origins: {fixture['origins']}."))
     print()
     for backend in matrix['backends']:
         for workload in matrix['workloads']:
@@ -266,11 +271,11 @@ def summarize(out):
                     raise RuntimeError(f'{control}: drift control is not byte-identical')
                 controls.append(json.loads((control / 'result.json').read_text())['step_ms']['p50'] /
                                 json.loads((baseline / 'result.json').read_text())['step_ms']['p50'])
-            print(f'Drift control {backend}/{workload}: verified byte-identical sources; '
-                  f'raw off/on p50 range {min(controls):.4f}–{max(controls):.4f}.')
+            print(log_line(f'Drift control {display_value(backend)}/{display_value(workload)}: '
+                           f'verified byte-identical sources; '
+                           f'raw off/on p50 range {min(controls):.4f}–{max(controls):.4f}.'))
     print()
-    print('| backend | workload | arm | source matches on | off/on paired p50 ratio median (range) | max abs / rel vs on | changed losses | max abs / rel vs Torch |')
-    print('|---|---|---|---|---|---|---|---|')
+    rows = []
     for backend in matrix['backends']:
         for workload in matrix['workloads']:
             oracle = result(out / f'torch-{workload}' / 'stdout')['losses']
@@ -285,9 +290,15 @@ def summarize(out):
                     vs_on.append(envelope(row['losses'], on['losses']))
                     vs_torch.append(envelope(row['losses'], oracle))
                 paired = [math.sqrt(a * b) for a, b in zip(ratios[::2], ratios[1::2])]
-                print(f'| {backend} | {workload} | {treatment} | {sources_equal} | {statistics.median(paired):.4f} ({min(paired):.4f}–{max(paired):.4f}) | '
-                      f'{max(v[0] for v in vs_on):.3g} / {max(v[1] for v in vs_on):.3g} | '
-                      f'{max(v[2] for v in vs_on)} | {max(v[0] for v in vs_torch):.3g} / {max(v[1] for v in vs_torch):.3g} |')
+                rows.append((
+                    display_value(backend), display_value(workload), treatment, str(sources_equal),
+                    f'{statistics.median(paired):.4f} ({min(paired):.4f}–{max(paired):.4f})',
+                    f'{max(v[0] for v in vs_on):.3g} / {max(v[1] for v in vs_on):.3g}',
+                    str(max(v[2] for v in vs_on)),
+                    f'{max(v[0] for v in vs_torch):.3g} / {max(v[1] for v in vs_torch):.3g}'))
+    print('\n'.join(table_lines(
+        ['backend', 'workload', 'arm', 'source matches on', 'off/on paired p50 ratio median (range)',
+         'max abs / rel vs on', 'changed losses', 'max abs / rel vs Torch'], rows)))
 
 
 def main():

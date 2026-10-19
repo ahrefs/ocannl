@@ -280,13 +280,9 @@ let () =
          must invalidate its timing too. Keep the real legacy spelling as the control. *)
       let stale_fingerprint =
         if Sched.backend_is_gpu (Context.backend_name bctx) then
-          let bs =
-            String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_block_size" ~default:"256")
-          in
-          let mp =
-            String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
-          in
-          Printf.sprintf "gpu:fission=%b:block_size=%s:min_parallel=%s"
+          let bs = Utils.registered_int ~arg_name:"gpu_schedule_block_size" in
+          let mp = Utils.registered_int ~arg_name:"gpu_schedule_min_parallel" in
+          Printf.sprintf "gpu:fission=%b:block_size=%d:min_parallel=%d"
             (Sched.default_pipeline_fissions ())
             bs mp
         else "a-different-config"
@@ -306,7 +302,9 @@ let () =
         | Some r -> replayed r && Option.is_none r.Autotune.default_ms
         | None -> false)
   | None ->
-      p "a stored stale default fingerprint drops the reference but not the hit (gh-ocannl-552)"
+      (* Nothing is committed without a timing identity, so there this checks nothing. *)
+      gated ~aggregation:`Environment ~when_:cache_available ~on:"a device with no timing identity"
+        "a stored stale default fingerprint drops the reference but not the hit (gh-ocannl-552)"
         (not chain_cache_committed));
   (* gh-ocannl-543: [candidates_timed >= 2] is a cc-shaped assertion. This chain's candidate space
      is the same on every backend, but most of it is serial forms — the whole-routine presets dedup

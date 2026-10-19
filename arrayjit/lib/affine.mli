@@ -137,11 +137,38 @@ val separates :
     that a common cell forces [w1] equal, while instances [(0, 1)] and [(1, 0)] share [acc[1]].
     [syms] is then the subset the caller needs told apart. *)
 
-val bounds_range : (Indexing.symbol * (int * int)) list -> Indexing.symbol -> (int * int) option
-(** [bounds_range env s]: the range of loop symbol [s] in a loop-bound environment (such as
-    [Low_level.loop_bounds]), the hull of EVERY binding of [s] there: sibling loops may rebind one
-    symbol with different bounds, and the first binding alone would drop the others' values
-    (gh-ocannl-1282). The environment a {!pair_conflict} side is ranged by. *)
+(** {2 Loop ranges}
+
+    Loop symbols are NOT unique within a routine: sibling loops (two nests, two inner loops of one
+    nest, the copies a schedule op mints) may rebind one symbol with different bounds. A per-binding
+    list invites [List.Assoc.find], whose first binding silently drops the siblings' values — the
+    hole the within-nest form of gh-ocannl-1282 went through. [Loop_ranges.t] holds ONE range per
+    symbol, the hull of every binding it was built from, so no lookup can see a part of it
+    (gh-ocannl-1305). It is the box environment the queries here are ranged by ([Loop_ranges.find r]
+    is a [~range]); [Low_level.loop_ranges] builds it for a program. *)
+
+module Loop_ranges : sig
+  type t
+
+  val empty : t
+
+  val bind : t -> Indexing.symbol -> int * int -> t
+  (** [bind r s (lo, hi)]: [r] with [s]'s range widened to the hull of its current range and the
+      inclusive [lo..hi]. *)
+
+  val of_bindings : (Indexing.symbol * (int * int)) list -> t
+  (** The hull, per symbol, of every binding in the list. *)
+
+  val find : t -> Indexing.symbol -> (int * int) option
+  (** The inclusive hull of every binding of the symbol; [None] for a symbol no loop binds. *)
+
+  val mem : t -> Indexing.symbol -> bool
+
+  val to_alist : t -> (Indexing.symbol * (int * int)) list
+  (** One entry per bound symbol, in symbol order (not program order). *)
+
+  val is_empty : t -> bool
+end
 
 val axis_index_to_string : Indexing.axis_index -> string
 (** The rendering of one index component the engine's witnesses use, for messages that quote a cell

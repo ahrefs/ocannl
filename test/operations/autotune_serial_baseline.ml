@@ -92,14 +92,19 @@ let () =
   let base = Option.value_exn ~here:[%here] !captured in
   (* Over the lowering's loops: an elementwise routine with no loops at all would bind nothing for
      the wrong reason. *)
-  p_empty "the tuner's base lowering binds no hardware dimension" ~over:(LL.loop_bounds base.LL.llc)
+  p_empty "the tuner's base lowering binds no hardware dimension"
+    ~over:(Ir.Affine.Loop_ranges.to_alist (LL.loop_ranges base.LL.llc))
     (LL.hardware_axes base.LL.llc);
   let default =
     Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices:[] base
   in
-  p "the untuned default compile of the same code does"
-    ((not (Sched.automatic_schedule_active ~backend_name:backend))
-    || List.exists default ~f:(fun o -> not (List.is_empty (LL.hardware_axes o.LL.llc))));
+  (* The default schedules are a configuration's to switch off ([automatic_gpu_schedule],
+     [automatic_cpu_schedule], routine logging): a run that did has nothing to compare. *)
+  gated ~aggregation:`Environment
+    ~when_:(Sched.automatic_schedule_active ~backend_name:backend)
+    ~on:(backend ^ " with automatic schedules off")
+    "the untuned default compile of the same code does"
+    (List.exists default ~f:(fun o -> not (List.is_empty (LL.hardware_axes o.LL.llc))));
 
   (* --- The search: the baseline is timed on CPU backends and skipped on GPU ones --- *)
   let ma = TDSL.ndarray mav ~label:[ "sb_ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
@@ -120,8 +125,10 @@ let () =
   let r = Option.value_exn ~here:[%here] !report in
   let is_gpu = Sched.backend_is_gpu backend in
   let baseline_measured = Float.is_finite r.Autotune.baseline_ms in
+  (* The baseline's own window (gh-ocannl-1423), not [timings_contended], which a refused candidate
+     window grows too. *)
   let baseline_contention_refused =
-    (not is_gpu) && (not baseline_measured) && r.Autotune.timings_contended > 0
+    (not is_gpu) && (not baseline_measured) && r.Autotune.baseline_refused
   in
   p "the serial baseline is measured or contention-refused on CPU, and not dispatched on GPU"
     (if is_gpu then not baseline_measured else baseline_measured || baseline_contention_refused);

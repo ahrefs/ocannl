@@ -64,6 +64,7 @@ from pathlib import Path
 import box_gate
 import cell_group
 import strict_json
+from display_safe import code_span, display_value, log_line, table_lines
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -109,7 +110,7 @@ LIMIT = [None]
 
 def log(msg):
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%SZ")
-    print(f"[{stamp}] {msg}", flush=True)
+    print(log_line(f"[{stamp}] {msg}"), flush=True)
 
 
 def host_snapshot(out, tag):
@@ -196,7 +197,7 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
             # The sources ARE this cell's deliverable: without them it failed, whatever it timed.
             with open(str(base) + ".status", "w") as f:
                 f.write("no-artifacts\n")
-            log(f"FAILED {base.name}: no generated sources under {staged}")
+            log(f"FAILED {base.name}: no generated sources under {display_value(str(staged))}")
             return
     res = result_line(base)
     if res is None:
@@ -514,9 +515,7 @@ def summarize(args):
             if not any(timed(backend, fx, t) for fx in fixtures for t in NAMES):
                 continue
             print(f"\n### Step times, {backend}, {title}\n")
-            print("| fixture | treatment | p50 per repeat (ms) | median p50 | vs A | vs B | "
-                  "tokens/s | p10..p90 spread | compile s |")
-            print("|---|---|---|---|---|---|---|---|---|")
+            rows = []
             for fx in fixtures:
                 meds = {t: med([v[0]["step_ms"]["p50"] for v in timed(backend, fx, t).values()])
                         for t in NAMES}
@@ -529,13 +528,16 @@ def summarize(args):
                                  for v in reps.values())
                     tok = next(iter(reps.values()))[0].get("tokens_per_step", 0)
                     comp = med([v[0]["compile_s"] for v in reps.values()])
-                    print(f"| `{fx}` | {t} | {', '.join(f'{x:.1f}' for x in p50s)} | "
-                          f"{meds[t]:.1f} | {meds[t] / meds['A']:.3f}x | {meds[t] / meds['B']:.3f}x | "
-                          f"{tok / (meds[t] / 1000):.0f} | up to {spread:.3f}x | {comp:.1f} |")
+                    rows.append((code_span(fx), t, ", ".join(f"{x:.1f}" for x in p50s),
+                                 f"{meds[t]:.1f}", f"{meds[t] / meds['A']:.3f}x",
+                                 f"{meds[t] / meds['B']:.3f}x", f"{tok / (meds[t] / 1000):.0f}",
+                                 f"up to {spread:.3f}x", f"{comp:.1f}"))
+            print("\n".join(table_lines(
+                ["fixture", "treatment", "p50 per repeat (ms)", "median p50", "vs A", "vs B",
+                 "tokens/s", "p10..p90 spread", "compile s"], rows)))
 
             print(f"\n### Peak requested memory, {backend}, {title}\n")
-            print("| fixture | treatment | peak (MiB) | vs A | minus A (MiB) | across repeats |")
-            print("|---|---|---|---|---|---|")
+            rows = []
             for fx in fixtures:
                 peaks = {t: [v[0]["peak_memory_bytes"] for v in timed(backend, fx, t).values()]
                          for t in NAMES}
@@ -545,13 +547,14 @@ def summarize(args):
                     p, a = med(peaks[t]), med(peaks["A"])
                     same = "identical" if len(set(peaks[t])) == 1 else \
                         f"{min(peaks[t]) / 2**20:.2f}..{max(peaks[t]) / 2**20:.2f}"
-                    print(f"| `{fx}` | {t} | {p / 2**20:.1f} | {p / a:.3f}x | "
-                          f"{(p - a) / 2**20:+.1f} | {same} |")
+                    rows.append((code_span(fx), t, f"{p / 2**20:.1f}", f"{p / a:.3f}x",
+                                 f"{(p - a) / 2**20:+.1f}", same))
+            print("\n".join(table_lines(
+                ["fixture", "treatment", "peak (MiB)", "vs A", "minus A (MiB)", "across repeats"],
+                rows)))
 
             print(f"\n### Loss-trajectory parity, {backend}, {title}\n")
-            print("| fixture | treatment | worst relative difference vs A, same repeat "
-                  "(6 parity steps) | A vs torch cpu |")
-            print("|---|---|---|---|")
+            rows = []
             for fx in fixtures:
                 ref_losses = torch_losses(out, fx)
                 if ref_losses is None:
@@ -573,15 +576,17 @@ def summarize(args):
                         worst = max(diffs)
                         if worst > TREATMENT_PARITY:
                             problems.append(f"{backend} {fx} {t}: losses differ from A by {worst:.2e}")
-                        print(f"| `{fx}` | {t} | {worst:.2e} | {vs_torch} |")
+                        rows.append((code_span(fx), t, f"{worst:.2e}", vs_torch))
+            print("\n".join(table_lines(
+                ["fixture", "treatment",
+                 "worst relative difference vs A, same repeat (6 parity steps)", "A vs torch cpu"],
+                rows)))
 
             if backend != "metal":
                 continue
             print(f"\n### Attribution, {backend}, {title} (per-kernel min-of-20, summed over the four "
                   "layers; median over repeats)\n")
-            print("| fixture | treatment | kernels | all kernels (ms) | attention forward (ms) | "
-                  "attention backward (ms) | backward kernels per layer |")
-            print("|---|---|---|---|---|---|---|")
+            table = []
             for fx in fixtures:
                 for t in NAMES:
                     reps = timed(backend, fx, t)
@@ -600,9 +605,13 @@ def summarize(args):
                         continue
                     if any(r[5] != 4 or r[6] != 4 for r in rows):
                         problems.append(f"{fx} {t}: attention blocks not found for all 4 layers")
-                    print(f"| `{fx}` | {t} | {rows[0][0]} | {med([r[1] for r in rows]):.1f} | "
-                          f"{med([r[2] for r in rows]):.1f} | {med([r[3] for r in rows]):.1f} | "
-                          f"{rows[0][4]} |")
+                    table.append((code_span(fx), t, str(rows[0][0]),
+                                  f"{med([r[1] for r in rows]):.1f}",
+                                  f"{med([r[2] for r in rows]):.1f}",
+                                  f"{med([r[3] for r in rows]):.1f}", str(rows[0][4])))
+            print("\n".join(table_lines(
+                ["fixture", "treatment", "kernels", "all kernels (ms)", "attention forward (ms)",
+                 "attention backward (ms)", "backward kernels per layer"], table)))
             print(f"\n### Layer-0 attention backward kernels, {backend}, {title} (repeat 0)\n")
             for fx in fixtures:
                 for t in NAMES:
@@ -612,10 +621,10 @@ def summarize(args):
                     _, bwd = attention_blocks(kernels(rep[1]) or [])
                     if not bwd:
                         continue
-                    print(f"- `{fx}` {t}:")
+                    print(log_line(f"- {code_span(fx)} {t}:"))
                     for k in bwd[0]:
-                        print(f"  - {k['ms']:.3f} ms grid [{k['grid']}] block [{k['block']}]: "
-                              f"{' '.join(k['w'])}")
+                        print(log_line(f"  - {k['ms']:.3f} ms grid [{k['grid']}] block [{k['block']}]: "
+                                       f"{' '.join(map(display_value, k['w']))}"))
 
     # The sweep: per treatment, peak memory at fixed batch 1 over seq, and a least-squares
     # a + b s + c s^2 fit -- c in units of one [seq, seq] f32 buffer per head per layer.
@@ -633,22 +642,23 @@ def summarize(args):
         if not rows:
             continue
         print(f"\n### Sequence sweep at batch 1, {backend}: peak memory (MiB) and p50 (ms)\n")
-        print("| treatment | " + " | ".join(f"seq {s}" for _, s in SWEEP_SEQS) +
-              " | quadratic term c (bytes/seq^2) | c / (4 B x 8 heads x 4 layers) |")
-        print("|---|" + "---|" * (len(SWEEP_SEQS) + 2))
+        table = []
         for t, pts in rows.items():
             c = quad_fit([(s, m) for s, m, _ in pts])[2]
-            cells_txt = " | ".join(f"{m / 2**20:.1f} / {ms:.0f}" for _, m, ms in pts)
-            print(f"| {t} | {cells_txt} | {c:.1f} | {c / (4 * 8 * 4):.2f} |")
+            table.append((t, *(f"{m / 2**20:.1f} / {ms:.0f}" for _, m, ms in pts), f"{c:.1f}",
+                          f"{c / (4 * 8 * 4):.2f}"))
+        print("\n".join(table_lines(
+            ["treatment", *(f"seq {s}" for _, s in SWEEP_SEQS), "quadratic term c (bytes/seq^2)",
+             "c / (4 B x 8 heads x 4 layers)"], table)))
 
     if notes:
         print("\nPARTIAL (--partial):")
         for n in notes:
-            print(f"- {n}")
+            print(log_line(f"- {n}"))
     if problems:
         print("\nPROBLEMS:")
         for p in problems:
-            print(f"- {p}")
+            print(log_line(f"- {p}"))
         return 1
     return 0
 

@@ -32,3 +32,17 @@ dac_lane: the twin stores the uniform: true
 dac_lane: the random stream holds 12 pairwise distinct values: true
 dac_lane: every value lies in [0, 1): true
 dac_lane: the twin with the uniform materialized in B reads the same values: true
+ft_constexpr: the gather counts as a read of the table by another node: true
+ft_constexpr: the table is not a scalar constexpr: true
+ft_constexpr: the table is not zero-initialized by code: true
+ft_constexpr: the table stays read-before-write: true
+ft_constexpr: the table stays an input of the routine: true
+ft_constexpr: the gather reads the entry values, not the later write: true
+ft_constexpr: the materialized-table twin reads the same values: true
+ft_zero_out: the gather counts as a read of the table by another node: true
+ft_zero_out: the table is not a scalar constexpr: true
+ft_zero_out: the table is not zero-initialized by code: true
+ft_zero_out: the table stays read-before-write: true
+ft_zero_out: the table stays an input of the routine: true
+ft_zero_out: the gather reads the entry values, not the later write: true
+ft_zero_out: the materialized-table twin reads the same values: true

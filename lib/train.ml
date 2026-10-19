@@ -950,6 +950,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      and any other driver failure as an ordinary [Invalid_argument]. *)
   let must_propagate = function
     | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _ -> true
+    (* A malformed registered setting (gh-ocannl-1332) is the configuration's failure, not an arm's
+       or a flip's: contained, it would ship whichever placement happens not to read the key, as
+       though the setting had been honored. *)
+    | Utils.Invalid_config_value _ -> true
     | _ -> false
   in
   (* A [report] callback exception is the caller's failure, not the search's — {!Autotune.tune}
@@ -1527,9 +1531,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
            configuration asked for a refinement it also made impossible, and swallowing that would
            silently skip the refinement and ship the A/B winner as though the setting had been
            honored. The two process-level classes are not this containment's either, for the same
-           reasons they are not the arms'. *)
+           reasons they are not the arms'; nor is a malformed registered setting, which the surface
+           can be the first to read ([must_propagate]). Each propagates after releasing the arms'
+           results, as the abandon ratio's below does: a caller that catches it and retries would
+           otherwise keep both compiled arms rooted in the backend pool. *)
         | exception exn when match exn with Utils.User_error _ -> true | _ -> must_propagate exn ->
             let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+            release_unshipped ();
             Stdlib.Printexc.raise_with_backtrace exn backtrace
         | exception exn ->
             logf "flip refinement skipped: the decision-surface lowering failed: %s"
@@ -1539,8 +1547,14 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       match surface with
       | None -> ship ~what:winner_arm ~commit:commit_winner winner
       | Some surface ->
+          (* Released before a malformed value propagates, as for the abandon ratio below. *)
           let bound_pruning =
-            Utils.get_global_flag ~default:false ~arg_name:"autotune_bound_pruning"
+            match Utils.registered_flag ~arg_name:"autotune_bound_pruning" with
+            | enabled -> enabled
+            | exception exn ->
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                release_unshipped ();
+                Stdlib.Printexc.raise_with_backtrace exn backtrace
           in
           (* gh-ocannl-1110: a flip is abandoned once its best after its first [beam_width] timed
              candidates trails the incumbent's best at the same depth by more than this ratio

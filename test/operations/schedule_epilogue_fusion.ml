@@ -76,7 +76,8 @@ let make_graph () =
   let%op mc = relu (prod + bias) in
   (ma, mb, prod, mc)
 
-let run_with name transform (mc : Tensor.t) =
+(* The readback, and the compile's mma census. *)
+let run_census name transform (mc : Tensor.t) =
   let ctx = Context.auto () in
   let ctx, routine =
     Context.compile
@@ -86,7 +87,9 @@ let run_with name transform (mc : Tensor.t) =
       Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
-  Context.get_values ctx mc.Tensor.value
+  (Context.get_values ctx mc.Tensor.value, Ll_test.renderings routine.Context.mma)
+
+let run_with name transform mc = fst (run_census name transform mc)
 
 let () =
   (* --- Two-kernel reference --- *)
@@ -225,33 +228,36 @@ let () =
     scan opt.LL.llc;
     opt
   in
-  let got3 = run_with "epf_mma" transform3 mc3 in
+  let got3, census3 = run_census "epf_mma" transform3 mc3 in
   p "staged fused: epilogue is a sibling of the fragment store-back" !has_epilogue_sibling;
   p_all2 "staged fused values match two-kernel" got3 want ~f:(fun a b -> Float.(abs (a - b) < 1e-2));
-  p_all2 "staged fused bitwise on C backends" got3 want ~f:(fun a b -> on_gpu || Float.equal a b);
+  (let label = "staged fused bitwise on C backends" in
+   if on_gpu then Verdict.skipped ~backend:backend_name label
+   else p_all2 label got3 want ~f:Float.equal);
   (let src = Generated.read "epf_mma" in
    let has s = String.is_substring src ~substring:s in
-   let ok =
-     if on_metal then
-       (* The intrinsic fragment path fires against the workgroup-shared accumulator, and the fused
-          epilogue renders after the fragment store and its trailing barrier, in the same kernel. *)
-       match
-         ( String.substr_index src ~pattern:"simdgroup_store(__mma_fragment_",
-           String.substr_index src ~pattern:"relu_mc[" )
-       with
-       | Some store, Some ep ->
-           has "threadgroup float" && has "simdgroup_multiply_accumulate" && store < ep
-       | _ -> false
-     else if on_gpu then
-       (* CUDA/HIP decline uniform f32 to the lane-0 scalar fallback; the epilogue still fuses into
-          the same kernel. *)
-       has "== 0)" && has "relu_mc["
-     else
-       (* cc: the register tiling fires on the fragment array; the fused epilogue is in the same
-          routine. *)
-       has "Tile_mma register tiling" && has "relu_mc["
+   (* Which way the [Tile_mma] went is the census's to say, read against the backend's capability
+      for the uniform-f32 site (gh-ocannl-1316): the register tiling on the C backends, Metal's
+      simdgroup intrinsics against the workgroup-shared accumulator, and the lane-0 scalar fallback
+      where the backend advertises no f32-input tile (CUDA outside tf32, HIP). Either way the fused
+      epilogue renders in the same routine. *)
+   let rendered =
+     Ll_test.census_agrees_with_capability ~backend_name ~what:"epf_mma" ~a_prec:Ir.Ops.single
+       ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single census3
    in
-   p "staged fused structure as expected" ok);
+   let ordered =
+     (not on_metal)
+     ||
+     (* Metal's fused epilogue renders after the fragment store and its trailing barrier: an order
+        only the source has. *)
+     match
+       ( String.substr_index src ~pattern:"simdgroup_store(__mma_fragment_",
+         String.substr_index src ~pattern:"relu_mc[" )
+     with
+     | Some store, Some ep -> has "threadgroup float" && store < ep
+     | _ -> false
+   in
+   p "staged fused structure as expected" (rendered && ordered && has "relu_mc["));
 
   (* --- Autotune seeding: every matmul sketch gets a fused-epilogue twin on this graph, and the
      tuned routine (whichever candidate wins) matches the two-kernel reference. --- *)

@@ -251,16 +251,24 @@ files.
   still the cheaper refusal, before compilation, so everything a kernel declares in `threadgroup`
   memory must reach `Schedule.workgroup_memory_bytes` (gh-ocannl-1205): staged tiles from
   `workgroup_shared`, and backend-emitted scratch through
-  `codegen_capabilities.mma_scope_workgroup_bytes`, which the emitting backend derives from the same
-  resolver as its declaration (Metal's converted-boundary coordinate table, 256 B per `Tile_mma`
-  statement, each `Unroll`/`Partition` copy included). A new `threadgroup` or `__shared__`
-  declaration in a backend emitter needs the same route. The estimate sums exact sizes, while Metal
-  rounds each `threadgroup` array up to 4 bytes (measured, M4 Max), so odd-length `half` tiles at
-  the limit pass the gate and reach the link-time refusal. Guards:
+  `codegen_capabilities.mma_kernel_workgroup_bytes`, which the emitting backend derives from the same
+  predicate as its kernel-scope declaration (`C_syntax_config.mma_kernel_prologue`): Metal's
+  converted-boundary coordinate table, 256 B once per kernel however many converted `Tile_mma`
+  scopes (each `Unroll`/`Partition` copy is one) read it (gh-ocannl-1255; it was per scope). The
+  renderer hands the prologue the triples of the emissions it accepted, the estimate those of every
+  `Tile_mma`, so the estimate is the upper bound. A new `threadgroup` or `__shared__`
+  declaration in a backend emitter needs the same route. Metal rounds each `threadgroup` array up
+  to 4 bytes (measured, M4 Max: the driver's request for two odd `half` tiles is their rounded sum),
+  so the estimate charges each array rounded to
+  `codegen_capabilities.workgroup_allocation_alignment` (gh-ocannl-1330), through
+  `Schedule.kernel_workgroup_bytes` — which the sketch families' workgroup-memory refutations and
+  filters call too, with the compiling context's capabilities (`?capabilities`; without them they
+  charge exact tile sizes and no scratch, a weaker floor). With the gate exact, the one route to
+  the link-time refusal is the test seam `Schedule.with_gate_capabilities`. Guards:
   `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; plus one
   converted scope they are refused at `Hardware_limits`) and
   `test/operations/metal_threadgroup_overflow.ml` (odd tiles at the limit are refused at
-  `Backend_link`, even ones run).
+  `Hardware_limits`, even ones run; under the seam's exact sizes the odd ones reach `Backend_link`).
 - `Context.get_used_memory` must report OCANNL's OWN allocation (`Slab.used_memory`, or the
   backend's atomic counter) — never the driver's `total - free`. That is device-global: it counts
   other processes and moves in allocation granules, so it cannot see sub-granule effects like the

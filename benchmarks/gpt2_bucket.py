@@ -42,6 +42,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from display_safe import code_span, display_value, log_line, table_lines  # noqa: E402
+
 # --- what a named tensor node says about its segment --------------------------------------
 # Order matters: these are tried in sequence and the first match wins, because a segment
 # legitimately names weights from more than one class.
@@ -238,19 +241,15 @@ def main() -> None:
         agg_n[bucket[k]] += 1
     total = sum(agg_ns.values())
 
-    print(f"source : {args.source}")
-    print(f"stats  : {args.stats}")
+    print(log_line(f"source : {display_value(str(args.source))}"))
+    print(log_line(f"stats  : {display_value(str(args.stats))}"))
     print(f"kernels: {len(matched)} profiled / {len(bucket)} emitted;  dispatches per kernel: {steps}")
     print(f"total GPU kernel time: {total / 1e6:.3f} ms over {steps} steps "
           f"= {total / 1e6 / steps:.3f} ms/step\n")
-    print(f"| bucket | kernels | ms/step | share |")
-    print(f"|---|---:|---:|---:|")
-    for b in BUCKET_ORDER:
-        if not agg_n[b]:
-            continue
-        print(f"| {BUCKET_LABEL[b]} | {agg_n[b]} | {agg_ns[b] / 1e6 / steps:.3f} | "
-              f"{100 * agg_ns[b] / total:.1f}% |")
-    print(f"| **total** | {len(matched)} | {total / 1e6 / steps:.3f} | 100.0% |")
+    rows = [(BUCKET_LABEL[b], str(agg_n[b]), f"{agg_ns[b] / 1e6 / steps:.3f}",
+             f"{100 * agg_ns[b] / total:.1f}%") for b in BUCKET_ORDER if agg_n[b]]
+    rows.append(("**total**", str(len(matched)), f"{total / 1e6 / steps:.3f}", "100.0%"))
+    print("\n".join(table_lines(["bucket", "kernels", "ms/step", "share"], rows, align="lrrr")))
 
     # How much of the above rests on a name in a kernel signature rather than on the propagation
     # heuristic. If the seeded share is high the bucket table is essentially read off the source.
@@ -263,22 +262,25 @@ def main() -> None:
     if unresolved:
         print(f"\nUNRESOLVED (reported as 'other', not folded into a bucket): {len(unresolved)}")
         for s in unresolved:
-            print(f"  {s}: {sorted(segs[s].params)}")
+            print(log_line(f"  {display_value(s)}: {sorted(segs[s].params)}"))
     if unprofiled:
-        print(f"\nemitted but not profiled ({len(unprofiled)}): {', '.join(unprofiled)}")
+        print("\n" + log_line(f"emitted but not profiled ({len(unprofiled)}): "
+                             f"{', '.join(map(display_value, unprofiled))}"))
     if unsourced:
-        print(f"\nprofiled but not in source ({len(unsourced)}): {', '.join(unsourced[:12])}")
+        print("\n" + log_line(f"profiled but not in source ({len(unsourced)}): "
+                             f"{', '.join(map(display_value, unsourced[:12]))}"))
 
     if args.dump:
         # Params and the kernel's gist, so every row can be checked against the source by eye --
         # which is how the dominant kernels' identity is established, not by the classifier.
-        print("\n| seg | bucket | seeded | ms/step | params | gist |")
-        print("|---|---|---|---:|---|---|")
-        for k in sorted(matched, key=seg_index):
-            s = segs[k]
-            print(f"| {k} | {bucket[k]} | {'yes' if k in seeded else 'prop'} | "
-                  f"{matched[k][1] / 1e6 / steps:.4f} | {' '.join(sorted(s.params))} | "
-                  f"`{s.gist[:110]}` |")
+        # The gist is a line of kernel source (`||` included), so it is shown, not pasted.
+        rows = [(display_value(k), bucket[k], "yes" if k in seeded else "prop",
+                 f"{matched[k][1] / 1e6 / steps:.4f}",
+                 " ".join(map(display_value, sorted(segs[k].params))), code_span(segs[k].gist[:110]))
+                for k in sorted(matched, key=seg_index)]
+        print()
+        print("\n".join(table_lines(["seg", "bucket", "seeded", "ms/step", "params", "gist"], rows,
+                                    align="lllrll")))
 
 
 if __name__ == "__main__":

@@ -412,14 +412,20 @@ let forced_pairs (rg : ranges) (terms, rhs) : (Idx.symbol * Idx.symbol) list =
 let axis_index_to_string (idx : Idx.axis_index) =
   Sexp.to_string_hum ([%sexp_of: Idx.axis_index] idx)
 
-(** [bounds_range env s]: the range of [s] in a loop-bound environment, the hull of every binding of
-    [s] there — sibling loops may rebind one symbol with different bounds, and the first binding
-    alone would drop the others' values (gh-ocannl-1282). *)
-let bounds_range (env : (Idx.symbol * (int * int)) list) s =
-  List.fold env ~init:None ~f:(fun acc (s', (lo, hi)) ->
-      if Idx.equal_symbol s s' then
-        match acc with None -> Some (lo, hi) | Some (lo', hi') -> Some (min lo lo', max hi hi')
-      else acc)
+module Loop_ranges = struct
+  type t = (int * int) Map.M(Idx.Symbol).t
+
+  let empty : t = Map.empty (module Idx.Symbol)
+
+  let bind (r : t) s (lo, hi) : t =
+    Map.update r s ~f:(function None -> (lo, hi) | Some (lo', hi') -> (min lo lo', max hi hi'))
+
+  let of_bindings bindings = List.fold bindings ~init:empty ~f:(fun r (s, b) -> bind r s b)
+  let find (r : t) s = Map.find r s
+  let mem (r : t) s = Map.mem r s
+  let to_alist (r : t) = Map.to_alist r
+  let is_empty (r : t) = Map.is_empty r
+end
 
 (** [pair_conflict ~left_range ~right_range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on
     whether the accesses viewed as [left] and [right] (over the same tensor node, re-coarsened here
@@ -1148,8 +1154,9 @@ let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (
   else
     (* Each side's own loop bounds, the static range beyond them: they range the side's symbols in
        the pair solver and prove its run's no-spill in the view. *)
-    let side_range (x : 'tn access) s =
-      match bounds_range x.a_loops s with Some _ as r -> r | None -> static_range s
+    let side_range (x : 'tn access) =
+      let own = Loop_ranges.of_bindings x.a_loops in
+      fun s -> match Loop_ranges.find own s with Some _ as r -> r | None -> static_range s
     in
     let side_view (x : 'tn access) =
       view ~range:(side_range x) ?dyn_axis:x.a_dyn_axis

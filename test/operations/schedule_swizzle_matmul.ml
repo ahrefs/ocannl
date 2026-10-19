@@ -60,9 +60,9 @@ let approx a b = Float.(abs (a - b) < 1e-3)
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
 
-(* Intentional dialect identity: these branches pin literal MSL versus CUDA/HIP shared-memory,
-   barrier, and intrinsic spellings around swizzled tiles; schedule availability uses family and
-   hardware-limit queries. *)
+(* Intentional dialect identity: these branches pin literal MSL versus CUDA/HIP shared-memory and
+   barrier spellings around swizzled tiles; schedule availability uses family and hardware-limit
+   queries, and how a [Tile_mma] rendered, the routine's mma census. *)
 let on_metal = String.is_substring backend_name ~substring:"metal"
 let on_gpu = Sched.backend_is_gpu backend_name
 
@@ -369,14 +369,13 @@ let () =
       if on_metal then count_sub "threadgroup float tile_" = 2
       else count_sub "__shared__ float tile_" = 2
     in
-    let no_intrinsics =
-      if on_metal then (not (has "simdgroup_multiply_accumulate")) && not (has "simdgroup_load")
-      else not (has "wmma")
-    in
-    (* The ma tile is [16 x 16] (mask 15), the mb tile [16 x 32] (mask 31); each is written by its
-       cooperative load and read by the fallback micro-kernel: >= 4 XOR sites total. *)
+    (* That every statement declined is the census's to say (gh-ocannl-1316), not the lane-0 guard's
+       text or an intrinsic's absence. The ma tile is [16 x 16] (mask 15), the mb tile [16 x 32]
+       (mask 31); each is written by its cooperative load and read by the fallback micro-kernel: >=
+       4 XOR sites total, the swizzle's own text. *)
     p "swizzled operands decline the MMA intrinsics to the lane-0 fallback"
-      (shared_ok && no_intrinsics && has "== 0)"
+      (shared_ok
+      && Ll_test.all_declined ~what:"mm_swizzled_mma" (Ll_test.renderings routine_c.Context.mma)
       && count_sub " ^ " >= 4
       && has " & 15)" && has " & 31)"))
   else (

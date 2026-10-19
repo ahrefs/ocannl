@@ -30,9 +30,7 @@ let named name (comp : Asgns.comp) : Asgns.comp =
     config [autotune_calibration_file] is not set — the pass would time kernels with nowhere to
     record them. *)
 let stream ?(elems = 1 lsl 26) ?repeats ctx =
-  let file =
-    String.strip (Utils.get_global_arg ~arg_name:"autotune_calibration_file" ~default:"")
-  in
+  let file = Utils.registered_text ~arg_name:"autotune_calibration_file" in
   if String.is_empty file then
     raise
       (Utils.User_error

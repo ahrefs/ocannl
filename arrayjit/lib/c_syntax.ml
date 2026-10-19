@@ -993,16 +993,28 @@ module type C_syntax_config = sig
       space and layout to decide acceptance by, no address — because they are addressed by the
       nested [Tile_mma]s, each at its own position inside the reduction loop. *)
 
-  val mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int
-  (** Static workgroup-shared bytes that one accepted MMA emission scope declares for this storage
-      triple beyond the staged tiles: one per {!mma_syntax} call outside a fragment scope, one per
-      {!mma_fragment_syntax} scope (its nested update-only call declares none; the scope is rendered
-      only around exactly one [Tile_mma], which is how the schedule estimate counts it). Metal's
-      converted destination boundary is the one non-zero case (gh-ocannl-1205): its coordinate table
-      lives in [threadgroup] memory. The hook that emits the declaration derives this from the same
-      policy, so [Schedule.check_hardware_limits_classified]'s estimate cannot drift from the
-      kernel. An upper bound per scope: a call the hook then declines (extents, spaces, layouts)
-      declares nothing, which the estimate does not try to predict. *)
+  val mma_kernel_prologue : triples:(Ops.prec * Ops.prec * Ops.prec) list -> string list
+  (** Kernel-scope lines — declarations and their initialization — that the tile-MMA emissions of
+      one kernel share, given the [(d, a, b)] storage triples of the emissions the hooks accepted in
+      it (gh-ocannl-1255). [compile_proc] places them once, after the local declarations and before
+      the main logic; every emission scope reading them opens with a barrier, which orders the
+      initialization before its reads. Metal's converted destination boundary is the one non-empty
+      case: its coordinate table, the same 0..63 for every scope, lives in [threadgroup] memory, so
+      one copy per kernel serves all of them. Default: none. *)
+
+  val mma_kernel_workgroup_bytes : triples:(Ops.prec * Ops.prec * Ops.prec) list -> int
+  (** The workgroup-shared bytes {!mma_kernel_prologue} declares for these triples, derived from the
+      same predicate, so [Schedule.check_hardware_limits_classified]'s estimate cannot drift from
+      the kernel. The estimate passes the triples of EVERY [Tile_mma] statement of the kernel —
+      including those a hook then declines (extents, spaces, layouts), which the renderer does not
+      pass — so it is an upper bound. Default 0. *)
+
+  val workgroup_allocation_alignment : int
+  (** The granule, in bytes, the device's allocator rounds each [shared_decl_prefix] array up to
+      (gh-ocannl-1330), published as
+      {!Backend_intf.codegen_capabilities.workgroup_allocation_alignment} for the schedule-level
+      estimate to round each allocation by. Metal: 4 (measured). Default 1: the declared sizes add
+      up exactly. *)
 
   val kernel_log_param : (string * string) option
   (** Kernel parameter for logging, if any. E.g., (Some ("int", "log_id")) or (Some ("const char*",
@@ -1079,7 +1091,8 @@ let codegen_capabilities (module Config : C_syntax_config) =
                        ~body:(fun () -> PPrint.empty)))
             && statement (PPrint.empty, ldd, `Fragment fragment_name, d_layout));
     mma_operand_fragments = Config.mma_operand_fragments;
-    mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
+    mma_kernel_workgroup_bytes = Config.mma_kernel_workgroup_bytes;
+    workgroup_allocation_alignment = Config.workgroup_allocation_alignment;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
        simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
        residency (the precisions [ocannl_shfl_xor] is overloaded at), routine logging off -- and
@@ -2185,7 +2198,9 @@ struct
   let mma_operand_fragments ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
-  let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0
+  let mma_kernel_prologue ~triples:_ = []
+  let mma_kernel_workgroup_bytes ~triples:_ = 0
+  let workgroup_allocation_alignment = 1
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
   let styled_log_arg doc =
@@ -2894,13 +2909,13 @@ module C_syntax (B : C_syntax_config) = struct
         (** Set by [compile_proc]: the kernel's hardware-annotated loops with their positional slots
             (docs/proposals/axis-types-for-loops.md §1/§5), consulted by [pp_ll]'s [For_loop] case
             to render hardware index bindings. *)
-    current_loop_bounds : (Indexing.symbol * (int * int)) list ref;
-        (** Every symbol bound by a loop in the routine, with its iteration range. The accumulator
-            peel needs the COMPLEMENT: a guard symbol outside this set is bound outside every loop
-            -- a static index parameter, a runtime extent -- so it cannot select among an enclosing
-            level's iterations, which is what keeps gh-490's runtime-extent guard ([i < s])
-            peelable. The ranges are what lets it ask whether the accumulated cell tells two
-            enclosing instances apart ([Affine.separates], gh-ocannl-721). *)
+    current_loop_ranges : Affine.Loop_ranges.t ref;
+        (** Every symbol bound by a loop in the routine, with the hull of its iteration ranges. The
+            accumulator peel needs the COMPLEMENT: a guard symbol outside this set is bound outside
+            every loop -- a static index parameter, a runtime extent -- so it cannot select among an
+            enclosing level's iterations, which is what keeps gh-490's runtime-extent guard
+            ([i < s]) peelable. The ranges are what lets it ask whether the accumulated cell tells
+            two enclosing instances apart ([Affine.separates], gh-ocannl-721). *)
     current_workgroup_shared : Set.M(Tn).t ref;
         (** Set by [compile_proc]: nodes placed in workgroup-shared memory. Their declarations carry
             [shared_decl_prefix] and cannot use [= {0}] (not allowed for
@@ -2934,6 +2949,10 @@ module C_syntax (B : C_syntax_config) = struct
         (** The marked fragments a [Tile_mma] rendered into outside a recognized scope, as the local
             array (gh-ocannl-1342: e.g. the trailing copy of a scope a materializing [Unroll] of an
             enclosing loop duplicated, beside a first copy rendered by the hook). *)
+    emitted_mma_triples : (Ops.prec * Ops.prec * Ops.prec) list ref;
+        (** The [(d, a, b)] storage triples of the tile-MMA emissions a backend hook accepted in
+            this kernel (gh-ocannl-1255): what [compile_proc] hands [mma_kernel_prologue], so the
+            kernel declares the scratch only an emitted scope reads. *)
     current_swizzled : Low_level.swizzle_kind Map.M(Tn).t ref;
         (** Set by [compile_proc]: nodes stored XOR-swizzled ([Schedule.Stage ~swizzle], see
             {!Low_level.optimized.swizzled}). Scalar element accesses go through [pp_tn_offset]
@@ -4196,9 +4215,9 @@ module C_syntax (B : C_syntax_config) = struct
          bound under its body. Loops enclosing the Grid loop are shared across chunks (chunks of one
          dispatch execute under the same outer-iteration values, with a join before the next), which
          is exactly the query's treatment of unlisted symbols. *)
-      let env = (sym, grid_range) :: Low_level.loop_bounds body in
-      let range = Affine.bounds_range env in
-      let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
+      let env = Affine.Loop_ranges.bind (Low_level.loop_ranges body) sym grid_range in
+      let range = Affine.Loop_ranges.find env in
+      let dup = Affine.Loop_ranges.mem env in
       let feasible =
         Hashtbl.for_all locals ~f:(fun info ->
             (* The legacy procedural shared rule (every access mentions [sym] and all accesses agree
@@ -4582,6 +4601,8 @@ module C_syntax (B : C_syntax_config) = struct
                       | Some _ -> Some (render_with (Active_target (fragment, target_op)))
                       | None -> None)
             in
+            if Option.is_some fragment_doc then
+              ctx.emitted_mma_triples := (d_prec, a_prec, b_prec) :: !(ctx.emitted_mma_triples);
             match rendered with
             | Some doc ->
                 ctx.rendered_simdgroup_fragments :=
@@ -5820,6 +5841,8 @@ module C_syntax (B : C_syntax_config) = struct
                       | _ -> false
                     in
                     record (if uses_ldmatrix then Mma_intrinsics_ldmatrix else Mma_intrinsics);
+                    ctx.emitted_mma_triples :=
+                      (d_prec, a_prec, b_prec) :: !(ctx.emitted_mma_triples);
                     emission ~a_ptr:a_ptr_doc ~b_ptr:b_ptr_doc
                 | None ->
                     (declinef ctx) "Tile_mma intrinsics declined by the backend hook: %s"
@@ -6120,11 +6143,11 @@ module C_syntax (B : C_syntax_config) = struct
       =
     (* The decision itself — the peel and every decline — is {!Low_level.decide_accum_width}'s, the
        one owner [Schedule.Privatize] asks too (gh-ocannl-1151); this level supplies the
-       serialized-slot predicate and the routine's loop bounds, and turns the peel's report into the
+       serialized-slot predicate and the routine's loop ranges, and turns the peel's report into the
        census verdict. *)
     match
       Low_level.decide_accum_width ~extra_level:(serialized_hardware ctx)
-        ~loop_bounds:!(ctx.current_loop_bounds) ~index:i ~from_ ~to_ body
+        ~loop_ranges:!(ctx.current_loop_ranges) ~index:i ~from_ ~to_ body
     with
     | Low_level.Accum_not_a_nest refusal -> Accum_not_a_nest refusal
     | Low_level.Accum_base { tn; idcs; base; debug; rebuild; report; pinned } ->
@@ -7681,7 +7704,7 @@ module C_syntax (B : C_syntax_config) = struct
         rendered_accumulation_scopes = Hash_set.create (module Int);
         volatility_events = ref [];
         current_hardware_axes = ref (Low_level.hardware_axes llc);
-        current_loop_bounds = ref (Low_level.loop_bounds llc);
+        current_loop_ranges = ref (Low_level.loop_ranges llc);
         current_workgroup_shared = ref workgroup_shared;
         current_thread_axes = ref [];
         current_active_slots = ref [];
@@ -7690,6 +7713,7 @@ module C_syntax (B : C_syntax_config) = struct
         current_simdgroup_fragments = ref simdgroup_fragments;
         rendered_simdgroup_fragments = ref (Set.empty (module Tn));
         unscoped_simdgroup_fragments = ref (Set.empty (module Tn));
+        emitted_mma_triples = ref [];
         current_swizzled = ref swizzled;
         widest_vector_bytes = ref 0;
         current_pipelined = ref pipelined;
@@ -8136,6 +8160,18 @@ module C_syntax (B : C_syntax_config) = struct
            (Hashtbl.to_alist traced_store)
     in
     body := !body ^^ local_decls ^^ hardline;
+    (* gh-ocannl-1255: kernel-scope scratch of the accepted tile-MMA emissions (Metal's converted
+       destination boundary's coordinate table), declared and initialized once, before the main
+       logic, whose emission scopes each open with a barrier ahead of their first read of it. *)
+    (match B.mma_kernel_prologue ~triples:!(ctx.emitted_mma_triples) with
+    | [] -> ()
+    | lines ->
+        body :=
+          !body
+          ^^ string "/* Kernel-scope tile-MMA scratch. */"
+          ^^ hardline
+          ^^ separate_map hardline string lines
+          ^^ hardline ^^ hardline);
 
     let main_logic = string "/* Main logic. */" ^^ hardline ^^ main_logic_doc in
     body := !body ^^ main_logic;

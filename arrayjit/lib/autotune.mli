@@ -371,6 +371,7 @@ val mma_tile_for_precisions_in_scope :
     resolver's floors at every cutoff (gh-ocannl-1214). *)
 
 val sketch_seed_params :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -389,13 +390,17 @@ val sketch_seed_params :
     also pre-filter here, as the family tree's construction-time refutations (gh-ocannl-577): a seed
     list never proposes a candidate that statically must fail its build. For the matmul family this
     list {e is} {!Ir.Schedule_space.leaves} of {!matmul_sketch_tree}, epilogue twins included.
-    Exposed for tests. *)
+    [capabilities] is the compiling context's [Context.codegen_capabilities]: the workgroup-memory
+    refutations charge the staged tiles by it as the gate does ([Schedule.kernel_workgroup_bytes]:
+    allocation rounding, tile-MMA scratch, gh-ocannl-1255); the default charges exact tile sizes, a
+    weaker floor. Exposed for tests. *)
 
 val coalesce_prefix :
   layout:coalesce_layout -> Ir.Low_level.optimized -> Ir.Schedule.schedule option
 (** See {!Sketch_families.coalesce_prefix} (gh-ocannl-1165, gh-ocannl-1279). Exposed for tests. *)
 
 val coalesced_seed_params :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -511,6 +516,7 @@ module Family_decision : sig
 end
 
 val matmul_sketch_tree :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -564,6 +570,7 @@ type family_seeding =
   | Seeding_none
 
 val family_seeding :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -578,6 +585,7 @@ type coalesced_verdict = {
 }
 
 val coalesced_seeding :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -595,6 +603,7 @@ type seeding_census = {
 
 val seeding_census :
   ?coalesced:bool ->
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
@@ -609,6 +618,7 @@ val log_seeding_enabled : unit -> bool
 
 val log_seeding :
   ?coalesced:bool ->
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   where:string ->
   is_gpu:bool ->
   is_cpu:bool ->
@@ -627,15 +637,15 @@ val geometry_lattice_witness : string
 
 val pad_waste_max : unit -> float
 (** The pad-waste threshold of the matmul family's geometry menus (gh-ocannl-740), as this process
-    resolves config [autotune_pad_waste_max] (at least 1; a malformed value is the default, 2). A
-    geometry's pad-waste ratio is its padded work over the site's: the product, over the axes it
-    pads to its block sizes, of padded over real extent. A geometry whose ratio is at least this
-    many times that of the least-padded geometry its own menu proposes is
-    {!Ir.Schedule_space.child.Excluded} with a witness naming both ratios: valid, never proposed by
-    default, re-proposed exactly by {!Ir.Schedule_space.lift_excluded}. The least-padded geometry is
-    never excluded, and legality refutations take precedence. Judged in the GPU blocktile menu, the
-    GPU tensorized curated menu and the CPU packed menu of each packing shape. Exposed so a test
-    judges the tree against the threshold the tree was built with. *)
+    resolves config [autotune_pad_waste_max] (at least 1; a malformed or NaN value raises
+    [Utils.Invalid_config_value], gh-ocannl-1332). A geometry's pad-waste ratio is its padded work
+    over the site's: the product, over the axes it pads to its block sizes, of padded over real
+    extent. A geometry whose ratio is at least this many times that of the least-padded geometry its
+    own menu proposes is {!Ir.Schedule_space.child.Excluded} with a witness naming both ratios:
+    valid, never proposed by default, re-proposed exactly by {!Ir.Schedule_space.lift_excluded}. The
+    least-padded geometry is never excluded, and legality refutations take precedence. Judged in the
+    GPU blocktile menu, the GPU tensorized curated menu and the CPU packed menu of each packing
+    shape. Exposed so a test judges the tree against the threshold the tree was built with. *)
 
 val lift_pad_waste :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
@@ -1071,6 +1081,17 @@ type report = {
           rejection is in [declines] like any candidate's. The HIP scratch validator declining the
           unscheduled serial form of a large softmax/cross-entropy head at [Backend_link] is the
           case this exists for — before it was contained, that one rejection ended the search. *)
+  baseline_refused : bool;
+      (** The dispatched serial baseline ran its timing window and the window was refused
+          (gh-ocannl-1423): contention, a queued calibration that measured no batch within its
+          target, or a degenerate clock reading. [baseline_ms] is then [infinity] although the
+          baseline ran, and the window counts in [timings_contended]. This is the baseline's own
+          record, where [timings_contended] counts every refused window: a claim about the
+          baseline's measurement gates on it, so a loaded host reads as a skip and every other
+          [infinity] (a baseline never relinked, never dispatched, declined) still fails the claim.
+          An identical seed may time the same code later, which [default_ms] attributes by digest;
+          [baseline_ms] stays the baseline's own reading. [false] on cache replay and
+          search-disabled calls, which time nothing, and on a declined or undispatched baseline. *)
   declines : decline_summary list;
       (** Candidate rejections aggregated by stable cause key. Their counts sum to
           [candidates_failed]. Cache-entry replay failures are excluded: they are
@@ -1224,7 +1245,7 @@ type report = {
       (** The unscheduled serial baseline's measured time, or [infinity] when it was not dispatched:
           on a GPU backend an unparallelized candidate is never run (gh-ocannl-532 — the whole
           routine in one work-item, unbounded in cost and uninterruptible), so it has no measurement
-          and cannot win. Also [infinity] when [baseline_declined]. *)
+          and cannot win. Also [infinity] when [baseline_declined] or [baseline_refused]. *)
   default_ms : float option;
       (** The untuned default pipeline's measured time (gh-ocannl-552): the [config_thresholds]
           fissioned-preset seed reproduces {!Ir.Schedule.maybe_default_schedules} exactly, so this
@@ -1988,6 +2009,21 @@ val seeded_split_backend : string -> bool
     HIP (see {!seeded_split_sites}). A test states what each backend promises through these, never a
     restated list. *)
 
+val search_shaping_key_read : backend:string -> string -> bool
+(** Whether a search on [backend] can read the [Utils.Search_shaping] configuration key [key]
+    (gh-ocannl-1331): the seeded plan's [gpu_default_*] keys where {!seeded_default_backend} (and,
+    for the split threshold, {!seeded_split_backend}) holds, [autotune_register_tile_rm_twin] where
+    [Ir.Schedule.backend_is_cpu] does (only the CPU register-tiled rendering reads it), the default
+    pipeline's keys per {!Ir.Schedule.search_shaping_key_read}, and every other key everywhere. A
+    key a backend's search cannot read keys nothing in its trajectory identity
+    ({!search_shaping_identity}). *)
+
+val search_shaping_identity : backend:string -> limits:Ir.Backend_intf.hardware_limits -> string
+(** The [Search_shaping] part of {!tune}'s search-trajectory identity on [backend] at [limits]:
+    [Utils.config_class_fingerprint] of the class, over the keys {!search_shaping_key_read} says the
+    backend reads, with defaults resolved per device ({!Ir.Schedule.resolve_search_shaping_value}).
+*)
+
 val seeded_split_sites :
   backend:string ->
   min_serial:int ->
@@ -2026,7 +2062,7 @@ val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
     the threshold's measured default — where nothing calibrates either tier: no advisory (Metal, the
     C backends) and no [model_cache_capacity] / [model_cache_bandwidth] override. An explicit [none]
     override is a calibration and keeps [Ranked], even with both tiers off. Raises
-    {!Utils.User_error} on anything else. *)
+    [Utils.Invalid_config_value] naming the key on anything else (gh-ocannl-1332). *)
 
 (** What the seeded plan does with one segment (gh-ocannl-1388). *)
 type seeded_segment =
@@ -2866,7 +2902,8 @@ val tune :
 
 val budget_setting : unit -> float option
 (** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
-    the setting is a positive number, [None] (no budget) otherwise. *)
+    the setting is a positive number, [None] (no budget) when it is empty, zero or negative; text
+    that is no number raises [Utils.Invalid_config_value] (gh-ocannl-1332). *)
 
 val budget_floor_unmeasured :
   budget_cut:bool -> auto_sched:bool -> baseline_dispatched:bool -> floor_measured:bool -> bool

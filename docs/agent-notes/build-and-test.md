@@ -177,15 +177,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   together twice on 2026-10-15: staging#1139 with staging#1142 did not compile, and staging#1171
   with staging#1172 broke `tools/test-test-run.sh`'s repeat leg. `.github/ship-pr-merge-build`
   therefore has ship-pr's `merge` build the PR head merged with master's tip before the merge call,
-  whenever a path BOTH sides changed since their merge base is an OCaml build input or a `*.sh`,
-  and refuse the merge when `tools/merge-build-check.sh` fails there. That script always runs
+  whenever ANY path changed on both sides since their merge base, and refuse the merge when
+  `tools/merge-build-check.sh` fails there. That script always runs
   `dune build @check @test/operations/scans`, about 40 s from a fresh tree on mac-studio, and adds
-  the shell harness tier, about 470 s, only when a shared path is a `*.sh`. In the month before it
-  landed, 140 of 441 merges shared an input and 5 shared a script, so the expensive tier stays
-  rare. Run on the two merge commits above, it refused the first in its compile tier and the
-  second in its shell tier. A clash confined to Markdown or goldens, or across paths only one side
-  changed, is outside that boundary. To check a merge by hand, run the script at the root of a
-  checkout whose HEAD is that merge; `--plan` prints the tiers it selects and why.
+  the shell harness tier, about 470 s, only when a shared path is a `*.sh`. Every path is an input
+  because the scans read the repository itself: two notes edits that merge cleanly can still break
+  `agent_notes_structure`, push `AGENTS.md` past `agents_md_size`'s cap, or desynchronize a scan
+  golden (gh-ocannl-1382). In the month to 2026-10-19, 245 of 474 merges shared a path (166 an OCaml
+  input or script, 238 counting Markdown) and 6 a script, so the expensive tier stays rare.
+  Run on the two merge commits above, it refused the first in its compile tier and the second in
+  its shell tier. A clash across paths only one side changed, or one only a runtime test sees, is
+  outside that boundary. To check a merge by hand, run the script at the root of a checkout whose
+  HEAD is that merge; `--plan` prints the tiers it selects and why.
 
 ### Scan corpora, goldens and floors
 
@@ -776,6 +779,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
   with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
   over the selected run and count its `FAIL  ` lines.
+- **A leg that cannot go on ends itself, never the harness** (gh-ocannl-1374). Each leg of
+  `tools/test-test-run.sh` is a function run by `harness_leg_run 'NAME' leg_N`; a check it cannot
+  get past (an extraction or mutant that matched nothing, a fixture repository that will not
+  commit, a fixture that never became ready) ends it with `harness_abandon DETAIL; return`: one
+  `FAIL  NAME: abandoned, its later checks did not run`, and the legs after it run and report.
+  An `exit` there ended the run and hid every later leg, the shape one leg's code drift kept
+  costing; the body's own last status is no verdict, only `report`/`skip`/`harness_abandon` are.
+  A shared fixture outside the legs that is not what they assume is a FAIL where it is built and
+  the run goes on; only a subject that cannot be staged at all (a missing script, the
+  sourced-files scan `stage_shared` runs) still exits 2. An `exit` that does escape a body is
+  named: `aborted before finish (rc=N) inside leg: NAME`. Leg 86 pins it on a copy of the
+  harness (leg 79 abandoned, leg 70 after it still reporting) against that copy with the check
+  spelled as an `exit`; `scripts/test-harness-support.sh` pins the primitives. `set -u`'s
+  unbound-variable abort is not containable this way and still ends the run.
 - Strict skips: the toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1` (every skip is a
   FAIL); the toolchain-free `harnesses` job runs `tools/test-harnesses.sh --shell --expected-skips
   tools/harness-skips-ci-shell.txt`, strict except for the `HARNESS<TAB>LABEL` lines listed
@@ -855,7 +872,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
   reports publication, never the verdict. `tools/test-test-run.sh` legs 29–32 pin all of this
   against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
-  `repeat [--alone] N` is the supported flake diagnostic: it holds that same worktree lock once,
+  `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one
+  build, then replays; see Dune mechanics below): it holds that same worktree lock once,
   gives every Dune invocation a freshly cleaned cache-disabled build context, retains each
   iteration's separate stdout, stderr and exit status, and writes every pairwise diff. Stdout or status drift is red;
   stderr-only drift is called out separately and stays diagnostic-green. `--alone` adds `-j 1`,
@@ -880,6 +898,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   A reachable group that loses leader identity before KILL is refused without consulting the
   fallible census. After KILL reached a verified group, leaderless residue is accepted only when
   its census is zombie-only; any live leaderless descendant is a loud refusal to reuse the tree.
+  Those zombie-only shapes reproduce only under a parent that never reaps orphans (staging#1172's
+  three review rounds each found one in the reviewer's container; macOS and the Ubuntu runners
+  reap). Leg 85 of `tools/test-test-run.sh` (Linux, gh-ocannl-1376) runs `repeat` and `run` under
+  a stand-in: a python3 child subreaper (`prctl(PR_SET_CHILD_SUBREAPER)`) that waits for its own
+  child only, so every orphan below it stays a zombie in the group it left, and that records what
+  it held. A capped set keeps TIMEOUT, a GPU set passes through the resolution's inert branch
+  (`left only zombies ... inert, not reaped`), `run` keeps its verdict, and the stand-in must have
+  held a zombie and nothing live; taking out the iteration shell's reaping trap, or that branch,
+  makes the set refused (exit 2) under the same stand-in.
 - Every liveness question in that script — per pid and per process GROUP — reads process STATE and
   not only the signal, because `kill -0` succeeds on a ZOMBIE exactly as on a live process, and an
   identity token does not rescue the check either: a zombie leader still prints its recorded
@@ -1528,6 +1555,27 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   it as under `--cache=disabled`), while `--cache=enabled` also stores the test runs and restores
   their outputs instead of re-running them. A GPU batch's repeat has `run`'s two bounds (next
   section's GPU bullet).
+  **`repeat --direct N @<dir>/runtest-<name>...` pays that rebuild once** (gh-ocannl-1377): a
+  build phase builds and runs the named tests into the set's own build directory, then each
+  iteration replays the test's own target-producing rules in the built tree
+  (`tools/replay-rules.sh`, from `dune rules`' expanded action, in the environment
+  `dune exec --no-build` reports for the context plus dune's per-action TMPDIR and
+  BUILD_PATH_PREFIX_MAP) and runs `dune build --force` over the aliases, which re-runs the alias
+  actions (the golden diff, a run-and-diff or inline-test rule) and compiles nothing. On
+  mac-studio an iteration of `runtest-hello_world_op` took 7-8 s at `-j 4` (its inline-test runner
+  is an alias action, so that is the forced dune alone) after a 29 s build phase, against 21-23 s
+  per clean iteration. Every set compares the first replay with dune's own run of the same rules
+  (the build phase's snapshot of their targets): a replay that agrees with itself but not with
+  dune is `REPLAY DIVERGED`, never a stable test — it caught, while the mode was written, `echo`'s
+  space-joining, a python's locale coercion exporting `LC_CTYPE`, and the `SHLVL`/`_` a shell's
+  `exec` drops (so the build phase's dune is never exec'd). Refused before any iteration: a rule
+  dune runs in a sandbox (the scans' `(sandbox always)` targets), an action outside the replayed
+  forms (`system`, `bash`, a directory target), a test the build phase never ran (`BUILD FAILED`
+  when the build itself failed); for those use the clean form. Not reproduced: the named tests'
+  dune scheduling beside each other (a replay runs them in turn) and a fresh tree (files a test
+  leaves beside its targets persist, as between two dune runs). `tools/test-test-run.sh` leg 84
+  pins all of it against a real dune, with a mutant without the replay as the control that dune's
+  `--force` alone never re-runs a target-producing test.
   For one fresh, TIMED run of named tests (a before/after wall-time comparison),
   `tools/test-run.sh fresh @<dir>/runtest-<name> [@<dir>/slow-<name>...]` hands dune a build
   directory of the run's own with `--force --cache=disabled`: the closure compiles there (some
@@ -1755,10 +1803,28 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `gated ~when_:(not (List.is_empty xs)) label ((not (List.is_empty xs)) && List.for_all xs …)` is
   refused; a boolean that quantifies nothing has no population. Its recognized forms are held
   equal to the `gated` and `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
-  (`p "…" ((not on_cpu) || ok)`), which prints `true` where it should report a skip, is a
-  different shape it does not see. Most of its mutation runs exit 4, not 1: the ratchet's trailing
+  (`p "…" ((not on_cpu) || ok)`) is the fifth reader's (below). Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).
+- `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):
+  `p "…" ((not on_cpu) || ok)` prints `true` on a GPU, a pass byte-identical to a CPU run that
+  checked `ok`, so the transcript says the claim held on hardware that never evaluated it.
+  `Verdict_scan.folded_gate_census` splits each `Verdict` claim's value (the boolean, or a
+  quantified claim's `~f` body; `p_none`'s at the opposite polarity) into the disjuncts that alone
+  pass it -- through `||`, `not`, a negated `&&`, a `let`-bound name, and an `if` whose other branch
+  is the passing constant -- and refuses one that is RUN-CONSTANT beside one the test computed. Run-constant
+  is what a configuration reader returns (`get_global_arg`, `getenv`, `Context.backend_name`,
+  `Context.hardware_limits`, `Sys.win32`, `Utils.settings`), and what library calls compute from those and constants
+  alone, through names anywhere in the source: `on_cpu`, `seeds_here`, a `lazy` hardware probe. A
+  value that also reads a parameter, a pattern variable or a computation (`Context.auto ()`) is the
+  test's own, so an implication over a computed antecedent (`(not ran) || finite`) passes, and so
+  does a census computed under the backend. The remedy is `Verdict.gated ~when_` (a `gated_*` form
+  for a quantified claim; a branch with `skipped` for a pairwise one, which has no gated form). Its
+  header in `test/support/verdict_scan.ml` states the boundary: claims through a wrapper or a
+  pipeline, a source function's result, and a fold below a conjunction (`ok && ((not on_metal) ||
+  dialect)`, partly checked everywhere) are not read. The tree's 32 folded sites converted with
+  their goldens unmoved, `gated` printing `p`'s line; the cross-machine sweep's skip coverage now
+  sees what they never checked.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured
@@ -2799,13 +2865,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   whole `dune runtest` step was ~8min, most of it this chain; taking it off the per-PR path took
   ubuntu CI from ~31min to ~15 and macOS from ~16 to ~10). The daily sweep's full-suite units
   build `@runtest @train` together, so every backend still executes them daily, and per-PR CI
-  runs the tier as a macOS-ONLY shard: measured with the compile cached, `@train` is ~4.7min on
-  an M4 Max but ~10min on a 24-thread Linux box, so a ubuntu shard (slower still on the 4-vCPU
-  runner) would replace the ~15min main job as the matrix's latency ceiling while the macOS shard
-  fits under it. A change to training dynamics, `Train.*` plumbing or the autotuner's fission
-  path is still worth a local `dune build @train` (or the affected
-  `@test/training/train-<name>`) before pushing, since ubuntu-specific breakage there surfaces
-  only in the sweep. `@slow` keeps the
+  runs the tier as two ubuntu shards (gh-ocannl-1422; the schedule adds a macOS `train` job). It
+  used to be one macOS job, because one ubuntu job would have set the matrix's latency (the chain
+  is ~10min on a 24-thread Linux box with the compile cached, slower on the 4-vCPU runner); but
+  a second macOS job per PR doubled each PR's claim on the scarce macOS runners, and in a ~20-PR
+  wave macOS jobs queued ~2h. `tools/ci-shard.sh targets K/N train` deals the `train` aggregate's
+  members by `TRAIN_WEIGHTS` -- WALL seconds, since the members serialize on the lock and each
+  saturates the cores, so a shard's time is the sum of its members' -- re-measured with
+  `tools/test-run.sh fresh @test/training/train-<name>...` on a Linux box, which prints each
+  member's wall time. A change to training dynamics, `Train.*` plumbing or the autotuner's
+  fission path is still worth a local `dune build @train` (or the affected
+  `@test/training/train-<name>`) before pushing, since macOS-specific breakage there surfaces
+  only in the schedule and the sweep. `@slow` keeps the
   genuinely long real-dataset runs (`mnist_conv`, `cifar_conv`, `gpt2_dry_run`). CI also runs its
   one dune walk as `dune build "@default" "@runtest"` — two separate commands would hold the
   serialized lock chain (what remains of it) against an otherwise idle runner after every file
@@ -2813,7 +2884,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `@` tokens to nothing.
 - Per-PR ubuntu runs that suite as N jobs (`shard: K/N` in `ci.yml`'s matrix), macOS as one: as a
   single job ubuntu had grown back to 18-32min, three quarters of its dune step executing
-  `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` names
+  `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` (suite
+  `main`, the default; `train` above is the other) names
   a shard's targets: each `runtest-<name>` alias of `test/operations` (built `@@`, non-recursive)
   is a unit, and one `@rest` unit is every suite alias, non-recursively, of every OTHER directory
   holding a tracked dune file. **`@@dir/default` is not non-recursive**: no dune file here defines
@@ -2832,8 +2904,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the script reads, prints on STDERR and exits 0 for a directory it does not know (and `dune
   rules` prints nothing for an action-only alias, so it cannot answer coverage questions either):
   the script validates the listing and refuses (exit 2) rather than shard a partial one.
-  `test/operations/ci_matrix.sh` holds the matrix to exactly `1/N..N/N` and the unsharded legs'
-  alias list to the script's; `tools/test-ci-shard.sh` is the hermetic harness.
+  The `train` suite needs no dune: its units are read from the tracked dune files' `(alias (name
+  train) (deps ...))` aggregates as S-expressions, and the reader refuses whatever would make its
+  member list differ from what `@train` builds (a dep that is not `(alias train-<name>)` defined
+  beside it, an extra aggregate field, a rule on `train` itself, an `include`).
+  `test/operations/ci_matrix.sh` holds the matrix to exactly `1/N..N/N` for each sharded suite, the
+  unsharded legs' alias list to the script's and the sharded step to passing its suite, and runs
+  the train shards for the matrix's N against its own reading of the aggregates (they must
+  partition it); `tools/test-ci-shard.sh` is the hermetic harness.
 
 ### opam and caches in CI
 
@@ -3142,8 +3220,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 - Sweep endpoint and lock-contract helpers live in `tools/lab-map.sh`, registry reads in
   `tools/fleet-registry.sh`, diagnostic normalization in `tools/sweep-fingerprint.sh`, the
-  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990), and the fleet's GPU tokens
-  (a GPU unit's readings and its take) in `tools/gpu-tokens.sh` (gh-ocannl-1177). Their caller-owned
+  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990), the fleet's GPU tokens
+  (a GPU unit's readings and its take) in `tools/gpu-tokens.sh` (gh-ocannl-1177), and the process
+  supervisor every unit leg runs under -- `capped`, `remote_capped`, `capped_perl` and the `sq`
+  quoting its far-side text ships with -- in `tools/sweep-supervisor.sh` (gh-ocannl-1380), so a
+  fixture or a live witness on a GPU box sources the shipped text instead of restating it or
+  cutting it out of `tools/sweep.sh` with sed. Their caller-owned
   variables and callback dependencies are listed at each file's head. `runtest-sweep_components`
   exercises the sourced functions without running a sweep; `bash test/operations/sweep_components.sh
   state` (also `lab`, `fleet`, `fingerprint`, `tokens`) isolates one fixture. The default runs all four plus broken
@@ -3261,11 +3343,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   T of its S correctness-slot files (lukstafi/ludics-lite#391; rog-nv-linux 4 and 2, because three
   concurrent cuda batches ran out of device memory). The sweep took none, so a sweep unit could be
   the third batch. Now every remote GPU unit asks the box's own `fleet-worker.sh execution slot
-  --probe` (the same candidate list as this host's, under the box's home) and reads which slot files
-  are flocked, by whom, from the kernel's flock table: at its start (`opened`), after its suite
-  (`closed`), and when a take is refused (`refused`), one JSON line each in
-  `<log stem>.gpu-tokens` (`box`, `event`, `at`; `slot`, `kind`, `pid`, `user`, `command`, `cwd`
-  per holder -- the vocabulary of the fleet's co-tenant records, lukstafi/ludics-lite#566), beside a
+  --probe` (the same candidate list as this host's, under the box's home) and, from the same
+  script, which slot files are held and by whom: `execution slot --holders` (lukstafi/ludics-lite#639;
+  gh-ocannl-1417), so the fleet owns the one read of the kernel's flock table and the sweep parses
+  none. At its start (`opened`), after its suite (`closed`), and when a take is refused (`refused`),
+  one JSON line each in `<log stem>.gpu-tokens` (`box`, `event`, `at`; per holder the fleet's own
+  line -- `slot`, `kind`, `pid`, `user`, `command`, `cwd`, `source`, `unknown`, the vocabulary of
+  the fleet's co-tenant records, lukstafi/ludics-lite#566 -- plus the sweep's `gpu`), beside a
   `reservations` line with the registry's active reservations on the box (from the per-unit
   `execution list --active` read; a reservation holds no token, so the counts come from the flocks).
   A reading that saw another batch holding the GPU is named on the summary, the record's twelfth
@@ -3278,8 +3362,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   without a token under a `gpu token: WARNING` line, failing open as the registry read does. The
   RTC context and the box check hold no GPU test and take none; workers' batches and the GPU
   integration loop (lukstafi/ludics-lite#615) wait for the same tokens, with no precedence either
-  way. `OCANNL_TOOL_FLEET_WORKER=none` reads and takes nothing. A box without `/proc/locks` (the
-  macOS host) cannot be read, so the local metal unit records `-`; a token taken and released
+  way. `OCANNL_TOOL_FLEET_WORKER=none` reads and takes nothing. The fleet's `kind` is the SLOT's:
+  on a box whose tokens do not bind every slot is `gpu`, so a `--cpu` batch there, or one that fell
+  back into a token slot, is listed `gpu`; the sweep counts a holder as on the GPU (`gpu: true`) only
+  when its command does not declare `--cpu` before the first `--`, as the reader it replaced did --
+  a declared CPU batch holds no device memory, and a launch OOM is what the count attributes. A
+  `--holders` that exits non-zero (a skills checkout from before ludics-lite#639, as tuf's can be)
+  or prints anything but holder lines for the probed box is an `unread` reading, never zero holders.
+  Only remote GPU units read, so the local metal unit records `-`; a token taken and released
   between two readings is not seen.
 - **Each lane runs `benchmarks/check-box.sh --box-only` once** (gh-ocannl-1062), after its first
   unit whose suite ran (`pass`, `incremental-pass` or `fail`; a `timeout` leaves it to the next
@@ -3363,7 +3453,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   alive. For a remote unit that means the cap says "coverage lost" while the run still holds the
   GPU and the worktree lock the next sweep must take. Both sides of `tools/sweep.sh` therefore run
   the unit under the same perl supervisor (`capped` locally, `remote_capped` emitting it as far-side
-  shell text): it forks, `setpgrp`s the child, and signals the GROUP on expiry, TERM then KILL, so
+  shell text; both in `tools/sweep-supervisor.sh`): it forks, `setpgrp`s the child, and signals the GROUP on expiry, TERM then KILL, so
   the bound holds whatever `timeout` is on the far side's PATH. Exit 142 (128+SIGALRM) is that
   supervisor's expiry, on either side of the ssh (gh-ocannl-727).
 - A normal sweep is deliberately incremental and records `incremental-pass`, not `pass`: that unit
@@ -3948,7 +4038,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   fingerprint across intervening greens, plus each failing golden's last-touch commit. A new red
   after green, or after one of those golden commits moves, is labeled `REGRESSION OR FIX DID NOT
   TAKE`; a changed fingerprint is reported against the previous failure rather than merely the
-  previous run. Standing identical reds stay quiet, which is the signal-to-noise property the
+  previous run. A red after a green also gets the ready bisect on the line after it
+  (gh-ocannl-1375): `<box>/<backend>: bisect on <host>: OCANNL_BACKEND=<backend> tools/test-run.sh
+  bisect <green sha> <this sha> <aliases>`, the aliases being the failing stanzas the serial rerun
+  maps plus each `(test)` golden diff's `@<dir>/runtest-<name>` (from its `.exe.output` operand;
+  the site itself names only the `.expected`), with any site no stanza is found for listed as left
+  out. A green at the same commit prints `bisect: none` instead: nothing in the code moved. Standing identical reds stay quiet, which is the signal-to-noise property the
   cursor exists to preserve. The cursor key includes the requested logical ref, so an exploratory
   branch or historical run cannot become `origin/master`'s predecessor. Golden paths come from the
   full log: ordinary test diffs name their `.expected` file directly, while an explicit rule's
@@ -3966,7 +4061,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 When a sweep unit (or any run) goes red and an earlier run of the same targets on the same box was
 green, the two commits bound a bisect: `tools/test-run.sh bisect GOOD BAD <targets…>`
-(gh-ocannl-1225), for example `OCANNL_BACKEND=cuda tools/test-run.sh bisect --build
+(gh-ocannl-1225; a sweep unit's summary prints it ready to paste, gh-ocannl-1375), for example `OCANNL_BACKEND=cuda tools/test-run.sh bisect --build
 ./test/operations/test_vec_simple.exe <good-sha> <bad-sha> @test/operations/runtest-test_vec_simple`.
 Finding gh-ocannl-1222's cause took a hand-rolled `git bisect run` on tuf, and its step script had
 three easy ways to lie; the verb encodes each once (tools/bisect-steps.sh says how):
@@ -4097,12 +4192,17 @@ box.
   measurement set complete — because a refused digest is dropped from `seen` so an equivalent seed
   can retry it: on an idle cuda box `autotune_fission_sketch`'s chain search refuses 4 windows over
   0 distinct candidates, so a claim that added the counter into a candidate population credited four
-  candidates that were the same one, four times. Two report fields carry the narrower facts
+  candidates that were the same one, four times. Three report fields carry the narrower facts
   (gh-ocannl-892 follow-up): `candidates_contended`, the distinct digests refused that no later seed
   timed — the term that composes with `candidates_timed` and the `Not_dispatched_key` declines into
-  "how many distinct candidates did this search reach" — and `default_refused`, which separates a
+  "how many distinct candidates did this search reach" — `default_refused`, which separates a
   contention-refused untuned-default reference from the gh-ocannl-552 regression of never proposing
-  or attributing that seed. A per-arm or per-report scoping is the same rule one level up: a union
+  or attributing that seed, and `baseline_refused` (gh-ocannl-1423), the baseline's own window.
+  `autotune_replay_refusal`'s "the re-search times the baseline the replay released" gates on that
+  one, after re-running the re-search up to three times: a `timings_contended` gate would let any
+  candidate's refusal excuse it, and a `baseline_ms` gate reads the value under test, so a baseline
+  never relinked would skip instead of failing. Its leg 4 refuses the window through
+  `on_candidate_measured` and pins the record, the shape for a new gate of this kind. A per-arm or per-report scoping is the same rule one level up: a union
   over two arms lets partial contention in one excuse the other, and `autotune_arm_containment`'s
   injected-failure scenario is waived only by arm B stopping short of the injection threshold
   (`candidates_timed < 2` for `~after_arm_timed:2`), never by arm A's refusals.

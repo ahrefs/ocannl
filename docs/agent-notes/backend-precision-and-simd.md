@@ -480,7 +480,7 @@ files.
   STATIC symbol, a kernel parameter bound at launch. (`Schedule`'s Pad guards ARE constant-bounded;
   the two shapes are easy to conflate.) A static symbol cannot select among enclosing loop
   iterations, but the peel cannot tell it from a loop index on its own, so it reads the
-  classification off the program: the REQUIRED `~loop_bounds` is `Low_level.loop_bounds` of the
+  classification off the program: the REQUIRED `~loop_ranges` is `Low_level.loop_ranges` of the
   enclosing code — the same "box environment for Affine queries" the engine's other consumers pass,
   which also supplies the iteration ranges `separates` needs. A guard symbol in it that is not
   peeled is an enclosing level's index; one outside it is bound outside every loop and is harmless.
@@ -770,7 +770,7 @@ files.
   on gfx1151 and ~6.6% on gfx1102, intrinsic to the f32 arm (a before/after split showed at most ~5
   points on one cell attributable to the gh-ocannl-1064 table boundary), while the serial legs run
   5-21% faster wide. The maintainer took the accuracy. HIP's resolution lives in
-  `Hip_backend.bf16_accum_wide`, the one predicate behind its `accum_prec` and `mma_combo`;
+  `Ir.Hip_mma.bf16_accum_wide`, the one predicate behind its `accum_prec` and `mma_combo`;
   `Numerics.bf16_accum_wide` still answers only "is the mode `Bf16_wide`", which
   is all the seeding gate needs since HIP advertises both wide scopes. Cache identity follows the
   resolution by derivation (the next bullet); the flip first shipped with a hand-added
@@ -920,9 +920,10 @@ files.
   `ocannl_mma_rc8` into a float fragment, then widens/narrows each scalar cell at the coordinate
   that fragment names (the coordinate-table principle above); no half/bfloat staging fragment
   remains. MSL 4.1 section 6.8.1 accepts only device/threadgroup pointers for `simdgroup_load`, so
-  `mma_d_table_lines` initializes a 64-float threadgroup table with a single writer (`lid == 0`
-  in every dimension) before the existing opening barrier. This costs 256 static bytes per
-  converted scope; `link_proc` checks the compiled kernel's actual allocation.
+  `mma_kernel_prologue` initializes a 64-float threadgroup table with a single writer (`lid == 0`
+  in every dimension) at kernel scope, once per kernel (gh-ocannl-1255), ahead of every converted
+  scope's opening barrier. This costs 256 static bytes per kernel; `link_proc` checks the compiled
+  kernel's actual allocation.
   The per-lane count derives from the float fragment's `storage_type` divided by the advertised
   32-thread width; `sizeof(thread_elements())` counts pointer bytes, not elements. Both scopes
   keep the old `(float)`, `(half)` and `(bfloat)` casts, preserving conversion rounding.
@@ -1934,6 +1935,15 @@ files.
   table is its own dependency-free library, `arrayjit.builtins_cc` (re-exported as
   `Context.Builtins_cc`), so the `arrayjit/lib/gen_builtins` generator links it without `context`
   (ir's stubs need the header first) and emits the header included by `builtins.c`; the `OCANNL_` SIMD namespace and platform includes remain cc-only.
+  The CUDA and HIP tables are stdlib-only libraries beside it (`arrayjit.builtins_cuda`,
+  `arrayjit.builtins_hip`, gh-ocannl-1353), not modules of the optional backend libraries, so
+  `dune build @check` compiles them on every PR although no CI job installs cudajit or hipjit.
+  `cuda_like_builtins_emulation` links them to compile, under host shims for the intrinsics, every
+  function each table shares by name with the C table (the uniform draws, scalar, `_vec` and
+  `_lane`, and the `<prec>_to_uint4x32` counters) plus HIP's fp8 cast guards, assembled by
+  `C_syntax.builtin_definitions` as a kernel prelude is, and compares them bitwise with the C ones.
+  A new shared helper needs a probe shape there or a named exclusion (threefry: its CUDA-like round
+  takes a C++ reference), and a dependency list missing an entry fails that compile.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.

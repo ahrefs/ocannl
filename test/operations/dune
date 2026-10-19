@@ -2362,7 +2362,10 @@
 ; verdict legs over gathers and scatters, and the issue's gather-under-a-fixed-row-Set executed.
 ; gh-ocannl-1245: a deferred packed uniform spliced into a later routine as a lane-extract gather of
 ; a counter that routine writes first -- reconcile_traced_store's re-check keeps the counter out of
-; read-before-write; executed against a twin with the uniform materialized.
+; read-before-write; executed against a twin with the uniform materialized. gh-ocannl-1327: a
+; gather is a first touch of its table -- a table gathered before a constant Set or a Zero_out stays
+; read-before-write, neither a scalar constexpr nor zero-initialized by code; executed beside a
+; materialized-table twin.
 
 (test
  (name dynamic_axis_coverage)
@@ -6133,6 +6136,10 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The configuration Ll_test.tensorized_capability reads beside the backend: the staged leg's
+  ; census claim is gated on the advertised f32 capability (gh-ocannl-1316).
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -7249,9 +7256,12 @@
  ; resolves against are synthetic records.
  (target config_class_fingerprint.actual)
  (package neural_nets_lib)
+ ; gh-ocannl-1332: the lane-mode read it refuses goes through Ir.Schedule.gpu_serial_lanes.
  (deps
   (alias runtest-env_spelling_gate)
-  ocannl_config)
+  ocannl_config
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_PROFILE))
  (action
   (with-stdout-to
    %{target}
@@ -8352,6 +8362,8 @@
   ../../tools/gpu-tokens.sh
   ; the credential deny-list sweep.sh scrubs from every dune leg (gh-ocannl-1280)
   ../../tools/credential-env.sh
+  ; the process supervisor and quoting every unit leg runs under (gh-ocannl-1380)
+  ../../tools/sweep-supervisor.sh
   sweep_harness.sh
   sweep_remote_fixture.sh
   ../../scripts/harness-support.sh
@@ -8387,6 +8399,7 @@
   ../../tools/box-jobs.sh
   ../../tools/kernel-window.sh
   ../../tools/gpu-tokens.sh
+  ../../tools/sweep-supervisor.sh
   (env_var ProgramFiles)
   (env_var ProgramW6432)
   (env_var "ProgramFiles(x86)")
@@ -8722,6 +8735,18 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1305: Low_level.loop_ranges hulls every binding of a reused loop symbol -- sibling
+; nests and sibling inner loops on raw post-schedule-shaped IR -- and an access-validity query
+; ranged by it sees the second sibling's cells. Structural only: nothing executes.
+
+(test
+ ; ocannl-backend: none -- pure Low_level traversal and Affine queries, no execution.
+ (name loop_ranges_hull)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules loop_ranges_hull)
+ (libraries base arrayjit.ir arrayjit.ll_builders arrayjit.verdict))
+
 (test
  ; ocannl-backend: none -- pure Low_level traversal and analysis, no execution.
  (name access_fold)
@@ -9054,7 +9079,8 @@
   gh1133_summary.py
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
-  ../../benchmarks/strict_json.py)
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py)
  (action
   (no-infer
    (progn
@@ -9079,7 +9105,8 @@
   ../../benchmarks/gh1002_cells.py
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
-  ../../benchmarks/strict_json.py)
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py)
  (action
   (no-infer
    (progn
@@ -9102,7 +9129,8 @@
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
   ../../benchmarks/cell_group.py
-  ../../benchmarks/strict_json.py)
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py)
  (action
   (no-infer
    (progn
@@ -9323,6 +9351,27 @@
   ctypes
   ctypes.foreign))
 
+; gh-ocannl-1353: the CUDA and HIP tables' device-free conversion helpers, compiled by the host C
+; compiler beside the C table and compared with it bitwise; the stdlib-only arrayjit.builtins_cuda
+; and arrayjit.builtins_hip libraries are what let a test link the tables without a backend.
+
+(test
+ ; ocannl-backend: cc -- compiles the CUDA and HIP tables' helpers with the host C compiler, no device.
+ (name cuda_like_builtins_emulation)
+ (package neural_nets_lib)
+ (modules cuda_like_builtins_emulation)
+ (deps
+  ocannl_config
+  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (libraries
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.builtins_cuda
+  arrayjit.builtins_hip
+  arrayjit.verdict
+  ctypes
+  ctypes.foreign))
+
 ; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
 ; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
 
@@ -9473,6 +9522,25 @@
  (deps ocannl_config)
  (modules cuda_mma_arms)
  (libraries base stdio arrayjit.ir arrayjit.verdict))
+
+; gh-ocannl-1246: every backend's advertised tensor-core formats against its arm table, as pure
+; functions of the numerics policy -- CUDA's, Metal's and HIP's device-free tables, cc's live ones --
+; so a dropped triple, arm or wide scope fails on a runner with no GPU.
+
+(test
+ ; ocannl-backend: cc -- Context.cpu () for cc's own tables; CUDA's, Metal's and HIP's are the pure
+ ; Ir.Cuda_mma, Ir.Metal_mma and Ir.Hip_mma, evaluated with no device.
+ (name mma_format_arm_tables)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules mma_format_arm_tables)
+ (libraries
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.context
+  arrayjit.autotune
+  arrayjit.verdict))
 
 ; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter and
 ; every split-reduce site field reaches its label, each beam-round candidate names its parent,

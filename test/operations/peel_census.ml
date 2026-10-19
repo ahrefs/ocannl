@@ -424,7 +424,7 @@ let () =
     let peeled =
       LL.peel_accum_nest
         ~report:(fun r -> report := Some r)
-        ~loop_bounds:[ (w, (0, 3)) ]
+        ~loop_ranges:(Ir.Affine.Loop_ranges.of_bindings [ (w, (0, 3)) ])
         ~free_of:[] nest
     in
     (Option.is_some peeled, Option.value_exn !report)

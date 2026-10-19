@@ -663,7 +663,7 @@ let from_env ~tune =
         | None -> fail "BENCH_SPLICE_ARM is required: control or treatment"
       in
       if not tune then fail "the splice mode replays tuned schedules: set BENCH_TUNE=1";
-      if Utils.get_global_flag ~arg_name:"autotune_search" ~default:true then
+      if Utils.registered_flag ~arg_name:"autotune_search" then
         fail
           "a splice arm must replay, never search: pass --ocannl_autotune_search=false (a key its \
            cache lacks then ships the untuned default, and the run fails)";

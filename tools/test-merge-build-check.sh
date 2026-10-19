@@ -2,8 +2,8 @@
 # Hermetic fixtures for tools/merge-build-check.sh: which tiers a merge commit selects (a script
 # both sides changed, by either name of a rename; a one-parent HEAD, --all and a quoted path run
 # every tier), the toolchain fallback through opam env, the exit statuses, and that
-# .github/ship-pr-merge-build feeds the shell tier's trigger. Fake dune, opam and harness tier:
-# no build runs.
+# .github/ship-pr-merge-build runs the script with every tracked path an input. Fake dune, opam
+# and harness tier: no build runs.
 # Usage: tools/test-merge-build-check.sh [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
@@ -189,14 +189,35 @@ if harness_leg 'usage #usage'; then
   else report 1 'an unknown argument exits 2' "exit $rc; $(cat "$TMP/out")"; fi
 fi
 
-# The config is what runs this script and what triggers its shell tier: it must name the script
-# as its command and carry, as an input, the glob the shell tier selects on (read from the script).
-if harness_leg 'the merge-build config runs this script and feeds its shell tier #config'; then
+# The config is what runs this script, and its inputs are what trigger it. The compile tier's
+# scans read the repository itself (notes, docs, goldens, YAML, Python, scripts, sources), so the
+# config makes every tracked path an input rather than keeping a second copy of the scans' corpora
+# (gh-ocannl-1382). Each tracked path must match one `input` glob as the merge build reads it: the
+# whole path, `*` crossing `/` (a [[ == ]] pattern does the same). That covers the shell tier's
+# trigger too, since every script the tier could select is a tracked path.
+if harness_leg 'the merge-build config runs this script, and every tracked path is an input #config'; then
   config=$HERE/../.github/ship-pr-merge-build
-  glob=$(sed -n "s/^SHELL_GLOB='\\(.*\\)'\$/\\1/p" "$HERE/merge-build-check.sh")
-  if [ -n "$glob" ] && grep -qxF "command tools/merge-build-check.sh" "$config" &&
-     grep -qxF "input $glob" "$config"; then
-    report 0 "the config's command is this script, and its inputs carry '$glob'"
-  else report 1 "the config's command is this script, and its inputs carry '$glob'" "$(cat "$config" 2>&1)"; fi
+  globs=() n=0 unmatched=
+  while IFS= read -r line; do
+    case $line in 'input '*) globs+=("${line#input }") ;; esac
+  done <"$config"
+  if [ ${#globs[@]} -gt 0 ]; then
+    while IFS= read -r -d '' p; do
+      n=$((n + 1)) hit=0
+      for g in "${globs[@]}"; do
+        # shellcheck disable=SC2053 # the glob is a pattern, as fnmatch reads it
+        if [[ $p == $g ]]; then hit=1; break; fi
+      done
+      [ "$hit" = 1 ] || { unmatched=$p; break; }
+    done < <(git -C "$HERE/.." ls-files -z)
+  fi
+  label="the config's command is this script, and its inputs match every tracked path"
+  if ! grep -qxF "command tools/merge-build-check.sh" "$config"; then
+    report 1 "$label" "no \`command tools/merge-build-check.sh\` line: $(cat "$config" 2>&1)"
+  elif [ ${#globs[@]} = 0 ] || [ "$n" = 0 ]; then
+    report 1 "$label" "read ${#globs[@]} input glob(s) and $n tracked path(s): nothing was checked"
+  elif [ -n "$unmatched" ]; then
+    report 1 "$label" "$unmatched is tracked, but no input glob (${globs[*]}) matches it: a clash in it would skip the build"
+  else report 0 "$label ($n paths)"; fi
 fi
 finish

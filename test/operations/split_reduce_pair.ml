@@ -69,8 +69,9 @@ let capture comp =
 let site_of sites tn = List.find sites ~f:(fun s -> Ir.Tnode.equal s.Autotune.sr_target tn)
 
 let extent (opt : LL.optimized) s =
-  List.find_map (LL.loop_bounds opt.LL.llc) ~f:(fun (s', (lo, hi)) ->
-      Option.some_if (Ir.Indexing.equal_symbol s s') (hi - lo + 1))
+  Option.map
+    (Ir.Affine.Loop_ranges.find (LL.loop_ranges opt.LL.llc) s)
+    ~f:(fun (lo, hi) -> hi - lo + 1)
 
 (* Whether the code reads a split's partials node: the prelude applied, not merely parsed. *)
 let reads_partials (llc : LL.t) =
@@ -387,7 +388,7 @@ let shared_band ~label ~nb ~both =
   let body = if both then L.seq (acc g1 x) (acc g2 y) else acc g1 x in
   let llc = L.loop_n b nb (L.loop_n s 128 (L.loop_n o 4 body)) in
   let opt = L.optimize ~materialized:[ g1; g2 ] ~name:label llc in
-  (LL.loop_bounds opt.LL.llc, Autotune.split_reduce_sites opt)
+  (Ir.Affine.Loop_ranges.to_alist (LL.loop_ranges opt.LL.llc), Autotune.split_reduce_sites opt)
 
 let () =
   p "one accumulation over the two-loop band is a coalesced site"

@@ -656,8 +656,9 @@ let line_break_census content =
     definition, where it is a parameter, and not at its callers. A [gated] boolean that quantifies
     nothing has no population: its comparisons and other calls are operands this reader does not
     read, so [gated ~when_:(xs <> []) label (sum xs = want)] passes, and so does a gate folded into
-    a value ([p "…" ((not on_cpu) || ok)]). Each of these is a place a population gate can hide from
-    this reader; none is a place it reports one that is not there.
+    a value ([p "…" ((not on_cpu) || ok)]), which {!folded_gate_census} reads instead. Each of these
+    is a place a population gate can hide from this reader; none is a place it reports one that is
+    not there.
 
     A gated application the reader cannot complete — a partial application no [let] binds, a
     [let]-bound one that no use the reader resolves completes (reached only through a module path,
@@ -1544,3 +1545,607 @@ let gate_census content =
     List.sort (!partials @ uncompleted) ~compare:(fun (_, a) (_, b) -> Int.compare a b)
   in
   { readings = List.rev !readings; gated_sites = !gated_sites; unread }
+
+(** {1 A gate folded into the claim's value (gh-ocannl-1310)}
+
+    [p "…" ((not on_cpu) || ok)] prints [true] on a GPU run: a pass, byte-identical to a CPU run
+    that checked [ok], where the honest report is a skip. The run's own transcript then says the
+    claim held on hardware that never evaluated it -- the same invisibility {!Verdict.skipped}
+    exists to end, reached by folding the gate into the boolean instead of spelling the skip.
+    [Verdict.gated ~when_:on_cpu ~on:backend_name "…" ok] (or a quantified [gated_*] form) is the
+    spelling that reports it, and this reader refuses the folded one.
+
+    {2 What is read}
+
+    The VALUE of every [Verdict] claim this source applies directly by its path (under any type
+    constraints), whose callee {!Verdict_callee} reads as [Verdict]'s or ambiguous:
+
+    - the boolean of [p], [claim], [pass_fail] and [gated] (the second positional argument), and of
+      [pf] and [claimf] (the last positional argument, after the format's);
+    - the predicate [~f] of a quantified claim -- [p_all], [p_alli], [p_exists], [p_all2],
+      [pf_all2], [pass_fail_all2] and the [gated_*] forms, whose element passes where it returns
+      [true], and [p_none], whose element passes where it returns [false] -- when it is a function
+      written there or a name bound to one: its body, under its parameters.
+
+    {!folded_slots} is that table; {!folded_unread_members} the members with no boolean to read
+    ([fail], [skipped], [case], [p_empty], [p_pairwise_distinct]), and [verdict_ratchet] holds the
+    two equal to [Verdict.Claims] together.
+
+    The value is split into the DISJUNCTS whose truth alone passes the claim: through [||] (and,
+    under a [not], [&&]), [not] (which swaps the two), a name into its [let] right-hand side, type
+    constraints, a [let] body and a sequence's last expression; and through an [if] one of whose
+    branches is the passing constant -- [if on_cpu then ok else true] is [(not on_cpu) || ok]. The
+    claim is refused when one disjunct is RUN-CONSTANT and another is computed by the test: the gate
+    decides the verdict wherever it is closed. For a [gated] claim, a disjunct that makes its own
+    [~when_] false -- a conjunct of the gate, negated -- is dropped first: the claim is never
+    evaluated where it holds. A disjunct that is a constant -- a literal, a library value -- is
+    neither, so a claim over the configuration and constants alone is no fold.
+
+    {2 Run-constant}
+
+    A value fixed by the run's configuration, not computed by the test: what a configuration reader
+    returns ({!configuration_readers}: [Utils.get_global_arg], [Utils.get_global_flag],
+    [Sys.getenv]/[getenv_opt], [Context.backend_name], [Context.hardware_limits] -- an applied path
+    ending in one of these names, or an unqualified one the source does not bind), a value of [Sys]
+    ([Sys.win32], [Sys.os_type], [Sys.big_endian], [Sys.argv], ...), the settings record
+    [Utils.settings] (its fields being the configuration), and what is computed from those and
+    constants alone: an application of a function from outside the source to run-constant and
+    constant arguments, at least one of them run-constant ([backend_is_cpu backend_name],
+    [String.equal backend_name "metal"], [not on_gpu]); an [if], [match] or [try] over such parts; a
+    field, a [lazy] or a constructor of one, a field of a record the source writes out being that
+    field's value; a name bound to one by [let], anywhere in the source, a qualified path into a
+    module of the source ([Gates.on_cpu]) being that module's binding of the name -- or, for a cell
+    the source assigns into with [:=], to a run-constant value in its initializer or in any write,
+    whatever their order. A constant is a literal, a constructor of constants, or a library value.
+
+    So [on_cpu], [on_gpu], [is_metal], [seeds_here = Autotune.seeded_default_backend backend_name]
+    and a [lazy] hardware probe are gates; a value computed from the program under test -- a census,
+    a readback, a query's answer, a seed list -- is not, though it read the backend along the way,
+    because it also reads something that is not run-constant (a parameter, a pattern variable, a
+    function value, a call over constants alone such as [Context.auto ()]). The distinction is the
+    one [Verdict]'s gates draw: the backend, an advertised capability, the configuration.
+
+    {2 What is not read}
+
+    A claim reached through a wrapper the source binds ([let check label ok = p label ok]), applied
+    through [|>] or [@@], or partially applied; a function's result where the function is the
+    source's own ([has_mma ()] is not run-constant, whatever its body reads); a name a destructuring
+    [let] or a [match] case binds; and a gate folded below a conjunction
+    ([census_ok && ((not on_metal) || dialect_ok)]), which the claim checks partly everywhere -- the
+    label then promises both halves, and only the reader of the label can tell that the second is
+    vacuous off Metal. Each is a place a folded gate can hide; none is one this reader reports where
+    the fold is not there.
+
+    The other direction has three known places, each loud -- a refusal of a claim that does not
+    fold: a cell's writes are not ordered against its reads (above); a configuration reader is
+    run-constant whatever it is handed ([Context.hardware_limits ctx] of an element's own [ctx]);
+    and [Sys], [Utils.settings] and the reader names are recognized by spelling, so a module the
+    source binds under one of those names is read as the standard one, unless the path names a
+    binding of that module of the source. *)
+
+type run_constancy =
+  | Constant  (** A literal, a constructor of constants, a library value. *)
+  | Run_constant  (** Fixed by the run's configuration (see above). *)
+  | Varying  (** Computed by the test. *)
+
+type folded_gate = {
+  folded_form : string;  (** The claim's callee, as written. *)
+  folded_ambiguous : bool;
+      (** The claim reaches [Verdict] only past an [open] of a module {!Verdict_callee} cannot read.
+      *)
+  folded_line : int;
+  when_ : string;
+      (** The gate a [~when_] would carry: the negation of the run-constant disjunct, printed. *)
+}
+
+type folded_census = {
+  folded : folded_gate list;  (** In source order. *)
+  folded_claim_sites : int;  (** Every claim whose value was read. *)
+}
+
+let configuration_readers =
+  [
+    "get_global_arg";
+    "get_global_flag";
+    "getenv";
+    "getenv_opt";
+    (* What [Context] reports of the device and backend a context runs on. *)
+    "backend_name";
+    "hardware_limits";
+    "codegen_capabilities";
+    "static_properties";
+    "timing_identity";
+  ]
+
+type value_slot =
+  | Positional of int  (** The [n]th positional argument, from zero. *)
+  | Last_positional  (** After a format's arguments. *)
+  | Predicate  (** The [~f] function's body. *)
+
+(** Each [Verdict.Claims] member whose value this reader reads, where it reads it, and the polarity
+    in which its value passes: [true] for every member but [p_none], whose element passes where its
+    predicate is [false]. *)
+let folded_slots =
+  [
+    ("p", Positional 1, true);
+    ("claim", Positional 1, true);
+    ("pass_fail", Positional 1, true);
+    ("gated", Positional 1, true);
+    ("pf", Last_positional, true);
+    ("claimf", Last_positional, true);
+    ("p_all", Predicate, true);
+    ("p_alli", Predicate, true);
+    ("p_exists", Predicate, true);
+    ("p_all2", Predicate, true);
+    ("pf_all2", Predicate, true);
+    ("pass_fail_all2", Predicate, true);
+    ("gated_all", Predicate, true);
+    ("gated_alli", Predicate, true);
+    ("gated_exists", Predicate, true);
+    ("p_none", Predicate, false);
+  ]
+
+(** The members with no boolean of the claim's own to read: a message, a skip, a row boundary, an
+    emptiness census, a distinctness check. *)
+let folded_unread_members = [ "fail"; "skipped"; "case"; "p_empty"; "p_pairwise_distinct" ]
+
+let folded_gate_census content =
+  let ast = Read.structure_of content in
+  let owners = Verdict_callee.of_structure ast in
+  let folded = ref [] and sites = ref 0 in
+  let constancy = Hashtbl.create (module Int) in
+  (* What the source assigns into a binding with [:=], by the binding's identity: a ref's value is
+     its initializer's and every write's. Claims are judged once the walk is over, when every write
+     is known. *)
+  let writes = Hashtbl.create (module Int) in
+  let pending = ref [] in
+  (* The value bindings of the source's own modules, by qualified name ([Gates.on_cpu]), the last
+     binding of a name winning: a qualified path into a module of this source is that binding. By
+     name, not by module identity -- an alias of the module ([module G = Gates]) is not followed. *)
+  let members = Hashtbl.create (module String) in
+  let modules = ref [] in
+  let path_of expr =
+    match (strip_constraints expr).pexp_desc with
+    | Pexp_ident { txt; _ } -> Option.try_with (fun () -> Read.flatten_longident txt)
+    | _ -> None
+  in
+  let is_function expr =
+    match (strip_constraints expr).pexp_desc with Pexp_function _ -> true | _ -> false
+  in
+  let rec irrefutable pattern =
+    match pattern.ppat_desc with
+    | Ppat_any | Ppat_var _ -> true
+    | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> irrefutable inner
+    | Ppat_tuple parts -> List.for_all parts ~f:irrefutable
+    | _ -> false
+  in
+  let is_bool expr value =
+    match (strip_constraints expr).pexp_desc with
+    | Pexp_construct ({ txt = Ppxlib.Longident.Lident name; _ }, None) ->
+        String.equal name (if value then "true" else "false")
+    | _ -> false
+  in
+  let walker =
+    object (self)
+      inherit [gate_denotation, gate_module] Lexical_scope.scoped as super
+      val mutable next_local = 0
+
+      method local =
+        next_local <- next_local - 1;
+        { identity = next_local; definition = None }
+
+      (* Modules matter here only to {!Verdict_callee}, which resolves the claim. *)
+      method module_path _ _ = None
+
+      method! binding_denotes env binding =
+        let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
+        match Read.pattern_name binding.pvb_pat with
+        | Some _ -> { identity; definition = Some (binding.pvb_expr, env) }
+        | None -> { identity; definition = None }
+
+      method! attribute _ attr = attr
+
+      method! module_binding env binding =
+        match binding.pmb_name.txt with
+        | Some name ->
+            modules := name :: !modules;
+            Exn.protect
+              ~f:(fun () -> super#module_binding env binding)
+              ~finally:(fun () -> modules := List.tl_exn !modules)
+        | None -> super#module_binding env binding
+
+      method! define ~top env rec_flag bindings ~walk =
+        let denotes = super#define ~top env rec_flag bindings ~walk in
+        (if not (List.is_empty !modules) then
+           let prefix = String.concat ~sep:"." (List.rev !modules) in
+           List.iter2_exn bindings denotes ~f:(fun binding denotation ->
+               Option.iter (Read.pattern_name binding.pvb_pat) ~f:(fun name ->
+                   Hashtbl.set members ~key:(prefix ^ "." ^ name) ~data:denotation)));
+        denotes
+
+      (* The binding a qualified path names in a module of this source. *)
+      method source_member expr =
+        Option.bind (path_of expr) ~f:(fun path ->
+            Hashtbl.find members (String.concat ~sep:"." path))
+
+      (* The path of a callee from outside this source: qualified, or a name nothing here binds. *)
+      method external_path env callee =
+        match path_of callee with
+        | Some [ name ] when Option.is_some (Lexical_scope.lookup env name) -> None
+        | path -> path
+
+      (* A standard connective the source does not rebind: bare, or qualified by a standard
+         library. *)
+      method connective env callee names =
+        match self#external_path env callee with
+        | Some [ name ] -> List.mem names name ~equal:String.equal
+        | Some [ library; name ] ->
+            List.mem Verdict_callee.standard_libraries library ~equal:String.equal
+            && List.mem names name ~equal:String.equal
+        | _ -> false
+
+      (* A binding's constancy, by its identity, wherever it is reached from: its right-hand side's,
+         and for a cell the source assigns into, its writes' too. *)
+      method bound_constancy identity rhs rhs_env =
+        match Hashtbl.find constancy identity with
+        | Some known -> known
+        | None ->
+            (* A cycle is the test's own computation. *)
+            Hashtbl.set constancy ~key:identity ~data:Varying;
+            let known =
+              match Hashtbl.find_multi writes identity with
+              | [] -> self#constancy rhs_env rhs
+              | written ->
+                  (* A cell the source assigns into holds, somewhere, each value it is given: one
+                     run-constant value makes it a gate wherever it is read -- the order of reads
+                     and writes is not followed, in the loud direction. *)
+                  let held =
+                    self#constancy rhs_env rhs
+                    :: List.map written ~f:(fun (value, env) -> self#constancy env value)
+                  in
+                  if List.mem held Run_constant ~equal:Poly.equal then Run_constant
+                  else
+                    List.fold held ~init:Constant ~f:(fun acc c ->
+                        match (acc, c) with
+                        | Varying, _ | _, Varying -> Varying
+                        | Run_constant, _ | _, Run_constant -> Run_constant
+                        | Constant, Constant -> Constant)
+            in
+            Hashtbl.set constancy ~key:identity ~data:known;
+            known
+
+      method constancy env expr =
+        let join parts =
+          if List.mem parts Varying ~equal:Poly.equal then Varying
+          else if List.mem parts Run_constant ~equal:Poly.equal then Run_constant
+          else Constant
+        in
+        match expr.pexp_desc with
+        | Pexp_constant _ | Pexp_construct (_, None) | Pexp_variant (_, None) -> Constant
+        | Pexp_construct (_, Some inner)
+        | Pexp_variant (_, Some inner)
+        | Pexp_lazy inner
+        | Pexp_constraint (inner, _)
+        | Pexp_coerce (inner, _, _)
+        | Pexp_sequence (_, inner)
+        | Pexp_open (_, inner)
+        | Pexp_newtype (_, inner) ->
+            self#constancy env inner
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup env name with
+            | Some { identity; definition = Some (rhs, rhs_env) } ->
+                self#bound_constancy identity rhs rhs_env
+            | Some _ -> Varying
+            | None -> Constant)
+        | Pexp_field (record, { txt = field; _ }) -> (
+            (* A field of a record the source writes out is that field's value, not the whole
+               record's. *)
+            let field = Ppxlib.Longident.last_exn field in
+            let rec literal env expr =
+              match (strip_constraints expr).pexp_desc with
+              | Pexp_record (fields, _) -> Some (fields, env)
+              | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                  match Lexical_scope.lookup env name with
+                  | Some { identity; definition = Some (rhs, rhs_env) }
+                    when List.is_empty (Hashtbl.find_multi writes identity) ->
+                      literal rhs_env rhs
+                  | _ -> None)
+              | _ -> None
+            in
+            match literal env record with
+            | Some (fields, fields_env) -> (
+                match
+                  List.find fields ~f:(fun ({ txt; _ }, _) ->
+                      String.equal (Ppxlib.Longident.last_exn txt) field)
+                with
+                | Some (_, value) -> self#constancy fields_env value
+                | None -> self#constancy env record)
+            | None -> self#constancy env record)
+        | Pexp_try (body, cases) ->
+            join
+              (self#constancy env body
+              :: List.map cases ~f:(fun case ->
+                  self#constancy (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs))
+        | Pexp_ident _ when Option.is_some (self#source_member expr) -> (
+            match self#source_member expr with
+            | Some { identity; definition = Some (rhs, rhs_env) } ->
+                self#bound_constancy identity rhs rhs_env
+            | _ -> Varying)
+        | Pexp_ident _ -> (
+            match Option.map (path_of expr) ~f:List.rev with
+            | Some (_ :: "Sys" :: _) -> Run_constant
+            | Some ("settings" :: "Utils" :: _) -> Run_constant
+            | _ -> Constant)
+        | Pexp_apply (callee, arguments) -> (
+            match self#external_path env callee with
+            | Some path when List.mem configuration_readers (List.last_exn path) ~equal:String.equal
+              ->
+                Run_constant
+            | Some _ -> (
+                (* A call over constants alone is a computation -- [Context.auto ()] -- not a value
+                   the configuration fixes. *)
+                match join (List.map arguments ~f:(fun (_, a) -> self#constancy env a)) with
+                | Constant -> Varying
+                | known -> known)
+            | None -> Varying)
+        | Pexp_ifthenelse (condition, yes, no) ->
+            join (List.map (condition :: yes :: Option.to_list no) ~f:(self#constancy env))
+        | Pexp_match (scrutinee, cases) ->
+            (* Cases whose patterns all match anything select by their guards alone. *)
+            let selects = not (List.for_all cases ~f:(fun case -> irrefutable case.pc_lhs)) in
+            join
+              ((if selects then self#constancy env scrutinee else Constant)
+              :: List.map cases ~f:(fun case ->
+                  let env = self#bind_patterns env [ case.pc_lhs ] in
+                  join
+                    (List.map (case.pc_rhs :: Option.to_list case.pc_guard) ~f:(self#constancy env)))
+              )
+        | Pexp_tuple parts | Pexp_array parts -> join (List.map parts ~f:(self#constancy env))
+        | Pexp_record (fields, base) ->
+            join (List.map (List.map fields ~f:snd @ Option.to_list base) ~f:(self#constancy env))
+        | Pexp_let (rec_flag, bindings, body) ->
+            self#constancy
+              (self#bind_group env bindings (self#denotations env rec_flag bindings))
+              body
+        | _ -> Varying
+
+      (* The disjuncts whose truth alone makes [expr] -- or, at [polarity = false], its negation --
+         true: each a leaf, its scope, and whether the disjunct is the leaf itself or its
+         negation. *)
+      method disjuncts env polarity expr ~seen =
+        let again env polarity expr = self#disjuncts env polarity expr ~seen in
+        let leaf = [ (expr, env, polarity) ] in
+        match expr.pexp_desc with
+        | Pexp_constraint (inner, _)
+        | Pexp_coerce (inner, _, _)
+        | Pexp_sequence (_, inner)
+        | Pexp_open (_, inner)
+        | Pexp_newtype (_, inner) ->
+            again env polarity inner
+        | Pexp_let (rec_flag, bindings, body) ->
+            again
+              (self#bind_group env bindings (self#denotations env rec_flag bindings))
+              polarity body
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup env name with
+            | Some { identity; definition = Some (rhs, rhs_env) }
+              when not (Hash_set.mem seen identity) -> (
+                Hash_set.add seen identity;
+                (* A name that is one disjunct, or a gate as a whole, is reported by its name, which
+                   is what a remedy's [~when_] would spell. *)
+                if Poly.equal (self#constancy env expr) Run_constant then leaf
+                else
+                  match again rhs_env polarity rhs with
+                  | [ (_, _, same) ] when Bool.equal same polarity -> leaf
+                  | parts -> parts)
+            | _ -> leaf)
+        | Pexp_apply (callee, [ (Nolabel, a); (Nolabel, b) ])
+          when (polarity && self#connective env callee [ "||"; "or" ])
+               || ((not polarity) && self#connective env callee [ "&&"; "&" ]) ->
+            again env polarity a @ again env polarity b
+        | Pexp_apply (callee, [ (Nolabel, a) ]) when self#connective env callee [ "not" ] ->
+            again env (not polarity) a
+        | Pexp_ifthenelse (condition, yes, Some no) when is_bool no polarity ->
+            (* [if c then x else true]: [not c], or [x]. *)
+            (condition, env, false) :: again env polarity yes
+        | Pexp_ifthenelse (condition, yes, Some no) when is_bool yes polarity ->
+            (condition, env, true) :: again env polarity no
+        | Pexp_try (body, cases) ->
+            (* The protected value, or a handler's: either can be what passes. *)
+            again env polarity body
+            @ List.concat_map cases ~f:(fun case ->
+                again (self#bind_patterns env [ case.pc_lhs ]) polarity case.pc_rhs)
+        | Pexp_match (scrutinee, cases)
+          when List.exists cases ~f:(fun case -> is_bool case.pc_rhs polarity) ->
+            (* [match s with A -> x | _ -> true]: [s] reaching a passing case, or a computed branch.
+               The first disjunct is the match with each case returning whether it passes, which is
+               as run-constant as [s] and the guards are. *)
+            let passes case =
+              let value = is_bool case.pc_rhs polarity in
+              {
+                case with
+                pc_rhs =
+                  {
+                    case.pc_rhs with
+                    pexp_desc =
+                      Pexp_construct
+                        ( {
+                            txt = Ppxlib.Longident.Lident (if value then "true" else "false");
+                            loc = case.pc_rhs.pexp_loc;
+                          },
+                          None );
+                  };
+              }
+            in
+            ({ expr with pexp_desc = Pexp_match (scrutinee, List.map cases ~f:passes) }, env, true)
+            :: List.concat_map cases ~f:(fun case ->
+                if is_bool case.pc_rhs polarity then []
+                else again (self#bind_patterns env [ case.pc_lhs ]) polarity case.pc_rhs)
+        | _ -> leaf
+
+      (* The body a predicate returns, under its parameters: a function written in place, or one a
+         name is bound to. *)
+      method bodies env expr ~seen =
+        match (strip_constraints expr).pexp_desc with
+        | Pexp_function (params, _, body) -> (
+            let env =
+              List.fold params ~init:env ~f:(fun env param ->
+                  match param.pparam_desc with
+                  | Pparam_val (label, _, pattern) -> self#bind_parameter env label pattern
+                  | Pparam_newtype _ -> env)
+            in
+            match body with
+            | Pfunction_body body when is_function body -> self#bodies env body ~seen
+            | Pfunction_body body -> [ (body, env) ]
+            | Pfunction_cases (cases, _, _) ->
+                (* [function p when g -> x | ...] is a match over the element, guards and all. *)
+                let element = "element" in
+                [
+                  ( {
+                      expr with
+                      pexp_desc =
+                        Pexp_match
+                          ( {
+                              expr with
+                              pexp_desc =
+                                Pexp_ident
+                                  { txt = Ppxlib.Longident.Lident element; loc = expr.pexp_loc };
+                            },
+                            cases );
+                    },
+                    Lexical_scope.bind_values env [ element ] self#local );
+                ])
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup env name with
+            | Some { identity; definition = Some (rhs, rhs_env) }
+              when not (Hash_set.mem seen identity) ->
+                Hash_set.add seen identity;
+                self#bodies rhs_env rhs ~seen
+            | _ -> [])
+        | _ -> []
+
+      method claim_values env slot arguments =
+        let positional =
+          List.filter_map arguments ~f:(function
+            | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+            | _ -> None)
+        in
+        match slot with
+        | Positional n -> List.map (Option.to_list (List.nth positional n)) ~f:(fun v -> (v, env))
+        | Last_positional ->
+            if List.length positional >= 2 then [ (List.last_exn positional, env) ] else []
+        | Predicate ->
+            List.concat_map arguments ~f:(function
+              | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), predicate ->
+                  self#bodies env predicate ~seen:(Hash_set.create (module Int))
+              | _ -> [])
+
+      (* Whether two disjunct leaves are the same expression: one binding, where both are names. *)
+      method same_leaf (a, a_env) (b, b_env) =
+        let print e = Ppxlib.Pprintast.string_of_expression e in
+        match (a.pexp_desc, b.pexp_desc) with
+        | ( Pexp_ident { txt = Ppxlib.Longident.Lident x; _ },
+            Pexp_ident { txt = Ppxlib.Longident.Lident y; _ } ) -> (
+            String.equal x y
+            &&
+            match (Lexical_scope.lookup a_env x, Lexical_scope.lookup b_env y) with
+            | Some { identity = i; _ }, Some { identity = j; _ } -> i = j
+            | None, None -> true
+            | _ -> false)
+        | _ -> String.equal (print a) (print b)
+
+      method! expression env expr =
+        (match expr.pexp_desc with
+        | Pexp_apply
+            ( callee,
+              [
+                (Nolabel, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }); (Nolabel, written);
+              ] )
+          when self#connective env callee [ ":=" ] -> (
+            (* Through any [let alias = cell] renaming: a write through an alias is a write into the
+               cell. *)
+            let rec cell env name =
+              match Lexical_scope.lookup env name with
+              | Some
+                  {
+                    definition =
+                      Some
+                        ( { pexp_desc = Pexp_ident { txt = Ppxlib.Longident.Lident aliased; _ }; _ },
+                          env );
+                    _;
+                  } ->
+                  cell env aliased
+              | Some { identity; _ } -> Some identity
+              | None -> None
+            in
+            match cell env name with
+            | Some identity -> Hashtbl.add_multi writes ~key:identity ~data:(written, env)
+            | None -> ())
+        | _ -> ());
+        (match expr.pexp_desc with
+        | Pexp_apply (callee, arguments) -> (
+            match Verdict_callee.resolve owners callee with
+            | Some { member; ownership = (Verdicts | Ambiguous) as ownership; spelled } -> (
+                match List.find folded_slots ~f:(fun (name, _, _) -> String.equal name member) with
+                | Some (_, slot, polarity) ->
+                    Int.incr sites;
+                    (* A gated claim is evaluated only where its [~when_] holds, so a disjunct that
+                       makes the gate false -- a copy of the gate's own negation -- is never the one
+                       that passes it. *)
+                    let unreachable () =
+                      List.concat_map arguments ~f:(function
+                        | Ppxlib.Asttypes.Labelled "when_", gate ->
+                            self#disjuncts env false gate ~seen:(Hash_set.create (module Int))
+                        | _ -> [])
+                    in
+                    let values = self#claim_values env slot arguments in
+                    pending :=
+                      (fun () ->
+                        let unreachable = unreachable () in
+                        List.iter values ~f:(fun (value, env) ->
+                            let parts =
+                              List.filter_map
+                                (self#disjuncts env polarity value
+                                   ~seen:(Hash_set.create (module Int)))
+                                ~f:(fun (leaf, env, positive) ->
+                                  if
+                                    List.exists unreachable
+                                      ~f:(fun (gate, gate_env, gate_positive) ->
+                                        Bool.equal positive gate_positive
+                                        && self#same_leaf (leaf, env) (gate, gate_env))
+                                  then None
+                                  else Some (leaf, positive, self#constancy env leaf))
+                            in
+                            let gate =
+                              List.find parts ~f:(fun (_, _, c) -> Poly.equal c Run_constant)
+                            in
+                            match gate with
+                            | Some (leaf, positive, _)
+                              when List.exists parts ~f:(fun (_, _, c) -> Poly.equal c Varying) ->
+                                let printed =
+                                  Ppxlib.Pprintast.string_of_expression leaf
+                                  |> String.split_on_chars ~on:[ '\n'; ' ' ]
+                                  |> List.filter ~f:(fun word -> not (String.is_empty word))
+                                  |> String.concat ~sep:" "
+                                in
+                                folded :=
+                                  {
+                                    folded_form = spelled;
+                                    folded_ambiguous = Poly.equal ownership Ambiguous;
+                                    folded_line = expr.pexp_loc.loc_start.pos_lnum;
+                                    when_ = (if positive then "not (" ^ printed ^ ")" else printed);
+                                  }
+                                  :: !folded
+                            | _ -> ()))
+                      :: !pending
+                | None -> ())
+            | _ -> ())
+        | _ -> ());
+        super#expression env expr
+    end
+  in
+  ignore
+    (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
+  List.iter (List.rev !pending) ~f:(fun judge -> judge ());
+  { folded = List.rev !folded; folded_claim_sites = !sites }

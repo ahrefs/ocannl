@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Exercise shared harness lifecycle, counted skips (and a strict run's list of
-# expected ones), the --only leg filter with its coverage account, and
-# reason-specific rejection.
+# expected ones), the --only leg filter with its coverage account, function
+# leg bodies that abandon themselves, and reason-specific rejection.
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -32,6 +32,15 @@ case $MODE in
       [ -z "${BETA_SKIP:-}" ] || skip 'beta check' 'no beta host'
     fi
     if harness_leg 'gamma leg #odd'; then echo gamma >>"$RECORD.ran"; report "${GAMMA_RC:-0}" 'gamma body'; fi ;;
+  abandon)
+    # Function bodies (harness_leg_run): delta gives up partway, epsilon's last
+    # command fails after its verdict, and zeta, when asked, exits mid-leg.
+    delta() { echo delta >>"$RECORD.ran"; harness_abandon 'the fixture is not there'; return; echo late >>"$RECORD.ran"; }
+    epsilon() { echo epsilon >>"$RECORD.ran"; report 0 'epsilon body'; false; }
+    zeta() { echo zeta >>"$RECORD.ran"; exit 9; }
+    harness_leg_run 'delta leg #odd' delta
+    harness_leg_run 'epsilon leg #even' epsilon
+    [ -z "${ZETA:-}" ] || harness_leg_run 'zeta leg #odd' zeta ;;
 esac
 finish
 PROBE
@@ -206,6 +215,35 @@ for bad in "--only" "--only=" "--only=("; do
     report 0 "'$bad' is refused before any leg runs"
   else report 1 "'$bad' is refused before any leg runs" "exit $rc; $(cat "$TMP/out")"; fi
 done
+# A leg whose body is a function (gh-ocannl-1374): giving up through
+# harness_abandon fails that leg alone, named, and the next leg still runs; the
+# body's own last status is no verdict; a filtered body does not run; and an
+# exit inside a body still aborts, naming the leg it was in.
+abandon_probe() { # expected bodies run, then probe arguments
+  local want=$1 rc=0
+  shift
+  rm -f "$RECORD.ran"
+  MODE=abandon probe "$@" || rc=$?
+  ran=
+  [ ! -f "$RECORD.ran" ] || ran=$(tr '\n' ' ' <"$RECORD.ran" | sed 's/ $//')
+  [ "$ran" = "$want" ] || { printf 'bodies run: "%s", wanted "%s"\n' "$ran" "$want" >>"$TMP/out"; rc=99; }
+  return "$rc"
+}
+abandon_probe 'delta epsilon'; rc=$?
+if [ "$rc" = 1 ] && grep -qx 'FAIL  delta leg #odd: abandoned, its later checks did not run' "$TMP/out" \
+   && grep -qx '      the fixture is not there' "$TMP/out" && grep -qx 'PASS  epsilon body' "$TMP/out" \
+   && grep -qx '1 leg(s) failed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish' "$TMP/out"; then
+  report 0 'an abandoned leg fails alone, and the leg after it runs; a body'"'"'s last status is no verdict'
+else report 1 'an abandoned leg fails alone, and the leg after it runs; a body'"'"'s last status is no verdict' "exit $rc; $(cat "$TMP/out")"; fi
+abandon_probe 'epsilon' --only '#even'; rc=$?
+if [ "$rc" = 0 ] && grep -qx 'FILTERED  delta leg #odd' "$TMP/out" && grep -qx '  RAN   epsilon leg #even' "$TMP/out"; then
+  report 0 'harness_leg_run gates a function body as harness_leg does'
+else report 1 'harness_leg_run gates a function body as harness_leg does' "exit $rc; $(cat "$TMP/out")"; fi
+ZETA=1 abandon_probe 'delta epsilon zeta'; rc=$?
+if [ "$rc" = 9 ] && grep -qx 'aborted before finish (rc=9) inside leg: zeta leg #odd' "$TMP/out" \
+   && ! grep -q 'legs passed\|leg(s) failed' "$TMP/out"; then
+  report 0 'an exit inside a leg body still aborts, naming the leg'
+else report 1 'an exit inside a leg body still aborts, naming the leg' "exit $rc; $(cat "$TMP/out")"; fi
 reason() { echo 'claimed defect'; return 1; }
 wrong_reason() { echo 'unrelated defect'; return 1; }
 wrong_status() { echo 'claimed defect'; return 127; }

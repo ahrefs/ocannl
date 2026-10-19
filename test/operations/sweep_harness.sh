@@ -147,7 +147,7 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_REGISTRY_FROM SWEEP_TEST_REMOTE_DRIVER SWEEP_TEST_REMOTE_ROOT \
   SWEEP_TEST_REMOTE_CASE SWEEP_TEST_CREDENTIALS SWEEP_TEST_CREDENTIAL_PLAIN \
   SWEEP_TEST_SWITCH_CREDENTIALS SWEEP_TEST_OPAM_SELF SWEEP_TEST_SLOT_UNREACHABLE \
-  SWEEP_TEST_PROC_LOCKS SWEEP_TEST_TOKEN_WAIT
+  SWEEP_TEST_TOKEN_WAIT
 # And the directory the launching sweep collects its own actions' verdict records in
 # (gh-ocannl-1114): the probe runs below are this harness's fixtures, and a skip they record
 # there would reach the OUTER sweep's aggregation as a claim the suite left unexecuted. Unset
@@ -609,6 +609,11 @@ chmod +x "$fake_bin/wake-lab.sh"
 # does, a REAL flock on the first free of `slot.1`..`slot.<tokens>` under the box's slot state,
 # waited for up to <n> seconds and inherited by the command it then execs, or refuses with the real
 # refusal line. SWEEP_TEST_SLOT_UNREACHABLE answers as an anchor whose registry did not.
+# `execution slot --holders` (gh-ocannl-1417) answers as the real one does where it can test a
+# slot's flock: one line per slot file whose non-blocking test lock fails now, in the fleet's
+# fields, of the slot's kind under the box's tokens; the holder's pid -- which the real one reads
+# from /proc/locks, absent on macOS -- from the `<slot file>.holder` file a fixture batch leaves
+# beside it, else null and named in `unknown`, as the real one says it.
 cat >"$fake_bin/fleet-worker.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_FLEET_CALLS"
@@ -656,6 +661,34 @@ case $* in
       }
       print "EXECUTION SLOT REFUSED $box: all $tokens GPU tokens (slots 1-$tokens of $slots) busy after ${wait}s; a batch that holds no GPU declares --cpu\n";
       exit 1' "$dir" "$SWEEP_TEST_REMOTE_HOST" "$slots" "$tokens" "$wait" "$@"
+    ;;
+  'execution slot --holders')
+    [ -n "${SWEEP_TEST_REMOTE_HOST:-}" ] || { echo 'fake fleet-worker.sh: holders off a GPU box' >&2; exit 2; }
+    exec perl -MJSON::PP -MPOSIX -e '
+      use Fcntl ":flock";
+      my ($dir, $box, $slots, $tokens) = @ARGV;
+      my $at = POSIX::strftime("%Y-%m-%dT%H:%M:%S+00:00", gmtime);
+      opendir(my $d, $dir) or exit 0;
+      for my $i (sort { $a <=> $b } map { /\Aslot\.([0-9]+)\z/ ? $1 : () } readdir $d) {
+        open(my $h, "<", "$dir/slot.$i") or next;
+        next if flock($h, LOCK_EX | LOCK_NB);
+        my %l = (box => $box, event => "held", at => $at, slot => 0 + $i, slots => 0 + $slots,
+          kind => $tokens == $slots || $i <= $tokens ? "gpu" : "cpu", cwd => undef, source => "proc-locks",
+          pid => undef, user => undef, command => undef, unknown => {});
+        my ($p, $pid);
+        if (open($p, "<", "$dir/slot.$i.holder") and defined($pid = <$p>)) {
+          chomp $pid;
+          my $args = qx{ps -o args= -p $pid 2>/dev/null};
+          chomp $args;
+          my $user = qx{ps -o user= -p $pid 2>/dev/null};
+          $user =~ s/\s+//g;
+          @l{qw(pid user command)} = (0 + $pid, $user, substr($args, 0, 300));
+        } else {
+          $l{unknown}{$_} = "no FLOCK line names this slot file" for qw(pid user command cwd);
+        }
+        print JSON::PP->new->canonical->encode(\%l), "\n";
+      }' "$HOME/.local/state/fleet-execution-slots/$SWEEP_TEST_REMOTE_HOST" "$SWEEP_TEST_REMOTE_HOST" \
+      "$slots" "$tokens"
     ;;
   'execution list --active --compact')
     reads=$(grep -c '^execution list' "$SWEEP_TEST_FLEET_CALLS")
@@ -791,7 +824,6 @@ run_sweep_args() {
     "SWEEP_TEST_REMOTE_ROOT=${SWEEP_TEST_REMOTE_ROOT:-}" \
     "SWEEP_TEST_REMOTE_CASE=${SWEEP_TEST_REMOTE_CASE:-}" \
     "SWEEP_TEST_SLOT_UNREACHABLE=${SWEEP_TEST_SLOT_UNREACHABLE:-}" \
-    "OCANNL_TOOL_PROC_LOCKS=${SWEEP_TEST_PROC_LOCKS:-}" \
     "OCANNL_TOOL_SWEEP_TOKEN_WAIT=${SWEEP_TEST_TOKEN_WAIT:-}" \
     "SWEEP_TEST_CREDENTIALS=${SWEEP_TEST_CREDENTIALS:-}" \
     "SWEEP_TEST_SWITCH_CREDENTIALS=${SWEEP_TEST_SWITCH_CREDENTIALS:-}" \
@@ -954,6 +986,11 @@ state_regression=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
 grep -q 'm4-max/cc: REGRESSION OR FIX DID NOT TAKE -- previous verdict was incremental-pass' \
   <<<"$state_regression"
 absent 'fingerprint moved since the previous failure' <<<"$state_regression"
+# The green was at this very commit, so there is no range to bisect (gh-ocannl-1375), and the line
+# says so rather than print a bisect of one commit against itself.
+grep -qx '  m4-max/cc: bisect: none -- the previous pass was at this same commit, so the test or its environment changed, not the code' \
+  <<<"$state_regression"
+absent 'tools/test-run.sh bisect' <<<"$state_regression"
 
 # Land the exact kind of attempted fix #897 was about. The next sweep resolves
 # the new origin/master, finds that the currently failing golden's last-touch
@@ -982,6 +1019,32 @@ unit_state=$(grep -l "$(printf '^last_verdict\tfail$')" \
 [ -f "$unit_state" ]
 grep -q '^last_verdict.fail$' "$unit_state"
 grep -q "^golden.$fix_sha.test/unit.cc_expected.ml$" "$unit_state"
+
+# A red after a green at an EARLIER commit prints the ready bisect (gh-ocannl-1375): the green's
+# commit, this one, and the failing stanzas -- an explicit rule's dune-file site, and a `(test)`
+# stanza's golden diff, which names only its `.expected` and maps through its `.exe.output`
+# operand. A site no stanza is found for is named as left out. Its own target scope, so the
+# cursor above is not this case's predecessor.
+bisect_green=$(run_sweep_args --target bisect-probe)
+grep -q 'm4-max/cc: incremental-pass' <<<"$bisect_green"
+bisect_good=$(git -C "$main" rev-parse HEAD)
+printf 'after the green\n' >"$main/test/bisect_range.txt"
+git -C "$main" add test/bisect_range.txt
+git -C "$main" commit -qm 'a commit inside the bisect range'
+git -C "$main" push -q origin master
+bisect_bad=$(git -C "$main" rev-parse HEAD)
+bisect_failure="$state_failure
+File \"test/bisect_probe.expected\", line 1, characters 0-0:
+diff --git a/_build/default/test/bisect_probe.expected b/_build/default/test/bisect_probe.exe.output
+File \"test/bisect_elsewhere.ml\", line 3, characters 0-5:
+Error: a site no stanza names"
+bisect_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$bisect_failure \
+  run_sweep_args --target bisect-probe)
+grep -q 'm4-max/cc: REGRESSION OR FIX DID NOT TAKE -- previous verdict was incremental-pass' <<<"$bisect_red"
+grep -qxF "  m4-max/cc: bisect on m4-max: OCANNL_BACKEND=cc tools/test-run.sh bisect $bisect_good $bisect_bad @test/runtest-bisect_probe @test/runtest-state-probe" \
+  <<<"$bisect_red"
+grep -qxF '  m4-max/cc: bisect: left out, no stanza found for: [File "test/bisect_elsewhere.ml", line 3]' \
+  <<<"$bisect_red"
 
 # Two complete forced units expose only the INTERSECTION of their skip sets.
 # The three absent backends keep this a potential finding rather than a failure:
@@ -3537,10 +3600,10 @@ grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
 [ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
 
 # The guard itself: the far-side supervisor's `--hold`, run here against fake inhibitors. The
-# program is the sweep's own, extracted as tools/test-test-run.sh extracts unit_jobs (the sweep
-# cannot be sourced), and asserted to have matched.
+# program is the sweep's own, from the helper the sweep sources (gh-ocannl-1380), asserted to be
+# the one that defines the guard.
 supervisor=$tmp/supervisor.pl
-sed -n "/^capped_perl='/,/^'\$/p" "$sweep" | sed '1s/^capped_perl=.//;$d' >"$supervisor"
+(. "$(cd "$(dirname "$sweep")" && pwd)/sweep-supervisor.sh" && printf '%s' "$capped_perl") >"$supervisor"
 grep -q 'sub hold_sleep' "$supervisor"
 guard_bin=$tmp/guard-bin
 mkdir -p "$guard_bin" "$tmp/guard-empty"

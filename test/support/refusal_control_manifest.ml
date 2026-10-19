@@ -276,6 +276,9 @@ let raw_entries =
         "[scanner-refusal:14b02d2180d3814d6746acd827aecbc3] classifications claim cache-key";
         "[scanner-refusal:8109160f59717560ff5e6f7251a6a2b2] cache-key components no";
         "[scanner-refusal:1825a277ba0eda3313fbe079e465c15d] but classified code-borne";
+        "[scanner-refusal:3a04e06161978f8255007c739f6806a5] Autotune.tune's";
+        "[scanner-refusal:d011313dec8b9e6e53f58ce97ef08a66] Autotune.tune's";
+        "[scanner-refusal:12aa84c890c2e9d7e1f3bdca30397d4e] placement-shaping or untimed-model";
         "[scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count";
         "[scanner-refusal:a9c0305e1a7d7817b8ba147ce52e8f90] classified exactly once";
         "[scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is classified code-borne";
@@ -560,6 +563,7 @@ let raw_entries =
         "[scanner-refusal:c56af001748a614d221709bf11098511] the empty string";
         "[scanner-refusal:e583c416783b3632963a66636f20f65e] string literal in";
         "[scanner-refusal:b4c59d5ad7a9c4e591998fccf8f039aa] exempted functions that";
+        "[scanner-refusal:4e4d383baae3810309379fe0b2c3e9ef] registered default goes";
         "[scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count";
         "[scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys";
       ] );
@@ -573,6 +577,8 @@ let raw_entries =
         "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
+        "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
+        "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
@@ -590,6 +596,9 @@ let raw_entries =
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
         "[scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
+        "[scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into";
+        "[scanner-refusal:e9935bd293c26e123652183c000cb7e8] Verdict.Claims";
+        "[scanner-refusal:07f11cb8fe0952beedc14df2223a8f0f] values of Verdict";
         "[scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted";
         "[scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on";
         "[scanner-refusal:bd1c6476261fa5d1b680ca8c0959f3f9] exempted claim-shaped literal";
