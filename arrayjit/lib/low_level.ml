@@ -9789,6 +9789,117 @@ let validate_scan_loops plc (llc : t) : unit =
   Option.iter (scan_loop_violation plc llc) ~f:(fun msg ->
       invalid_arg ("Low_level.validate_scan_loops: " ^ msg))
 
+(* gh-ocannl-1402: the loop-binder lint. Two generators broke sibling-binder uniqueness
+   independently -- concat segments (gh-ocannl-765) and padding-margin strips (gh-ocannl-1384) --
+   and every flat symbol-keyed consumer misread it SILENTLY: [def_loop_ranges] and
+   [Schedule.statement_mappings] kept one loop's extent, and the canonical render's shadow check
+   declined the routine for both digest caches without a word. A free symbol is the dual defect: an
+   index no loop and no static index gives a value to renders as an undeclared identifier, and every
+   extent table lacks it. The walk is one pass over the routine with a hash set, cheap next to the
+   analysis it gates. *)
+let loop_binder_violation (static_indices : Indexing.static_symbol list) (root : t) : string option
+    =
+  let exception Malformed of string in
+  let reject msg = raise (Malformed msg) in
+  let ident = Indexing.symbol_ident in
+  let statics =
+    Set.of_list (module Indexing.Symbol) (List.map static_indices ~f:(fun s -> s.static_symbol))
+  in
+  (* Every binder seen so far in the routine, with a description of the loop that bound it. *)
+  let bound = Hashtbl.create (module Indexing.Symbol) in
+  let bind ~what index ~from_ ~to_ =
+    let here = Printf.sprintf "%s %s = %d..%d" what (ident index) from_ to_ in
+    if Set.mem statics index then
+      reject (here ^ " binds a static index of the routine, which is already bound outside it");
+    (match Hashtbl.find bound index with
+    | Some first ->
+        reject
+          (here ^ " rebinds a symbol already bound by " ^ first
+         ^ "; every loop must mint its own symbol (one binder per symbol per routine) -- a shared \
+            binder is misread by every flat symbol-keyed consumer of the routine")
+    | None -> ());
+    Hashtbl.set bound ~key:index ~data:here
+  in
+  let use ~scope ~where s =
+    if not (Set.mem scope s) then
+      reject
+        (Printf.sprintf
+           "%s mentions the symbol %s, which no enclosing loop binds and which is not a static \
+            index of the routine"
+           where (ident s))
+  in
+  let idx ~scope ~where (i : Indexing.axis_index) =
+    match i with
+    | Fixed_idx _ | Sub_axis -> ()
+    | Iterator s -> use ~scope ~where s
+    | Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> use ~scope ~where s)
+    | Concat syms -> List.iter syms ~f:(use ~scope ~where)
+  in
+  let idcs ~scope ~where tn a =
+    Array.iter a ~f:(idx ~scope ~where:(where ^ " of " ^ Tn.debug_name tn))
+  in
+  let rec proc ~scope (llc : t) =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
+        ()
+    | Seq (a, b) ->
+        proc ~scope a;
+        proc ~scope b
+    | For_loop { index; from_; to_; body; axis } ->
+        bind ~what:("the " ^ axis_type_label axis ^ " loop") index ~from_ ~to_;
+        proc ~scope:(Set.add scope index) body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        (* The inits evaluate before the scan's index is bound. *)
+        List.iter carried ~f:(fun c -> scalar ~scope c.init);
+        bind ~what:"the scan" index ~from_ ~to_;
+        proc ~scope:(Set.add scope index) body
+    | Set { tn; idcs = a; llsc; _ } ->
+        idcs ~scope ~where:"a Set" tn a;
+        scalar ~scope llsc
+    | Set_dynamic { tn; idcs = a; dyn_value = v, _; llsc; _ } ->
+        idcs ~scope ~where:"a Set_dynamic" tn a;
+        scalar ~scope v;
+        scalar ~scope llsc
+    | Set_from_vec { tn; idcs = a; arg = v, _; _ } ->
+        idcs ~scope ~where:"a Set_from_vec" tn a;
+        scalar ~scope v
+    | Set_local (_, llsc) -> scalar ~scope llsc
+    | If { cond = c, _; body } ->
+        scalar ~scope c;
+        proc ~scope body
+    | Tile_mma { d = d_tn, d_idcs; a = a_tn, a_idcs; b = b_tn, b_idcs; lane; fallback; _ } ->
+        use ~scope ~where:"a Tile_mma's lane" lane;
+        idcs ~scope ~where:"a Tile_mma" d_tn d_idcs;
+        idcs ~scope ~where:"a Tile_mma" a_tn a_idcs;
+        idcs ~scope ~where:"a Tile_mma" b_tn b_idcs;
+        proc ~scope fallback
+  and scalar ~scope (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { id; body; orig_indices; _ } ->
+        idcs ~scope ~where:"a Local_scope's call-site indices" id.tn orig_indices;
+        proc ~scope body
+    | Get (tn, a) -> idcs ~scope ~where:"a Get" tn a
+    | Get_merge_buffer (tn, a) -> idcs ~scope ~where:"a Get_merge_buffer" tn a
+    | Get_dynamic { tn; idcs = a; dyn_value = v, _; _ } ->
+        idcs ~scope ~where:"a Get_dynamic" tn a;
+        scalar ~scope v
+    | Embed_index i -> idx ~scope ~where:"an Embed_index" i
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar ~scope a;
+        scalar ~scope b;
+        scalar ~scope c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar ~scope a;
+        scalar ~scope b
+    | Unop (_, (a, _)) -> scalar ~scope a
+    | Get_local _ | Constant _ | Constant_bits _ -> ()
+  in
+  match proc ~scope:statics root with () -> None | exception Malformed msg -> Some msg
+
+let validate_loop_binders static_indices (llc : t) : unit =
+  Option.iter (loop_binder_violation static_indices llc) ~f:(fun msg ->
+      invalid_arg ("Low_level.validate_loop_binders: " ^ msg))
+
 let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-584: the pipeline's entry gate for scope purity, ahead of the analysis cache so a
      digest hit cannot skip it. Codegen's gate alone would not do: [hoist_cross_statement_cse] lifts
@@ -9798,6 +9909,9 @@ let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   validate_scope_bodies llc;
   (* gh-ocannl-696: the scan contract, same two-gate discipline (codegen holds the exit gate). *)
   validate_scan_loops input_ctx.placements llc;
+  (* gh-ocannl-1402: one binder per loop symbol, no free symbol -- a lowering generator's defect,
+     refused where it is still the generator's shape rather than misread downstream. *)
+  validate_loop_binders static_indices llc;
   specialize_proc input_ctx (cached_analyze_proc static_indices llc)
 
 let code_hum_margin = ref 100

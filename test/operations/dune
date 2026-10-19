@@ -2222,6 +2222,19 @@
  (modules dynamic_axis_coverage)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-1402: the loop-binder lint at Low_level.optimize's entry -- one binder per loop symbol
+; per routine, no free symbol -- refused by name on hand-built IR, with the well-formed shapes it
+; must keep accepting. Structural only: nothing executes.
+
+(test
+ (name loop_binder_lint)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules loop_binder_lint)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 ; gh-ocannl-696: the loop-carried recurrence construct [Scan_loop] on hand-built IR -- executed
 ; cumulative sums in both directions, the online-softmax recurrence, a per-row scan under a Grid
 ; outer loop, the placement and well-formedness contracts, schedule opacity and digest identity.

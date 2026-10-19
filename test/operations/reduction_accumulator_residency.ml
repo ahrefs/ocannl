@@ -478,9 +478,11 @@ let () =
   and tmp = node ~dims:[| 1 |] "res_lift_tmp" in
   List.iter [ src; out_a; out_b ] ~f:Ll_test.materialize;
   Ll_test.virtualize tmp;
-  let i = Ll_test.sym () in
-  let scoped =
-    let id = LL.get_scope tmp in
+  (* One fresh loop symbol per user: the two scopes are alpha-equivalent, which is what the CSE
+     lifts, while [optimize]'s loop-binder lint refuses one symbol bound twice (gh-ocannl-1402). *)
+  let id = LL.get_scope tmp in
+  let scoped () =
+    let i = Ll_test.sym () in
     let body =
       LL.Seq
         ( LL.Set_local (id, Ll_test.c 0.0),
@@ -492,8 +494,8 @@ let () =
   in
   let program =
     LL.Seq
-      ( Ll_test.set out_a [| Ll_test.fixed 0 |] scoped,
-        Ll_test.set out_b [| Ll_test.fixed 0 |] scoped )
+      ( Ll_test.set out_a [| Ll_test.fixed 0 |] (scoped ()),
+        Ll_test.set out_b [| Ll_test.fixed 0 |] (scoped ()) )
   in
   let optimized = Ll_test.optimize ~materialized:[ src; out_a; out_b ] ~name:"res_lifted" program in
   let rec count_declarations = function
