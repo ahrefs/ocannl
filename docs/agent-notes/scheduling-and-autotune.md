@@ -1322,7 +1322,13 @@ files.
   serial-K tiles and no split, while its merged-k `Split_reduce` is still `Op_legal`. Both routes
   are pinned in `split_reduce_pair`: the split site records exactly the pair the contraction prefix
   coalesces, and on the prefix-prepared code the merged k is an ordinary uncoalesced site whose
-  prelude, behind the prefix, gives the same exact sums.
+  prelude, behind the prefix, gives the same exact sums. Measured (`benchmarks/gh1279_cells.sh`, isolated out projection,
+  j = 256, (h, e) = (8, 32); best coal-k finalist against best uncoalesced one, fwd/rev legs):
+  HIP gfx1151 1.23x on both production sites with depth 32, the search crowning a coal-k seed;
+  CUDA RTX 5070 Ti 0.90x there, because the uncoalesced winner is a 64x64 block (256 threads)
+  the K menu does not offer, and the search crowns uncoalesced refinements; Metal neutral within
+  its desktop co-tenant noise. Depth 256 won only on CUDA's 16-row small-output site (1.43x), where
+  the search's crown was the split of the merged k (partials plus combine, 0.0096 ms) instead.
 ## Timing objectives and calibration
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
