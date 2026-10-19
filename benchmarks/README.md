@@ -629,10 +629,14 @@ cell is the step: cite the step cell. Each issue's cell:
   `benchmarks/kernel_attribution.py` joins each segment's median device time over the timed steps
   with the same compile's isolated minimum. Rows are flagged `ISO` (isolated more than 10% off
   in-step) or `SPREAD` (in-step p90/p10 above 1.10), and cells of one kernel list get a cross-cell
-  repeatability table. Read per-kernel step shares from the in-step column only: on rog's
-  gpt2_mini_train_b256 the in-step medians sum to the traced step p50 within 0.2%, while 34
-  kernels (16% of the step) sit 15-130% off their isolated minimum in every repeat. Tracing costs
-  about 2-3% of step time, so a kprof cell's step time enters no matrix.
+  repeatability table. Each cell also states its common in-step/isolated factor F, the median ratio
+  over its kernels of at least 0.5 ms with the per-step factor's p10..p90, and flags `OWN` a
+  kernel whose isolated minimum times F still misses in-step by more than 10% (gh-ocannl-1391): on
+  rog's power-capped GPU a b256 step runs every sizeable kernel a common 7-11% slower than alone,
+  so `ISO` there marks the clock and `OWN` the kernel. Read per-kernel step shares from the
+  in-step column only: on rog's gpt2_mini_train_b256 the in-step medians sum to the traced step
+  p50 within 0.2%. Tracing costs about 2-3% of step time, so a kprof cell's step time enters no
+  matrix.
   `BENCH_CANON=1` (`bench_conv_diag`) prints whether the schedule cache can key the step's
   lowering (`Schedule_cache.complete` of its canonical form) and, when it cannot, why: the free
   symbols, the loop symbols bound twice (each with the first node its loop body reads) and the
