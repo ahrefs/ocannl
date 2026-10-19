@@ -60,3 +60,30 @@ auto where it is not admits them without cutting: true
 auto on an unmeasured device admits them without cutting: true
 auto on the run's backend resolves to its measured mode: true
 executed fused step: every segment computing dV computes dK beside it, on the device's mode (cut: both on their lanes; admitted: dV off the lanes): true
+--- leg 8: a row statistic beside the value pass costs it no lanes ---
+row statistic after the value pass, costly lanes: the value pass is scheduled with lanes: true
+row statistic after the value pass, costly lanes: no kernel holds both: true
+row statistic after the value pass, costly lanes: the GPU pipeline emits the row statistic: true
+row statistic after the value pass, costly lanes: the row statistic runs under a Grid or Workgroup loop: true
+row statistic after the value pass, cheap lanes: the value pass is scheduled with lanes: true
+row statistic after the value pass, cheap lanes: no kernel holds both: true
+row statistic after the value pass, cheap lanes: the GPU pipeline emits the row statistic: true
+row statistic after the value pass, cheap lanes: the row statistic runs under a Grid or Workgroup loop: true
+row statistic after the value pass, judged on the plain plans alone: one kernel holds both: true
+row statistic after the value pass, judged on the plain plans alone: the value pass loses its lanes: true
+lanes_row_after: every cell of lanes_row_after_o holds the serial order's exact value: true
+lanes_row_after: every cell of lanes_row_after_r holds the serial order's exact value: true
+row statistic after the value pass, executed on the run's device: the value pass keeps its lanes: true
+row statistic before the value pass, costly lanes: the value pass is scheduled with lanes: true
+row statistic before the value pass, costly lanes: no kernel holds both: true
+row statistic before the value pass, costly lanes: the GPU pipeline emits the row statistic: true
+row statistic before the value pass, costly lanes: the row statistic runs under a Grid or Workgroup loop: true
+row statistic before the value pass, cheap lanes: the value pass is scheduled with lanes: true
+row statistic before the value pass, cheap lanes: no kernel holds both: true
+row statistic before the value pass, cheap lanes: the GPU pipeline emits the row statistic: true
+row statistic before the value pass, cheap lanes: the row statistic runs under a Grid or Workgroup loop: true
+row statistic before the value pass, judged on the plain plans alone: one kernel holds both: true
+row statistic before the value pass, judged on the plain plans alone: the value pass loses its lanes: true
+lanes_row_before: every cell of lanes_row_before_o holds the serial order's exact value: true
+lanes_row_before: every cell of lanes_row_before_r holds the serial order's exact value: true
+row statistic before the value pass, executed on the run's device: the value pass keeps its lanes: true

@@ -122,13 +122,17 @@ files.
   per layer at s1024; its plain plan walks a whole row per thread), while the fused dV loses -- not
   on its own, but because `keeps_mapping` cut it from dK to keep its lanes (dK 1.03 + dV 2.30 ms,
   against 1.72 ms for the two merged on the plain plan). So `admitted` takes lanes wherever a
-  kernel admits them and has `fission_keep_mapping` probe WITHOUT lanes: no boundary is kept for
-  lanes, so a merge costing a nest only its lanes goes through. That is broader than the evidence
-  (a dK/dV cut): a new nest sharing the value pass's plain chain -- a saved row statistic, say --
-  would now merge with it and cost the forward its lanes (`lane_geometry` declines a kernel mixing
-  lane and plain nests). Gating lanes wholesale was measured and rejected (it threw away the
-  forward win). Measured on gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged.
-  Leg 7 of `gpu_serial_lanes` pins both halves, the training step's own forward included. `cut`
+  kernel admits them and has `fission_keep_mapping` judge merges between nests WITH a lane path
+  on the plain plans (`mapping_probe`'s `mp_lane_trade`): no boundary is kept for lanes between
+  them, so dV joins dK. The evidence is that dK/dV trade only, so a merged kernel that would also
+  hold a loop nest with NO lane path (`Schedule.laneless_nest`: a row statistic sharing the value
+  pass's plain chain) must pass the lane-inclusive probe too -- a segment's statement may keep the
+  mapping it already has there, so a nest the trade already took off its lanes loses nothing more
+  (gh-ocannl-1239; per-nest lanes in a mixed kernel was the costlier alternative: the coverage
+  rule would need a guarded lane slot for the plain nest).
+  Gating lanes wholesale was measured and rejected (it threw away the forward win). Measured on
+  gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged. Leg 7 of `gpu_serial_lanes`
+  pins both halves, the training step's own forward included; leg 8 the row-statistic cut. `cut`
   keeps a boundary only where a merge would cost a nest its lanes, never "dV runs apart": where lanes
   are cheap dK takes them too (the cooperative preamble), on dV's topology, so dQ, dK and dV share
   one lane kernel on Metal and CUDA (leg 7's executed-step claim).
