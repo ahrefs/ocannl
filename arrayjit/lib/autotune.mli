@@ -1878,6 +1878,18 @@ type seeded_segment =
   | Seeded_sunk of { digest : string; swaps : int }
       (** {!reduction_sink}'s [swaps] interchanges, then the default preset, likewise matched. *)
 
+type seeded_start = {
+  decide : Ir.Low_level.optimized -> sketch_params option;
+      (** The plan's per-segment decision: the sketch its gate admits on a segment, probed and
+          validated there, or [None] for the preset. *)
+  gate_tag : string;  (** The gate it reads, rendered for the search shape. *)
+}
+(** The seeded plan's decision rule, for {!tune}'s staffed start (gh-ocannl-1138, config
+    [autotune_staffed_singles]), which applies it to the search's own segments: the plan's recorded
+    decisions are taken on the split routine under the untuned segmentation and match no search key.
+    Carried in the plan so that the device readings the gate rests on reach {!tune} only through
+    {!seeded_plan}. *)
+
 type seeded_plan = {
   sp_split : (sr_site * int) list;
       (** The reductions split whole-routine before segmenting ({!seeded_split_sites}). *)
@@ -1887,6 +1899,9 @@ type seeded_plan = {
   sp_refined : int;
       (** Default segments replaced by their finer [arity_cuts] pieces ({!refine_segments}: a block
           takes its pieces where more of them seed). *)
+  sp_start : seeded_start option;
+      (** The plan's decision rule, as {!seeded_plan} derives it; [None] in the plans the untuned
+          compile builds for itself. *)
 }
 (** The seeded untuned plan as a replayable value (gh-ocannl-1388): what {!seeded_default} decides
     for one lowering. {!tune} derives it on its base lowering and seeds it as its FIRST candidate,

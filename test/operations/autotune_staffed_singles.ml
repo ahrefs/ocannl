@@ -355,6 +355,34 @@ let () =
       | None -> p "start: a faster single replaced the second key's start choice" false)
   | _ -> p "start: the search swept the chain's two keys" false
 
+(* --- start_refused: the timed composite proves its staff compatible --- *)
+
+(* As in [start], both keys start with a choice. After the first key's sweep the composite is timed,
+   and the second key's own choice is that composite: reused without a compile, it proves the second
+   key's staff compatible (Codex P2 on PR #1215), so its later staffed singles, all refused here,
+   are not retried bare. *)
+let () =
+  let second = ref "" in
+  let start ~menu =
+    match menu with
+    | [ (k1, ps1); (k2, ps2) ] ->
+        second := key_of (entry_of k2 (List.last_exn ps2));
+        [ (k1, List.last_exn ps1); (k2, List.last_exn ps2) ]
+    | _ -> []
+  in
+  let refuse label =
+    is_staffed label
+    && String.equal (key_of (List.hd_exn (focus label))) !second
+    && not (String.is_empty !second)
+  in
+  let o = search ~width:0 ~start ~refuse ~tag:"start_refused" ~cost () in
+  let refused_attempts =
+    List.count o.attempts ~f:(fun l ->
+        is_staffed l && String.equal (key_of (List.hd_exn (focus l))) !second)
+  in
+  p "start_refused: no refusal after the reused composite is retried bare"
+    (refused_attempts >= 3 && o.report.Autotune.fiss_sketch_backdrop_fallbacks = 0)
+
 (* --- refused: a staffed refusal is retried bare --- *)
 
 let () =

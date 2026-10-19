@@ -2383,10 +2383,17 @@ type seeded_segment =
   | Seeded_sketch of { digest : string; params : sketch_params }
   | Seeded_sunk of { digest : string; swaps : int }
 
+(* gh-ocannl-1138: the plan's per-segment decision rule, for the staffed search's start, which
+   applies it to the search's own segments; and a rendering of the gate it reads, which joins the
+   search shape when that start is used. Carried in the plan so that the device readings the gate
+   rests on reach [tune] only through it (gh-ocannl-1253's [limits_field_classes]). *)
+type seeded_start = { decide : LL.optimized -> sketch_params option; gate_tag : string }
+
 type seeded_plan = {
   sp_split : (sr_site * int) list;
   sp_segments : (Sched.segmentation * seeded_segment list) option;
   sp_refined : int;
+  sp_start : seeded_start option;
 }
 
 type fiss_flavor =
@@ -4522,9 +4529,14 @@ let seeded_plan_on ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~sink
   match
     seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~sink_enabled opt
   with
-  | None -> { sp_split = split; sp_segments = None; sp_refined = 0 }
+  | None -> { sp_split = split; sp_segments = None; sp_refined = 0; sp_start = None }
   | Some (segmentation, segs, refined) ->
-      { sp_split = split; sp_segments = Some (segmentation, segs); sp_refined = refined }
+      {
+        sp_split = split;
+        sp_segments = Some (segmentation, segs);
+        sp_refined = refined;
+        sp_start = None;
+      }
 
 let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ~backend ~limits ~accum_prec
     ~static_indices (opt : LL.optimized) =
@@ -4538,13 +4550,32 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ~backend ~
       (* Hermetic, prelude included: deriving the plan must leave the caller's lowering as it
          was. *)
       let opt, split = seeded_split ~backend ~min_serial ~static_indices (scratch_of opt) in
+      let ranked_below = seeded_ranker ~limits ~accum_prec ~static_indices in
       match
-        seeded_plan_on ~limits ~accum_prec ~static_indices ~gate
-          ~ranked_below:(seeded_ranker ~limits ~accum_prec ~static_indices)
-          ~sink_enabled ~split opt
+        seeded_plan_on ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~sink_enabled ~split
+          opt
       with
       | { sp_split = []; sp_segments = None; _ } -> None
-      | plan -> Some plan)
+      | plan ->
+          let gate_tag =
+            match gate with
+            | Min_reduction n -> Printf.sprintf "min_reduction=%d" n
+            | Ranked { capacity; cache_rate } ->
+                Printf.sprintf "ranked capacity=%s cache_rate=%s"
+                  (Option.value_map capacity ~default:"none" ~f:Int.to_string)
+                  (Option.value_map cache_rate ~default:"none" ~f:Float.to_string)
+          in
+          Some
+            {
+              plan with
+              sp_start =
+                Some
+                  {
+                    decide =
+                      seeded_segment_params ~limits ~accum_prec ~static_indices ~gate ~ranked_below;
+                    gate_tag;
+                  };
+            })
 
 (* The seeded pipeline on [opt] (mutated as a compile's transform input is): the splits, the plan
    decided on the split routine, its replay. Shared by the untuned compile's transform and by
@@ -4553,7 +4584,8 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~backend ~limits ~
     ~static_indices ~gate ~min_serial ~sink_enabled (opt : LL.optimized) : LL.optimized list =
   let t0 = Unix.gettimeofday () in
   let opt, split = seeded_split ~backend ~min_serial ~static_indices opt in
-  on_choice (seeded_plan_choice { sp_split = split; sp_segments = None; sp_refined = 0 });
+  on_choice
+    (seeded_plan_choice { sp_split = split; sp_segments = None; sp_refined = 0; sp_start = None });
   let plan =
     seeded_plan_on ~limits ~accum_prec ~static_indices ~gate
       ~ranked_below:(seeded_ranker ~limits ~accum_prec ~static_indices)
@@ -5619,7 +5651,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
       lazy
         (match Lazy.force seeded_plan_value with
         | None -> search_shape_settings ^ "|seed=none"
-        | Some plan -> search_shape_settings ^ "|seed=" ^ seeded_plan_digest plan)
+        | Some plan ->
+            search_shape_settings ^ "|seed=" ^ seeded_plan_digest plan
+            (* gh-ocannl-1138: the staffed search's start reads the plan's gate on the search's own
+               segments, which the digest does not record. *)
+            ^ Option.value_map plan.sp_start ~default:"" ~f:(fun start ->
+                if staffed_singles then "|staffed_start=" ^ start.gate_tag else ""))
     in
     (* A stored shape whose settings already differ is decided without deriving the plan. *)
     let same_search_shape stored =
@@ -7094,7 +7131,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 List.filter_map ps ~f:(fun p ->
                     match (current, !running_ms) with
                     | Some q, Some ms when Poly.equal p q ->
-                        (* The running composite itself, timed already: not compiled again. *)
+                        (* The running composite itself, timed already: not compiled again, and
+                           proof the staff is compatible with the key (Codex P2 on PR #1215). *)
+                        staff_admitted := true;
                         Some (p, ms)
                     | _ -> (
                         match try_spec (single key staff p) with
@@ -7111,11 +7150,16 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                                 Int.incr n_backdrop_fallbacks;
                                 logf "%s: refused with its staff; retrying it bare"
                                   (spec_label (single key staff p));
-                                Option.iter
-                                  (try_spec (single key [] p))
-                                  ~f:(fun ((_, ms) as r) ->
+                                (match try_spec (single key [] p) with
+                                | Some ((_, ms) as r) ->
                                     admit r;
-                                    bare := (p, ms) :: !bare);
+                                    bare := (p, ms) :: !bare
+                                | None -> (
+                                    (* A bare twin already timed under its digest still ranks (Codex
+                                       P2 on PR #1215). *)
+                                    match !last_attempt with
+                                    | `Dedup (Some ms) -> bare := (p, ms) :: !bare
+                                    | _ -> ()));
                                 None
                             | _ -> None)))
               in
@@ -7226,21 +7270,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              #1215). The rule is the plan's whole gate ({!seeded_segment_params}: a threshold, or
              gh-ocannl-1253's ranked [auto]); where it seeds nothing
              ([gpu_default_sketch_min_reduction=0], another backend) no key has a start. *)
-          let seeded_gate =
-            match
-              seeded_settings ~backend ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
-            with
-            | Some (gate, _, _) -> Some gate
-            | None -> None
-          in
           let seeded_choice ~pre_of key =
-            Option.bind seeded_gate ~f:(fun gate ->
-                Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
-                    Option.map
-                      (seeded_segment_params ~limits ~accum_prec ~static_indices ~gate
-                         ~ranked_below:(seeded_ranker ~limits ~accum_prec ~static_indices)
-                         pre)
-                      ~f:(fun p -> (key, p))))
+            Option.bind (Lazy.force seeded_plan_value) ~f:(fun plan ->
+                Option.bind plan.sp_start ~f:(fun start ->
+                    Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
+                        Option.map (start.decide pre) ~f:(fun p -> (key, p)))))
           in
           let running, running_ms, swept_against, sweep =
             sketch_sweeper ~plan:coarse_plan ~fine:false ~keys:(List.map fiss_sketch_entries ~f:fst)
@@ -7279,9 +7313,14 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               fine_sweep ~pre_of:fine_pre
                 ~start:
                   (List.filter_map fine_all_entries ~f:(fun (key, _) ->
-                       match List.Assoc.find !running ~equal:equal_seg_key key with
-                       | Some p -> Some (key, p)
-                       | None -> seeded_choice ~pre_of:fine_pre key))
+                       (* An unchanged key is the coarse key: its coarse sweep decided it, a key
+                          left on its preset included, and the fine sweep does not revisit it (Codex
+                          P2 on PR #1215). Only a new key takes the seeded rule's start. *)
+                       if List.Assoc.mem fine_new_entries key ~equal:equal_seg_key then
+                         seeded_choice ~pre_of:fine_pre key
+                       else
+                         Option.map (List.Assoc.find !running ~equal:equal_seg_key key) ~f:(fun p ->
+                             (key, p))))
                 fine_new_entries)
           else List.iter coarse_single_specs ~f:run_seed;
           List.iter post_sweep_specs ~f:run_seed;

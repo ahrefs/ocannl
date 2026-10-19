@@ -24,6 +24,7 @@ start: the first key's own choice is swept first, staffed with the second's: tru
 start: every slower replacement left the first key's choice as it was: true
 start: the second key's start choice, the timed composite by then, is not timed again: true
 start: a faster single replaced the second key's start choice: true
+start_refused: no refusal after the reused composite is retried bare: true
 refused: one staffed single refused, one bare retry: true
 refused: the attempt after the refusal is its bare twin: true
 refused: the bare twin was timed: true

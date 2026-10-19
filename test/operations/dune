@@ -4875,6 +4875,7 @@
   (alias slow-env_spelling_gate)
   autotune_fission_sketch.expected
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -6552,6 +6553,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
@@ -8462,6 +8464,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_AUTOTUNE_LOG)
   (env_var OCANNL_AUTOTUNE_PROGRESS)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
@@ -8531,6 +8534,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
   (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION)
@@ -9165,6 +9169,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_BIG_MODELS)
