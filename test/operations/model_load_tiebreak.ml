@@ -210,7 +210,7 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   let rule = capabilities in
   let no_ldmatrix = { capabilities with mma_operand_loads = no_ldmatrix_rule } in
   let label s = tag ^ ": " ^ s in
-  let loads capabilities o = Autotune.model_operand_loads ~limits ~capabilities o in
+  let loads capabilities o = Autotune.model_operand_loads ~capabilities o in
   let show_loads = Option.value_map ~default:"no tile-MMA" ~f:Int.to_string in
   let fewer a b = match (a, b) with Some a, Some b -> a < b | _ -> false in
   let claim s b =
@@ -254,7 +254,10 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   let reusing =
     {
       capabilities with
-      mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> false);
+      mma_operand_fragments =
+        (fun ~a_prec ~b_prec ~d_prec ~scope ->
+          Option.map (capabilities.mma_operand_fragments ~a_prec ~b_prec ~d_prec ~scope)
+            ~f:(fun f -> { f with BI.mf_reloads = false }));
     }
   in
   all "the arm's reloads count: a reusing arm issues fewer loads than the record's own"
@@ -266,9 +269,11 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   let per_statement_reloads =
     {
       capabilities with
-      mma_operand_reloads =
-        (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope ->
-          BI.equal_mma_emission_scope scope BI.Mma_per_statement);
+      mma_operand_fragments =
+        (fun ~a_prec ~b_prec ~d_prec ~scope ->
+          Option.map (capabilities.mma_operand_fragments ~a_prec ~b_prec ~d_prec ~scope)
+            ~f:(fun f ->
+              { f with BI.mf_reloads = BI.equal_mma_emission_scope scope BI.Mma_per_statement }));
     }
   in
   let per_statement (o : LL.optimized) =
@@ -360,7 +365,7 @@ let () =
       {
         BI.no_codegen_capabilities with
         mma_operand_loads = Ir.Cuda_mma.operand_loads;
-        mma_operand_reloads = Ir.Cuda_mma.operand_reloads;
+        mma_operand_fragments = Ir.Cuda_mma.operand_fragments;
       }
     ~evaluated:true
 
@@ -417,6 +422,19 @@ let () =
     | None -> false
   in
   let leaves = List.tl explained |> Option.value ~default:[] in
+  (* A backend that describes none of its arms (every backend but CUDA: the CPU register tiles,
+     Metal's and HIP's fragments) has no operand-load count for any candidate: none is invented. *)
+  let caps = Context.codegen_capabilities ctx in
+  let describes =
+    List.exists Ir.Ops.all_precs ~f:(fun a_prec ->
+        List.exists Ir.Ops.all_precs ~f:(fun b_prec ->
+            List.exists Ir.Ops.all_precs ~f:(fun d_prec ->
+                List.exists BI.all_of_mma_emission_scope ~f:(fun scope ->
+                    Option.is_some (caps.BI.mma_operand_fragments ~a_prec ~b_prec ~d_prec ~scope)))))
+  in
+  gated_all ~when_:(not describes) ~on:backend_name
+    "where the backend describes no mma arm, no candidate gets an operand-load count" explained
+    ~f:(fun (_, ex) -> Option.is_none ex.Autotune.ex_operand_loads);
   gated_exists ~when_:staged_fp8 ~on:backend_name
     "model_explain shows two candidates tied exactly on the ranking score with different operand \
      loads" (List.cartesian_product leaves leaves) ~f:(fun ((_, x), (_, y)) ->

@@ -35,4 +35,5 @@ backend record: among the staged leaves, without ldmatrix it keeps the first-lis
 model_explain lists the default pipeline first: true
 model_explain's labels are distinct: true
 every explained ranking score is at least its bound: true
+where the backend describes no mma arm, no candidate gets an operand-load count: true
 model_explain shows two candidates tied exactly on the ranking score with different operand loads: true

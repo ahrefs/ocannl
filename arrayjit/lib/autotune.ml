@@ -4028,15 +4028,11 @@ let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp 
       Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
       Context.compile ?name ctx comp bindings
 
-(* gh-ocannl-1254: a candidate's tile-MMA operand loads under a load rule, counted per intrinsic
-   fragment of the tile the device's descriptor advertises for each statement's storage triple. *)
-let model_operand_loads ~(limits : Ir.Backend_intf.hardware_limits)
-    ~(capabilities : Ir.Backend_intf.codegen_capabilities) (opt : LL.optimized) =
-  let intrinsic_tile ~a_prec ~b_prec ~d_prec ~scope =
-    Option.bind limits.Ir.Backend_intf.mma ~f:(fun mma ->
-        mma_tile_for_precisions_in_scope mma ~scope ~a_prec ~b_prec ~d_prec)
-  in
-  CM.operand_load_count ~intrinsic_tile ~operand_reloads:capabilities.mma_operand_reloads
+(* gh-ocannl-1254: a candidate's tile-MMA operand loads under the backend's own description of its
+   arms: their load rule and fragment structure. *)
+let model_operand_loads ~(capabilities : Ir.Backend_intf.codegen_capabilities) (opt : LL.optimized)
+    =
+  CM.operand_load_count ~operand_fragments:capabilities.mma_operand_fragments
     ~operand_loads:capabilities.mma_operand_loads opt
 
 (* The branch-and-bound walk over the factored matmul family (gh-ocannl-514 phase 4), shared by
@@ -4091,9 +4087,7 @@ let model_family_search ?(on_rejected = fun () -> ()) ~capabilities ~is_gpu ~is_
       (* Computed only for leaves that tie; a leaf that cannot be applied scored nothing, so never
          reaches a tie. *)
       let tie_break p =
-        match applied p with
-        | None -> None
-        | Some post -> model_operand_loads ~limits ~capabilities post
+        match applied p with None -> None | Some post -> model_operand_loads ~capabilities post
       in
       let best, stats =
         Sspace.search
@@ -4560,7 +4554,7 @@ let model_explain ?name ctx comp bindings =
   let ms = Option.map ~f:(fun s -> s *. 1e3) in
   let explain segs =
     let ex_operand_loads =
-      match List.filter_map segs ~f:(model_operand_loads ~limits ~capabilities:caps) with
+      match List.filter_map segs ~f:(model_operand_loads ~capabilities:caps) with
       | [] -> None
       | counts -> Some (List.sum (module Int) counts ~f:Fn.id)
     in

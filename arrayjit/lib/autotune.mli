@@ -1747,15 +1747,11 @@ val model_default :
     {!Ir.Assignments.Block_comment} requires it. *)
 
 val model_operand_loads :
-  limits:Ir.Backend_intf.hardware_limits ->
-  capabilities:Ir.Backend_intf.codegen_capabilities ->
-  Ir.Low_level.optimized ->
-  int option
+  capabilities:Ir.Backend_intf.codegen_capabilities -> Ir.Low_level.optimized -> int option
 (** {!Ir.Cost_model.operand_load_count} under [capabilities]' [mma_operand_loads] rule and
-    [mma_operand_reloads] multiplicity, with the intrinsic tile [limits]' tile-MMA descriptor
-    advertises per storage triple ({!mma_tile_for_precisions_in_scope}, in each statement's emission
-    scope): the count {!model_family_search} breaks exact ties with and {!model_explain} reports
-    (gh-ocannl-1254); [None] for code with no [Tile_mma]. *)
+    [mma_operand_fragments] structure: the count {!model_family_search} breaks exact ties with and
+    {!model_explain} reports (gh-ocannl-1254). [None] where the backend describes no arm for some
+    statement (every backend but CUDA), or for code with no [Tile_mma]. *)
 
 val model_family_search :
   ?on_rejected:(unit -> unit) ->

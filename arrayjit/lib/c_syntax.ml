@@ -941,17 +941,16 @@ module type C_syntax_config = sig
       {!Backend_intf.codegen_capabilities.mma_operand_loads}, by the cost model's load tie-break
       (gh-ocannl-1254). Backends without that instruction inherit [(false, false)]. *)
 
-  val mma_operand_reloads :
+  val mma_operand_fragments :
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->
     d_prec:Ops.prec ->
     scope:Backend_intf.mma_emission_scope ->
-    bool
-  (** Whether an accepted call for these storage precisions, in this emission scope, reloads each
-      operand's intrinsic fragment for every tile of the other operand's free axis, rather than
-      reusing it across that axis; published as
-      {!Backend_intf.codegen_capabilities.mma_operand_reloads} (gh-ocannl-1254). State it beside the
-      loops the hook emits. Default [false]. *)
+    Backend_intf.mma_fragments option
+  (** How an accepted call for these storage precisions, in this emission scope, loads its operand
+      fragments ({!Backend_intf.mma_fragments}); published as
+      {!Backend_intf.codegen_capabilities.mma_operand_fragments} (gh-ocannl-1254). State it beside
+      the loops the hook emits. Default [None]: undescribed, so the cost model counts no loads. *)
 
   val mma_arm :
     a_prec:Ops.prec ->
@@ -1036,7 +1035,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     asynchronous_staging_copy = Option.is_some Config.async_copy;
     mma_arm = Config.mma_arm;
     mma_operand_loads = Config.mma_operand_loads;
-    mma_operand_reloads = Config.mma_operand_reloads;
+    mma_operand_fragments = Config.mma_operand_fragments;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
        simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
@@ -2117,7 +2116,7 @@ struct
      == 0] guard. *)
   let mma_syntax = None
   let mma_operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
-  let mma_operand_reloads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = false
+  let mma_operand_fragments ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
   let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0

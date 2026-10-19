@@ -265,10 +265,10 @@ val ranking_seconds :
     enclosing loop extents over its lane extent), is per lane: an [ldmatrix] operand costs one
     instruction per [lane_bytes] it delivers to each lane — 16 for [a], CUDA's emitted [.x4] form,
     and 8 for [b], its [.x2] form — a gathered one one load per element (fp8 gathers bytes, the
-    16-bit arms 16-bit halves, f32 32-bit words) — counted per intrinsic fragment, with the reloads
-    the emission's loop nest repeats, where the backend's intrinsic tile is given and divides the
-    statement, since ties fall between geometries too. A statement the backend then declines
-    (extents, the device's floor) renders scalar code whatever the class says. *)
+    16-bit arms 16-bit halves, f32 32-bit words) — counted per intrinsic fragment of the arm's own
+    tile, with the reloads its loop nest repeats ({!Backend_intf.mma_fragments}), since ties fall
+    between geometries too. Only a backend that describes its arms counts at all (CUDA); a statement
+    the device's floor then declines renders scalar code whatever the class says. *)
 
 type operand_load =
   | Ldmatrix of { lane_bytes : int }
@@ -283,18 +283,12 @@ val operand_place : Low_level.optimized -> Tnode.t -> Backend_intf.mma_operand_p
     [`Swizzled_b128] for a [Swizzle_b128] entry of [optimized.swizzled]. *)
 
 val operand_load_count :
-  ?intrinsic_tile:
+  operand_fragments:
     (a_prec:Ops.prec ->
     b_prec:Ops.prec ->
     d_prec:Ops.prec ->
     scope:Backend_intf.mma_emission_scope ->
-    (int * int * int) option) ->
-  ?operand_reloads:
-    (a_prec:Ops.prec ->
-    b_prec:Ops.prec ->
-    d_prec:Ops.prec ->
-    scope:Backend_intf.mma_emission_scope ->
-    bool) ->
+    Backend_intf.mma_fragments option) ->
   operand_loads:
     (a_prec:Ops.prec ->
     b_prec:Ops.prec ->
@@ -308,14 +302,12 @@ val operand_load_count :
   Low_level.optimized ->
   int option
 (** The per-lane load instructions of every [Tile_mma] operand, summed over the statements'
-    executions (see the section contract); [None] for code with no [Tile_mma] — not applicable,
-    rather than zero loads: such code still loads its operands, by paths this count does not see.
-    [intrinsic_tile] is the backend's tile [(tm, tn, tk)] for a storage triple
-    ([Autotune.model_operand_loads] reads it from the device's tile-MMA descriptor): where it
-    divides a statement, each operand is counted per intrinsic fragment: once per reduction step,
-    or, where [operand_reloads] (the backend's [mma_operand_reloads], default [false]) says the arm
-    reloads, for every tile of the other operand's free axis too, as CUDA's inline-PTX arms emit
-    them. Elsewhere each operand tile counts once per statement. *)
+    executions (see the section contract), under a backend's load rule ([operand_loads], its
+    [mma_operand_loads]) and fragment structure ([operand_fragments], its [mma_operand_fragments]).
+    [None] — not applicable, rather than zero loads — for code with no [Tile_mma] (such code still
+    loads its operands, by paths this count does not see), and for code with a statement the backend
+    does not describe or whose extents its arm's tile does not divide: a partial count would order
+    candidates by the part it sees. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 

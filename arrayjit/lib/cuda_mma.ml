@@ -176,9 +176,9 @@ let operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
    [k_loop_lines]). *)
 let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
 
-let operand_reloads ~a_prec ~b_prec ~d_prec ~scope =
-  Option.value_map ~default:false ~f:arm_reloads_operands
-    (resolve_arm ~a_prec ~b_prec ~d_prec ~scope)
+let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
+  Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
+      { Backend_intf.mf_tile = arm_tile arm; mf_reloads = arm_reloads_operands arm })
 
 let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->

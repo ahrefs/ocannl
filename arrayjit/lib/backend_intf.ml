@@ -455,6 +455,18 @@ type mma_operand_place = [ `Device | `Shared | `Thread ] * [ `Plain | `Swizzled_
     per-thread array) and its physical layout ([`Swizzled_b128] for a [Low_level.Swizzle_b128]
     staged tile). What {!field-codegen_capabilities.mma_operand_loads} decides the load path by. *)
 
+type mma_fragments = {
+  mf_tile : int * int * int;
+      (** The intrinsic tile [(tm, tn, tk)] the arm emits: an [a] fragment is [tm x tk], a [b]
+          fragment [tk x tn]. *)
+  mf_reloads : bool;
+      (** [true]: both fragments are loaded inside the [m/tm x n/tn x k/tk] tile loops, so each is
+          reloaded for every tile of the other operand's free axis (CUDA's inline-PTX arms);
+          [false]: each fragment loads once per reduction step and is reused across that axis
+          (CUDA's wmma arms). *)
+}
+(** An mma arm's fragment structure, as its emission loops load operands (gh-ocannl-1254). *)
+
 type codegen_capabilities = {
   supports_f64 : bool;
       (** Whether the backend dialect can represent f64 tensor storage. This is explicit rather than
@@ -497,14 +509,17 @@ type codegen_capabilities = {
           it reads the decision the kernel makes. Like {!field-mma_arm}, only the arm- and
           operand-level choice: a call the hook declines on extents or the device renders the scalar
           fallback whatever this says. [(false, false)] on a backend without such a load. *)
-  mma_operand_reloads :
-    a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> scope:mma_emission_scope -> bool;
-      (** Whether the backend's mma arm for these storage precisions, in this emission scope,
-          reloads each operand's intrinsic fragment for every tile of the other operand's free axis
-          ([true]: CUDA's inline-PTX arms, which load both fragments inside their [m x n x k] tile
-          loops) rather than loading each fragment once per reduction step and reusing it across
-          that axis ([false]: CUDA's wmma arms, and the default). How the cost model's operand-load
-          count multiplies a statement's fragments (gh-ocannl-1254). *)
+  mma_operand_fragments :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:mma_emission_scope ->
+    mma_fragments option;
+      (** How the backend's mma arm for these storage precisions, in this emission scope, brings its
+          operands into registers: its intrinsic tile and whether it reloads each operand fragment
+          for every tile of the other's free axis (gh-ocannl-1254). The arm's own description, read
+          by the cost model's operand-load count, which has no count where this is [None]: no arm,
+          or a backend that does not describe its emission (the default). *)
   mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
           tiles, for a [(d, a, b)] storage triple: the backend's
@@ -536,7 +551,7 @@ let no_codegen_capabilities =
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_operand_loads =
       (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
-    mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> false);
+    mma_operand_fragments = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
@@ -552,7 +567,7 @@ let no_codegen_capabilities =
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
     until it is rendered (warning 9).
 
-    [mma_operand_loads] and [mma_operand_reloads] are not rendered either (gh-ocannl-1254): which
+    [mma_operand_loads] and [mma_operand_fragments] are not rendered either (gh-ocannl-1254): which
     operands load through [ldmatrix], and how often, is a fixed function of the arm, which the [mma]
     row below already renders, and of each operand's transposition, space and layout, which are the
     schedule's own content and so already in its canonical digest. Rendering them would add no
@@ -575,7 +590,7 @@ let codegen_capabilities_fingerprint
       asynchronous_staging_copy;
       mma_arm;
       mma_operand_loads = _;
-      mma_operand_reloads = _;
+      mma_operand_fragments = _;
       mma_scope_workgroup_bytes = _;
       lane_all_reduce_workgroup_bytes = _;
     } =

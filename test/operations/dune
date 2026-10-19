@@ -5468,7 +5468,8 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_TF32_MATMULS)
   (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC))
+  (env_var OCANNL_BF16_ARITHMETIC)
+  (env_var OCANNL_NARROW_COMPUTE_F32))
  (modules model_load_tiebreak)
  (libraries base stdio ocannl arrayjit.verdict ll_test)
  (preprocess

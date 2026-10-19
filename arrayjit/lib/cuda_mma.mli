@@ -112,16 +112,18 @@ val arm_reloads_operands : arm -> bool
     operand's free axis: the inline-PTX bodies load both fragments inside their [m x n x k] tile
     loops, wmma loads each fragment once per reduction step and reuses it. *)
 
-val operand_reloads :
+val operand_fragments :
   a_prec:Ops.prec ->
   b_prec:Ops.prec ->
   d_prec:Ops.prec ->
   scope:Backend_intf.mma_emission_scope ->
-  bool
-(** {!arm_reloads_operands} of the scope's arm ([false] with no arm): the backend's
-    [C_syntax_config.mma_operand_reloads], published as
-    {!Backend_intf.codegen_capabilities.mma_operand_reloads} for the cost model's operand-load count
-    (gh-ocannl-1254). *)
+  Backend_intf.mma_fragments option
+(** The scope's arm ({!resolve_arm}) as its emission loads operands: {!arm_tile} — the arm's own
+    tile, not the descriptor's (uniform f16 under [Fp16_wide] emits m16n8k16 per statement under an
+    advertised 16x16x16) — and {!arm_reloads_operands}; [None] with no arm. The backend's
+    [C_syntax_config.mma_operand_fragments], published as
+    {!Backend_intf.codegen_capabilities.mma_operand_fragments} for the cost model's operand-load
+    count (gh-ocannl-1254). *)
 
 (** {1 Per-arm rendering data} *)
 
