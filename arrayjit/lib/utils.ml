@@ -166,6 +166,7 @@ let known_config_keys =
       "autotune_pad_waste_max";
       "autotune_composite_playoff_width";
       "autotune_composite_playoff_margin";
+      "autotune_staffed_singles";
       "autotune_round_expansion";
       "autotune_log";
       "autotune_progress";
@@ -397,6 +398,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_pad_waste_max";
         "autotune_composite_playoff_width";
         "autotune_composite_playoff_margin";
+        "autotune_staffed_singles";
         "autotune_round_expansion";
         "autotune_keep_fraction";
         "autotune_bound_pruning";
@@ -618,6 +620,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_pad_waste_max", (Float_at_least { floor = 1.; fallback = 2. }, "2."));
     ("autotune_composite_playoff_width", (Integer, "2"));
     ("autotune_composite_playoff_margin", (Float_number, "0.005"));
+    ("autotune_staffed_singles", (Flag, "false"));
     ("autotune_round_expansion", (Keyword, "differing"));
     ("autotune_keep_fraction", (Float_number, "1."));
     ("autotune_bound_pruning", (Flag, "false"));

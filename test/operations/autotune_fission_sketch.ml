@@ -650,7 +650,12 @@ let () =
        fact comes from usable singles for two distinct segments, never from a report-wide contention
        waiver. Every eligible composite must reach its own window. *)
     (((not eligible) || composite_timed report_ab)
-    && if is_cpu then timed_ab = cand_ab + Bool.to_int eligible else timed_ab > 0);
+    &&
+    if is_cpu then
+      (* A staffed search (config [autotune_staffed_singles], gh-ocannl-1138) times its composite as
+         its last accepted staffed single, not as a window of its own. *)
+      timed_ab = cand_ab + if Autotune.staffed_singles_setting () then 0 else Bool.to_int eligible
+    else timed_ab > 0);
   p_all2 "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial ~f:approx;
 
   (* A post-admission failure must not erase the window from the partial report. The attempt label
@@ -665,7 +670,7 @@ let () =
     composite_attempt :=
       String.is_prefix label ~prefix:"F_sketch["
       && (not (String.is_prefix label ~prefix:"F_sketch[fine "))
-      && String.mem label ',' );
+      && (String.mem label ',' || String.is_substring label ~substring:" | staff ") );
   ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
     if !composite_attempt then (
       injected := true;
@@ -689,7 +694,10 @@ let () =
       p partial_claim
         (Poly.equal r.Autotune.fiss_sketch_composite `Timed
         && r.Autotune.fiss_sketch_timed > 0
-        && r.Autotune.fiss_sketch_timed = r.Autotune.fiss_sketch_candidates + 1
+        && (if Autotune.staffed_singles_setting () then
+              (* Cut at the first staffed window, the first composite a staffed search times. *)
+              r.Autotune.fiss_sketch_staffed_timed = 1
+            else r.Autotune.fiss_sketch_timed = r.Autotune.fiss_sketch_candidates + 1)
         && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
   | Some r -> (
       if not (completed r) then fail "untriggered injection did not complete its search";

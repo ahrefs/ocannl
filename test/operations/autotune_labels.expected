@@ -4,6 +4,9 @@ changing any one field of the unusual base point changes its label: true
 no label carries a comma: true
 every coalesced layout labels apart: true
 one-entry sketch candidates of distinct segment keys with equal parameters print apart: true
+an empty staff prints the bare label: true
+a staffed label is the bare one's focus followed by its staff: true
+staffs of different parameters print apart: true
 the per-field updates name exactly the site type's fields, in order: true
 the two base sites differ in every field: true
 the two base targets share a debug name: true
@@ -11,6 +14,8 @@ the two base chains have equal length: true
 changing any one field of the first base site changes its label: true
 changing any one field of the second base site changes its label: true
 changing the block count changes the label: true
+a staffed split label is the bare one's focus followed by its staff: true
+split staffs of different block counts print apart: true
 no site label carries a comma: true
 the search ran its round: true
 a round candidate extends a segment of a fissioned parent: true

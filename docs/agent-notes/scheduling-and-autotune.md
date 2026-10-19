@@ -1140,6 +1140,45 @@ files.
   moved 2.474 -> 2.427 ms (replicate means) with the spread narrowed 16x. Before reading a per-key
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
+- **Staffed singles time a key's sketches inside the running composite** (gh-ocannl-1138, config
+  `autotune_staffed_singles`, **default off: measured, not yet worth it**). With the seeded-rule start
+  (below) on the gh-ocannl-1109 cell (gpt2_mini, approximate, rog/CUDA, one pair) the first 1% gain came at
+  12 s of a search instead of 455 s, but the best came within 5% of final only at 55%/75% of the two
+  placement arms' timings (bare: 96%), at +29% search compile time, crown and step p50 unchanged,
+  against the plan's bar of under half. The pre-sweep seeds (presets, whole-routine sketches) still
+  come first and late keys still lower the best; flip the default only on a re-measurement that
+  clears it (entry_version bump with it). The coarse keys are swept one at a time, each single's `staff` holding
+  the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
+  before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its
+  sweep, heaviest key first (segment count times its best sketch's roofline score, logged as
+  `staffed: segment <tag> weighs <w>`; unscored keys last, in enumeration order). Only times within
+  one key's sweep are comparable, so per-key minima stay valid but a cross-key comparison does not; the composite's own choice is swept first, at its known time and
+  without a compile. **The start is the seeded plan's decision RULE, not its recorded decisions**:
+  `seeded_params` applied to each key's own segment. The recorded `Seeded_sketch` digests were taken
+  on the split routine under the untuned segmentation without the search's zero fold, so they equal
+  no key's digest: at `381bbc93` the composite started empty on gpt2_mini/CUDA, its best sat at the
+  seeded floor (3.70 ms) until two late keys left on presets were swept, and it came within 5% of its
+  final best only at 77% of its timings (bare search: 96%; ABBA, crowns and step p50 unchanged).
+  A refused (not contended) staffed single is retried bare once (`fiss_sketch_backdrop_fallbacks`),
+  until a staffed single of the key is admitted (the staff is then known compatible, so later
+  refusals are the seeds' own). A key's incumbent is its own choice as timed in the sweep, or the
+  running composite whole (for a key with no choice, the key on its preset): a single joins only by
+  beating it. A key whose staffed singles ALL decline cannot join that
+  staff (the composite holding both is the refused code), so its fastest bare single, the composite
+  of that key alone, replaces the running composite when faster as a whole routine. The last key's
+  winning window IS the coarse composite, so `fs_composite` is set from it at admission (and stays
+  `Timed` if a bare replacement later shrinks the composite; the split flags likewise), and the
+  playoff skips a key whose sweep ran inside the incumbent.
+  The fine segmentation (GPU, gh-ocannl-574) keeps its own composite: a fine key the finer cuts left
+  unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded rule's,
+  and only the new keys are swept (`test/operations/autotune_staffed_fine`, skipped off GPU).
+  The split-reduce sites keep one more (`F_split`'s `staff`, the other sites' block counts, starting
+  empty): staffing a site's prelude with the others' splits forms the multi-site composite during
+  the seeds, but every segment of a split candidate still runs its preset, so the split singles'
+  backdrop does not shrink the way a sketch single's does, and the seeded plan's split is no start
+  worth its approximate site matching.
+  `test/operations/autotune_staffed_singles` scripts an additive landscape and seeds the start through
+  the `Autotune.on_staffed_start` seam, which only a seeded plan fills in production.
 - **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**
   (gh-ocannl-1137; a capped correctness-grade probe on a shared rog box, CUDA, approximate profile).
   A round is adopted only when its best beats the incumbent by `min_progress` (1%); a sub-1% best is

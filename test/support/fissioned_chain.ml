@@ -45,22 +45,39 @@ let matrix ~label ~modulus ~offset ~stride =
 
 (* Two matmul segments of different shapes (the multi-site chain of [autotune_fission_sketch]): the
    materialized sums cut the chain so each product is a keyed segment of its own. *)
-let chain () =
+let chain_with_output ?(rows = 16) ?(third = false) () =
   let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
   let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
   let qc = matrix ~label:"qc" ~modulus:5 ~offset:(-2.) ~stride:0.5 in
   let qc16 =
     TDSL.ndarray
-      (Array.init (16 * q)
-         ~f:(Ll_test.cycle_flat ~dims:[| 16; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
-      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ 16 ] ()
+      (Array.init (rows * q)
+         ~f:(Ll_test.cycle_flat ~dims:[| rows; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
+      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ rows ] ()
   in
   let%op qd = qa + qb in
   Train.set_materialized qd.Tensor.value;
   let%op qe = qd * qc in
   Train.set_materialized qe.Tensor.value;
   let%op qg = qc16 * qe in
-  Train.forward qg
+  if not third then (qg, Train.forward qg)
+  else (
+    (* A third keyed product, for a sweep that needs a key after two. *)
+    Train.set_materialized qg.Tensor.value;
+    let qk =
+      TDSL.ndarray
+        (Array.init (8 * rows)
+           ~f:(Ll_test.cycle_flat ~dims:[| 8; rows |] ~modulus:3 ~offset:(-1.) ~stride:0.5))
+        ~label:[ "qk" ] ~input_dims:[ rows ] ~output_dims:[ 8 ] ()
+    in
+    let%op qi = qk * qg in
+    (qi, Train.forward qi))
+
+(* The chain's computation alone. [chain_with_output] also returns the output tensor, for a test
+   that reads what a crowned routine computes, and takes the second product's row count: at its
+   default 16 the second product is the lighter, at 64 the heavier. [~third:true] adds a third keyed
+   product after the second. *)
+let chain () = snd (chain_with_output ())
 
 (* The fraction of each segment's sketches the small menu keeps, for a test that passes it to one
    search ([Autotune.tune ~keep_fraction]) rather than stating it for all of them. *)
@@ -95,11 +112,26 @@ let small_menu () =
       ("autotune_pad_waste_max", "inf");
     ]
 
-let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')
-let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem label ','
+(* A per-segment sketch label's focus (gh-ocannl-1138): what precedes [" | staff "], where a staffed
+   single lists the running composite's choices for the other keys. A bare label is all focus. *)
+let focus label =
+  match String.substr_index label ~pattern:" | staff " with
+  | Some i -> String.prefix label i
+  | None -> label
 
-(* A single's keyed segment: the tag its label ends with ([@<digests>:u<n>]). *)
-let segment_of label = List.last_exn (String.split label ~on:'@')
+(* Single or composite by the focus alone: a staffed single schedules several segments but is a
+   single of its focus key. *)
+let is_single label =
+  String.is_prefix label ~prefix:"F_sketch[" && not (String.mem (focus label) ',')
+
+let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem (focus label) ','
+
+let is_staffed label =
+  String.is_prefix label ~prefix:"F_sketch[" && String.is_substring label ~substring:" | staff "
+
+(* A single's keyed segment: the tag its focus ends with ([@<digests>:u<n>]). *)
+let segment_of label =
+  List.last_exn (String.split (String.chop_suffix_if_exists (focus label) ~suffix:"]") ~on:'@')
 
 (* The singles among [measured] (a search's timed labels, in attempt order), counted per keyed
    segment. *)
