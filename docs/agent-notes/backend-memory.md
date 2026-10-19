@@ -105,6 +105,15 @@ files.
   must share the id, and `Context.derive` preserves it for them; a fresh id per upload strands the
   readers compiled before it and refuses every later refill. An upload fork gets its own id and a
   copy of its parent's registrations; `test_execution_deps` Test 9 pins both directions.
+- **The same flag is what refuses a dead handle** (gh-ocannl-1329). `Context.check_live` reads
+  `finalized` at every entry point that touches buffers (compile, run on either the run context or
+  the routine's compile context, sync, the transfers, the `decide_*` recorders) and raises a typed
+  `User_error`. Because the flag is shared exactly where pools are, an earlier value of a linear
+  upload chain is refused with the latest one, while compile siblings and upload forks keep working.
+  What it cannot see is a released ANCESTOR: a compiled descendant has a fresh flag of its own, so
+  "release leaves" stays an unchecked precondition. The `decide_*` refusal matters for that reason:
+  `make_child` of a dead handle would mint a live-looking flag over freed buffer locations.
+  Guard: `test/operations/context_handle_refusals.ml`.
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working

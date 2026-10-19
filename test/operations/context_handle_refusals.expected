@@ -1,0 +1,18 @@
+chr_released: the routine ran before the release: true
+chr_released: run on the released value is refused: true
+chr_released: run on an earlier value of its upload chain is refused: true
+chr_released: run on the live parent with a routine compiled into the released value is refused: true
+chr_released: compile is refused: true
+chr_released: sync is refused: true
+chr_released: to_host is refused: true
+chr_released: get_values is refused: true
+chr_released: set_values is refused: true
+chr_released: from_host is refused: true
+chr_released: copy out of it is refused: true
+chr_released: copy into it is refused: true
+chr_released: decide_materialized is refused: true
+chr_released: decide_inline is refused: true
+chr_released: decide_footprint is refused: true
+chr_released: the refusal names the entry point and the backend: true
+chr_released: the compile sibling still runs and reads back: true
+chr_released: the live parent still compiles and runs: true
