@@ -2229,9 +2229,10 @@ type fiss_flavor =
   | F_seeded of seeded_plan
       (** The seeded untuned plan (gh-ocannl-1388): its split prelude whole-routine, as [F_split]'s,
           then its segments through {!seeded_replay}, the replay the recipes' untuned compile runs
-          ({!seeded_default}), so the candidate is the step that ships untuned on CUDA and HIP.
-          Seeded FIRST, so the search's floor is that step by construction: a search cut short after
-          its first timing, or one whose other candidates are all refused, still crowns it. *)
+          ({!seeded_default}), so the candidate is the step that ships untuned on CUDA and HIP
+          (where [model_default_schedule] is off). Seeded FIRST, so the search's floor is that step
+          by construction: a search cut short after its first timing, or one whose other candidates
+          are all refused, still crowns it. *)
 
 type spec = Whole of whole_flavor | Fiss of fiss_flavor
 
@@ -6443,6 +6444,17 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
               | _ -> ());
               Option.iter result ~f:admit);
+          (* gh-ocannl-1388: a refused window drops its digest from [seen] so that an equivalent
+             later seed can measure it, but no later seed reproduces the seeded plan, so its floor
+             would be lost to one contended window. Retried once here, after the seed pass. Still
+             unmeasured after that, [seeded_ms] stays [None] and says so. *)
+          List.iter seeded_specs ~f:(fun spec ->
+              if
+                Option.is_none (seeded_ms ())
+                && Option.exists !seeded_seed_digest ~f:(Hash_set.mem contended_digests)
+              then (
+                logf "%s: its window was refused; retrying the seeded plan once" (spec_label spec);
+                Option.iter (try_spec spec) ~f:admit));
           (* At most three composites, each proposed only if its singles justify it: no total to
              announce, so no phase line either; a composite's attempt still counts and can print. *)
           progress_phase_begin "recombine" None;

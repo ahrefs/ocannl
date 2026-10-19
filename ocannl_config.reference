@@ -321,7 +321,9 @@
 # through workgroup tiles, instead of the default preset; every other segment is the default's.
 # Nothing is timed or scored and no schedule cache is read or written. The autotuner seeds this
 # same plan (with the split and the sink below) as its FIRST candidate (gh-ocannl-1388), so a tuned
-# step is never slower than the untuned one even when the search stops early; this key and the two
+# step is never slower than the untuned one even when the search stops early (under
+# model_default_schedule=true the untuned compile is the model's pick instead, which the search
+# does not reproduce, so there the floor is this plan rather than the untuned step); this key and the two
 # below therefore shape a search like the autotune_* keys: a cached crown replays under any value,
 # but a search's timed trajectory is kept only for one under the same values. Results are unchanged: the
 # sketch keeps each output's summation order, and a site whose accumulator would be wider than its

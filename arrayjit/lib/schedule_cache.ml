@@ -1131,8 +1131,9 @@ type placement_entry = {
 (* Versions [placement_entry] payloads the way [entry_version] versions schedule entries. *)
 (*= placement_entry_version history -- one line per value, oldest first; a bump appends one:
    1: gh-ocannl-786 -- the placement decision and the arm timings that chose it
+   2: gh-ocannl-1388 -- decisions compared arm searches that lacked the seeded untuned floor
 *)
-let placement_entry_version = 1
+let placement_entry_version = 2
 
 let placement_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend =
   Option.map (cache_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend)

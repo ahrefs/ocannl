@@ -324,7 +324,9 @@ cell is the step: cite the step cell. Each issue's cell:
   seam, so a search still compiles and attempts its candidates but crowns among the first N timed:
   the search a budget or a contended box cuts short. With N=1 it measures the floor a search's
   first candidate sets -- on CUDA and HIP the seeded untuned plan, which the tuner seeds first --
-  so a tuned cell under it should match the untuned cell. Each `tune` arm's `timings_contended`
+  so a tuned cell under it should match the untuned cell, in a regime without
+  `model_default_schedule=true` (the `approximate` and `performance` profiles set it, and their
+  untuned cell ships the model's pick, which no candidate reproduces). Each `tune` arm's `timings_contended`
   in the result line counts the refused windows, which is how a cut cell reads apart from a full
   search.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate

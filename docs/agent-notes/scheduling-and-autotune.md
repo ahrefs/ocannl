@@ -540,7 +540,14 @@ files.
   needs a long OUTERMOST reduction loop: a fixture with `b = 4` outermost proposes no split at all
   (the b8 case above), so `autotune_seeded_seed` lays out 1024 x 4 rows. A plan equal to the default
   pipeline (another backend, nothing seeds, splits or sinks) is not seeded, so CPU searches and
-  unseeded GPU ones keep their candidate order. The three `gpu_default_*` keys are `Search_shaping`
+  unseeded GPU ones keep their candidate order. The floor is the step the untuned compile ships
+  only where that compile IS `seeded_default`: under `model_default_schedule=true` (the
+  `performance` and `approximate` profiles) it is `model_default`'s pick, whose placement pre-search
+  changes the program, so no candidate reproduces it (gh-ocannl-1253's defaults flip starts the
+  model from this plan). A refused window does not lose the floor: a contended digest leaves
+  `seen` for an equivalent later seed to measure, and since no later seed reproduces the plan, the
+  seed pass ends with one retry of it. `placement_entry_version` 2 retired the recorded arm
+  decisions that compared searches without the floor. The three `gpu_default_*` keys are `Search_shaping`
   (registered defaults 32, 4096, true), the report's `seeded_ms` is the seed's time beside
   `default_ms` (not stored, so `None` on a cache hit), and `entry_version` 15 retired the crowns
   searched without this floor. `seeded_plan_digest` names the plan from its content alone (split

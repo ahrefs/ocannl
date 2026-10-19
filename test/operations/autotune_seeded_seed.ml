@@ -17,14 +17,24 @@
 
    The search's measurements are scripted through [Autotune.on_candidate_measured] (gh-ocannl-1027)
    with the windows opted out of host contention ([with_uncontended_test_windows], gh-ocannl-1156):
-   the first admitted window keeps its reading and every later one is refused, which is the search
-   cut to its first candidate. The claims: that first window is the seeded plan's, its code is the
-   untuned compile's segment for segment (the digests the search keys candidates by), the search did
-   try later candidates and crowned the seeded plan, and the crowned routine computes bitwise what
-   the untuned compile computes, on inputs whose every partial sum rounds -- and which tell the
-   plans apart: the split reassociates the bias gradient, so the plain default pipeline computes it
-   differently in some cell, which is claimed as the control. Off CUDA/HIP the untuned compile is
-   the plain default and the search seeds no plan, which is claimed instead.
+   the seeded plan's windows keep their readings and every other one is refused, which is the search
+   cut to its first candidate. The claims: the first candidate attempted is the seeded plan, its
+   timed code is the untuned compile's segment for segment (the digests the search keys candidates
+   by), the search did time later candidates, it crowned the seeded plan, and the crowned routine
+   computes bitwise what the untuned compile computes, on inputs whose every partial sum rounds --
+   and which tell the plans apart: the split reassociates the bias gradient, so the plain default
+   pipeline computes it differently in some cell, which is claimed as the control. Off CUDA/HIP the
+   untuned compile is the plain default and the search seeds no plan, which is claimed instead.
+
+   A window the host refuses anyway (queued calibration that measured no batch, routine on a shared
+   box) never reaches the seam, so the claims that read the scripted windows are gated on every
+   attempt of the seeded plan having reached it; the first-candidate claim is structural and always
+   evaluated.
+
+   A second search refuses the seeded plan's first window, as host contention would, and scripts
+   every other candidate far slower than any real reading: a refused digest leaves the dedup set for
+   an equivalent later seed, but no later seed reproduces the plan, so only the one retry the seed
+   pass ends with can measure and crown it. That retry is claimed, with the crown it wins.
 
    The CUDA/HIP legs need a device that seeds; elsewhere they are skipped. *)
 
@@ -118,25 +128,64 @@ let untuned () =
   in
   (run ctx routine, !digest, !choice)
 
-(* The search cut to its first candidate: every admitted window after the first refused. *)
-let cut_search () =
-  let windows = ref [] and report = ref None in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
+let is_seeded label = String.is_prefix label ~prefix:"F_seeded["
+
+(* A search whose admitted windows are scripted: [reading ~index ~label ms] is what the [index]th
+   admitted window (from 0) records, [nan] refusing it. *)
+let scripted_search ~reading =
+  let windows = ref [] and attempts = ref [] and report = ref None in
+  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
+  and old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   let ctx, routine =
     Exn.protect
-      ~finally:(fun () -> Autotune.Seam.set Autotune.on_candidate_measured old_measured)
+      ~finally:(fun () ->
+        Autotune.Seam.set Autotune.on_candidate_measured old_measured;
+        Autotune.Seam.set Autotune.on_candidate_attempt old_attempt)
       ~f:(fun () ->
+        ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+          if not (String.equal label "baseline") then attempts := label :: !attempts );
         ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
-          let first = List.is_empty !windows in
+          let ms = reading ~index:(List.length !windows) ~label ms in
           windows := (label, digest, ms) :: !windows;
-          if first then ms else Float.nan );
+          ms );
         Autotune.with_uncontended_test_windows (fun () ->
             Autotune.tune ~search:true ~beam_width:2 ~rounds:0 ~repeats:1 ~seed_block_sizes:[]
               ~cache_dir:"" ~log:false
               ~report:(fun r -> report := Some r)
               (Context.auto ()) comp Ir.Indexing.Empty))
   in
-  (run ctx routine, List.rev !windows, Option.value_exn ~here:[%here] !report)
+  let report = Option.value_exn ~here:[%here] !report in
+  let windows = List.rev !windows in
+  (* A window the host refuses (queued calibration that measured no batch, routine on a shared box)
+     never reaches the seam. What the claims read is the seeded plan's: every attempt of it must
+     have reached the seam, so the host refused none of its windows. *)
+  let attempts = List.rev !attempts in
+  let quiet =
+    List.count attempts ~f:is_seeded = List.count windows ~f:(fun (label, _, _) -> is_seeded label)
+  in
+  Stdio.eprintf
+    "scripted search (not part of the golden): %d windows, %d refused by the script, %d refused in \
+     all\n\
+     %!"
+    (List.length windows)
+    (List.count windows ~f:(fun (_, _, ms) -> Float.is_nan ms))
+    report.timings_contended;
+  (run ctx routine, attempts, windows, report, quiet)
+
+(* The search cut to its first candidate, the seeded plan: every other window refused. *)
+let cut_search () =
+  scripted_search ~reading:(fun ~index:_ ~label ms -> if is_seeded label then ms else Float.nan)
+
+(* The seeded plan's first window refused, as contention would refuse it, and every other candidate
+   scripted far slower than any real reading of this fixture: only a retry of the plan can crown
+   it. *)
+let refused_seed_search () =
+  let seeded_seen = ref 0 in
+  scripted_search ~reading:(fun ~index:_ ~label ms ->
+      if not (is_seeded label) then 1e6
+      else (
+        Int.incr seeded_seen;
+        if !seeded_seen = 1 then Float.nan else ms))
 
 let () =
   let (w_untuned, b_untuned), untuned_digest, choice = untuned () in
@@ -166,51 +215,79 @@ let () =
           : Context.t * Context.routine);
       p "off CUDA/HIP the search derives no seeded plan"
         (match !plan with Some None -> true | Some (Some _) | None -> false));
-  let tuned = if seeds_here then Some (cut_search ()) else None in
-  let with_tuned label f =
-    claim label (fun () ->
-        match tuned with Some t -> f t | None -> p (label ^ " (no search ran)") false)
+  let quiet_host = "a host that refused a window of the seeded plan"
+  and quiet_note label quiet =
+    if not quiet then
+      Stdio.eprintf "%s: the host refused a seeded window, so the scripted claims skip\n%!" label
   in
-  let first_window (_, windows, _) = List.hd windows in
-  with_tuned "the search's first timed window is the seeded untuned plan" (fun t ->
-      Option.iter (first_window t) ~f:(fun (label, _, _) ->
-          Stdio.eprintf "first window: %s (not part of the golden)\n%!" label);
-      p "the search's first timed window is the seeded untuned plan"
-        (match first_window t with
-        | Some (label, _, _) -> String.is_prefix label ~prefix:"F_seeded["
-        | None -> false));
-  with_tuned "its code is the untuned compile's, segment for segment" (fun t ->
-      p "its code is the untuned compile's, segment for segment"
-        (match (first_window t, untuned_digest) with
-        | Some (_, digest, _), Some d -> String.equal digest d
-        | _ -> false));
-  with_tuned "the search went on to later candidates, every one of them refused"
-    (fun (_, windows, r) ->
-      p "the search went on to later candidates, every one of them refused"
-        (List.length windows >= 2 && r.Autotune.timings_contended = List.length windows - 1));
-  with_tuned "the search crowned the seeded untuned plan" (fun ((_, _, r) as t) ->
-      p "the search crowned the seeded untuned plan"
-        (match first_window t with
-        | Some (label, _, _) -> String.equal r.Autotune.best_label label
-        | None -> false));
-  with_tuned "the report's seeded_ms is that window's reading, and the crowned time" (fun t ->
-      let _, _, r = t in
-      p "the report's seeded_ms is that window's reading, and the crowned time"
-        (match first_window t with
-        | Some (_, _, ms) ->
-            Option.equal Float.equal r.Autotune.seeded_ms (Some ms) && Float.equal r.best_ms ms
-        | None -> false));
-  with_tuned "the crowned weight gradient is bitwise the untuned compile's"
-    (fun ((w_tuned, _), _, _) ->
-      p_all2 "the crowned weight gradient is bitwise the untuned compile's" w_tuned w_untuned
-        ~f:bitwise);
-  with_tuned "the crowned bias gradient is bitwise the untuned compile's"
-    (fun ((_, b_tuned), _, _) ->
-      p_all2 "the crowned bias gradient is bitwise the untuned compile's" b_tuned b_untuned
-        ~f:bitwise);
+  let tuned = if seeds_here then Some (cut_search ()) else None in
+  (* [f] gets the search; [quiet] gates the claims that read its windows. *)
+  let with_tuned ?(scripted = true) label f =
+    claim label (fun () ->
+        match tuned with
+        | None -> p (label ^ " (no search ran)") false
+        | Some ((_, _, _, _, quiet) as t) ->
+            quiet_note "cut search" quiet;
+            gated ~aggregation:`Environment ~when_:((not scripted) || quiet) ~on:quiet_host label
+              (f t))
+  in
+  let seeded_windows windows =
+    List.filter windows ~f:(fun (label, _, ms) -> is_seeded label && not (Float.is_nan ms))
+  in
+  with_tuned ~scripted:false "the search's first candidate is the seeded untuned plan"
+    (fun (_, attempts, _, _, _) ->
+      Option.iter (List.hd attempts) ~f:(fun label ->
+          Stdio.eprintf "first candidate: %s (not part of the golden)\n%!" label);
+      match attempts with label :: _ :: _ -> is_seeded label | _ -> false);
+  with_tuned "its timed code is the untuned compile's, segment for segment"
+    (fun (_, _, windows, _, _) ->
+      match (seeded_windows windows, untuned_digest) with
+      | [ (_, digest, _) ], Some d -> String.equal digest d
+      | _ -> false);
+  with_tuned "the search went on to time later candidates, every one of them refused"
+    (fun (_, _, windows, _, _) ->
+      List.exists windows ~f:(fun (label, _, _) -> not (is_seeded label))
+      && List.for_all windows ~f:(fun (label, _, ms) -> is_seeded label || Float.is_nan ms));
+  with_tuned "the search crowned the seeded plan, its reading the report's seeded_ms and best_ms"
+    (fun (_, _, windows, r, _) ->
+      match seeded_windows windows with
+      | [ (label, _, ms) ] ->
+          String.equal r.Autotune.best_label label
+          && Option.equal Float.equal r.seeded_ms (Some ms)
+          && Float.equal r.best_ms ms
+      | _ -> false);
+  (let label = "the crowned gradients are bitwise the untuned compile's" in
+   claim label (fun () ->
+       match tuned with
+       | None -> p (label ^ " (no search ran)") false
+       | Some ((w_tuned, b_tuned), _, _, _, quiet) ->
+           Verdict.gate ~aggregation:`Environment ~when_:quiet ~on:quiet_host label (fun () ->
+               p_all2 label (Array.append w_tuned b_tuned)
+                 (Array.append w_untuned b_untuned)
+                 ~f:bitwise)));
   claim "the control: the plain default pipeline's bias gradient differs in some cell" (fun () ->
       let ctx, routine = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
       let _, b_default = run ctx routine in
       p_exists "the control: the plain default pipeline's bias gradient differs in some cell"
         (List.zip_exn (Array.to_list b_default) (Array.to_list b_untuned))
-        ~f:(fun (a, b) -> not (bitwise a b)))
+        ~f:(fun (a, b) -> not (bitwise a b)));
+  let retried = if seeds_here then Some (refused_seed_search ()) else None in
+  let with_retried label f =
+    claim label (fun () ->
+        match retried with
+        | None -> p (label ^ " (no search ran)") false
+        | Some ((_, _, _, _, quiet) as t) ->
+            quiet_note "refused-seed search" quiet;
+            gated ~aggregation:`Environment ~when_:quiet ~on:quiet_host label (f t))
+  in
+  with_retried "a refused seeded window is retried after the seed pass"
+    (fun (_, _, windows, _, _) ->
+      match List.filter windows ~f:(fun (label, _, _) -> is_seeded label) with
+      | [ (_, _, first); (_, _, retry) ] -> Float.is_nan first && Float.(retry < 1e6)
+      | _ -> false);
+  with_retried "the retried seeded plan is crowned and reported as seeded_ms"
+    (fun (_, _, windows, r, _) ->
+      match seeded_windows windows with
+      | [ (label, _, ms) ] ->
+          String.equal r.Autotune.best_label label && Option.equal Float.equal r.seeded_ms (Some ms)
+      | _ -> false)

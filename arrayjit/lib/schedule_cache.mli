@@ -558,7 +558,9 @@ type placement_entry = {
 [@@deriving sexp]
 
 val placement_entry_version : int
-(** Bumped when {!placement_entry} or {!canonicalize_source}'s rendering changes; stale entries are
+(** Bumped when {!placement_entry} or {!canonicalize_source}'s rendering changes, or when the
+    searches a recorded decision compared lacked a candidate that can change which arm wins (2,
+    gh-ocannl-1388: the seeded untuned plan, the floor of every GPU search); stale entries are
     ignored by {!lookup_placements}. *)
 
 val placement_key :

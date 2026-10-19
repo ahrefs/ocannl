@@ -50,7 +50,12 @@
       HIP, where the recipes' untuned compile ships the seeded plan ({!seeded_default}) rather than
       that pipeline, the plan is seeded too, as the very FIRST candidate ({!seeded_plan},
       gh-ocannl-1388; its time is [seeded_ms]): a search that stops after its first timing, or whose
-      every later window is refused, crowns the step that ships untuned. Each preset is additionally
+      every later window is refused, crowns the step that ships untuned; a refused window of the
+      plan's own is retried once after the seed pass. Under config [model_default_schedule=true]
+      (the [performance] and [approximate] profiles) the recipes' untuned compile is
+      {!model_default}'s pick instead, which no candidate reproduces (its placement pre-search
+      changes the program), so there the floor is the seeded plan, not the step that ships untuned,
+      until gh-ocannl-1253 starts the model's pick from this plan. Each preset is additionally
       seeded in a {e privatized} variant ({!extend_with_privatize}): per segment, every materialized
       read-modify-write accumulator is contracted into a per-thread register tile
       ({!Ir.Schedule.optop.Privatize}) over its serial reduction loop where the op's preconditions
@@ -1081,8 +1086,8 @@ type report = {
           [seeded_ms = Some s], [best_ms <= s] by construction, and a search that timed only its
           first candidate crowned it. Attributed by digest, like [default_ms]. [None] where no plan
           was seeded (another backend, or a plan that is the default pipeline, whose time is
-          [default_ms]), when its seed failed to compile or its window was refused, and on a cache
-          hit (not stored). *)
+          [default_ms]), when its seed failed to compile or both its window and its one retry were
+          refused, and on a cache hit (not stored). *)
   best_ms : float;
       (** The winner's measured time, or [infinity] when nothing was timed at all — every candidate
           failed and the baseline was not dispatched (or was declined). In that case no cache entry
@@ -1753,7 +1758,8 @@ type seeded_plan = {
 (** The seeded untuned plan as a replayable value (gh-ocannl-1388): what {!seeded_default} decides
     for one lowering. {!tune} derives it on its base lowering and seeds it as its FIRST candidate,
     replayed the way the untuned compile replays it, so the step the recipes ship untuned is the
-    search's floor by construction; gh-ocannl-1138 extends it from there. *)
+    search's floor by construction (where {!untuned_compile} is {!seeded_default}, i.e. without
+    [model_default_schedule=true]); gh-ocannl-1138 extends it from there. *)
 
 val seeded_plan :
   ?min_reduction:int ->

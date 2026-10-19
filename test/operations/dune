@@ -9016,7 +9016,8 @@
 
 ; gh-ocannl-1388: the autotuner seeds the seeded untuned plan first, so a search cut to its first
 ; candidate (every later window refused through the measurement seam) crowns the step the untuned
-; compile ships: the same code, digest for digest, computing bitwise the same gradients. CUDA/HIP
+; compile ships: the same code, digest for digest, computing bitwise the same gradients; a refused
+; seeded window is retried once and still crowns. CUDA/HIP
 ; legs, skipped elsewhere, where the search must derive no plan. Every threshold is the config's.
 
 (test

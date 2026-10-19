@@ -1,11 +1,11 @@
 on CUDA/HIP the untuned plan seeds a contraction and splits a reduction: true
 off CUDA/HIP the untuned compile is the plain default: true
 off CUDA/HIP the search derives no seeded plan: true
-the search's first timed window is the seeded untuned plan: true
-its code is the untuned compile's, segment for segment: true
-the search went on to later candidates, every one of them refused: true
-the search crowned the seeded untuned plan: true
-the report's seeded_ms is that window's reading, and the crowned time: true
-the crowned weight gradient is bitwise the untuned compile's: true
-the crowned bias gradient is bitwise the untuned compile's: true
+the search's first candidate is the seeded untuned plan: true
+its timed code is the untuned compile's, segment for segment: true
+the search went on to time later candidates, every one of them refused: true
+the search crowned the seeded plan, its reading the report's seeded_ms and best_ms: true
+the crowned gradients are bitwise the untuned compile's: true
 the control: the plain default pipeline's bias gradient differs in some cell: true
+a refused seeded window is retried after the seed pass: true
+the retried seeded plan is crowned and reported as seeded_ms: true
