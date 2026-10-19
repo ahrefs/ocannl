@@ -74,7 +74,8 @@ files.
   `scalar_t` construct there and nowhere else (the matches are exhaustive, so the build breaks);
   a new digest-relevant *fact* is a `Canonical_render.policy` field if it is an identity choice, or
   a consumer's own preamble/companion section if only one of them consults it. The walk owns what
-  the two agree on: loop-binder tokens `b<n>`, first-occurrence local-scope alpha, comment
+  the two agree on: loop-binder tokens `b<n>` (in scope for the loop body only — a reference after
+  the exit reaches `emit_free_sym`, gh-ocannl-1403), first-occurrence local-scope alpha, comment
   skipping, `mark_incomplete` on opaque statements. Golden + seam test:
   `test/operations/canonical_render.ml`.
 - Why a bespoke renderer rather than `to_doc` / `sexp_of_t`: (1) the digests must be
