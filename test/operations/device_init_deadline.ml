@@ -21,8 +21,10 @@
    returned; a SIGALRM blocked in the thread, or one already pending, does not hide the deadline; a
    SIGALRM from anything else meets the program's own disposition, and a timer the program starts
    during a region is left in place; overlapping regions on two domains are serialized, so a healthy
-   one's disarm does not leave a wedged one unbounded; and the cc backends are not guarded at all.
-   Last, the diagnostic's tag is the one [tools/test-run.sh]'s digest reads. *)
+   one's disarm does not leave a wedged one unbounded; a process exec'd under an ancestor that
+   caught SIGALRM with SA_SIGINFO, which on macOS reads the default disposition with that flag still
+   set (GitHub's macOS runner agent is such an ancestor), is armed; and the cc backends are not
+   guarded at all. Last, the diagnostic's tag is the one [tools/test-run.sh]'s digest reads. *)
 
 open Base
 open Stdio
@@ -259,6 +261,11 @@ let () =
     "guarded regions are serialized: a wedged one entered while a healthy one held the timer is \
      still killed by its own deadline after the healthy one returns"
     (holds concurrent ~f:(died_by_deadline "hip"));
+  let inherited = run ~deadline:"0.5" [ "inherited-siginfo"; "cuda" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "a SIGALRM an ancestor caught with SA_SIGINFO reaches an exec'd process as its default \
+     disposition, and the deadline is armed there (on macOS the flag survives the exec)"
+    (holds inherited ~f:(died_by_deadline "cuda"));
   let cpu =
     List.map cpu_backends ~f:(fun name -> (name, run ~deadline:"0.5" [ "unguarded"; name ]))
   in

@@ -545,6 +545,17 @@ __attribute__((constructor)) static void ocannl_deadline_register_atfork(void) {
       pthread_atfork(NULL, NULL, ocannl_deadline_atfork_child) == 0;
 }
 
+/* Whether SIGALRM has its default disposition. The handler slot alone decides it: [sa_handler] and
+   [sa_sigaction] share it, so an [SA_SIGINFO] handler is never [SIG_DFL]. [sa_flags] must not be
+   consulted: macOS keeps a caught signal's [SA_SIGINFO] across [exec], which resets the handler
+   to [SIG_DFL], so every descendant of a process that once caught SIGALRM that way -- GitHub's
+   macOS runner agent is one -- reads [SIG_DFL] with [SA_SIGINFO] set, and a flag check refused
+   the deadline in all of them. */
+static int ocannl_sigalrm_is_default(void) {
+  struct sigaction cur;
+  return sigaction(SIGALRM, NULL, &cur) == 0 && cur.sa_handler == SIG_DFL;
+}
+
 /* Under the lock. */
 static int ocannl_deadline_start_thread(void) {
   pthread_t thread;
@@ -597,7 +608,6 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   return Val_int(0);
 #else
   double seconds = Double_val(v_seconds);
-  struct sigaction cur;
   char msg[OCANNL_DEADLINE_MSG_MAX];
   size_t len;
   int armed = 2;
@@ -605,8 +615,7 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   if (!(seconds > 0.0)) return Val_int(0);
   /* A bound past three years is a bound all the same, never "disabled". */
   if (seconds > 1e8) seconds = 1e8;
-  if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
-      cur.sa_handler != SIG_DFL)
+  if (!ocannl_sigalrm_is_default())
     return Val_int(0);
   /* Copied before the runtime lock is released: the OCaml string may move meanwhile. */
   len = caml_string_length(v_msg);
@@ -621,8 +630,7 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
       pthread_cond_wait(&ocannl_deadline_free, &ocannl_deadline_lock);
     /* Checked again after the wait, right before committing: another thread may have installed
        its own SIGALRM handler meanwhile, and a program with its own handler gets no deadline. */
-    if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
-        cur.sa_handler != SIG_DFL)
+    if (!ocannl_sigalrm_is_default())
       armed = 0;
     else if (ocannl_deadline_start_thread()) {
       int64_t now = ocannl_monotonic_ns();

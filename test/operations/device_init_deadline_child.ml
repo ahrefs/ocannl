@@ -21,6 +21,14 @@
 
    [unguarded BACKEND]: one guarded call whose hook would print [hook-ran]; prints [returned].
 
+   [inherited-siginfo BACKEND]: catches SIGALRM with an [SA_SIGINFO] handler, then [exec]s this
+   executable, with the same configuration flags, as [exec-stall BACKEND]: as under GitHub's macOS
+   runner agent, whose caught SIGALRM reaches every descendant as [SIG_DFL] with [SA_SIGINFO] still
+   set on macOS.
+
+   [exec-stall BACKEND]: prints [siginfo-inherited <whether SIGALRM reads as SIG_DFL with
+   SA_SIGINFO>], then a 30 s stall.
+
    [again BACKEND]: one real [num_devices] call (on a missing backend's stub, or on a device that
    answers), then a 30 s stall in the same entry point.
 
@@ -53,6 +61,8 @@ module Backends = Context.Backends
 exception Stall_done
 
 external raise_sigalrm : unit -> unit = "ocannl_test_raise_sigalrm"
+external catch_sigalrm_siginfo : unit -> unit = "ocannl_test_catch_sigalrm_siginfo"
+external sigalrm_default_with_siginfo : unit -> bool = "ocannl_test_sigalrm_default_with_siginfo"
 
 let now () = Int64.to_float (Mtime_clock.now_ns ()) /. 1e9
 let say fmt = Printf.ksprintf (fun line -> printf "%s\n%!" line) fmt
@@ -94,10 +104,9 @@ let start_timer seconds =
       : Unix.interval_timer_status)
 
 let () =
-  let args =
-    Array.to_list (Sys.get_argv ())
-    |> List.tl_exn
-    |> List.filter ~f:(fun a -> not (String.is_prefix a ~prefix:"--"))
+  let argv = Sys.get_argv () in
+  let flags, args =
+    Array.to_list argv |> List.tl_exn |> List.partition_tf ~f:(String.is_prefix ~prefix:"--")
   in
   match args with
   | [ "stall"; name; entry; seconds ] ->
@@ -254,6 +263,14 @@ let () =
       done;
       (try call_entry second "num_devices" with Stall_done -> ());
       Stdlib.Domain.join healthy;
+      say "survived"
+  | [ "inherited-siginfo"; name ] ->
+      catch_sigalrm_siginfo ();
+      let exe = Stdlib.Sys.executable_name in
+      Unix.execv exe (Array.of_list ((exe :: flags) @ [ "exec-stall"; name ]))
+  | [ "exec-stall"; name ] ->
+      say "siginfo-inherited %b" (sigalrm_default_with_siginfo ());
+      guarded_call name (stall_for 30.0);
       say "survived"
   | [ "unguarded"; name ] ->
       guarded_call name (fun () ->
