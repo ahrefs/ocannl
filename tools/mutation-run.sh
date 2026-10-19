@@ -293,6 +293,8 @@ for my $pair ([INT => 2], [TERM => 15], [HUP => 1]) {
         kill 'TERM', $child if $child;
     };
 }
+# A signal that reached the baseline's handlers after the baseline was judged cancels this run too.
+$cancel ||= $baseline_stop;
 my $code = 2;
 my $error;
 eval {

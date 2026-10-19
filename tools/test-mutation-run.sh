@@ -609,6 +609,30 @@ PERL
 done
 unset PROBE_BASELINE
 printf 'PASS INT TERM HUP cancel in the baseline, the fork window and during test-run, restoring what was mutated\n'
+# A signal landing after the baseline was judged, before the mutation's own handlers: injected into a
+# copy of the runner right after the baseline, it still cancels before anything is mutated.
+perl - tools/mutation-run.sh > tools/mutation-late-signal.sh <<'PERL'
+use strict;
+use warnings;
+local $/;
+open my $f, '<', $ARGV[0] or die $!;
+my $s = <$f>;
+my $anchor = qq{\nunlink "\$scratch/baseline";\n};
+my $at = index($s, $anchor);
+die "missing post-baseline anchor" if $at < 0;
+substr($s, $at + length($anchor), 0, qq{kill 'TERM', \$\$;\n});
+print $s;
+PERL
+export PROBE_MODE=pass
+rm -f "$fixture/observed"
+set +e
+bash tools/mutation-late-signal.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
+actual=$?
+set -e
+[ "$actual" = 143 ] && [ ! -e "$fixture/observed" ] ||
+  { cat "$fixture/result"; echo "late baseline signal: exit $actual, or the mutant ran"; exit 1; }
+cmp module.ml "$fixture/pristine"
+printf 'PASS a signal between the baseline and the mutation cancels before mutating\n'
 export PROBE_MODE=sleep OCANNL_TOOL_TEST_CAP=1
 run_case 142
 unset OCANNL_TOOL_TEST_CAP
