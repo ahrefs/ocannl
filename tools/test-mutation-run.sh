@@ -58,8 +58,10 @@ m2='  [scanner-refusal:00000000000000000000000000000002] last refusal\n'
 section='\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n'
 case "$PROBE_MODE" in
   fail)
-    rows 'first: false\nnested: label: false\nlast: true\n'
-    printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n'
+    # Two Verdict.fail messages ending like claims, on both streams as Verdict.fail prints them.
+    rows 'first: false\nFAIL: a message ending like a claim: false\nnested: label: false\nlast: true\nFAIL: one ending like pass_fail: FAIL\n'
+    printf 'FAIL: first: false\nFAIL: a message ending like a claim: false\nFAIL: nested: label: false\nFAIL: first: false\n'
+    printf 'FAIL: one ending like pass_fail: FAIL\n'
     printf 'prefix FAIL: decoy: false\nFAIL: true claim: true\nFAIL: suffix: false extra\n'
     exit 1 ;;
   pass) rows 'first: true\nnested: label: true\nlast: true' ; exit 0 ;;
@@ -75,8 +77,12 @@ case "$PROBE_MODE" in
   short) rows 'first: false\nnested: label: true\n'; printf 'FAIL: first: false\n'; exit 1 ;;
   stopped) rows 'first: false\nnested: label: true\nlast: true\n'
     printf 'FAIL: first: false\nSTOPPED EARLY: an uncaught exception ended the run\n'; exit 1 ;;
-  more) rows 'first: false\nFAIL: extra\nnested: label: true\nlast: true\n'
+  more) rows 'first: false\nFAIL: a message\nextra row\nnested: label: true\nlast: true\n'
     printf 'FAIL: first: false\n'; exit 1 ;;
+  # A run cut short after a multi-line failure message: its `FAIL: ` rows are no rows of the
+  # golden, so they cannot make up the rows it never printed (gh-ocannl-1364).
+  failpad) rows 'first: false\nFAIL: the message:\nFAIL:   one\nFAIL:   two\n'
+    printf 'FAIL: first: false\nFAIL: the message:\nFAIL:   one\nFAIL:   two\n'; exit 1 ;;
   # A raising Verdict.case (gh-ocannl-1084): one failed claim in place of the
   # rows the raise kept from printing, and the cases after it still run.
   casemid) rows 'nested: the case ran to completion (raised Failure("injected")): false\nlast: true\n'
@@ -197,11 +203,19 @@ run_case() {
 }
 export PROBE_MODE=fail
 run_case 1
-sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
+# The listing between `false claims:` and the next section: the claims alone (gh-ocannl-1364).
+claims() { awk '/^false claims:$/ { on = 1; next } /^(failure messages|rows)/ { on = 0 } on' "$fixture/result"; }
+messages() { awk '/^failure messages/ { on = 1; next } /^rows/ { on = 0 } on' "$fixture/result"; }
+claims > "$fixture/claims"
 printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n' > "$fixture/expected"
-cmp "$fixture/claims" "$fixture/expected"
+cmp "$fixture/claims" "$fixture/expected" || { cat "$fixture/result"; echo 'fail: the false claims are not the claims'; exit 1; }
+# Verdict.fail messages ending like claims are listed as messages, apart from the claims.
+messages > "$fixture/messages"
+printf 'FAIL: a message ending like a claim: false\nFAIL: one ending like pass_fail: FAIL\n' > "$fixture/expected"
+cmp "$fixture/messages" "$fixture/expected" || { cat "$fixture/result"; echo 'fail: the failure messages are not listed apart'; exit 1; }
 grep -q '^run: ' "$fixture/result"
 grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
+grep -q "^rows not counted: 2 \`FAIL: \` rows of the run's own " "$fixture/result"
 reached() {
   if grep -Eq '^(STOPPED EARLY|NEVER RAN|NOT COUNTED): ' "$fixture/result"; then
     cat "$fixture/result"; echo "a run that reached its last row was flagged"; exit 1
@@ -217,7 +231,7 @@ flagged() {
   grep -q "^$1$" "$fixture/result" || { cat "$fixture/result"; echo "missing: $1"; exit 1; }
   grep -q '^(not evidence: the mutant was neither caught nor survived)$' "$fixture/result"
 }
-for mode in raise short stopped casecrash caseexit casecut stale reused both; do
+for mode in raise short failpad stopped casecrash caseexit casecut stale reused both; do
   export PROBE_MODE=$mode
   run_case 4
   case $mode in
@@ -227,6 +241,10 @@ for mode in raise short stopped casecrash caseexit casecut stale reused both; do
     short)
       grep -q '^FAIL: first: false$' "$fixture/result"
       flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows" ;;
+    failpad)
+      grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
+      grep -q "^rows not counted: 3 " "$fixture/result"
+      flagged "STOPPED EARLY: the mutated run printed 1 of the golden's 3 rows" ;;
     stopped)
       grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
       flagged 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran' ;;
@@ -247,6 +265,7 @@ done
 export PROBE_MODE=more
 run_case 1
 grep -q '^rows: 4 printed of 3 in probe.expected$' "$fixture/result"
+grep -q "^rows not counted: 1 " "$fixture/result"
 reached
 # A raising Verdict.case prints fewer rows than the golden and still reached its
 # last case: caught, not stopped early (gh-ocannl-1084).
@@ -330,12 +349,13 @@ printf 'PASS a failing run short by its success trailer is caught; cut, killed o
 # unprefixed continuation row, the shape Verdict.fail printed before, is a row the golden lacks.
 export PROBE_MODE=trailermulti
 PROBE_ALIAS=@runtest-trailer run_case 1
-grep -q '^rows: 7 printed of 8 in trailer.expected$' "$fixture/result"
+grep -q '^rows: 5 printed of 8 in trailer.expected$' "$fixture/result"
+grep -q "^rows not counted: 2 " "$fixture/result"
 grep -q '^success trailer omitted: 2 rows ' "$fixture/result"
 reached
 export PROBE_MODE=trailermultibare
 PROBE_ALIAS=@runtest-trailer run_case 4
-flagged "STOPPED EARLY: the mutated run printed 7 of the golden's 8 rows"
+flagged "STOPPED EARLY: the mutated run printed 6 of the golden's 8 rows"
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
 # The text above is this fixture's own; what the runner reads is Verdict's. So the runner also reads
 # real Verdict runs: the streams of verdict_teardown's children, which its golden pins byte for byte
@@ -366,10 +386,10 @@ reached
 replay case_exit 'the claim: true\nexits: done: true\nafter the exit: true\n' 4
 flagged 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran'
 # A scan-shaped run short by its success trailer: every line of a multi-line Verdict.fail carries
-# `FAIL: `, and the teardown names several checks. Its `FAIL: ` rows count among the rows printed,
-# and the runner reads a trailer only on a run short of the golden, hence a trailer of two rows.
+# `FAIL: `, and the teardown names several checks. Its `FAIL: ` rows are no rows of the golden, so
+# they do not count among the rows printed (gh-ocannl-1364).
 replay trailer_omitted 'first claim: true\nthird claim: true\nlast claim: true\n\nOK: every claim held.\nOK: four claims checked.\n' 1
-grep -q '^rows: 5 printed of 6 in replay.expected$' "$fixture/result"
+grep -q '^rows: 3 printed of 6 in replay.expected$' "$fixture/result"
 grep -q '^success trailer omitted: 3 rows ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'trailer_omitted: no omitted-trailer line'; exit 1; }
 reached
@@ -377,14 +397,14 @@ reached
 # is its stdout row behind `FAIL: `, so the runner lists every such line, and the message, a `FAIL: `
 # row on both streams, is none of them.
 replay pass_fail_forms 'held: PASS\nfailed: PASS\ndetailed: PASS\n' 1
-sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
+claims > "$fixture/claims"
 sed 's/^/FAIL: /' "$fixture/replay.stdout" > "$fixture/echoes"
 grep -Fx -f "$fixture/echoes" "$fixture/replay.stderr" > "$fixture/expected" || true
 [ "$(wc -l < "$fixture/expected")" -ge 2 ] ||
   { echo 'pass_fail_forms: fewer than two failed claims echo their row on stderr'; exit 1; }
 cmp "$fixture/claims" "$fixture/expected" ||
   { cat "$fixture/result"; echo 'pass_fail_forms: the false claims are not the echoed rows'; exit 1; }
-grep -q '^rows: 4 printed of 3 in replay.expected$' "$fixture/result"
+grep -q '^rows: 3 printed of 3 in replay.expected$' "$fixture/result"
 reached
 printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed\n'
 for mode in pass compile refused; do

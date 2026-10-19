@@ -8,8 +8,9 @@
 # -- whose golden is <dir>/<name>.expected: a mutated run counts as evidence only
 # once it has REACHED ITS LAST ROW (gh-ocannl-1083). The stdout this run wrote
 # (<name>.exe.output, .actual or .output under the build tree) must print as
-# many rows as the golden, and Verdict must not have printed STOPPED EARLY (for
-# an escaping exception, or an exit inside a Verdict.case). Rows short of the
+# many rows as the golden -- its own `FAIL: ` rows, Verdict.fail's, beyond those the
+# golden has, are no rows of it (gh-ocannl-1364) -- and Verdict must not have printed
+# STOPPED EARLY (for an escaping exception, or an exit inside a Verdict.case). Rows short of the
 # golden still count as reached when a Verdict.case raised, Verdict's teardown
 # ended the process, and its stdout ended on the golden's last row or on a case's
 # raise (gh-ocannl-1084); so do rows short only by refusal-manifest marker rows, the
@@ -24,6 +25,8 @@
 # left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
 # (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
 # 1 ("caught") or 0 ("survived").
+# The false claims are the log's `FAIL: ` claim lines; a Verdict.fail message, which
+# prints the same line on stdout too, is listed apart under `failure messages`.
 # Exit: test-run's status, 2 for refusal, 3 for deferred/failed restoration,
 # 4 for a run that is no evidence (above); signals 128+N.
 # A surviving test-run lock prevents automatic restoration; stop the surviving
@@ -85,51 +88,63 @@ sub signature {
     return @s ? join(':', @s[0, 1, 7, 9, 10]) : 'absent';
 }
 my %before = map { $_ => signature($_) } @outputs;
-sub rows {
-    open my $f, '<:raw', $_[0] or refuse("read $_[0]: $!");
-    my ($n, $last, $chunk) = (0, "\n");
-    while (read($f, $chunk, 65536)) {
-        $n += ($chunk =~ tr/\n//);
-        $last = substr($chunk, -1);
-    }
-    close $f or refuse("close $_[0]: $!");
-    return $n + ($last ne "\n");
-}
-my $golden_rows = rows("$root/$golden");
 # What a Verdict.case prints when its case raises (test/support/verdict.ml): the
 # case's own failed claim, standing in for rows the raise kept from printing.
 my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
-# The number of case raises in a stdout, and its last row.
-sub case_raises {
-    open my $f, '<:raw', $_[0] or refuse("read $_[0]: $!");
-    my ($n, $last) = (0, '');
-    while (my $line = <$f>) {
-        $line =~ s/\r?\n$//;
-        $n++ if $line =~ $case_raise;
-        $last = $line;
-    }
-    close $f or refuse("close $_[0]: $!");
-    return ($n, $last);
-}
-my (undef, $golden_last) = case_raises("$root/$golden");
 # A refusal-manifest marker row, as Test_utils.Refusal_control_manifest.print writes one: a
 # claim's marker prints only once Verdict recorded that claim passing, so a run in which the
 # claim failed is a marker row short of the golden while it still reached its last row
-# (gh-ocannl-1216). The other rows, in order, and how many markers there were. A run's own
-# `FAIL: ` rows are Verdict.fail's (every line of a multi-line message carries the prefix),
-# never a golden's, so they are no row of either side.
+# (gh-ocannl-1216).
 my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
-sub plain_rows {
-    open my $f, '<:raw', $_[0] or refuse("read $_[0]: $!");
-    my ($markers, @rows) = (0);
+# A `FAIL: ` row is Verdict.fail's (every line of a multi-line message carries the prefix): the
+# run's own report of what went wrong, no row the golden has -- unless the golden has it, as a
+# golden capturing a refusing child's output does. So a run's `FAIL: ` rows beyond the golden's
+# own, row text by row text, are the run's own, and count toward no row of the golden: a run cut
+# short after a long enough failure message must not read as having reached the golden's last row
+# (gh-ocannl-1364). The golden's are counted like any other row.
+my %golden_fail;
+# One pass over a stdout: its rows (the run's own `FAIL: ` rows apart, counted on their own), its
+# last such row, its case raises, its marker rows, and its other rows in order. [$own] says
+# whether the golden's `FAIL: ` rows are to be set apart (a run's) or counted (the golden's).
+sub read_rows {
+    my ($path, $own) = @_;
+    open my $f, '<:raw', $path or refuse("read $path: $!");
+    my %r = (rows => 0, own_fail => 0, last => '', raises => 0, markers => 0, plain => [], fail_rows => {});
+    my %seen;
     while (my $line = <$f>) {
         $line =~ s/\r?\n$//;
-        if ($line =~ $marker_row) { $markers++ } elsif ($line !~ /^FAIL: /) { push @rows, $line }
+        if ($line =~ /^FAIL: /) {
+            $r{fail_rows}{$line}++;
+            if ($own && ++$seen{$line} > ($golden_fail{$line} // 0)) { $r{own_fail}++; next }
+            $golden_fail{$line}++ unless $own;
+        }
+        $r{rows}++;
+        $r{last} = $line;
+        $r{raises}++ if $line =~ $case_raise;
+        if ($line =~ $marker_row) { $r{markers}++ } else { push @{$r{plain}}, $line }
     }
-    close $f or refuse("close $_[0]: $!");
-    return ($markers, @rows);
+    close $f or refuse("close $path: $!");
+    return \%r;
 }
-my ($golden_markers, @golden_plain) = plain_rows("$root/$golden");
+# One pass over a run's log, handing [$on_line] each line and whether it is one of the stdout's
+# `FAIL: ` rows [$stdout_fails] (row => count), matched once each, in order.
+sub log_pass {
+    my ($log, $stdout_fails, $on_line) = @_;
+    my %left = $stdout_fails ? %$stdout_fails : ();
+    open my $f, '<:raw', $log or refuse("read $log: $!");
+    while (my $line = <$f>) {
+        my $message = 0;
+        if ($line =~ /^(FAIL: .*?)\r?\n?$/ && $left{$1}) {
+            $left{$1}--;
+            $message = 1;
+        }
+        $on_line->($line, $message);
+    }
+    close $f or refuse("close $log: $!");
+}
+my $golden_read = read_rows("$root/$golden", 0);
+my ($golden_rows, $golden_last, $golden_markers, @golden_plain) =
+    ($golden_read->{rows}, $golden_read->{last}, $golden_read->{markers}, @{$golden_read->{plain}});
 # A scan's success trailer: its `OK: ` rows, which it prints only once no claim failed (`if not
 # (Verdict.any_failed ()) then printf "\nOK: ..."`, the shape the manifest-printing scans share),
 # so a complete failing run lacks them -- and the blank row a trailer's leading `\n` puts before
@@ -250,8 +265,8 @@ if ($changed) {
     }
 }
 unlink $backup;
-# All potentially large reporting is after restoration. Stream both files and
-# print each claim immediately rather than accumulating the log or claim list.
+# All potentially large reporting is after restoration. Stream the transcript and
+# the log, printing each claim immediately rather than accumulating the log or claim list.
 $SIG{$_} = 'DEFAULT' for qw(INT TERM HUP);
 my $reported = eval {
     my $log;
@@ -265,14 +280,24 @@ my $reported = eval {
     }
     # Read the digest from THIS invocation, never 'last' or its truncated tail.
     if (defined $log) {
+        # The one stdout this run wrote, when it wrote exactly one: the rows it counts against the
+        # golden's, and the `FAIL: ` rows that tell a failure message from a claim below.
+        my @fresh = grep { -f $_ && !-l $_ && signature($_) ne $before{$_} } @outputs;
+        my $run = @fresh == 1 ? read_rows($fresh[0], 1) : undef;
+        # A claim's stderr line is its stdout row behind `FAIL: `: `<label>: false`, or a failed
+        # pass_fail's `<label>: FAIL` or `<label>: FAIL (<detail>)` (verdict_teardown pins both
+        # streams' bytes). Verdict.fail prints its message on BOTH streams, every line behind
+        # `FAIL: `, so a message ending like a claim reads as one in the log alone; the stdout
+        # tells them apart (gh-ocannl-1364). A log line `FAIL: X` is a message's while the stdout
+        # has a row `FAIL: X` it has not yet been matched to, and a claim's otherwise (`claim` and
+        # `claimf` print no stdout row at all). Each pass over the log matches afresh, so no line
+        # is listed both ways.
+        my $claim_line = qr/^(FAIL: .*: (?:false|FAIL(?: \(.*\))?))\r?\n?$/;
         print 'run: ', basename(dirname($log)), "\nfalse claims:\n";
-        open my $claims, '<:raw', $log or refuse("read $log: $!");
         my ($found, $stopped, $teardown) = (0, '', 0);
-        while (my $line = <$claims>) {
-            # A claim's stderr line is its stdout row behind `FAIL: `: `<label>: false`, or a
-            # failed pass_fail's `<label>: FAIL` or `<label>: FAIL (<detail>)` (verdict_teardown
-            # pins both streams' bytes).
-            if ($line =~ /^(FAIL: .*: (?:false|FAIL(?: \(.*\))?))\r?\n?$/) {
+        log_pass($log, $run && $run->{fail_rows}, sub {
+            my ($line, $message) = @_;
+            if (!$message && $line =~ $claim_line) {
                 print "$1\n";
                 $found = 1;
             }
@@ -284,15 +309,28 @@ my $reported = eval {
             # Verdict's teardown (Verdict.teardown_line): the process ended through
             # exit, not a signal, so nothing after a caught raise was cut off.
             $teardown = 1 if $line =~ /^FAILED: \d+ checks? did not hold(?:: .*)?\.\r?$/;
-        }
-        close $claims or refuse("close $log: $!");
+        });
         print "(none)\n" unless $found;
+        if ($run) {
+            my $header = 0;
+            log_pass($log, $run->{fail_rows}, sub {
+                my ($line, $message) = @_;
+                return unless $message;
+                print "failure messages (Verdict.fail's, no claims):\n" unless $header++;
+                $line =~ s/\r?\n?$/\n/;
+                print $line;
+            });
+        } elsif ($found) {
+            print "(no stdout of this run to tell a Verdict.fail message ending like a claim from one: "
+                . "every such line is listed)\n";
+        }
         # Whether the run reached its last row. Only then is 1 "caught" and 0 "survived".
-        my @fresh = grep { -f $_ && !-l $_ && signature($_) ne $before{$_} } @outputs;
         my $verdict;
-        if (@fresh == 1) {
-            my $printed = rows($fresh[0]);
+        if ($run) {
+            my $printed = $run->{rows};
             print "rows: $printed printed of $golden_rows in $golden\n";
+            print "rows not counted: $run->{own_fail} `FAIL: ` row" . ($run->{own_fail} == 1 ? '' : 's')
+                . " of the run's own (Verdict.fail's; the golden lacks them)\n" if $run->{own_fail};
             if ($stopped eq 'exit') {
                 $verdict = 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran';
             } elsif ($stopped) {
@@ -306,11 +344,11 @@ my $reported = eval {
                 # because nothing after it ran and nothing stopped the run: a signal
                 # leaves no teardown line, and an exit inside a later case its own
                 # STOPPED EARLY, taken above.
-                my ($raised, $last) = case_raises($fresh[0]);
+                my ($raised, $last) = ($run->{raises}, $run->{last});
                 # Omitted marker rows and an omitted success trailer: every other row printed, the
                 # golden's row for row, and the process ended through Verdict's teardown, so a
                 # failed claim did end it.
-                my ($markers, @plain) = plain_rows($fresh[0]);
+                my ($markers, @plain) = ($run->{markers}, @{$run->{plain}});
                 my $trailer = $teardown && $markers <= $golden_markers ? same_plain_rows(@plain) : undef;
                 if ($raised && $teardown && ($last eq $golden_last || $last =~ $case_raise)) {
                     print "cases raised: $raised (the rows short of the golden are theirs; "
