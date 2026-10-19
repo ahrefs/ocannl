@@ -1047,24 +1047,32 @@ let codegen_capabilities (module Config : C_syntax_config) =
         ~m
         ~n
         ~k
+        ~fragment
         ~d:(ldd, (d_space, d_layout))
         ~a:(lda, (a_space, a_layout))
         ~b:(ldb, (b_space, b_layout))
       ->
-        match Config.mma_syntax with
-        | None -> false
-        | Some emit ->
-            Option.is_some
-              (emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k
-                 ~d:
-                   ( PPrint.empty,
-                     ldd,
-                     (match d_space with
-                     | `Fragment -> `Fragment "__mma_probe"
-                     | (`Device | `Shared | `Thread) as space -> (space :> mma_space)),
-                     d_layout )
-                 ~a:(lda, (a_space :> mma_space), a_layout)
-                 ~b:(ldb, (b_space :> mma_space), b_layout)));
+        let target : mma_operand = (PPrint.empty, ldd, (d_space :> mma_space), d_layout) in
+        let a_src : mma_source = (lda, (a_space :> mma_space), a_layout)
+        and b_src : mma_source = (ldb, (b_space :> mma_space), b_layout) in
+        let statement d =
+          match Config.mma_syntax with
+          | None -> false
+          | Some emit ->
+              Option.is_some (emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d ~a:a_src ~b:b_src)
+        in
+        if not fragment then statement target
+        else
+          (* The renderer's order: the enclosing scope accepts the backing target and operands, then
+             renders the update-only statement against its fragment array. *)
+          let fragment_name = "__mma_probe" in
+          (match Config.mma_fragment_syntax with
+            | None -> false
+            | Some scope ->
+                Option.is_some
+                  (scope ~d_prec ~a_prec ~b_prec ~m ~n ~k ~fragment:fragment_name ~target ~a:a_src
+                     ~b:b_src ~body:(fun () -> PPrint.empty)))
+          && statement (PPrint.empty, ldd, `Fragment fragment_name, d_layout));
     mma_operand_fragments = Config.mma_operand_fragments;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole

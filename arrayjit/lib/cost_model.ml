@@ -775,17 +775,16 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
            unmarked statement — on its own, if the hook accepts it with its destination's real
            place. A statement it declines both ways renders scalar or register-tiled code: nothing
            the arm description says applies to it. *)
-        let accepts d_place =
-          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d:(ldd, d_place)
+        let accepts ~fragment =
+          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~fragment
+            ~d:(ldd, operand_place opt d_tn)
             ~a:(lda, operand_place opt a_tn)
             ~b:(ldb, operand_place opt b_tn)
         in
-        let d_space, d_layout = operand_place opt d_tn in
         let scope =
-          if Set.mem opt.Low_level.simdgroup_fragments d_tn && accepts (`Fragment, d_layout) then
+          if Set.mem opt.Low_level.simdgroup_fragments d_tn && accepts ~fragment:true then
             Some Backend_intf.Mma_fragment_scope
-          else if accepts ((d_space :> [ `Device | `Shared | `Thread | `Fragment ]), d_layout) then
-            Some Backend_intf.Mma_per_statement
+          else if accepts ~fragment:false then Some Backend_intf.Mma_per_statement
           else None
         in
         let description =

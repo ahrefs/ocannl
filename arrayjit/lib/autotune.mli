@@ -1790,7 +1790,9 @@ type explain = {
   ex_compute_ms : float option;  (** The compute leg, summed over the kernels. *)
   ex_memory_ms : float option;
       (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
-  ex_spilled : bool;  (** Some kernel's working set exceeds the cache capacity. *)
+  ex_spilled : bool option;
+      (** Some kernel's working set exceeds the cache capacity; [None] where the ranking score was
+          not computed (no envelope constants, or an opaque kernel). *)
   ex_operand_loads : Ir.Cost_model.load_count;
       (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
           over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if

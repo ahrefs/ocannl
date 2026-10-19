@@ -308,7 +308,8 @@ val operand_load_count :
     m:int ->
     n:int ->
     k:int ->
-    d:int * Backend_intf.mma_destination_place ->
+    fragment:bool ->
+    d:int * Backend_intf.mma_operand_place ->
     a:int * Backend_intf.mma_operand_place ->
     b:int * Backend_intf.mma_operand_place ->
     bool) ->

@@ -305,17 +305,19 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
           ~m:_
           ~n:_
           ~k:_
-          ~d:(_, (d_space, _))
+          ~fragment:asks_fragment
+          ~d:_
           ~a:_
           ~b:_
-        -> match d_space with `Fragment -> fragment | `Device | `Shared | `Thread -> true);
+        -> (not asks_fragment) || fragment);
     }
   in
   let declining =
     {
       capabilities with
       mma_accepts =
-        (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ ~ta:_ ~tb:_ ~m:_ ~n:_ ~k:_ ~d:_ ~a:_ ~b:_ -> false);
+        (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ ~ta:_ ~tb:_ ~m:_ ~n:_ ~k:_ ~fragment:_ ~d:_ ~a:_ ~b:_ ->
+          false);
     }
   in
   all "a statement the hook declines has no count" (fun (_, plain, swz) ->
@@ -422,7 +424,19 @@ let () =
         (* CUDA's acceptance is its hook's, which needs the backend; the stand-in accepts every
            statement, and the backend-record leg reads the real hook. *)
         mma_accepts =
-          (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ ~ta:_ ~tb:_ ~m:_ ~n:_ ~k:_ ~d:_ ~a:_ ~b:_ -> true);
+          (fun ~d_prec:_
+            ~a_prec:_
+            ~b_prec:_
+            ~ta:_
+            ~tb:_
+            ~m:_
+            ~n:_
+            ~k:_
+            ~fragment:_
+            ~d:_
+            ~a:_
+            ~b:_
+          -> true);
       }
     ~evaluated:true
 
@@ -456,10 +470,11 @@ let () =
   List.iter explained ~f:(fun (label, ex) ->
       let ms = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.9f") in
       Stdio.eprintf
-        "explain %s: floor %s rank %s compute %s memory %s spilled %b loads %s (not part of the \
+        "explain %s: floor %s rank %s compute %s memory %s spilled %s loads %s (not part of the \
          golden)\n"
         label (ms ex.Autotune.ex_floor_ms) (ms ex.ex_rank_ms) (ms ex.ex_compute_ms)
-        (ms ex.ex_memory_ms) ex.ex_spilled
+        (ms ex.ex_memory_ms)
+        (Option.value_map ex.ex_spilled ~default:"n/a" ~f:Bool.to_string)
         (Sexp.to_string (CM.sexp_of_load_count ex.ex_operand_loads)));
   p "model_explain lists the default pipeline first"
     (match explained with (label, _) :: _ -> String.equal label "default" | [] -> false);

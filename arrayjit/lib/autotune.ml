@@ -4544,7 +4544,7 @@ type explain = {
   ex_rank_ms : float option;
   ex_compute_ms : float option;
   ex_memory_ms : float option;
-  ex_spilled : bool;
+  ex_spilled : bool option;
   ex_operand_loads : CM.load_count;
 }
 
@@ -4569,7 +4569,7 @@ let model_explain ?name ctx comp bindings =
           ex_rank_ms = None;
           ex_compute_ms = None;
           ex_memory_ms = None;
-          ex_spilled = false;
+          ex_spilled = None;
           ex_operand_loads;
         }
     | Some (bound, legs) ->
@@ -4582,7 +4582,7 @@ let model_explain ?name ctx comp bindings =
           ex_rank_ms = Some (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l) *. 1e3);
           ex_compute_ms = ms (total (fun l -> l.kl_compute));
           ex_memory_ms = ms (total (fun l -> l.kl_memory));
-          ex_spilled = List.exists legs ~f:(fun l -> l.kl_spilled);
+          ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
           ex_operand_loads;
         }
   in
