@@ -354,7 +354,6 @@ let exempt_zero_reference_exports =
        -- are reached through [Nn_blocks.DSL_modules] re-exports this census does not follow. Which
        of them an interface should publish, and which it should hide, is gh-ocannl-1010's decision
        (lib/ has no interfaces); this block is its census. *)
-    "Calibrate.named";
     "Nn_blocks.avg_pool2d";
     (* Shared implementation of batch_norm1d/2d, deliberately internal to Nn_blocks; an eventual
        lib/ interface (gh-ocannl-1010) should hide this state-construction helper. *)
@@ -384,8 +383,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";
-    "Parallel.host_get";
-    "Parallel.schedule";
     "Train.compile_with_model_gate";
     "Train.compile_within_budget";
     "Train.decision_lowering_digest";
@@ -427,15 +424,12 @@ let exempt_zero_reference_exports =
    with the type's name would take the entry off this list. *)
 let exempt_unmentioned_types =
   [
-    "Mixed_prec.twin_placement";
     "Ndarray.apply2_as_bigarray";
     "Ndarray.apply_as_bigarray";
     "Ndarray.apply_with_prec";
     "Nn_blocks.position_embedding";
     "Ops.apply_prec";
     "Ops.prec_family";
-    "Parallel.handle";
-    "Parallel.reduction";
     "Train.placement_arm";
     "Utils.config_source";
     "Utils.env_var_class";
