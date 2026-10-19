@@ -7396,11 +7396,22 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
         Utils.registered_int ~arg_name:"cpu_schedule_min_parallel")
   in
   try
-    (* Scratch-writing nests take chains too (gh-ocannl-1343); where linking them to their readers
-       bails the kernel, the plain analysis -- those nests serial, as before -- is the fallback, so
-       the extension never costs a nest the parallelism it had. *)
+    (* Scratch-writing nests take chains too (gh-ocannl-1343). Linking them to their readers can
+       bail the kernel, or trim a reader's chain to the prefix it shares with the scratch writer --
+       a [y[i, j]] reading [s[i]] keeps only [i] -- and lower the largest parallel size below what
+       the plain analysis found, possibly below [min_parallel]. In either case the plain analysis
+       (those nests serial, as before) is the result, so the extension never costs the kernel the
+       parallelism it had: alignment keeps at least the outermost loop of every chain it trims, and
+       the outermost loop is all this preset retypes. *)
     let chains =
-      try analyze_parallel_chains ~shared_locals:true opt with Bail -> analyze_parallel_chains opt
+      let plain = lazy (analyze_parallel_chains opt) in
+      match analyze_parallel_chains ~shared_locals:true opt with
+      | exception Bail -> Lazy.force plain
+      | shared -> (
+          match Lazy.force plain with
+          | plain when max_parallel_size shared < max_parallel_size plain -> plain
+          | _ -> shared
+          | exception Bail -> shared)
     in
     crosscheck_scratch_containment opt chains;
     if max_parallel_size chains < min_parallel then []

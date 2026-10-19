@@ -929,10 +929,11 @@ val default_cpu : ?min_parallel:int -> Low_level.optimized -> schedule
     (gh-ocannl-1343): a nest that writes only scratch ([Local], a function-scope array on the C
     backends) takes its chain from those writes instead of staying serial -- on GPU such a nest runs
     whole in every thread over a per-thread copy, on the C backends a serial nest runs once, on one
-    core. Where linking such a nest to its readers bails, the plain analysis is the fallback, and
-    the C renderer's rule for locals under a pool-parallel loop stays the final word on rendering.
-    Returns the empty schedule below [min_parallel] (default from config [cpu_schedule_min_parallel]
-    = 16384; task fan-out costs more than a GPU launch is worth on small kernels). *)
+    core. Where linking such a nest to its readers bails, or trims a reader's chain so that the
+    largest parallel size drops, the plain analysis is the result, and the C renderer's rule for
+    locals under a pool-parallel loop stays the final word on rendering. Returns the empty schedule
+    below [min_parallel] (default from config [cpu_schedule_min_parallel] = 16384; task fan-out
+    costs more than a GPU launch is worth on small kernels). *)
 
 val log_launches : bool Lazy.t
 (** Config [schedule_log_launches]: backend [compile] logs one stderr line per compiled segment with

@@ -21,14 +21,16 @@
    1. [stats], through the default pipeline ([Schedule.maybe_default_schedules], the transform
    backend [compile] applies, at the configured thresholds): a 128x128 matmul [h] (materialized: it
    exceeds the stack threshold) followed by row statistics [s] (scratch) and [y = h - s]. The
-   matmul's accumulation nest is [Grid]-typed and the statistics stay scratch. 2. [chain], through
-   the default pipeline at [min_parallel] 1 (the presets the tuner seeds and times its fissioned
-   candidates with): the issue's three layers [y_k = relu (w_k * y_{k-1})] at 32x32, every [y_k]
-   materialized and only the last product, so the first two products are scratch. Every product's
-   accumulation nest is [Grid]-typed and the scratch products stay scratch. 3. [transposed], same
-   presets: a scratch product its consumer reads transposed cannot be linked to it by the alignment
-   rule, so the preset falls back to the plain analysis -- the consumer keeps its [Grid] and the
-   producer stays serial, as before the fix. *)
+   matmul's accumulation nest is [Grid]-typed, the statistics stay scratch, and their consumer keeps
+   its [Grid]: linking the scratch writer [s[i]] to its reader [y[i, j]] trims the reader's chain to
+   [i], below [cpu_schedule_min_parallel], so the preset keeps the plain analysis there. 2. [chain],
+   through the default pipeline at [min_parallel] 1 (the presets the tuner seeds and times its
+   fissioned candidates with): the issue's three layers [y_k = relu (w_k * y_{k-1})] at 32x32, every
+   [y_k] materialized and only the last product, so the first two products are scratch. Every
+   product's accumulation nest is [Grid]-typed and the scratch products stay scratch. 3.
+   [transposed], same presets: a scratch product its consumer reads transposed cannot be linked to
+   it by the alignment rule, so the preset falls back to the plain analysis -- the consumer keeps
+   its [Grid] and the producer stays serial, as before the fix. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -136,6 +138,7 @@ let () =
   in
   p "stats: the matmul's accumulation nest is Grid-typed" (grid_writer segments h.Tensor.value);
   p_all "stats: the statistics stay scratch" still_scratch ~f:Fn.id;
+  p "stats: the statistics' consumer keeps its Grid" (grid_writer segments y.Tensor.value);
   p "stats: every Grid loop renders on the pool"
     (grid_loops segments > 0 && pool_rendered src = grid_loops segments);
   p_all2 "stats: values equal the unscheduled compile's, bit for bit" got want ~f:Float.equal

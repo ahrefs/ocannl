@@ -1,5 +1,6 @@
 stats: the matmul's accumulation nest is Grid-typed: true
 stats: the statistics stay scratch: true
+stats: the statistics' consumer keeps its Grid: true
 stats: every Grid loop renders on the pool: true
 stats: values equal the unscheduled compile's, bit for bit: true
 chain: every product's accumulation nest is Grid-typed: true
