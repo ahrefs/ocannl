@@ -1207,28 +1207,35 @@ val launch_geometry_excess :
     on Metal) exempts its dimensions. The workgroup thread PRODUCT is deliberately not a row: it is
     not a per-dimension geometry question, and only the gate checks it. *)
 
-val workgroup_allocation_bytes : capabilities:Backend_intf.codegen_capabilities -> int -> int
-(** One workgroup-shared array's charge: its declared bytes rounded up to the backend's
-    {!field:Backend_intf.workgroup_allocation_alignment} (gh-ocannl-1330). What
-    {!workgroup_memory_bytes} charges each allocation it counts, and what a prediction of it charges
-    each tile. *)
+val kernel_workgroup_bytes :
+  capabilities:Backend_intf.codegen_capabilities ->
+  arrays:int list ->
+  mma_triples:(Ops.prec * Ops.prec * Ops.prec) list ->
+  int
+(** The workgroup-shared charge of a kernel declaring [arrays] (each one array's declared bytes) and
+    tile-MMA emission scopes of the [(d, a, b)] storage triples [mma_triples]: every array rounded
+    up to the backend's {!field:Backend_intf.workgroup_allocation_alignment} (gh-ocannl-1330), plus
+    the backend's per-kernel {!field:Backend_intf.mma_kernel_workgroup_bytes} over the triples, once
+    (gh-ocannl-1255). What {!workgroup_memory_bytes} charges the code it reads, and what a seeding
+    prediction of it charges the tiles and scopes every completion of a sketch declares
+    ([Sketch_families]), so the two round and count alike. *)
 
 val workgroup_memory_bytes :
   capabilities:Backend_intf.codegen_capabilities -> Low_level.optimized -> int
-(** The static workgroup-shared bytes the kernel will declare, each array charged by
-    {!workgroup_allocation_bytes} (Metal rounds every [threadgroup] array up to 4 bytes,
-    gh-ocannl-1330): its [workgroup_shared] tiles (a pipelined tile, one array of rotating copies,
-    counted once per copy) plus, once for the kernel, the rendering backend's
-    {!field:Backend_intf.mma_kernel_workgroup_bytes} over the storage triples of its tile-MMA
-    emission scopes — Metal declares one coordinate table per kernel when any of them converts its
-    destination boundary (gh-ocannl-1205, gh-ocannl-1255). A scope is one [Tile_mma] statement, each
-    copy listed where a loop transform duplicated it; a simdgroup-fragment scope is rendered only
-    around exactly one [Tile_mma], so it is the same list. Plus, per lane all-reduce site that
-    stages per-simdgroup partials ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup],
-    gh-ocannl-1168), the backend's {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its
-    extent at the larger of its local's compute and accumulator precisions. Pass the compiling
-    context's [Context.codegen_capabilities]; the capability-free
-    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
+(** The static workgroup-shared bytes the kernel will declare, charged by {!kernel_workgroup_bytes}
+    (Metal rounds every [threadgroup] array up to 4 bytes, gh-ocannl-1330): its [workgroup_shared]
+    tiles (a pipelined tile, one array of rotating copies, counted once per copy) plus, once for the
+    kernel, the rendering backend's {!field:Backend_intf.mma_kernel_workgroup_bytes} over the
+    storage triples of its tile-MMA emission scopes — Metal declares one coordinate table per kernel
+    when any of them converts its destination boundary (gh-ocannl-1205, gh-ocannl-1255). A scope is
+    one [Tile_mma] statement, each copy listed where a loop transform duplicated it; a
+    simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same list.
+    Plus, per lane all-reduce site that stages per-simdgroup partials
+    ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
+    {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its extent at the larger of its
+    local's compute and accumulator precisions. Pass the compiling context's
+    [Context.codegen_capabilities]; the capability-free {!Backend_intf.no_codegen_capabilities}
+    counts the tiles alone. *)
 
 val thread_private_bytes : Low_level.optimized -> int
 (** The per-work-item scratch bytes the kernel will declare (gh-ocannl-1313): one function-scope

@@ -1,5 +1,7 @@
 the staged composition marks its accumulator as a simdgroup fragment: true
 a duplicated fragment region hands the per-kernel term one triple per copy: true
+the matmul family keeps every staged tensorized seed at a limit of its gate estimate, scratch included: true
+the matmul family refutes every staged tensorized seed one byte below its gate estimate, and a tiles-only family does not: true
 the converted half boundary charges a positive scratch, once per kernel however many scopes: true
 R control: tiles of exactly the limit, no converted boundary, compile and run: true
 R control: the unconverted kernel is tensorized and declares no coordinate table: true

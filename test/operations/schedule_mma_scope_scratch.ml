@@ -222,6 +222,22 @@ let all_claims =
 let claim_fragment_marked = "the staged composition marks its accumulator as a simdgroup fragment"
 let claim_dup_counted = "a duplicated fragment region hands the per-kernel term one triple per copy"
 
+(* The seeding's prediction of the gate (gh-ocannl-1255 item 3), on every backend, under a stand-in
+   capability charging Metal-like scratch and rounding and a stand-in uniform-f16 tile
+   advertisement: the matmul family refutes a staged tensorized seed on workgroup memory exactly
+   where the gate would refuse its built schedule. Each staged tensorized leaf of the unconstrained
+   family is rebuilt and read by the gate's own [Sched.workgroup_memory_bytes]; the family built
+   against that reading as the limit keeps the leaf, and one byte below it refutes it. A tiles-only
+   prediction (the family's default, no capabilities) keeps it one byte below, which is the compile
+   a doomed seed used to cost. *)
+let claim_seed_fit =
+  "the matmul family keeps every staged tensorized seed at a limit of its gate estimate, scratch \
+   included"
+
+let claim_seed_refuted =
+  "the matmul family refutes every staged tensorized seed one byte below its gate estimate, and a \
+   tiles-only family does not"
+
 let () =
   let bk = 16 in
   let a = NTDSL.init ~l:"dup_a" ~prec:Ir.Ops.half ~i:[ 2 * bk ] ~o:[ m ] ~f:(fun _ -> 1.) () in
@@ -253,7 +269,57 @@ let () =
     - Sched.workgroup_memory_bytes ~capabilities:Ir.Backend_intf.no_codegen_capabilities o
   in
   p claim_fragment_marked (not (Set.is_empty opt.LL.simdgroup_fragments));
-  p claim_dup_counted (scopes opt = 1 && scopes { opt with LL.llc = LL.Seq (opt.llc, opt.llc) } = 2)
+  p claim_dup_counted (scopes opt = 1 && scopes { opt with LL.llc = LL.Seq (opt.llc, opt.llc) } = 2);
+  let charging =
+    {
+      Ir.Backend_intf.no_codegen_capabilities with
+      mma_kernel_workgroup_bytes = (fun ~triples -> if List.is_empty triples then 0 else 256);
+      workgroup_allocation_alignment = 4;
+    }
+  in
+  let f16t = Ir.Backend_intf.Mma_f16 in
+  let f16_limits cap =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      max_workgroup_memory_bytes = cap;
+      mma =
+        Some
+          {
+            Ir.Backend_intf.minimal_mma_capability with
+            mma_tile = (8, 8, 8);
+            mma_simd_width = simd_width;
+            mma_format_tiles = [ ((f16t, f16t, f16t), (8, 8, 8)) ];
+          };
+    }
+  in
+  let leaves ?capabilities cap =
+    match
+      Autotune.matmul_sketch_tree ?capabilities ~is_gpu:true ~is_cpu:false ~limits:(f16_limits cap)
+        lowered
+    with
+    | Some tree -> List.map (Ir.Schedule_space.leaves tree) ~f:Autotune.sexp_of_sketch_params
+    | None -> []
+  in
+  let staged =
+    List.filter_map (leaves ~capabilities:charging None) ~f:(fun sexp ->
+        let p = Autotune.sketch_params_of_sexp sexp in
+        if p.Autotune.sk_mma && p.Autotune.sk_bk > 0 then Some (sexp, p) else None)
+  in
+  let accum_prec = (Context.codegen_capabilities (Context.auto ())).accum_prec in
+  let estimate p =
+    Sched.workgroup_memory_bytes ~capabilities:charging
+      (Sched.apply (Autotune.sketch_schedule ~accum_prec ~p lowered) lowered)
+  in
+  let kept ?capabilities cap sexp =
+    List.mem (leaves ?capabilities (Some cap)) sexp ~equal:Sexp.equal
+  in
+  let judged = List.map staged ~f:(fun (sexp, p) -> (sexp, estimate p)) in
+  Stdio.eprintf
+    "schedule_mma_scope_scratch: %d staged tensorized seeds judged (not part of the golden)\n%!"
+    (List.length judged);
+  p_all claim_seed_fit judged ~f:(fun (sexp, est) -> kept ~capabilities:charging est sexp);
+  p_all claim_seed_refuted judged ~f:(fun (sexp, est) ->
+      (not (kept ~capabilities:charging (est - 1) sexp)) && kept (est - 1) sexp)
 
 let () =
   let limits = Context.hardware_limits (Context.auto ()) in

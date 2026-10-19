@@ -259,9 +259,11 @@ files.
   `Tile_mma`, so the estimate is the upper bound. A new `threadgroup` or `__shared__`
   declaration in a backend emitter needs the same route. Metal rounds each `threadgroup` array up
   to 4 bytes (measured, M4 Max: the driver's request for two odd `half` tiles is their rounded sum),
-  so the estimate charges each array `Schedule.workgroup_allocation_bytes`, rounded to
-  `codegen_capabilities.workgroup_allocation_alignment` (gh-ocannl-1330); a prediction of the
-  estimate (a seeding filter) charges its tiles the same way. With the gate exact, the one route to
+  so the estimate charges each array rounded to
+  `codegen_capabilities.workgroup_allocation_alignment` (gh-ocannl-1330), through
+  `Schedule.kernel_workgroup_bytes` — which the sketch families' workgroup-memory refutations and
+  filters call too, with the compiling context's capabilities (`?capabilities`; without them they
+  charge exact tile sizes and no scratch, a weaker floor). With the gate exact, the one route to
   the link-time refusal is the test seam `Schedule.with_gate_capabilities`. Guards:
   `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; plus one
   converted scope they are refused at `Hardware_limits`) and

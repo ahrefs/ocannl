@@ -8716,44 +8716,49 @@ let workgroup_allocation_bytes ~(capabilities : Backend_intf.codegen_capabilitie
   let align = max 1 capabilities.Backend_intf.workgroup_allocation_alignment in
   (bytes + align - 1) / align * align
 
+(* The one charge both the gate's estimate and the seeding predictions of it apply: each array
+   rounded, plus the backend's per-kernel tile-MMA term over the scopes' storage triples
+   (gh-ocannl-1255: once for the kernel, not once per scope). *)
+let kernel_workgroup_bytes ~(capabilities : Backend_intf.codegen_capabilities) ~arrays ~mma_triples
+    =
+  let alloc = workgroup_allocation_bytes ~capabilities in
+  List.sum (module Int) arrays ~f:alloc
+  + alloc (capabilities.Backend_intf.mma_kernel_workgroup_bytes ~triples:mma_triples)
+
 let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
     (opt : Low_level.optimized) : int =
-  let alloc = workgroup_allocation_bytes ~capabilities in
   let staged =
-    Set.fold opt.workgroup_shared ~init:0 ~f:(fun acc tn ->
+    Set.fold opt.workgroup_shared ~init:[] ~f:(fun acc tn ->
         (* A pipelined tile is allocated as [pt_depth] rotating copies (gh-ocannl-487): the IR-level
            dims stay single-copy, so the accounting multiplies here, matching the codegen
-           declaration — one array of [pt_depth] copies, so rounded once. *)
+           declaration — one array of [pt_depth] copies. *)
         let copies =
           match Map.find opt.Low_level.pipelined tn with
           | Some { Low_level.pt_depth; _ } -> pt_depth
           | None -> 1
         in
-        acc + alloc (copies * Lazy.force tn.Tn.size_in_bytes))
+        (copies * Lazy.force tn.Tn.size_in_bytes) :: acc)
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
-  (* gh-ocannl-1255: one kernel-scope term over all the scopes' triples, not one per scope. *)
-  let mma_scratch =
-    staged
-    + alloc
-        (capabilities.Backend_intf.mma_kernel_workgroup_bytes
-           ~triples:
-             (List.map (mma_emission_scopes opt) ~f:(fun (d, a, b) -> (prec d, prec a, prec b))))
-  in
   (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
      one declaration per site (a duplicated copy is its own site). The local resides at its compute
      or its accumulator precision, whichever the renderer's census decides; counting the larger
      keeps the estimate an upper bound (at f32 the two coincide on every GPU backend). *)
-  List.fold
-    (Low_level.lane_all_reduce_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
-    ~init:mma_scratch ~f:(fun acc site ->
-      if not site.Low_level.lar_cross_simdgroup then acc
-      else
-        let bytes p =
-          capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent ~prec:p
-        in
-        let p = prec site.lar_local.Low_level.tn in
-        acc + alloc (max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p))))
+  let partials =
+    List.filter_map
+      (Low_level.lane_all_reduce_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
+      ~f:(fun site ->
+        if not site.Low_level.lar_cross_simdgroup then None
+        else
+          let bytes p =
+            capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent
+              ~prec:p
+          in
+          let p = prec site.lar_local.Low_level.tn in
+          Some (max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p))))
+  in
+  kernel_workgroup_bytes ~capabilities ~arrays:(staged @ partials)
+    ~mma_triples:(List.map (mma_emission_scopes opt) ~f:(fun (d, a, b) -> (prec d, prec a, prec b)))
 
 (* gh-ocannl-1313: the per-work-item scratch the kernel declares — the function-scope arrays
    [C_syntax]'s [local_decls] emits, one per [Local]-settling node of the kernel's traced store,
