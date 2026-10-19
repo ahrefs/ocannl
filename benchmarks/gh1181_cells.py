@@ -42,6 +42,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import box_gate
+from display_safe import display_value, log_line, table_lines
 
 # Each arm: (framework, tree, regime, variant). The order is the base the rotation starts from;
 # it interleaves frameworks so that even an unrotated repeat never runs one framework's arms back
@@ -500,23 +501,29 @@ def summarize(out):
                "timing_rows": len(rows),
                "quote_ok_rows": sum(1 for r in rows if r["quote_ok"]),
                "failures_recorded": failures, "cells": table, "ratios": ratios}
-    lines = [f"# {env['box']} ({env['backend']})", ""]
+    lines = [log_line(f"# {display_value(env['box'])} ({display_value(env['backend'])})"), ""]
     for w, arms in table.items():
-        lines += [f"## {w}", "", "| arm | n | median p50 ms | min | max | compile s | parity max rel | rejected |",
-                  "|---|---|---|---|---|---|---|---|"]
+        rows = []
         for arm, e in arms.items():
             if "median_ms" in e:
                 cs = e["compile_s"]
                 comp = f"{min(cs):.1f}-{max(cs):.1f}" if cs else "-"
-                lines.append(f"| {arm} | {e['n']} | {e['median_ms']:.3f} | {e['min_ms']:.3f} | "
-                             f"{e['max_ms']:.3f} | {comp} | {e['parity_max_rel']:.1e} | {len(e['rejected'])} |")
+                rows.append((display_value(arm), str(e["n"]), f"{e['median_ms']:.3f}",
+                             f"{e['min_ms']:.3f}", f"{e['max_ms']:.3f}", comp,
+                             f"{e['parity_max_rel']:.1e}", str(len(e["rejected"]))))
             else:
-                lines.append(f"| {arm} | 0 | - | - | - | - | - | {len(e['rejected'])} |")
-        lines += ["", "| ratio | value |", "|---|---|"]
-        lines += [f"| {k} | {v:.2f} |" for k, v in ratios[w].items()]
+                rows.append((display_value(arm), "0", "-", "-", "-", "-", "-",
+                             str(len(e["rejected"]))))
+        lines += [log_line(f"## {display_value(w)}"), ""]
+        lines += table_lines(["arm", "n", "median p50 ms", "min", "max", "compile s",
+                              "parity max rel", "rejected"], rows)
+        lines.append("")
+        lines += table_lines(["ratio", "value"],
+                             # The script's own `<arm> / <arm>` labels, of `--arms` choices.
+                             [(k, f"{v:.2f}") for k, v in ratios[w].items()])
         lines.append("")
     if failures:
-        lines += ["## failures", ""] + [f"- {json.dumps(f)}" for f in failures] + [""]
+        lines += ["## failures", ""] + [log_line(f"- {json.dumps(f)}") for f in failures] + [""]
     (out / "summary.md").write_text("\n".join(lines))
     return summary
 

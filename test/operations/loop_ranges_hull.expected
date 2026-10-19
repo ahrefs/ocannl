@@ -1,0 +1,10 @@
+sibling nests: the range of the shared symbol is the hull of both bindings: true
+sibling nests: the shared symbol has exactly one entry: true
+inner siblings: the range of the shared symbol is the hull of both bindings: true
+inner siblings: the enclosing loop keeps its own range: true
+inner siblings: one entry per symbol: true
+of_bindings hulls in either order: true
+bind widens an existing range: true
+a symbol no loop binds has no range: true
+an access-validity query ranged by loop_ranges sees the second sibling's out-of-bounds cells: true
+the same query over the first sibling's range alone admits the access (the hull is what decides): true

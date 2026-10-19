@@ -99,7 +99,7 @@ def job_keys(text):
     return jobs
 
 
-def matrix(text, event, windows=False, compiler=''):
+def raw_jobs(text, event, windows=False, compiler=''):
     systems = expression(field(text, 'os'), event, windows, compiler)
     compilers = expression(field(text, 'ocaml-compiler'), event, windows, compiler)
     includes = expression(field(text, 'include'), event, windows, compiler)
@@ -109,6 +109,11 @@ def matrix(text, event, windows=False, compiler=''):
     jobs = [job + ('',) for job in itertools.product(systems, compilers, suites)]
     jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite'], entry.get('shard', ''))
              for entry in includes]
+    return jobs
+
+
+def matrix(text, event, windows=False, compiler=''):
+    jobs = raw_jobs(text, event, windows, compiler)
     # Every job but the matrix itself and the triage notifier (which runs
     # after all of them) is a side job the Windows fallback must skip: read
     # them from the workflow, so a new job that lacks the guard is refused.
@@ -120,29 +125,43 @@ def matrix(text, event, windows=False, compiler=''):
         assert guard, job + ' selection missing'
         selected[job] = bool(expression(guard[1], event, windows, compiler))
     assert len(set(selected.values())) == 1, 'side jobs select differently: %s' % selected
-    return unshard(sorted(jobs)), selected[side[0]]
+    return unshard(sorted(jobs))[0], selected[side[0]]
+
+
+# The suites ubuntu's 5.5 jobs may shard: tools/ci-shard.sh knows how to cut
+# exactly these, and a shard of anything else would be a job it cannot name.
+SHARDABLE = {('ubuntu-latest', '5.5.x', 'main'), ('ubuntu-latest', '5.5.x', 'train')}
 
 
 def unshard(jobs):
-    # ubuntu's 5.5 main suite as N shard jobs stands for ONE suite, but only if
-    # its shards are exactly 1/N..N/N: a missing K is coverage lost without a red,
-    # a duplicate is a job run twice. Any other job must not carry a shard.
-    shards = [job[3] for job in jobs if job[:3] == ('ubuntu-latest', '5.5.x', 'main')]
-    rest = [job for job in jobs if job[:3] != ('ubuntu-latest', '5.5.x', 'main')]
-    assert all(job[3] == '' for job in rest), 'shard on an unsharded suite'
-    if not shards:
-        return [job[:3] for job in rest]
-    counts = {shard.partition('/')[2] for shard in shards}
-    assert len(counts) == 1 and counts.pop().isdigit(), 'shards disagree on N: %s' % shards
-    n = int(shards[0].partition('/')[2])
-    assert sorted(shards) == sorted('%d/%d' % (k, n) for k in range(1, n + 1)), \
-        'shards are not exactly 1/%d..%d/%d: %s' % (n, n, n, shards)
-    return sorted([job[:3] for job in rest] + [('ubuntu-latest', '5.5.x', 'main')])
+    # A suite as N shard jobs stands for ONE job, but only if its shards are
+    # exactly 1/N..N/N: a missing K is coverage lost without a red, a duplicate
+    # is a job run twice, and an unsharded twin beside them is the suite twice.
+    # Returns the collapsed jobs and each sharded suite's N.
+    groups = {}
+    for job in jobs:
+        groups.setdefault(job[:3], []).append(job[3])
+    collapsed, counts = [], {}
+    for group, shards in groups.items():
+        collapsed.append(group)
+        if shards == ['']:
+            continue
+        assert group in SHARDABLE, 'shard on a suite ci-shard.sh does not cut: %s' % (group,)
+        assert '' not in shards, 'unsharded job beside the shards of %s' % (group,)
+        ns = {shard.partition('/')[2] for shard in shards}
+        assert len(ns) == 1 and ns.pop().isdigit(), 'shards disagree on N: %s' % shards
+        n = int(shards[0].partition('/')[2])
+        assert sorted(shards) == sorted('%d/%d' % (k, n) for k in range(1, n + 1)), \
+            'shards are not exactly 1/%d..%d/%d: %s' % (n, n, n, shards)
+        counts[group] = n
+    return sorted(collapsed), counts
 
 
-normal = sorted([('ubuntu-latest', '5.5.x', 'main'),
-                 ('macos-latest', '5.5.x', 'main'), ('macos-latest', '5.5.x', 'train')])
-full = sorted(normal + [('windows-latest', '5.5.x', 'main'),
+# Per PR and on master: ubuntu carries both suites, macOS only `main` -- ONE
+# job on the scarce runners (gh-ocannl-1422). The schedule adds macOS `train`.
+normal = sorted([('ubuntu-latest', '5.5.x', 'main'), ('ubuntu-latest', '5.5.x', 'train'),
+                 ('macos-latest', '5.5.x', 'main')])
+full = sorted(normal + [('macos-latest', '5.5.x', 'train'), ('windows-latest', '5.5.x', 'main'),
                         ('windows-latest', '5.5.x', 'train'), ('ubuntu-latest', '5.3.x', 'main')])
 windows = [('windows-latest', '5.5.x', 'main'), ('windows-latest', '5.5.x', 'train')]
 
@@ -156,6 +175,14 @@ def suite_step(text):
     assert step, 'unsharded suite step missing'
     named = [token.strip('"').removeprefix('@') for token in step[1].split()]
     assert named == sys.argv[3].split(), 'ci.yml names %s, ci-shard.sh %s' % (named, sys.argv[3].split())
+    # The sharded step hands the script the job's suite: without it every
+    # `train` shard would build a share of `main` instead, green either way.
+    shard = text.split("    - if: ${{ matrix.shard }}\n", 1)
+    assert len(shard) == 2, 'sharded suite step missing'
+    shard = shard[1].split('\n    - ', 1)[0]
+    assert '        SUITE: ${{ matrix.suite }}\n' in shard, 'sharded step does not read matrix.suite'
+    assert re.search(r'^        targets=\$\(opam exec -- tools/ci-shard\.sh targets "\$SHARD" "\$SUITE"\)$',
+                     shard, re.M), 'sharded step does not pass its suite to ci-shard.sh'
 
 
 def compiler_input(text):
@@ -221,8 +248,13 @@ print('PASS normal, scheduled and explicit Windows fallback matrix selections')
 print('PASS every ocaml_compiler option: the default is the ordinary matrix, another is one ubuntu job')
 print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
 print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
-print('PASS ubuntu main shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
+print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
+print('PASS per PR and on master macOS runs one job, main; the schedule adds its train job')
 second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
+train_second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "2/2"},'
+train_last = train_second.rstrip(',') + "]'"
+assert source.count(train_second) == 1 and source.count(',\n               ' + train_last) == 1, \
+    'train 2/2 entries moved; update the mutants below'
 side_guard = "github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'"
 assert source.count(side_guard) == 4, 'side-job guard text moved; update the mutants below'
 compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
@@ -255,6 +287,15 @@ for label, mutant in (
     ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
     ('floor job sharded', source.replace('"ocaml-compiler": "5.3.x", "suite": "main"}', '"ocaml-compiler": "5.3.x", "suite": "main", "shard": "1/1"}')),
     ('suite alias drift', source.replace('"@default" "@runtest" "@bin-smoke"', '"@default" "@runtest"')),
+    ('per-PR train shard dropped', source.replace(',\n               ' + train_last, "]'", 1)),
+    ('scheduled train shard dropped', source.replace(train_second, '', 1)),
+    ('train back on macOS per PR', source[:source.rindex(train_last)] + train_second
+     + ' {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]\'' + source[source.rindex(train_last) + len(train_last):]),
+    ('scheduled macOS train dropped', source.replace('               {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"},\n', '', 1)),
+    ('an unsharded ubuntu train beside its shards', source.replace(train_second, train_second + ' {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train"},', 1)),
+    ('a shard of a suite ci-shard.sh does not cut', source.replace('"suite": "train"}]\'', '"suite": "train", "shard": "1/1"}]\'', 1)),
+    ('sharded step drops the suite', source.replace('targets "$SHARD" "$SUITE")', 'targets "$SHARD")')),
+    ('sharded step reads no suite', source.replace('        SUITE: ${{ matrix.suite }}\n', '')),
 ):
     assert mutant != source, label
     try:
@@ -264,6 +305,51 @@ for label, mutant in (
     else:
         raise AssertionError('accepted mutant: ' + label)
 
+
+# The `train` shards together build exactly the tier `@train` builds. The tier
+# is read here on its own terms -- each tracked dune file's top-level `train`
+# aggregate, its `(alias train-<name>)` deps -- a reader deliberately simpler
+# than ci-shard.sh's, so a disagreement between the two is a red, not a shared
+# blind spot. ci-shard.sh's train mode runs no dune, so this needs none.
+root = Path(sys.argv[1]).resolve().parents[2]
+listed = subprocess.run(['git', '-C', str(root), 'ls-files', '--', 'dune', '*/dune'],
+                        capture_output=True, text=True, check=True).stdout.split()
+tier = set()
+for path in listed:
+    prefix = '' if '/' not in path else path.rsplit('/', 1)[0] + '/'
+    code = re.sub(r';[^\n]*', '', (root / path).read_text())
+    for stanza in re.split(r'\n(?=\()', '\n' + code):
+        if re.match(r'\(alias\s+\(name\s+train\)', stanza):
+            tier |= {'@@' + prefix + name for name in re.findall(r'\(alias\s+(train-[^\s()]+)\s*\)', stanza)}
+assert len(tier) >= 2, 'no train tier found: %s' % sorted(tier)
+
+
+def train_shards(n):
+    out = []
+    for k in range(1, n + 1):
+        run = subprocess.run([str(root / 'tools/ci-shard.sh'), 'targets', '%d/%d' % (k, n), 'train'],
+                             capture_output=True, text=True)
+        assert run.returncode == 0, 'ci-shard.sh targets %d/%d train: %s' % (k, n, run.stderr)
+        out.append(run.stdout.split())
+    return out
+
+
+def partitions(shards, whole):
+    # Every shard nonempty, none sharing a target, together exactly WHOLE.
+    flat = [t for shard in shards for t in shard]
+    return all(shards) and len(flat) == len(set(flat)) and set(flat) == whole
+
+
+group = ('ubuntu-latest', '5.5.x', 'train')
+for event in ('pull_request', 'push', 'schedule'):
+    counts = unshard(sorted(raw_jobs(source, event)))[1]
+    assert group in counts, '%s runs no ubuntu train shards' % event
+    shards = train_shards(counts[group])
+    assert partitions(shards, tier), '%s: the %d train shards %s are not a partition of %s' % (
+        event, counts[group], shards, sorted(tier))
+    # The oracle discriminates: a lost shard, a member it does not carry.
+    assert not partitions(shards[:-1], tier) and not partitions(shards, tier | {'@@x/train-ghost'})
+print('PASS the train shards partition the tier the train aggregates define, every shard nonempty')
 
 # Run the exact bash guard from the workflow with git reporting a fixture HEAD
 # and gh answering the compare API for the one direction the guard must ask:

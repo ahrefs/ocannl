@@ -25,6 +25,9 @@
 # fault-injected twins -- the subject with the split-directory exclusion
 # removed, and with `@rest` naming `default` (recursive in dune, so every
 # test in one shard) instead of `all` -- which the same oracle must reject.
+# The `train` suite's legs hold the same partition over the dune files'
+# `train` aggregates with no dune at all, the reader's refusals, and a twin
+# that skips `subdir` stanzas.
 #
 # On no dune alias, like its siblings in CI's shell-harness job: the subject
 # runs `python3` under that exact name, which a host without one skips.
@@ -41,28 +44,70 @@ harness_scratch test-ci-shard
 
 # The fixture repository: the root, three plain directories, the split
 # directory and a subdirectory of it that defines a same-named per-test alias
-# (the `@@` form is what keeps it out of the split units).
+# (the `@@` form is what keeps it out of the split units), and a training
+# directory whose dune file is the `train` suite's real input.
 repo="$TMP/repo"
-mkdir -p "$repo/tools" "$repo/lib" "$repo/bin" "$repo/test/operations/sub" "$TMP/aliases"
+mkdir -p "$repo/tools" "$repo/lib" "$repo/bin" "$repo/test/operations/sub" "$repo/test/training" "$TMP/aliases"
 for d in . lib bin test/operations test/operations/sub; do : >"$repo/$d/dune"; done
+# The `train` suite reads dune files, not dune: an aggregate whose members
+# include a rule on two aliases and one whose action quotes `;`, parens and
+# `(alias train)`; a train-<name> rule nobody aggregates (no unit: `@train`
+# does not build it); the same `(alias train-gate)` as a DEPENDENCY, which
+# defines nothing; and a `subdir` stanza in the root holding an aggregate of
+# its own. bin/dune names a module `train`, which is no alias at all.
+train_dune='; (alias train) in a comment is prose
+(rule
+ (alias train-gate)
+ (action (progn)))
+(rule
+ (alias train-heavy)
+ (deps (alias train-gate))
+ (action (progn)))
+(rule
+ (aliases train-b runtest-b)
+ (action (progn)))
+(rule
+ (alias train-c)
+ (action (system "echo \"; (alias train)\" ) (")))
+(rule
+ (alias train-orphan)
+ (action (progn)))
+(alias
+ (name train)
+ (package p)
+ (deps
+  (alias train-gate)
+  (alias train-heavy)
+  (alias train-b)
+  (alias train-c)))
+'
+reset_train_dune() { printf '%s' "$train_dune" >"$repo/test/training/dune"; }
+reset_train_dune
+printf '(subdir sub2\n (rule (alias train-sub) (action (progn)))\n (alias (name train) (deps (alias train-sub))))\n' >"$repo/dune"
+printf '(executable (name train) (modules train))\n' >"$repo/bin/dune"
 # Untracked: not part of the tree the shards cover.
 mkdir -p "$repo/scratch" && : >"$repo/scratch/dune"
 
-# The subject, with the fixture table spliced over the shipping one.
+# The subject, with the fixture tables spliced over the shipping ones.
 fixture_weights='
 heavy 10
 @rest 3
 ghost 5
 '
+fixture_train_weights='
+test/training/train-heavy 10
+test/training/train-ghost 5
+'
 install_subject() { # SOURCE
-  python3 - "$1" "$repo/tools/ci-shard.sh" "$fixture_weights" <<'PY'
+  python3 - "$1" "$repo/tools/ci-shard.sh" "$fixture_weights" "$fixture_train_weights" <<'PY'
 import re
 import sys
-source, target, weights = sys.argv[1:4]
+source, target, weights, train_weights = sys.argv[1:5]
 text = open(source).read()
-new, count = re.subn(r"^WEIGHTS='\n.*?^'\n", lambda m: "WEIGHTS='" + weights + "'\n", text, flags=re.M | re.S)
-assert count == 1, 'WEIGHTS block not found exactly once'
-open(target, 'w').write(new)
+for name, table in (('WEIGHTS', weights), ('TRAIN_WEIGHTS', train_weights)):
+    text, count = re.subn(r"^" + name + r"='\n.*?^'\n", lambda m: name + "='" + table + "'\n", text, flags=re.M | re.S)
+    assert count == 1, name + ' block not found exactly once'
+open(target, 'w').write(text)
 PY
   chmod +x "$repo/tools/ci-shard.sh"
 }
@@ -92,6 +137,7 @@ default_listings() {
   listing bin all default bin-smoke
   listing test/operations all default runtest runtest-a runtest-b runtest-c runtest-heavy bin-smoke scans
   listing test/operations/sub all default runtest runtest-a
+  listing test/training all default train train-gate train-heavy train-b train-c train-orphan
   # The split directory's file targets: test executables, their outputs and
   # sources, a helper and a slow-only executable that no unit is named after.
   printf '%s\n' a.exe a.exe.output a.ml b.exe c.exe heavy.exe helper.exe slowonly.exe slowonly.ml \
@@ -152,6 +198,7 @@ units_expected="@@$ops/runtest-a
 @@$ops/bin-smoke
 @@$ops/sub/all
 @@$ops/sub/runtest
+@@test/training/all
 $ops/helper.exe
 $ops/slowonly.exe"
 
@@ -318,7 +365,7 @@ twin() { # LABEL AWK_PROGRAM EXPECTED_TARGET
   install_subject "$SRC"
 }
 twin "no split exclusion" \
-  '/if d == split_dir and a in \(.runtest., .default.\):/ { print "        if False:"; next } { print }' \
+  '/if d == split_dir and a in \(.runtest., .default.\):/ { match($0, /^ */); print substr($0, 1, RLENGTH) "if False:"; next } { print }' \
   "@@$ops/runtest"
 # Credentials never reach its `dune show` calls (gh-ocannl-1280), while a plain variable does; the
 # negative control is a copy with the scrub cut out of both subshells.
@@ -342,7 +389,109 @@ else
   report 1 "negative control: without the scrub, dune show sees the credentials" "exit $cred_rc; see $TMP/credentials.log"
 fi
 twin "rest names default" \
-  "/share = 'all' if a == 'default' else a/ { print \"        share = a\"; next } { print }" \
+  "/share = 'all' if a == 'default' else a/ { match(\$0, /^ */); print substr(\$0, 1, RLENGTH) \"share = a\"; next } { print }" \
   "@@default"
+
+# The `train` suite. Its units are the aggregates' members, read from the
+# dune files: the fake dune is never asked (pointed at a missing command
+# below, so a train run that called it would fail).
+train_expected="@@sub2/train-sub
+@@test/training/train-b
+@@test/training/train-c
+@@test/training/train-gate
+@@test/training/train-heavy"
+train_partition_holds() { # LOG
+  local n k all
+  : >"$1"
+  for n in 1 2 3 4 5; do
+    all=
+    for ((k = 1; k <= n; k++)); do
+      out=$(OCANNL_TOOL_CI_SHARD_DUNE="$TMP/no-such-dune" subject targets "$k/$n" train 2>>"$1") ||
+        { echo "targets $k/$n train failed" >>"$1"; return 1; }
+      [ -n "$out" ] || { echo "train shard $k/$n is empty" >>"$1"; return 1; }
+      all="$all$out"$'\n'
+    done
+    if [ "$(printf '%s' "$all" | sort)" != "$(printf '%s\n' "$train_expected" | sort)" ]; then
+      { echo "N=$n train targets differ from the members:"; printf '%s' "$all" | sort; } >>"$1"
+      return 1
+    fi
+  done
+}
+train_partition_holds "$TMP/train-partition.log"
+report $? "train: for N=1..5 the shards partition the aggregates' members exactly, without dune" \
+  "see $TMP/train-partition.log"
+train1=$(subject targets 1/2 train 2>"$TMP/train-deal.err")
+train2=$(subject targets 2/2 train 2>/dev/null)
+[ "$train1" = "@@test/training/train-heavy" ]
+report $? "train: the heaviest member is dealt first, alone on shard 1/2" "got: $train1"
+[ "$(printf '%s\n' "$train2" | tr '\n' ' ')" = "@@sub2/train-sub @@test/training/train-b @@test/training/train-c @@test/training/train-gate " ]
+report $? "train: the rest go to the lighter shard, equal weights by name" "got: $train2"
+grep -q 'weight for test/training/train-ghost, which is no unit any more' "$TMP/train-deal.err"
+report $? "train: a weight naming no member warns on stderr" "see $TMP/train-deal.err"
+subject plan 2 train 2>/dev/null | grep -q '^shard 2/2: 4 units, load 4 '
+report $? "train: plan reports each shard's members and load"
+[ "$(subject targets 1/1 2>/dev/null)" = "$(subject targets 1/1 main 2>/dev/null)" ]
+report $? "the suite defaults to main"
+
+train_refused() { # LABEL PATTERN DUNE-TEXT [FILE]
+  printf '%s' "$3" >"${4:-$repo/test/training/dune}"
+  refused "train: $1" "$2" subject targets 1/2 train
+  reset_train_dune
+}
+train_refused "an aggregate dep that is no alias" 'not an \(alias train-<name>\)' \
+  '(rule (alias train-a) (action (progn)))
+(alias (name train) (deps (alias train-a) data.txt))'
+train_refused "an aggregate dep on an alias_rec" 'not an \(alias train-<name>\)' \
+  '(rule (alias train-a) (action (progn)))
+(alias (name train) (deps (alias_rec train-a)))'
+train_refused "an aggregate member nothing defines" 'names train-missing, which no stanza there defines' \
+  '(rule (alias train-a) (deps (alias train-missing)) (action (progn)))
+(alias (name train) (deps (alias train-a) (alias train-missing)))'
+train_refused "an aggregate with an action" 'has action' \
+  '(rule (alias train-a) (action (progn)))
+(alias (name train) (deps (alias train-a)) (action (progn)))'
+train_refused "an aggregate with enabled_if" 'has enabled_if' \
+  '(rule (alias train-a) (action (progn)))
+(alias (name train) (enabled_if false) (deps (alias train-a)))'
+train_refused "a rule attached to train itself" 'attaches a rule stanza to the train alias itself' \
+  '(rule (alias train-a) (action (progn)))
+(rule (aliases train runtest) (action (progn)))
+(alias (name train) (deps (alias train-a)))'
+train_refused "two train aggregates in one directory" 'defines the train alias 2 times' \
+  '(rule (alias train-a) (action (progn)))
+(alias (name train) (deps (alias train-a)))
+(alias (name train) (deps (alias train-a)))'
+train_refused "a member named twice" 'names train-a twice' \
+  '(rule (alias train-a) (action (progn)))
+(alias (name train) (deps (alias train-a) (alias train-a)))'
+train_refused "an include it cannot read" 'include stanza' \
+  '(include train.inc)'
+train_refused "a block comment it does not skip" 'comment' \
+  '#| (alias (name train) (deps (alias train-a))) |#'
+root_dune=$(cat "$repo/dune")
+: >"$repo/dune"
+train_refused "no aggregate anywhere" 'no tracked dune file defines a train aggregate' ''
+printf '%s\n' "$root_dune" >"$repo/dune"
+refused "an unknown suite" "unknown suite 'slow'" subject targets 1/2 slow
+refused "plan with an unknown suite" "unknown suite 'slow'" subject plan 2 slow
+train_partition_holds "$TMP/train-partition.log"
+report $? "train: the fixture is restored after the refusals" "see $TMP/train-partition.log"
+
+# The twin for the train reader: skip `subdir` stanzas instead of descending
+# into them, and the root's aggregate member disappears from every shard --
+# which the partition oracle must report as a member mismatch.
+path=$(mutant skip-subdir '/train_stanzas\(stanza\[2:\]/ { match($0, /^ */); print substr($0, 1, RLENGTH) "pass"; next } { print }') &&
+  install_subject "$path" && ! grep -q 'train_stanzas(stanza\[2:\]' "$repo/tools/ci-shard.sh"
+twin_rc=$?
+if [ "$twin_rc" != 0 ]; then
+  report 1 "negative control: train subdir stanzas skipped" "could not build the mutant"
+elif train_partition_holds "$TMP/train-twin.log"; then
+  report 1 "negative control: train subdir stanzas skipped" "the train partition oracle accepted the mutant"
+else
+  grep -q 'train targets differ from the members' "$TMP/train-twin.log" &&
+    ! grep -qxF '@@sub2/train-sub' "$TMP/train-twin.log"
+  report $? "negative control: train subdir stanzas skipped" "rejected for an unrelated reason; see $TMP/train-twin.log"
+fi
+install_subject "$SRC"
 
 finish

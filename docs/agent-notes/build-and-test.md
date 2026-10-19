@@ -786,7 +786,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   A shared fixture outside the legs that is not what they assume is a FAIL where it is built and
   the run goes on; only a subject that cannot be staged at all (a missing script, the
   sourced-files scan `stage_shared` runs) still exits 2. An `exit` that does escape a body is
-  named: `aborted before finish (rc=N) inside leg: NAME`. Leg 84 pins it on a copy of the
+  named: `aborted before finish (rc=N) inside leg: NAME`. Leg 86 pins it on a copy of the
   harness (leg 79 abandoned, leg 70 after it still reporting) against that copy with the check
   spelled as an `exit`; `scripts/test-harness-support.sh` pins the primitives. `set -u`'s
   unbound-variable abort is not containable this way and still ends the run.
@@ -869,7 +869,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
   reports publication, never the verdict. `tools/test-test-run.sh` legs 29–32 pin all of this
   against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
-  `repeat [--alone] N` is the supported flake diagnostic: it holds that same worktree lock once,
+  `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one
+  build, then replays; see Dune mechanics below): it holds that same worktree lock once,
   gives every Dune invocation a freshly cleaned cache-disabled build context, retains each
   iteration's separate stdout, stderr and exit status, and writes every pairwise diff. Stdout or status drift is red;
   stderr-only drift is called out separately and stays diagnostic-green. `--alone` adds `-j 1`,
@@ -1551,6 +1552,27 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   it as under `--cache=disabled`), while `--cache=enabled` also stores the test runs and restores
   their outputs instead of re-running them. A GPU batch's repeat has `run`'s two bounds (next
   section's GPU bullet).
+  **`repeat --direct N @<dir>/runtest-<name>...` pays that rebuild once** (gh-ocannl-1377): a
+  build phase builds and runs the named tests into the set's own build directory, then each
+  iteration replays the test's own target-producing rules in the built tree
+  (`tools/replay-rules.sh`, from `dune rules`' expanded action, in the environment
+  `dune exec --no-build` reports for the context plus dune's per-action TMPDIR and
+  BUILD_PATH_PREFIX_MAP) and runs `dune build --force` over the aliases, which re-runs the alias
+  actions (the golden diff, a run-and-diff or inline-test rule) and compiles nothing. On
+  mac-studio an iteration of `runtest-hello_world_op` took 7-8 s at `-j 4` (its inline-test runner
+  is an alias action, so that is the forced dune alone) after a 29 s build phase, against 21-23 s
+  per clean iteration. Every set compares the first replay with dune's own run of the same rules
+  (the build phase's snapshot of their targets): a replay that agrees with itself but not with
+  dune is `REPLAY DIVERGED`, never a stable test — it caught, while the mode was written, `echo`'s
+  space-joining, a python's locale coercion exporting `LC_CTYPE`, and the `SHLVL`/`_` a shell's
+  `exec` drops (so the build phase's dune is never exec'd). Refused before any iteration: a rule
+  dune runs in a sandbox (the scans' `(sandbox always)` targets), an action outside the replayed
+  forms (`system`, `bash`, a directory target), a test the build phase never ran (`BUILD FAILED`
+  when the build itself failed); for those use the clean form. Not reproduced: the named tests'
+  dune scheduling beside each other (a replay runs them in turn) and a fresh tree (files a test
+  leaves beside its targets persist, as between two dune runs). `tools/test-test-run.sh` leg 84
+  pins all of it against a real dune, with a mutant without the replay as the control that dune's
+  `--force` alone never re-runs a target-producing test.
   For one fresh, TIMED run of named tests (a before/after wall-time comparison),
   `tools/test-run.sh fresh @<dir>/runtest-<name> [@<dir>/slow-<name>...]` hands dune a build
   directory of the run's own with `--force --cache=disabled`: the closure compiles there (some
@@ -2805,13 +2827,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   whole `dune runtest` step was ~8min, most of it this chain; taking it off the per-PR path took
   ubuntu CI from ~31min to ~15 and macOS from ~16 to ~10). The daily sweep's full-suite units
   build `@runtest @train` together, so every backend still executes them daily, and per-PR CI
-  runs the tier as a macOS-ONLY shard: measured with the compile cached, `@train` is ~4.7min on
-  an M4 Max but ~10min on a 24-thread Linux box, so a ubuntu shard (slower still on the 4-vCPU
-  runner) would replace the ~15min main job as the matrix's latency ceiling while the macOS shard
-  fits under it. A change to training dynamics, `Train.*` plumbing or the autotuner's fission
-  path is still worth a local `dune build @train` (or the affected
-  `@test/training/train-<name>`) before pushing, since ubuntu-specific breakage there surfaces
-  only in the sweep. `@slow` keeps the
+  runs the tier as two ubuntu shards (gh-ocannl-1422; the schedule adds a macOS `train` job). It
+  used to be one macOS job, because one ubuntu job would have set the matrix's latency (the chain
+  is ~10min on a 24-thread Linux box with the compile cached, slower on the 4-vCPU runner); but
+  a second macOS job per PR doubled each PR's claim on the scarce macOS runners, and in a ~20-PR
+  wave macOS jobs queued ~2h. `tools/ci-shard.sh targets K/N train` deals the `train` aggregate's
+  members by `TRAIN_WEIGHTS` -- WALL seconds, since the members serialize on the lock and each
+  saturates the cores, so a shard's time is the sum of its members' -- re-measured with
+  `tools/test-run.sh fresh @test/training/train-<name>...` on a Linux box, which prints each
+  member's wall time. A change to training dynamics, `Train.*` plumbing or the autotuner's
+  fission path is still worth a local `dune build @train` (or the affected
+  `@test/training/train-<name>`) before pushing, since macOS-specific breakage there surfaces
+  only in the schedule and the sweep. `@slow` keeps the
   genuinely long real-dataset runs (`mnist_conv`, `cifar_conv`, `gpt2_dry_run`). CI also runs its
   one dune walk as `dune build "@default" "@runtest"` — two separate commands would hold the
   serialized lock chain (what remains of it) against an otherwise idle runner after every file
@@ -2819,7 +2846,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `@` tokens to nothing.
 - Per-PR ubuntu runs that suite as N jobs (`shard: K/N` in `ci.yml`'s matrix), macOS as one: as a
   single job ubuntu had grown back to 18-32min, three quarters of its dune step executing
-  `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` names
+  `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` (suite
+  `main`, the default; `train` above is the other) names
   a shard's targets: each `runtest-<name>` alias of `test/operations` (built `@@`, non-recursive)
   is a unit, and one `@rest` unit is every suite alias, non-recursively, of every OTHER directory
   holding a tracked dune file. **`@@dir/default` is not non-recursive**: no dune file here defines
@@ -2838,8 +2866,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the script reads, prints on STDERR and exits 0 for a directory it does not know (and `dune
   rules` prints nothing for an action-only alias, so it cannot answer coverage questions either):
   the script validates the listing and refuses (exit 2) rather than shard a partial one.
-  `test/operations/ci_matrix.sh` holds the matrix to exactly `1/N..N/N` and the unsharded legs'
-  alias list to the script's; `tools/test-ci-shard.sh` is the hermetic harness.
+  The `train` suite needs no dune: its units are read from the tracked dune files' `(alias (name
+  train) (deps ...))` aggregates as S-expressions, and the reader refuses whatever would make its
+  member list differ from what `@train` builds (a dep that is not `(alias train-<name>)` defined
+  beside it, an extra aggregate field, a rule on `train` itself, an `include`).
+  `test/operations/ci_matrix.sh` holds the matrix to exactly `1/N..N/N` for each sharded suite, the
+  unsharded legs' alias list to the script's and the sharded step to passing its suite, and runs
+  the train shards for the matrix's N against its own reading of the aggregates (they must
+  partition it); `tools/test-ci-shard.sh` is the hermetic harness.
 
 ### opam and caches in CI
 
@@ -4103,12 +4137,17 @@ box.
   measurement set complete — because a refused digest is dropped from `seen` so an equivalent seed
   can retry it: on an idle cuda box `autotune_fission_sketch`'s chain search refuses 4 windows over
   0 distinct candidates, so a claim that added the counter into a candidate population credited four
-  candidates that were the same one, four times. Two report fields carry the narrower facts
+  candidates that were the same one, four times. Three report fields carry the narrower facts
   (gh-ocannl-892 follow-up): `candidates_contended`, the distinct digests refused that no later seed
   timed — the term that composes with `candidates_timed` and the `Not_dispatched_key` declines into
-  "how many distinct candidates did this search reach" — and `default_refused`, which separates a
+  "how many distinct candidates did this search reach" — `default_refused`, which separates a
   contention-refused untuned-default reference from the gh-ocannl-552 regression of never proposing
-  or attributing that seed. A per-arm or per-report scoping is the same rule one level up: a union
+  or attributing that seed, and `baseline_refused` (gh-ocannl-1423), the baseline's own window.
+  `autotune_replay_refusal`'s "the re-search times the baseline the replay released" gates on that
+  one, after re-running the re-search up to three times: a `timings_contended` gate would let any
+  candidate's refusal excuse it, and a `baseline_ms` gate reads the value under test, so a baseline
+  never relinked would skip instead of failing. Its leg 4 refuses the window through
+  `on_candidate_measured` and pins the record, the shape for a new gate of this kind. A per-arm or per-report scoping is the same rule one level up: a union
   over two arms lets partial contention in one excuse the other, and `autotune_arm_containment`'s
   injected-failure scenario is waived only by arm B stopping short of the injection threshold
   (`candidates_timed < 2` for `~after_arm_timed:2`), never by arm A's refusals.

@@ -29,6 +29,7 @@ import re
 import sys
 from pathlib import Path
 
+from display_safe import display_value, log_line, table_lines
 from strict_json import loads
 
 KERNEL = re.compile(r"^bench: kernel (\d+)/(\d+) (?:([0-9.]+) ms .*? w: (.*)|.*DECLINED.*)$")
@@ -106,8 +107,9 @@ def attribute(kernels):
 
 
 def label(result):
+    """The cell as its row names it; the workload is the fixture's own name, shown."""
     regime = result.get("profile") or "exact"
-    return f"{result['workload']}/{result['backend']}/{result['variant']}/{regime}"
+    return f"{display_value(str(result['workload']))}/{result['backend']}/{result['variant']}/{regime}"
 
 
 def main(argv=None):
@@ -121,13 +123,14 @@ def main(argv=None):
     logs = [p for p in sorted(args.logs.glob("*.log")) if "_search_pass_" not in p.name]
     cells = [c for c in map(read_cell, logs) if c]
     if not cells:
-        print(f"gh1161_sites: no OCANNL cifar_resnet cell log in {args.logs}", file=sys.stderr)
+        print(log_line(f"gh1161_sites: no OCANNL cifar_resnet cell log in "
+                       f"{display_value(str(args.logs))}"), file=sys.stderr)
         return 1
     rows, all_sites = [], set()
     for result, kernels, declared in cells:
         if any(label(result) == row[0] for row in rows):
-            print(f"gh1161_sites: two logs in {args.logs} report cell {label(result)}",
-                  file=sys.stderr)
+            print(log_line(f"gh1161_sites: two logs in {display_value(str(args.logs))} report "
+                           f"cell {label(result)}"), file=sys.stderr)
             return 1
         whole = complete(kernels, declared)
         sites, families, unattributed = attribute(kernels)
@@ -136,8 +139,7 @@ def main(argv=None):
     per_site = sorted(all_sites, key=lambda s: (s != "stem", s)) if args.per_site else []
     head = ["cell", "step p50 ms", "kernels timed", "sum of minima ms",
             *(name for name, _ in FAMILIES), "unattributed", *per_site]
-    print("| " + " | ".join(head) + " |")
-    print("|" + "---|" * len(head))
+    table = []
     for name, result, kernels, declared, whole, sites, families, unattributed in sorted(
         rows, key=lambda row: row[0]
     ):
@@ -158,7 +160,8 @@ def main(argv=None):
             ms(unattributed),
             *(ms(sites.get(s, 0.0)) for s in per_site),
         ]
-        print("| " + " | ".join(cols) + " |")
+        table.append(cols)
+    print("\n".join(table_lines(head, table)))
     return 0
 
 

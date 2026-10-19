@@ -55,7 +55,8 @@ test_cap_reaches_slow() { # dune-argv...; 0 (printing the target) iff one reache
 # Run by the resolver beside dune, in the run's process group with the worktree
 # lock closed, it lists the processes every few seconds (`ps`, the portable
 # reader: /proc on Linux, the BSD ps on macOS) and takes as a test every
-# child of a `dune` descending from the resolver -- dune starts each action as
+# child of a `dune` descending from the resolver (or of a process named in
+# `test-parents` there: a direct repeat's replay) -- dune starts each action as
 # its own process-group leader, so the run's group kill reaches dune but not
 # them, while dune's own TERM handling kills every action it has running
 # (measured on dune 3.24, a TERM-ignoring action included). Children of dune
@@ -97,7 +98,16 @@ test_cap_watch='
       if (open my $fh, ">", "$rd/test-cap-off") { print $fh "ps cannot list this host\x27s processes\n"; close $fh }
       exit 0;
     }
-    my (%dune, @queue);
+    # The processes that start tests as dune does: also those that wrote their
+    # pid into `test-parents` in the record directory -- the replay of a direct
+    # repeat (tools/replay-rules.sh), which runs the rules of a test without dune.
+    # Only one descending from the resolver counts, so a stale line cannot
+    # name an unrelated process.
+    my (%dune, %parents, @queue);
+    if (open my $pf, "<", "$rd/test-parents") {
+      while (<$pf>) { $parents{$1} = 1 if /^(\d+)$/ }
+      close $pf;
+    }
     @queue = ($resolver);
     while (@queue) {
       for my $k (@{ $kids{ shift @queue } || [] }) {
@@ -105,7 +115,7 @@ test_cap_watch='
         # By name: a `dune` on PATH that is a shebang WRAPPER would be named
         # dune too (Linux names a script by its basename), and the real dune
         # below it would then be timed as a test.
-        $dune{$k} = 1 if $comm{$k} =~ m{(?:^|/)dune(?:\.exe)?$};
+        $dune{$k} = 1 if $comm{$k} =~ m{(?:^|/)dune(?:\.exe)?$} || $parents{$k};
       }
     }
     for my $p (sort { $a <=> $b } keys %ppid) {

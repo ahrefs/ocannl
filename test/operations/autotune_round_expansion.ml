@@ -324,11 +324,10 @@ let () =
         | ctx, _ ->
             Context.release ctx;
             `Accepted
-        | exception Utils.User_error msg -> `Refused msg)
+        | exception Utils.Invalid_config_value { key; _ } -> `Refused key)
   in
   (match outcome with
-  | `Refused msg ->
-      p "malformed: the refusal names the key"
-        (String.is_substring msg ~substring:"autotune_round_expansion")
+  | `Refused key ->
+      p "malformed: the refusal names the key" (String.equal key "autotune_round_expansion")
   | `Accepted -> p "malformed: the refusal names the key" false);
   p "malformed: nothing was compiled" (!attempts = 0)

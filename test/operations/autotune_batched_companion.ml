@@ -158,11 +158,11 @@ let () =
      set to be non-empty, so it cannot pass by going vacuous. Both are stated over the resulting
      BLOCK COUNT rather than over the split factor (gh-ocannl-744), so neither pins the provenance
      of the geometry that produced it. *)
-  let bounds = LL.loop_bounds opt.LL.llc in
+  let bounds = LL.loop_ranges opt.LL.llc in
   let j_grid_factors bounds sched =
     List.filter_map sched ~f:(function
       | Sched.Split { axis; factor; outer = LL.Grid; _ } -> (
-          match List.Assoc.find bounds axis ~equal:Ir.Indexing.equal_symbol with
+          match Ir.Affine.Loop_ranges.find bounds axis with
           | Some (0, hi) when hi + 1 = m -> Some factor
           | _ -> None)
       | _ -> None)
@@ -399,11 +399,11 @@ let () =
     | _ -> false);
   (* Finer segmentation: the GEMM segment is freed, its seeds construct, and they spread j — the
      axis whose extent m = 64 is unique in this workload (b = 4, i = 32, k = 16). *)
-  let bounds seg = LL.loop_bounds seg.LL.llc in
+  let bounds seg = LL.loop_ranges seg.LL.llc in
   let j_grid_factors seg sched =
     List.filter_map sched ~f:(function
       | Sched.Split { axis; factor; outer = LL.Grid; _ } -> (
-          match List.Assoc.find (bounds seg) axis ~equal:Ir.Indexing.equal_symbol with
+          match Ir.Affine.Loop_ranges.find (bounds seg) axis with
           | Some (0, hi) when hi + 1 = m -> Some factor
           | _ -> None)
       | _ -> None)

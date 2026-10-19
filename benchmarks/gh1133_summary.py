@@ -10,6 +10,7 @@ import statistics
 import sys
 
 import strict_json
+from display_safe import display_value, log_line, table_lines
 
 
 def training_output(out, name):
@@ -56,9 +57,10 @@ def read_cells(out, treatments):
     # A summary is only as complete as its cells (the table is still printed for what exists).
     incomplete = bool(missing) or bool(unreadable) or not cells
     for name in missing:
-        print("MISSING RESULT: %s has no result line" % name)
+        print(log_line("MISSING RESULT: %s has no result line" % display_value(name)))
     for name, error in unreadable:
-        print("UNREADABLE RESULT: %s: its result line is not strict JSON (%s)" % (name, error))
+        print(log_line("UNREADABLE RESULT: %s: its result line is not strict JSON (%s)"
+                       % (display_value(name), error)))
     if not cells:
         print("NO MEASUREMENT: no numbered cell produced a result line")
     return cells, incomplete
@@ -90,9 +92,7 @@ def step_matrix(out, treatments, ref_treatment, ref_all):
     """Print the step-time matrix; whether it is incomplete (a missing result or reference)."""
     treatments = treatments.split()
     cells, incomplete = read_cells(out, treatments)
-    print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs %s | p10..p90 spread | queued (median) | loss vs %s |" % (ref_treatment, ref_treatment))
-    print("|---|---|---|---|---|---|---|---|---|")
-    missing_refs = []
+    rows, missing_refs = [], []
     for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1], treatments.index(kv[0][2]) if kv[0][2] in treatments else 99)):
         p50s = [r["step_ms"]["p50"] for _, r in reps]
         m = statistics.median(p50s)
@@ -103,13 +103,19 @@ def step_matrix(out, treatments, ref_treatment, ref_all):
         ref = median_p50(cells, (backend, fixture, rt))
         if ref is None:
             # The comparison the summary advertises did not happen: an incomplete matrix.
-            missing_refs.append("%s %s %s (reference %s)" % (backend, fixture, treatment, rt))
+            missing_refs.append("%s %s %s (reference %s)" % tuple(
+                map(display_value, (backend, fixture, treatment, rt))))
         loss = loss_vs(reps, cells.get((backend, fixture, rt)))
-        print("| %s | %s | %s | %s | %.2f | %s | %.3fx | %.2f | %s |" % (
-            backend, fixture, treatment, ", ".join("%.2f" % p for p in p50s), m,
-            "%.3fx" % (m / ref) if ref else "", spread, queued, loss))
+        rows.append((
+            display_value(backend), display_value(fixture), display_value(treatment),
+            ", ".join("%.2f" % p for p in p50s), "%.2f" % m, "%.3fx" % (m / ref) if ref else "",
+            "%.3fx" % spread, "%.2f" % queued, loss))
+    shown_ref = display_value(ref_treatment)
+    print("\n".join(table_lines(
+        ["backend", "fixture", "treatment", "p50 per repeat (ms)", "median p50", "vs " + shown_ref,
+         "p10..p90 spread", "queued (median)", "loss vs " + shown_ref], rows)))
     for row in missing_refs:
-        print("MISSING REFERENCE: %s has no reference cell to compare with" % row)
+        print(log_line("MISSING REFERENCE: %s has no reference cell to compare with" % row))
     return incomplete or bool(missing_refs)
 
 
@@ -125,10 +131,10 @@ def summary(out, treatments, ref_treatment, ref_all="", step_stage=True):
         if name.endswith("-trainseg.out"):
             content, reason = training_output(out, name)
             if reason:
-                print("REFUSED: %s %s" % (name, reason))
+                print(log_line("REFUSED: %s %s" % (display_value(name), reason)))
                 incomplete = True
                 continue
-            print("\n### Training segments: %s\n" % name[:-4])
+            print("\n" + log_line("### Training segments: %s" % display_value(name[:-4])) + "\n")
             print("Isolated min-of-20 launch + sync times; their sum is not a step latency, and a row"
                   " is not that kernel's share of the step: the kprof step's in-step column is"
                   " (benchmarks/kernel_attribution.py).\n")
@@ -142,7 +148,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "--check-training":
         _, reason = training_output(sys.argv[2], sys.argv[3])
         if reason:
-            print("REFUSED: %s %s" % (sys.argv[3], reason))
+            print(log_line("REFUSED: %s %s" % (display_value(sys.argv[3]), reason)))
         sys.exit(1 if reason else 0)
     if sys.argv[1] == "--no-step-stage":
         sys.exit(summary(*sys.argv[2:], step_stage=False))

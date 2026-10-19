@@ -814,7 +814,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
   in
   (llc, !out_masks)
 
-(* The accumulation mints below forward [Low_level.loop_bounds llc] to [Low_level.peel_accum_nest],
+(* The accumulation mints below forward [Low_level.loop_ranges llc] to [Low_level.peel_accum_nest],
    so a runtime-extent guard ([i < s], gh-490) does not stop them: [s] is bound outside every loop
    and cannot select among enclosing iterations. Derived here rather than certified by [apply]'s
    caller, because declining is NOT neutral for these mints the way it is in codegen -- a refused
@@ -917,7 +917,7 @@ let coalesce_body ~outer ~inner ~merged ~p ~q (body : Low_level.t) : Low_level.t
   code body
 
 let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
-  let loop_ranges = lazy (Low_level.loop_bounds llc) in
+  let program_ranges = lazy (Low_level.loop_ranges llc) in
   let open Low_level in
   match op with
   | Stage _ | Privatize _ | Fuse_epilogue _ | Tensorize _ | Split_reduce _ | Fold_mma _ ->
@@ -1011,7 +1011,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                serial candidates still agree — both per-step. *)
             if Utils.debug_log_from_routines () then None
             else
-              Low_level.peel_accum_nest ~loop_bounds:(Lazy.force loop_ranges) ~free_of:[ axis ]
+              Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
                 fc.body
           in
           match mint with
@@ -1163,7 +1163,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           let mint =
             if Utils.debug_log_from_routines () then None
             else
-              Low_level.peel_accum_nest ~loop_bounds:(Lazy.force loop_ranges) ~free_of:[ axis ]
+              Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
                 fc.body
           in
           match mint with
@@ -2739,7 +2739,7 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
       let storage = Lazy.force target.Tn.storage_prec in
       let update_bases =
         List.map !updates ~f:(fun st ->
-            match peel_accum_nest ~loop_bounds:[] ~free_of:[] st with
+            match peel_accum_nest ~loop_ranges:Affine.Loop_ranges.empty ~free_of:[] st with
             | Some (_, idcs, base, _, _) when accum_base_widens ~tn:target ~idcs base -> Some base
             | _ -> None)
       in
@@ -2779,9 +2779,7 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
             (* Where [over] is a loop of [entry] itself, the tile narrows once per execution of it,
                which matches the serial rendering only where that is the level localizing the write;
                a loop a [Split] minted carries no such record. *)
-            let over_in_entry =
-              List.Assoc.mem (loop_bounds entry) over ~equal:Indexing.equal_symbol
-            in
+            let over_in_entry = Affine.Loop_ranges.mem (loop_ranges entry) over in
             match judged with
             | [] -> false
             | _ ->
@@ -4869,7 +4867,7 @@ let privatized_tile_widens ~tile (llc : Low_level.t) =
     | Set { tn; llsc; _ } when Tn.equal tn tile -> (
         (not (scalar_touches_tn tile llsc))
         ||
-        match peel_accum_nest ~loop_bounds:[] ~free_of:[] llc with
+        match peel_accum_nest ~loop_ranges:Affine.Loop_ranges.empty ~free_of:[] llc with
         | Some (_, idcs, base, _, _) -> accum_base_widens ~tn:tile ~idcs base
         | None -> false)
     | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn -> not (Tn.equal tn tile)
@@ -5226,9 +5224,9 @@ let loops_independent (opt : Low_level.optimized) ~(syms : Indexing.symbol list)
   let plc = opt.optimize_ctx.placements in
   let verdict_of loop =
     let accs = Low_level.affine_accesses loop in
-    let env = Low_level.loop_bounds loop in
-    let range = Affine.bounds_range env in
-    let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
+    let env = Low_level.loop_ranges loop in
+    let range = Affine.Loop_ranges.find env in
+    let dup = Affine.Loop_ranges.mem env in
     let pairs = List.map syms ~f:(fun s -> (s, s)) in
     let extent s = match range s with Some (lo, hi) -> hi - lo + 1 | None -> 1 in
     let outside =
@@ -6127,7 +6125,8 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
   (* Per-group loop-bound environments (the bare pseudo-group binds no loops): the box domains for
      the affine conflict queries below. *)
   let env_arr =
-    Array.of_list (List.map nests ~f:(fun n -> Low_level.loop_bounds n.n_loops) @ [ [] ])
+    Array.of_list
+      (List.map nests ~f:(fun n -> Low_level.loop_ranges n.n_loops) @ [ Affine.Loop_ranges.empty ])
   in
   (* Cross-group dependency edges (module comment, aligned cross-nest parallelism): a node written
      in one group and touched in another must have all its write/access pairs aligned — unless it is
@@ -6216,8 +6215,8 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
       &&
       (* Each nest ranges its own symbols: two nests may bind one symbol with different bounds, and
          one nest's bounds would drop the other's values (gh-ocannl-1282). *)
-      let range g = Affine.bounds_range env_arr.(g) in
-      let dup g s = List.Assoc.mem env_arr.(g) s ~equal:Indexing.equal_symbol in
+      let range g = Affine.Loop_ranges.find env_arr.(g) in
+      let dup g = Affine.Loop_ranges.mem env_arr.(g) in
       let pairs = List.zip_exn (List.take full_syms.(gi) l) (List.take full_syms.(gj) l) in
       let verdict =
         Affine.pair_conflict ~left_range:(range gi) ~right_range:(range gj) ~dup_left:(dup gi)
@@ -6291,9 +6290,9 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
      comment for the safety argument). *)
   List.iter2_exn nests chains ~f:(fun n chain ->
       let syms = chain_syms chain in
-      let env = Low_level.loop_bounds n.n_loops in
-      let range = Affine.bounds_range env in
-      let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
+      let env = Low_level.loop_ranges n.n_loops in
+      let range = Affine.Loop_ranges.find env in
+      let dup = Affine.Loop_ranges.mem env in
       let pairs = List.map syms ~f:(fun s -> (s, s)) in
       (* The agreement rule: all accesses agree on every component that mentions a parallel symbol.
          For materialized nodes it is the legacy (procedural) special case of the affine conflict
@@ -6712,9 +6711,7 @@ let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
    measurement (lukstafi/ocannl-staging#909, ahrefs/ocannl#1133): on HIP (gfx1151) a one-dimensional
    32-lane workgroup over a (b, s, h, d) projection runs at half the speed of a (h, d) = 8 x 32 one,
    while CUDA measures the two within 0.5% of each other. *)
-let gpu_schedule_workgroup_fill () =
-  Int.of_string
-    (String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_workgroup_fill" ~default:"256"))
+let gpu_schedule_workgroup_fill () = Utils.registered_int ~arg_name:"gpu_schedule_workgroup_fill"
 
 (** {2 The parallel-prefix launch plan (gh-ocannl-1133)}
 
@@ -6911,20 +6908,17 @@ let chain_loops chain =
 type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
 [@@deriving sexp_of, equal]
 
-let lane_preamble_reduction_of_string value =
-  match String.lowercase (String.strip value) with
-  | "auto" -> None
-  | "refused" -> Some Preamble_refused
-  | "duplicated" -> Some Preamble_duplicated
-  | "cooperative" -> Some Preamble_cooperative
-  | other ->
-      invalid_arg
-        ("gpu_lane_preamble_reduction: expected auto, refused, duplicated or cooperative, got "
-       ^ other)
+(* [Some None] is [auto]; [None] is no mode. The value is canonical: stripped and lowercased. *)
+let lane_preamble_reduction_of_string = function
+  | "auto" -> Some None
+  | "refused" -> Some (Some Preamble_refused)
+  | "duplicated" -> Some (Some Preamble_duplicated)
+  | "cooperative" -> Some (Some Preamble_cooperative)
+  | _ -> None
 
 let gpu_lane_preamble_reduction () =
-  lane_preamble_reduction_of_string
-    (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"auto")
+  Utils.registered_keyword ~arg_name:"gpu_lane_preamble_reduction"
+    ~expected:"auto, refused, duplicated or cooperative" ~parse:lane_preamble_reduction_of_string
 
 (* [auto] resolves from the device's economics ({!Backend_intf.hardware_limits}'s
    [lane_scalar_recompute_cheap]): the lanes recompute each pair's scalar preamble ([p], [ds]) once
@@ -6942,19 +6936,13 @@ let lane_preamble_reduction_for limits =
    [gpu_lane_all_reduce_simdgroups] (gh-ocannl-1168): [auto] ([None]) or a positive count. At one
    simdgroup the all-reduce is a register butterfly; past it, each simdgroup's partial goes through
    workgroup-shared memory between two barriers per pair ([C_syntax.try_lane_all_reduce]). *)
-let lane_all_reduce_simdgroups_of_string value =
-  match String.lowercase (String.strip value) with
-  | "auto" -> None
-  | other -> (
-      match Int.of_string_opt other with
-      | Some k when k >= 1 -> Some k
-      | _ ->
-          invalid_arg
-            ("gpu_lane_all_reduce_simdgroups: expected auto or a positive integer, got " ^ other))
+let lane_all_reduce_simdgroups_of_string = function
+  | "auto" -> Some None
+  | other -> ( match Int.of_string_opt other with Some k when k >= 1 -> Some (Some k) | _ -> None)
 
 let gpu_lane_all_reduce_simdgroups () =
-  lane_all_reduce_simdgroups_of_string
-    (Utils.get_global_arg ~arg_name:"gpu_lane_all_reduce_simdgroups" ~default:"auto")
+  Utils.registered_keyword ~arg_name:"gpu_lane_all_reduce_simdgroups"
+    ~expected:"auto or a positive integer" ~parse:lane_all_reduce_simdgroups_of_string
 
 (* [auto] resolves from the device's measured economics ({!Backend_intf.hardware_limits}'s
    [lane_all_reduce_simdgroups]): one simdgroup wherever the barriers' cost was not measured to be
@@ -6972,16 +6960,16 @@ let lane_all_reduce_simdgroups_for limits =
    ([off]). *)
 type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
 
-let serial_lanes_of_string value =
-  match String.lowercase (String.strip value) with
-  | "auto" -> None
-  | "cut" -> Some Lanes_cut
-  | "admitted" -> Some Lanes_admitted
-  | "off" -> Some Lanes_off
-  | other -> invalid_arg ("gpu_serial_lanes: expected auto, cut, admitted or off, got " ^ other)
+let serial_lanes_of_string = function
+  | "auto" -> Some None
+  | "cut" -> Some (Some Lanes_cut)
+  | "admitted" -> Some (Some Lanes_admitted)
+  | "off" -> Some (Some Lanes_off)
+  | _ -> None
 
 let gpu_serial_lanes () =
-  serial_lanes_of_string (Utils.get_global_arg ~arg_name:"gpu_serial_lanes" ~default:"auto")
+  Utils.registered_keyword ~arg_name:"gpu_serial_lanes" ~expected:"auto, cut, admitted or off"
+    ~parse:serial_lanes_of_string
 
 (* [auto] resolves from the same economics as {!lane_preamble_reduction_for}. Every lane recomputes
    its nest's per-pair scalar preamble, which the plain plan pays once per thread over its channel
@@ -7009,17 +6997,18 @@ let resolve_search_shaping_value (limits : Backend_intf.hardware_limits) ~key va
     | Preamble_cooperative -> "cooperative"
   in
   let lanes = function Lanes_cut -> "cut" | Lanes_admitted -> "admitted" | Lanes_off -> "off" in
-  try
-    match key with
-    | "gpu_lane_preamble_reduction" ->
-        preamble (resolve_lane_preamble_reduction limits (lane_preamble_reduction_of_string value))
-    | "gpu_lane_all_reduce_simdgroups" ->
-        Int.to_string
-          (resolve_lane_all_reduce_simdgroups limits (lane_all_reduce_simdgroups_of_string value))
-    | "gpu_serial_lanes" -> lanes (resolve_serial_lanes limits (serial_lanes_of_string value))
-    | "gpu_schedule_block_size" -> Int.to_string (clamp_block_size ~limits (Int.of_string value))
-    | _ -> value
-  with Invalid_argument _ | Failure _ -> value
+  let resolved parse resolve render =
+    Option.value_map (parse value) ~default:value ~f:(fun mode -> render (resolve limits mode))
+  in
+  match key with
+  | "gpu_lane_preamble_reduction" ->
+      resolved lane_preamble_reduction_of_string resolve_lane_preamble_reduction preamble
+  | "gpu_lane_all_reduce_simdgroups" ->
+      resolved lane_all_reduce_simdgroups_of_string resolve_lane_all_reduce_simdgroups Int.to_string
+  | "gpu_serial_lanes" -> resolved serial_lanes_of_string resolve_serial_lanes lanes
+  | "gpu_schedule_block_size" ->
+      resolved Int.of_string_opt (fun limits n -> clamp_block_size ~limits n) Int.to_string
+  | _ -> value
 
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
@@ -7233,9 +7222,8 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
     (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
-    Option.value block_size
-      ~default:
-        (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_block_size" ~default:"256")
+    Option.value_or_thunk block_size ~default:(fun () ->
+        Utils.registered_int ~arg_name:"gpu_schedule_block_size")
   in
   let block_size = clamp_block_size ~limits block_size in
   (* Default 64 (was 1024): a kernel launches either way, so on GPU any real parallelism beats the
@@ -7246,9 +7234,8 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
      coalesce back to a single kernel and fission's placement promotions are undone, so tiny
      programs keep byte-identical artifacts and context contents. *)
   let min_parallel =
-    Option.value min_parallel
-      ~default:
-        (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
+    Option.value_or_thunk min_parallel ~default:(fun () ->
+        Utils.registered_int ~arg_name:"gpu_schedule_min_parallel")
   in
   let fill = Option.value workgroup_fill ~default:(gpu_schedule_workgroup_fill ()) in
   (* The presets' proved two-loop schedule, the thread count of its launch (1 when it stays serial)
@@ -7388,10 +7375,8 @@ let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?a
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
-    Option.value min_parallel
-      ~default:
-        (Int.of_string
-        @@ Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
+    Option.value_or_thunk min_parallel ~default:(fun () ->
+        Utils.registered_int ~arg_name:"cpu_schedule_min_parallel")
   in
   try
     let chains = analyze_parallel_chains opt in
@@ -7946,8 +7931,7 @@ let zero_mappings (tns : Tn.t list) (sched : schedule) : (int * int) list =
 let dry_run = Indexing.discarding_symbols
 
 (* Config [gpu_fission_keep_mapping] (gh-ocannl-1126). *)
-let gpu_fission_keep_mapping =
-  lazy (Utils.get_global_flag ~default:true ~arg_name:"gpu_fission_keep_mapping")
+let gpu_fission_keep_mapping = lazy (Utils.registered_flag ~arg_name:"gpu_fission_keep_mapping")
 
 (* The schedule-aware half of the merge decision (gh-ocannl-1126): [mapping] is the per-segment
    default GPU schedule ({!fission_keep_mapping}): the schedule the kernel will actually receive,
@@ -8246,15 +8230,13 @@ let promote_crossing plc (segs_with_replicas : (segment * funit list) list) :
 let zero_expansion ?block_size ?min_parallel ?workgroup_fill
     ~(limits : Backend_intf.hardware_limits) (tns : Tn.t list) : schedule =
   let block_size =
-    Option.value block_size
-      ~default:
-        (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_block_size" ~default:"256")
+    Option.value_or_thunk block_size ~default:(fun () ->
+        Utils.registered_int ~arg_name:"gpu_schedule_block_size")
   in
   let block_size = clamp_block_size ~limits block_size in
   let min_parallel =
-    Option.value min_parallel
-      ~default:
-        (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
+    Option.value_or_thunk min_parallel ~default:(fun () ->
+        Utils.registered_int ~arg_name:"gpu_schedule_min_parallel")
   in
   let dims tn = Lazy.force tn.Tn.dims in
   let numel tn = Array.fold (dims tn) ~init:1 ~f:( * ) in
@@ -8587,11 +8569,8 @@ let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_in
 
 (** {2 Wiring: the implicit transform for GPU and CPU backends} *)
 
-let automatic_gpu_schedule =
-  lazy (Utils.get_global_flag ~default:true ~arg_name:"automatic_gpu_schedule")
-
-let automatic_cpu_schedule =
-  lazy (Utils.get_global_flag ~default:true ~arg_name:"automatic_cpu_schedule")
+let automatic_gpu_schedule = lazy (Utils.registered_flag ~arg_name:"automatic_gpu_schedule")
+let automatic_cpu_schedule = lazy (Utils.registered_flag ~arg_name:"automatic_cpu_schedule")
 
 let backend_is_gpu name =
   String.is_substring name ~substring:"cuda"
@@ -8599,7 +8578,23 @@ let backend_is_gpu name =
   || String.is_substring name ~substring:"metal"
 
 let backend_is_cpu name = String.is_substring name ~substring:"cc"
-let schedule_fission = lazy (Utils.get_global_flag ~default:true ~arg_name:"schedule_fission")
+
+(* gh-ocannl-1331: the default pipeline's [Search_shaping] keys that only one kind of backend reads
+   -- the GPU presets, lane geometry and fission mapping, and the CPU preset's threshold -- each
+   through the predicate its read sites are gated on ([backend_is_gpu] / [backend_is_cpu], or the
+   [is_gpu] / [is_cpu] the tuner derives from them). Any other key is read wherever a search runs:
+   an omission over-keys, which costs a warm cache its records but never replays one across
+   regimes. *)
+let search_shaping_key_read ~backend_name key =
+  match key with
+  | "automatic_gpu_schedule" | "gpu_fission_keep_mapping" | "gpu_schedule_block_size"
+  | "gpu_schedule_min_parallel" | "gpu_schedule_workgroup_fill" | "gpu_lane_preamble_reduction"
+  | "gpu_lane_all_reduce_simdgroups" | "gpu_serial_lanes" ->
+      backend_is_gpu backend_name
+  | "automatic_cpu_schedule" | "cpu_schedule_min_parallel" -> backend_is_cpu backend_name
+  | _ -> true
+
+let schedule_fission = lazy (Utils.registered_flag ~arg_name:"schedule_fission")
 
 (* Per-compile launch-geometry trace on stderr; consumed by backend [compile]. *)
 let log_launches = lazy (Utils.get_global_flag ~default:false ~arg_name:"schedule_log_launches")
@@ -8616,12 +8611,8 @@ let default_schedule_fingerprint ~backend_name =
   else
     let fission = Lazy.force schedule_fission in
     if backend_is_gpu backend_name then
-      let bs =
-        String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_block_size" ~default:"256")
-      in
-      let mp =
-        String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
-      in
+      let bs = Utils.registered_int ~arg_name:"gpu_schedule_block_size" in
+      let mp = Utils.registered_int ~arg_name:"gpu_schedule_min_parallel" in
       let fill = gpu_schedule_workgroup_fill () in
       (* [lane-plans-v1] (gh-ocannl-1133): the default maps every loop of a proved chain, so a
          [default_ms] timed under the two-loop presets describes another algorithm. [keep_mapping]
@@ -8654,12 +8645,10 @@ let default_schedule_fingerprint ~backend_name =
       (* [zero-topology-v1] (gh-ocannl-1169): under [keep_mapping], zero segments cut where a node
          would lose its lane plan, over shape-sorted zero runs. *)
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
-      let mp =
-        String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
-      in
-      [%string "cpu:fission=%{fission#Bool}:min_parallel=%{mp}"]
+      let mp = Utils.registered_int ~arg_name:"cpu_schedule_min_parallel" in
+      [%string "cpu:fission=%{fission#Bool}:min_parallel=%{mp#Int}"]
 
 let maybe_default_schedule ~backend_name ?(limits = Backend_intf.no_hardware_limits) ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized =
@@ -8691,11 +8680,12 @@ let maybe_default_schedules ~backend_name ?(limits = Backend_intf.no_hardware_li
 
 (* The emission scopes of [opt]'s [Tile_mma] statements, as [(d, a, b)] operand triples: one per
    statement, wherever it sits — duplicated by a materializing [Unroll] or [Partition], each copy is
-   its own lexical scope and declares its own scratch. A recognized simdgroup-fragment scope is no
-   exception: [C_syntax]'s fragment rendering accepts a reduction holding exactly ONE [Tile_mma]
-   into the fragment, so its scope and that statement are one-to-one (and the fragment carries its
-   target's storage precision, the [d] precision the hook is asked about). Fallbacks are not
-   entered: they render instead of, not beside, the intrinsic. *)
+   its own lexical scope (the kernel-scope scratch they share is the backend's per-kernel term over
+   the whole list, gh-ocannl-1255). A recognized simdgroup-fragment scope is no exception:
+   [C_syntax]'s fragment rendering accepts a reduction holding exactly ONE [Tile_mma] into the
+   fragment, so its scope and that statement are one-to-one (and the fragment carries its target's
+   storage precision, the [d] precision the hook is asked about). Fallbacks are not entered: they
+   render instead of, not beside, the intrinsic. *)
 let mma_emission_scopes (opt : Low_level.optimized) : (Tn.t * Tn.t * Tn.t) list =
   let open Low_level in
   let rec go acc = function
@@ -8708,41 +8698,56 @@ let mma_emission_scopes (opt : Low_level.optimized) : (Tn.t * Tn.t * Tn.t) list 
   in
   List.rev (go [] opt.llc)
 
+(* gh-ocannl-1330: one workgroup-shared array's charge, its declared bytes rounded up to the
+   backend's allocation granule — Metal allocates each [threadgroup] array in 4-byte units, so exact
+   sizes summed under-count odd-length [half] tiles. An empty allocation declares nothing. *)
+let workgroup_allocation_bytes ~(capabilities : Backend_intf.codegen_capabilities) bytes =
+  let align = max 1 capabilities.Backend_intf.workgroup_allocation_alignment in
+  (bytes + align - 1) / align * align
+
+(* The one charge both the gate's estimate and the seeding predictions of it apply: each array
+   rounded, plus the backend's per-kernel tile-MMA term over the scopes' storage triples
+   (gh-ocannl-1255: once for the kernel, not once per scope). *)
+let kernel_workgroup_bytes ~(capabilities : Backend_intf.codegen_capabilities) ~arrays ~mma_triples
+    =
+  let alloc = workgroup_allocation_bytes ~capabilities in
+  List.sum (module Int) arrays ~f:alloc
+  + alloc (capabilities.Backend_intf.mma_kernel_workgroup_bytes ~triples:mma_triples)
+
 let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
     (opt : Low_level.optimized) : int =
   let staged =
-    Set.fold opt.workgroup_shared ~init:0 ~f:(fun acc tn ->
+    Set.fold opt.workgroup_shared ~init:[] ~f:(fun acc tn ->
         (* A pipelined tile is allocated as [pt_depth] rotating copies (gh-ocannl-487): the IR-level
            dims stay single-copy, so the accounting multiplies here, matching the codegen
-           declaration. *)
+           declaration — one array of [pt_depth] copies. *)
         let copies =
           match Map.find opt.Low_level.pipelined tn with
           | Some { Low_level.pt_depth; _ } -> pt_depth
           | None -> 1
         in
-        acc + (copies * Lazy.force tn.Tn.size_in_bytes))
+        (copies * Lazy.force tn.Tn.size_in_bytes) :: acc)
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
-  let mma_scratch =
-    List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
-        acc
-        + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
-            ~b_prec:(prec b))
-  in
   (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
      one declaration per site (a duplicated copy is its own site). The local resides at its compute
      or its accumulator precision, whichever the renderer's census decides; counting the larger
      keeps the estimate an upper bound (at f32 the two coincide on every GPU backend). *)
-  List.fold
-    (Low_level.lane_all_reduce_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
-    ~init:mma_scratch ~f:(fun acc site ->
-      if not site.Low_level.lar_cross_simdgroup then acc
-      else
-        let bytes p =
-          capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent ~prec:p
-        in
-        let p = prec site.lar_local.Low_level.tn in
-        acc + max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p)))
+  let partials =
+    List.filter_map
+      (Low_level.lane_all_reduce_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
+      ~f:(fun site ->
+        if not site.Low_level.lar_cross_simdgroup then None
+        else
+          let bytes p =
+            capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent
+              ~prec:p
+          in
+          let p = prec site.lar_local.Low_level.tn in
+          Some (max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p))))
+  in
+  kernel_workgroup_bytes ~capabilities ~arrays:(staged @ partials)
+    ~mma_triples:(List.map (mma_emission_scopes opt) ~f:(fun (d, a, b) -> (prec d, prec a, prec b)))
 
 (* gh-ocannl-1313: the per-work-item scratch the kernel declares — the function-scope arrays
    [C_syntax]'s [local_decls] emits, one per [Local]-settling node of the kernel's traced store,
@@ -8761,8 +8766,21 @@ let thread_private_bytes (opt : Low_level.optimized) : int =
         acc + Tn.size_in_bytes_peek tn
       else acc)
 
+(* gh-ocannl-1330: the test seam over the capabilities the gate judges by, one value per domain like
+   [Autotune.Seam] (which this module cannot reuse: [Autotune] depends on it). The default is the
+   identity and no configuration selects anything else. *)
+let gate_capabilities_seam :
+    (Backend_intf.codegen_capabilities -> Backend_intf.codegen_capabilities) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () -> Fn.id)
+
+let with_gate_capabilities adjust ~f =
+  let prior = Stdlib.Domain.DLS.get gate_capabilities_seam in
+  Stdlib.Domain.DLS.set gate_capabilities_seam adjust;
+  Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set gate_capabilities_seam prior)
+
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
+  let capabilities = (Stdlib.Domain.DLS.get gate_capabilities_seam) capabilities in
   Option.iter limits.max_threads_per_workgroup ~f:(fun max_threads ->
       let block = (Low_level.launch_dims opt.llc).block in
       let block_product = Array.fold block ~init:1 ~f:( * ) in

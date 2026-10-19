@@ -836,7 +836,14 @@ files.
   `Backend_intf.advertises_mma_format_in_scope`, a pure descriptor judgment with explicit policy
   and accumulator scope; tile divisibility is asserted separately. Missing MMA capability skips
   this both-sides census leg, including HIP's device/header conjunction. `mma_format_scope` covers
-  absent wide scopes and policy combinations a concrete GPU cannot vary. The arch-floor axis no
+  absent wide scopes and policy combinations a concrete GPU cannot vary. The descriptor's
+  correspondence with the arm table, for every backend, needs no device at all:
+  `mma_format_arm_tables` (gh-ocannl-1246) sweeps `Numerics.all` x emission scopes x storage
+  triples through `Autotune.mma_tile_for_precisions_in_scope` against each backend's `mma_arm`,
+  plus reachability of every advertised key, over CUDA's `Ir.Cuda_mma`, Metal's `Ir.Metal_mma`,
+  HIP's `Ir.Hip_mma` (the device-free tables each backend installs once its device set qualifies)
+  and cc's live tables. Put a new backend's mma tables in such a module and add a row; what the
+  census leg alone still pins is that the hooks render the arm the table names. The arch-floor axis no
   fleet GPU can vary either (every box sits above CUDA's 70/80/89 cutoffs) is `cuda_mma_cutoffs`'s
   (gh-ocannl-1214): CUDA's descriptor and arm resolver live in `Ir.Cuda_mma`, outside the
   cudajit-gated backend, as functions of the compute capability, and the test evaluates both just
@@ -868,6 +875,18 @@ files.
   through the swizzle map. Eligibility remains per operand and orientation. The census
   distinguishes `Mma_intrinsics_ldmatrix` from `Mma_intrinsics` using the actual load choice,
   so "tensorized" and "fed at rate" are separable in a sweep.
+- **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
+  The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
+  `"== 0)"` never told the two apart; "no intrinsic spelling" says nothing about a statement that
+  declined for another reason; and a decline diagnostic goes to stderr, so a check that the source
+  lacks it always passes. `Ll_test` holds the statement-level forms over
+  `Ll_test.renderings routine.Context.mma`: `all_rendered`, `all_tensorized`, `all_declined`,
+  `none_emitted` (for GPU legs of a CPU-only `Tensorize` schedule) and
+  `census_agrees_with_capability` (tensorized where `Ll_test.advertised` says the backend has the
+  tile for the leg's storage precisions, declined elsewhere — its stanza then declares
+  `OCANNL_TF32_MATMULS` and `OCANNL_CC_VECTOR_BYTES` beside the backend). Keep a text pin only
+  for what the text is about (a dialect's instruction, a register-tile geometry, a fence's
+  position, a swizzle's XOR), and say so at the site.
 ## Register-tile search and ranking
 - **The register-tile geometry is a schedule decision, not a renderer constant** (gh-ocannl-619).
   `Schedule.Tensorize` carries `tile : Register_tile.t option` (`{rm; rn; lanes}`) into
@@ -1131,7 +1150,18 @@ files.
   `auto` lane mode is resolved per device (`Schedule.resolve_search_shaping_value`, passed by
   `tune` once `limits` is known), so an explicit mode equal to `auto`'s pick is also the default.
   A new `Search_shaping` key needs a `config_key_defaults` row (the `config_class_fingerprint`
-  test fails without one), and every read of a registered key refuses a `~default:` that disagrees.
+  test fails without one) and is read only through its kind's typed getter (`Utils.registered_int`
+  and siblings, gh-ocannl-1332): the getter owns the default and refuses text the kind does not
+  parse with `Utils.Invalid_config_value` naming the key (`autotune_rounds=two` used to run as 2),
+  `test_config_consistency` fails any other read, and a keyword's modes are its read site's
+  `~parse`. The key must also be read within `Autotune.tune`'s static reach (`digest_completeness`
+  check 4, gh-ocannl-1331); a key only some backends read goes in
+  `Schedule.search_shaping_key_read` (or `Autotune.search_shaping_key_read` for the seeded plan's),
+  so `gpu_*` stated on cc keys nothing -- `flip_abandonment` states every key the predicate calls
+  unread on cc OFF its default and requires the warm chain to replay its abandonment record. It
+  states valid values, not garbage, and so pins the identity, not an absence of reads: the
+  placement level above the search does read two of them on cc (`Autotune.placement_surface`
+  segments for the cc mma descriptor as the GPU seeders do).
 - **A structural twin of a lost flip is skipped without a budget slot** (gh-ocannl-1274). The
   identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
   program (`optimized.source`, where an inlined node is still present) that sets or reads the
@@ -1920,7 +1950,7 @@ files.
   The default annotator DOES descend, registering the body's accesses like a serial loop's, so an
   enclosing loop the accesses prove independent keeps its `Grid` mapping — the carried state is
   per-iteration scratch of that loop (leg 4, Serial vs Grid parity on cc and Metal). For footprint
-  queries the scan index is an ordinary loop symbol: `loop_bounds`, interval analysis, and
+  queries the scan index is an ordinary loop symbol: `loop_ranges`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
 ## Timing identity

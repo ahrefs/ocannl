@@ -39,7 +39,8 @@ let () =
     | [ site ] -> Idx.equal_symbol site.Autotune.sr_axis k
     | _ -> false);
   let residual = { base with LL.llc = concat_output } in
-  p_empty "concatenated output yields no split-reduce site" ~over:(LL.loop_bounds residual.LL.llc)
+  p_empty "concatenated output yields no split-reduce site"
+    ~over:(Ir.Affine.Loop_ranges.to_alist (LL.loop_ranges residual.LL.llc))
     (Autotune.split_reduce_sites residual);
   let unrelated = sym () in
   p "Concat mentions each constituent and no unrelated symbol"

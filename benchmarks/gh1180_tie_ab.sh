@@ -40,9 +40,11 @@ usage() { sed -n '/^# Usage/,/^# Exit/p' "$0" | sed '$d' >&2; exit 2; }
 HERE=$(cd "$(dirname "$0")" && pwd -P)
 
 summary() { # OUT
-  python3 - "$1" <<'EOF'
+  python3 - "$1" "$HERE" <<'EOF'
 import glob, os, re, statistics, sys
 out = sys.argv[1]
+sys.path.insert(0, sys.argv[2])  # benchmarks/, for the shared table and line builders
+from display_safe import display_value, log_line, table_lines
 line_re = re.compile(r'^(packmma(?:_par)?)\s+\S+ ms\s+(\S+) GFLOP/s.*\[(.*)\]\s*$')
 cells, bad = {}, []
 for path in sorted(glob.glob(os.path.join(out, '*.out'))):
@@ -58,18 +60,17 @@ for path in sorted(glob.glob(os.path.join(out, '*.out'))):
         if lm:
             census = lm.group(3)
             if 'Mma_register_tiled' not in census or 'fallback' in census.lower():
-                bad.append(f'{os.path.basename(path)}: census [{census}]')
+                bad.append(f'{display_value(os.path.basename(path))}: census [{census}]')
             rates[lm.group(1)] = float(lm.group(2))
     if status != '0':
-        bad.append(f'{os.path.basename(path)}: exit {status}')
+        bad.append(f'{display_value(os.path.basename(path))}: exit {status}')
     header = next((ln for ln in text.splitlines() if ln.startswith('GEBP ')), '')
     if f' rn{rn} ' not in header or '(requested)' not in header:
-        bad.append(f'{os.path.basename(path)}: header does not name the requested rn{rn}')
+        bad.append(f'{display_value(os.path.basename(path))}: header does not name the requested rn{rn}')
     if set(rates) != {'packmma', 'packmma_par'}:
-        bad.append(f'{os.path.basename(path)}: packed lines missing ({sorted(rates)})')
+        bad.append(f'{display_value(os.path.basename(path))}: packed lines missing ({sorted(rates)})')
     cells.setdefault(case, {}).setdefault(rnd, {})[rn] = rates
-rows = ['| Case | Variant | A | B | A range (GFLOP/s) | B range (GFLOP/s) | Median A vs B | A wins |',
-        '| --- | --- | --- | --- | --- | --- | --- | --- |']
+rows = []
 # The round count the run was launched with: a summary over fewer rounds, or over a round missing
 # one side of its pair, would be an unbalanced ABBA design reported as a complete one.
 m = re.search(r' rounds=(\d+)', open(os.path.join(out, 'driver.log')).read()) \
@@ -83,20 +84,20 @@ if m:
         prec, n, bm, bk, reps, rna, rnb = c.split(':')
         name = f'{prec}-{n}-{bm}-{bk}-{reps}-rn{rna}-rn{rnb}'
         if name not in cells:
-            bad.append(f'{name}: no cells at all')
+            bad.append(f'{display_value(name)}: no cells at all')
 for case in cases:
     rounds = cells[case]
     prec, n, bm, bk, reps, rna, rnb = case.split('-')
     rna, rnb = int(rna[2:]), int(rnb[2:])
     if rna == rnb:
-        bad.append(f'{case}: rn{rna} paired with itself -- both sides read one cell')
+        bad.append(f'{display_value(case)}: rn{rna} paired with itself -- both sides read one cell')
     if sorted(rounds) != list(range(expected)):
-        bad.append(f'{case}: rounds {sorted(rounds)}, expected 0..{expected - 1}')
+        bad.append(f'{display_value(case)}: rounds {sorted(rounds)}, expected 0..{expected - 1}')
     for variant in ('packmma', 'packmma_par'):
         missing = [r for r in sorted(rounds)
                    if rounds[r].get(rna, {}).get(variant) is None or rounds[r].get(rnb, {}).get(variant) is None]
         if missing:
-            bad.append(f'{case}: {variant} lacks a side of the pair in rounds {missing}')
+            bad.append(f'{display_value(case)}: {variant} lacks a side of the pair in rounds {missing}')
         a = [rounds[r].get(rna, {}).get(variant) for r in sorted(rounds)]
         b = [rounds[r].get(rnb, {}).get(variant) for r in sorted(rounds)]
         pairs = [(x, y) for x, y in zip(a, b) if x is not None and y is not None]
@@ -106,14 +107,16 @@ for case in cases:
         wins = sum(1 for x, y in pairs if x > y)
         ties = sum(1 for x, y in pairs if x == y)
         xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
-        label = f'{prec} n={n} bm={bm} bk={bk}'
-        rows.append(f'| {label} | {"serial" if variant == "packmma" else "parallel"} | rn{rna} | rn{rnb} '
-                    f'| {min(xs):.2f}–{max(xs):.2f} | {min(ys):.2f}–{max(ys):.2f} '
-                    f'| {statistics.median(ratios) * 100:+.2f}% | {wins}/{len(pairs)}'
-                    f'{f", {ties} tie" if ties else ""} |')
-text = '\n'.join(rows) + '\n'
+        # The case's parts come from the cell file names, which the operator's case list named.
+        label = ' '.join(display_value(x) for x in (prec, f'n={n}', f'bm={bm}', f'bk={bk}'))
+        rows.append((label, 'serial' if variant == 'packmma' else 'parallel', f'rn{rna}', f'rn{rnb}',
+                     f'{min(xs):.2f}–{max(xs):.2f}', f'{min(ys):.2f}–{max(ys):.2f}',
+                     f'{statistics.median(ratios) * 100:+.2f}%',
+                     f'{wins}/{len(pairs)}' + (f', {ties} tie' if ties else '')))
+text = '\n'.join(table_lines(['Case', 'Variant', 'A', 'B', 'A range (GFLOP/s)',
+                               'B range (GFLOP/s)', 'Median A vs B', 'A wins'], rows)) + '\n'
 if bad:
-    text += '\nINVALID CELLS:\n' + '\n'.join('- ' + b for b in bad) + '\n'
+    text += '\nINVALID CELLS:\n' + '\n'.join(log_line('- ' + b) for b in bad) + '\n'
 open(os.path.join(out, 'summary.md'), 'w').write(text)
 print(text, end='')
 sys.exit(1 if bad else 0)

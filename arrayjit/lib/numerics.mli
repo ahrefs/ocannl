@@ -32,7 +32,7 @@
       mantissa and 65504 range for a doubled lane count. On targets that merely promote to float it
       is ignored (costs accuracy for no speed), and the GPU backends behave as under [Fp16_auto]
       (their f16 arithmetic is native narrow already). *)
-type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, equal]
+type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, equal, enumerate]
 
 (** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
     policy surface stays one shape for both 16-bit float formats.
@@ -41,11 +41,10 @@ type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, 
       (under {!field-narrow_compute_f32}), CUDA's bf16 accumulators are f32 structurally (NVIDIA has
       no bf16 accumulate), HIP resolves WIDE since gh-ocannl-1051 (as [Bf16_wide]: gfx11's
       bf16-accumulate WMMA is not exactly rounded and drifts grossly over long reductions, and the
-      f32 arm was measured at most ~8% slower on tensorized GEMM cells;
-      [Hip_backend.bf16_accum_wide]), and Metal keeps storage-width bf16 accumulators mirroring its
-      uniform-bf16 tensor-unit triple. Like [Fp16_auto] this retains latitude per backend: do not
-      write code that assumes it equals [Bf16_narrow] — ask the backend's [accum_prec]/seeding
-      instead.
+      f32 arm was measured at most ~8% slower on tensorized GEMM cells; [Hip_mma.bf16_accum_wide]),
+      and Metal keeps storage-width bf16 accumulators mirroring its uniform-bf16 tensor-unit triple.
+      Like [Fp16_auto] this retains latitude per backend: do not write code that assumes it equals
+      [Bf16_narrow] — ask the backend's [accum_prec]/seeding instead.
     - [Bf16_wide] (config [false]): bf16 reduction accumulators reside in f32 on every backend,
       narrowing once per nest — the rounding of the narrowing alone, where gfx11's bf16-accumulate
       WMMA loses about a bf16 ulp at the partial-sum scale. As for [Fp16_wide], backends whose
@@ -61,7 +60,7 @@ type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, 
       HIP, where it keeps the bf16-accumulate WMMA arm and storage-width serial accumulators that
       [Bf16_auto] resolved to before gh-ocannl-1051. It is what the [approximate] profile names,
       which is how that profile kept the narrow side when auto moved. *)
-type bf16_mode = Bf16_auto | Bf16_narrow | Bf16_wide [@@deriving sexp, compare, equal]
+type bf16_mode = Bf16_auto | Bf16_narrow | Bf16_wide [@@deriving sexp, compare, equal, enumerate]
 
 type t = {
   tf32_matmuls : bool;
@@ -120,11 +119,13 @@ type t = {
       (** How bf16 accumulates, per {!bf16_mode} (gh-ocannl-838). bf16 COMPUTE needs no knob: no
           target has native bf16 arithmetic, so {!field-narrow_compute_f32} already decides it. *)
 }
-[@@deriving sexp, compare, equal]
+[@@deriving sexp, compare, equal, enumerate]
 
 (** Serialization and structural comparison are deliberately public: callers can persist and compare
     complete policies and individual modes without consulting the process-wide policy. The [sexp_of]
-    converters also provide debugging and observability entry points. *)
+    converters also provide debugging and observability entry points. The [all] enumeration is every
+    policy, the grid a pure test over a policy-reading table sweeps without listing the fields
+    itself, so a field added here joins every such sweep (gh-ocannl-1246). *)
 
 val default : unit -> t
 (** Read a policy from the global configuration without changing the cached current policy. *)

@@ -92,7 +92,8 @@ let () =
   let base = Option.value_exn ~here:[%here] !captured in
   (* Over the lowering's loops: an elementwise routine with no loops at all would bind nothing for
      the wrong reason. *)
-  p_empty "the tuner's base lowering binds no hardware dimension" ~over:(LL.loop_bounds base.LL.llc)
+  p_empty "the tuner's base lowering binds no hardware dimension"
+    ~over:(Ir.Affine.Loop_ranges.to_alist (LL.loop_ranges base.LL.llc))
     (LL.hardware_axes base.LL.llc);
   let default =
     Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices:[] base
@@ -120,8 +121,10 @@ let () =
   let r = Option.value_exn ~here:[%here] !report in
   let is_gpu = Sched.backend_is_gpu backend in
   let baseline_measured = Float.is_finite r.Autotune.baseline_ms in
+  (* The baseline's own window (gh-ocannl-1423), not [timings_contended], which a refused candidate
+     window grows too. *)
   let baseline_contention_refused =
-    (not is_gpu) && (not baseline_measured) && r.Autotune.timings_contended > 0
+    (not is_gpu) && (not baseline_measured) && r.Autotune.baseline_refused
   in
   p "the serial baseline is measured or contention-refused on CPU, and not dispatched on GPU"
     (if is_gpu then not baseline_measured else baseline_measured || baseline_contention_refused);

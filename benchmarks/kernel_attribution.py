@@ -56,6 +56,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import strict_json  # noqa: E402
+from display_safe import display_value, log_line, table_lines  # noqa: E402
 from gh1002_cells import KERNEL  # noqa: E402  (the one reader of the kernel-table row)
 
 ISO_TOLERANCE = 0.10
@@ -149,7 +150,8 @@ def trace(path, tracer="nsys"):
                     agents.add(r["Agent_Id"])
     if len(agents) > 1:
         raise Refused("%s: the step's kernels ran on %d agents (%s); the cell states one device's"
-                      " memory model" % (Path(path).name, len(agents), ", ".join(sorted(agents))))
+                      " memory model" % (Path(path).name, len(agents),
+                                         ", ".join(map(display_value, sorted(agents)))))
     for _, name, ms in sorted(rows):
         m = SEG.match(name)
         if m:
@@ -188,7 +190,7 @@ def attribute(out, name):
         off = ids[0]
         if ids != list(range(off, off + len(ids))) or sorted(seg.get(routine, {})) != list(range(len(ids))):
             raise Refused("%s: routine %s's in-step segments do not match its isolated kernels %d..%d"
-                          % (name, routine, off, ids[-1]))
+                          % (name, display_value(routine), off, ids[-1]))
         for j in range(len(ids)):
             mapped[off + j] = (seg[routine][j], kernels[off + j])
     if sorted(mapped) != sorted(rows):
@@ -290,21 +292,22 @@ def render_cell(out, name, rec, rows):
               % (round(ISO_TOLERANCE * 100), len(own), sum(r["med"] for r in own),
                  100 * sum(r["med"] for r in own) / total))
     if rec["memory_model"] is not None:
-        print("- memory model: %s %s" % rec["memory_model"])
+        print(log_line("- memory model: %s %s" % rec["memory_model"]))
     clk = clocks(out, stem)
     if clk:
         print("- SM clock in P0: %d..%d MHz, median %d (%d samples)" % (clk[0], clk[2], clk[1], clk[3]))
-    print("\n| kernel | in-step median | p10..p90 | isolated min | iso / in-step | table min | flags | writes |")
-    print("|---|---|---|---|---|---|---|---|")
-    shown, covered = 0, 0.0
+    listed, shown, covered = [], 0, 0.0
     for r in sorted(rows, key=lambda r: -r["med"]):
         if covered >= SHOWN_SHARE * total or shown >= SHOWN_MAX:
             break
         shown += 1
         covered += r["med"]
-        print("| %d | %.3f | %.3f..%.3f | %.3f | %.2f | %.3f | %s | %s |" % (
-            r["i"], r["med"], r["p10"], r["p90"], r["iso_min"], r["iso_min"] / r["med"],
-            r["host_min"], " ".join(r["flags"]), label(r["writes"])))
+        listed.append(("%d" % r["i"], "%.3f" % r["med"], "%.3f..%.3f" % (r["p10"], r["p90"]),
+                      "%.3f" % r["iso_min"], "%.2f" % (r["iso_min"] / r["med"]),
+                      "%.3f" % r["host_min"], " ".join(r["flags"]), label(r["writes"])))
+    print()
+    print("\n".join(table_lines(["kernel", "in-step median", "p10..p90", "isolated min",
+                                 "iso / in-step", "table min", "flags", "writes"], listed)))
     rest = sorted(rows, key=lambda r: -r["med"])[shown:]
     if rest:
         print("\n%d further kernels: %.2f ms in-step (%.1f%%), %d flagged ISO, %d SPREAD, %d OWN." % (
@@ -345,13 +348,12 @@ def render_repeatability(cells):
                     if members[0][1][i]["med"] >= 0.1
                     and max(spread("med", i)[0], spread("iso_min", i)[0]) > REPEAT_TOLERANCE]
         if rows_out:
-            print("\n| kernel | in-step medians | isolated minima | writes |")
-            print("|---|---|---|---|")
-            for i in rows_out:
-                print("| %d | %s | %s | %s |" % (
-                    i, ", ".join("%.3f" % x for x in spread("med", i)[1]),
-                    ", ".join("%.3f" % x for x in spread("iso_min", i)[1]),
-                    label(members[0][1][i]["writes"])))
+            print()
+            print("\n".join(table_lines(
+                ["kernel", "in-step medians", "isolated minima", "writes"],
+                [("%d" % i, ", ".join("%.3f" % x for x in spread("med", i)[1]),
+                  ", ".join("%.3f" % x for x in spread("iso_min", i)[1]),
+                  label(members[0][1][i]["writes"])) for i in rows_out])))
         else:
             print("- no kernel of >= 0.1 ms moved by more than %.0f%% between cells"
                   % ((REPEAT_TOLERANCE - 1) * 100))
@@ -366,7 +368,7 @@ def report(out):
         try:
             rec, rows = attribute(out, name)
         except (Refused, OSError, ValueError, KeyError) as e:
-            print("REFUSED: %s: %s" % (name, e))
+            print(log_line("REFUSED: %s: %s" % (name, e)))
             refused = True
             continue
         render_cell(out, name, rec, rows)
@@ -380,7 +382,7 @@ if __name__ == "__main__":
         try:
             attribute(sys.argv[2], sys.argv[3])
         except (Refused, OSError, ValueError, KeyError) as e:
-            print("REFUSED: %s: %s" % (sys.argv[3], e))
+            print(log_line("REFUSED: %s: %s" % (display_value(sys.argv[3]), e)))
             sys.exit(1)
         sys.exit(0)
     if len(sys.argv) == 3 and sys.argv[1] == "report":

@@ -1,11 +1,12 @@
-(* gh-ocannl-1205: the schedule-level shared-memory estimate counts the workgroup memory a tile-MMA
-   emission scope declares beside the staged tiles. Metal's converted destination boundary (a float
-   accumulator over half storage under [Fp16_wide], gh-ocannl-1075) initializes a coordinate table
-   in [threadgroup] memory once per scope. Before this the estimate summed the staged tiles alone,
-   so a candidate that fit them but not the table reached backend compilation, where
-   [newComputePipelineStateWithFunction] refused it (measured on an M4 Max) — then an untyped
+(* gh-ocannl-1205, gh-ocannl-1255: the schedule-level shared-memory estimate counts the workgroup
+   memory a kernel's tile-MMA emission scopes declare beside the staged tiles. Metal's converted
+   destination boundary (a float accumulator over half storage under [Fp16_wide], gh-ocannl-1075)
+   reads a coordinate table in [threadgroup] memory. Before gh-ocannl-1205 the estimate summed the
+   staged tiles alone, so a candidate that fit them but not the table reached backend compilation,
+   where [newComputePipelineStateWithFunction] refused it (measured on an M4 Max) — then an untyped
    [Failure], a fatal to a search; since gh-ocannl-1226 a typed [Backend_link] decline, but the gate
-   refuses before compiling anything.
+   refuses before compiling anything. Since gh-ocannl-1255 the table (the same 0..63 everywhere) is
+   declared once per kernel rather than once per scope, and the estimate charges it once per kernel.
 
    The legs work at the device's own limit [L], on a staged + tensorized uniform-half matmul whose
    accumulator is a resident fragment across two [k_o] blocks (one converted scope).
@@ -14,13 +15,15 @@
    so the kernel compiles, links and runs at the limit, tensorized (the control: the tiles alone fit
    and the staged accounting is exact there). Under [Fp16_wide] the same schedule is refused at
    [Hardware_limits], before any backend compilation, requesting [L + scratch], where [scratch] is
-   the backend's own [mma_scope_workgroup_bytes] for the triple (positive on Metal).
+   the backend's own [mma_kernel_workgroup_bytes] for the triple (positive on Metal).
 
-   F, the fit at the limit: under [Fp16_wide], tiles of [L - scratch] bytes (an A-tile stride pad
-   makes the sum land exactly), so the estimate is exactly [L]. It compiles, links and runs, so the
+   F, the fit at the limit, with TWO converted scopes: under [Fp16_wide], tiles of [L - scratch]
+   bytes (an A-tile stride pad makes the sum land exactly), and the kernel's code run twice in
+   sequence (each copy a scope of its own, the second recomputing the same product), so the estimate
+   is exactly [L] only because the table is charged once. It compiles, links and runs, so the
    compiled kernel's own static allocation is not above the estimate (Metal's pipeline creation
-   would refuse it otherwise). The emitted source declares exactly as many tables as the estimate
-   counted scopes.
+   would refuse it otherwise), and its values are the product's. The emitted source declares one
+   table for the two scopes.
 
    The scratch size is never restated here: it is read off the capability the emitter derives it
    from. Only Metal converts at a threadgroup-resident boundary; elsewhere the legs are skipped. *)
@@ -117,7 +120,7 @@ type leg = {
   out : Tensor.t;
 }
 
-let compile_leg ~name ~fp16 ~bk ~a_pad =
+let compile_leg ?(scopes = 1) ~name ~fp16 ~bk ~a_pad () =
   let k = 2 * bk in
   let a =
     NTDSL.init ~l:(name ^ "_a") ~prec:Ir.Ops.half ~i:[ k ] ~o:[ m ]
@@ -142,6 +145,16 @@ let compile_leg ~name ~fp16 ~bk ~a_pad =
         (staged_schedule ~bk ~a_pad ~out:c.Tensor.value ~src_a:a.Tensor.value ~src_b:b.Tensor.value
            opt)
         opt
+    in
+    (* [scopes] copies of the kernel's code in sequence, each emitting its own scope. *)
+    let o =
+      {
+        o with
+        LL.llc =
+          List.reduce_exn
+            (List.init scopes ~f:(fun _ -> o.LL.llc))
+            ~f:(fun c1 c2 -> LL.Seq (c1, c2));
+      }
     in
     (* Read under the leg's policy: the triple converts only under [Fp16_wide]. *)
     estimate := Sched.workgroup_memory_bytes ~capabilities:ctx_caps o;
@@ -176,15 +189,18 @@ let claim_r_control =
 let claim_r_control_source =
   "R control: the unconverted kernel is tensorized and declares no coordinate table"
 
-let claim_scratch = "the converted half boundary charges a positive per-scope scratch"
+let claim_scratch =
+  "the converted half boundary charges a positive scratch, once per kernel however many scopes"
 
 let claim_r_refused =
   "R wide: the same tiles plus the scope scratch are refused at Hardware_limits, requesting \
    exactly tiles + scratch"
 
-let claim_f_estimate = "F wide: tiles of limit - scratch make the estimate exactly the limit"
-let claim_f_runs = "F wide: the at-limit estimate compiles, links and runs"
-let claim_f_scopes = "F wide: the source declares one table per scope the estimate counted"
+let claim_f_estimate =
+  "F wide: tiles of limit - scratch with two converted scopes make the estimate exactly the limit"
+
+let claim_f_runs = "F wide: the at-limit estimate compiles, links and runs, computing the product"
+let claim_f_scopes = "F wide: the source declares one table for its two converted scopes"
 
 let all_claims =
   [
@@ -197,13 +213,30 @@ let all_claims =
     claim_f_scopes;
   ]
 
-(* The scope count, structurally and on every backend (Codex round 1 on staging#1010): a
-   materializing loop transform that duplicates a fragment region keeps the same fragment node in
-   each copy, and each copy renders its own scope, so the estimate must count copies rather than
-   fragment nodes. A probe capability charging one byte per uniform-half scope makes the estimate's
-   scope count readable off its value. *)
+(* The scopes the per-kernel term is handed, structurally and on every backend (Codex round 1 on
+   staging#1010): a materializing loop transform that duplicates a fragment region keeps the same
+   fragment node in each copy, and each copy renders its own scope, so the estimate hands the
+   backend one triple per copy rather than per fragment node — what it charges for them is the
+   backend's (Metal: one table per kernel, leg F). A probe capability charging one byte per
+   uniform-half triple makes the number of triples readable off the estimate. *)
 let claim_fragment_marked = "the staged composition marks its accumulator as a simdgroup fragment"
-let claim_dup_counted = "a duplicated fragment region counts one scope per copy"
+let claim_dup_counted = "a duplicated fragment region hands the per-kernel term one triple per copy"
+
+(* The seeding's prediction of the gate (gh-ocannl-1255 item 3), on every backend, under a stand-in
+   capability charging Metal-like scratch and rounding and a stand-in uniform-f16 tile
+   advertisement: the matmul family refutes a staged tensorized seed on workgroup memory exactly
+   where the gate would refuse its built schedule. Each staged tensorized leaf of the unconstrained
+   family is rebuilt and read by the gate's own [Sched.workgroup_memory_bytes]; the family built
+   against that reading as the limit keeps the leaf, and one byte below it refutes it. A tiles-only
+   prediction (the family's default, no capabilities) keeps it one byte below, which is the compile
+   a doomed seed used to cost. *)
+let claim_seed_fit =
+  "the matmul family keeps every staged tensorized seed at a limit of its gate estimate, scratch \
+   included"
+
+let claim_seed_refuted =
+  "the matmul family refutes every staged tensorized seed one byte below its gate estimate, and a \
+   tiles-only family does not"
 
 let () =
   let bk = 16 in
@@ -225,10 +258,10 @@ let () =
   let probe =
     {
       Ir.Backend_intf.no_codegen_capabilities with
-      mma_scope_workgroup_bytes =
-        (fun ~d_prec ~a_prec ~b_prec ->
-          if List.for_all [ d_prec; a_prec; b_prec ] ~f:(Ir.Ops.equal_prec Ir.Ops.half) then 1
-          else 0);
+      mma_kernel_workgroup_bytes =
+        (fun ~triples ->
+          List.count triples ~f:(fun (d_prec, a_prec, b_prec) ->
+              List.for_all [ d_prec; a_prec; b_prec ] ~f:(Ir.Ops.equal_prec Ir.Ops.half)));
     }
   in
   let scopes o =
@@ -236,23 +269,76 @@ let () =
     - Sched.workgroup_memory_bytes ~capabilities:Ir.Backend_intf.no_codegen_capabilities o
   in
   p claim_fragment_marked (not (Set.is_empty opt.LL.simdgroup_fragments));
-  p claim_dup_counted (scopes opt = 1 && scopes { opt with LL.llc = LL.Seq (opt.llc, opt.llc) } = 2)
+  p claim_dup_counted (scopes opt = 1 && scopes { opt with LL.llc = LL.Seq (opt.llc, opt.llc) } = 2);
+  let charging =
+    {
+      Ir.Backend_intf.no_codegen_capabilities with
+      mma_kernel_workgroup_bytes = (fun ~triples -> if List.is_empty triples then 0 else 256);
+      workgroup_allocation_alignment = 4;
+    }
+  in
+  let f16t = Ir.Backend_intf.Mma_f16 in
+  let f16_limits cap =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      max_workgroup_memory_bytes = cap;
+      mma =
+        Some
+          {
+            Ir.Backend_intf.minimal_mma_capability with
+            mma_tile = (8, 8, 8);
+            mma_simd_width = simd_width;
+            mma_format_tiles = [ ((f16t, f16t, f16t), (8, 8, 8)) ];
+          };
+    }
+  in
+  let leaves ?capabilities cap =
+    match
+      Autotune.matmul_sketch_tree ?capabilities ~is_gpu:true ~is_cpu:false ~limits:(f16_limits cap)
+        lowered
+    with
+    | Some tree -> List.map (Ir.Schedule_space.leaves tree) ~f:Autotune.sexp_of_sketch_params
+    | None -> []
+  in
+  let staged =
+    List.filter_map (leaves ~capabilities:charging None) ~f:(fun sexp ->
+        let p = Autotune.sketch_params_of_sexp sexp in
+        if p.Autotune.sk_mma && p.Autotune.sk_bk > 0 then Some (sexp, p) else None)
+  in
+  let accum_prec = (Context.codegen_capabilities (Context.auto ())).accum_prec in
+  let estimate p =
+    Sched.workgroup_memory_bytes ~capabilities:charging
+      (Sched.apply (Autotune.sketch_schedule ~accum_prec ~p lowered) lowered)
+  in
+  let kept ?capabilities cap sexp =
+    List.mem (leaves ?capabilities (Some cap)) sexp ~equal:Sexp.equal
+  in
+  let judged = List.map staged ~f:(fun (sexp, p) -> (sexp, estimate p)) in
+  Stdio.eprintf
+    "schedule_mma_scope_scratch: %d staged tensorized seeds judged (not part of the golden)\n%!"
+    (List.length judged);
+  p_all claim_seed_fit judged ~f:(fun (sexp, est) -> kept ~capabilities:charging est sexp);
+  p_all claim_seed_refuted judged ~f:(fun (sexp, est) ->
+      (not (kept ~capabilities:charging (est - 1) sexp)) && kept (est - 1) sexp)
 
 let () =
   let limits = Context.hardware_limits (Context.auto ()) in
   let mma = Option.is_some limits.Ir.Backend_intf.mma in
   match (on_metal && mma, limits.max_workgroup_memory_bytes) with
   | true, Some limit ->
-      let scratch =
+      let scratch, scratch_twice =
         let saved = Numerics.get () in
         Numerics.set_policy { saved with fp16_arithmetic = Numerics.Fp16_wide };
         Exn.protect
           ~f:(fun () ->
-            (Context.codegen_capabilities (Context.auto ())).mma_scope_workgroup_bytes
-              ~d_prec:Ir.Ops.half ~a_prec:Ir.Ops.half ~b_prec:Ir.Ops.half)
+            let bytes =
+              (Context.codegen_capabilities (Context.auto ())).mma_kernel_workgroup_bytes
+            in
+            let h = Ir.Ops.half in
+            (bytes ~triples:[ (h, h, h) ], bytes ~triples:[ (h, h, h); (h, h, h) ]))
           ~finally:(fun () -> Numerics.set_policy saved)
       in
-      p claim_scratch (scratch > 0);
+      p claim_scratch (scratch > 0 && scratch_twice = scratch);
       (* R: [bk] so that the unpadded tiles total exactly [limit]. *)
       let tile_row = half_bytes * (bm + n) in
       let bk_r = limit / tile_row in
@@ -279,7 +365,7 @@ let () =
         List.iter all_claims ~f:(fun c -> if not (String.equal c claim_scratch) then skipped c))
       else
         let r_auto =
-          compile_leg ~name:"scratch_r_auto" ~fp16:Numerics.Fp16_auto ~bk:bk_r ~a_pad:None
+          compile_leg ~name:"scratch_r_auto" ~fp16:Numerics.Fp16_auto ~bk:bk_r ~a_pad:None ()
         in
         let r_values = run_values r_auto in
         if Option.is_none r_values then
@@ -301,7 +387,7 @@ let () =
           (Option.is_some r_values && tensorized
           && not (String.is_substring (Generated.read r_auto.routine) ~substring:"ocannl_mma_rc8"));
         let r_wide =
-          compile_leg ~name:"scratch_r_wide" ~fp16:Numerics.Fp16_wide ~bk:bk_r ~a_pad:None
+          compile_leg ~name:"scratch_r_wide" ~fp16:Numerics.Fp16_wide ~bk:bk_r ~a_pad:None ()
         in
         let refused =
           match r_wide.result with
@@ -321,7 +407,8 @@ let () =
         in
         p claim_r_refused refused;
         let f_wide =
-          compile_leg ~name:"scratch_f_wide" ~fp16:Numerics.Fp16_wide ~bk:bk_f ~a_pad:(Some a_pad)
+          compile_leg ~scopes:2 ~name:"scratch_f_wide" ~fp16:Numerics.Fp16_wide ~bk:bk_f
+            ~a_pad:(Some a_pad) ()
         in
         p claim_f_estimate (f_wide.estimate = limit);
         let f_values = run_values f_wide in
@@ -334,11 +421,10 @@ let () =
           (Option.is_some f_values
           &&
           let src = Generated.read f_wide.routine in
-          let tables =
-            List.length
-              (String.substr_index_all src ~may_overlap:false
-                 ~pattern:"threadgroup float ocannl_mma_rc8[")
+          let count pattern =
+            List.length (String.substr_index_all src ~may_overlap:false ~pattern)
           in
-          tables >= 1
-          && tables * scratch = f_wide.estimate - staged_bytes ~bk:bk_f ~a_ld:(bk_f + a_pad))
+          count "threadgroup float ocannl_mma_rc8[" = 1
+          && count "{ /* simdgroup fragment " = 2
+          && scratch = f_wide.estimate - staged_bytes ~bk:bk_f ~a_ld:(bk_f + a_pad))
   | _ -> List.iter all_claims ~f:skipped

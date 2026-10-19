@@ -966,6 +966,59 @@ let label_uses content =
   iterator#structure (structure_of content);
   List.rev !uses
 
+type keyed_read = { read_key : string; reader : string list option; defaulted : bool; at : int }
+(** A configuration key named by a string literal, with what reads it (gh-ocannl-1332): at an
+    application site [~arg_name:"k"], [reader] is the applied function's path ([None] when it is no
+    plain identifier) and [defaulted] whether the same application passes [~default] or [?default];
+    as a parameter's default ([?(arg_name = "k")]), [reader] is [None] and [defaulted] is [true] --
+    a helper that reads [k] unless told otherwise. [at] is where the literal sits. *)
+
+let keyed_reads content =
+  let reads = ref [] in
+  let is_default = function
+    | Asttypes.Labelled "default" | Asttypes.Optional "default" -> true
+    | _ -> false
+  in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_apply (fn, args) ->
+            let defaulted = List.exists args ~f:(fun (lbl, _) -> is_default lbl) in
+            List.iter args ~f:(fun (lbl, arg) ->
+                if is_our_label lbl then
+                  Option.iter (string_literal arg) ~f:(fun read_key ->
+                      reads :=
+                        {
+                          read_key;
+                          reader = longident_of fn;
+                          defaulted;
+                          at = arg.pexp_loc.loc_start.pos_cnum;
+                        }
+                        :: !reads))
+        | Pexp_function (params, _, _) ->
+            List.iter params ~f:(fun param ->
+                match param.pparam_desc with
+                | Pparam_val (lbl, Some default, _) when is_our_label lbl ->
+                    Option.iter (string_literal default) ~f:(fun read_key ->
+                        reads :=
+                          {
+                            read_key;
+                            reader = None;
+                            defaulted = true;
+                            at = param.pparam_loc.loc_start.pos_cnum;
+                          }
+                          :: !reads)
+                | _ -> ())
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  iterator#structure (structure_of content);
+  List.rev !reads
+
 type definition = { start : int; stop : int; name : string option; top_level : bool }
 (** Every function in the file: the source range it covers, the name of the binding it is the body
     of (if any), and whether that binding is top-level.
@@ -1110,7 +1163,9 @@ type key_reach = {
     -- contributes whatever [external_keys] answers for its path, after a top-level [module X = Y]
     alias of this module has been expanded; the caller decides which modules it can follow, since
     this function sees one file. A field of [Utils.settings] contributes what [settings_field_keys]
-    answers for it (the field's own name by default).
+    answers for it (the field's own name by default). [~fields:false] leaves [field_reach] empty for
+    a caller that reads only [reach]: following a record field's initializer through a long
+    function's local helpers is not memoized, and over [autotune.ml] it ran for minutes.
 
     [by_last_component] answers for any path no local value answers to by its LAST component alone,
     whatever qualifies it and whatever brought it into scope -- an `open`, a `let open … in`, a
@@ -1120,7 +1175,7 @@ type key_reach = {
     derivation predates it. *)
 let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     ?(settings_field_keys = fun field -> [ field ]) ?(by_last_component = fun (_ : string) -> [])
-    ?(all_pattern_names = false) content =
+    ?(all_pattern_names = false) ?(fields = true) content =
   (* The names a binding is credited under: its simple name, or with [~all_pattern_names] every
      variable its pattern binds, each with the whole initializer's reach (Codex P2, round 10).
      Opt-in because that over-reads -- in `Utils`, [config_file_args] would reach the bootstrap keys
@@ -1195,6 +1250,9 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
   (* A path named inside [scope] (the nested modules a binding sits in) means the innermost value of
      that spelling defined so far, as OCaml resolves it; a path no local value answers to is another
      module's, whatever [external_keys] says of it. *)
+  (* The other modules a top-level [include Other] brings into scope (gh-ocannl-1331: [Autotune]
+     includes [Sketch_families]), whose values a bare name no local value answers to may be. *)
+  let included = ref [] in
   let resolve ~env ~scope path =
     let rec local_as path depth =
       if depth < 0 then None
@@ -1222,7 +1280,9 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     | Some keys -> keys
     | None -> (
         match path with
-        | [ _ ] -> by_name
+        | [ _ ] ->
+            List.fold !included ~init:by_name ~f:(fun acc m ->
+                Set.union acc (Set.of_list (module String) (external_keys (m @ path))))
         | _ -> Set.union by_name (Set.of_list (module String) (external_keys (expand path))))
   in
   let field_reach = ref [] in
@@ -1343,12 +1403,13 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                                 Set.union acc (local_reach ~seen:(Set.add seen name) direct))
                       | _ -> Set.union acc (resolve ~env:field_env ~scope path))
                 in
-                List.iter (record_fields_of binding.pvb_expr) ~f:(fun (field, value) ->
-                    field_reach :=
-                      ( field,
-                        Set.to_list
-                          (local_reach ~seen:(Set.empty (module String)) (direct_of value)) )
-                      :: !field_reach));
+                if fields then
+                  List.iter (record_fields_of binding.pvb_expr) ~f:(fun (field, value) ->
+                      field_reach :=
+                        ( field,
+                          Set.to_list
+                            (local_reach ~seen:(Set.empty (module String)) (direct_of value)) )
+                        :: !field_reach));
             env'
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
            functor's body is not walked: what its values read depends on its argument. *)
@@ -1368,6 +1429,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                 (* Through a top-level [module W = Public] alias too (Codex P2, round 10). *)
                 match Option.map (flatten_module_path txt) ~f:expand with
                 | Some path ->
+                    if List.is_empty scope then included := path :: !included;
                     let prefix = dotted (scope @ path) ^ "." in
                     Map.fold env ~init:env ~f:(fun ~key ~data acc ->
                         (* Every descendant, nested submodules' values included (Codex P2, round
@@ -1928,3 +1990,64 @@ let keys_by_file files =
 let source_reads_key content ~key =
   let has keys = List.mem keys key ~equal:String.equal in
   has (keys_in_source content) || has (settings_keys_in_source content)
+
+type library_reach = {
+  external_keys : string list -> string list;
+      (** The keys the value a qualified path names reaches: a [Utils] settings predicate's
+          ({!settings_predicate_keys}), or a top-level value of one of the library's modules, read
+          by {!top_level_key_reach} with this same function following its own qualified calls. A
+          leading component among [wrappers] names a dune library's wrapper module and is dropped
+          ([Ir.Schedule.f] is [Schedule.f]). Any other path reaches nothing. *)
+  settings_field_keys : string -> string list;
+      (** Every key that initializes a field of [Utils.settings] (its [restore_settings]
+          assignment), so a compatibility alias is answered for beside the key; the field's own name
+          where nothing does. *)
+}
+
+(** The key reach of a library given as [(module name, file on disk)] pairs, each module read once
+    and only when a path reaches it (gh-ocannl-1149; shared with gh-ocannl-1331's check that the
+    search-shaping keys are read within [Autotune.tune]'s reach). OCaml admits no cycle between a
+    library's modules, so the in-progress guard only keeps a malformed tree from looping. *)
+let library_reach ?(wrappers = []) ~library_modules () =
+  let settings_initializers =
+    match List.Assoc.find library_modules "Utils" ~equal:String.equal with
+    | Some on_disk -> settings_field_initializers (Stdio.In_channel.read_all on_disk)
+    | None -> []
+  in
+  let settings_field_keys field =
+    match List.Assoc.find settings_initializers field ~equal:String.equal with
+    | Some (_ :: _ as keys) -> keys
+    | Some [] | None -> [ field ]
+  in
+  let module_reaches = Hashtbl.create (module String) in
+  let rec external_keys path =
+    match settings_predicate_keys path with
+    | Some keys when match path with [ "Utils"; _ ] -> true | _ -> false -> keys
+    | _ -> (
+        match path with
+        | wrapper :: (_ :: _ :: _ as inner) when List.mem wrappers wrapper ~equal:String.equal ->
+            external_keys inner
+        | module_name :: (_ :: _ as value) -> (
+            match module_reach module_name with
+            | Some reach ->
+                Option.value
+                  (List.Assoc.find reach (String.concat ~sep:"." value) ~equal:String.equal)
+                  ~default:[]
+            | None -> [])
+        | _ -> [])
+  and module_reach module_name =
+    match Hashtbl.find module_reaches module_name with
+    | Some reach -> reach
+    | None ->
+        Option.map (List.Assoc.find library_modules module_name ~equal:String.equal)
+          ~f:(fun on_disk ->
+            Hashtbl.set module_reaches ~key:module_name ~data:(Some []);
+            let reach =
+              (top_level_key_reach ~external_keys ~settings_field_keys ~fields:false
+                 (Stdio.In_channel.read_all on_disk))
+                .reach
+            in
+            Hashtbl.set module_reaches ~key:module_name ~data:(Some reach);
+            reach)
+  in
+  { external_keys; settings_field_keys }

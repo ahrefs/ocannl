@@ -113,7 +113,7 @@ jobs:
         # dropping the other. test/operations/ci_matrix.sh evaluates every
         # option of the input against these expressions.
         #
-        # ubuntu is absent here on purpose: its 5.5 `main` suite runs as shards,
+        # ubuntu is absent here on purpose: its 5.5 suites run as shards,
         # which `include` below adds (it says why).
         #
         # Not listed: freebsd. Either the waiting queue for it is very long, or
@@ -133,18 +133,18 @@ jobs:
           && format('["{0}"]', inputs.ocaml_compiler)
           || '["5.5.x"]') }}
         # Which dune targets the job builds. `main` is the regular suite; the
-        # `train` shard (added through `include` below) builds only the
+        # `train` suite (added through `include` below) builds only the
         # training-integration tier, which lives off the runtest path because
         # its members serialize on the ocannl_training_test lock and set every
         # full run's wall-clock tail (test/training/dune says why).
         suite:
           - main
-        # Three kinds of include entry. First, ubuntu's 5.5 `main` suite, as
-        # one job per `shard` K/N: `tools/ci-shard.sh targets K/N` names that
-        # job's dune targets, and the N jobs together build exactly the
-        # unsharded suite. As one job it ran 18-32min, 13-26 of them in its
-        # one dune step, and set the matrix's latency; three quarters of that
-        # step executes test/operations, so the cut runs through that
+        # Three kinds of include entry. First, ubuntu's 5.5 suites, each as
+        # one job per `shard` K/N: `tools/ci-shard.sh targets K/N SUITE` names
+        # that job's dune targets, and the N jobs together build exactly the
+        # unsharded suite. As one job `main` ran 18-32min, 13-26 of them in
+        # its one dune step, and set the matrix's latency; three quarters of
+        # that step executes test/operations, so the cut runs through that
         # directory, by measured weight (the script says how, and how to
         # re-weigh). Every K from 1 to N must be listed --
         # test/operations/ci_matrix.sh holds that, since a missing shard is
@@ -153,15 +153,20 @@ jobs:
         # the macOS concurrency it grants Linux), so a second macOS job would
         # more likely wait for a runner than run beside the first.
         #
-        # The `train` shards: macOS on every run,
-        # Windows only on the scheduled or explicit Windows-only matrix beside its main job.
-        # macOS ONLY per-PR, deliberately: the tier is a serialized chain
-        # (measured ~4.7min on an M4 Max, ~10min on a 24-thread Linux box with
-        # the compile cached), so a ubuntu shard would run ~15-20min and
-        # replace the ~15min main job as the matrix's latency ceiling, while
-        # the macOS shard fits under it -- per-PR execution coverage of the
-        # tier on one substrate, at no latency cost. Ubuntu still executes the
-        # tier daily through tools/sweep.sh's full-suite units.
+        # Then the `train` tier. Per PR and on master it runs as two ubuntu
+        # shards, NOT on macOS (gh-ocannl-1422): as a second macOS job beside
+        # `main` it doubled each PR's claim on the scarce runners, and in a
+        # wave of ~20 PRs in review macOS jobs queued ~2h, one was cancelled
+        # after 2h13m in the queue, and master's tip went over an hour
+        # without a verdict. The tier is a serialized chain (its members
+        # share the ocannl_training_test lock), so one ubuntu job would run
+        # ~15-20min and set the matrix's latency; the shards each carry about
+        # half the chain, dealt by measured member times (the script's
+        # TRAIN_WEIGHTS), and each compiles only the training closure. The
+        # scheduled matrix keeps the macOS `train` job beside them, and
+        # Windows runs it only on the scheduled or explicit Windows-only
+        # matrix beside its main job; tools/sweep.sh's full-suite units still
+        # execute the tier daily on every box.
         #
         # And the floor the opam files claim: `"ocaml" {>= "5.3.0"}`. Per-PR
         # runs build only 5.5, so without this the lower bound is a promise
@@ -182,12 +187,15 @@ jobs:
           || github.event_name == 'schedule'
           && '[{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "1/2"},
                {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},
+               {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "1/2"},
+               {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "2/2"},
                {"os": "ubuntu-latest", "ocaml-compiler": "5.3.x", "suite": "main"},
                {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"},
                {"os": "windows-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]'
           || '[{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "1/2"},
                {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},
-               {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]') }}
+               {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "1/2"},
+               {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "2/2"}]') }}
     runs-on: ${{ matrix.os }}
     # Hard ceilings, not budgets: a hung job otherwise runs to GitHub's six-hour
     # default. The ceiling is fixed when the job starts, before the opam cache
@@ -463,9 +471,9 @@ jobs:
       run: |
         export PATH="/usr/bin:/mingw64/bin:$PATH"
         /usr/bin/bash tools/test-windows-opam-cache.sh
-    # On the first ubuntu shard only: one leg answers the question.
+    # On the first ubuntu `main` shard only: one leg answers the question.
     - name: Check non-default module log level and trace semantics
-      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && startsWith(matrix.shard, '1/')
+      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main' && startsWith(matrix.shard, '1/')
       env:
         OCANNL_LOG_LEVEL_CC_BACKEND: 3
       run: opam exec -- dune build "@check" "@test/operations/runtest-cc_backend_trace_name"
@@ -510,7 +518,7 @@ jobs:
     # unaffected.
     - if: ${{ !matrix.shard }}
       run: opam exec -- dune build ${{ matrix.suite == 'train' && '"@train"' || '"@default" "@runtest" "@bin-smoke"' }}
-    # A sharded job builds the same suite's share that `tools/ci-shard.sh`
+    # A sharded job builds the share of its suite that `tools/ci-shard.sh`
     # assigns it, still in one walk. The script refuses (exit 2) rather than
     # print a listing it could not validate, and the assignment is expanded
     # into the log, so a red shard names what it was carrying. ubuntu only,
@@ -518,9 +526,10 @@ jobs:
     - if: ${{ matrix.shard }}
       env:
         SHARD: ${{ matrix.shard }}
+        SUITE: ${{ matrix.suite }}
       run: |
-        targets=$(opam exec -- tools/ci-shard.sh targets "$SHARD")
-        echo "::group::shard $SHARD: $(printf '%s\n' "$targets" | wc -l) targets"
+        targets=$(opam exec -- tools/ci-shard.sh targets "$SHARD" "$SUITE")
+        echo "::group::$SUITE shard $SHARD: $(printf '%s\n' "$targets" | wc -l) targets"
         printf '%s\n' "$targets"
         echo "::endgroup::"
         opam exec -- dune build $targets

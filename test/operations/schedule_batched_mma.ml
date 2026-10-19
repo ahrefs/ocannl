@@ -135,8 +135,12 @@ let check_leg ~tag ~serial ~tensorized =
     let ctx = Context.run ctx routine in
     let got = Context.get_values ctx tensorized.Tensor.value in
     p_all2 (tag ^ " tensorized matches the serial twin bitwise") got want ~f:Float.equal;
-    Generated.assert_emits ~routine:(tag ^ "_mma") ~contains:"Tile_mma register tiling"
-      (tag ^ " tensorized structure as expected");
+    (* Which way the statements rendered is the census's to say (gh-ocannl-1316): the register
+       tiling, every one of them, not the lane-0 scalar fallback its guard also wraps. *)
+    p
+      (tag ^ " tensorized structure as expected")
+      (Ll_test.all_rendered ~what:(tag ^ "_mma") Ir.C_syntax.Mma_register_tiled
+         (Ll_test.renderings routine.Context.mma));
     opt
 
 let () =

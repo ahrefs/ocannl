@@ -1,0 +1,11 @@
+CUDA: every function the table shares with the C table is probed or excluded with a reason: true
+HIP: every function the table shares with the C table is probed or excluded with a reason: true
+HIP: each fp8 guard is in the table and casts once, as the probe's substitution expects: true
+CUDA: every probed conversion helper returns the C one's bytes, for every draw and lane: true
+CUDA: a copy whose __hiloint2double swaps its words differs from the C table somewhere: true
+HIP: every probed conversion helper returns the C one's bytes, for every draw and lane: true
+HIP: a copy whose __hiloint2double swaps its words differs from the C table somewhere: true
+HIP: the f32 fp8 guard over a correct cast is the C codec, bitwise: true
+HIP: the f64 fp8 guard over a correct cast is the C codec, bitwise: true
+HIP: an f32 guard whose zero drops its sign differs from the C codec: true
+HIP: an f64 guard whose zero drops its sign differs from the C codec: true

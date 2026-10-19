@@ -20,6 +20,7 @@ import bench_venv
 import box_gate
 import fixture_digest
 import cell_group
+import display_safe
 import gh1161_sites
 import orchestrate
 import strict_json
@@ -263,6 +264,85 @@ class StrictJsonTest(unittest.TestCase):
         self.assertFalse(refuses_every_non_finite_line(json.loads))
 
 
+class ResultFieldReaderTest(unittest.TestCase):
+    """strict_json's `last_result`/`field` and the `field` command a shell driver asks instead of
+    grepping a result line's text (gh-ocannl-1355; gh-ocannl-1253's driver read `step_ms` as a
+    number where the runner prints a `{p10,p50,p90}` object)."""
+
+    LINES = ('noise\n{"step_ms":{"p10":9,"p50":9,"p90":9}}\n'
+             '{"step_ms":{"p10":1,"p50":2.5,"p90":3},"tune":{"shipped":"A","searches":1}}\n'
+             'trailing noise\n')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def ask(self, text, key):
+        path = self.dir / "cell.out"
+        path.write_text(text)
+        return subprocess.run([sys.executable, str(HERE / "strict_json.py"), "field", str(path), key],
+                              text=True, capture_output=True, timeout=60)
+
+    def test_the_last_result_line_and_its_nested_fields(self):
+        record = strict_json.last_result(self.LINES)
+        self.assertEqual(strict_json.field(record, "step_ms.p50"), 2.5)
+        self.assertEqual(strict_json.field(record, "tune.shipped"), "A")
+        self.assertIsNone(strict_json.last_result("no record here\n"))
+        for key in ("nope", "step_ms.p50.x", "tune.arms"):
+            with self.subTest(key=key):
+                with self.assertRaises(KeyError) as caught:
+                    strict_json.field(record, key)
+                self.assertIn("the result line has no", caught.exception.args[0])
+
+    def test_the_command_prints_a_field_or_names_why_not(self):
+        for key, shown in (("step_ms.p50", "2.5"), ("tune.shipped", "A"),
+                           ("step_ms", '{"p10": 1, "p50": 2.5, "p90": 3}')):
+            with self.subTest(key=key):
+                proc = self.ask(self.LINES, key)
+                self.assertEqual((proc.returncode, proc.stdout), (0, shown + "\n"), proc.stderr)
+        for text, key, why in ((self.LINES, "step_ms.p99", "has no step_ms.p99"),
+                               ("noise\n", "step_ms.p50", "no result line"),
+                               ('{"step_ms":{"p50":NaN}}\n', "step_ms.p50", "NaN"),
+                               ('{"step_ms":{"p50":1e999}}\n', "step_ms.p50", "overflows")):
+            with self.subTest(why=why):
+                proc = self.ask(text, key)
+                self.assertEqual((proc.returncode, proc.stdout), (1, ""), proc.stderr)
+                self.assertIn(why, proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
+
+
+# A shell driver line that greps a quoted JSON key out of a file: a hand parse of a result line.
+SHELL_JSON_KEY_GREP = re.compile(r'\bgrep\b.*"[A-Za-z_][A-Za-z0-9_]*":')
+
+
+class ShellFieldGrepInventoryTest(unittest.TestCase):
+    """No shell driver reads a result-line field with a text pattern (gh-ocannl-1355): it asks
+    `strict_json.py field` for it, which parses the line."""
+
+    def test_no_driver_greps_a_json_field(self):
+        sources = ResultLineReaderInventoryTest.shipped_sources()
+        self.assertIn("gh1253_flip_cells.sh", sources)
+        found = [(name, line.strip()) for name, text in sorted(sources.items())
+                 if name.endswith(".sh") for line in text.splitlines()
+                 if SHELL_JSON_KEY_GREP.search(line)]
+        self.assertEqual(found, [], "read the field with `python3 strict_json.py field FILE KEY`")
+
+    def test_the_scan_finds_the_shapes_it_replaced(self):
+        for planted in (
+            """ms=$({ grep -o '"step_ms":{[^}]*}' "$out/$name.out" || true; } | tail -1)""",
+            """shipped=$(grep -ho '"shipped":"[AB]"' "$out/search.out" | head -1)""",
+            'grep -ho \'"p50":[0-9.]*\' "$out/replay2.out"',
+        ):
+            with self.subTest(planted=planted):
+                self.assertTrue(SHELL_JSON_KEY_GREP.search(planted))
+        # A presence check of a key, and a key in a source file's text, are not field reads.
+        for clean in ("""elif ! grep -q '"step_ms"' "$f"; then""",
+                      'grep -q \'"tune_ship_arm"\' "$t/arrayjit/lib/utils.ml"'):
+            with self.subTest(clean=clean):
+                self.assertFalse(SHELL_JSON_KEY_GREP.search(clean))
+
+
 class NonFiniteResultLineReadersTest(unittest.TestCase):
     """Each reader of a runner's result line refuses one that spells a non-finite number, as
     `strict_json` does, instead of taking it as a measurement."""
@@ -421,7 +501,8 @@ class Gh1003SummaryTest(unittest.TestCase):
 
     def test_the_matrix_as_the_driver_rendered_it(self):
         # The expected rows are what the driver's inline heredoc printed for this directory before
-        # the summary moved into gh1003_summary.py: the move changed no byte. They cover the
+        # the summary moved into gh1003_summary.py, except that an empty cell is now the shared
+        # builder's single blank (`| |`, gh-ocannl-1355) rather than two spaces. They cover the
         # two-pass-bwd fallback of the training fixtures, both mma census fields (and a null one),
         # a loss disagreement, a missing composed reference, and a dry cell that never enters.
         self.cell("metal-gpt2_mini-composed-r1.out", 10.0, 9.5, 10.5)
@@ -437,12 +518,12 @@ class Gh1003SummaryTest(unittest.TestCase):
         self.assertEqual(proc.stdout.splitlines(), [
             "| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs composed | vs two-pass | p10..p90 spread | shipped mma | loss vs composed |",
             "|---|---|---|---|---|---|---|---|---|---|",
-            "| cc | gpt2_mini | fold-8 | 100.0 | 100.0 |  |  | 1.000x |  |  |",
-            "| metal | gpt2_mini | composed | 10.0, 12.0 | 11.0 | 1.000x | 1.375x | 1.105x |  | 0 |",
+            "| cc | gpt2_mini | fold-8 | 100.0 | 100.0 | | | 1.000x | | |",
+            "| metal | gpt2_mini | composed | 10.0, 12.0 | 11.0 | 1.000x | 1.375x | 1.105x | | 0 |",
             '| metal | gpt2_mini | two-pass | 8.0 | 8.0 | 0.727x | 1.000x | 1.000x | {"mma": 2} | 0.11 |',
             "| metal | gpt2_mini | fold-16 | 5.0 | 5.0 | 0.455x | 0.625x | 1.500x | 3 | 0 |",
-            "| metal | gpt2_mini_train_s512 | two-pass-bwd | 20.0 | 20.0 |  | 1.000x | 1.000x |  |  |",
-            "| metal | gpt2_mini_train_s512 | fold-8-bwd | 10.0 | 10.0 |  | 0.500x | 1.000x |  |  |",
+            "| metal | gpt2_mini_train_s512 | two-pass-bwd | 20.0 | 20.0 | | 1.000x | 1.000x | | |",
+            "| metal | gpt2_mini_train_s512 | fold-8-bwd | 10.0 | 10.0 | | 0.500x | 1.000x | | |",
         ])
 
     def test_names_each_unreadable_cell(self):
@@ -7256,7 +7337,7 @@ class DisplaySafeSweepTest(unittest.TestCase):
         row.update(workload=self.NAME, profile=None, regime_knobs=self.leaking(), searched=False)
         return row, None
 
-    def sweep(self):
+    def sweep(self, refusal=SystemExit):
         environ = {k: v for k, v in os.environ.items() if not k.startswith("OCANNL_")}
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
@@ -7281,10 +7362,23 @@ class DisplaySafeSweepTest(unittest.TestCase):
             )
             stack.enter_context(contextlib.redirect_stdout(out))
             # A regime mismatch and a runner failure: the sweep fails, after writing the report.
-            with self.assertRaises(SystemExit) as failed:
+            with self.assertRaises(refusal) as failed:
                 orchestrate.main()
-        self.assertEqual(failed.exception.code, 1)
+        if refusal is SystemExit:
+            self.assertEqual(failed.exception.code, 1)
         return out.getvalue(), (self.dir / "results" / "report.md").read_text()
+
+    def test_a_gate_line_built_from_a_raw_value_is_refused(self):
+        # The planted raw interpolation (gh-ocannl-1355): a gate label that skipped `display_value`
+        # for its workload. Gate labels reach the run log only, so the report's table refusal
+        # cannot catch it; the line refusal does, and the report is already written.
+        def raw_label(result):
+            return f"{result['workload']} {result['framework']}/{result['backend']}"
+
+        with unittest.mock.patch.object(orchestrate, "gate_label", raw_label):
+            stdout, report_text = self.sweep(refusal=display_safe.UnsafeLogLine)
+        self.assertIn("**REGIME MISMATCH**", report_text)
+        self.assertNotIn("REGIME GATE", stdout)
 
     def test_report_tables_keep_their_columns_and_the_log_its_lines(self):
         stdout, report_text = self.sweep()
@@ -7324,9 +7418,10 @@ class DisplaySafeSweepTest(unittest.TestCase):
 
 
 class TableRowTest(unittest.TestCase):
-    """Every report table row is built by `table_row`, which refuses a raw `|` or line break at
-    render time (post-wave follow-up of gh-ocannl-1273): display safety checked where the row is
-    rendered, not remembered at each interpolation."""
+    """Every report table row is built by `display_safe.table_row`, which refuses a raw `|` or line
+    break at render time (post-wave follow-up of gh-ocannl-1273), in every report-writing script
+    (gh-ocannl-1355): display safety checked where the row is rendered, not remembered at each
+    interpolation."""
 
     # The builders themselves, and `display_value`, which spells the `|` it escapes.
     BUILDERS = ("table_row", "table_lines", "display_value")
@@ -7336,35 +7431,49 @@ class TableRowTest(unittest.TestCase):
         return char == "|" or len(f"a{char}b".splitlines()) != 1
 
     def test_a_row_renders_its_cells_and_an_empty_one_as_a_blank(self):
-        self.assertEqual(orchestrate.table_row("a", "", "b c"), "| a | | b c |")
+        self.assertEqual(display_safe.table_row("a", "", "b c"), "| a | | b c |")
         self.assertEqual(
-            orchestrate.table_lines(["x", "y"], [("1", "2")]), ["| x | y |", "|---|---|", "| 1 | 2 |"]
+            display_safe.table_lines(["x", "y"], [("1", "2")]),
+            ["| x | y |", "|---|---|", "| 1 | 2 |"],
         )
+        self.assertEqual(display_safe.table_lines(["x", "y"], [], align="lr")[1], "|---|---:|")
+        for align in ("l", "lx", "lrl"):
+            with self.subTest(align=align):
+                with self.assertRaises(display_safe.UnsafeTableRow):
+                    display_safe.table_lines(["x", "y"], [], align=align)
 
     def test_it_refuses_exactly_the_characters_that_break_a_cell(self):
         # Derived, not restated: the refusal set is `|` plus every character `str.splitlines` (and
         # so `markdown_tables`, and any line-based reader of the report) breaks a line at.
-        refused = [chr(c) for c in range(0x110000) if orchestrate._TABLE_CELL_BREAKERS_RE.match(chr(c))]
+        refused = [
+            chr(c) for c in range(0x110000) if display_safe._TABLE_CELL_BREAKERS_RE.match(chr(c))
+        ]
         breaking = [chr(c) for c in range(0x110000) if self.breaks_a_cell(chr(c))]
         self.assertEqual(refused, breaking)
         for char in breaking:
             with self.subTest(char=char):
-                with self.assertRaises(orchestrate.UnsafeTableRow) as refusal:
-                    orchestrate.table_row("fine", f"odd{char}value")
+                with self.assertRaises(display_safe.UnsafeTableRow) as refusal:
+                    display_safe.table_row("fine", f"odd{char}value")
                 self.assertIn("table cell 1", str(refusal.exception))
                 self.assertIn("display_value", str(refusal.exception))
                 # The remedy the refusal names is sufficient: the shown value renders in one cell.
-                row = orchestrate.table_row("fine", orchestrate.display_value(f"odd{char}value"))
+                row = display_safe.table_row("fine", display_safe.display_value(f"odd{char}value"))
                 self.assertEqual(row.count("|"), 3, row)
                 self.assertEqual(len(row.splitlines()), 1, row)
 
+    def test_a_code_span_cannot_be_closed_early(self):
+        self.assertEqual(display_safe.code_span("gpt2_mini_train"), "`gpt2_mini_train`")
+        shown = display_safe.code_span("a`b|c")
+        self.assertEqual(shown.count("`"), 2, shown)
+        self.assertEqual(json.loads(shown[1:-1]), "a`b|c")
+
     def test_it_refuses_a_non_string_cell_and_a_row_of_the_wrong_width(self):
         with self.assertRaises(TypeError):
-            orchestrate.table_row("a", 1.5)
+            display_safe.table_row("a", 1.5)
         for row in (("1",), ("1", "2", "3")):
             with self.subTest(row=row):
-                with self.assertRaises(orchestrate.UnsafeTableRow):
-                    orchestrate.table_lines(["x", "y"], [row])
+                with self.assertRaises(display_safe.UnsafeTableRow):
+                    display_safe.table_lines(["x", "y"], [row])
 
     def test_a_raw_value_in_a_row_fails_the_report_and_writes_nothing(self):
         # The planted raw interpolation: a failure label that skipped `display_value`.
@@ -7372,24 +7481,36 @@ class TableRowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             with contextlib.redirect_stdout(io.StringIO()):
-                with self.assertRaises(orchestrate.UnsafeTableRow):
+                with self.assertRaises(display_safe.UnsafeTableRow):
                     orchestrate.report([], out, (), failures)
             # Refused before results.jsonl or report.md was written, as the report's other
             # refusals are.
             self.assertEqual(list(out.iterdir()), [])
 
     def test_no_table_row_is_written_outside_the_builders(self):
-        self.assertEqual(
-            table_row_literals(Path(orchestrate.__file__).read_text(), self.BUILDERS),
-            [],
-            "build report table rows with orchestrate.table_row",
-        )
+        sources = report_sources()
+        # The population is every shipped script: the drivers named here are the ones that wrote
+        # rows by hand before gh-ocannl-1355, so a scan that lost them would pass vacuously.
+        for name in ("orchestrate.py", "gh1002_cells.py", "gh1051_cells.py", "gh1133_summary.py",
+                     "gh1181_cells.py", "gpt2_bucket.py", "gh1180_tie_ab.sh:EOF"):
+            self.assertIn(name, sources)
+        found = {
+            name: rows
+            for name, text in sources.items()
+            for rows in [table_row_literals(text, self.BUILDERS)]
+            if rows
+        }
+        self.assertEqual(found, {}, "build report table rows with display_safe.table_row")
 
     def test_the_scan_finds_a_planted_row(self):
         for planted in (
             'def report(lines, x):\n    lines.append(f"| {x} | y |")\n',
             'def report(lines, x):\n    lines.append("\\n| a | " + x + " |")\n',
             'def report(lines):\n    lines.append("|---|---|")\n',
+            'def report(lines):\n    lines.append("| --- | --- |")\n',
+            'print("| %s | %d |" % (name, n))\n',
+            'print("|" + "|".join(cells) + "|")\n',
+            'print("\\n| ".join(rows))\n',
         ):
             with self.subTest(planted=planted):
                 self.assertTrue(table_row_literals(planted, self.BUILDERS))
@@ -7397,15 +7518,141 @@ class TableRowTest(unittest.TestCase):
             'def table_row(*cells):\n    return "| " + " | ".join(cells) + " |"\n',
             'def f():\n    """| a | b |"""\n',
             'def f(a, b):\n    return f"{a} | {b}"\n',
+            'pattern = "(%s)" % "|".join(names)\n',
         ):
             with self.subTest(clean=clean):
                 self.assertEqual(table_row_literals(clean, self.BUILDERS), [])
 
+    def test_the_scan_reaches_a_drivers_inline_python(self):
+        # Negative control at the population: a row planted in a shell driver's heredoc is found.
+        script = "summary() {\n  python3 - \"$1\" <<'EOF'\nprint('| a | b |')\nEOF\n}\n"
+        sources = shell_heredocs("planted.sh", script)
+        self.assertEqual(list(sources), ["planted.sh:EOF"])
+        self.assertTrue(table_row_literals(sources["planted.sh:EOF"], self.BUILDERS))
+
+
+class LogLineTest(unittest.TestCase):
+    """A run-log line naming an operator- or runner-supplied value is built by
+    `display_safe.log_line`, which refuses a raw line break (gh-ocannl-1355): a fixture's name
+    cannot forge a line a reader takes as the driver's own."""
+
+    def test_it_refuses_exactly_the_characters_that_break_a_line(self):
+        breaking = [chr(c) for c in range(0x110000) if len(f"a{chr(c)}b".splitlines()) != 1]
+        refused = [c for c in map(chr, range(0x110000)) if display_safe._LINE_BREAKERS_RE.match(c)]
+        self.assertEqual(refused, breaking)
+        for char in breaking:
+            with self.subTest(char=char):
+                with self.assertRaises(display_safe.UnsafeLogLine) as refusal:
+                    display_safe.log_line(f"fixture odd{char}name")
+                self.assertIn("display_value", str(refusal.exception))
+                line = display_safe.log_line(
+                    "fixture " + display_safe.display_value(f"odd{char}name"))
+                self.assertEqual(len(line.splitlines()), 1, line)
+        # `|` and the backtick are a table's and a code span's concern, not a line's.
+        self.assertEqual(display_safe.log_line("a | b `c`"), "a | b `c`")
+        self.assertEqual(display_safe.log_lines(["a", "b"]), "a\nb")
+        with self.assertRaises(display_safe.UnsafeLogLine):
+            display_safe.log_lines(["a", "b\nPARITY GATE: all cells passed"])
+        with self.assertRaises(TypeError):
+            display_safe.log_line(3)
+
+
+class ReportScriptsDisplayTest(unittest.TestCase):
+    """The drivers that wrote rows by hand before gh-ocannl-1355, rendering an operator-supplied
+    string with a `|`, a backtick and a newline in it: every table keeps its columns, the text adds
+    no line, and the value is still there, shown."""
+
+    HOSTILE = "odd|lab`el\nTAIL"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def assert_display_safe(self, text):
+        tables = markdown_tables(text)
+        self.assertTrue(tables, text)
+        for header, rows in tables:
+            for row in rows:
+                self.assertEqual(row.count("|"), header.count("|"), row)
+        # No raw piece survives: no forged line, no raw `|` or backtick inside the value.
+        self.assertFalse([l for l in text.splitlines() if l.startswith("TAIL")], text)
+        for raw in ("odd|lab", "lab`el"):
+            self.assertNotIn(raw, text)
+        self.assertIn(display_safe.display_value(self.HOSTILE), text)
+
+    def test_gh1051_tables_show_the_memory_label(self):
+        # The driver's `memory` label is its operator's third argument.
+        for arm in ("true", "false"):
+            for prec in ("bfloat16", "single"):
+                log = self.dir / f"n64_r1_{arm}_{prec}.log"
+                log.write_text("".join(
+                    f"{v}   1.5 ms   10.0 GFLOP/s   (x chk 1.0/2.0, y) [Mma_intrinsics 2]\n"
+                    for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2")))
+                Path(str(log) + ".status").write_text("0\n")
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "gh1051_cells.py"), "ab", str(self.dir), self.HOSTILE],
+            text=True, capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assert_display_safe(proc.stdout)
+
+    def test_gh1181_summary_shows_the_box_and_workload(self):
+        import gh1181_cells
+
+        arms = ["ocannl-master-exact", "torch-exact-eager"]
+        (self.dir / "env.json").write_text(json.dumps(
+            {"box": self.HOSTILE, "backend": "cuda", "fixtures": [self.HOSTILE], "arms": arms}))
+        rows = [{"workload": self.HOSTILE, "arm": arm, "repeat": rep, "quote_ok": True,
+                 "step_ms": {"p10": p50, "p50": p50, "p90": p50}, "compile_s": 1.0,
+                 "parity_max_rel": 0.0}
+                for rep in (0, 1) for arm, p50 in zip(arms, (2.0, 4.0))]
+        (self.dir / "timings.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (self.dir / "failures.jsonl").write_text("")
+        gh1181_cells.summarize(self.dir)
+        text = (self.dir / "summary.md").read_text()
+        self.assert_display_safe(text)
+        self.assertIn("| ocannl-master-exact / torch-exact-eager | 0.50 |", text)
+
+
+HEREDOC_START = re.compile(r"python3\b[^\n]*?<<'?(\w+)'?")
+
+
+def shell_heredocs(name, text):
+    """The inline Python of a shell driver: every heredoc fed to `python3`, as
+    {"<script>:<tag>": source} (a repeated tag numbers its later bodies `<tag>#2`, ...)."""
+    lines = text.splitlines()
+    found = {}
+    for i, line in enumerate(lines):
+        m = HEREDOC_START.search(line)
+        if not m:
+            continue
+        tag = m.group(1)
+        end = next(j for j in range(i + 1, len(lines)) if lines[j] == tag)
+        key, n = f"{name}:{tag}", 1
+        while key in found:
+            n += 1
+            key = f"{name}:{tag}#{n}"
+        found[key] = "\n".join(lines[i + 1:end]) + "\n"
+    return found
+
+
+def report_sources():
+    """Every shipped script that could write a report, as {name: Python source}: each `*.py` here
+    and under runners/ (the population of ResultLineReaderInventoryTest, minus the builders' own
+    module) and the inline Python of each `*.sh`."""
+    sources = {}
+    for name, text in ResultLineReaderInventoryTest.shipped_sources().items():
+        if name.endswith(".sh"):
+            sources.update(shell_heredocs(name, text))
+        elif name != "display_safe.py":
+            sources[name] = text
+    return sources
+
 
 def table_row_literals(source, builders):
-    """The string literals in `source` that open a Markdown table line (`| ...`, or a `|---` rule)
-    outside the functions named `builders` and outside docstrings: each is a table row written
-    around `table_row`, so its cells are never checked."""
+    """The string literals in `source` that open a Markdown table line (`| ...`, or a `|---` /
+    `| ---` rule) outside the functions named `builders` and outside docstrings: each is a table
+    row written around `table_row`, so its cells are never checked."""
     import ast
 
     tree = ast.parse(source)
@@ -7421,6 +7668,18 @@ def table_row_literals(source, builders):
             and isinstance(node.body[0].value, ast.Constant)
         ):
             skip.add(id(node.body[0].value))
+        # A `.join` separator with no line break in it sits between two pieces of one line, so it
+        # opens none (`"|".join(names)`, a regex alternation); what precedes the joined text is
+        # still scanned (`"| " + " | ".join(cells)` is caught by its `"| "`).
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "join"
+            and isinstance(node.func.value, ast.Constant)
+            and isinstance(node.func.value.value, str)
+            and len(f"a{node.func.value.value}b".splitlines()) == 1
+        ):
+            skip.add(id(node.func.value))
     found = []
     # Breadth-first, so an f-string is met before its literal pieces: only its FIRST piece can open
     # a line (`f"platform: {p} | commit"` does not).
@@ -7435,7 +7694,7 @@ def table_row_literals(source, builders):
             text = node.value
         else:
             continue
-        if text.lstrip().startswith("|") or "|---" in text:
+        if text.lstrip().startswith("|") or re.search(r"\|\s*---", text):
             found.append(f"line {node.lineno}: {text!r}")
     return found
 

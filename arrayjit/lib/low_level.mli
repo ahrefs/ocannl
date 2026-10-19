@@ -121,7 +121,7 @@ type t =
           [Schedule.find_loops_env] / [rewrite_loop], so an op naming either symbol declines with
           the usual no-such-loop [Invalid_argument]); enclosing loops keep their full menu, since
           the state is per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary
-          affine loop symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval
+          affine loop symbol for footprint purposes ({!loop_ranges}, {!affine_accesses}, interval
           analysis) -- a scan's accesses stay affine and dense even though its values are serial. *)
   | Zero_out of Tnode.t
   | Set of {
@@ -577,7 +577,7 @@ type peel_report = {
 val peel_accum_nest :
   ?extra_level:(Indexing.symbol -> axis_type -> bool) ->
   ?report:(peel_report -> unit) ->
-  loop_bounds:(Indexing.symbol * (int * int)) list ->
+  loop_ranges:Affine.Loop_ranges.t ->
   free_of:Indexing.symbol list ->
   t ->
   (Tnode.t
@@ -619,7 +619,7 @@ val peel_accum_nest :
     load/store pair private and idempotent (gh-ocannl-721) — which is why the cell reaches the
     decision and the peel defers it to the base.
 
-    [loop_bounds] is {!loop_bounds} of the enclosing program, and supplies both the classification
+    [loop_ranges] is {!loop_ranges} of the enclosing program, and supplies both the classification
     and the ranges: a guard symbol in it that is not peeled is an enclosing level's index, while one
     outside it is a static index parameter or a runtime extent and is harmless — which is what keeps
     gh-490's runtime-extent guard ([Assignments.extent_guard]'s [i < s], whose bound is a static
@@ -665,7 +665,7 @@ type accum_decision =
 
 val decide_accum_width :
   extra_level:(Indexing.symbol -> axis_type -> bool) ->
-  loop_bounds:(Indexing.symbol * (int * int)) list ->
+  loop_ranges:Affine.Loop_ranges.t ->
   index:Indexing.symbol ->
   from_:int ->
   to_:int ->
@@ -679,7 +679,7 @@ val decide_accum_width :
     and [Schedule.Privatize] asks it of the program it was handed to choose its tile's width.
     [extra_level] is the serialized-slot predicate: a hardware-annotated loop the backend renders
     serially (no hardware index for its slot) is a peelable level like any other — code generation
-    passes its own ([C_syntax.serialized_hardware]); [loop_bounds] is {!loop_bounds} of the
+    passes its own ([C_syntax.serialized_hardware]); [loop_ranges] is {!loop_ranges} of the
     enclosing program, as for {!peel_accum_nest}. Pure but for the routine-logging flag it reads. *)
 
 val accum_decision_widens : accum_decision -> bool
@@ -1501,10 +1501,14 @@ val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * Tn
     cross-routine inlined computation count: the traced store is completed from the final optimized
     code (gh-610). *)
 
-val loop_bounds : t -> (Indexing.symbol * (int * int)) list
-(** All [For_loop] bindings within the code (loop symbols are unique within a routine), with
-    inclusive iteration bounds — the box environment for {!Affine} queries, and what
-    {!peel_accum_nest} classifies its guard symbols against: one absent from this list is bound
+val loop_ranges : t -> Affine.Loop_ranges.t
+(** Every [For_loop] and [Scan_loop] binding within the code, ONE inclusive range per symbol: the
+    hull of all its bindings. Loop symbols are not unique within a routine: {!validate_loop_binders}
+    holds only at [optimize]'s entry, and schedule rewrites emit sibling nests sharing a symbol by
+    design (staging transfer nests, a materializing unroll's copies), with possibly different
+    bounds. A per-binding list would let a first-binding lookup drop the siblings' values, the hole
+    gh-ocannl-1282 went through (gh-ocannl-1305). The box environment for {!Affine} queries, and
+    what {!peel_accum_nest} classifies its guard symbols against: one absent from it is bound
     outside every loop (a static index parameter, a runtime extent) and cannot select among any
     level's iterations. *)
 
