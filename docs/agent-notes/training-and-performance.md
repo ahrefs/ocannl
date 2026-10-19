@@ -344,12 +344,21 @@ files.
   that a test can reach only by extracting it from the script's text: `gh1133_summary.py` owns
   reading the numbered cells (`read_cells`), which `gh1003_summary.py` shares, so a change to how a
   result line is read or refused lands once.
-- `orchestrate.py`'s report writes every Markdown table row through `table_row`/`table_lines`,
-  which refuse (`UnsafeTableRow`) a cell holding a raw `|` or line break when the row is rendered.
-  A string the operator, the environment or a runner supplies -- a fixture's file name, a cache
-  path, a knob value -- reaches a cell through `display_value`, which escapes exactly what the
-  builder refuses; the records keep the raw value. `TableRowTest` scans the source for a row
-  literal (`| ...`, `|---`) written outside the builders, so a new table cannot bypass them.
+- Every report-writing script in `benchmarks/` -- `orchestrate.py`, the `gh*_cells.py`/`_summary.py`
+  drivers, `gpt2_bucket.py`, `kernel_attribution.py`, and the shell drivers' inline Python --
+  writes each Markdown table row through `benchmarks/display_safe.py`'s `table_row`/`table_lines`,
+  which refuse (`UnsafeTableRow`) a cell holding a raw `|` or line break when the row is rendered,
+  and each run-log line naming an outside value through `log_line`/`log_lines`, which refuse
+  (`UnsafeLogLine`) a raw line break (gh-ocannl-1355). A string the operator or the environment
+  supplies -- a fixture's file name, a cache path, a knob value, a driver's label or treatment
+  argument -- reaches a cell or a line through `display_value` (`code_span` inside backticks),
+  which escapes exactly what the builders refuse; the records keep the raw value. Text a runner or
+  the host printed and the script's own regex matched (a census, a kernel's writes, a CPU name)
+  stays raw: the render-time refusal is its guard, and quoting it would only make every report
+  noisier. `TableRowTest` scans every shipped `*.py` and every `*.sh` heredoc fed to `python3` for a
+  row literal (`| ...`, `|---`, `| ---`) written outside the builders, so a new table cannot bypass
+  them. orchestrate's `!!!` lines print inside a cell's failure handling, where a refusal would
+  lose the sweep, and stay unchecked; the end-of-run RUNNER FAILURES lines check the same notes.
 
 - Before its later stages a cell CHECKPOINTS what it completed (gh-ocannl-1209):
   `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every
