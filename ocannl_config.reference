@@ -349,9 +349,12 @@
 # the CUDA step from 543 to 391 ms (RTX 5070 Ti) but the HIP step from 885 to 1256 ms (gfx1151,
 # unified memory), so HIP ignores this key and keeps the unsplit plan. Ignored where
 # gpu_default_sketch_min_reduction is ignored too, except that it does not need the sketch seeding
-# on. 0 disables the split. At 4096, gpt2_mini_train at batch 256 splits its 26 bias and layer-norm
-# parameter gradients and its loss sum (32768 rows each), and batch 8 splits nothing.
-#gpu_default_split_reduce_min_serial=4096
+# on. 0 disables the split. At 1024 (gh-ocannl-1414), gpt2_mini_train at batch 256 splits its 26
+# bias and layer-norm parameter gradients and its loss sum (32768 rows each), as at 4096; at
+# batch 8 and at seq 512 x batch 2 (1024 rows) the same gradients, two loops wide there, plus the
+# vocabulary-wide softmax reductions, which took those steps from 15.2 to 12.6 ms and from 19.9 to
+# 15.9 ms. A 4096 threshold leaves the 1024-row steps unsplit.
+#gpu_default_split_reduce_min_serial=1024
 
 # If true, the recipes' untuned compiles (the same ones gpu_default_sketch_min_reduction applies
 # to) sink the reduction loops of each CUDA or HIP fission segment no sketch takes below their

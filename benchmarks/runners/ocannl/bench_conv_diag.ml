@@ -114,10 +114,16 @@ let () =
     let sites = Autotune.split_reduce_sites opt in
     Stdio.printf "split-reduce sites detected: %d\n" (List.length sites);
     List.iter sites ~f:(fun s ->
-        Stdio.printf "  %s: reduction extent %d, target cells %d, est. segment cost %d%s%s\n"
+        Stdio.printf "  %s: reduction extent %d, target cells %d, est. segment cost %d%s%s%s\n"
           (Ir.Tnode.debug_name s.Autotune.sr_target)
           s.Autotune.sr_red s.Autotune.sr_out s.Autotune.sr_cost
           (if s.Autotune.sr_dynamic then " (scatter)" else "")
+          (* gh-ocannl-1414: a site split over two reduction loops merged into one. *)
+          (match s.Autotune.sr_coalesce with
+          | None -> ""
+          | Some (o, i) ->
+              Printf.sprintf " (coalesced %s*%s)" (Ir.Indexing.symbol_ident o)
+                (Ir.Indexing.symbol_ident i))
           (* gh-ocannl-537: the conv-gradient sites are reachable only through an enabling
              interchange, so name it — a site listed with no swaps was splittable as lowered. *)
           (match s.Autotune.sr_swaps with

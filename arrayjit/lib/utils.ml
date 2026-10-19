@@ -591,7 +591,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("gpu_lane_all_reduce_simdgroups", (Keyword, "auto"));
     ("gpu_serial_lanes", (Keyword, "auto"));
     ("gpu_default_sketch_min_reduction", (Integer, "32"));
-    ("gpu_default_split_reduce_min_serial", (Integer, "4096"));
+    ("gpu_default_split_reduce_min_serial", (Integer, "1024"));
     ("gpu_default_reduction_sink", (Flag, "true"));
     ("autotune_search", (Flag, "true"));
     ("autotune_beam_width", (Integer, "2"));

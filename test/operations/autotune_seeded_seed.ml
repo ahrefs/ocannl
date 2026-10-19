@@ -11,7 +11,7 @@
    The fixture is one dense layer with a bias, [y = w * x + b], backpropagated through [loss = sum
    (y *. dy)] over [nb * ns] = 4096 rows: the weight gradient's reduction (4096) and the forward
    product's (96) both reach the default seeding threshold (32), and the bias gradient's serial
-   chain (4096 rows per output cell) and the loss sum's reach the default split threshold (4096), so
+   chain (4096 rows per output cell) and the loss sum's reach the default split threshold (1024), so
    the plan seeds AND splits. Every setting is the configuration's default: the search reads them,
    as the untuned compile does.
 

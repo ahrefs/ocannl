@@ -4,8 +4,8 @@
    gradient lowers as a training step's bias and layer-norm parameter gradients do -- [for b, s, o:
    b.grad[o] += dy[b,s,o]], one thread per output cell walking all [nb * ns] = 8192 rows in sequence
    under the default plan. [Autotune.seeded_default] splits it before segmenting: its serial chain
-   per cell (8192) is above the default threshold of 4096, and the split reduction is detected on
-   the batch loop through the enabling interchange, as the search detects it.
+   per cell (8192) is above the threshold of 4096 the test passes, and the split reduction is
+   detected on the batch loop through the enabling interchange, as the search detects it.
 
    The split reassociates the sum, so it is held to an f64 host reference within an f32 tolerance,
    beside the default pipeline's result held to the same; the inputs are NOT dyadic, so a split

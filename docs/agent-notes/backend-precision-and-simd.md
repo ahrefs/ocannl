@@ -810,7 +810,9 @@ files.
   step (bias and layer-norm parameter gradients, the loss sum) into a deterministic tree over
   blocks chosen from the routine alone, and ships ON by default in the exact regime rather than
   in the `approximate` payload: within ~2.4e-6 relative on gpt2_mini_train b256's losses, for
-  543 → 391 ms on CUDA. The `reproducible` profile pins it at 0. The precedent the decision rests
+  543 → 391 ms on CUDA. gh-ocannl-1414 lowered the default threshold to 1024 (the wave coordinator
+  approved it on the measurement), which extends it to the batch-8 and long-sequence steps' 1024-row
+  reductions: within ~1.1e-6 relative on their losses, for 15.2 → 12.6 ms at b8. The `reproducible` profile pins it at 0. The precedent the decision rests
   on: the default GPU plan's cooperative all-reduces (gh-ocannl-1124) and, under the default
   `autotune_search=true`, the tuner's own split-reduce candidates already reassociate in the
   exact regime. A new numerics-changing gate still follows the rule below.
@@ -1900,6 +1902,27 @@ files.
   packing with a per-lane `pow(` that skips `binop_syntax` fails it, and the values alone would not
   (on M4 Max the half overload matches f32 `pow` narrowed bitwise); routing through
   `binop_syntax` passes.
+
+- Metal half `Exp`, `Log`, `Exp2`, `Log2`, `Sin`, `Cos` and `Sqrt` render as
+  `(half)op((float)(x))` (gh-ocannl-1288), the same contract as half pow: **a half result is the f32
+  builtin narrowed once, under whichever math policy is in force** (`unop_syntax`'s
+  `widened_math`). Packed half lanes (gh-ocannl-1295) inherit it by rendering through
+  `unop_syntax`. `benchmarks/runners/ocannl/metal_half_math_probe.ml` runs each overload and its
+  widened form over all 65536 half inputs, under the legacy `fastMathEnabled=false` (forced; newer
+  runtimes still accept it, so one macOS 15+ host covers both policies, though not macOS 14's
+  compiler), the modern split and the default. On M4 Max / macOS 26 every finite in-range result
+  of both forms was within 0.5 half ulp of f64. The overloads matched the widened form bitwise
+  except for `sin(-0)` (the overload returns +0) under both policies, and, under the modern policy,
+  `sin`/`cos` of ±inf and NaN, where the overload gives NaN and the fast f32 functions give 0. The
+  widening therefore moved exactly those values. A half `sin`/`cos` of a non-finite input is now 0
+  under the modern policy, as f32 already was. `half_unary_math` pins the relationship executed
+  (with those inputs; the overloads fail it) and the spelling, Metal-gated: CUDA and HIP keep the
+  native `hexp`/`hsin`/... intrinsics, which promise no such relationship.
+  `Recip_sqrt` (`rsqrt`) and `Tanh_approx` (`tanh`) keep their half overloads. `rsqrt` matched its
+  widened form bitwise under both policies. For `tanh` the fast f32 function narrowed is much worse
+  (up to 1024 half ulps near the subnormal range) while the overload stays within 0.502, and the
+  two policies' f32 `tanh` disagree on 11466 inputs, so widening it would buy policy coupling at an
+  accuracy cost.
 
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half
