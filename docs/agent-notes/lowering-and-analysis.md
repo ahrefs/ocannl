@@ -328,6 +328,11 @@ files.
   `Set`, or a static read inside a scatter, is never exempt. No placement outcome shows that verdict
   today (a gathered table is committed non-virtual at the read, and `reconcile_traced_store`
   promotes exemption-dependent writers anyway), so its tests assert `reads_covered_query` itself.
+  The structural facts pass reads a gather the same way (gh-ocannl-1327): `trace_node_facts`
+  records the table as read (`read_by_other`, the setter's fan-in sink) and as touched first, with
+  no exemption. A walker over a `Get_dynamic` that only recurses into `dyn_value` drops the table
+  silently: here a later constant `Set` became the table's first touch, and the table was then
+  committed a scalar constexpr and refused at its own gather (legs 13-14 of that test).
 - **The peel's DECISION is carried, not re-derived from the emitted kernel** (gh-ocannl-733). Two
   nests differing only in whether the accumulated cell mentions the enclosing index peel a different
   number of levels under a different guard verdict and emit the SAME localized kernel — one scope,
