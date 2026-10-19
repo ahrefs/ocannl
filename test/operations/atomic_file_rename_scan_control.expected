@@ -5,6 +5,7 @@ a corpus section after sources is refused: true
 a corpus without the generators header is refused: true
 an empty OCaml source corpus reaches its refusal: true
 an invalid OCaml source reaches the parse refusal: true
+a scanner exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:7191f5e19a3640926ad61aeb2d7a349e] source-generation input has
@@ -14,3 +15,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:bccd646d58b5010b1fe4eee6abe7eb53] corpus arguments must
   [scanner-refusal:fb72b56980e9afc888059f90e9734599] arguments the rule's
   [scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch
+  [scanner-refusal:125c419015c4e6332b0fa19c8e6a1762] rename scan raised

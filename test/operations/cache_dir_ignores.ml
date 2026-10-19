@@ -94,16 +94,27 @@ let refuse_unreadable_patterns ~fail patterns =
             letting the pattern count as non-matching"
            pattern))
 
-let read_source_or_refusal ~fail ~source content =
-  match Or_error.try_with (fun () -> Scan.read ~source content) with
-  | Ok reading -> Some reading
-  | Error error ->
+(* One source's reading, its failures told apart (gh-ocannl-1292): a source that does not parse is
+   the source's to fix, and any other exception is the reader's own defect, which used to be
+   reported as a parse failure. [reader] is a parameter so the refusal control can plant the
+   defect. *)
+let read_source_or_refusal ?(reader = fun ~source content -> Scan.read ~source content) ~fail
+    ~source content =
+  match Test_utils.Scan_attempt.run (fun () -> reader ~source content) with
+  | Scanned reading -> Some reading
+  | Unparsed where ->
       fail
         (Printf.sprintf
            "%s is among the sources this check scans and does not parse as OCaml (%s) -- if it is \
             a build artifact rather than a source, exclude it beside the `.pp.ml` expansions"
-           source
-           (String.concat ~sep:" " (String.split_lines (Error.to_string_hum error))));
+           source where);
+      None
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the cache-directory reader raised %s on %s, which parses -- a defect in the scanner \
+            rather than in the source, so the directories it names went unchecked"
+           exn source);
       None
 
 let checked_name ~fail ~source ~line ~spelling = function
@@ -182,11 +193,34 @@ let refusal_control () =
        Cache_dir_scan.glob_matches does not implement -- teach it that form rather than letting \
        the pattern count as non-matching" (fun fail ->
       Scan.ignore_patterns "/auto**tune_cache*/" |> refuse_unreadable_patterns ~fail);
-  case "an invalid OCaml source reaches the parse refusal"
+  (* The two ways a source's read can fail, each reaching its own refusal and only that one
+     (gh-ocannl-1292): the observation is recorded only for the message the format names. *)
+  let routed_case label ~format ~fragment run =
+    let messages = ref [] in
+    run (fun message -> messages := message :: !messages);
+    let routed =
+      match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
+    in
+    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    Verdict.p label routed
+  in
+  routed_case "an invalid OCaml source reaches the parse refusal"
     ~format:
       "%s is among the sources this check scans and does not parse as OCaml (%s) -- if it is a \
-       build artifact rather than a source, exclude it beside the `.pp.ml` expansions" (fun fail ->
+       build artifact rather than a source, exclude it beside the `.pp.ml` expansions"
+    ~fragment:"bad.ml is among the sources this check scans and does not parse" (fun fail ->
       ignore (read_source_or_refusal ~fail ~source:"bad.ml" "let ="));
+  routed_case
+    "a reader exception on a source that parses reaches the scanner-defect refusal, not the parse \
+     one"
+    ~format:
+      "the cache-directory reader raised %s on %s, which parses -- a defect in the scanner rather \
+       than in the source, so the directories it names went unchecked"
+    ~fragment:"raised Invalid_argument(\"planted\") on good.ml, which parses" (fun fail ->
+      ignore
+        (read_source_or_refusal
+           ~reader:(fun ~source:_ _ -> invalid_arg "planted")
+           ~fail ~source:"good.ml" "let x = 1"));
   case "a cache name outside the required prefix reaches its refusal"
     ~format:
       "%s:%d: `%s` names the cache directory %S, which `%s` does not cover -- it has to be a \

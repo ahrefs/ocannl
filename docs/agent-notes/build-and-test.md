@@ -632,9 +632,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   a module binding — stays written against the constructors.
 - A scan's failure on a source is classified through `Test_utils.Scan_attempt`, never a
   `try … with _ ->` that calls every exception "does not parse": `run` tells the parser's errors
-  (the input's fault) from any other exception (the scanner's, kept with its one-line
-  `Printexc.to_string` text), and a case file's per-snippet catch-all is `attempted ~what ~name
-  ~default`, which reports either as a `Verdict.fail`.
+  (the input's fault, `Unparsed` carrying the parser's own one-line report: line, columns, what)
+  from any other exception (the scanner's, kept with its one-line `Printexc.to_string` text), and a
+  case file's per-snippet catch-all is `attempted ~what ~name ~default`, which reports either as a
+  `Verdict.fail`. Each repository scan's two refusals are separate formats, the reader an argument
+  of its `*_or_refusal` function so the refusal control can plant a raise and claim that exactly the
+  defect message fired (`routed_case`, gh-ocannl-1292). Not yet routed: `env_var_deps`'s
+  `Generated.init` caller census and its `source_reads_key` probe, and the dune-file readers, whose
+  parse errors are sexplib's or `Dune_stanza_scan`'s rather than located ppxlib ones.
 - Type-check every OCaml snippet a scan's cases feed it before trusting the arm. The parser
   accepts programs the type checker rejects — a duplicate top-level `module` parses cleanly — and
   an arm over such a snippet pins the scanner's reading of code no compiler would build, so its

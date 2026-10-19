@@ -143,14 +143,14 @@ let refusal_control () =
   in
   (match outcome with
   | Attempt.Raised exn -> refuse_raised ~fail [ ("test/parses.ml", exn) ]
-  | Attempt.Scanned _ | Attempt.Unparsed -> ());
+  | Attempt.Scanned _ | Attempt.Unparsed _ -> ());
   Verdict.p
     "a scanner exception on a parsing file reaches the scanner-defect refusal, not the parse one"
     (!raised
     &&
     match outcome with
     | Attempt.Raised exn -> String.is_substring exn ~substring:"Invalid_argument"
-    | Attempt.Scanned _ | Attempt.Unparsed -> false);
+    | Attempt.Scanned _ | Attempt.Unparsed _ -> false);
   (* gh-ocannl-1207: the parse refusal, executed: this scan as a child, handed a source that does
      not parse. *)
   Test_utils.Refusal_control_manifest.with_tree
@@ -242,7 +242,7 @@ let () =
           | Attempt.Scanned (rejections, site) ->
               rejected := rejections @ !rejected;
               site
-          | Attempt.Unparsed ->
+          | Attempt.Unparsed _ ->
               unparsed := name :: !unparsed;
               None
           | Attempt.Raised exn ->

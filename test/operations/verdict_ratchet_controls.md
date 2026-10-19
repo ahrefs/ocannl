@@ -718,3 +718,16 @@ run-constant gate into its value, naming tile_mma_declines.ml:253 and `on_cpu`, 
 sites, and only them (run `20261019T165108Z-75301`); the rebase onto master brought one more
 candidate, `cc_kept_library`'s claim that a library is kept where the configuration requests it,
 which is a claim over the configuration alone and taught the reader the settings record.
+
+## gh-ocannl-1292 mutation runs
+
+The claim readers over one source and the syntax matrix's per-cell reader classify a failure
+through `Test_utils.Scan_attempt`: a source that does not parse is reported by name, an exception
+from one that parses is the reader's own defect, named as such. Each run used tools/mutation-run.sh
+on `verdict_ratchet.ml` and the focused verdict_ratchet alias, exited 1 on exactly the listed false
+claims, and restored the source byte-for-byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A claim reader that raises on a source that parses refuses as a reader defect | `verdict_ratchet.ml`: the raised arm of `read_claims` reports nothing | Failed: `a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one` | `20261019T223808Z-39359` |
+| A matrix cell whose reader raises reads as a reader defect | `verdict_ratchet.ml`: `matrix_cell_helpers` classifies a raise as a parse failure | Failed: `a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure` | `20261019T223830Z-62902` |

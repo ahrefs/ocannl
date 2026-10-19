@@ -1360,8 +1360,12 @@ let association_cases =
 let attempt_cases =
   let parse source () = ignore (Scan.rejections ~emitters ~path:"case.ml" ~contents:source) in
   [
-    ("a syntax error is the file's", parse "let =\n", "unparsed");
-    ("a lexical error is the file's", parse "let s = \"unterminated\n", "unparsed");
+    ( "a syntax error is the file's, with where the parser stopped",
+      parse "let =\n",
+      "unparsed at line 1, characters 4-5: Syntax error" );
+    ( "a lexical error is the file's, with where the lexer stopped",
+      parse "let s = \"unterminated\n",
+      "unparsed at line 1, characters 8-9: String literal not terminated" );
     ("a source that parses is scanned", parse "let x = 1\n", "scanned");
     ( "a scanner exception is the scanner's, with its text",
       (fun () ->
@@ -1371,7 +1375,7 @@ let attempt_cases =
 
 let render_attempt = function
   | Attempt.Scanned () -> "scanned"
-  | Attempt.Unparsed -> "unparsed"
+  | Attempt.Unparsed where -> "unparsed at " ^ where
   | Attempt.Raised exn -> "raised " ^ exn
 
 let render_association = function

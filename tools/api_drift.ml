@@ -36,12 +36,12 @@ let read rev source =
     Test_utils.Scan_attempt.run (fun () -> Surface.declarations ~paths:inventory ~source contents)
   with
   | Scanned declarations -> declarations
-  | Unparsed ->
+  | Unparsed where ->
       failwith
         (Printf.sprintf
-           "%s at commit %s does not parse, so its declarations cannot be read -- start the window \
-            after that commit"
-           source rev)
+           "%s at commit %s does not parse (%s), so its declarations cannot be read -- start the \
+            window after that commit"
+           source rev where)
   | Raised exn -> failwith (Printf.sprintf "reading %s at commit %s: %s" source rev exn)
 
 let run ?context since until =

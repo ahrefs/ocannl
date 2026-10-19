@@ -404,7 +404,7 @@ let audit ~sources ~note : site list * entry list * problem list =
     List.map sources ~f:(fun (file, content) ->
         match Test_utils.Scan_attempt.run (fun () -> scan_source ~file content) with
         | Scanned found -> found
-        | Unparsed -> ([], [ Unparsed file ])
+        | Unparsed _ -> ([], [ Unparsed file ])
         | Raised exn -> ([], [ Scanner_raised (file, exn) ]))
   in
   let sites = List.concat_map scanned ~f:fst in
@@ -415,7 +415,7 @@ let audit ~sources ~note : site list * entry list * problem list =
           Test_utils.Scan_attempt.run (fun () -> oracle_reasons (Read.structure_of content))
         with
         | Scanned found -> Hash_set.iter found ~f:(Hash_set.add reasons)
-        | Unparsed -> (* reported by the site scan above *) ()
+        | Unparsed _ -> (* reported by the site scan above *) ()
         | Raised exn -> oracle_raised := Scanner_raised (file, exn) :: !oracle_raised);
   let unconsulted =
     List.filter_map sites ~f:(fun s ->

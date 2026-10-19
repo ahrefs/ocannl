@@ -3,6 +3,7 @@ an empty OCaml source corpus reaches its refusal: true
 a missing required ignore glob reaches its refusal: true
 an unsupported root ignore pattern reaches its refusal: true
 an invalid OCaml source reaches the parse refusal: true
+a reader exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a cache name outside the required prefix reaches its refusal: true
 an unresolved cache argument reaches its refusal: true
 an absent built-in default reaches its refusal: true
@@ -15,6 +16,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:88e191145bdba435fd0fb303d486d684] gitignore no longer
   [scanner-refusal:3076fb53f1ae34b427f82aaa89404cb3] root gitignore pattern
   [scanner-refusal:e2fdd92481a66b85f6f54b5c68513edd] sources this check
+  [scanner-refusal:af5123353725f010d363e6b3758bfef2] cache-directory reader raised
   [scanner-refusal:cd6f72db4a56b656b92efd2c4a07945f] the cache directory
   [scanner-refusal:a8ea78ba60f371d22646868a36871617] argument
   [scanner-refusal:4168ef8491021497635783bb1f7e4232] no source reads
