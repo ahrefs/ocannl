@@ -154,11 +154,11 @@ let () =
   (* The zero-filled fringe of the staged tiles: the load nests keep Where-form edge guards
      (rendered as conditional expressions storing 0 past the source extents), and the masked
      store-back writes only the valid rows. *)
-  p "staged tiles zero-fill their fringe and the store-back is masked"
-    ((not on_cpu)
-     (* The bounds are float constants cast to the index type, so they carry the radix point every
-        emitted float constant now does (gh-ocannl-623): [(int)(33.0)], same value. *)
-    || (has "!= 0.0 ? " && has "(float)(0.0)" && has (Printf.sprintf "< (int)(%d.0))) {" m_ext)))
+  gated ~when_:on_cpu ~on:backend_name
+    "staged tiles zero-fill their fringe and the store-back is masked"
+    (* The bounds are float constants cast to the index type, so they carry the radix point every
+       emitted float constant now does (gh-ocannl-623): [(int)(33.0)], same value. *)
+    (has "!= 0.0 ? " && has "(float)(0.0)" && has (Printf.sprintf "< (int)(%d.0))) {" m_ext))
 
 (* === GPU leg: padded shared cooperative composition (mirrors autotune's [gpu_mma_sketch_schedule],
    plus the pads — including the unsplit column panel, which the intrinsic n-extent needs). The
@@ -319,14 +319,14 @@ let () =
       p "awkward site seeds staged GPU MMA pad-compositions" false;
       p "awkward site does not seed the unstaged (in-place) GPU flavor" false;
       p "awkward site seeds the CPU packed pad-composition" false);
-  p_all2 "seeded packed pad-composition matches the serial twin bitwise" got want ~f:(fun a b ->
-      (not on_cpu) || Float.equal a b);
+  (let label = "seeded packed pad-composition matches the serial twin bitwise" in
+   if on_cpu then p_all2 label got want ~f:Float.equal else skipped label);
   (* Parity holds for the scalar fallback too; the routine's census says which ran
      (gh-ocannl-1283). *)
-  p "seeded packed pad-composition's routine is labeled tensorized"
-    ((not on_cpu)
-    || Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
-         Ir.C_syntax.Tensorized)
+  gated ~when_:on_cpu ~on:backend_name
+    "seeded packed pad-composition's routine is labeled tensorized"
+    (Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
+       Ir.C_syntax.Tensorized)
 
 (* === Negative pin: a pad guard over an in-place operand (no zero-fringe staged tile) must be
    rejected — the intrinsic path would read past the operand's extent. === *)

@@ -204,17 +204,13 @@ let () =
   p_none "bc: the j-blocking detector rejects the CPU pipelines, which block the row axis instead"
     cpu_scheds ~f:(fun s -> blocks_j bounds s);
 
-  (* Executable parity, seed by seed, on backends that can run shared staging. Vacuous on cc —
-     announced on stderr so it is not mistaken for coverage; the golden stays
+  (* Executable parity, seed by seed, on backends that can run shared staging. Skipped on cc --
+     reported as a skip, so it is not mistaken for coverage; the golden stays
      backend-independent. *)
-  if not is_gpu then
-    Stdio.eprintf "bc: %s is not a GPU backend — the executable parity check below is vacuous\n"
-      backend_name;
-  p_all "bc: every unfused GPU seed compiles and computes correctly"
+  gated_all ~when_:is_gpu ~on:backend_name
+    "bc: every unfused GPU seed compiles and computes correctly"
     (List.init (List.length seeds) ~f:Fn.id)
     ~f:(fun idx ->
-      (not is_gpu)
-      ||
       let transform opt =
         let sp = List.nth_exn (gpu_seeds opt) idx in
         Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:sp opt) opt
@@ -479,20 +475,14 @@ let () =
         Stdio.eprintf "lm: finer fissioned execution FAILED: %s\n" (Exn.to_string exn);
         false);
   (* Executed per seed (GPU backends): each fine GPU seed's sketch schedule on the freed GEMM
-     segment, presets elsewhere — the executable half of the spreads-j pin. Vacuous on cc, announced
-     on stderr. *)
-  if not is_gpu then
-    Stdio.eprintf "lm: %s is not a GPU backend — the per-seed executable check below is vacuous\n"
-      backend_name;
+     segment, presets elsewhere — the executable half of the spreads-j pin. Skipped on cc. *)
   let n_seeds =
     match fine_gemm_seg (segments ~arity_cuts:true opt) with
     | Some seg -> List.length (gpu_seeds seg)
     | None -> 0
   in
-  p_all "lm: every fine GPU seed compiles and computes correctly" (List.init n_seeds ~f:Fn.id)
-    ~f:(fun idx ->
-      (not is_gpu)
-      ||
+  gated_all ~when_:is_gpu ~on:backend_name "lm: every fine GPU seed compiles and computes correctly"
+    (List.init n_seeds ~f:Fn.id) ~f:(fun idx ->
       let comp_s, z_s, r_s = mk_comp (Printf.sprintf "lms%d" idx) in
       let transforms opt =
         let preset seg =

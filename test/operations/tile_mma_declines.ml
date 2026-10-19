@@ -114,13 +114,12 @@ let () =
         if on_cpu then Sched.apply (tensorize_schedule ~out:mc.Tensor.value opt) opt else opt)
       (named "tmd_regtile" (Train.forward mc))
   in
-  p "census: standard layout renders register-tiled"
-    ((not on_cpu)
-    || List.equal Ir.C_syntax.equal_mma_rendering (renderings census)
-         [ Ir.C_syntax.Mma_register_tiled ]);
-  p "census: the honoured schedule's routine is labeled tensorized"
-    ((not on_cpu)
-    || Ir.C_syntax.equal_tensorization census.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized);
+  gated ~when_:on_cpu ~on:backend_name "census: standard layout renders register-tiled"
+    (List.equal Ir.C_syntax.equal_mma_rendering (renderings census)
+       [ Ir.C_syntax.Mma_register_tiled ]);
+  gated ~when_:on_cpu ~on:backend_name
+    "census: the honoured schedule's routine is labeled tensorized"
+    (Ir.C_syntax.equal_tensorization census.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized);
   (* gh-ocannl-998: with the contraction licence off (the default, pinned here) the accumulation
      reaches [Tensorize] in plain-add form, which the register tile declines; the tile's own
      fallback is written fused, so the rendering survives. *)
@@ -138,10 +137,10 @@ let () =
             else opt)
           (named "tmd_regtile_unfused" (Train.forward mc_unfused)))
   in
-  p "census: without the contraction licence the standard layout still renders register-tiled"
-    ((not on_cpu)
-    || List.equal Ir.C_syntax.equal_mma_rendering (renderings census_unfused)
-         [ Ir.C_syntax.Mma_register_tiled ]);
+  gated ~when_:on_cpu ~on:backend_name
+    "census: without the contraction licence the standard layout still renders register-tiled"
+    (List.equal Ir.C_syntax.equal_mma_rendering (renderings census_unfused)
+       [ Ir.C_syntax.Mma_register_tiled ]);
   let mta = TDSL.ndarray mav ~label:[ "tmd_ta" ] ~output_dims:[ n; n ] () in
   let mtb = TDSL.ndarray mbv ~label:[ "tmd_tb" ] ~output_dims:[ n; n ] () in
   let%op td = mta +* "ik;jk=>ij" mtb in
@@ -151,14 +150,13 @@ let () =
         if on_cpu then Sched.apply (tensorize_schedule ~out:td.Tensor.value opt) opt else opt)
       (named "tmd_scalar_tb" (Train.forward td))
   in
-  p "census: transposed-B layout falls back to the lane-0 scalar rendering"
-    ((not on_cpu)
-    || List.equal Ir.C_syntax.equal_mma_rendering (renderings census_tb)
-         [ Ir.C_syntax.Mma_scalar_fallback ]);
-  p "census: the declined schedule's routine is labeled scalar-fallback, not tensorized"
-    ((not on_cpu)
-    || Ir.C_syntax.equal_tensorization census_tb.Ir.C_syntax.tensorization
-         Ir.C_syntax.Scalar_fallback)
+  gated ~when_:on_cpu ~on:backend_name
+    "census: transposed-B layout falls back to the lane-0 scalar rendering"
+    (List.equal Ir.C_syntax.equal_mma_rendering (renderings census_tb)
+       [ Ir.C_syntax.Mma_scalar_fallback ]);
+  gated ~when_:on_cpu ~on:backend_name
+    "census: the declined schedule's routine is labeled scalar-fallback, not tensorized"
+    (Ir.C_syntax.equal_tensorization census_tb.Ir.C_syntax.tensorization Ir.C_syntax.Scalar_fallback)
 
 (* === The per-chunk privatization cap: grid-outermost packed GEMM re-packing B~ per chunk
    (gh-ocannl-475's shape). Both packing Stages land inside the Grid body, so both tiles must
@@ -240,22 +238,20 @@ let () =
       p_all2 "per-chunk B~ re-pack matches the serial twin bitwise" got want ~f:Float.equal;
       (* Parity holds for the scalar fallback too; the routine's census says which ran
          (gh-ocannl-1283). *)
-      p "per-chunk B~ re-pack's routine is labeled tensorized"
-        ((not on_cpu)
-        || Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
-             Ir.C_syntax.Tensorized));
+      gated ~when_:on_cpu ~on:backend_name "per-chunk B~ re-pack's routine is labeled tensorized"
+        (Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
+           Ir.C_syntax.Tensorized));
     Generated.read name
   in
   (let src = compile_bpack ~run_parity:true ~name:"tmd_bpack_fits" ~dim:256 () in
    (* Two parallel loops: the expanded zeroing nest and the packed accumulation loop. *)
-   p "per-chunk B~ re-pack under the cap pool-parallelizes"
-     ((not on_cpu)
-     || (count_parallel_constructs src = 2 && String.is_substring src ~substring:"tile_")));
+   gated ~when_:on_cpu ~on:backend_name "per-chunk B~ re-pack under the cap pool-parallelizes"
+     (count_parallel_constructs src = 2 && String.is_substring src ~substring:"tile_"));
   let src = compile_bpack ~name:"tmd_bpack_over" ~dim:1024 () in
   (* Only the zeroing nest parallelizes; the accumulation loop's per-chunk tiles trip the cap and it
      renders serial. *)
-  p "per-chunk B~ re-pack over the cap declines to serial"
-    ((not on_cpu) || count_parallel_constructs src = 1)
+  gated ~when_:on_cpu ~on:backend_name "per-chunk B~ re-pack over the cap declines to serial"
+    (count_parallel_constructs src = 1)
 
 (* === The seeding pre-filter (gh-ocannl-479) and the mixed grid-outermost seed (gh-ocannl-473).
    Synthetic limits pin the vector width (32 bytes = 8 f32 lanes), and seeds are enumerated on the
