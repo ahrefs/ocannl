@@ -721,6 +721,20 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
        (placement_problem ?name ?timing_ctx ctx loss comp bindings)
        decision)
 
+(** Whether a search {!tune_placements} observed is evidence a recorded placement decision may rest
+    on (gh-ocannl-786's rule): it completed, with no contention-refused window, uncut by its budget
+    (gh-ocannl-1409), and measured something. A {!Autotune.Lineage_refused} search measured nothing
+    but spoils nothing either (gh-ocannl-1421): its placement can never ship into the caller under
+    this decision problem, whose key carries both lineages, so the decision does not skip a
+    competitor a later process could measure. *)
+let placement_evidence_clean (r : Autotune.report) =
+  match r.Autotune.outcome with
+  | Autotune.Lineage_refused _ -> true
+  | _ ->
+      r.Autotune.timings_contended = 0 && (not r.Autotune.budget_cut)
+      && Option.is_none (Autotune.terminal_failure r)
+      && Float.is_finite r.Autotune.best_ms
+
 (** Placement A/B autotuning: {!Autotune.tune} on [comp] under the graph's current (default)
     placements — virtual intermediates plus the compiler's promotions — and again with every
     embedded node of [loss] materialized, keeping the measured winner (the arms' [best_ms] are
@@ -1209,12 +1223,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     match store with
     | None -> ()
     | Some (problem, key, limits, capabilities, backend) ->
-        let unclean =
-          List.exists !observed ~f:(fun r ->
-              r.Autotune.timings_contended > 0 || r.Autotune.budget_cut
-              || Option.is_some (Autotune.terminal_failure r)
-              || not (Float.is_finite r.Autotune.best_ms))
-        in
+        let unclean = not (List.for_all !observed ~f:placement_evidence_clean) in
         let outcome_digest =
           Option.value_map shipped ~default:"" ~f:(fun r -> r.Autotune.source_digest)
         in
@@ -1730,12 +1739,20 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 List.iter results ~f:(fun (_, r, ms, _, _, rep, (arm, identity)) ->
                     (* Only clean evidence anchors: a search with a refused (contended) window
                        ranked an incomplete candidate set, and one that timed nothing measured
-                       nothing -- its twin gets its own chance. The search-disabled report is the
-                       exception: nothing is ever timed there, nothing can ship from a flip, and
-                       anchoring is what makes a search-off chain list its twin classes. *)
+                       nothing -- its twin gets its own chance. The search-disabled and
+                       lineage-refused reports are the exception: nothing is ever timed there,
+                       nothing can ship from such a flip, and anchoring is what makes a search-off
+                       chain list its twin classes -- and what keeps the timing tag's refusal the
+                       thing that separates two flips of a lineage-refused chain
+                       (gh-ocannl-1421). *)
                     let search_off, clean =
                       match rep with
-                      | Some { Autotune.outcome = Autotune.Search_disabled; _ } -> (true, true)
+                      | Some
+                          {
+                            Autotune.outcome = Autotune.Search_disabled | Autotune.Lineage_refused _;
+                            _;
+                          } ->
+                          (true, true)
                       | Some rep -> (false, rep.Autotune.timings_contended = 0)
                       | None -> (false, false)
                     in

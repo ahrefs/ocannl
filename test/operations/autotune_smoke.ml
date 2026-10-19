@@ -436,7 +436,8 @@ let () =
       match r.Autotune.outcome with
       | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ | Autotune.Cache_replay ->
           true
-      | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandonment_replay _ ->
+      | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandonment_replay _
+      | Autotune.Lineage_refused _ ->
           r.Autotune.candidates_timed = 0);
   (* Only a CHOSEN cache replays (Codex P2 on PR #291): the SAME directory is replayed or ignored
      depending on whether someone asked for it. A search with no [cache_dir] populates the built-in

@@ -53,7 +53,8 @@ an entry that names a node the problem lacks is ignored and the placements re-tu
 an entry that names a node the problem lacks is overwritten by the re-tune, given clean evidence: true
 the caller's and the timing lineage lower the default placements differently: true
 with a timing context, the cold run's routine computes the right values: true
-with a timing context, no compared search failed: a schedule the caller's lineage cannot take is refused there, typed, and the untuned default ships: true
+with a timing context, no compared search failed: a schedule the caller's lineage cannot take is never compiled into it: true
+with a timing context, arm A -- whose lowering differs between the two lineages -- is refused before searching, and arm B, which materializes the intermediate in both, searches: true
 with a timing context, the cold run records a decision of its own, whenever its evidence was clean: true
 with a timing context, the recorded outcome digest is the shipped search's own source digest: true
 with a timing context, a fresh lowering of the recorded decision in the timing lineage reproduces it: true

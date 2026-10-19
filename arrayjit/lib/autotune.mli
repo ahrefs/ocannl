@@ -913,6 +913,16 @@ type outcome =
           {!tune} raised {!Search_abandoned}. Not a failure: the counters hold the work it reached,
           [best_ms] is a measurement of the search context, nothing was compiled for the caller and
           clean measured prefixes are cached for a later {!Abandonment_replay}. *)
+  | Lineage_refused of { caller_digest : string; timing_digest : string }
+      (** gh-ocannl-1421: the [timing_ctx] lowers this routine to another program than the caller's
+          context does -- the structural digests ([with_placements:false]) of the two lowerings,
+          carried here, differ, as when the timing lineage materializes a node the caller's leaves
+          virtual. Every candidate derives from the timing lineage's base lowering, so no schedule
+          tuned or cached there can be compiled into the caller: nothing is searched or replayed,
+          and the caller gets the untuned default compile, as under {!Search_disabled}. Every time
+          is [infinity], so a caller ranking searches ([Train.tune_placements]) ranks it last; it is
+          no failure. Decided before the cache is consulted, from an analysis-only lowering of the
+          caller's context ({!Context.lowered_for_decisions}). *)
 
 type timing_mode =
   | Isolated

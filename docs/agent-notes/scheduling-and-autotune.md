@@ -1925,12 +1925,17 @@ files.
   one lineage but wrong across two: with `?timing_ctx` materializing a node the caller leaves
   virtual, a whole-routine winner emitted code reading an undeclared buffer (a classified decline
   on cc, an unclassified `Failure` on Metal) and a fissioned one raised
-  `promote_local_to_device: … is virtual`, fatal under strict classification. Every compile into
-  the caller (`compile_spec_real`: cache replay, winner, seeded fallback) now compares the fresh
-  lowering's STRUCTURAL digest with the base's (taken in the base transform, `timing_ctx` only)
-  and refuses a mismatch at `Transform` as `Illegal_schedule "Autotune.caller_lineage"`, with an
-  unconditional stderr WARNING, so the plain untuned default ships. Structural, because placement
-  classes legitimately differ across lineages on identical code. It is conservative: a timing
+  `promote_local_to_device: … is virtual`, fatal under strict classification. `tune` now compares
+  the STRUCTURAL digest of the base lowering (taken in the base transform, `timing_ctx` only) with
+  that of the caller's analysis-only lowering (`Context.lowered_for_decisions`) before the cache
+  and the search; a mismatch reports `Lineage_refused`, searches nothing, warns on stderr
+  unconditionally and ships the untuned default at `best_ms = infinity`. Up front, not at the
+  winner compile: a refusal there left the arm ranked, and its decision recorded, by the crown it
+  never shipped (the local review's P2). `Train.placement_evidence_clean` lets such an arm stand
+  beside a recording, since the problem key carries both lineages. Every compile into the caller
+  (`compile_spec_real`) still re-checks the fresh lowering as a backstop, refusing at `Transform`
+  as `Illegal_schedule "Autotune.caller_lineage"`. Structural, because placement classes
+  legitimately differ across lineages on identical code. It is conservative: a timing
   lineage that inlines a computation the caller holds materialized (`flip_twins`' inheriting
   lineage) runs fine but is refused too. `placement_store` run 6 ranks fissioned candidates first
   through `Autotune.on_candidate_measured`, which reproduced the old failure deterministically.

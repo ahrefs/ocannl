@@ -74,15 +74,10 @@ let replayed (r : Autotune.report) =
 let uncontended (r : Autotune.report) = r.Autotune.timings_contended = 0
 let source_digest (r : Autotune.report) = r.Autotune.source_digest
 
-(* The evidence a recording rests on, as [Train.tune_placements] judges it: every search the run
-   observed had no contention-refused window, did not fail, and timed something. A flip the
-   abandonment rule stopped early was measured, briefly, and lost: it does not spoil the
-   evidence. *)
-let clean_report (r : Autotune.report) =
-  uncontended r
-  && Option.is_none (Autotune.terminal_failure r)
-  && Float.is_finite r.Autotune.best_ms
-
+(* The evidence a recording rests on, as [Train.tune_placements] judges it: its own predicate, so
+   the test cannot disagree with the recorder (a flip the abandonment rule stopped early, or a
+   lineage-refused arm, does not spoil the evidence). *)
+let clean_report = Train.placement_evidence_clean
 let clean_evidence reports = List.for_all reports ~f:clean_report
 
 (* A search that failed outright: the evidence is unclean, but not by the load, so a retry would
@@ -791,18 +786,18 @@ let () =
 
      Its own directory, and fissioned candidates ranked FIRST (gh-ocannl-1421). Every schedule these
      searches crown is tuned on the timing lineage's lowering, where the intermediate is
-     materialized; in the caller's lineage it is virtual, so arm A's schedule does not apply there,
-     and [Autotune.tune] refuses to compile it into the caller (a structural-digest mismatch,
-     typed): the untuned default ships for that arm, and arm B, which materializes the intermediate
-     in both lineages, ships its own crown. A fissioned winner used to die instead, promoting the
-     virtual intermediate to a device buffer -- fatal under strict classification, so the replayed
-     search failed and the warm run went back to the arms (gh-ocannl-1386's flake, whenever the
-     timing noise crowned a fissioned schedule; on Metal a whole-routine winner's compile failure
-     was fatal too). Ranking fissioned candidates first makes that winner deterministic, and the
-     claim that no compared search failed -- which no environment waives -- fails on the old
-     behavior every time. The materialize-all lineage of run 1's arm B lowers to the same program as
-     this timing lineage, so a shared directory would hand these searches run 1's unranked winner as
-     a schedule-cache hit. --- *)
+     materialized; in the caller's lineage it is virtual, so no arm-A schedule applies there, and
+     [Autotune.tune] refuses arm A up front ([Lineage_refused], the structural digests differ): it
+     searches nothing, ships the untuned default and ranks last, while arm B, which materializes the
+     intermediate in both lineages, searches and ships its own crown. A fissioned winner used to die
+     instead, promoting the virtual intermediate to a device buffer -- fatal under strict
+     classification, so the replayed search failed and the warm run went back to the arms
+     (gh-ocannl-1386's flake, whenever the timing noise crowned a fissioned schedule; on Metal a
+     whole-routine winner's compile failure was fatal too). Ranking fissioned candidates first makes
+     that winner deterministic, and the claim that no compared search failed -- which no environment
+     waives -- fails on the old behavior every time. The materialize-all lineage of run 1's arm B
+     lowers to the same program as this timing lineage, so a shared directory would hand these
+     searches run 1's unranked winner as a schedule-cache hit. --- *)
   let timing_ctx () = Context.decide_materialized (Context.auto ()) [ mc.Tensor.value ] in
   p "the caller's and the timing lineage lower the default placements differently"
     (not
@@ -830,8 +825,19 @@ let () =
   let failed6 = failed_search (arms6 @ flips6) in
   p_none
     "with a timing context, no compared search failed: a schedule the caller's lineage cannot take \
-     is refused there, typed, and the untuned default ships"
+     is never compiled into it"
     (arms6 @ flips6) ~f:(fun r -> Option.is_some (Autotune.terminal_failure r));
+  p
+    "with a timing context, arm A -- whose lowering differs between the two lineages -- is refused \
+     before searching, and arm B, which materializes the intermediate in both, searches"
+    (match arms6 with
+    | [ { Autotune.outcome = Autotune.Lineage_refused _; best_ms; _ }; rb ] -> (
+        Float.is_inf best_ms
+        &&
+        match rb.Autotune.outcome with
+        | Autotune.Searched | Autotune.Cache_replay -> true
+        | _ -> false)
+    | _ -> false);
   records_when_clean ~identity:persisted6.identity ~failed:failed6 ~clean:clean6
     [ placement_stores persisted6 ]
     "with a timing context, the cold run records a decision of its own, whenever its evidence was \
