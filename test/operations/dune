@@ -4207,6 +4207,8 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -4588,7 +4590,7 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS))
  (modules autotune_smoke)
- (libraries base ocannl stdio arrayjit.verdict arrayjit.ll_builders)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.ll_builders ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5307,6 +5309,8 @@
   (env_var LOCALAPPDATA)
   (env_var HIP_PATH)
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -5513,6 +5517,8 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_CC_FP16_ARITHMETIC)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -5561,6 +5567,8 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -5682,6 +5690,23 @@
   (env_var OCANNL_BACKEND))
  (modules peel_dead_level)
  (libraries base ocannl stdio ll_test arrayjit.verdict))
+
+(test
+ (name lowered_nest_order)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
+ (modules lowered_nest_order)
+ (libraries base ocannl stdio ll_test arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
 
 (test
  (name peel_census)
@@ -7312,7 +7337,26 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_TF32_MATMULS))
  (modules seeded_default)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1413: the seeded untuned default's site refinement compares its segmentation with the
+; finer arity_cuts one block by block: Autotune.refine_segments on synthetic segmentations, then an
+; attention score product whose finer cut moves a boundary is seeded on CUDA/HIP (nothing elsewhere)
+; with outputs bitwise the default pipeline's. The threshold is passed explicitly; backend-uniform.
+
+(test
+ (name seeded_refine_blocks)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_TF32_MATMULS))
+ (modules seeded_refine_blocks)
+ (libraries base ocannl stdio unix arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -8483,6 +8527,8 @@
   ocannl_config
   (env_var OCANNL_BUILD_FILES_PREFIX)
   (env_var OCANNL_BACKEND)
+  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; Its default-pipeline mirror reads every default-schedule key and the fission merge gate.
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -9044,5 +9090,28 @@
   (env_var OCANNL_TF32_MATMULS))
  (modules autotune_sketch_placements)
  (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1388: the autotuner seeds the seeded untuned plan first, so a search cut to its first
+; candidate (every later window refused through the measurement seam) crowns the step the untuned
+; compile ships: the same code, digest for digest, computing bitwise the same gradients; a refused
+; seeded window is retried once and still crowns. CUDA/HIP
+; legs, skipped elsewhere, where the search must derive no plan. Every threshold is the config's.
+
+(test
+ (name autotune_seeded_seed)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
+  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
+ (modules autotune_seeded_seed)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

@@ -287,13 +287,9 @@ let with_census f =
    codegen, so the summary is a field of the compiled routine rather than something a caller must
    remember to collect. *)
 
-type peel_skip =
-  | Skip_debug_logging
-      (** [debug_log_from_routines]: the per-step [Set] form is kept so the trace survives. *)
-  | Skip_dead_level  (** The level being rendered is dead ([to_ < from_]). *)
-  | Skip_accum_pinned
-      (** The peel reached a base whose update renders at storage precision (the rng carve-out,
-          gh-ocannl-517), so localizing it would change the draw rather than move it. *)
+(** Why a site's width decision declined a base the peel reached: {!Low_level.accum_skip}, the
+    shared decision's own reasons (gh-ocannl-1151), re-exported for the census. *)
+type peel_skip = Low_level.accum_skip = Skip_debug_logging | Skip_dead_level | Skip_accum_pinned
 [@@deriving sexp, equal, compare]
 
 type peel_verdict = {
@@ -881,10 +877,9 @@ module type C_syntax_config = sig
       at any storage width: the shuffled value resides at [accum_prec] of the storage precision
       (gh-ocannl-682), and a storage precision whose residency is neither f32 nor f64 is refused —
       as is an RNG-bearing contribution wherever that residency is wider than storage, since the
-      serial rendering of one keeps a narrow accumulator (see [accum_pinned_to_storage_prec]). [0]
-      disables the rendering: [Workgroup_reduce] loops render like [Workgroup] — hardware binding,
-      or the serial fallback (which is the correct meaning of a recognized accumulation body on CPU
-      backends). *)
+      serial rendering of one keeps a narrow accumulator ({!Low_level.accum_skip}). [0] disables the
+      rendering: [Workgroup_reduce] loops render like [Workgroup] — hardware binding, or the serial
+      fallback (which is the correct meaning of a recognized accumulation body on CPU backends). *)
 
   val mma_syntax :
     (d_prec:Ops.prec ->
@@ -2442,21 +2437,16 @@ module C_syntax (B : C_syntax_config) = struct
      with [Schedule.Privatize]'s tile precision). *)
   let mentions_rng_conversion = Low_level.mentions_rng_conversion
 
-  (* gh-ocannl-682: whether a recognized accumulation's contribution pins its accumulator to the
-     target's STORAGE precision. One of the declines of the accumulator-width decision every
-     rendering of a reduction level consumes ([decide_accum_width], gh-ocannl-754), so no rendering
-     can drift on which bodies get the wide accumulator.
-
-     An RNG conversion picks both its result type and which random bits it consumes from the
-     precision it renders at (gh-ocannl-517), so [try_localize_serial_reduce] declines to localize
-     an RNG-bearing update: its serial rendering accumulates directly in the narrow cell, narrowing
-     on EVERY iteration. A rendering that instead accumulated the whole reduction at [accum_prec]
-     and narrowed once would therefore change the accumulator's WIDTH, not merely the association --
-     the exact property gh-ocannl-682 exists to preserve -- so the warp-shuffle rendering refuses
-     such a body wherever the residency is wider than storage. Where the two coincide (f32/f64
-     storage, and every backend that does not widen) there is no divergence to guard against and
-     RNG-bearing reductions render exactly as they did before gh-ocannl-682. *)
-  let accum_pinned_to_storage_prec (llsc : Low_level.scalar_t) = mentions_rng_conversion llsc
+  (* gh-ocannl-682's storage pin — an RNG-bearing update keeps a storage-width accumulator in every
+     rendering of its level — is one of the shared decision's declines
+     ([Low_level.decide_accum_width]'s [Skip_accum_pinned], gh-ocannl-1151). An RNG conversion picks
+     both its result type and which random bits it consumes from the precision it renders at
+     (gh-ocannl-517), so the serial rendering accumulates such an update directly in the narrow
+     cell, narrowing on EVERY iteration; a rendering that instead accumulated the whole reduction at
+     [accum_prec] and narrowed once would change the accumulator's WIDTH, not merely the
+     association, which is why the warp-shuffle rendering refuses such a body wherever the residency
+     is wider than storage. Where the two coincide (f32/f64 storage, and every backend that does not
+     widen) there is no divergence to guard against. *)
 
   (* Whether the value of a [Set] renders directly at the target's storage precision, bypassing
      [comp_prec]. True when the rendering contains no operator, so there is no intermediate to keep
@@ -5966,47 +5956,23 @@ module C_syntax (B : C_syntax_config) = struct
 
   and decide_accum_width ctx ({ i; from_; to_; body; _ } : loop_ctx) ?(body = body) () : accum_width
       =
-    let report = ref None in
+    (* The decision itself — the peel and every decline — is {!Low_level.decide_accum_width}'s, the
+       one owner [Schedule.Privatize] asks too (gh-ocannl-1151); this level supplies the
+       serialized-slot predicate and the routine's loop bounds, and turns the peel's report into the
+       census verdict. *)
     match
-      Low_level.peel_accum_nest ~extra_level:(serialized_hardware ctx)
-        ~report:(fun r -> report := Some r)
-        ~loop_bounds:!(ctx.current_loop_bounds) ~free_of:[ i ] body
+      Low_level.decide_accum_width ~extra_level:(serialized_hardware ctx)
+        ~loop_bounds:!(ctx.current_loop_bounds) ~index:i ~from_ ~to_ body
     with
-    | None ->
-        Accum_not_a_nest
-          (match !report with
-          | Some { Low_level.refusal = Some refusal; _ } -> refusal
-          | _ ->
-              (* [peel_accum_nest] reports exactly once, and a [None] result carries a refusal; this
-                 arm exists only so the census cannot invent a verdict. *)
-              Low_level.Refused_not_a_nest)
-    | Some (tn, idcs, base, debug, rebuild) ->
+    | Low_level.Accum_not_a_nest refusal -> Accum_not_a_nest refusal
+    | Low_level.Accum_base { tn; idcs; base; debug; rebuild; report; pinned } ->
         let verdict =
-          match !report with
+          match report with
           | Some { Low_level.levels; guards; refusal = _ } ->
               (* [+ 1]: the peel is asked of this level's BODY, so a scope spans one more level than
                  it reports — the one being rendered here. *)
               { levels = levels + 1; guards }
           | None -> { levels = 1; guards = [] }
-        in
-        (* The declines, in the order the serial rendering has always applied them. Under
-           [debug_log_from_routines] the per-step [Set] form is kept — a [Local_scope] body renders
-           with [log_set_locals:false], so a rewrite would silence the per-iteration trace (the SIMD
-           and shuffle renderings refuse under logging for the same reason). A dead level ([to_ <
-           from_]) performs no accesses; see [peel_accum_nest]'s refusal, which covers the levels
-           BELOW this one — this is the same refusal for the level being rendered, whose bounds the
-           peel never sees. And the storage-pinned base ([accum_pinned_to_storage_prec]): an update
-           mentioning an RNG conversion renders at the storage precision, so localizing it would
-           change the draw, not merely move it — the serial rendering accumulates it in the narrow
-           cell, narrowing every iteration, and every other rendering must do the same or change the
-           width (gh-ocannl-682). *)
-        let pinned =
-          if Utils.debug_log_from_routines () then Some Skip_debug_logging
-          else if to_ < from_ then Some Skip_dead_level
-          else
-            match base with
-            | `Update llsc when accum_pinned_to_storage_prec llsc -> Some Skip_accum_pinned
-            | `Update _ | `Scope _ -> None
         in
         Accum_base { tn; idcs; base; debug; rebuild; verdict; pinned }
   (* The single accumulation statement at THIS level, as the warp-shuffle and SIMD renderings need

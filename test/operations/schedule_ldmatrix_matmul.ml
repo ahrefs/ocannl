@@ -43,9 +43,7 @@ module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
-let accum_prec =
-  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
-  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+let accum_prec = Ll_test.backend_accum_prec
 
 (* gh-ocannl-1153: the marker a rendering carries for an arm — [(<arm_name>)] in its [tile_mma]
    comment — read from the backend's capability arm table rather than restated, so every arm this
