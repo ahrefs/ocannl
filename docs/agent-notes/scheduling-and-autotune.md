@@ -1183,11 +1183,10 @@ files.
   a matmul — `ic` as `k`, the `oy + ky` window axis as `i` — and since `sketch_seed_params` tries
   the matmul family FIRST, the conv family silently stops being seeded; `schedule_conv_gemm` is the
   test that catches it (11 claims), so run it whenever the matmul classifier is relaxed.
-  Two things the generalization does NOT do: it does not coalesce the nest into one loop
-  (`Sched.Coalesce` could: every mention of the out projection's `(h, e)` contraction pair is an
-  adjacent plain pair, but no family seeds it), so a tile's k-extent is judged against the
-  innermost contraction extent alone and `bk` values above it are refuted by the ordinary
-  divisibility gates; and the whole-`m_k` forms (the unstaged `bk = 0` tensorize, the CPU
+  Two things the generalization does NOT do: the family does not coalesce the nest into one loop,
+  so within it a tile's k-extent is judged against the innermost contraction extent alone (the
+  coalesced branch's contraction layout merges the pair instead, gh-ocannl-1279, below); and the
+  whole-`m_k` forms (the unstaged `bk = 0` tensorize, the CPU
   whole-triple) keep the outer contraction loops above the block statement. Accumulator contraction
   then promotes one logical fragment around that whole loop chain, so this shape is
   **fragment-scoped for capability purposes**: a wide-f16 backend that advertises only
@@ -1259,6 +1258,18 @@ files.
   prefix a schedule carries keeps its own. `test/operations/schedule_coalesce`; the scalar
   pipeline's flattened operands are why `Stage`/`Privatize` read `Affine.axis_extents`
   (lowering-and-analysis.md).
+- **The branch has two layouts, named by `sk_coalesce : coalesce_layout option`** (gh-ocannl-1279):
+  `Coalesce_columns` above (label `coal-n`), and `Coalesce_contraction` (label `coal-k`) for the
+  attention out projection `d[b,s,j] += w[j,h,e] * x[b,s,h,e]`, whose contraction nest
+  (`m_ko = [h]`, `m_k = e`) capped the k-tile at one head. Its prefix is `Coalesce (last m_ko, m_k)`
+  alone, prepared by `coalesce_reduction_pair` (moved into `Sketch_families`, the one preparation
+  gh-ocannl-1414's split-reduce pair sites use too); output coordinates are untouched, so the zeroing is not
+  coalesced and stays an ordinary companion. The prepared code is RE-DETECTED and the prefix kept
+  only when the new site is the expected one (the merged loop as `m_k` over `h*e`, the pair gone from
+  `m_ko`, output roles unchanged): a weight stored `w[h, j, e]`, a per-head-only operand or a padded
+  inner axis declines at the op. `Stage`, `Privatize` and `Split_reduce` needed no change for the
+  merged k (the flattened arm of gh-ocannl-1148/gh-ocannl-1147 already covered it); `schedule_coalesce`'s hand-built
+  contraction legs pin that before any seed relies on it.
 ## Timing objectives and calibration
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from

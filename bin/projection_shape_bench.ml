@@ -34,11 +34,12 @@
    family applied as the pure IR transform it is -- plus, under [--with-mma], every tensorized seed
    the backend and numerics policy offer (f32 on CUDA needs [tf32_matmuls], e.g. the [approximate]
    profile; each site's phase-1 line counts what the menu offered), and the coalesced layout's seeds
-   the search offers beside the family (gh-ocannl-1165, labelled [coal]: on the split q/k/v site,
-   the head axis merged into the column tile); mode [tune] instead runs a full [Autotune.tune]
-   search per site with [~search:true] and the disk cache DISABLED, so neither shape can replay the
-   other's cached winner and a configuration that disabled searching cannot return the untuned
-   default under a tuned label.
+   the search offers beside the family (gh-ocannl-1165, labelled [coal-n]: on the split q/k/v site,
+   the head axis merged into the column tile; gh-ocannl-1279, labelled [coal-k]: on the out
+   projection, the head pair merged into one contraction); mode [tune] instead runs a full
+   [Autotune.tune] search per site with [~search:true] and the disk cache DISABLED, so neither shape
+   can replay the other's cached winner and a configuration that disabled searching cannot return
+   the untuned default under a tuned label.
 
    Timing is ROUND-INTERLEAVED, not site-by-site: one round per base tile geometry ([bgrid] twins
    included, since a merged site's plain arm and a batched site's [bgrid] arm are the pair being
@@ -187,7 +188,10 @@ let geom_label (q : Autotune.sketch_params) =
     (if q.sk_grid then " grid" else "")
     (if q.sk_pack_rest then " packrest" else "")
     (if not q.sk_batch_grid then "" else if q.sk_batch_inner then " bgrid-in" else " bgrid")
-    (if q.sk_coalesce then " coal" else "")
+    (match q.sk_coalesce with
+    | None -> ""
+    | Some Autotune.Coalesce_columns -> " coal-n"
+    | Some Autotune.Coalesce_contraction -> " coal-k")
 
 (* A MONOTONIC counter, not a wall-clock timestamp: an NTP step or a VM clock correction during a
    long run would otherwise jump (or invert) an interval, and the corrupted batch feeds the median
@@ -837,7 +841,8 @@ let () =
        (gh-ocannl-1165) joins the round of its tile too: its split site's 64-wide arm and the merged
        twin's are the comparison the branch exists for. *)
     let base_geom g =
-      let g = String.chop_suffix_if_exists g ~suffix:" coal" in
+      let g = String.chop_suffix_if_exists g ~suffix:" coal-n" in
+      let g = String.chop_suffix_if_exists g ~suffix:" coal-k" in
       String.chop_suffix_if_exists
         (String.chop_suffix_if_exists g ~suffix:" bgrid-in")
         ~suffix:" bgrid"

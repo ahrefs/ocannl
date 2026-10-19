@@ -58,3 +58,31 @@ folded: the segment's zero nest and site both coalesce: true
 folded: the branch seeds a column tile wider than one head: true
 folded: every coalesced schedule constructs and validates: true
 folded: every coalesced seed executes to the materialized run: true
+ck_proj: no cell of the serial reference is zero: true
+ck_proj: the columns layout has no interior batch loop to merge here: true
+ck_proj: the contraction prefix is the one Coalesce of the contraction pair: true
+ck_proj: the contraction prefix is Op_legal: true
+ck_proj: the coalesced site contracts over one k of the pair's product, every output role kept: true
+ck_proj: the prefix alone computes the serial reference bitwise: true
+ck_proj: the contraction branch offers seeds: true
+ck_proj: every contraction seed is an unfused scalar blocktile seed: true
+ck_proj: every contraction schedule constructs and validates: true
+ck_proj: every contraction schedule loads both operands through the flattened address over K: true
+ck_proj: every contraction schedule survives the cache's structural round trip: true
+ck_proj: every contraction seed executes to the serial reference bitwise: true
+ck_odd: no cell of the serial reference is zero: true
+ck_odd: the columns layout has no interior batch loop to merge here: true
+ck_odd: the contraction prefix is the one Coalesce of the contraction pair: true
+ck_odd: the contraction prefix is Op_legal: true
+ck_odd: the coalesced site contracts over one k of the pair's product, every output role kept: true
+ck_odd: the prefix alone computes the serial reference bitwise: true
+ck_odd: the contraction branch offers seeds: true
+ck_odd: every contraction seed is an unfused scalar blocktile seed: true
+ck_odd: every contraction schedule constructs and validates: true
+ck_odd: every contraction schedule loads both operands through the flattened address over K: true
+ck_odd: every contraction schedule survives the cache's structural round trip: true
+ck_odd: every contraction seed executes to the serial reference bitwise: true
+ck_hje: the site is a multi-axis contraction: true
+ck_hje: the contraction prefix declines on the weight storing the pair apart: true
+ck_hje: the ordinary family still seeds the site: true
+ck_hje: the branch offers no contraction seed: true
