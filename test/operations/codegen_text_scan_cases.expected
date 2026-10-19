@@ -132,6 +132,17 @@ ok: source -- a discarded record write keeps the source dependency explicitly un
 ok: source -- a let-bound write keeps its source dependency explicitly uncertain
 ok: source -- a generated ref initializer cannot validate text after an ordinary overwrite
 ok: source -- a generated record initializer cannot validate an overwritten field
+ok: source -- a stored argument keeps its mutation boundary through a full application
+ok: source -- a stored argument keeps its mutation boundary through a named result
+ok: source -- a stored source beside a returned one keeps the direct pin and the mutation
+ok: source -- an ordinary stored argument does not mark a direct pin partial
+ok: source -- an argument both stored and returned keeps its pin beside the mutation
+ok: source -- Stdlib-qualified reference operators are a cell write and read
+ok: source -- a Stdlib-qualified stored argument keeps its boundary through a full application
+ok: source -- a Stdlib-qualified dereference of an initialised ref is a cell read
+ok: source -- an unqualified dereference of an initialised ref is a cell read
+ok: source -- Stdlib.Array.get is a cell read
+ok: source -- Stdlib.Array.set is a cell write
 ok: source -- an independent generated result survives a preceding write boundary
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context

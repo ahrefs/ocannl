@@ -180,7 +180,7 @@ test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: com
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
     "lane all-reduce into a scope local"
-test/operations/gpu_packed_prec.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component]
+test/operations/gpu_packed_prec.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, mutation or unseen buffer write]
     "(half)exp((float)("
     "exp"
     "reinterpret_cast"

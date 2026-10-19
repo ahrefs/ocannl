@@ -813,6 +813,65 @@ let () = p "ordinary" (String.is_substring src ~substring:"cuda")|ocaml},
 let src = store backend_name
 let () = p "ordinary" (String.is_substring src ~substring:"cuda")|ocaml},
       "+partial(opaque, mutation)" );
+    (* gh-ocannl-1237: a full application substitutes every argument, and used to discharge the
+       callee's boundaries with them -- including the [Mutation] of an argument the callee stores
+       into a cell and reads back. The returned [^ y] keeps a parameter in the result, which is what
+       sent the write boundary down the [Unresolved] arm that forgot the stored argument. *)
+    ( "a stored argument keeps its mutation boundary through a full application",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "w") "") ~substring:"m5")|ocaml},
+      "+partial(mutation)" );
+    ( "a stored argument keeps its mutation boundary through a named result",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let src = store (Generated.read "w") ""
+let () = p "marker" (String.is_substring src ~substring:"m5")|ocaml},
+      "+partial(mutation)" );
+    ( "a stored source beside a returned one keeps the direct pin and the mutation",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "a") (Generated.read "w")) ~substring:"m6")|ocaml},
+      {|"m6" +partial(mutation)|} );
+    (* The boundary is the stored TEXT's, not the write's: ordinary text through the cell carries
+       nothing a site could pin, so the returned source's pin stays whole. *)
+    ( "an ordinary stored argument does not mark a direct pin partial",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let () = p "marker" (String.is_substring (store backend_name (Generated.read "w")) ~substring:"m7")|ocaml},
+      {|"m7"|} );
+    (* Stored AND returned: the direct flow still names the text, so the pin stays beside the
+       boundary rather than vanishing into an uncorrelated cell (the live census's [reduction_forms]
+       counts subscripts into a ref while returning the text it scanned). *)
+    ( "an argument both stored and returned keeps its pin beside the mutation",
+      {ocaml|let store x = let n = ref 0 in n := String.length x; x
+let () = p "marker" (String.is_substring (store (Generated.read "w")) ~substring:"m9")|ocaml},
+      {|"m9" +partial(mutation)|} );
+    (* gh-ocannl-1237: the [Stdlib]-qualified spellings of the cell operators are the same cells. *)
+    ( "Stdlib-qualified reference operators are a cell write and read",
+      {ocaml|let store x = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"qualified mutation marker")|ocaml},
+      "+partial(mutation)" );
+    ( "a Stdlib-qualified stored argument keeps its boundary through a full application",
+      {ocaml|let store x y = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "w") "") ~substring:"m5")|ocaml},
+      "+partial(mutation)" );
+    ( "a Stdlib-qualified dereference of an initialised ref is a cell read",
+      {ocaml|let store x = let r = ref x in Stdlib.( ! ) r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"qualified read marker")|ocaml},
+      "+partial(mutation)" );
+    ( "an unqualified dereference of an initialised ref is a cell read",
+      {ocaml|let store x = let r = ref x in !r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"read marker")|ocaml},
+      "+partial(mutation)" );
+    ( "Stdlib.Array.get is a cell read",
+      {ocaml|let store x = let a = [| x |] in Stdlib.Array.get a 0
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"array read marker")|ocaml},
+      "+partial(mutation)" );
+    ( "Stdlib.Array.set is a cell write",
+      {ocaml|let store x y = let a = [| "" |] in Stdlib.Array.set a 0 x; a.(0) ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "w") "") ~substring:"m8")|ocaml},
+      "+partial(mutation)" );
     ( "an independent generated result survives a preceding write boundary",
       {ocaml|let store x = let r = ref "" in r := x; Generated.read "internal"
 let src = store backend_name

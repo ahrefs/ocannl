@@ -981,6 +981,11 @@ type provenance = {
       (** The returned data depends on an argument, rather than an internal generated-text read. *)
   parameters : Set.M(String).t;
   buffer : bool;
+  stored : Set.M(String).t;
+      (** The parameters whose argument this expression writes into a cell -- a reference, a mutable
+          field, an array -- where it may be read back (gh-ocannl-1237). Substituting such an
+          argument does not discharge the [Mutation] boundary the way substituting a directly
+          returned one discharges its parameter's: what the cell hands back is not modelled. *)
   uncertainty : uncertainty;
   because : boundary list;
       (** The boundaries behind a non-[Known] [uncertainty], sorted; empty exactly when it is
@@ -1001,6 +1006,7 @@ let no_provenance =
     parameter_dependent = false;
     parameters = Set.empty (module String);
     buffer = false;
+    stored = Set.empty (module String);
     uncertainty = Known;
     because = [];
     functions = [];
@@ -1037,6 +1043,7 @@ let join_provenance a b =
            ((a.generated && not a.parameter_dependent) || (b.generated && not b.parameter_dependent));
     parameters = Set.union a.parameters b.parameters;
     buffer = a.buffer || b.buffer;
+    stored = Set.union a.stored b.stored;
     uncertainty =
       (let joined = join_uncertainty a.uncertainty b.uncertainty in
        if
@@ -1053,7 +1060,7 @@ let equal_provenance a b =
   Bool.equal a.generated b.generated
   && Bool.equal a.parameter_dependent b.parameter_dependent
   && Set.equal a.parameters b.parameters
-  && Bool.equal a.buffer b.buffer
+  && Bool.equal a.buffer b.buffer && Set.equal a.stored b.stored
   && Poly.equal a.uncertainty b.uncertainty
   && Poly.equal a.because b.because
   && Poly.equal a.functions b.functions
@@ -1078,14 +1085,19 @@ let argument_provenance of_expr parameter args =
       then uncertain Unresolved Unsupplied_application result
       else result
 
-(** The standard reference operator [name] ([!] or [:=]) at [callee]: an operator the file binds
-    itself, where it is spelled, is that binding, not a read or write of a cell. *)
+(** The standard reference operator [name] ([!] or [:=]) at [callee]: spelled bare, or qualified by
+    a path meaning [Stdlib] ([Stdlib.( ! )], through any alias in scope; gh-ocannl-1237). An
+    operator the file binds itself, where it is spelled bare, is that binding, not a read or write
+    of a cell. *)
 let ref_operator scope callee name =
   Poly.equal (longident_of callee) (Some [ name ])
   && not (Hashtbl.mem scope.values (span callee.pexp_loc))
+  || calls scope callee ~target:"Stdlib" ~name
 
-(** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get]. What was stored there is not
-    modelled, so a value read this way carries the [Mutation] boundary. *)
+(** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get], each also under a [Stdlib.]
+    qualifier ([Stdlib.Array.get] resolves to [Array] as any qualified path resolves to its last
+    module). What was stored there is not modelled, so a value read this way carries the [Mutation]
+    boundary. *)
 let reads_cell scope callee =
   ref_operator scope callee "!"
   || calls scope callee ~target:"Array" ~name:"get"
@@ -1126,14 +1138,16 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         end
       in
       writes#expression discarded;
+      let stored = Set.union result.stored (Set.union !written.parameters !written.stored) in
       if !written.generated || (not (Set.is_empty !written.parameters)) || !written.buffer then
         if result.generated || not (Set.is_empty result.parameters) then
-          uncertain Unresolved Mutation result
+          { (uncertain Unresolved Mutation result) with stored }
         else
           {
             (uncertain Uncorrelated Mutation (join_provenance result !written)) with
             uncertainty = Uncorrelated;
             functions = [];
+            stored;
           }
       else result
     in
@@ -1261,12 +1275,54 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                     join_provenance acc (of_expr argument))
               else result
             in
-            if callee_value.generated && not callee_value.parameter_dependent then result
-            else
-              List.fold formal_parameters ~init:result ~f:(fun acc (symbol, destination) ->
-                  if Set.mem callee_value.parameters symbol then
-                    join_provenance acc (argument_provenance of_expr destination args)
-                  else acc)
+            let result =
+              if callee_value.generated && not callee_value.parameter_dependent then result
+              else
+                List.fold formal_parameters ~init:result ~f:(fun acc (symbol, destination) ->
+                    if Set.mem callee_value.parameters symbol then
+                      join_provenance acc (argument_provenance of_expr destination args)
+                    else acc)
+            in
+            (* gh-ocannl-1237: an argument the callee stores into a cell arrives, at least in part,
+               through memory the scan does not model -- so substituting it does not discharge the
+               [Mutation] boundary the way substituting a directly returned argument discharges its
+               parameter's. Where the callee ALSO returns the argument directly (a body that writes
+               an index derived from its source into a counter while building its result from that
+               source), the direct flow still names the text, and the boundary only stays
+               [Unresolved]; where the cell is the only way the argument comes back, it joins
+               [Uncorrelated], as the same write does inside a body. An argument carrying nothing a
+               site could pin (ordinary text) adds nothing. *)
+            let carries p = p.generated || (not (Set.is_empty p.parameters)) || p.buffer in
+            let stored_only, stored_returned =
+              List.fold formal_parameters ~init:(no_provenance, no_provenance)
+                ~f:(fun (only, returned) (symbol, destination) ->
+                  if Set.mem callee_value.stored symbol && parameter_supplied destination args then
+                    let argument = argument_provenance of_expr destination args in
+                    if Set.mem callee_value.parameters symbol then
+                      (only, join_provenance returned argument)
+                    else (join_provenance only argument, returned)
+                  else (only, returned))
+            in
+            let result =
+              {
+                result with
+                stored =
+                  List.fold formal_parameters ~init:result.stored
+                    ~f:(fun acc (symbol, destination) ->
+                      if parameter_supplied destination args then Set.remove acc symbol else acc);
+              }
+            in
+            let result =
+              if carries stored_returned then uncertain Unresolved Mutation result else result
+            in
+            if carries stored_only then
+              join_provenance result
+                {
+                  (uncertain Uncorrelated Mutation stored_only) with
+                  uncertainty = Uncorrelated;
+                  functions = [];
+                }
+            else result
           else !found
         in
         let found =
