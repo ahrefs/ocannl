@@ -3305,8 +3305,9 @@ let interval_axis ~(axis : [ `Bm | `Bk ]) ~(values : int array)
 (* One epilogue-fusion flavor of the matmul family: the pipeline level and everything below it.
    [fused] selects the leaves' [sk_epilogue] and the flavor's own companion-coverage verdict
    ([coverage_witness], owned by {!matmul_family_tree} so that the flavors can share it). *)
-let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    ~(coverage_witness : string option Lazy.t) ~(fused : bool) site : family_tree =
+let matmul_flavor_tree ?(coalesced : coalesce_layout option) ~is_gpu ~is_cpu
+    ~(limits : Ir.Backend_intf.hardware_limits) ~(coverage_witness : string option Lazy.t)
+    ~(fused : bool) site : family_tree =
   (* Builder preconditions statically decidable at tree construction (gh-ocannl-577): rules the
      schedule builders settle identically for every tile completion refute here, with their
      witnesses, instead of failing candidate by candidate at build — the same lift phase 2 gave the
@@ -3386,6 +3387,48 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
      [~batch] threads into their leaves' [sk_batch_grid] and [sk_batch_inner]. The CPU branches
      ignore it — they are only ever built with [`Serial] (see [with_batch_twins] at the pipeline
      level). *)
+  (* The GPU scalar blocktile geometries [(bm, bn, bk, tm, tn)]. The family's own menu keeps its
+     k-tile at 8 or 16: on an uncoalesced multi-axis contraction the tile is judged against the
+     innermost extent alone, one head. The contraction-coalesced site (gh-ocannl-1279) contracts
+     over one merged k, so its menu is a bounded K menu instead: depths 256 down to 32 — 256 being
+     gpt2_mini's whole [h * e], one k-block per output tile — over two 64-thread block shapes, a
+     16x16 tile of 2x2 register tiles and a 32x32 tile of 4x4 ones, deepest first. The usual
+     judgments below bound it: the staged tiles' workgroup-memory floor (16x16x256 in f32 needs 32
+     KiB, exactly Metal's threadgroup limit, and 32x32x256 twice that, which no current GPU's limit
+     admits), the thread cap, pad composition and pad waste, and the launch caps at the leaf. The
+     shallow 8/16 depths are not repeated here: over a merged k they are the family's own tiles of
+     the uncoalesced site, already seeded beside this branch. *)
+  let blocktile_geometries () =
+    match coalesced with
+    | Some Coalesce_contraction ->
+        List.concat_map [ 256; 128; 64; 32 ] ~f:(fun bk ->
+            [ (16, 16, bk, 2, 2); (32, 32, bk, 4, 4) ])
+    | Some Coalesce_columns | None ->
+        [
+          (64, 64, 8, 4, 4);
+          (32, 32, 8, 4, 4);
+          (16, 16, 8, 4, 4);
+          (32, 32, 16, 2, 2);
+          (16, 16, 8, 2, 2);
+        ]
+  in
+  (* A K-menu depth whose half already covers the merged extent in one block only adds zero fringe
+     (K = 120 tiled 256 deep is more than half padding; 128 holds it): the shallower depth is in the
+     menu. A depth just above K stays — K = 60 tiled 64 deep is one block with a 4-slot pad. The
+     family's own menu never meets this: its depths are at most 16, and smaller extents pad there by
+     design (gh-ocannl-730). *)
+  let k_menu_gate bk =
+    match coalesced with
+    | Some Coalesce_contraction ->
+        [
+          ( bk / 2 < site.m_nk,
+            Printf.sprintf
+              "bk=%d: half that depth already covers the coalesced contraction extent %s in one \
+               block (a deeper tile only pads)"
+              bk (k_extent_label site) );
+        ]
+    | Some Coalesce_columns | None -> []
+  in
   let blocktile_child ~(batch : batch_layout) =
     if is_gpu then
       let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
@@ -3395,15 +3438,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
              (gh-ocannl-740, [judge_pad_waste]); a dividing geometry has ratio 1. *)
           choice
           @@ judge_pad_waste
-               (List.map
-                  [
-                    (64, 64, 8, 4, 4);
-                    (32, 32, 8, 4, 4);
-                    (16, 16, 8, 4, 4);
-                    (32, 32, 16, 2, 2);
-                    (16, 16, 8, 2, 2);
-                  ]
-                  ~f:(fun (bm, bn, bk, tm, tn) ->
+               (List.map (blocktile_geometries ()) ~f:(fun (bm, bn, bk, tm, tn) ->
                     ( Family_decision.Geometry
                         (Gpu_blocktile { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = tm; g_tn = tn }),
                       site_pad_axes ~bm ~bn ~bk,
@@ -3422,6 +3457,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                               ndiv_k "bk" bk;
                             ])
                         @ [ ndiv "tm" tm ~into:"bm" bm; ndiv "tn" tn ~into:"bn" bn ]
+                        @ k_menu_gate bk
                         (* The launch size is statically known — two Workgroup dimensions of [bm/tm]
                            and [bn/tn] threads — so a known thread cap refutes pre-compile what
                            [Schedule.check_hardware_limits_classified] would reject per candidate;
@@ -4226,7 +4262,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
    is derived from it and the alignment analysis runs twice only where the unfused flavor is
    refuted. Both flavors' subtrees stay lazy like every other level: nothing below the root is built
    before a consumer descends into it. *)
-let matmul_family_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+let matmul_family_tree ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     ~(opt : LL.optimized) site : family_tree =
   let unfused_coverage = lazy (matmul_coverage_witness ~opt ~fused:false site) in
   let fused_coverage =
@@ -4236,7 +4272,8 @@ let matmul_family_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
       | Some _ -> matmul_coverage_witness ~opt ~fused:true site)
   in
   let flavor ~fused ~coverage_witness =
-    Sspace.Child (lazy (matmul_flavor_tree ~is_gpu ~is_cpu ~limits ~coverage_witness ~fused site))
+    Sspace.Child
+      (lazy (matmul_flavor_tree ?coalesced ~is_gpu ~is_cpu ~limits ~coverage_witness ~fused site))
   in
   decided_choice
     [
@@ -4247,9 +4284,9 @@ let matmul_family_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
         | None -> flavor ~fused:true ~coverage_witness:fused_coverage );
     ]
 
-let matmul_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~opt site :
-    sketch_params list =
-  Sspace.leaves (matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site)
+let matmul_seed_params ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~opt
+    site : sketch_params list =
+  Sspace.leaves (matmul_family_tree ?coalesced ~is_gpu ~is_cpu ~limits ~opt site)
 
 (** {2 The composed seed list} *)
 
@@ -4279,11 +4316,12 @@ let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
    companion coverage of the merged chain, divisibility, workgroup memory — is judged on the site
    the schedule will actually build, and each leaf is stamped with its layout. A separate branch
    beside {!sketch_seed_params}, not a level of its tree: the tree is over one lowering, this branch
-   over others. Columns first, then the contraction; a site has at most one pair of each. GPU scalar
-   blocktile leaves only: the residual the layouts target is the scalar family's tile extent (#915
-   closed the tensorized gap on CUDA tf32, and gfx1151 has no f32 tile shape), and the tensorized
-   pipelines' [Tensorize] reads each operand's last two axes as its tile, which a [Sub_axis] run is
-   not. Unfused only: [Fuse_epilogue]'s tail is a nest over the target's own dims, which a coalesced
+   over others. Columns first, then the contraction, whose leaves come from its own K menu
+   ([matmul_flavor_tree ~coalesced]); a site has at most one pair of each. GPU scalar blocktile
+   leaves only: the residual the layouts target is the scalar family's tile extent (#915 closed the
+   tensorized gap on CUDA tf32, and gfx1151 has no f32 tile shape), and the tensorized pipelines'
+   [Tensorize] reads each operand's last two axes as its tile, which a [Sub_axis] run is not.
+   Unfused only: [Fuse_epilogue]'s tail is a nest over the target's own dims, which a coalesced
    output no longer indexes axis by axis (and the projections have no tail); for the contraction
    layout, admitting the tensorized, hoisted-packing and fused flavors is a follow-up with its own
    executed test. The probe's minted symbols are discarded: the seeds carry none, and a seeding pass
@@ -4300,7 +4338,7 @@ let coalesced_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_li
                 match detect_matmul prepared.LL.llc with
                 | None -> []
                 | Some site ->
-                    matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt:prepared site
+                    matmul_seed_params ~coalesced:layout ~is_gpu ~is_cpu ~limits ~opt:prepared site
                     |> List.filter_map ~f:(fun p ->
                         if p.sk_gpu && (not p.sk_mma) && not p.sk_epilogue then
                           Some { p with sk_coalesce = Some layout }

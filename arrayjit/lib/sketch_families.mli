@@ -19,7 +19,9 @@ type coalesce_layout =
           [Coalesce { outer = last m_ko; inner = m_k }] — so the attention out projection
           [d[b,s,j] += w[j,h,e] * x[b,s,h,e]] contracts over one loop of extent [h * e], and its
           k-tile can span several heads. Output coordinates are untouched, so the zeroing nest is
-          not coalesced. *)
+          not coalesced. Its seeds come from a bounded K menu of their own (depths 256 down to 32,
+          under the usual workgroup-memory, thread, pad and launch judgments), not the family's
+          8/16-deep tiles. *)
 [@@deriving sexp]
 
 type sketch_params = {

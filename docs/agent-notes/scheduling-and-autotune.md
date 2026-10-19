@@ -1267,7 +1267,13 @@ files.
   coalesced and stays an ordinary companion. The prepared code is RE-DETECTED and the prefix kept
   only when the new site is the expected one (the merged loop as `m_k` over `h*e`, the pair gone from
   `m_ko`, output roles unchanged): a weight stored `w[h, j, e]`, a per-head-only operand or a padded
-  inner axis declines at the op. `Stage`, `Privatize` and `Split_reduce` needed no change for the
+  inner axis declines at the op. The contraction layout enumerates its own bounded K menu
+  (`blocktile_geometries`): depths 256/128/64/32 over two 64-thread shapes (16x16 of 2x2, 32x32 of
+  4x4), never the family's 8/16 (those are the uncoalesced site's own tiles); a depth whose half
+  already covers K is refuted (`k_menu_gate`: only pads). Mind the memory floor: 16x16x256 f32 is
+  exactly Metal's 32 KiB and is admitted (executed bitwise there); 32x32x256 is 64 KiB and refuted on
+  every current GPU, so a test executing seeds must enumerate them under the device's limits, not
+  no-limits. `Stage`, `Privatize` and `Split_reduce` needed no change for the
   merged k (the flattened arm of gh-ocannl-1148/gh-ocannl-1147 already covered it); `schedule_coalesce`'s hand-built
   contraction legs pin that before any seed relies on it.
 ## Timing objectives and calibration

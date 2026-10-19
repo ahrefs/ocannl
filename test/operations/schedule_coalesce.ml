@@ -908,14 +908,13 @@ let out_proj ~tag ~bb ~ss ~jj ~hh ~ee () =
   let%op out = w * att in
   (out, w, att)
 
-let contraction_seeds opt =
-  Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false
-    ~limits:Ir.Backend_intf.no_hardware_limits opt
+let contraction_seeds ?(limits = Ir.Backend_intf.no_hardware_limits) opt =
+  Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits opt
   |> List.filter ~f:(fun q ->
       Poly.equal q.Autotune.sk_coalesce (Some Autotune.Coalesce_contraction))
 
-(* One out-projection leg; returns the captured lowering and the contraction seeds for the K-menu
-   claims of the caller. *)
+(* One out-projection leg; returns the captured lowering, the contraction seeds under no limits, and
+   those under the device's limits (the executed ones on GPU), for the caller's K-menu claims. *)
 let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
   let kk = hh * ee in
   let reference, _, _ = out_proj ~tag:(tag ^ "_ref") ~bb ~ss ~jj ~hh ~ee () in
@@ -1014,9 +1013,17 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
   Stdio.eprintf "%s: backend %s, %d contraction seed(s): %s (not part of the golden)\n" tag
     backend_name (List.length seeds)
     (String.concat ~sep:", " (List.map seeds ~f:Autotune.sketch_params_label));
+  (* Executed under the device's own limits: a seed the synthetic no-limits enumeration admits but
+     this device's workgroup memory does not (32x32x256 in f32) is refuted there, not run. *)
+  let device_seeds =
+    if on_gpu then contraction_seeds ~limits:(Context.hardware_limits (Context.auto ())) opt
+    else seeds
+  in
+  Stdio.eprintf "%s: %d contraction seed(s) under this device's limits (not part of the golden)\n"
+    tag (List.length device_seeds);
   gated_all ~when_:on_gpu ~on:backend_name
-    (tag ^ ": every contraction seed executes to the serial reference bitwise") schedules
-    ~f:(fun (q, _) ->
+    (tag ^ ": every contraction seed this device admits executes to the serial reference bitwise")
+    device_seeds ~f:(fun q ->
       match
         run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
       with
@@ -1024,13 +1031,51 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
       | exception exn ->
           Stdio.eprintf "%s contraction seed FAILED: %s\n" tag (Exn.to_string exn);
           false);
-  (opt, seeds)
+  (opt, seeds, device_seeds)
 
-(* gpt2_mini's heads: h = 8, e = 32, K = 256. *)
-let _ = contraction_leg ~tag:"ck_proj" ~bb:2 ~ss:32 ~jj:64 ~hh:8 ~ee:32
+(* The K menu (gh-ocannl-1279). gpt2_mini's heads, h = 8 and e = 32: K = 256, so the deepest depth
+   tiles the whole merged contraction in one k-block, and every menu depth divides K. Under Metal's
+   32 KiB threadgroup limit the 16x16x256 tile (32 KiB of f32 operand tiles) is admitted exactly at
+   the limit and the 32x32x256 one (64 KiB) is refuted by the workgroup-memory floor. *)
+let () =
+  let kk = 8 * 32 in
+  let opt, seeds, device_seeds = contraction_leg ~tag:"ck_proj" ~bb:2 ~ss:32 ~jj:64 ~hh:8 ~ee:32 in
+  let geom (bm, bn, bk) q =
+    q.Autotune.sk_bm = bm && q.Autotune.sk_bn = bn && q.Autotune.sk_bk = bk
+  in
+  p_exists "ck_proj: a contraction seed tiles the whole merged k (bk = K = 256)" seeds ~f:(fun q ->
+      q.Autotune.sk_bk = kk);
+  p_all "ck_proj: no contraction seed's k-tile is shallower than one head" seeds ~f:(fun q ->
+      q.Autotune.sk_bk >= 32);
+  p_exists "ck_proj: the menu reaches below 256 too" seeds ~f:(fun q -> q.Autotune.sk_bk < kk);
+  let metal_like =
+    { Ir.Backend_intf.no_hardware_limits with max_workgroup_memory_bytes = Some 32768 }
+  in
+  let limited = contraction_seeds ~limits:metal_like opt in
+  p_exists "ck_proj: 32 KiB of workgroup memory admits the 16x16x256 tile, exactly at the limit"
+    limited
+    ~f:(geom (16, 16, 256));
+  p_none "ck_proj: 32 KiB of workgroup memory refutes the 32x32x256 tile" limited
+    ~f:(geom (32, 32, 256));
+  p_exists "ck_proj: no-limits enumeration offers the 32x32x256 tile the floor refutes" seeds
+    ~f:(geom (32, 32, 256));
+  (* Every GPU this runs on admits at least 32 KiB (Metal exactly that), so the headline tile is
+     among the seeds executed above. *)
+  gated_exists ~when_:on_gpu ~on:backend_name
+    "ck_proj: this device admits, and so executed, the 16x16x256 tile" device_seeds
+    ~f:(geom (16, 16, 256))
 
-(* An odd K whose head neither tile depth divides: tiles cross heads and the last one pads. *)
-let _ = contraction_leg ~tag:"ck_odd" ~bb:2 ~ss:16 ~jj:32 ~hh:3 ~ee:20
+(* An odd K: h = 3 heads of e = 20, K = 60. A depth whose half already covers K would only pad, so
+   the menu offers 64 and 32: a 32-deep tile crosses a head boundary in every block and pads the
+   last one, a 64-deep one is a single block padding K by four. *)
+let () =
+  let _opt, seeds, _ = contraction_leg ~tag:"ck_odd" ~bb:2 ~ss:16 ~jj:32 ~hh:3 ~ee:20 in
+  p_all "ck_odd: no contraction seed's k-tile is deeper than one padded block of K" seeds
+    ~f:(fun q -> q.Autotune.sk_bk <= 64);
+  p_exists "ck_odd: a contraction seed's k-tile crosses heads (32 does not divide e = 20)" seeds
+    ~f:(fun q -> q.Autotune.sk_bk = 32);
+  p_exists "ck_odd: a contraction seed pads the merged k (64 does not divide K = 60)" seeds
+    ~f:(fun q -> q.Autotune.sk_bk = 64)
 
 (* A weight storing the pair apart ([w[h, j, e]]): the contraction prefix declines, so the branch
    offers no contraction seed, while the ordinary family still seeds the site. *)

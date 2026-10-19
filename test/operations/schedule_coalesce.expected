@@ -69,7 +69,14 @@ ck_proj: every contraction seed is an unfused scalar blocktile seed: true
 ck_proj: every contraction schedule constructs and validates: true
 ck_proj: every contraction schedule loads both operands through the flattened address over K: true
 ck_proj: every contraction schedule survives the cache's structural round trip: true
-ck_proj: every contraction seed executes to the serial reference bitwise: true
+ck_proj: every contraction seed this device admits executes to the serial reference bitwise: true
+ck_proj: a contraction seed tiles the whole merged k (bk = K = 256): true
+ck_proj: no contraction seed's k-tile is shallower than one head: true
+ck_proj: the menu reaches below 256 too: true
+ck_proj: 32 KiB of workgroup memory admits the 16x16x256 tile, exactly at the limit: true
+ck_proj: 32 KiB of workgroup memory refutes the 32x32x256 tile: true
+ck_proj: no-limits enumeration offers the 32x32x256 tile the floor refutes: true
+ck_proj: this device admits, and so executed, the 16x16x256 tile: true
 ck_odd: no cell of the serial reference is zero: true
 ck_odd: the columns layout has no interior batch loop to merge here: true
 ck_odd: the contraction prefix is the one Coalesce of the contraction pair: true
@@ -81,7 +88,10 @@ ck_odd: every contraction seed is an unfused scalar blocktile seed: true
 ck_odd: every contraction schedule constructs and validates: true
 ck_odd: every contraction schedule loads both operands through the flattened address over K: true
 ck_odd: every contraction schedule survives the cache's structural round trip: true
-ck_odd: every contraction seed executes to the serial reference bitwise: true
+ck_odd: every contraction seed this device admits executes to the serial reference bitwise: true
+ck_odd: no contraction seed's k-tile is deeper than one padded block of K: true
+ck_odd: a contraction seed's k-tile crosses heads (32 does not divide e = 20): true
+ck_odd: a contraction seed pads the merged k (64 does not divide K = 60): true
 ck_hje: the site is a multi-axis contraction: true
 ck_hje: the contraction prefix declines on the weight storing the pair apart: true
 ck_hje: the ordinary family still seeds the site: true
