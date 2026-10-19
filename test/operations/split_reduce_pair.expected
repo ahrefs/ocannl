@@ -22,6 +22,17 @@ coalesced (h, e): the split prelude applied (the compiled code reads its partial
 coalesced (h, e): the exact result is not trivially zero: true
 coalesced (h, e): the default pipeline computes the exact sums: true
 coalesced (h, e): the split computes bitwise the default pipeline's result: true
+the contraction layout's prefix coalesces the pair the split site records: true
+on the prepared contraction the merged k is a single split site: true
+prepared (h, e): the split prelude applied (the compiled code reads its partials): true
+prepared (h, e): the exact result is not trivially zero: true
+prepared (h, e): the default pipeline computes the exact sums: true
+prepared (h, e): the split computes bitwise the default pipeline's result: true
+the split candidate's label names the split and its coalesced pair: true
+every contraction-coalesced tile's label names its layout, never a split: true
+the production out projection is no split-reduce site (output above sr_out_max): true
+the split of the production out projection's merged k is Op_legal: true
+the contraction branch tiles the production out projection's k 256 deep: true
 a 128-row batch reduction is a split-reduce site: true
 it is split on its batch loop, uncoalesced: true
 one accumulation over the two-loop band is a coalesced site: true

@@ -1275,7 +1275,13 @@ files.
   every current GPU, so a test executing seeds must enumerate them under the device's limits, not
   no-limits. `Stage`, `Privatize` and `Split_reduce` needed no change for the
   merged k (the flattened arm of gh-ocannl-1148/gh-ocannl-1147 already covered it); `schedule_coalesce`'s hand-built
-  contraction legs pin that before any seed relies on it.
+  contraction legs pin that before any seed relies on it. The k-split of the merged loop is not a sketch twin: it stays
+  gh-ocannl-1414's `F_split` candidate (`sr_coalesce = Some (h, e)`, label `coalesce:h*e`), seeded only
+  below `sr_out_max = 4096` output cells, so the production out projection (262144 cells) gets
+  serial-K tiles and no split, while its merged-k `Split_reduce` is still `Op_legal`. Both routes
+  are pinned in `split_reduce_pair`: the split site records exactly the pair the contraction prefix
+  coalesces, and on the prefix-prepared code the merged k is an ordinary uncoalesced site whose
+  prelude, behind the prefix, gives the same exact sums.
 ## Timing objectives and calibration
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
