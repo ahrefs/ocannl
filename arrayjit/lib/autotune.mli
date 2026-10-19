@@ -1857,6 +1857,7 @@ val compile_advisory :
   ?name:string ->
   ?on_fallback:(exn -> unit) ->
   ?fallback_if:(unit -> bool) ->
+  ?on_unrecovered:(Ir.Schedule_outcome.classified_cause -> Context.t * Context.routine) ->
   (Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
   Context.t ->
   Ir.Assignments.comp ->
@@ -1868,9 +1869,11 @@ val compile_advisory :
     [on_fallback] is called with the public rendering of the cause when fallback fires.
     [fallback_if] (default: always) is consulted first, for transforms that may themselves have
     degraded to the default pipeline — [false] re-raises the original exception, backtrace included,
-    instead of duplicating a compile that has nothing to fall back to. For advisory transforms only:
-    a failure of the default pipeline itself propagates. [name] names the routine, exactly as
-    {!Context.compile}'s does, and reaches the fallback compile too. See {!model_default}
+    instead of duplicating a compile that has nothing to fall back to; given [on_unrecovered], that
+    classified cause is handed to it instead of raised, so a caller with a fallback of its own acts
+    on the classified rejection alone, never on a fatal failure (gh-ocannl-1390). For advisory
+    transforms only: a failure of the default pipeline itself propagates. [name] names the routine,
+    exactly as {!Context.compile}'s does, and reaches the fallback compile too. See {!model_default}
     (gh-ocannl-519). *)
 
 val model_default :

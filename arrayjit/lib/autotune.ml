@@ -4136,20 +4136,26 @@ let model_default_enabled =
 let geometry_lattice_enabled =
   lazy (Utils.get_global_flag ~default:false ~arg_name:"model_default_geometry_lattice")
 
-let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp bindings =
+let compile_advisory ?name ?on_fallback ?fallback_if ?on_unrecovered lowered_transform ctx comp
+    bindings =
   match
     Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp bindings
   with
   | Ok result -> result
   | Error (Outcome.Fatal _ as failure) -> Outcome.raise_failure failure
-  | Error (Outcome.Classified classified as failure) ->
+  | Error (Outcome.Classified classified as failure)
+    when not (Option.value_map fallback_if ~default:true ~f:(fun f -> f ())) -> (
       (* [fallback_if] is what keeps the retry from duplicating a genuine failure: a transform that
          already degraded to the default pipeline has nothing to fall back TO, so recompiling would
          just repeat the same failing compile (and, on a resource failure, aggravate it) before
          raising the same exception. Such callers say [false] here and the original exception
-         propagates through the public exception contract. *)
-      if not (Option.value_map fallback_if ~default:true ~f:(fun f -> f ())) then
-        Outcome.raise_failure failure;
+         propagates through the public exception contract -- or, given [on_unrecovered], the
+         classified cause goes to the caller, which may know a fallback of its own (gh-ocannl-1390:
+         [model_default]'s placement pick). A fatal failure never reaches it. *)
+      match on_unrecovered with
+      | Some f -> f classified
+      | None -> Outcome.raise_failure failure)
+  | Error (Outcome.Classified classified) ->
       (* Typed compiler rejection is the advisory fallback boundary. Fatal failures are propagated
          above without paying for a second compile. *)
       Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
@@ -5411,44 +5417,49 @@ let model_default ?name ?report ctx comp bindings =
     (* With the model on the default pipeline (no sketch strictly improved on it, or the pick failed
        validation above), the compile that just failed IS the fallback: retrying it would duplicate
        an expensive failure and delay the honest error, so the exception propagates instead. *)
-    let compile_from base_ctx =
-      compile_advisory ?name ~on_fallback
+    let compile_from ?on_unrecovered base_ctx =
+      compile_advisory ?name ~on_fallback ?on_unrecovered
         ~fallback_if:(fun () -> !applied_pick)
         transforms base_ctx comp bindings
     in
     let result =
       match placement_pick with
       | None -> compile_from ctx
-      | Some (mat, inl, fp) -> (
+      | Some (mat, inl, fp) ->
           (* Every reading gets its call, empty or not — the historical context lineage of this
              path, kept as is; skipping would change only context identity, not the decisions. *)
           let ctx' = Context.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
-          match compile_from ctx' with
-          | result ->
-              (* The emitted label carries the placement decision: the in-compile selection only
-                 names the pipeline it chose under those placements. *)
-              let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
-              choice :=
-                {
-                  !choice with
-                  mc_label =
-                    Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
-                      (names fp) !choice.mc_label;
-                };
-              result
-          | exception ((Utils.User_error _ | Invalid_argument _) as exn) ->
-              (* A classified rejection that [compile_advisory] had nothing to fall back to under
-                 the picked placements ([applied_pick] was false: the pick's win was the placement
-                 move itself, so the failing compile was already the default pipeline — under
-                 [ctx'], not under [ctx]). The pick is advisory, so abandon it and rerun the
-                 ordinary selection from the caller's own placements; fatal failures propagate
-                 above. *)
-              logf
-                "model_default: compiling under the picked placements FAILED (%s); recompiling \
-                 from the default placements"
-                (Exn.to_string exn);
-              applied_pick := false;
-              compile_from ctx)
+          let picked = ref true in
+          (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under the
+             picked placements ([applied_pick] was false: the pick's win was the placement move
+             itself, so the failing compile was already the default pipeline — under [ctx'], not
+             under [ctx]). The pick is advisory, so abandon it and rerun the ordinary selection from
+             the caller's own placements. Only the classified cause comes here (gh-ocannl-1390): a
+             fatal failure — an untyped exception a transform or the builder raised, under
+             [strict_failure_classification] — propagates, rather than being retried from the
+             default placements as one more decline. *)
+          let on_unrecovered (classified : Outcome.classified_cause) =
+            logf
+              "model_default: compiling under the picked placements FAILED (%s); recompiling \
+               from                the default placements"
+              (Exn.to_string (Outcome.exception_of_cause classified.cause));
+            picked := false;
+            applied_pick := false;
+            compile_from ctx
+          in
+          let result = compile_from ~on_unrecovered ctx' in
+          (if !picked then
+             (* The emitted label carries the placement decision: the in-compile selection only
+                names the pipeline it chose under those placements. *)
+             let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
+             choice :=
+               {
+                 !choice with
+                 mc_label =
+                   Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
+                     (names fp) !choice.mc_label;
+               });
+          result
     in
     emit !choice;
     result
