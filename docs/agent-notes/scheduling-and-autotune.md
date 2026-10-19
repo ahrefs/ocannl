@@ -1127,6 +1127,9 @@ files.
   A refused (not contended) staffed single is retried bare once (`fiss_sketch_backdrop_fallbacks`),
   until a key's bare retry is refused too; the last key's winning window IS the coarse composite, so
   `fs_composite` is set from it, and the playoff skips a key whose sweep ran inside the incumbent.
+  The fine segmentation (GPU, gh-ocannl-574) keeps its own composite: a fine key the finer cuts left
+  unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded plan's,
+  and only the new keys are swept (`test/operations/autotune_staffed_fine`, skipped off GPU).
   `test/operations/autotune_staffed_singles` scripts an additive landscape and seeds the start through
   the `Autotune.on_staffed_start` seam, which only a seeded plan fills in production.
 - **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**

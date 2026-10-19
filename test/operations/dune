@@ -8469,6 +8469,24 @@
  (preprocess
   (pps ppx_ocannl)))
 
+; gh-ocannl-1138: the fine segmentation's staffed sweep. The finer segmentation is GPU-only, so
+; the search runs on a GPU backend and every claim is skipped elsewhere.
+
+(test
+ (name autotune_staffed_fine)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION))
+ (modules autotune_staffed_fine)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-1229: which units of each beam entry a round expands (autotune_round_expansion).
 ; Scripted timings, pinned to cc; its searches run on Fissioned_chain's small menu, so the model
 ; pre-filter's three keys are declared beside the rule's own, and at the cc vector width the small
