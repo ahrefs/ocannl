@@ -450,6 +450,7 @@ test/operations/schedule_pipelined_matmul.ml [also pins text this scan cannot na
     "ocannl_cp_async4(&"
     "ocannl_cp_async_wait_all();"
 test/operations/schedule_register_matmul.ml
+    "(acc_mc1["
     "__shared__ float tile_"
     "acc_mc1"
     "fma("
