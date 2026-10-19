@@ -45,15 +45,15 @@ let matrix ~label ~modulus ~offset ~stride =
 
 (* Two matmul segments of different shapes (the multi-site chain of [autotune_fission_sketch]): the
    materialized sums cut the chain so each product is a keyed segment of its own. *)
-let chain_with_output () =
+let chain_with_output ?(rows = 16) () =
   let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
   let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
   let qc = matrix ~label:"qc" ~modulus:5 ~offset:(-2.) ~stride:0.5 in
   let qc16 =
     TDSL.ndarray
-      (Array.init (16 * q)
-         ~f:(Ll_test.cycle_flat ~dims:[| 16; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
-      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ 16 ] ()
+      (Array.init (rows * q)
+         ~f:(Ll_test.cycle_flat ~dims:[| rows; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
+      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ rows ] ()
   in
   let%op qd = qa + qb in
   Train.set_materialized qd.Tensor.value;
@@ -63,7 +63,8 @@ let chain_with_output () =
   (qg, Train.forward qg)
 
 (* The chain's computation alone. [chain_with_output] also returns the output tensor, for a test
-   that reads what a crowned routine computes. *)
+   that reads what a crowned routine computes, and takes the second product's row count: at its
+   default 16 the second product is the lighter, at 64 the heavier. *)
 let chain () = snd (chain_with_output ())
 
 (* The fraction of each segment's sketches the small menu keeps, for a test that passes it to one

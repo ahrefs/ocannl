@@ -114,7 +114,8 @@ let untuned (qg, comp) =
    [autotune_staffed_singles] and [autotune_composite_playoff_width] for this search only; [?start]
    gives the running composite its start; [?refuse] refuses (at pre-dispatch validation, a contained
    decline) every attempt whose label it holds for. *)
-let search ?(staffed = true) ?width ?start ?refuse ?(cache_dir = "") ?chain ~tag ~cost () =
+let search ?(staffed = true) ?(log = false) ?width ?start ?refuse ?(cache_dir = "") ?chain ~tag
+    ~cost () =
   let qg, comp = match chain with Some c -> c | None -> Fissioned_chain.chain_with_output () in
   let report = ref None and measured = ref [] and attempts = ref [] and current = ref "" in
   let settings =
@@ -145,7 +146,7 @@ let search ?(staffed = true) ?width ?start ?refuse ?(cache_dir = "") ?chain ~tag
         @@ fun () ->
         let ctx, routine =
           Autotune.with_uncontended_test_windows (fun () ->
-              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~log:false ~progress:false
+              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~log ~progress:false
                 ~report:(fun r -> report := Some r)
                 (Context.cpu ()) comp Ir.Indexing.Empty)
         in
@@ -165,6 +166,36 @@ let search ?(staffed = true) ?width ?start ?refuse ?(cache_dir = "") ?chain ~tag
         report.Autotune.best_label report.Autotune.best_ms;
       { report; measured = List.rev !measured; attempts = List.rev !attempts; output }
   | None -> failwith (tag ^ ": the search delivered no report")
+
+(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote; the text
+   is echoed back to stderr afterwards, whether [f] returned or raised, and the file removed. *)
+let with_stderr_captured f =
+  let file = Stdlib.Filename.temp_file "autotune_staffed_singles" ".stderr" in
+  Exn.protect
+    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
+    ~f:(fun () ->
+      Stdio.Out_channel.flush Stdio.stderr;
+      let saved = Unix.dup Unix.stderr in
+      let outcome =
+        Exn.protect
+          ~finally:(fun () -> Unix.close saved)
+          ~f:(fun () ->
+            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
+            let outcome =
+              match f () with
+              | result -> Ok result
+              | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())
+            in
+            Stdio.Out_channel.flush Stdio.stderr;
+            Unix.dup2 saved Unix.stderr;
+            outcome)
+      in
+      let text = Stdio.In_channel.read_all file in
+      Stdio.eprintf "%s%!" text;
+      match outcome with
+      | Ok result -> (result, String.split_lines text)
+      | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
 
 (* The keys in sweep order, by their singles' first appearance among [measured]. *)
 let keys measured =
@@ -400,3 +431,36 @@ let () =
           Option.exists crowned_second ~f:(fun e -> List.mem (focus l) e ~equal:String.equal)
           && List.exists (focus l) ~f:(fun e -> String.equal (key_of e) first))
   | _ -> p "ties: the search swept the chain's two keys" false
+
+(* --- heavy: the keys are swept heaviest first --- *)
+
+(* The chain with its second product four times the rows: by the model the heavier of the two, yet
+   the second enumerated, so sweeping in enumeration order would fail the order claim. The weights
+   are the search's own, read off its [autotune_log] lines. *)
+let () =
+  let o, lines =
+    with_stderr_captured (fun () ->
+        search ~log:true ~width:0
+          ~chain:(Fissioned_chain.chain_with_output ~rows:64 ())
+          ~tag:"heavy" ~cost ())
+  in
+  let weights =
+    List.filter_map lines ~f:(fun line ->
+        match String.chop_prefix line ~prefix:"autotune: staffed: segment " with
+        | None -> None
+        | Some rest -> (
+            match String.split rest ~on:' ' with
+            | [ tag; "weighs"; w ] -> Option.map (Float.of_string_opt w) ~f:(fun w -> (tag, w))
+            | _ -> None))
+  in
+  Stdio.eprintf "heavy weights (not part of the golden): %s\n%!"
+    (String.concat ~sep:" " (List.map weights ~f:(fun (tag, w) -> Printf.sprintf "%s=%.3e" tag w)));
+  match weights with
+  | [ (_, first); (_, second) ] ->
+      p "heavy: the model weighs the second enumerated key the heavier" Float.(second > first);
+      let by_weight =
+        List.map ~f:fst (List.stable_sort weights ~compare:(fun (_, a) (_, b) -> Float.compare b a))
+      in
+      p "heavy: the keys are swept heaviest first"
+        (List.equal String.equal (keys o.measured) by_weight)
+  | _ -> p "heavy: the search logged a weight for each of the two keys" false

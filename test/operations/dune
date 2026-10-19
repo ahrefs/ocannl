@@ -8455,6 +8455,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_AUTOTUNE_LOG)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
   (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
@@ -8464,7 +8465,7 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_staffed_singles)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain)
  (preprocess
   (pps ppx_ocannl)))
 

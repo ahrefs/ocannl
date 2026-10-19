@@ -6530,6 +6530,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 (key, model_prefilter_params ~seg_opt:pre ~family:(tag ^ seg_key_tag key) ps))
           in
           let coarse_plan, coarse_entries = enum_fiss_entries ~arity_cuts:false in
+          (* Each coarse key's pre-schedule segment, which the staffed sweep weighs its key by. *)
+          let coarse_pre = List.map coarse_entries ~f:(fun (key, pre, _) -> (key, pre)) in
           let fiss_sketch_entries = prefilter_entries ~tag:"segment " coarse_entries in
           (* The finer ([arity_cuts]) segmentation (gh-ocannl-574): cutting apart a companion that
              cannot follow its site's full arity — the lm_head's max-logits reduction and that
@@ -6772,7 +6774,34 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             if not (List.is_empty !running) then
               logf "staffed: the running composite starts from %s"
                 (fiss_sketch_label ~fine:false !running);
-            List.iter fiss_sketch_entries ~f:sweep_key)
+            (* Heaviest key first: its weight is its segment count times the roofline score of its
+               best-scored sketch, so the keys whose geometries differ most, whose gaps can absorb a
+               noisy backdrop, are decided first, and the near-tie keys last, in the smallest
+               backdrop. A key the model cannot score keeps its enumeration order, after the scored
+               ones. *)
+            let weighed =
+              List.map fiss_sketch_entries ~f:(fun ((key, ps) as entry) ->
+                  let weight =
+                    Option.bind (List.Assoc.find coarse_pre ~equal:equal_seg_key key) ~f:(fun pre ->
+                        (* A sketch that does not construct here is left unscored, as the candidate
+                           compile would decline it. *)
+                        List.filter_map ps ~f:(fun p ->
+                            match sketch_schedule ~accum_prec ~p pre with
+                            | exception (Invalid_argument _ | Outcome.Cause_at _) -> None
+                            | sched -> model_score ~static_indices ~limits pre sched)
+                        |> List.min_elt ~compare:Float.compare
+                        |> Option.map ~f:(fun s -> Float.of_int (List.length key.key_units) *. s))
+                  in
+                  logf "staffed: segment %s weighs %s" (seg_key_tag key)
+                    (Option.value_map weight ~default:"unscored" ~f:(Printf.sprintf "%.6e"));
+                  (entry, weight))
+            in
+            let scored, unscored = List.partition_tf weighed ~f:(fun (_, w) -> Option.is_some w) in
+            List.iter
+              (List.stable_sort scored ~compare:(fun (_, a) (_, b) ->
+                   Option.compare Float.compare b a)
+              @ unscored)
+              ~f:(fun (entry, _) -> sweep_key entry))
           else List.iter coarse_single_specs ~f:run_seed;
           List.iter post_sweep_specs ~f:run_seed;
           (* gh-ocannl-1388: a refused window drops its digest from [seen] so that an equivalent

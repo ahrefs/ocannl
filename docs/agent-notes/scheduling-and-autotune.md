@@ -1119,8 +1119,9 @@ files.
   `autotune_staffed_singles`): the coarse keys are swept one at a time, each single's `staff` holding
   the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
   before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its
-  sweep. Only times within one key's sweep are comparable, so per-key minima stay valid but a
-  cross-key comparison does not; the composite's own choice is swept first, at its known time and
+  sweep, heaviest key first (segment count times its best sketch's roofline score, logged as
+  `staffed: segment <tag> weighs <w>`; unscored keys last, in enumeration order). Only times within
+  one key's sweep are comparable, so per-key minima stay valid but a cross-key comparison does not; the composite's own choice is swept first, at its known time and
   without a compile. The composite starts from the seeded plan's `Seeded_sketch` choices, matched to
   coarse keys by structural digest only, so its split prelude and sunk segments are not in the staff.
   A refused (not contended) staffed single is retried bare once (`fiss_sketch_backdrop_fallbacks`),
