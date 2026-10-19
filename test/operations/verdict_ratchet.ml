@@ -4212,6 +4212,31 @@ let () =
         ~f:positive);
   Queue.enqueue queue sample|ocaml},
       [] );
+    ( "refuses a gate on a value written before a claim a collection stores is called",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let checks =
+    List.singleton (fun () ->
+        Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+          ~f:positive)
+  in
+  Queue.enqueue queue sample;
+  List.iter checks ~f:(fun check -> check ())|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written before a claim a Stdlib collection stores is called",
+      {ocaml|let () =
+  let queue = Queue.create () in
+  let checks =
+    List.cons
+      (fun () ->
+        Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (List.of_seq (Queue.to_seq queue))
+          ~f:positive)
+      []
+  in
+  Queue.add sample queue;
+  List.iter (fun check -> check ()) checks|ocaml},
+      [ "sample" ] );
     ( "refuses a gate on a value written before a lazy claim is forced",
       {ocaml|open Base
 let () =

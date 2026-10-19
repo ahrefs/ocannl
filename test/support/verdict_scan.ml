@@ -998,8 +998,10 @@ let rec strip_constraints expr =
     {!frame} of each point inside it.
 
     - A [while] or [for] loop, and a function handed directly to a function of a collection module
-      other than [Seq] or [Sequence] (a [List.iter] callback), run synchronously, possibly many
-      times: a {!Loop}.
+      other than [Seq] or [Sequence] in a position that module calls before it returns (a
+      [List.iter] callback: {!calls_back}), run synchronously, possibly many times: a {!Loop}. A
+      function handed in any other position ([List.singleton (fun () -> ...)]) may be stored and
+      called later, like any other function value.
     - Any other function may run whenever it is called. It is ONCE when it is the right-hand side of
       a non-recursive local [let] whose name the source spells exactly once, as the callee of a full
       application outside the function's own body: then its body runs exactly where that call runs,
@@ -1034,6 +1036,30 @@ type frame_kind =
 
 type frame = { frame_id : int; shape : frame_kind; frame_start : int; frame_stop : int }
 type point = { at_start : int; at_end : int; enclosing : frame list  (** Innermost first. *) }
+
+(* The [Stdlib]-ordered functions of a collection module that call the function they are handed
+   first -- positionally, after the count for [init] -- before they return. *)
+let stdlib_callers =
+  Set.of_list
+    (module String)
+    (String.split_on_chars ~on:[ ' '; '\n' ]
+       {|iter iteri iter2 map mapi map2 rev_map rev_map2 filter filteri filter_map concat_map
+         fold_left fold_right fold_left2 fold_right2 fold for_all exists for_all2 exists2 find
+         find_opt find_index find_map find_mapi find_all partition partition_map sort stable_sort
+         fast_sort sort_uniq merge equal compare filter_map_inplace map_inplace mapi_inplace
+         filter_inplace|}
+    |> List.filter ~f:(Fn.non String.is_empty))
+
+(* Whether the function a collection-module function [name] is handed with [label], as its [index]th
+   positional argument if unlabelled, is called before [name] returns: a [~f] callback, or a
+   [Stdlib]-ordered callback {!stdlib_callers} names. Any other function handed to it may be stored
+   and called later ([List.singleton (fun () -> ...)]), so it is no {!Loop}. *)
+let calls_back ~stdlib name label index =
+  match label with
+  | Ppxlib.Asttypes.Labelled "f" -> true
+  | Ppxlib.Asttypes.Nolabel when stdlib ->
+      if String.equal name "init" then index = 1 else index = 0 && Set.mem stdlib_callers name
+  | _ -> false
 
 (* A function's frame, from its parameters. *)
 let function_kind ~binding params body =
@@ -1923,13 +1949,18 @@ let gate_census content =
                      ~data:(List.map arguments ~f:fst, self#point_of expr)
                | _ -> ());
                (match (fst (self#resolve_callee env callee)).pexp_desc with
-               | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, _); _ } -> (
+               | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                    match self#module_path env prefix with
-                   | Some (Collection_module { family; _ })
+                   | Some (Collection_module { stdlib; family; _ })
                      when not (List.mem [ "Seq"; "Sequence" ] family ~equal:String.equal) ->
-                       List.iter arguments ~f:(fun (_, argument) ->
+                       let positional = ref 0 in
+                       List.iter arguments ~f:(fun (label, argument) ->
+                           let index = !positional in
+                           (match label with
+                           | Ppxlib.Asttypes.Nolabel -> Int.incr positional
+                           | _ -> ());
                            match (strip_constraints argument).pexp_desc with
-                           | Pexp_function _ ->
+                           | Pexp_function _ when calls_back ~stdlib name label index ->
                                Hash_set.add synchronous (position (strip_constraints argument))
                            | _ -> ())
                    | _ -> ())

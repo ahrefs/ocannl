@@ -616,6 +616,8 @@ refuses a gate on a value written between two calls of the function making the c
 accepts a gate on a value written after the one call of the function making the claim: true
 refuses a gate on a value written after a once-called claim inside the loop calling it: true
 accepts a gate on a value written after the iteration whose callback makes the claim: true
+refuses a gate on a value written before a claim a collection stores is called: true
+refuses a gate on a value written before a claim a Stdlib collection stores is called: true
 refuses a gate on a value written before a lazy claim is forced: true
 refuses a gate on a value written after an expect test making the claim: true
 refuses a gate read off the set an in-place filter keeps the population's keys by: true

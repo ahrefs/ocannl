@@ -723,7 +723,10 @@ which is a claim over the configuration alone and taught the reader the settings
 
 The gate reader's residue from staging#1089's review (ahrefs/ocannl#1303): its collection-module
 functions became a closed table (`Verdict_scan.collection_functions`) whose unlisted members are
-refused rather than read by a name-prefix guess, and in-place filters and maps are writers. Every
+refused rather than read by a name-prefix guess, and in-place filters and maps are writers; a
+callee is followed through the `let`s that rename it; an opened local structure's exports keep their
+definitions; a match pattern's name is a part of the component it takes apart; and only a write
+that may run before the claim is followed. Every
 run used tools/mutation-run.sh on the named module and the focused verdict_ratchet alias, exited 1
 on exactly the listed false claims, and restored the source byte-for-byte with cmp; the baseline
 run `20261019T200705Z-70844` exited 0.
@@ -741,6 +744,7 @@ run `20261019T200705Z-70844` exited 0.
 | A name in a tuple component's place is a part of that component | `verdict_scan.ml`: a literal tuple's components bind nothing | Failed: `refuses a gate read off the component a match takes the population from` | `20261019T202503Z-33678` |
 | Only a write that may run before the claim is followed | `verdict_scan.ml`: every write precedes every claim | Failed: `accepts a gate on a value written into the population only after the claim`; `accepts a gate on a value written after the one call of the function making the claim`; `accepts a gate on a value written after the iteration whose callback makes the claim` | `20261019T203621Z-73269` |
 | A function handed to a collection-module function runs synchronously, as a loop | `verdict_scan.ml`: no callback is synchronous | Failed: accepts a gate on a value written after the iteration whose callback makes the claim | `20261019T203337Z-29970` |
+| A function handed to a collection-module function is a loop only in a position that function calls before it returns | `verdict_scan.ml`: every function handed to a collection-module function is a callback | Failed: `refuses a gate on a value written before a claim a collection stores is called`; `refuses a gate on a value written before a claim a Stdlib collection stores is called` | `20261019T204737Z-19119` |
 | A local function its name calls exactly once runs at that call | `verdict_scan.ml`: no function is once | Failed: accepts a gate on a value written after the one call of the function making the claim | `20261019T203400Z-56779` |
 | A point in a once function is placed in the frames of its call | `verdict_scan.ml`: a once frame skipped, its point left in its lexical frames | Failed: `refuses a gate on a value written after a once-called claim inside the loop calling it` | `20261019T203422Z-81920` |
 | A write and a claim in one repeating frame may run in either order | `verdict_scan.ml`: a shared frame not read | Failed: `refuses a gate on a value written after the claim in the loop that repeats it`; refuses a gate on a value written after a once-called claim inside the loop calling it | `20261019T203445Z-99022` |
