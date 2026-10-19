@@ -949,10 +949,9 @@ let collection_functions =
            {|
             for_all for_alli for_all2 for_all2_exn exists existsi exists2 exists2_exn is_empty
             contains is_sorted is_sorted_strictly is_subset subset contains_dup is_some is_none
-            is_ok is_error
+            is_ok is_error is_valid_utf_8
           |};
-         group Every_argument
-           {| is_prefix is_suffix is_substring starts_with ends_with is_valid_utf_8 |};
+         group Every_argument {| is_prefix is_suffix is_substring starts_with ends_with |};
          (* Selectors. *)
          group Collection
            {|
@@ -1017,7 +1016,9 @@ let collection_arguments ~stdlib function_ arguments =
   | Collection, false -> List.take positional 1 @ data
   | Collection_and_callback, false -> List.take positional 1 @ labeled [ "f" ] @ data
   | (Every_argument | Collection | Collection_and_callback), _ ->
-      positional @ labeled [ "key"; "f" ] @ data
+      (* What a callback returns joins the result: [~f], [~combine] (a merge's value for a shared
+         key), [~get_key] (a keyed builder's key), [~finish] ([fold_until]'s result). *)
+      positional @ labeled [ "key"; "f"; "combine"; "get_key"; "finish" ] @ data
 
 (* A callee under type annotations, [(List.map : ...) f xs], is the callee. *)
 let rec strip_constraints expr =
@@ -1834,7 +1835,11 @@ let gate_census content =
               let env =
                 List.fold params ~init:env ~f:(fun env param ->
                     match param.pparam_desc with
-                    | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                    | Pparam_val (_, Some default, pattern) ->
+                        (* [fun ?(value = sample) _ -> value]: an optional parameter is a part of
+                           its default, which a call without the label passes. *)
+                        self#bind_parts env pattern (default, env)
+                    | Pparam_val (_, None, pattern) -> self#bind_patterns env [ pattern ]
                     | Pparam_newtype _ -> env)
               in
               match body with
@@ -1937,7 +1942,11 @@ let gate_census content =
               let env =
                 List.fold params ~init:env ~f:(fun env param ->
                     match param.pparam_desc with
-                    | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                    | Pparam_val (_, Some default, pattern) ->
+                        (* [fun ?(value = sample) _ -> value]: an optional parameter is a part of
+                           its default, which a call without the label passes. *)
+                        self#bind_parts env pattern (default, env)
+                    | Pparam_val (_, None, pattern) -> self#bind_patterns env [ pattern ]
                     | Pparam_newtype _ -> env)
               in
               match body with

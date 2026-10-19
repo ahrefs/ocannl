@@ -4159,6 +4159,24 @@ let () =
   let rows = match probe with { kept; _ } -> kept in
   Verdict.gated_all ~when_:(not (is_default defaults)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
       [ "defaults" ] );
+    ( "refuses a gate read off the value a merge's combining callback returns",
+      {ocaml|open Base
+let () =
+  let merged = Map.merge_skewed left right ~combine:(fun ~key:_ _ _ -> sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all entries pass" (Map.to_alist merged) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate that closes on the string a gated validity claim reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (String.contains rows bad_byte)) ~on:"cc" "the text is UTF-8"
+    (String.is_valid_utf_8 rows)|ocaml},
+      [ "rows" ] );
+    ( "refuses a gate read off the default of a callback's optional parameter",
+      {ocaml|open Base
+let () =
+  let rows = Array.init 1 ~f:(fun ?(value = sample) _ -> value) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Array.to_list rows) ~f:positive|ocaml},
+      [ "sample" ] );
     ( "follows a collection function through a value alias",
       {ocaml|open Base
 let () =
