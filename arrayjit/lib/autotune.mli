@@ -1751,9 +1751,10 @@ val model_operand_loads :
   Ir.Low_level.optimized ->
   Ir.Cost_model.load_count
 (** {!Ir.Cost_model.operand_load_count} under [capabilities]' [mma_operand_loads] rule and
-    [mma_operand_fragments] structure: the count {!model_family_search} breaks exact ties with and
-    {!model_explain} reports (gh-ocannl-1254): [Undescribed] where the backend describes no arm for
-    some statement (every backend but CUDA). The walk keys only [Loads]. *)
+    [mma_operand_fragments] structure, for the statements its [mma_accepts] hook probe accepts: the
+    count {!model_family_search} breaks exact ties with and {!model_explain} reports
+    (gh-ocannl-1254): [Undescribed] where the backend describes no arm for some statement (every
+    backend but CUDA). The walk keys only [Loads]. *)
 
 val model_family_search :
   ?on_rejected:(unit -> unit) ->

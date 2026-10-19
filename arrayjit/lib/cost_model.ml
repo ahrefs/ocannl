@@ -751,7 +751,8 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
   (* One load per element a lane gathers, whatever its width. *)
   | Gather _ -> (elements + lanes - 1) / lanes
 
-let tile_mma_operand_loads ~operand_fragments ~operand_loads (opt : Low_level.optimized) =
+let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
+    (opt : Low_level.optimized) =
   let prec tn = Lazy.force tn.Tn.storage_prec in
   let sites = ref [] in
   let rec go ~scale ~env (c : Low_level.t) =
@@ -763,7 +764,7 @@ let tile_mma_operand_loads ~operand_fragments ~operand_loads (opt : Low_level.op
         let extent = max 0 (to_ - from_ + 1) in
         go ~scale:(scale * extent) ~env:((index, extent) :: env) body
     | If { body; _ } -> go ~scale ~env body
-    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; ta; tb; m; n; k; lane; _ } ->
+    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; ta; tb; m; n; k; ldd; lda; ldb; lane; _ } ->
         let lanes =
           max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
         in
@@ -778,9 +779,18 @@ let tile_mma_operand_loads ~operand_fragments ~operand_loads (opt : Low_level.op
               ~b:(operand_place opt b_tn),
             operand_fragments ~a_prec ~b_prec ~d_prec ~scope )
         in
+        (* A statement the hook would decline renders scalar or register-tiled code: nothing the arm
+           description says applies to it. *)
+        let accepted =
+          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k
+            ~d:(ldd, operand_place opt d_tn)
+            ~a:(lda, operand_place opt a_tn)
+            ~b:(ldb, operand_place opt b_tn)
+        in
         let description =
           let statement = describe Backend_intf.Mma_per_statement in
-          if not (Set.mem opt.Low_level.simdgroup_fragments d_tn) then Some statement
+          if not accepted then None
+          else if not (Set.mem opt.Low_level.simdgroup_fragments d_tn) then Some statement
           else
             let fragment = describe Backend_intf.Mma_fragment_scope in
             Option.some_if (Poly.equal statement fragment) statement
@@ -832,8 +842,8 @@ let combine_load_counts counts =
     | [] -> No_tile_mma
     | ns -> Loads (List.sum (module Int) ns ~f:Fn.id)
 
-let operand_load_count ~operand_fragments ~operand_loads opt =
-  match tile_mma_operand_loads ~operand_fragments ~operand_loads opt with
+let operand_load_count ~operand_accepts ~operand_fragments ~operand_loads opt =
+  match tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads opt with
   | [] -> No_tile_mma
   | sites when List.exists sites ~f:Option.is_none -> Undescribed
   | sites ->

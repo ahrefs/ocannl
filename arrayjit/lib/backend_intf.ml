@@ -509,6 +509,25 @@ type codegen_capabilities = {
           it reads the decision the kernel makes. Like {!field-mma_arm}, only the arm- and
           operand-level choice: a call the hook declines on extents or the device renders the scalar
           fallback whatever this says. [(false, false)] on a backend without such a load. *)
+  mma_accepts :
+    d_prec:Ops.prec ->
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    m:int ->
+    n:int ->
+    k:int ->
+    d:int * mma_operand_place ->
+    a:int * mma_operand_place ->
+    b:int * mma_operand_place ->
+    bool;
+      (** Whether the backend's per-statement mma hook accepts a statement with these storage
+          precisions, orientations, extents and, per operand, leading dimension and place — asked of
+          the hook itself (a C backend's [C_syntax_config.mma_syntax], which decides acceptance
+          without the operand addresses), so it holds every condition the emission checks: layouts,
+          spaces, strides, extents, the device's floor (gh-ocannl-1254). [false] on a backend
+          without the hook. *)
   mma_operand_fragments :
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->
@@ -551,6 +570,8 @@ let no_codegen_capabilities =
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_operand_loads =
       (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
+    mma_accepts =
+      (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ ~ta:_ ~tb:_ ~m:_ ~n:_ ~k:_ ~d:_ ~a:_ ~b:_ -> false);
     mma_operand_fragments = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
@@ -567,11 +588,11 @@ let no_codegen_capabilities =
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
     until it is rendered (warning 9).
 
-    [mma_operand_loads] and [mma_operand_fragments] are not rendered either (gh-ocannl-1254): which
-    operands load through [ldmatrix], and how often, is a fixed function of the arm, which the [mma]
-    row below already renders, and of each operand's transposition, space and layout, which are the
-    schedule's own content and so already in its canonical digest. Rendering them would add no
-    discrimination, only re-tunes.
+    [mma_operand_loads], [mma_accepts] and [mma_operand_fragments] are not rendered either
+    (gh-ocannl-1254): which operands load through [ldmatrix], and how often, is a fixed function of
+    the arm, which the [mma] row below already renders, and of each operand's transposition, space
+    and layout, which are the schedule's own content and so already in its canonical digest.
+    Rendering them would add no discrimination, only re-tunes.
 
     The fields deliberately not rendered are [mma_scope_workgroup_bytes] and
     [lane_all_reduce_workgroup_bytes] (the same argument holds for both): it decides whether a
@@ -590,6 +611,7 @@ let codegen_capabilities_fingerprint
       asynchronous_staging_copy;
       mma_arm;
       mma_operand_loads = _;
+      mma_accepts = _;
       mma_operand_fragments = _;
       mma_scope_workgroup_bytes = _;
       lane_all_reduce_workgroup_bytes = _;

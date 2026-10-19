@@ -1035,6 +1035,30 @@ let codegen_capabilities (module Config : C_syntax_config) =
     asynchronous_staging_copy = Option.is_some Config.async_copy;
     mma_arm = Config.mma_arm;
     mma_operand_loads = Config.mma_operand_loads;
+    (* gh-ocannl-1254: the hook itself, asked with no addresses — it decides acceptance from
+       extents, spaces, layouts and strides alone, and the emission it returns is never applied
+       here. *)
+    mma_accepts =
+      (fun ~d_prec
+        ~a_prec
+        ~b_prec
+        ~ta
+        ~tb
+        ~m
+        ~n
+        ~k
+        ~d:(ldd, (d_space, d_layout))
+        ~a:(lda, (a_space, a_layout))
+        ~b:(ldb, (b_space, b_layout))
+      ->
+        match Config.mma_syntax with
+        | None -> false
+        | Some emit ->
+            Option.is_some
+              (emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k
+                 ~d:(PPrint.empty, ldd, (d_space :> mma_space), d_layout)
+                 ~a:(lda, (a_space :> mma_space), a_layout)
+                 ~b:(ldb, (b_space :> mma_space), b_layout)));
     mma_operand_fragments = Config.mma_operand_fragments;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole

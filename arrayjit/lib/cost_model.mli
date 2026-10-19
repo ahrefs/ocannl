@@ -300,6 +300,19 @@ val combine_load_counts : load_count list -> load_count
     ([No_tile_mma] when there are none). *)
 
 val operand_load_count :
+  operand_accepts:
+    (d_prec:Ops.prec ->
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    m:int ->
+    n:int ->
+    k:int ->
+    d:int * Backend_intf.mma_operand_place ->
+    a:int * Backend_intf.mma_operand_place ->
+    b:int * Backend_intf.mma_operand_place ->
+    bool) ->
   operand_fragments:
     (a_prec:Ops.prec ->
     b_prec:Ops.prec ->
@@ -320,8 +333,9 @@ val operand_load_count :
   load_count
 (** The per-lane load instructions of every [Tile_mma] operand, summed over the statements'
     executions (see the section contract), under a backend's load rule ([operand_loads], its
-    [mma_operand_loads]) and fragment structure ([operand_fragments], its [mma_operand_fragments]);
-    {!load_count} says when there is nothing, or nothing complete, to count. *)
+    [mma_operand_loads]) and fragment structure ([operand_fragments], its [mma_operand_fragments]),
+    for the statements its hook accepts ([operand_accepts], its [mma_accepts]: a declined statement
+    is [Undescribed]); {!load_count} says when there is nothing, or nothing complete, to count. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 

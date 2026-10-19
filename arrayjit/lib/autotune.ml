@@ -4032,7 +4032,8 @@ let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp 
    arms: their load rule and fragment structure. *)
 let model_operand_loads ~(capabilities : Ir.Backend_intf.codegen_capabilities) (opt : LL.optimized)
     =
-  CM.operand_load_count ~operand_fragments:capabilities.mma_operand_fragments
+  CM.operand_load_count ~operand_accepts:capabilities.mma_accepts
+    ~operand_fragments:capabilities.mma_operand_fragments
     ~operand_loads:capabilities.mma_operand_loads opt
 
 (* The branch-and-bound walk over the factored matmul family (gh-ocannl-514 phase 4), shared by

@@ -294,6 +294,20 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   let per_statement (o : LL.optimized) =
     { o with LL.simdgroup_fragments = Set.empty (module Ir.Tnode) }
   in
+  let declining =
+    {
+      capabilities with
+      mma_accepts =
+        (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ ~ta:_ ~tb:_ ~m:_ ~n:_ ~k:_ ~d:_ ~a:_ ~b:_ -> false);
+    }
+  in
+  all "a statement the hook declines has no count" (fun (_, plain, swz) ->
+      CM.equal_load_count
+        (Autotune.model_operand_loads ~capabilities:declining plain)
+        CM.Undescribed
+      && CM.equal_load_count
+           (Autotune.model_operand_loads ~capabilities:declining swz)
+           CM.Undescribed);
   all "a marked statement counts where both scopes' arms agree, as unmarked" (fun (_, plain, _) ->
       (not (Set.is_empty plain.LL.simdgroup_fragments))
       && Option.is_some (loads rule plain)
@@ -384,6 +398,10 @@ let () =
         BI.no_codegen_capabilities with
         mma_operand_loads = Ir.Cuda_mma.operand_loads;
         mma_operand_fragments = Ir.Cuda_mma.operand_fragments;
+        (* CUDA's acceptance is its hook's, which needs the backend; the stand-in accepts every
+           statement, and the backend-record leg reads the real hook. *)
+        mma_accepts =
+          (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ ~ta:_ ~tb:_ ~m:_ ~n:_ ~k:_ ~d:_ ~a:_ ~b:_ -> true);
       }
     ~evaluated:true
 
