@@ -562,12 +562,6 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
    process the policy is fixed, across processes only the cache carries schedules. *)
 let numerics_tag () =
   let policy = Numerics.fingerprint (Numerics.get ()) in
-  let algebra = Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra" in
-  (* Schedule.apply simplifies again after transforms such as materializing unroll. Two identical
-     base programs may expose different algebra there. Preserve existing all-on cache identities. *)
-  let policy =
-    if String.equal algebra "all" then policy else policy ^ ";simplify_fp_algebra=" ^ algebra
-  in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string policy)) 8
 
 (* gh-ocannl-572: the same argument as the numerics tag, for the rest of the settings a backend
@@ -760,8 +754,9 @@ type entry = {
    12: gh-ocannl-1175 -- a reduction's zero folds into its own segment's sketches
    13: gh-ocannl-1165 -- the coalesced layout's seeds, a search branch beside the sketch families
    14: gh-ocannl-1325 -- wte.grad / v.grad become matmul sites; the scalar blocktile ep twins compile
+   15: gh-ocannl-1414 -- two-loop reduction bands become split-reduce sites, coalesced or interchanged
 *)
-let entry_version = 14
+let entry_version = 15
 
 let sanitize name =
   String.map name ~f:(fun c ->
@@ -859,8 +854,9 @@ let cache_file ~dir ~key =
    5: gh-ocannl-1167 -- lane geometry gated per device: HIP segmentation moves under unchanged keys
    6: gh-ocannl-1164 -- [fission] is gone: a fissioned winner persists its own segmentation
    7: gh-ocannl-1228 -- an entry's filename is a digest of its key, which the entry now stores
+   8: gh-ocannl-998 -- the licensed float algebra left the post-schedule simplifier for the raw tier
 *)
-let cache_regime_version = 7
+let cache_regime_version = 8
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename
@@ -1088,6 +1084,11 @@ let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 
 let lookup ~dir ~key =
   lookup_sexp ~dir ~key ~of_sexp:entry_of_sexp ~current:(fun e -> e.version = entry_version)
+
+let read_entry_file file =
+  match stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) with
+  | { key; payload } -> Some (key, payload)
+  | exception exn when not (process_level exn) -> None
 
 (** {2 Abandoned searches} *)
 

@@ -140,7 +140,7 @@ files.
 - **`--arch` decides what the CUDA soak is measuring**, and the default is not the backend's
   setting. `cuda_fp8.hpp` guards its conversions with `#if __CUDA_ARCH__ >= 890`: at or above sm_89
   the cast is the hardware `cvt` instruction, below it the header's own software emulation. The
-  repo's arch policy (`Cuda_backend.gpu_arch_options`) is MARKER-driven — a source with no
+  repo's arch policy (`Ir.Cuda_mma.gpu_arch_options`) is MARKER-driven — a source with no
   tensor-core markers gets no `--gpu-architecture` at all, so nvrtc's default target applies:
   measured as `__CUDA_ARCH__ = 750` under CUDA 13.3, hence the software path. That is the honest
   answer to "does the codec agree with what the backend emits" (`--arch=backend`), but it is not the
@@ -626,7 +626,7 @@ files.
   `Numerics.fp16_accum_wide` policy predicate and the backend capability's scope list. On CUDA
   sm_80+ the per-statement uniform-f16 statement routes to the f32-accumulate inline-PTX m16n8k16
   arm (the bf16 uniform arm's body parameterized by `mma16_spellings` — the PTX fragment layouts
-  are shared by .f16/.bf16; marker `(mma-f16)`, arch floor 80 in `gpu_arch_options`), and its
+  are shared by .f16/.bf16; marker `(mma-f16)`, arch floor 80 from `Cuda_mma.arm_floor`), and its
   f16-accumulate wmma combo is gated off. The persistent-fragment scope is wmma's `__half` x
   `__half` -> `float` fragments behind a converted `d` boundary since gh-ocannl-925 (the
   `wmma-f16-wide` combo, `wc_d_cvt`; see the coordinate-table bullet below); before it the list
@@ -779,14 +779,24 @@ files.
   exists for CUDA's tf32 gate: the tf32 arm reads f32 storage as tf32 and accumulates at
   the same f32 `accum_prec` reports with the gate shut, so a code change to that gate under an
   unchanged mode moved nothing before. Each backend derives `mma_arm` from the very table its hooks
-  dispatch on — CUDA's `wmma_combo` (in `Ir.Cuda_mma` since gh-ocannl-1214, beside the other arm
-  tables and the descriptor; its accumulator is now a precision, `wc_acc_prec`, spelled
-  through `typ_of_prec`) behind the inline-PTX arms in the hooks' own order, HIP's and Metal's
-  `mma_accumulator` tables (from which their fragment spellings now follow) — so a new arm or a
-  changed gate reaches the key with no hand-added component. CUDA's hooks try several tables in an
-  order, and that ORDER is restated in its `mma_arm`; it is pinned against the hooks by
-  `schedule_mma_matmul` and `schedule_ldmatrix_matmul`, which read every arm marker they expect in
-  rendered CUDA from `mma_arm` rather than as literals — a new CUDA arm test does the same. Pinned by
+  dispatch on — CUDA's `Ir.Cuda_mma.resolve_arm`, HIP's and Metal's `mma_accumulator` tables (from
+  which their fragment spellings now follow) — so a new arm or a changed gate reaches the key with
+  no hand-added component. **CUDA resolves its arms once** (gh-ocannl-1232): `resolve_arm` maps
+  (storage triple, policy, emission scope) to one variant (`Inline_ptx` fp8 m16n8k32 / m16n8k16
+  bf16|f16, or `Wmma` of five kinds), both hooks `match` on it (an update-only call against a
+  `` `Fragment `` destination resolves at `Mma_fragment_scope`, the scope that declared the array),
+  and an arm's own conditions decline to the scalar fallback, never to another arm. Floors, markers,
+  tiles, accumulators and the `ldmatrix` operand rule are functions of the variant
+  (`arm_floor` is the ONLY place the 70/80/89 cutoffs are written); `mma_arm` is its projection,
+  `capability` names each entry by the arm it seeds, and `gpu_arch_options` (moved into `Cuda_mma`,
+  so `test_cuda_arch_flags` runs everywhere) maps each arm's `(<marker>)` to its floor over
+  `all_of_arm`. The one scope-split triple is wide uniform f16 (per statement m16n8k16, fragment
+  scope the converted `wmma-f16-wide`) — before, a fall-through. Its marker now floors the nvrtc
+  target at compute_80 (it was compute_70 via `nvcuda::wmma`). A new arm is a new constructor:
+  every `match` over `arm` fails to compile until it is handled, and `cuda_mma_arms` checks the
+  table's shape (no per-statement arm converts its destination, scopes split only there, every arm
+  resolves somewhere). `schedule_mma_matmul` and `schedule_ldmatrix_matmul` still read the markers
+  they expect in rendered CUDA from `mma_arm` rather than as literals. Pinned by
   `codegen_resolution_identity`: synthetic records (a changed resolution or arm table — an arm
   appearing, another arm, its accumulator, its floor — moves the tag, an extensionally equal
   closure does not; dropping the fingerprint's arm row fails the four arm claims on every backend),
@@ -800,7 +810,9 @@ files.
   step (bias and layer-norm parameter gradients, the loss sum) into a deterministic tree over
   blocks chosen from the routine alone, and ships ON by default in the exact regime rather than
   in the `approximate` payload: within ~2.4e-6 relative on gpt2_mini_train b256's losses, for
-  543 → 391 ms on CUDA. The `reproducible` profile pins it at 0. The precedent the decision rests
+  543 → 391 ms on CUDA. gh-ocannl-1414 lowered the default threshold to 1024 (the wave coordinator
+  approved it on the measurement), which extends it to the batch-8 and long-sequence steps' 1024-row
+  reductions: within ~1.1e-6 relative on their losses, for 15.2 → 12.6 ms at b8. The `reproducible` profile pins it at 0. The precedent the decision rests
   on: the default GPU plan's cooperative all-reduces (gh-ocannl-1124) and, under the default
   `autotune_search=true`, the tuner's own split-reduce candidates already reassociate in the
   exact regime. A new numerics-changing gate still follows the rule below.
@@ -841,13 +853,33 @@ files.
   `ambient_ocannl_shadowed`, the inherited variables its own command line outranks
   (gh-ocannl-1273), and `--cell-flag KEY=VALUE` is the way to set a payload key per cell — the
   regime gate accepts it as a declared override, never as a leak.
-- **The development `simplify_fp_algebra` selector also acts after scheduling** (gh-ocannl-998):
-  `Schedule.apply` reruns `simplify_llc`, so a materializing unroll can expose constant algebra
-  absent from the pre-schedule code digest. Identical base digests can therefore produce different
-  scheduled kernels under different selections. It is `Keyed "numerics"`, not solely `Code_borne`;
-  `Schedule_cache.numerics_tag` carries non-default selections while retaining the existing `all`
-  tag. `simplify_fp_algebra` pins this with an equal-source/different-unrolled-code witness and a
-  cache-tag separation claim. Profiles remain unchanged during the measurement phase.
+- **The floating-point licences are three keys, applied once on the raw lowering** (gh-ocannl-998):
+  `fp_contract` (a float `a * b + c` into one `FMA`), `fp_reassociate` (constant reassociation,
+  subtraction re-parenthesizing, the multiplication/division interchanges, integer-power
+  unrolling) and `fp_finite_math` (the zero identities, which infinities, NaNs and the sign of
+  zero contradict), read as `Low_level.Fp_licence.of_config`. The arms live in one first-match
+  step function, `Low_level.fp_algebra_step`; the `Rewrites` tier member `Fp_algebra` applies it
+  bottom-up per assignment, after `Online_softmax` (contraction would hide `o := o + w * v` from
+  the hoist). `simplify_llc` -- after virtualization and again after scheduling -- is exact: it
+  keeps only IEEE identities (`x * 1`, `x - (+0)`, `x + (-0)`), constant folding and, for integer
+  precisions, the unlicensed reassociation the index canonicalizer needs. So OCANNL never
+  contracts an inlined producer with its consumer, and a placement flip cannot change a result at
+  uniform f32 -- with the C compiler's own contraction off; `fp_licence_values` executes that
+  claim (cc, `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 either way, `2^-24` fused). Backend
+  compilers keep their licences (`cc_backend_fp_contract`, NVRTC's `--use_fast_math` implies
+  `--fmad=true`), so production-wide neutrality would need backend enforcement too. The trade:
+  folds that existed only after inlining (a consumer contracting its producer's product, a scalar
+  constant node folding into a quotient, algebra a materializing unroll exposes) are gone. The keys
+  are `Code_borne` (the rewritten code carries them; no transform consults them), and the cache
+  regime was bumped for the identical digests whose scheduled kernels changed. A raw-tier pow
+  unroll must not take a base exact simplification folds to a constant (an `Identity`-wrapped
+  constant, a fixed embedded index): the folded product would be computed in double, not at the
+  target's multiplication rounding. All three are off by default (no family showed a measured
+  speed benefit), on under `approximate` -- `runtest-online_softmax_fp_licences` reruns the
+  online-softmax claims with them on -- and pinned off by `reproducible`. The
+  development selector `simplify_fp_algebra` (six arm families) is retired with no alias;
+  `benchmarks/gh998_cells.py` ablates the three keys, and a result line records each under
+  `fp_licences` with its source.
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
@@ -1073,6 +1105,14 @@ files.
   (width 48 over 512, a 4-column tail) runs 1.15–1.29 ms against 1.40–1.53 ms for the tail-free
   `--rn=4`, i.e. ~20% — the gh-ocannl-620 reuse-only ranking is right here by well more than the
   bench's timing noise, and `--rn=6` is what `Register_tile.default` picks.
+- **`Tensorize` writes a floating fallback fused, whatever the contraction licence**
+  (gh-ocannl-998). The register tile renders only an `FMA`-form fallback, because a plain
+  `acc + a * b` is contracted or not at the C compiler's discretion and no vector twin could match
+  it bitwise. When the simplifier contracted every float `a * b + c`, every accumulation reached
+  `Tensorize` fused; with the licence off it arrives plain, and every cc register tile would have
+  declined silently. A tile multiply-accumulate is fused on every unit, so the fallback states that:
+  a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
+  the register-tiled census with the contraction licence off.
 ## SIMD operations and rounding
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
@@ -1890,6 +1930,27 @@ files.
   packing with a per-lane `pow(` that skips `binop_syntax` fails it, and the values alone would not
   (on M4 Max the half overload matches f32 `pow` narrowed bitwise); routing through
   `binop_syntax` passes.
+
+- Metal half `Exp`, `Log`, `Exp2`, `Log2`, `Sin`, `Cos` and `Sqrt` render as
+  `(half)op((float)(x))` (gh-ocannl-1288), the same contract as half pow: **a half result is the f32
+  builtin narrowed once, under whichever math policy is in force** (`unop_syntax`'s
+  `widened_math`). Packed half lanes (gh-ocannl-1295) inherit it by rendering through
+  `unop_syntax`. `benchmarks/runners/ocannl/metal_half_math_probe.ml` runs each overload and its
+  widened form over all 65536 half inputs, under the legacy `fastMathEnabled=false` (forced; newer
+  runtimes still accept it, so one macOS 15+ host covers both policies, though not macOS 14's
+  compiler), the modern split and the default. On M4 Max / macOS 26 every finite in-range result
+  of both forms was within 0.5 half ulp of f64. The overloads matched the widened form bitwise
+  except for `sin(-0)` (the overload returns +0) under both policies, and, under the modern policy,
+  `sin`/`cos` of ±inf and NaN, where the overload gives NaN and the fast f32 functions give 0. The
+  widening therefore moved exactly those values. A half `sin`/`cos` of a non-finite input is now 0
+  under the modern policy, as f32 already was. `half_unary_math` pins the relationship executed
+  (with those inputs; the overloads fail it) and the spelling, Metal-gated: CUDA and HIP keep the
+  native `hexp`/`hsin`/... intrinsics, which promise no such relationship.
+  `Recip_sqrt` (`rsqrt`) and `Tanh_approx` (`tanh`) keep their half overloads. `rsqrt` matched its
+  widened form bitwise under both policies. For `tanh` the fast f32 function narrowed is much worse
+  (up to 1024 half ulps near the subnormal range) while the overload stays within 0.502, and the
+  two policies' f32 `tanh` disagree on 11466 inputs, so widening it would buy policy coupling at an
+  accuracy cost.
 
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half

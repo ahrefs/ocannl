@@ -21,6 +21,12 @@ let tier : rewrite list =
       apply = (fun target -> Online_softmax.rewrite ~auto_block:target.online_softmax_auto_block);
       reset = Online_softmax.reset;
     };
+    {
+      name = "fp_contract, fp_reassociate, fp_finite_math";
+      enabled = Fp_algebra.enabled;
+      apply = (fun _target -> Fp_algebra.rewrite (Low_level.Fp_licence.of_config ()));
+      reset = Fn.id;
+    };
   ]
 
 let reset () = List.iter tier ~f:(fun r -> r.reset ())

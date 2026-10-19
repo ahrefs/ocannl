@@ -1,6 +1,6 @@
 (* The nvrtc [--gpu-architecture] policy (gh-ocannl-481 item 3, D4).
 
-   [Cuda_backend.gpu_arch_options] decides one thing with two very different answers:
+   [Ir.Cuda_mma.gpu_arch_options] decides one thing with two very different answers:
 
    - a FLOOR: the lowest arch whose PTX contains the instructions a kernel uses. The driver
    forward-JIT-compiles floor-targeted PTX on every later GPU, so one compile covers everything
@@ -14,13 +14,18 @@
    No arm emits [(mma-mxfp8)] yet (block scaling is blocked on OCANNL having microscaling storage at
    all), so this pins the MECHANISM: that the marker selects a family target on a family device,
    that it does not on any other device, and that its presence changes nothing for every existing
-   floor marker. The function is pure, so no GPU is needed — this file is selected on cudajit being
-   installed, not on hardware being present. *)
+   floor marker. The function is pure and lives outside the cudajit-gated backend (gh-ocannl-1232),
+   so it is checked wherever OCANNL builds, with no toolkit and no device.
+
+   The arm floors are not restated here: every arm's own marker, compiled for a device exactly at
+   the arm's own floor, must target that floor -- loadable there, and containing the arm's
+   instructions -- so a new arm, or a floor moved in [Cuda_mma.arm_floor], is covered with no edit
+   to this file. *)
 
 open Base
 
 let check label ~device_cc src ~expected =
-  let got = Cuda_backend.gpu_arch_options ~device_cc src in
+  let got = Ir.Cuda_mma.gpu_arch_options ~device_cc src in
   let render l = if List.is_empty l then "(none)" else String.concat ~sep:" " l in
   if not (List.equal String.equal got expected) then
     failwith (Printf.sprintf "%s: expected %s, got %s" label (render expected) (render got))
@@ -73,4 +78,14 @@ let () =
   check "mxfp8 marker supersedes a floor on-family" ~device_cc:120
     "/* (mma-mxfp8) */ /* (mma-fp8) */"
     ~expected:[ "--gpu-architecture=compute_120a" ];
+  (* Every arm's marker, as its rendering comment carries it, at a device sitting exactly at the
+     arm's floor. Only the marker: a wmma rendering also mentions [nvcuda::wmma], whose lowest-floor
+     trigger the max would absorb anyway. *)
+  List.iter Ir.Cuda_mma.all_of_arm ~f:(fun arm ->
+      let floor = Ir.Cuda_mma.arm_floor arm and marker = Ir.Cuda_mma.arm_marker arm in
+      check
+        (Printf.sprintf "the (%s) arm at its own floor" marker)
+        ~device_cc:floor
+        (Printf.sprintf "/* tile_mma 16x16x16 (%s) */" marker)
+        ~expected:[ Printf.sprintf "--gpu-architecture=compute_%d" floor ]);
   Stdio.print_endline "cuda gpu_arch_options: ok"

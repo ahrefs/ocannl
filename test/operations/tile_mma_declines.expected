@@ -1,5 +1,6 @@
 census: standard layout renders register-tiled: true
 census: the honoured schedule's routine is labeled tensorized: true
+census: without the contraction licence the standard layout still renders register-tiled: true
 census: transposed-B layout falls back to the lane-0 scalar rendering: true
 census: the declined schedule's routine is labeled scalar-fallback, not tensorized: true
 per-chunk B~ re-pack matches the serial twin bitwise: true

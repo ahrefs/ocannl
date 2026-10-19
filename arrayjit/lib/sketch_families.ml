@@ -286,10 +286,11 @@ type matmul_site = {
           normalizes it. A transposed A never declines (its feeds are scalar splats either way), so
           it is not tracked. *)
   m_fma : bool;
-      (** The accumulation is in fused ([Ops.FMA]) form, as [optimize]'s simplify leaves it — the
-          form the register-tiled [Tile_mma] rendering requires (its vector twin promises bitwise
-          equality only for fused rounding). Candidate schedules rewrite operand reads but never the
-          accumulation form, so this is decidable at seeding time. *)
+      (** The accumulation is fused in the [Tile_mma] fallback [Tensorize] writes
+          ({!Ir.Schedule.fused_accumulation}: an [Ops.FMA], or a floating plain add of the product,
+          gh-ocannl-998) — the form the register-tiled rendering requires (its vector twin promises
+          bitwise equality only for fused rounding). Candidate schedules rewrite operand reads but
+          never the accumulation form, so this is decidable at seeding time. *)
 }
 
 let strip_stmts stmts =
@@ -498,11 +499,7 @@ let detect_matmul_procedural (llc : LL.t) : matmul_site option =
           let d_reads, others = List.partition_tf gets ~f:is_d_read in
           match (d_reads, others) with
           | _ :: _, [ o1; o2 ] ->
-              let fma =
-                match llsc with
-                | LL.Ternop (Ir.Ops.FMA, _, _, (LL.Get (tn, idcs), _)) -> is_d_read (tn, idcs)
-                | _ -> false
-              in
+              let fma = Option.is_some (Ir.Schedule.fused_accumulation ~d ~di llsc) in
               classify_matmul ~loops ~d ~di ~o1 ~o2
                 ~zeroed:(List.exists zeroed ~f:(phys_equal d))
                 ~fma
@@ -540,21 +537,28 @@ let path_head = A.stmt_head
 let accesses_by_statement (accs : Ir.Tnode.t A.access list) =
   List.group accs ~break:(fun a b -> path_head a.A.a_path <> path_head b.A.a_path)
 
-(* The accumulation form (fused [Ops.FMA] vs add-of-product) is scalar structure the access records
-   do not carry; probe the recognized statement's leaf assignment directly. *)
+(* The statement an access path leads to, followed the way [LL.affine_accesses] builds it: a loop
+   adds no component, a [Seq] level one [Stmt] per flattened statement, an [If] its [Body]. The head
+   [Stmt] is NOT an index into [llc]'s top-level statements when [llc] is a loop whose body is a
+   sequence -- the first pass of a split reduction, [for blk { init; for inner { ... } }], is one
+   (gh-ocannl-1414). *)
+let rec stmt_at (llc : LL.t) (path : A.path_comp list) : LL.t option =
+  match (llc, path) with
+  | LL.For_loop { body; _ }, _ -> stmt_at body path
+  | LL.Seq _, A.Stmt k :: rest ->
+      Option.bind (List.nth (LL.flat_lines [ llc ]) k) ~f:(fun s -> stmt_at s rest)
+  | LL.If { body; _ }, A.Body :: rest -> stmt_at body rest
+  | _, [ (A.Rhs | A.Write) ] -> Some llc
+  | _ -> None
+
+(* The accumulation form (fused, or fusable by [Tensorize]: {!Ir.Schedule.fused_accumulation}) is
+   scalar structure the access records do not carry; probe the recognized write's own statement
+   directly. *)
 let fma_form (llc : LL.t) ~stmt_path ~d ~(di : Idx.axis_index array) : bool =
-  let stmt =
-    match path_head stmt_path with -1 -> llc | h -> List.nth_exn (LL.flat_lines [ llc ]) h
-  in
   let is_d_read tn idcs = phys_equal tn d && Array.equal Idx.equal_axis_index idcs di in
-  let rec find = function
-    | LL.Seq (a, b) -> ( match find a with Some _ as r -> r | None -> find b)
-    | LL.For_loop { body; _ } | LL.If { body; _ } -> find body
-    | LL.Set { tn; idcs; llsc; _ } when is_d_read tn idcs -> Some llsc
-    | _ -> None
-  in
-  match find stmt with
-  | Some (LL.Ternop (Ir.Ops.FMA, _, _, (LL.Get (tn, idcs), _))) -> is_d_read tn idcs
+  match stmt_at llc stmt_path with
+  | Some (LL.Set { tn; idcs; llsc; _ }) ->
+      is_d_read tn idcs && Option.is_some (Ir.Schedule.fused_accumulation ~d ~di llsc)
   | _ -> false
 
 (* The perfect all-serial from-0 accumulation statement, as the relations express it: a single
@@ -935,10 +939,7 @@ let detect_conv_procedural (llc : LL.t) : conv_site option =
                               let axes = Option.all (List.map a_axes ~f:with_extents) in
                               let loop_syms = List.map loops ~f:fst in
                               let m_fma =
-                                match llsc with
-                                | LL.Ternop (Ir.Ops.FMA, _, _, (LL.Get (tn, idcs), _)) ->
-                                    is_d_read (tn, idcs)
-                                | _ -> false
+                                Option.is_some (Ir.Schedule.fused_accumulation ~d ~di llsc)
                               in
                               let is_kernel s = List.mem kernel_syms s ~equal:Idx.equal_symbol in
                               let outer =

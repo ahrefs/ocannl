@@ -1,0 +1,34 @@
+the batch-8 bias gradient is a split-reduce site: true
+its site merges the batch and sequence loops: true
+its split loop ranges over every row: true
+its split loop is the merged loop, not a loop of the lowering: true
+the untuned split takes it at 32 blocks, the square root of its 1024-row chain: true
+coalesced (b, s): the split prelude applied (the compiled code reads its partials): true
+coalesced (b, s): the exact result is not trivially zero: true
+coalesced (b, s): the default pipeline computes the exact sums: true
+coalesced (b, s): the split computes bitwise the default pipeline's result: true
+the coalesced prelude round-trips through the cache's saved form: true
+the bias gradient read through a sequence table is a split-reduce site: true
+the table's reads decline the coalescing, so its site is the interchanged pair: true
+interchanged (b, s): the split prelude applied (the compiled code reads its partials): true
+interchanged (b, s): the exact result is not trivially zero: true
+interchanged (b, s): the default pipeline computes the exact sums: true
+interchanged (b, s): the split computes bitwise the default pipeline's result: true
+the two-axis contraction is a split-reduce site: true
+its site merges the two contracted loops: true
+its split loop ranges over the whole contraction: true
+the untuned split declines this site, its chain shorter than every block count squared: true
+coalesced (h, e): the split prelude applied (the compiled code reads its partials): true
+coalesced (h, e): the exact result is not trivially zero: true
+coalesced (h, e): the default pipeline computes the exact sums: true
+coalesced (h, e): the split computes bitwise the default pipeline's result: true
+a 128-row batch reduction is a split-reduce site: true
+it is split on its batch loop, uncoalesced: true
+one accumulation over the two-loop band is a coalesced site: true
+two accumulations over the two-loop band yield no site: true
+two accumulations under a 128-row batch loop yield no site either: true
+the matmul detector reads a write nested in a loop's statement sequence without raising: true
+on CUDA the untuned plan splits the batch-8 bias gradient into 32 blocks: true
+on CUDA the split routine compiles without falling back to the default: true
+off CUDA the untuned plan splits nothing: true
+the untuned plan's bias gradient is the exact sum: true

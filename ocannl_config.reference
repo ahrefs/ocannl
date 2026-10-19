@@ -343,9 +343,12 @@
 # the CUDA step from 543 to 391 ms (RTX 5070 Ti) but the HIP step from 885 to 1256 ms (gfx1151,
 # unified memory), so HIP ignores this key and keeps the unsplit plan. Ignored where
 # gpu_default_sketch_min_reduction is ignored too, except that it does not need the sketch seeding
-# on. 0 disables the split. At 4096, gpt2_mini_train at batch 256 splits its 26 bias and layer-norm
-# parameter gradients and its loss sum (32768 rows each), and batch 8 splits nothing.
-#gpu_default_split_reduce_min_serial=4096
+# on. 0 disables the split. At 1024 (gh-ocannl-1414), gpt2_mini_train at batch 256 splits its 26
+# bias and layer-norm parameter gradients and its loss sum (32768 rows each), as at 4096; at
+# batch 8 and at seq 512 x batch 2 (1024 rows) the same gradients, two loops wide there, plus the
+# vocabulary-wide softmax reductions, which took those steps from 15.2 to 12.6 ms and from 19.9 to
+# 15.9 ms. A 4096 threshold leaves the 1024-row steps unsplit.
+#gpu_default_split_reduce_min_serial=1024
 
 # If true, the recipes' untuned compiles (the same ones gpu_default_sketch_min_reduction applies
 # to) sink the reduction loops of each CUDA or HIP fission segment no sketch takes below their
@@ -1461,17 +1464,37 @@
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 
-# Development ablation of simplify_llc's floating-point algebra (gh-ocannl-998).
-# Comma-separated enabled families: contract (FMA), constants (Add/Mul constant reassociation),
-# sub (subtraction re-parenthesizing), mul_div (division constant folds and mul/div interchange),
-# pow (integer-power unrolling), identities (zero Add/Sub/Mul/Div folds).
-# all keeps today's behaviour; none disables all families. Integer canonicalization and
-# constant-constant folding remain enabled.
-# This is a measurement control, not a promise of strict IEEE evaluation: backend compiler
-# math settings still apply. No profile changes it; the later rewrite-tier split is separate.
-# Post-schedule simplification can expose new algebra (e.g. after unrolling), so the selector
-# also enters the schedule cache's numerics identity. Default all preserves existing cache tags.
-#simplify_fp_algebra=all
+# The licences of the floating-point algebra over lowered code (gh-ocannl-998): rewrites that are
+# identities over the reals but change IEEE results. Each is its own boolean key, off by default
+# like every numerics-changing gate: the `approximate` profile turns all three on and
+# `reproducible` pins them off. With them off, the arithmetic is the program's own; the
+# measurement that split them found no family with a demonstrated speed benefit. The exact
+# canonicalization (index and constant folding, interval-driven guard folds, x*1) always runs, and
+# integer precisions take every licence but the two floating-only rewrites (contraction and the
+# multiplication/division interchange), since wrapping integer arithmetic reassociates exactly.
+# These are the lowered code's own licences; the C compiler's are cc_backend_fp_contract and
+# cc_backend_fast_math, and a GPU compiler's are its own (NVRTC's --use_fast_math contracts).
+# They apply once, on the raw lowering, one assignment at a time (the rewrite tier, after the
+# online-softmax rewrite): an inlined producer is never contracted or reassociated with its
+# consumer, so a placement change cannot change what OCANNL's own algebra computes, and the
+# simplification after virtualization and after scheduling is exact. The rewritten code carries
+# the decision, so no schedule-cache component is needed.
+#
+# Contraction: a floating a*b+c becomes one fused multiply-add, one rounding instead of two. An
+# explicit FMA the program or a schedule wrote (a tensorized accumulation's fallback) is not this
+# licence's and stays.
+#fp_contract=false
+#
+# Reassociation: constant reassociation through Add and Mul ((x + c2) + c1 to x + (c1 + c2)),
+# re-parenthesized subtraction chains (a + (b - c) to (a + b) - c), the multiplication/division
+# interchanges (a * (b / c) to (a * b) / c, and constant divisors), and unrolling a known integer
+# power 0..8 into multiplications (whose rounding is that chain's, not the ocannl_powi helper's).
+#fp_reassociate=false
+#
+# Finite math: the zero identities x + 0 = x, 0 - x = -x, 0 * x = 0 and 0 / x = 0, which hold only
+# when no operand is infinite or NaN and the sign of zero does not matter (-0 + 0 is +0, 0 * inf
+# is NaN).
+#fp_finite_math=false
 
 # Algebraic rewrite over lowered code (gh-ocannl-483): the online-softmax attention rewrite. The
 # composed softmax's max-reduction and sum-of-exp reduction over one axis become a single scan per
@@ -1612,6 +1635,14 @@
 # # Contraction the codegen did not ask for (the explicit `fmaf` selections stay): whether a*b+c
 # # becomes one fused op is compiler- and target-discretionary.
 # cc_backend_fp_contract=off
+# # The lowered code's own licences of the same kinds (gh-ocannl-998), pinned at their defaults: it
+# # contracts no a*b+c into an fma, reassociates no constant, sum or product, and folds no zero
+# # identity that infinities, NaNs or the sign of zero would contradict. What remains is the
+# # arithmetic the program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized
+# # accumulation's, stay).
+# fp_contract=false
+# fp_reassociate=false
+# fp_finite_math=false
 # cc_backend_fast_math=false
 # # Explicit SIMD rendering reassociates strict-FP reductions into per-lane accumulator chains,
 # # so the summation order would follow the probed vector width. 0 keeps the serial order.
@@ -1660,6 +1691,9 @@
 # # float, and on the GPU backends (whose f16 arithmetic and accumulators are native narrow
 # # under this setting, same as under auto -- gh-ocannl-680).
 # fp16_arithmetic=true
+#
+# # The floating-point licences (fp_contract, fp_reassociate, fp_finite_math; gh-ocannl-998) stay
+# # at their defaults, off: they change results, which is the `approximate` profile's axis.
 # --- END PROFILE PAYLOAD performance ---
 
 # --- BEGIN PROFILE PAYLOAD approximate ---
@@ -1706,6 +1740,14 @@
 # # why `reproducible` pins them off and `performance` leaves them at their defaults.
 # cc_backend_fast_math=true
 # cc_backend_fp_contract=fast
+# # The lowered code's own licences of the same kinds (gh-ocannl-998), on every backend: contract
+# # a*b+c into an fma, reassociate constants, sums and products (and unroll known integer
+# # powers), and fold the zero identities x+0 and 0*x as if no operand were infinite, NaN or a
+# # negative zero. Each applies within one assignment of the raw lowering, never across an
+# # inlining boundary.
+# fp_contract=true
+# fp_reassociate=true
+# fp_finite_math=true
 # # The greedy inlining refinement of Train.tune_placements is not numerics-neutral where storage
 # # is narrower than compute (a materialized node rounds to its storage precision, an inlined one
 # # does not), so `performance` leaves it alone. Two flips: each costs a full search, so this

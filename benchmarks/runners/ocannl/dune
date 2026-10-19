@@ -25,6 +25,16 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; The splice-segments A/B (gh-ocannl-1277): both arms replay the control's schedule outside the
+; target segments. A library so that test/operations/bench_splice_dirs drives it on synthetic cache
+; directories, and so that any runner can adopt the mode with two calls.
+
+(library
+ (name bench_splice)
+ (package neural_nets_lib)
+ (modules bench_splice)
+ (libraries base stdio arrayjit.ir arrayjit.utils arrayjit.autotune))
+
 (library
  (name bench_conv_model)
  (package neural_nets_lib)
@@ -66,6 +76,7 @@
   bench_conv_model
   bench_gpt_model
   bench_json
+  bench_splice
   ocannl
   stdio
   unix
@@ -76,12 +87,21 @@
  (modes exe))
 
 ; The standalone (OCANNL-free) Metal compiler probes: the two accumulation-miscompile
-; reproducers, the math-mode reassociation/infinity measurement (gh-ocannl-848), and the
+; reproducers, the math-mode reassociation/infinity measurement (gh-ocannl-848), the half math
+; overloads against their widened forms under both math policies (gh-ocannl-1288), and the
 ; long-command-buffer queue discriminator (gh-ocannl-828).
 
 (executables
- (names bench_metal_bug bench_metal_bug_local metal_reassoc_probe)
- (modules bench_metal_bug bench_metal_bug_local metal_reassoc_probe)
+ (names
+  bench_metal_bug
+  bench_metal_bug_local
+  metal_reassoc_probe
+  metal_half_math_probe)
+ (modules
+  bench_metal_bug
+  bench_metal_bug_local
+  metal_reassoc_probe
+  metal_half_math_probe)
  (libraries metal ctypes arrayjit.ir arrayjit.metal_math_api_runtime)
  (enabled_if
   (= %{system} macosx))
@@ -164,8 +184,7 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_PROFILE))
  ; Both staged layouts (gh-ocannl-1190): the plain twin and its Swizzle_b128 sibling.
  (action
   (no-infer

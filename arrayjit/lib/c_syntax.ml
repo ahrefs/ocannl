@@ -949,9 +949,10 @@ module type C_syntax_config = sig
       published as {!Backend_intf.codegen_capabilities.mma_arm} and so into the schedule cache's
       identity. Derive it from the very combination table and floors those hooks dispatch on — a
       second copy would let a code change to the hooks' arm choice leave the identity alone. Where
-      the hooks try several tables in an order (CUDA), that order is restated here; pin it with
-      tests that read the arm markers they expect in rendered code from this function. [None] for a
-      combination neither hook has an arm for, and everywhere on a backend without them. *)
+      several arms compete for a triple (CUDA), resolve them once and have the hooks match on the
+      result ([Cuda_mma.resolve_arm], gh-ocannl-1232) rather than restate a dispatch order here.
+      [None] for a combination neither hook has an arm for, and everywhere on a backend without
+      them. *)
 
   val mma_fragment_syntax :
     (d_prec:Ops.prec ->
@@ -5283,8 +5284,10 @@ module C_syntax (B : C_syntax_config) = struct
            inexact values — the gh-ocannl-545 accumulator precedent), so parity tests pick
            narrow-exact inputs. The plain-add (non-FMA) fallback form is declined — its [a * b + c]
            arithmetic is only maybe-contracted, so a vector twin could not promise the equality.
-           Emitted under the same lane-0 guard as the fallback ([`Vec_extensions] backends render
-           the lane loop serially; GPU backends never take this path). *)
+           [Schedule.Tensorize] writes its floating fallbacks fused whatever the simplifier's
+           contraction licence (gh-ocannl-998), so the decline guards hand-built statements. Emitted
+           under the same lane-0 guard as the fallback ([`Vec_extensions] backends render the lane
+           loop serially; GPU backends never take this path). *)
         let try_register_tile () : PPrint.document option =
           (* [cond] names a rule violation: decline (with the per-rule diagnostic, gh-ocannl-479)
              when it holds. *)
