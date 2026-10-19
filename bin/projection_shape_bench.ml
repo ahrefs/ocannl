@@ -87,9 +87,9 @@
    Usage (bin/ cwd trap: pin the backend, and run from a directory holding an ocannl_config):
    OCANNL_BACKEND=hip <path to>/projection_shape_bench.exe \ [repeats] [batches] [group] [order]
    [mode] [--with-mma] Defaults 50 repeats, 6 timing batches, group "all"
-   (a/b/c/d/e/p/abd/abde/all/qkv), order fwd (or rev, which reverses every round's complete arm
-   order), mode seeds (or tune, or both). The batch count must be EVEN -- the visiting order mirrors
-   in adjacent pairs -- so the measurement this bench was written for reads, in full:
+   (a/b/c/d/e/p/abd/abde/all/qkv/outproj), order fwd (or rev, which reverses every round's complete
+   arm order), mode seeds (or tune, or both). The batch count must be EVEN -- the visiting order
+   mirrors in adjacent pairs -- so the measurement this bench was written for reads, in full:
 
    cd benchmarks # the nearest ocannl_config, and bin/ has the cwd trap OCANNL_BACKEND=hip
    ../_build/default/bin/projection_shape_bench.exe 200 8 abde fwd seeds
@@ -401,7 +401,14 @@ let () =
             { tag = "Q_heads8_" ^ copy; bs = [ 8 ]; m = 128; ns = [ 8; 32 ]; ks = [ 256 ] };
             { tag = "Q_heads1_" ^ copy; bs = [ 8 ]; m = 128; ns = [ 256 ]; ks = [ 256 ] };
           ])
-    and smoke = [ { tag = "smoke_2x2"; bs = []; m = 2; ns = [ 2 ]; ks = [ 2 ] } ] in
+    and smoke = [ { tag = "smoke_2x2"; bs = []; m = 2; ns = [ 2 ]; ks = [ 2 ] } ]
+    (* gh-ocannl-1279: the out projection's two layouts of group d plus a small-output twin whose
+       4096 cells are at [Autotune]'s split-reduce eligibility bound, so a [tune] leg there weighs
+       the split of the merged k (partial and combine kernels, both inside the timed routine)
+       against the serial-K tiles of the contraction-coalesced seeds. *)
+    and outproj_small =
+      [ { tag = "D_outproj_rows16"; bs = []; m = 16; ns = [ 256 ]; ks = [ 8; 32 ] } ]
+    in
     match group with
     | "a" -> a
     | "b" -> b
@@ -413,6 +420,7 @@ let () =
     | "abde" -> a @ b @ d @ e
     | "all" -> a @ b @ c @ d @ e @ pk
     | "qkv" -> qkv
+    | "outproj" -> d @ outproj_small
     | "smoke" -> smoke
     | g -> invalid_arg ("unknown group " ^ g)
   in
@@ -728,6 +736,12 @@ let () =
   (* Every measured arm's three throughput statistics, by site: what the finalists round and the
      gh-ocannl-728 gate read back. *)
   let measured : (string, (string * stats) list) Hashtbl.t = Hashtbl.create (module String) in
+  (* gh-ocannl-1279's table: per (site, arm label), the timing batches' p10/p50/p90 in seconds and
+     the shipped launches, read back by the closing contraction-coalescing table. *)
+  let distribution : (string, (float * float * float) * string) Hashtbl.t =
+    Hashtbl.create (module String)
+  in
+  let dist_key tag label = tag ^ "\t" ^ label in
   (* The median is the summary and the winner-selection statistic: with a handful of batches on a
      loaded device the minimum is systematically optimistic and crowns whichever geometry drew the
      luckiest batch. The minimum is kept beside it as a diagnostic. *)
@@ -740,6 +754,10 @@ let () =
       if n % 2 = 1 then sorted.(n / 2) else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
     in
     let g t = lv.lv_flops /. t /. 1e9 in
+    (* Nearest-rank quantiles of the batch times. *)
+    let q f = sorted.(Int.min (n - 1) (Int.of_float (Float.round_down (f *. Float.of_int n)))) in
+    Hashtbl.set distribution ~key:(dist_key lv.lv_tag lv.lv_label)
+      ~data:((q 0.1, median, q 0.9), lv.lv_launch);
     p
       "   %-22s %-26s %8.1f GFLOP/s med (min %7.1f)  tuner iso %8.1f q %8.1f  spread %4.1f%%  %s%s\n"
       lv.lv_tag lv.lv_label (g median) (g best) (g !(lv.lv_iso)) (g !(lv.lv_queued))
@@ -924,11 +942,20 @@ let () =
         (shown (Utils.get_global_arg ~arg_name:"model_peak_memory_bandwidth" ~default:""));
       List.filter_map prepared ~f:(fun ((s, _, _, _, _, _) as pr) ->
           let lbl = ref "" and ms = ref Float.nan and outcome = ref None and contended = ref 0 in
+          let wall = ref Float.nan and counts = ref "" in
           let lv =
             arm pr ~label:tuned_label ~compile:(fun ~name ~fatal_seen fwd ->
+                let started = Mtime_clock.counter () in
                 Autotune.tune ~name ~search:true ~cache_dir:"" ~beam_width:tn_beam ~rounds:tn_rounds
                   ~repeats:tn_repeats ~keep_fraction:tn_keep ~max_split_reduce_sites:tn_split
                   ~report:(fun (r : Autotune.report) ->
+                    (* The search's cost (gh-ocannl-1279): its wall clock, from the call to its
+                       report, and what it timed. *)
+                    wall := elapsed started;
+                    counts :=
+                      Printf.sprintf "%d candidates timed, %d sketch, %d split-reduce"
+                        r.Autotune.candidates_timed r.Autotune.sketch_candidates
+                        r.Autotune.split_reduce_candidates;
                     lbl := r.Autotune.best_label;
                     contended := r.Autotune.timings_contended;
                     ms := r.Autotune.best_ms;
@@ -955,7 +982,8 @@ let () =
                   s.tag !contended !lbl;
                 false
             | Some Autotune.Searched when Float.is_finite !ms && not (String.is_empty !lbl) ->
-                p "   %-22s crowned: %s  (search best_ms %.4f)\n" s.tag !lbl !ms;
+                p "   %-22s crowned: %s  (search best_ms %.4f; search wall %.1f s, %s)\n" s.tag !lbl
+                  !ms !wall !counts;
                 Hashtbl.set tuned ~key:s.tag ~data:!lbl;
                 true
             | Some Autotune.Searched ->
@@ -1002,10 +1030,20 @@ let () =
           (* The best seed of each class under EACH statistic the gate reads, deduplicated: when the
              statistics rank differently (the gh-755 question), the best under the min-batch or
              queued reading is in the round too, not only the median's pick. *)
-          List.concat_map [ false; true ] ~f:(fun mma ->
+          (* Classes: tensorized, and the scalar seeds per coalesced layout (none, columns,
+             contraction), so the best uncoalesced seed and the best coalesced one of each layout
+             are all re-timed together (gh-ocannl-1279's comparison reads them from this round). *)
+          List.concat_map
+            [
+              (true, None);
+              (false, None);
+              (false, Some Autotune.Coalesce_columns);
+              (false, Some Autotune.Coalesce_contraction);
+            ]
+            ~f:(fun (mma, layout) ->
               let rows =
                 List.filter seed_rows ~f:(fun ((q : Autotune.sketch_params), _) ->
-                    Bool.equal q.sk_mma mma)
+                    Bool.equal q.sk_mma mma && (mma || Poly.equal q.sk_coalesce layout))
               in
               List.filter_map
                 [ (fun st -> st.st_med); (fun st -> st.st_min); (fun st -> st.st_queued) ]
@@ -1139,6 +1177,81 @@ let () =
      is the larger disagreement of the two duplicated pairs; the effect is the merged pair's mean
      over the split pair's mean, and the worst case is the slower merged copy against the faster
      split one. *)
+  (* gh-ocannl-1279: on every site the contraction layout seeds (the out projection's [(h, e)]
+     coalesced into one k), the median-best contraction-coalesced finalist against the median-best
+     uncoalesced scalar finalist -- both from the finalists round, so one interleaved round holds
+     the pair -- with the facts the comparison needs beside the timing: the seed's k-tile, its two
+     staged f32 operand tiles' workgroup memory, the batch-time spread, and the kernels the compile
+     shipped. The search's crown follows where a [tune] leg ran: whatever it picked, among the
+     tiles and (on a site small enough) the split of the merged k, whose partial and combine kernels
+     are both in that timed routine. Lines carry a [gh1279:] prefix for the driver
+     (benchmarks/gh1279_cells.sh). *)
+  let coal_k (q : Autotune.sketch_params) =
+    Poly.equal q.sk_coalesce (Some Autotune.Coalesce_contraction)
+  in
+  let coal_k_sites =
+    List.filter prepared ~f:(fun (_, _, seeds, _, _, _) -> List.exists seeds ~f:coal_k)
+  in
+  if do_seeds && not (List.is_empty coal_k_sites) then begin
+    let kernels launch =
+      1 + List.length (String.substr_index_all launch ~may_overlap:false ~pattern:" + ")
+    in
+    let ms x = x *. 1e3 in
+    p
+      "\n\n\
+       == gh-ocannl-1279: the best contraction-coalesced seed against the best uncoalesced one ==\n";
+    p
+      "   finalists round only; each class's median-best FINAL arm; p10/p50/p90 over its timing \
+       batches; smem = the two staged f32 operand tiles\n";
+    p "gh1279: %-20s %-12s %-28s %4s %6s %8s %9s %9s %9s  %s\n" "site" "class" "seed" "bk" "smem"
+      "GFLOP/s" "p10 ms" "p50 ms" "p90 ms" "kernels";
+    List.iter coal_k_sites ~f:(fun (s, _, seeds, _, _, _) ->
+        let row cname in_class =
+          let finals =
+            Option.value (Hashtbl.find measured s.tag) ~default:[]
+            |> List.filter_map ~f:(fun (l, st) ->
+                Option.bind (String.chop_prefix l ~prefix:final_prefix) ~f:(fun g ->
+                    List.find seeds ~f:(fun (q : Autotune.sketch_params) ->
+                        String.equal (geom_label q) g && (not q.sk_mma) && in_class q)
+                    |> Option.map ~f:(fun q -> (l, q, st))))
+          in
+          match
+            List.max_elt finals ~compare:(fun (_, _, a) (_, _, b) ->
+                Float.compare a.st_med b.st_med)
+          with
+          | None ->
+              p "gh1279: %-20s %-12s (no finalist of this class)\n" s.tag cname;
+              None
+          | Some (l, (q : Autotune.sketch_params), st) ->
+              let (p10, p50, p90), launch =
+                Option.value
+                  (Hashtbl.find distribution (dist_key s.tag l))
+                  ~default:((Float.nan, Float.nan, Float.nan), "")
+              in
+              p "gh1279: %-20s %-12s %-28s %4d %6d %8.1f %9.4f %9.4f %9.4f  %d (%s)\n" s.tag cname
+                (String.chop_prefix_if_exists l ~prefix:final_prefix)
+                q.sk_bk
+                (((q.sk_bm * q.sk_bk) + (q.sk_bk * q.sk_bn)) * 4)
+                st.st_med (ms p10) (ms p50) (ms p90) (kernels launch) launch;
+              Some st.st_med
+        in
+        let base = row "uncoalesced" (fun q -> Option.is_none q.sk_coalesce) in
+        let merged = row "coal-k" coal_k in
+        (match (base, merged) with
+        | Some b, Some m ->
+            p "gh1279: %-20s coal-k / uncoalesced throughput at the median: %.3fx\n" s.tag (m /. b)
+        | _ -> ());
+        match Hashtbl.find tuned s.tag with
+        | None -> ()
+        | Some crown ->
+            let (_, p50, _), launch =
+              Option.value
+                (Hashtbl.find distribution (dist_key s.tag tuned_label))
+                ~default:((Float.nan, Float.nan, Float.nan), "")
+            in
+            p "gh1279: %-20s tuned crown: %s  p50 %.4f ms  %d kernel(s) (%s)\n" s.tag crown (ms p50)
+              (kernels launch) launch)
+  end;
   if String.equal group "qkv" then begin
     let split = [ "Q_heads8_a"; "Q_heads8_b" ] and merged = [ "Q_heads1_a"; "Q_heads1_b" ] in
     let is_final l = String.is_prefix l ~prefix:final_prefix in
