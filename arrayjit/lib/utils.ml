@@ -1734,6 +1734,10 @@ let ensure_artifacts_dir base subdir =
      if Option.is_some subdir then try Stdlib.Sys.mkdir dir 0o777 with Stdlib.Sys_error _ -> ()));
   dir
 
+external os_process_id : unit -> int = "ocannl_os_process_id"
+(** The operating system's id of this process. Not [Unix.getpid], which on Windows answers a
+    process-local handle that need not differ between two processes. *)
+
 (* Concurrently running processes of one executable share its artifact subdirectories, and each
    process's startup empties them (the cleanup block below). So a process that writes into one first
    takes a SHARED advisory lock on a lock file beside it, held until the process ends, and the
@@ -1774,7 +1778,9 @@ module Artifacts_lock = struct
     let mutex = Stdlib.Mutex.create () in
     let holds : (string, Unix.file_descr option) Hashtbl.t = Hashtbl.create (module String) in
     fun base ->
-      let key = path base in
+      (* With this process's id: POSIX does not carry record locks across [fork], so a forked child,
+         inheriting the table, takes the lock afresh. *)
+      let key = Printf.sprintf "%d:%s" (os_process_id ()) (path base) in
       Stdlib.Mutex.protect mutex (fun () ->
           if not (Hashtbl.mem holds key) then
             let fd =
@@ -1811,10 +1817,6 @@ let build_file fname =
 
 (** The file extension of a dynamically loaded library on this platform. *)
 let dynamic_library_extension = if Sys.win32 then ".dll" else ".so"
-
-external os_process_id : unit -> int = "ocannl_os_process_id"
-(** The operating system's id of this process. Not [Unix.getpid], which on Windows answers a
-    process-local handle that need not differ between two processes. *)
 
 external process_alive : int -> bool = "ocannl_process_alive"
 (** Whether a process with the given OS id is running now; one that exists but cannot be queried
