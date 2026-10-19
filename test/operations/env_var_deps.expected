@@ -231,6 +231,26 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test zero_elision: Ir.Schedule.maybe_default_schedules
   test/training/dune, test fused_classifier: Ir.Schedule.maybe_default_schedules
 
+Programs reading the cc vector width, every rule running which declares or pins `OCANNL_CC_VECTOR_BYTES`
+(gh-ocannl-1320):
+  (the `Cc_backend` values reaching `cc_vector_bytes`: codegen_tag, vector_bytes_setting, vector_registers_setting)
+  (the device-limits fields they fill in arrayjit/lib/schedulers.ml: codegen_tag, simd_vector_bytes, simd_vector_registers)
+  (the record type of those fields, whose every label marks a limits update, in arrayjit/lib/backend_intf.ml: hardware_limits)
+  bin/dune, executable narrow_gebp_bench: narrow_gebp_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
+  bin/dune, executable schedule_bench: schedule_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
+  test/operations/dune, executable autotune_fission_sketch: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector_bytes`
+  test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
+  test/operations/dune, test schedule_conv_gemm: schedule_conv_gemm.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
+  test/operations/dune, test schedule_mma_matmul: schedule_mma_matmul.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
+  test/operations/dune, test schedule_strided_1x1: schedule_strided_1x1.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
+  test/operations/dune, test tile_mma_geometry: tile_mma_geometry.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
+  test/operations/dune, test tile_mma_narrow: tile_mma_narrow.ml reads `.simd_vector_bytes`
+
 Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @lifecycle
   arrayjit/test/dune                       @metal-codegen

@@ -658,8 +658,19 @@ let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) sexp =
      one branch has not pinned the run in another (gh-ocannl-749, Codex P1 round 1), and a pin
      around a helper does not protect the subject beside it (Codex P2, round 4). Carried per run
      site rather than per stanza, so both directions fall out of the same traversal. *)
-  | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _value :: rest) ->
-      List.concat_map rest ~f:(commands_in ~cwd ~pinned:(Set.add pinned name))
+  (* A value that reads the same variable back through `%{env:NAME=…}` passes the ambient value on:
+     that pform declares no dependency, so the run still varies with the variable and pins nothing
+     (gh-ocannl-1320, Codex P2 round 1). *)
+  | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest) ->
+      (* Case-insensitively: Windows environment names are (Codex P2, round 7). *)
+      let reads_itself =
+        List.exists (atoms value) ~f:(fun v ->
+            List.exists [ "="; "}" ] ~f:(fun stop ->
+                String.is_substring (String.lowercase v)
+                  ~substring:(String.lowercase ("%{env:" ^ name ^ stop))))
+      in
+      List.concat_map rest
+        ~f:(commands_in ~cwd ~pinned:(if reads_itself then pinned else Set.add pinned name))
   | Sexp.List (Sexp.Atom "chdir" :: Sexp.Atom dir :: rest)
     when String.is_substring dir ~substring:"%{" ->
       List.concat_map rest ~f:(commands_in ~cwd ~pinned)
