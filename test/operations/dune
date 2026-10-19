@@ -9286,3 +9286,18 @@
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; ahrefs/ocannl#1387: a kernel the backend's compiler rejects is a typed decline (Backend_rejected
+; at stage "compiler") on every backend, so the isolated per-kernel instrument declines that kernel
+; instead of ending the table.
+
+(test
+ (name compile_failure_declines)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules compile_failure_declines)
+ (libraries base stdio pprint ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here)))

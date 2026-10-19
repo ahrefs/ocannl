@@ -697,6 +697,12 @@ files.
   renderer precondition in a test, do surgery on the applied `optimized` (re-point `pt_rotor`)
   rather than retyping loops — a retyped anchor trips `Low_level.validate_parallel` first and never
   reaches the check under test.
+- The same holds one step later, for generated code the backend's COMPILER rejects: every backend
+  types it as `Backend_rejected` at stage `"compiler"` (cc and Metal raise `Cause_at` at the compile
+  call, CUDA and HIP answer `NVRTC_`/`HIPRTC_ERROR_COMPILATION` in `classify_failure`), so it is a
+  decline of that candidate or kernel. Only the compile status is typed: an environment fault fails
+  every candidate alike and must stay loud, which is why Metal types a failure only when its report
+  carries a `program_source:L:C: error:` diagnostic (`compile_failure_declines`, ahrefs/ocannl#1387).
 - The two pipelined-tile facts are also stated upstream, over the applied IR, as
   `Schedule.pipeline_violation` (gh-ocannl-1231): `op_legality` refuses any op leaving one — a
   `Split` or materializing `Unroll` of the rotor (its binder vanishes, so the reads fall outside),
