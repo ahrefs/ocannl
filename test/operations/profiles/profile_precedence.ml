@@ -81,5 +81,10 @@ let () =
   | Some (level, name, _) ->
       printf "%-24s = %-14s (picked via %s)\n" "profile" name (Utils.describe_config_level level));
   List.iter keys ~f:(fun (arg_name, default) ->
-      let value, source = Utils.get_global_arg_with_source ~default ~arg_name in
+      (* Through [profile_key_source], the raw resolution with its source: a registered key's plain
+         read is refused (gh-ocannl-1332), and what is shown here is where each value comes from,
+         not a parse of it. *)
+      let value, source =
+        Option.value (Utils.profile_key_source arg_name) ~default:(default, Utils.From_default)
+      in
       printf "%-24s = %-14s (%s)\n" arg_name value (Utils.config_source_label source))
