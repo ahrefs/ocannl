@@ -7,7 +7,12 @@
    recognizing [NVRTC_ERROR_COMPILATION]) declined just that kernel.
 
    The rejected code is a staged statement naming an identifier nothing declares, which no C-family
-   compiler accepts; the rest of the kernel is ordinary. *)
+   compiler accepts; the rest of the kernel is ordinary.
+
+   The second leg is the boundary: a header the compiler cannot open arrives under the same status
+   (nvrtc's and hiprtc's [*_ERROR_COMPILATION], a non-zero cc exit, a Metal [program_source]
+   diagnostic) but is the toolchain's fault and fails every kernel alike, so it must stay an untyped
+   failure — [Fatal] under the tests' strict classification — rather than one more decline. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -16,37 +21,45 @@ module Outcome = Ir.Schedule_outcome
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
-let () =
-  Stdio.eprintf "backend: %s (not part of the golden)\n%!" backend_name;
-  let tn = (Ll_test.node_factory ~first_id:13870 ~dims:[| 1 |] ()) "cfd_out" in
+let describe = function
+  | Ok _ -> "compiled"
+  | Error (Outcome.Classified { phase; cause; execution_effect }) ->
+      Printf.sprintf "classified at %s, %s, %s"
+        (Sexp.to_string_hum (Outcome.sexp_of_phase phase))
+        (Sexp.to_string_hum (Outcome.sexp_of_rejection_key (Outcome.key_of_cause cause)))
+        (Sexp.to_string_hum (Outcome.sexp_of_execution_effect execution_effect))
+  | Error (Outcome.Fatal { exn; _ }) -> "FATAL " ^ String.prefix (Exn.to_string exn) 400
+
+(* A kernel writing [cfd_out] whose only statement is [staged]; [id] keeps the two legs' nodes and
+   routine names apart. *)
+let compile_staged ~id ~name staged =
+  let tn = (Ll_test.node_factory ~first_id:id ~dims:[| 1 |] ()) "cfd_out" in
   Ll_test.materialize tn;
   let cell = [| Ll_test.fixed 0 |] in
   let o =
-    Ll_test.optimize_scoped ~materialized:[ tn ] ~name:"cfd_rejected"
+    Ll_test.optimize_scoped ~materialized:[ tn ] ~name
       ~raw:(Ll_test.set tn cell (Ir.Low_level.Constant 1.0))
-      (Ir.Low_level.Staged_compilation
-         (fun () -> PPrint.string "cfd_out[0] = ocannl_gh1387_undeclared_identifier;"))
+      (Ir.Low_level.Staged_compilation (fun () -> staged))
   in
   let outcome =
-    Context.compile_outcome ~name:"cfd_rejected" ~prelowered:o
+    Context.compile_outcome ~name ~prelowered:o
       ~lowered_transform:(fun x -> [ x ])
       ~provenance:Outcome.User_schedule (Lazy.force Ll_test.base_ctx) Ir.Assignments.empty_comp
       Ir.Indexing.Empty
   in
-  (match outcome with
-  | Ok _ -> Stdio.eprintf "outcome: compiled (not part of the golden)\n%!"
-  | Error (Outcome.Classified { phase; cause; execution_effect }) ->
-      Stdio.eprintf "outcome: classified at %s, %s, %s (not part of the golden)\n%!"
-        (Sexp.to_string_hum (Outcome.sexp_of_phase phase))
-        (Sexp.to_string_hum (Outcome.sexp_of_rejection_key (Outcome.key_of_cause cause)))
-        (Sexp.to_string_hum (Outcome.sexp_of_execution_effect execution_effect))
-  | Error (Outcome.Fatal { exn; _ }) ->
-      Stdio.eprintf "outcome: FATAL %s (not part of the golden)\n%!"
-        (String.prefix (Exn.to_string exn) 400));
+  Stdio.eprintf "%s: %s (not part of the golden)\n%!" name (describe outcome);
+  outcome
+
+let () =
+  Stdio.eprintf "backend: %s (not part of the golden)\n%!" backend_name;
+  let rejected =
+    compile_staged ~id:13870 ~name:"cfd_rejected"
+      (PPrint.string "cfd_out[0] = ocannl_gh1387_undeclared_identifier;")
+  in
   p
     "a compiler-rejected kernel is a typed decline: the backend's own compiler stage, a codegen \
      bug, no device writes"
-    (match outcome with
+    (match rejected with
     | Error
         (Outcome.Classified
            {
@@ -56,4 +69,10 @@ let () =
              _;
            }) ->
         true
-    | Ok _ | Error _ -> false)
+    | Ok _ | Error _ -> false);
+  let missing_header =
+    compile_staged ~id:13880 ~name:"cfd_missing_header"
+      PPrint.(hardline ^^ string "#include \"ocannl_gh1387_absent_header.h\"" ^^ hardline)
+  in
+  p "a header the compiler cannot open is not a decline: it propagates untyped, as Fatal"
+    (match missing_header with Error (Outcome.Fatal _) -> true | Ok _ | Error _ -> false)

@@ -29,7 +29,7 @@ When outputs differ between backends:
 2. Add compilation logic in `arrayjit/lib/backends.ml`
 3. Handle memory management and synchronization
 4. Add configuration options in `ocannl_config.reference`
-5. Type the compiler's rejection of generated code as `Backend_rejected { stage = "compiler"; severity = Compiler_bug }`: raise `Schedule_outcome.Cause_at` at the compiler call (cc, Metal) or answer the toolchain's compile status in `classify_failure` (CUDA, HIP), and nothing else the toolchain raises. Untyped, it is `Fatal` and one rejected kernel ends a search or the per-kernel table; `test/operations/compile_failure_declines` pins it per backend (ahrefs/ocannl#1387)
+5. Type the compiler's rejection of generated code as `Backend_rejected { stage = "compiler"; severity = Compiler_bug }`: raise `Schedule_outcome.Cause_at` at the compiler call (cc, Metal) or answer the toolchain's compile status in `classify_failure` (CUDA, HIP), and nothing else the toolchain raises — a header it could not open (`C_syntax.missing_include`) included. Untyped, it is `Fatal` and one rejected kernel ends a search or the per-kernel table; `test/operations/compile_failure_declines` pins it per backend (ahrefs/ocannl#1387)
 
 ### Code generation architecture
 

@@ -1595,7 +1595,7 @@ module Impl = struct
     with Failure msg ->
       let options_rendered = Compiler_options.render_metal option_state in
       let exn =
-        if compiler_diagnosed_error msg then
+        if compiler_diagnosed_error msg && not (C_syntax.missing_include msg) then
           (* The compiler rejected the generated source: a typed decline of this kernel, as the cc
              backend raises at its compiler call and CUDA's [classify_failure] answers for
              [NVRTC_ERROR_COMPILATION] (ahrefs/ocannl#1387). Untyped, it was [Fatal] under
@@ -1629,9 +1629,10 @@ module Impl = struct
                       options_rendered msg;
                 } )
         else
-          (* No compiler diagnostic: nothing establishes that the failure is this kernel's rather
-             than the environment's (an unavailable language version fails every kernel alike), so
-             it keeps propagating untyped. *)
+          (* No compiler diagnostic, or a header the compiler could not open: nothing establishes
+             that the failure is this kernel's rather than the environment's (an unavailable
+             language version or system header fails every kernel alike), so it keeps propagating
+             untyped. *)
           let error_msg =
             Printf.sprintf "Metal compilation failed for %s:\n%s\nmetal options: %s\nSource:\n%s"
               name msg options_rendered source

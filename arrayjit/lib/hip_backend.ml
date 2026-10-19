@@ -1727,12 +1727,14 @@ end = struct
      kernels on cifar_resnet).
 
      This status only, for the reason CUDA gives: every other hiprtc status (an option it does not
-     accept, a missing builtin header, an internal error) is the toolchain's and fails every
-     candidate alike, so it must propagate rather than become a silent "nothing worked". The
-     gh-ocannl-1313 frame-size refusal also arrives as [HIPRTC_ERROR_COMPILATION] and so lands here
-     too, inside the reserve band [compiler_frame_limit_bytes] leaves; it is reported as the
-     compiler's rejection rather than as a [Resource_exceeded] with numbers parsed out of a log. HIP
-     driver errors stay unclassified: no HIP fault has been characterized the way CUDA's are. *)
+     accept, an internal error) is the toolchain's and fails every candidate alike, so it must
+     propagate rather than become a silent "nothing worked". So must a header hiprtc could not open
+     ([hip/hip_fp16.h] without an SDK include path, an incomplete rocWMMA tree), which it reports
+     under this very status: [C_syntax.missing_include] reads it off the log. The gh-ocannl-1313
+     frame-size refusal also arrives as [HIPRTC_ERROR_COMPILATION] and so lands here too, inside the
+     reserve band [compiler_frame_limit_bytes] leaves; it is reported as the compiler's rejection
+     rather than as a [Resource_exceeded] with numbers parsed out of a log. HIP driver errors stay
+     unclassified: no HIP fault has been characterized the way CUDA's are. *)
   let classify_failure phase exn =
     match exn with
     | Hiprtc.Hiprtc_error { status; message } -> (
@@ -1743,7 +1745,7 @@ end = struct
         in
         let claim = C_syntax.codegen_bug_claim ~artifact:"the generated .hip file" in
         match status with
-        | "HIPRTC_ERROR_COMPILATION" ->
+        | "HIPRTC_ERROR_COMPILATION" when not (C_syntax.missing_include message) ->
             Some
               {
                 Schedule_outcome.phase;

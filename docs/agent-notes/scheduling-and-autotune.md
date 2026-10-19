@@ -702,7 +702,9 @@ files.
   call, CUDA and HIP answer `NVRTC_`/`HIPRTC_ERROR_COMPILATION` in `classify_failure`), so it is a
   decline of that candidate or kernel. Only the compile status is typed: an environment fault fails
   every candidate alike and must stay loud, which is why Metal types a failure only when its report
-  carries a `program_source:L:C: error:` diagnostic (`compile_failure_declines`, ahrefs/ocannl#1387).
+  carries a `program_source:L:C: error:` diagnostic, and why every backend leaves a header the
+  compiler could not open untyped (`C_syntax.missing_include`) although its toolchain reports it
+  under that same status (`compile_failure_declines`, ahrefs/ocannl#1387).
 - The two pipelined-tile facts are also stated upstream, over the applied IR, as
   `Schedule.pipeline_violation` (gh-ocannl-1231): `op_legality` refuses any op leaving one — a
   `Split` or materializing `Unroll` of the rotor (its binder vanishes, so the reads fall outside),

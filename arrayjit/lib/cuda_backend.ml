@@ -2011,11 +2011,15 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            nvrtc's compilation log in [message]. [stage] matches the cc backend's, so the blocker
            census groups "our codegen does not compile" across backends.
 
+           Except for a header nvrtc could not open ("cannot open source file", a missing or
+           mismatched CUDA include tree), which it reports under this same status but which fails
+           every candidate alike ([C_syntax.missing_include], ahrefs/ocannl#1387).
+
            This status only. [NVRTC_ERROR_BUILTIN_OPERATION_FAILURE] in particular stays
            unclassified: it reports nvrtc failing on its own builtins, which an incomplete or
            mismatched CUDA installation reproduces for every candidate — precisely the
            fails-identically class this classifier must let propagate. *)
-        | "NVRTC_ERROR_COMPILATION" ->
+        | "NVRTC_ERROR_COMPILATION" when not (C_syntax.missing_include message) ->
             reject ~stage:"compiler" ~severity:Schedule_outcome.Compiler_bug
               ~execution_effect:Schedule_outcome.No_device_writes
               [%string
