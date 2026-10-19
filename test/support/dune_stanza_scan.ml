@@ -211,9 +211,8 @@ let rec shapes_agree raw sexp =
       && List.for_all2_exn raw.raw_children children ~f:shapes_agree
   | _ -> false
 
-(** Raises if [content] is not something both readers agree on: a scan that cannot read its input
-    must say so rather than report a file with a hole in it. *)
-let stanzas content =
+(* Both readings of [content], checked to agree. *)
+let agreed content =
   let parsed = Sexplib.Sexp.scan_sexps (Lexing.from_string content) in
   let raw, _comments = read_raw content in
   if List.length raw <> List.length parsed || not (List.for_all2_exn raw parsed ~f:shapes_agree)
@@ -224,7 +223,39 @@ let stanzas content =
           -- sexplib and dune disagree about what is a comment here (`#|…|#` and `#;` are comments \
           to the one and atoms to the other), so this scan would read the file with a hole in it"
          (List.length parsed) (List.length raw));
-  parsed
+  List.zip_exn parsed raw
+
+(** Raises if [content] is not something both readers agree on: a scan that cannot read its input
+    must say so rather than report a file with a hole in it. *)
+let stanzas content = List.map (agreed content) ~f:fst
+
+(** Each stanza beside its source spelling, the same tree form for form ({!shapes_agree}), for a
+    reader that has to see what sexplib decodes away -- {!live_pforms}. *)
+let spelled_stanzas content = agreed content
+
+(** The pforms an atom's SOURCE SPELLING makes live, each as the text between [%{] and [}]
+    (gh-ocannl-1264). The decoded atom cannot answer this: dune's escape for a literal [%{] inside
+    quotes is [\%{], and sexplib keeps the backslash of an escape it does not know, so
+    ["\%{read:f}"] (literal text) and ["\\%{read:f}"] (an escaped backslash before a live pform)
+    parse to one atom. Inside quotes a backslash escapes the character after it -- a percent sign
+    and a second backslash alike, and a numeric escape such as [\x25] spells a literal [%] -- while
+    a line continuation leaves the next line's pform live; outside quotes a backslash is an ordinary
+    character. Each reading checked against dune 3.20. *)
+let live_pforms raw =
+  match raw.raw_atom with
+  | None -> []
+  | Some spelling ->
+      let n = String.length spelling in
+      let rec go i acc =
+        if i + 1 >= n then List.rev acc
+        else if raw.raw_quoted && Char.equal spelling.[i] '\\' then go (i + 2) acc
+        else if Char.equal spelling.[i] '%' && Char.equal spelling.[i + 1] '{' then
+          match String.index_from spelling (i + 2) '}' with
+          | None -> List.rev acc
+          | Some stop -> go (stop + 1) (String.sub spelling ~pos:(i + 2) ~len:(stop - i - 2) :: acc)
+        else go (i + 1) acc
+      in
+      go 0 []
 
 (** The 1-based line an offset falls on, for a diagnostic that a reader can go to. *)
 let line_of content offset =

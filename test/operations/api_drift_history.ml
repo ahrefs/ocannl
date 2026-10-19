@@ -345,9 +345,12 @@ let () =
         (has (read ~args:[ "--context"; "-1" ] ~success:false long) "non-negative"
         && has (read ~args:[ "--context" ] ~success:false long) "Usage");
       write "arrayjit/lib/cap.mli" "val";
-      ignore (commit "Invalid source must refuse" : string);
-      p "invalid source refuses the real historical reader"
-        (has (read ~success:false moved) "api-drift:"))
+      let invalid = commit "Invalid source must refuse" in
+      let refusal = read ~success:false moved in
+      p "invalid source refuses the real historical reader, naming the file and the commit"
+        (has refusal "api-drift: arrayjit/lib/cap.mli at commit "
+        && has refusal invalid && has refusal "does not parse"
+        && not (has refusal "Syntaxerr")))
     ~finally:(fun () ->
       Unix.chdir previous;
       Unix.unlink git_config;

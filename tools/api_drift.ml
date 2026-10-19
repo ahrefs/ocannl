@@ -25,9 +25,24 @@ let source_paths rev =
 
 let resolve rev = git [ "rev-parse"; "--verify"; "--end-of-options"; rev ^ "^{commit}" ]
 
+(* One source at one commit, its failure naming both (gh-ocannl-1264): the parse error of a file in
+   old history used to reach the user as a bare ("Syntaxerr.Error(_)"), with no way to tell which
+   file at which commit. History before 0.6.0 is where that happens; it is not read further, because
+   this aid serves editorial passes over recent windows. *)
 let read rev source =
   let inventory = if String.equal (Stdlib.Filename.basename source) "dune" then paths rev else [] in
-  git_raw [ "show"; rev ^ ":" ^ source ] |> Surface.declarations ~paths:inventory ~source
+  let contents = git_raw [ "show"; rev ^ ":" ^ source ] in
+  match
+    Test_utils.Scan_attempt.run (fun () -> Surface.declarations ~paths:inventory ~source contents)
+  with
+  | Scanned declarations -> declarations
+  | Unparsed ->
+      failwith
+        (Printf.sprintf
+           "%s at commit %s does not parse, so its declarations cannot be read -- start the window \
+            after that commit"
+           source rev)
+  | Raised exn -> failwith (Printf.sprintf "reading %s at commit %s: %s" source rev exn)
 
 let run ?context since until =
   let since = resolve since and until = resolve until in
@@ -103,7 +118,10 @@ let () =
         | [ since; until ] -> (since, until)
         | _ -> fail usage
       in
-      try run ?context since until
-      with exn ->
-        eprintf "api-drift: %s\n" (Exn.to_string exn);
-        Stdlib.exit 1)
+      try run ?context since until with
+      | Failure message ->
+          eprintf "api-drift: %s\n" message;
+          Stdlib.exit 1
+      | exn ->
+          eprintf "api-drift: %s\n" (Stdlib.Printexc.to_string exn);
+          Stdlib.exit 1)

@@ -203,6 +203,25 @@ let () =
       Option.value_map (dune_refusal dune) ~default:false ~f:(fun message ->
           String.is_substring message ~substring:"lib/dune: "
           && String.is_substring message ~substring:"gh-ocannl-1201"));
+  (* gh-ocannl-1264: dune reads [\%{] inside quotes as a literal [%{], and sexplib decodes the
+     escape it does not know by keeping the backslash, so ["\%{read:f}"] and ["\\%{read:f}"] (an
+     escaped backslash before a live pform) parse to one atom; only the source spelling tells them
+     apart. Outside quotes a backslash is an ordinary character. Each reading checked against
+     dune. *)
+  Verdict.p_all "an escaped read pform inside quotes is literal text and passes"
+    [
+      {|(library (name lib) (public_name pkg.lib) (flags "\%{read:flags.txt}"))|};
+      {|(library (name lib) (public_name pkg.lib) (flags "-D\%{read-lines:x}" "\x25{read:y}"))|};
+    ] ~f:(fun dune -> Option.is_none (dune_refusal dune));
+  Verdict.p_all
+    "a read pform after an escaped backslash, unquoted, or after a line break stays live"
+    [
+      {|(library (name lib) (public_name pkg.lib) (flags "\\%{read:flags.txt}"))|};
+      {|(library (name lib) (public_name pkg.lib) (flags \%{read:flags.txt}))|};
+      "(library (name lib) (public_name pkg.lib) (flags \"-D\\\n   %{read-strings:x}\"))";
+    ] ~f:(fun dune ->
+      Option.value_map (dune_refusal dune) ~default:false
+        ~f:(String.is_substring ~substring:"gh-ocannl-1201"));
   Verdict.p
     "a bare include atom, a variable named like a read pform and an include outside module owners \
      and generators pass"

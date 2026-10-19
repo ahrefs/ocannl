@@ -24,4 +24,4 @@ a private ordinary module a public one includes remains evidence: true
 compact rendering keeps attribution and the changed fragment, and counts the rest: true
 full rendering stays the default evidence: true
 an invalid context count refuses with usage: true
-invalid source refuses the real historical reader: true
+invalid source refuses the real historical reader, naming the file and the commit: true
