@@ -253,7 +253,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
 
 Programs reading the cc vector width, every rule running which declares or pins `OCANNL_CC_VECTOR_BYTES`
 (gh-ocannl-1320):
-  (the `Cc_backend` values reaching `cc_vector_bytes`: codegen_tag, vector_bytes_setting, vector_registers_setting)
+  (the `Cc_backend` values reaching `cc_vector_bytes`: codegen_tag, host_capabilities, vector_bytes_setting, vector_registers_setting)
   (the device-limits fields they fill in arrayjit/lib/schedulers.ml: codegen_tag, simd_vector_bytes, simd_vector_registers)
   (the record type of those fields, whose every label marks a limits update, in arrayjit/lib/backend_intf.ml: hardware_limits)
   bin/dune, executable narrow_gebp_bench: narrow_gebp_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`

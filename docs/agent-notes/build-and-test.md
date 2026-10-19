@@ -2861,10 +2861,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `@test/training/train-<name>`) before pushing, since macOS-specific breakage there surfaces
   only in the schedule and the sweep. `@slow` keeps the
   genuinely long real-dataset runs (`mnist_conv`, `cifar_conv`, `gpt2_dry_run`). CI also runs its
-  one dune walk as `dune build "@default" "@runtest"` — two separate commands would hold the
-  serialized lock chain (what remains of it) against an otherwise idle runner after every file
-  target finished, and the quotes are for PowerShell on the Windows leg, which splats unquoted
-  `@` tokens to nothing.
+  one dune walk as one `dune build @default @runtest @bin-smoke` — two separate commands would
+  hold the serialized lock chain (what remains of it) against an otherwise idle runner after every
+  file target finished. The targets live in the job's `SUITE_TARGETS`, which the Windows leg's
+  PowerShell step splits into an array: PowerShell splats an unquoted `@word` on a command line to
+  nothing, a plain `dune build` that runs no tests.
 - Per-PR ubuntu runs that suite as N jobs (`shard: K/N` in `ci.yml`'s matrix), macOS as one: as a
   single job ubuntu had grown back to 18-32min, three quarters of its dune step executing
   `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` (suite
@@ -2895,6 +2896,28 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   unsharded legs' alias list to the script's and the sharded step to passing its suite, and runs
   the train shards for the matrix's N against its own reading of the aggregates (they must
   partition it); `tools/test-ci-shard.sh` is the hermetic harness.
+- **A red build job ends with the dune rules that failed** (gh-ocannl-1304). Every dune build step
+  copies its output into `$RUNNER_TEMP/dune-build.log` through `tee`, and a failure-only last step
+  runs `tools/ci-failed-rules.sh --github` over it: one entry per dune error header (`File
+  "<path>", line(s) N[-M]`), the rule named by its own `alias`/`name`/`target` fields, the command
+  dune ran or the error it printed, each also an `::error` annotation on the run's summary page.
+  That step exits 1 deliberately, so `gh run view <id> --log-failed` includes it. The script reads
+  a log GitHub serves too (timestamps, colour, CRLF, `--log-failed`'s JOB/STEP prefixes), so
+  `gh run view <id> --log-failed | tools/ci-failed-rules.sh` is the first read of any red job; it
+  names a stanza from the source tree only when every line dune quoted still matches, so a log
+  from another revision falls back to dune's excerpt. **A pipe into `tee` reports tee's status**:
+  each such bash step says `shell: bash` (GitHub's `-eo pipefail`; the implicit default `bash -e`
+  has no pipefail, and the build would read green), and the PowerShell one ends `exit
+  $LASTEXITCODE`; `test/operations/ci_matrix.sh` holds both, with mutants.
+  `tools/test-ci-failed-rules.sh` (the `promotion` harness group, so current Dune and the floor)
+  builds a fixture project red and green.
+- **Each build job prints the host it drew** (gh-ocannl-1371), before building: `tools/host_caps.exe`
+  (run from `test/config`) prints `Cc_backend.host_capabilities` -- CPU, CPU count and pool tag, the
+  ISA the cc probes find under the kernel flags (`avx2+fma`, `avx512f+bw+vl`, `neon`), the resolved
+  `cc_vector_bytes` beside the auto width, the register count, fp16 support, compiler and flags.
+  GitHub's ubuntu runners come with or without AVX-512, and the auto width (64 or 32) changes what
+  the autotune pre-filter keeps (gh-ocannl-1363's flake). The line is repeated above the failure
+  listing. Read it first when a red reproduces on one runner and not another.
 
 ### opam and caches in CI
 
