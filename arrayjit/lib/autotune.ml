@@ -4028,6 +4028,17 @@ let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp 
       Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
       Context.compile ?name ctx comp bindings
 
+(* gh-ocannl-1254: a candidate's tile-MMA operand loads under a load rule, counted per intrinsic
+   fragment of the tile the device's descriptor advertises for each statement's storage triple. *)
+let model_operand_loads ~(limits : Ir.Backend_intf.hardware_limits) ~operand_loads
+    (opt : LL.optimized) =
+  let intrinsic_tile ~a_prec ~b_prec ~d_prec =
+    Option.bind limits.Ir.Backend_intf.mma ~f:(fun mma ->
+        mma_tile_for_precisions_in_scope mma ~scope:Ir.Backend_intf.Mma_per_statement ~a_prec
+          ~b_prec ~d_prec)
+  in
+  CM.operand_load_count ~intrinsic_tile ~operand_loads opt
+
 (* The branch-and-bound walk over the factored matmul family (gh-ocannl-514 phase 4), shared by
    [model_default] and the tests that drive it with stand-in limits and load rules: verdict-carrying
    children are the construction-time fathoms, and the bound is the schedule-invariant roofline
@@ -4038,10 +4049,10 @@ let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp 
    the tree's root level (gh-ocannl-613), so they compete inside the walk, after the unfused leaves
    and at the threshold those tightened to, with the same bound and on the same stats ledger. Leaves
    whose scores tie exactly are ordered by their tile-MMA operand loads under [operand_loads]
-   (gh-ocannl-1254, {!Ir.Cost_model.operand_load_count}): fewer load instructions win, so a staged
-   twin that brings its operands in through [ldmatrix] beats its gathering twin of equal flops and
-   bytes; the incumbent still wins every tie. [None] = no matmul site: the caller keeps the flat
-   path (conv seeds, which factor as a follow-up). *)
+   (gh-ocannl-1254, {!model_operand_loads}): fewer load instructions win, so a staged twin that
+   brings its operands in through [ldmatrix] beats its gathering twin of equal flops and bytes; the
+   incumbent still wins every tie. [None] = no matmul site: the caller keeps the flat path (conv
+   seeds, which factor as a follow-up). *)
 let model_family_search ?(on_rejected = fun () -> ()) ~operand_loads ~is_gpu ~is_cpu ~limits
     ~accum_prec ~static_indices ~peak_flops ~peak_memory_bandwidth ~score ~incumbent
     (base_opt : LL.optimized) =
@@ -4081,7 +4092,7 @@ let model_family_search ?(on_rejected = fun () -> ()) ~operand_loads ~is_gpu ~is
       let tie_break p =
         match applied p with
         | None -> Int.max_value
-        | Some post -> CM.operand_load_count ~operand_loads post
+        | Some post -> model_operand_loads ~limits ~operand_loads post
       in
       let best, stats =
         Sspace.search
@@ -4549,7 +4560,7 @@ let model_explain ?name ctx comp bindings =
   let ms = Option.map ~f:(fun s -> s *. 1e3) in
   let explain segs =
     let ex_operand_loads =
-      List.sum (module Int) segs ~f:(fun o -> CM.operand_load_count ~operand_loads o)
+      List.sum (module Int) segs ~f:(fun o -> model_operand_loads ~limits ~operand_loads o)
     in
     match segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs with
     | None ->

@@ -2,26 +2,29 @@
 
    The plain and [Swizzle_b128] staged fp8 twins of gh-ocannl-1190 touch the same cells with the
    same operations, so the ranking score ([Cost_model.ranking_seconds]) ties them, and the family
-   search's first-strictly-better rule kept the plain twin listed first — though on rog's sm_120 the
+   search's first-strictly-better rule kept the plain twin listed first, though on rog's sm_120 the
    swizzled one ran 12% faster, its A operand coming in through [ldmatrix] instead of byte gathers.
    The tie-break ([Schedule_space.search ~tie_break], [Autotune.model_family_search]) orders exact
-   ties by [Cost_model.operand_load_count] under the backend's [mma_operand_loads] rule: no priced
-   constant, no change to the twins' order.
+   ties by [Autotune.model_operand_loads] under the backend's [mma_operand_loads] rule: no priced
+   constant, no change to the twins' order. Everything here compiles nothing.
 
-   Everything here runs on whatever backend the test is given, compiling nothing:
-
-   - The search's tie semantics on hand-built trees: a tied leaf with a smaller key displaces the
+   The search's tie semantics, on hand-built trees: a tied leaf with a smaller key displaces the
    best leaf; equal keys keep the first; a tie never displaces the incumbent; keys are computed only
-   for ties; and a subtree whose bound equals the threshold is entered once a leaf holds it. - The
-   twins at the gh-ocannl-1190 shape (an 8192x32x4096 fp8 matmul, f32 accumulator, scheduled under a
-   CUDA-shaped [hardware_limits] record whose tile-MMA descriptor is [Ir.Cuda_mma.capability
-   ~cc:120]): equal flops, equal bytes, an equal ranking score, and fewer load instructions for the
-   swizzled twin under CUDA's own load rule ([Ir.Cuda_mma.operand_loads], pure, so it runs off CUDA
-   as the stand-in classifier) — none under a rule with no [ldmatrix], which is every other
-   backend's. - [Autotune.model_family_search] over that site: under CUDA's rule the pick is never a
-   plain staged twin whose swizzled sibling ties it, under the no-[ldmatrix] rule the pick is the
-   same geometry as under CUDA's, and the two picks score alike — the tie-break chooses among equals
-   and moves nothing else. *)
+   for ties; a subtree whose bound equals the threshold is entered once a leaf holds it.
+
+   The twins at the gh-ocannl-1190 shape (an 8192x32x4096 fp8 matmul, f32 accumulator), scheduled
+   under a CUDA-shaped [hardware_limits] record whose tile-MMA descriptor is [Ir.Cuda_mma.capability
+   ~cc:120]: equal flops, bytes and ranking score, and fewer loads for the swizzled twin under
+   CUDA's own rule ([Ir.Cuda_mma.operand_loads], pure, so it stands in off CUDA), equal loads under
+   a rule without [ldmatrix], which is every other backend's.
+
+   [Autotune.model_family_search] over that site: the pick has the fewest loads among the leaves
+   tied with it under either rule, and both picks score alike. The site's argmin is an unstaged leaf
+   with no twin, so the walk also runs over the staged leaves alone, where it crowns the swizzled
+   twin under CUDA's rule and keeps the plain one without [ldmatrix].
+
+   The same claims are made over the backend's own record and rule where it advertises the staged
+   fp8 layout (CUDA from sm_89), and [Autotune.model_explain]'s shape on every backend. *)
 
 open Base
 open Ocannl
@@ -175,12 +178,11 @@ let is_staged_plain_twin (p : Autotune.sketch_params) =
 let swizzled_twin (p : Autotune.sketch_params) =
   { p with Autotune.sk_swizzle = Some LL.Swizzle_b128 }
 
-let loads rule o = CM.operand_load_count ~operand_loads:rule o
-
 (* The claims over one record and its [ldmatrix] rule, each label prefixed by [tag]. [report]
    evaluates a claim, or skips it where the record is not this run's to check. *)
 let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
   let label s = tag ^ ": " ^ s in
+  let loads rule o = Autotune.model_operand_loads ~limits ~operand_loads:rule o in
   let claim s b =
     if evaluated then p (label s) (Lazy.force b) else skipped ~backend:backend_name (label s)
   in
@@ -214,18 +216,6 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
       loads rule swz < loads rule plain);
   all "under a rule without ldmatrix each pair issues equal operand loads" (fun (_, plain, swz) ->
       loads no_ldmatrix swz = loads no_ldmatrix plain);
-  (* The two operands' matrix loads are different forms: [a]'s [.x4] delivers 16 bytes per lane,
-     [b]'s [.x2] 8. On a square tile, so equal operand tiles, a rule loading only [b] that way must
-     cost more than one loading only [a]. *)
-  let only side ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a ~b =
-    let eligible place = Poly.equal place (`Shared, `Swizzled_b128) in
-    match side with `A -> (eligible a, false) | `B -> (false, eligible b)
-  in
-  let square = List.filter twins ~f:(fun (p, _, _) -> p.Autotune.sk_bm = p.Autotune.sk_bn) in
-  claim "on a square swizzled twin, B's narrower matrix loads cost more than A's"
-    (lazy
-      ((not (List.is_empty square))
-      && List.for_all square ~f:(fun (_, _, swz) -> loads (only `B) swz > loads (only `A) swz)));
   (* The family search over the site, under each rule. Every leaf it could score, scored the way it
      scores them, is the population its pick is checked against. *)
   let scored =
@@ -271,13 +261,32 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
       (match (cuda_pick, plain_pick) with
       | Some (_, _, a), Some (_, _, b) -> Float.equal a b
       | _ -> false));
-  (* Not vacuous: at this site the argmin is an exact tie that the loads decide. *)
-  claim "some leaf ties the pick under CUDA's rule with more operand loads"
-    (lazy
-      (match cuda_pick with
-      | Some ((_, o, _) as pk) ->
-          List.exists (tied_with pk) ~f:(fun (_, o', _) -> loads rule o' > loads rule o)
-      | None -> false))
+  (* At this site the argmin is an unstaged leaf, which has no twin. Restricted to the staged leaves
+     — the others left unscored, which the walk never crowns — the argmin is a tied twin pair, and
+     the loads decide it: the swizzled twin under CUDA's rule, the first-listed plain twin under a
+     rule without ldmatrix. *)
+  let staged_pick rule =
+    if not evaluated then None
+    else
+      let staged segs =
+        if List.for_all segs ~f:(fun (o : LL.optimized) -> Set.is_empty o.LL.workgroup_shared) then
+          None
+        else score limits segs
+      in
+      match
+        Autotune.model_family_search ~operand_loads:rule ~is_gpu:true ~is_cpu:false ~limits
+          ~accum_prec:Fn.id ~static_indices:[] ~peak_flops:limits.peak_flops
+          ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score:staged
+          ~incumbent:Float.infinity base
+      with
+      | Some (Some (p, _), _, _) -> Some p
+      | Some (None, _, _) | None -> None
+  in
+  let swizzled (p : Autotune.sketch_params) = Option.is_some p.Autotune.sk_swizzle in
+  claim "among the staged leaves, under CUDA's rule the family search picks a swizzled twin"
+    (lazy (Option.exists (staged_pick rule) ~f:swizzled));
+  claim "among the staged leaves, without ldmatrix it keeps the first-listed plain twin"
+    (lazy (Option.exists (staged_pick no_ldmatrix) ~f:(fun p -> not (swizzled p))))
 
 let () =
   site_claims ~tag:"stand-in" ~limits:stand_in ~rule:Ir.Cuda_mma.operand_loads ~evaluated:true

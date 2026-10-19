@@ -1746,6 +1746,24 @@ val model_default :
     lowerings of the placement search alike — and, as there, a comp carrying no
     {!Ir.Assignments.Block_comment} requires it. *)
 
+val model_operand_loads :
+  limits:Ir.Backend_intf.hardware_limits ->
+  operand_loads:
+    (a_prec:Ir.Ops.prec ->
+    b_prec:Ir.Ops.prec ->
+    d_prec:Ir.Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    a:Ir.Backend_intf.mma_operand_place ->
+    b:Ir.Backend_intf.mma_operand_place ->
+    bool * bool) ->
+  Ir.Low_level.optimized ->
+  int
+(** {!Ir.Cost_model.operand_load_count} with the intrinsic tile [limits]' tile-MMA descriptor
+    advertises per storage triple ({!mma_tile_for_precisions_in_scope}, per-statement scope): the
+    count {!model_family_search} breaks exact ties with and {!model_explain} reports
+    (gh-ocannl-1254). *)
+
 val model_family_search :
   ?on_rejected:(unit -> unit) ->
   operand_loads:
@@ -1791,9 +1809,9 @@ type explain = {
       (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
   ex_spilled : bool;  (** Some kernel's working set exceeds the cache capacity. *)
   ex_operand_loads : int;
-      (** Tile-MMA operand load instructions under the backend's load rule
-          ({!Ir.Cost_model.operand_load_count}): not a price, the count {!model_default}'s family
-          search breaks exact score ties with (gh-ocannl-1254). *)
+      (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}):
+          not a price, the count {!model_default}'s family search breaks exact score ties with
+          (gh-ocannl-1254). *)
 }
 (** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
 

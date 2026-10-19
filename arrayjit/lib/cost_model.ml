@@ -751,7 +751,7 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
   (* One load per element a lane gathers, whatever its width. *)
   | Gather _ -> (elements + lanes - 1) / lanes
 
-let tile_mma_operand_loads ~operand_loads (opt : Low_level.optimized) =
+let tile_mma_operand_loads ?intrinsic_tile ~operand_loads (opt : Low_level.optimized) =
   let prec tn = Lazy.force tn.Tn.storage_prec in
   let sites = ref [] in
   let rec go ~scale ~env (c : Low_level.t) =
@@ -767,9 +767,10 @@ let tile_mma_operand_loads ~operand_loads (opt : Low_level.optimized) =
         let lanes =
           max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
         in
+        let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
         let a_ldm, b_ldm =
-          operand_loads ~a_prec:(prec a_tn) ~b_prec:(prec b_tn) ~d_prec:(prec d_tn) ~ta ~tb
-            ~a:(operand_place opt a_tn) ~b:(operand_place opt b_tn)
+          operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a:(operand_place opt a_tn)
+            ~b:(operand_place opt b_tn)
         in
         (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
            [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm. *)
@@ -777,11 +778,22 @@ let tile_mma_operand_loads ~operand_loads (opt : Low_level.optimized) =
           if ldm then Ldmatrix { lane_bytes }
           else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
         in
+        (* Per intrinsic tile [(tm, tn, tk)] the emission loads an [a] fragment ([tm x tk]) and a
+           [b] fragment ([tk x tn]) inside its [m/tm x n/tn x k/tk] loop nest, so each operand is
+           reloaded for every tile of the other's free axis. Without a tile that divides the
+           statement, each operand tile counts once. *)
+        let fragments, a_elems, b_elems =
+          match Option.bind intrinsic_tile ~f:(fun f -> f ~a_prec ~b_prec ~d_prec) with
+          | Some (tm, tn, tk)
+            when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
+              (m / tm * (n / tn) * (k / tk), tm * tk, tk * tn)
+          | Some _ | None -> (1, m * k, k * n)
+        in
         sites :=
           ( scale / lanes,
             [
-              (a_tn, m * k, classify a_tn a_ldm ~lane_bytes:16);
-              (b_tn, k * n, classify b_tn b_ldm ~lane_bytes:8);
+              (a_tn, a_elems, fragments, classify a_tn a_ldm ~lane_bytes:16);
+              (b_tn, b_elems, fragments, classify b_tn b_ldm ~lane_bytes:8);
             ],
             lanes )
           :: !sites
@@ -792,23 +804,20 @@ let tile_mma_operand_loads ~operand_loads (opt : Low_level.optimized) =
   go ~scale:1 ~env:[] opt.Low_level.llc;
   List.rev !sites
 
-let operand_classes ~operand_loads opt =
-  List.concat_map (tile_mma_operand_loads ~operand_loads opt) ~f:(fun (_, operands, _) ->
-      List.map operands ~f:(fun (tn, _, cls) -> (tn, cls)))
-
-let operand_load_count ~operand_loads opt =
+let operand_load_count ?intrinsic_tile ~operand_loads opt =
   List.sum
     (module Int)
-    (tile_mma_operand_loads ~operand_loads opt)
+    (tile_mma_operand_loads ?intrinsic_tile ~operand_loads opt)
     ~f:(fun (executions, operands, lanes) ->
       executions
       * List.sum
           (module Int)
           operands
-          ~f:(fun (tn, elements, cls) ->
-            operand_load_instructions ~lanes ~elements
-              ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
-              cls))
+          ~f:(fun (tn, elements, fragments, cls) ->
+            fragments
+            * operand_load_instructions ~lanes ~elements
+                ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
+                cls))
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 

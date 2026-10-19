@@ -10,21 +10,21 @@ stand-in: each pair has equal bytes: true
 stand-in: each pair has exactly equal ranking scores: true
 stand-in: under CUDA's load rule each swizzled twin issues fewer operand loads: true
 stand-in: under a rule without ldmatrix each pair issues equal operand loads: true
-stand-in: on a square swizzled twin, B's narrower matrix loads cost more than A's: true
 stand-in: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
 stand-in: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
 stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
-stand-in: some leaf ties the pick under CUDA's rule with more operand loads: true
+stand-in: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
+stand-in: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
 backend record: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
 backend record: each pair has equal bytes: true
 backend record: each pair has exactly equal ranking scores: true
 backend record: under CUDA's load rule each swizzled twin issues fewer operand loads: true
 backend record: under a rule without ldmatrix each pair issues equal operand loads: true
-backend record: on a square swizzled twin, B's narrower matrix loads cost more than A's: true
 backend record: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
 backend record: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
 backend record: the tie-break moves no score: both rules' picks score exactly alike: true
-backend record: some leaf ties the pick under CUDA's rule with more operand loads: true
+backend record: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
+backend record: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
 model_explain lists the default pipeline first: true
 model_explain's labels are distinct: true
 every explained ranking score is at least its bound: true

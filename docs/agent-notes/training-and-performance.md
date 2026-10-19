@@ -135,7 +135,10 @@ files.
   gh-ocannl-1190 shape neither is the argmin: an unstaged tensorized leaf ranks strictly below
   every staged one (the staging copies add ops, the shared tiles add distinct-cell bytes, and the
   per-block global reads are the same), so making `model_default` pick a staged twin needs the
-  model to price what staging buys, not a tie-break.
+  model to price what staging buys, not a tie-break. Count per intrinsic fragment
+  (`Autotune.model_operand_loads` reads the descriptor's tile): the inline-PTX arms reload each
+  operand for every tile of the other's free axis, and a once-per-statement count ordered the
+  unstaged 16x32 and 32x32 leaves, which tie on the emitted loads.
 - The ranking score's `cache_capacity_bytes` and `cache_bandwidth` are calibrated, not looked up
   (gh-ocannl-1253): the working set sums per-block footprints that co-resident blocks share, so
   the boundary sits above any L2. `tools/calibrate_cache_capacity.exe`
