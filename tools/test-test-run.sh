@@ -9,14 +9,21 @@
 #   tools/test-test-run.sh --only '^81:'   # only the legs whose names match
 #   tools/test-test-run.sh --only '#lifecycle'   # one named group of legs
 #
-# Each leg's body is gated by `harness_leg 'N: what it pins #group'`
-# (scripts/harness-support.sh), its name led by the leg numbers below and
-# closed by the one group it belongs to (gh-ocannl-1202): #group-alive (1-5),
-# #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83), #options (26-28,
-# 37), #width (29-34, 48-52, 64, 70), #digest (35-36, 68-69, 71-73, 80),
-# #fresh (81), #lifecycle (40-47, 65, 74: the run/start lifecycle with its
-# signal legs, and both fork-window negative controls), #source (59-63, 66),
-# #slot (53-58, 78), #device (75-77), #credentials (79), #bisect (82). A
+# Each leg's body is a function, run by `harness_leg_run 'N: what it pins
+# #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
+# below and closed by the one group it belongs to (gh-ocannl-1202):
+# #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83),
+# #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36, 68-69,
+# 71-73, 80), #fresh (81), #lifecycle (40-47, 65, 74: the run/start lifecycle
+# with its signal legs, and both fork-window negative controls), #source
+# (59-63, 66), #slot (53-58, 78), #device (75-77), #credentials (79), #bisect
+# (82), #harness (84). A body that cannot go on (an extraction that
+# matched nothing, a fixture that is not what its checks assume) ends with
+# `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
+# which would end the harness and hide every leg after it (gh-ocannl-1374).
+# A shared fixture outside the legs that is not what they assume is a FAIL
+# where it is built, and the run goes on; only a subject that cannot be staged
+# at all (a missing script, the sourced-files scan) still stops the harness. A
 # selector is an extended regular expression over those names; one matching no
 # leg is refused (exit 2) as nothing tested. The shared fixtures stay outside
 # the gates, so a filtered run sets up and cleans up as a full one does. A
@@ -301,10 +308,15 @@
 #      dune call sees the pinned backend and neither of the
 #      runner's own variables, and the invoking checkout and its worktree
 #      list end as they began.
-#  70 sits at the very end, after every leg that fakes a device: a leg that
+#  70 sits at the end, after every leg that fakes a device: a leg that
 #      names no device probe still reads the harness's absent defaults, the
 #      width-cap probes answer "no device" through the shipping readers, and
 #      a hip run is neither capped nor told anything (gh-ocannl-1108).
+#  84 sits after leg 70: a copy of this harness, its test-run.sh respelled so
+#      leg 79's credential mutant cannot be cut, abandons leg 79 alone and
+#      still runs leg 70 to the footer; the same copy with that check spelled
+#      as the `exit 2` it was aborts inside leg 79, and leg 70 never reports
+#      (gh-ocannl-1374).
 
 set -u
 
@@ -522,7 +534,7 @@ done
 # The decision behind this issue is one definition, not two copies tested in
 # parallel. Count definitions across the shared helper and both production
 # callers so either copy coming back fails the harness that CI runs.
-if harness_leg '1: group_alive has one shared production definition #group-alive'; then
+leg_1() {
 group_definition_count() { awk '/^group_alive\(\)/ { n++ } END { print n + 0 }' "$@"; }
 one_group_definition() { [ "$(group_definition_count "$@")" = 1 ]; }
 if one_group_definition "$GROUP_SRC" "$SRC" "$HOOK_SRC"; then
@@ -540,7 +552,8 @@ if one_group_definition "$GROUP_SRC" "$SRC" "$HOOK_SRC" "$TMP/duplicate-process-
 else
   report 0 "the shared-definition check rejects a duplicate"
 fi
-fi # leg 1
+}
+harness_leg_run '1: group_alive has one shared production definition #group-alive' leg_1
 
 # ---------------------------------------------------------------------------
 # Leg 2: a live group reads alive
@@ -550,7 +563,7 @@ fi # leg 1
 # That the child really leads its own group has to be CHECKED (a shell whose
 # setpgrp does not take would otherwise have this leg quietly testing the
 # harness's own group), so both legs need the pgid reader.
-if harness_leg '2-3: a live group reads alive, an emptied one dead #group-alive'; then
+leg_2_3() {
 live_label="a group holding a running process reads as alive"
 empty_label="a group with no members left reads as dead"
 if [ "$have_pgid" = 0 ]; then
@@ -587,7 +600,8 @@ else
     report 0 "$empty_label"
   fi
 fi
-fi # leg 2-3
+}
+harness_leg_run '2-3: a live group reads alive, an emptied one dead #group-alive' leg_2_3
 
 # ---------------------------------------------------------------------------
 # Leg 4: a zombie-only group reads dead
@@ -610,7 +624,7 @@ fi # leg 2-3
 # premise it never established -- and the cleanup assertion at the end would
 # read an empty state as "reaped" and pass on a system that cannot see the
 # corpse at all. So the whole leg, zombie maker included, is skipped there.
-if harness_leg '4: a zombie-only group reads dead #group-alive'; then
+leg_4() {
 zlabel="a group holding nothing but a zombie reads as dead"
 clabel="the state reader alone rejects a zombie-only group (signal probe forced to say alive)"
 rlabel="the zombie leg reaps its own zombie, leaving no process-table entry"
@@ -724,7 +738,8 @@ else
   report 1 "$rlabel" "pid $zpid is still present as '$zleft'"
 fi
 fi
-fi # leg 4
+}
+harness_leg_run '4: a zombie-only group reads dead #group-alive' leg_4
 
 # ---------------------------------------------------------------------------
 # Leg 5: only a positive decimal integer is a pgid
@@ -732,7 +747,7 @@ fi # leg 4
 # A corrupted or forged pgid file must never reach kill: `kill -0 -- -0` targets
 # the CALLER's own group (which is alive, so the answer would be a confident
 # yes) and a negative reading broadcasts.
-if harness_leg '5: only a positive decimal integer is a pgid #group-alive'; then
+leg_5() {
 bad=""
 for candidate in "" "0" "12x" "-1" "abc" " 7"; do
   if group_alive "$candidate"; then bad="$bad '$candidate'"; fi
@@ -743,7 +758,8 @@ else
   report 1 "a pgid that is not a positive decimal integer is refused" \
     "accepted:$bad"
 fi
-fi # leg 5
+}
+harness_leg_run '5: only a positive decimal integer is a pgid #group-alive' leg_5
 
 # ---------------------------------------------------------------------------
 # Legs 6-7: the two sentences `stop` prints about a surviving process group
@@ -772,7 +788,7 @@ STOP_WT="$TMP/wt"
 mkdir -p "$STOP_RUNS" "$STOP_WT"
 STOP_RUNS=$(cd "$STOP_RUNS" && pwd -P)
 STOP_WT=$(cd "$STOP_WT" && pwd -P)
-stop_last=$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" paths last) || exit 1
+stop_last=$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" paths last) || stop_last=
 
 # A leg that cannot establish its premise must skip, not pass: without a pgid
 # reader the fixture could name THIS shell's group and stop would signal the
@@ -925,7 +941,8 @@ said() { # <label> <the whole line stop must have printed>
   fi
 }
 
-if harness_leg '6-8: the sentences stop prints, and a legacy leftover reaped #stop'; then
+leg_6_8() {
+[ -n "$stop_last" ] || { harness_abandon "stop: paths last named no pointer under $STOP_RUNS"; return; }
 if [ -n "$stop_skip" ]; then
   skip "$l_ignored" "$stop_skip"
   skip "$l_killed" "$stop_skip"
@@ -1041,7 +1058,8 @@ else
   legacy_holder=""
   rm -f "$STOP_WT/.test-run.lock" "$STOP_WT/.test-run.lock.owner"
 fi
-fi # leg 6-8
+}
+harness_leg_run '6-8: the sentences stop prints, and a legacy leftover reaped #stop' leg_6_8
 
 # ---------------------------------------------------------------------------
 # Everything the shipping script SOURCES has to exist in a fixture root, and the
@@ -1050,15 +1068,26 @@ fi # leg 6-8
 # real message buried under forty failures (the Ubuntu leg of gh-ocannl-983's
 # first CI round, where the mutation harness hit exactly this). The floor is the
 # other half: a regex that stops matching must fail loudly, not stage nothing.
-stage_sourced() { # <fixture root>
+# A leg staging a root of its own abandons itself on a failure, as any leg's
+# structural failure does (gh-ocannl-1374): `stage_sourced ROOT ||
+# { harness_abandon "$stage_error"; return; }`. The two roots most of the legs
+# share (repeat_root, life_root) are the exception, staged by stage_shared: the
+# scan is the same for every root, so where it fails no later leg can stage its
+# subject either, and the harness stops there with the reason (exit 2).
+stage_error=
+stage_sourced() { # <fixture root>; 1 with $stage_error saying why
   local dest=$1 rel staged=0
+  stage_error=
   while IFS= read -r rel; do
-    mkdir -p "$dest/$(dirname "$rel")" || exit 2
-    cp "$HERE/../$rel" "$dest/$rel" || { echo "cannot stage $rel into $dest" >&2; exit 2; }
+    mkdir -p "$dest/$(dirname "$rel")" && cp "$HERE/../$rel" "$dest/$rel" ||
+      { stage_error="cannot stage $rel into $dest"; return 1; }
     staged=$((staged + 1))
   done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC")
   [ "$staged" -ge 3 ] ||
-    { echo "only $staged sourced file(s) found in $SRC; the scan is broken" >&2; exit 2; }
+    { stage_error="only $staged sourced file(s) found in $SRC; the scan is broken"; return 1; }
+}
+stage_shared() { # <fixture root most later legs run against>
+  stage_sourced "$1" || { echo "$stage_error" >&2; exit 2; }
 }
 
 # ---------------------------------------------------------------------------
@@ -1080,7 +1109,7 @@ stage_sourced() { # <fixture root>
 # negative control runs the census that trusted the name -- the shipping
 # script with the liveness filter taken out -- and must leave the holder
 # running.
-if harness_leg '67: a lock held through an inherited descriptor is reaped #stop'; then
+leg_67() {
 l_inherit="stop: a leftover holding the lock through an inherited descriptor, its acquirer gone, is reaped"
 l_inherit_nc="negative control: a census that trusts /proc/locks' named acquirer misses that holder"
 inherit_skip=
@@ -1202,7 +1231,7 @@ else
   # moved leaves this control failing rather than testing the shipping code.
   inherit_root=$TMP/inherit-repo
   mkdir -p "$inherit_root/tools"
-  stage_sourced "$inherit_root"
+  stage_sourced "$inherit_root" || { harness_abandon "$stage_error"; return; }
   awk '
     $0 == "        fd_holds_lock \"$p\" && live=\"$live$p" { print "        live=\"$live$p"; n++; next }
     { print }
@@ -1230,7 +1259,8 @@ else
   inherit_kill
 fi
 [ -z "$inherit_lock" ] || rm -f "$inherit_lock" "$inherit_owner"
-fi # leg 67
+}
+harness_leg_run '67: a lock held through an inherited descriptor is reaped #stop' leg_67
 
 # ---------------------------------------------------------------------------
 # Legs 9-17: repeat mode's output, lifecycle and exit-code contract
@@ -1241,7 +1271,7 @@ repeat_root=$TMP/repeat-repo
 repeat_bin=$TMP/repeat-bin
 mkdir -p "$repeat_root/tools" "$repeat_root/scripts" "$repeat_bin"
 cp "$SRC" "$repeat_root/tools/test-run.sh"
-stage_sourced "$repeat_root"
+stage_shared "$repeat_root"
 chmod +x "$repeat_root/tools/test-run.sh"
 # The two readers tools/batch-backends.sh would build, faked for every leg
 # (gh-ocannl-1066): a run on a box where a backend meets a width cap, or under
@@ -1295,7 +1325,7 @@ export OCANNL_TOOL_DEVICE_PROBE=none
 unset OCANNL_TOOL_PER_TEST_CAP OCANNL_TOOL_DEVICE_PROBE_CAP
 # Read-only query contract: no state store, no first run, and no lock file yet.
 # The fixture root (not the caller's cwd) owns all omitted-RUN queries.
-if harness_leg '39: read-only paths and lock-status queries #queries'; then
+leg_39() {
 query_runs=$TMP/query-state/runs
 query_expected=$(cd "$TMP" && pwd -P)/query-state/runs
 query() {
@@ -1898,7 +1928,8 @@ if [ "$(query paths lock last)" = "$STOP_WT/.test-run.lock" ] \
 else
   report 1 "queries: legacy runs retain their recorded in-tree lock paths"
 fi
-fi # leg 39
+}
+harness_leg_run '39: read-only paths and lock-status queries #queries' leg_39
 
 cat >"$repeat_bin/dune" <<'EOF'
 #!/usr/bin/env bash
@@ -2171,9 +2202,11 @@ await_fixture_ready() { # MARKER [ATTEMPTS] -- never assume the fixture arrived
 }
 # Negative control for the timeout half of the helper's contract. The live
 # fixtures below prove its success half; this absent marker must be refused.
+# A shared fixture that is not what the legs assume is a FAIL here, outside any
+# leg, and the run goes on (gh-ocannl-1374): the legs reading it are named in
+# the label, and whatever they conclude, the run is red.
 if await_fixture_ready "$TMP/repeat-never-ready" 1; then
-  echo "repeat fixture readiness accepted an absent marker" >&2
-  exit 2
+  report 1 "fixture: await_fixture_ready accepted an absent marker (every leg awaiting a fixture reads it)"
 fi
 # The three width-cap probes read what the leg exported, which is the
 # harness-wide absent defaults (hermetic_probes) unless the leg opted in.
@@ -2207,11 +2240,20 @@ repeat_probe() {
   fixture_probe "$tag" "$mode" "$TMP/repeat-runs-$tag" repeat "$@"
   repeat_rc=$fixture_rc repeat_out=$fixture_out repeat_dir=$fixture_dir
 }
+# A background set whose fixture never became ready ends its leg (gh-ocannl-1374), released and
+# cancelled first: its lock and its group must not reach the legs that run after it.
+repeat_abandon() { # wait prefix of the background set in $repeat_pid
+  touch "$1.release"
+  [ -n "$repeat_pid" ] || return 0
+  kill -TERM -- "-$repeat_pid" 2>/dev/null || kill -TERM "$repeat_pid" 2>/dev/null
+  wait "$repeat_pid" 2>/dev/null
+  repeat_pid=
+}
 
 # This is an ordering invariant, not a timing lottery: once publish_run writes
 # `last`, an external stop may arrive on the next instruction. Pin all three
 # prerequisites above that line so a future refactor cannot reopen the gap.
-if harness_leg '9-25: repeat mode #repeat'; then
+leg_9_25() {
 completed_line=$(grep -n '^    completed=0$' "$SRC" | cut -d: -f1)
 signal_trap_line=$(grep -n "^    trap 'repeat_signal TERM' TERM$" "$SRC" | cut -d: -f1)
 exit_trap_line=$(grep -n '^    trap repeat_exit EXIT$' "$SRC" | cut -d: -f1)
@@ -2252,7 +2294,9 @@ repeat_pid=$!
 if ! await_fixture_ready "$repeat_red_cancel_prefix.ready"; then
   report 1 "repeat: earlier failure survives later cancellation" \
     "setup timeout waiting for iteration two's readiness marker"
-  exit 1
+  repeat_abandon "$repeat_red_cancel_prefix"
+  harness_abandon "a repeat fixture never became ready"
+  return
 fi
 red_cancel_stop=$(OCANNL_TOOL_TEST_RUNS=$repeat_red_cancel_runs \
   "$repeat_root/tools/test-run.sh" stop last 2>"$TMP/repeat-red-cancel-stop.err")
@@ -2490,7 +2534,9 @@ repeat_pid=$!
 if ! await_fixture_ready "$repeat_stop_prefix.ready"; then
   report 1 "repeat: last resolves active state and stop cancels the whole set" \
     "setup timeout waiting for iteration one's readiness marker"
-  exit 1
+  repeat_abandon "$repeat_stop_prefix"
+  harness_abandon "a repeat fixture never became ready"
+  return
 fi
 status_out=$(OCANNL_TOOL_TEST_RUNS=$repeat_stop_runs \
   "$repeat_root/tools/test-run.sh" status last 2>"$TMP/repeat-stop-status.err")
@@ -2538,7 +2584,9 @@ repeat_pid=$!
 if ! await_fixture_ready "$repeat_finalize_prefix.ready"; then
   report 1 "repeat: cancellation during finalization still publishes a verdict" \
     "setup timeout waiting for the comparison readiness marker"
-  exit 1
+  repeat_abandon "$repeat_finalize_prefix"
+  harness_abandon "a repeat fixture never became ready"
+  return
 fi
 kill -TERM -- "-$repeat_pid" 2>"$TMP/repeat-finalize-kill.err"
 finalize_kill_rc=$?
@@ -2589,7 +2637,8 @@ else
   report 1 "repeat: wait default covers every per-iteration cap" \
     "exit $wait_rc; sleeps $(tr '\n' ',' <"$TMP/repeat-wait-sleeps"); output: ${wait_out:-<nothing>}"
 fi
-fi # leg 9-25
+}
+harness_leg_run '9-25: repeat mode #repeat' leg_9_25
 
 # ---------------------------------------------------------------------------
 # Legs 26-28: this script's own options are refused on the wrong side of dune
@@ -2612,7 +2661,7 @@ argv_rc= argv_out= argv_err= argv_calls= argv_dir= argv_mode= argv_runs=
 # Every subcommand that takes options, and both spellings of a value option:
 # the guard sits on one code path, but a future refactor that splits it must
 # not be able to leave one entry point forwarding.
-if harness_leg '26-28: options on the wrong side of the dune arguments #options'; then
+leg_26_28() {
 misplaced_label="an option after the dune arguments is refused before dune runs"
 misplaced_detail=
 for probe in "run:run build @cheap --cap 900" \
@@ -2660,7 +2709,8 @@ else
   report 1 "an option past dune's -- reaches the program untouched" \
     "exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: $argv_err"
 fi
-fi # leg 26-28
+}
+harness_leg_run '26-28: options on the wrong side of the dune arguments #options' leg_26_28
 
 # ---------------------------------------------------------------------------
 # Legs 29-34: the dxg width cap (gh-ocannl-983)
@@ -2684,8 +2734,7 @@ rm -f "$dxg_absent"
 # The fixture is the whole experiment: a present path that is absent, or an
 # absent one that exists, would make every leg below agree with itself.
 if [ ! -e "$dxg_present" ] || [ -e "$dxg_absent" ]; then
-  echo "dxg fixture paths are not what the legs assume" >&2
-  exit 2
+  report 1 "fixture: the dxg device paths are not what the legs assume (every leg faking a dxg bridge reads them)"
 fi
 dxg_probe() { # tag device backend subcommand [argv...]
   local tag=$1 device=$2 backend=$3
@@ -2709,7 +2758,7 @@ tuf tuf-amd-linux tuf-amd-win tuf-amd-wsl'
 # The injection, in all four places it has to appear: dune's argv, the RECORDED
 # command (so a later digest shows the width too), stderr, and the run's log --
 # the artifact whoever triages the red suite reads.
-if harness_leg '29-34: the dxg width cap #width'; then
+leg_29_34() {
 dxg_probe cap-inject "$dxg_present" cuda run build @cheap
 dxg_detail=
 [ "$argv_rc" = 0 ] || dxg_detail="exit $argv_rc"
@@ -2917,7 +2966,8 @@ if [ -z "$dxg_detail" ]; then
 else
   report 1 "dxg: the sweep's box_jobs_sweep_jobs and the injected cap come from one table" "$dxg_detail"
 fi
-fi # leg 29-34
+}
+harness_leg_run '29-34: the dxg width cap #width' leg_29_34
 
 # ---------------------------------------------------------------------------
 # Legs 48-52: the native GPU width caps (gh-ocannl-1033)
@@ -2964,8 +3014,7 @@ native_map=
 rm -f "$nv_absent"
 if [ ! -f "$kfd_small/1/properties" ] || [ -e "$kfd_absent" ] ||
    [ ! -e "$nv_present" ] || [ -e "$nv_absent" ]; then
-  echo "native-cap fixture paths are not what the legs assume" >&2
-  exit 2
+  report 1 "fixture: the native-cap paths are not what the legs assume (every leg faking a native device reads them)"
 fi
 # The pool the fixtures must read as, from the shipping probe itself: a fixture
 # the parser misread would leave legs 48 and 49 agreeing with a wrong number.
@@ -2976,8 +3025,7 @@ native_pools=$(
   done
 )
 if [ "$native_pools" != "6,12,,," ]; then
-  echo "the KFD fixtures read as pools '$native_pools', not 6,12,,, -- fix the fixture or the probe" >&2
-  exit 2
+  report 1 "fixture: the KFD fixtures read as pools '$native_pools', not 6,12,,, -- fix the fixture or the probe (every leg faking a native device reads them)"
 fi
 native_probe() { # tag dxg kfd nvidia backend subcommand [argv...]
   local tag=$1 dxg=$2 kfd=$3 nv=$4 backend=$5
@@ -2995,7 +3043,7 @@ native_probe() { # tag dxg kfd nvidia backend subcommand [argv...]
 # pins it -- argv, the recorded command, stderr (with its source and the note)
 # and the run's log -- plus what the announcement says the hazard was. The
 # fleet's state records rog's slots here, which the CPU rows need.
-if harness_leg '48: native GPU width caps injected #width'; then
+leg_48() {
 native_detail=
 native_fleet=$fleet_rog
 # The last field is the sweep unit the same box runs, as `<machine>/<lab box>`:
@@ -3046,12 +3094,13 @@ if [ -z "$native_detail" ]; then
 else
   report 1 "native: hip on a small or a larger SDMA pool, and cuda and cc on a native NVIDIA boot, are capped, announced and recorded" "$native_detail"
 fi
-fi # leg 48
+}
+harness_leg_run '48: native GPU width caps injected #width' leg_48
 
 # Leg 49: the negative controls. Each denies one half of a condition leg 48
 # met, so a probe that capped every Linux GPU batch -- or keyed on the backend
 # alone -- fails here. Silence is part of the contract, as for the dxg legs.
-if harness_leg '49: native width-cap negative controls #width'; then
+leg_49() {
 native_detail=
 for probe in "cpu-on-wide-sdma:$kfd_large:$nv_absent:cc" \
              "cuda-on-wide-sdma:$kfd_large:$nv_absent:cuda" \
@@ -3085,12 +3134,13 @@ if [ -z "$native_detail" ]; then
 else
   report 1 "native: no cap and no announcement off the measured hazards, or for the other backend" "$native_detail"
 fi
-fi # leg 49
+}
+harness_leg_run '49: native width-cap negative controls #width' leg_49
 
 # Leg 50: an explicit width still wins on a native hazard, and says so; and a
 # WSL boot keeps the bridge's cap even where its topology would read as a
 # small pool (the bridge is the tighter limit, and the one measured there).
-if harness_leg '50: a named width wins on a native hazard #width'; then
+leg_50() {
 native_detail=
 for probe in "sdma:$kfd_small:$nv_absent:hip:small-SDMA-pool host" \
              "wide-sdma:$kfd_large:$nv_absent:hip:native AMD GPU host" \
@@ -3119,7 +3169,8 @@ if [ -z "$native_detail" ]; then
 else
   report 1 "native: a named width is honored on each native hazard; a dxg boot keeps its own cap" "$native_detail"
 fi
-fi # leg 50
+}
+harness_leg_run '50: a named width wins on a native hazard #width' leg_50
 
 # Leg 51: the backend resolved on a native hazard (gh-ocannl-1066). With
 # OCANNL_BACKEND unset the width follows what the batch can hold: a batch the
@@ -3131,7 +3182,7 @@ fi # leg 50
 # rog a cc batch gets the CPU width; and beside a small AMD pool there, a batch
 # that can hold both hip and cc takes the tighter of the two. The recorded
 # command carries the width, and a named width is honored and only told.
-if harness_leg '51: the native width follows the resolved backends #width'; then
+leg_51() {
 native_detail=
 for probe in "cc-on-sdma|$kfd_small|$nv_absent|$fleet_none|cc|$FAKE_READS\nend|build @cheap|" \
              "cc-on-wide-sdma|$kfd_large|$nv_absent|$fleet_none|cc|$FAKE_READS\nend|build @cheap|" \
@@ -3185,13 +3236,14 @@ if [ -z "$native_detail" ]; then
 else
   report 1 "native: with OCANNL_BACKEND unset the width follows the batch's resolved backends, the tightest of them" "$native_detail"
 fi
-fi # leg 51
+}
+harness_leg_run '51: the native width follows the resolved backends #width' leg_51
 
 # Leg 64: `plan` prints what `run` would do with an argv -- the resolved
 # backends and why, the width, the slot -- and runs nothing: no dune call, no
 # run recorded. Driven on the minix shape of leg 51 (a configuration naming
 # hip on a small SDMA pool).
-if harness_leg '64: plan prints what run would do #width'; then
+leg_64() {
 native_detail=
 export FAKE_BACKEND_TEST=hip
 native_probe native-plan "$dxg_absent" "$kfd_small" "$nv_absent" "" plan build @cheap
@@ -3279,7 +3331,8 @@ if [ -z "$native_detail" ]; then
 else
   report 1 "plan: prints the resolved backends, the width and the slot, and runs nothing" "$native_detail"
 fi
-fi # leg 64
+}
+harness_leg_run '64: plan prints what run would do #width' leg_64
 
 # Leg 65: the run's first phase. The backends resolve in the supervisor's
 # child, after the run is published (gh-ocannl-1106), so a `stop` of the run
@@ -3287,7 +3340,7 @@ fi # leg 64
 # are reaped, the launch exits 143 with the verdict recorded, dune never
 # started and the log says so, and the worktree is idle again. A reader held
 # asleep stands for a slow build.
-if harness_leg '65: a stop while the backends resolve cancels the run #lifecycle'; then
+leg_65() {
 plan_stop_runs=$TMP/argv-runs-plan-stop
 plan_stop_detail=
 mkdir -p "$plan_stop_runs"
@@ -3414,13 +3467,14 @@ if [ -z "$plan_stop_detail" ]; then
 else
   report 1 "plan: a stop or a signal while the backends resolve cancels the run before dune, and the worktree is idle" "$plan_stop_detail"
 fi
-fi # leg 65
+}
+harness_leg_run '65: a stop while the backends resolve cancels the run #lifecycle' leg_65
 
 # Leg 52: one place for the numbers. A hip cap is not a literal of its own
 # but its measured budget over its box's slot count, so a change to either
 # moves it; and the values are the measured ones (lukstafi/ludics-lite#316,
 # #344, #391), pinned here so an edit to box-jobs.sh has to say what it measured.
-if harness_leg '52: the native widths come from one place #width'; then
+leg_52() {
 native_consts=$(
   . "$JOBS_SRC"
   printf '%s/%s/%s/%s/%s/%s/%s/%s/%s/%s/%s/%s' "$BOX_JOBS_SDMA_CAP" \
@@ -3443,7 +3497,8 @@ if [ -z "$native_detail" ]; then
 else
   report 1 "native: the per-slot widths derive from box-jobs.sh's measured numbers" "$native_detail"
 fi
-fi # leg 52
+}
+harness_leg_run '52: the native widths come from one place #width' leg_52
 
 # ---------------------------------------------------------------------------
 # Legs 35-38: an invocation dune's own parser refused is a verdict of its own
@@ -3463,7 +3518,7 @@ fi # leg 52
 # invoked exactly once -- what tells this refusal from the guard's, which
 # shares its exit code.
 refused_verdict="verdict: INVOCATION REFUSED (dune rejected the arguments; nothing ran) (exit 2)"
-if harness_leg '35: a dune-refused invocation is INVOCATION REFUSED #digest'; then
+leg_35() {
 refused_label="a dune-refused invocation is INVOCATION REFUSED: run/wait exit 2, recorded exit 1"
 refused_detail=
 for probe in "usage_option|build @cheap --frobnicate" \
@@ -3541,7 +3596,8 @@ if [ -z "$refused_detail" ]; then
 else
   report 1 "$refused_label" "$refused_detail"
 fi
-fi # leg 35
+}
+harness_leg_run '35: a dune-refused invocation is INVOCATION REFUSED #digest' leg_35
 
 # The controls: a run that FAILED still says so, with dune's status and the
 # fingerprint -- a recogniser that fired on `dune:` alone would turn a test
@@ -3549,7 +3605,7 @@ fi # leg 35
 # reading at `Usage:` would do the same to a `dune exec` program that printed
 # a nested dune refusal and then failed (Codex review round 1, P2): both are
 # the inverse misreading, so the shape must also be ALONE in the log.
-if harness_leg '36: a red run still digests as FAIL #digest'; then
+leg_36() {
 red_label="a red run still digests as FAIL (exit 1) with its fingerprint"
 red_detail=
 for mode in red dune_prefixed_red nested_usage_red nested_usage_output; do
@@ -3599,7 +3655,8 @@ if [ -z "$red_detail" ]; then
 else
   report 1 "$red_label" "$red_detail"
 fi
-fi # leg 36
+}
+harness_leg_run '36: a red run still digests as FAIL #digest' leg_36
 
 # Legs 68-69 (gh-ocannl-1055): promotion is offered only on a diff dune printed.
 # A rule whose action failed names its `.corrected` file in the quoted stanza,
@@ -3607,7 +3664,7 @@ fi # leg 36
 # the action failed with no diff, and still show the fingerprint. The other
 # half: a real hunk, plain or colored, is still promotion -- and a green run is
 # neither.
-if harness_leg '68: a failed action with no diff is never promotion #digest'; then
+leg_68() {
 nodiff_label="a failed action with no diff hunk is 'action failed (no diff)', never promotion"
 argv_mode=action_no_diff argv_probe nodiff-action run build @cheap
 nodiff_detail=
@@ -3628,8 +3685,9 @@ if [ -z "$nodiff_detail" ]; then
 else
   report 1 "$nodiff_label" "$nodiff_detail; stdout: $argv_out"
 fi
-fi # leg 68
-if harness_leg '69: a printed or possible diff is promotion; a long log or drift is not no-diff #digest'; then
+}
+harness_leg_run '68: a failed action with no diff is never promotion #digest' leg_68
+leg_69() {
 hunk_label="a printed diff hunk, plain or colored, is still promotion; a green run is neither"
 hunk_detail=
 for mode in diff_hunk diff_hunk_color stable; do
@@ -3713,7 +3771,8 @@ if [ "$repeat_rc" = 1 ] && [ "$argv_rc" = 1 ] \
 else
   report 1 "$drift_label" "repeat exit $repeat_rc: $repeat_out; wait exit $argv_rc: $argv_out"
 fi
-fi # leg 69
+}
+harness_leg_run '69: a printed or possible diff is promotion; a long log or drift is not no-diff #digest' leg_69
 
 # Legs 71-73 (gh-ocannl-1087): the run's last phase records dune's own
 # promotion list (`dune promotion list`) as `promotions`, and the digest reads
@@ -3759,7 +3818,7 @@ promo_probe() { # tag list-name mode subcommand [argv...]; the list file may be 
 # long list is cut at 20 in the digest, never in the record. A dune killed by
 # a signal leaves the status an exec'd one would have, and that verdict does
 # not read the record.
-if harness_leg '71: dune'\''s recorded promotion list decides the digest #digest'; then
+leg_71() {
 rec_label="dune's recorded promotion list decides the digest, whatever the log shows"
 rec_detail=
 promo_probe rec-suppressed one diff_suppressed run build @cheap
@@ -3856,7 +3915,8 @@ if [ -z "$rec_detail" ]; then
 else
   report 1 "$rec_label" "$rec_detail"
 fi
-fi # leg 71
+}
+harness_leg_run '71: dune'\''s recorded promotion list decides the digest #digest' leg_71
 
 # Leg 72: no record where the list cannot be taken faithfully, and the log
 # decides as before: the list failing, a line that is not a path here (a
@@ -3865,7 +3925,7 @@ fi # leg 71
 # dune's own `--` the words are a program's, and the list is taken), and a cap
 # too nearly spent to ask. A missing build directory is an empty record,
 # asked of nobody -- under DUNE_BUILD_DIR's name too.
-if harness_leg '72: no record where the list cannot be taken faithfully #digest'; then
+leg_72() {
 norec_label="no record where dune's list cannot be taken faithfully; the log decides as before"
 norec_detail=
 for probe in "unset|diff_hunk|present|" \
@@ -3935,13 +3995,14 @@ if [ -z "$norec_detail" ]; then
 else
   report 1 "$norec_label" "$norec_detail"
 fi
-fi # leg 72
+}
+harness_leg_run '72: no record where the list cannot be taken faithfully #digest' leg_72
 
 # Leg 73: a verdict dune did not give never reads the record -- the list a run
 # that ran nothing finds is an older build's. Forged from a recorded run with
 # a stale list: a refused slot (exit 1 under a `slot` record and the slot's
 # refusal line) and a cancellation (143).
-if harness_leg '73: a refused slot or a cancelled run never reads a recorded list #digest'; then
+leg_73() {
 stale_label="a refused slot or a cancelled run never reads a recorded list"
 stale_detail=
 promo_probe stale-source one diff_suppressed run build @cheap
@@ -3971,7 +4032,8 @@ if [ -z "$stale_detail" ]; then
 else
   report 1 "$stale_label" "$stale_detail"
 fi
-fi # leg 73
+}
+harness_leg_run '73: a refused slot or a cancelled run never reads a recorded list #digest' leg_73
 
 # Leg 80: the run records its slowest actions from its own dune trace, and the
 # digest names them. The trace is synthetic -- a real one records dune's
@@ -3979,7 +4041,7 @@ fi # leg 73
 # the five kept are known exactly and the open one is a lower bound up to the
 # trace's last timestamp. The reader is the shipping tools/action-durations.sh,
 # staged beside the fixture's copy of the script.
-if harness_leg '80: the digest names the batch'\''s slowest actions #digest'; then
+leg_80() {
 slow_label="the digest names the batch's five slowest actions from its own dune trace"
 if ! command -v python3 >/dev/null 2>&1; then
   skip "$slow_label" "no python3 on PATH (tools/action-durations.sh needs it)"
@@ -4241,7 +4303,8 @@ PY
     report 1 "$slow_label" "$slow_detail"
   fi
 fi
-fi # leg 80
+}
+harness_leg_run '80: the digest names the batch'\''s slowest actions #digest' leg_80
 
 # Leg 81: `fresh` runs the named per-test aliases once, in a build directory of
 # the run's own, forced and uncached, and the digest gives each its wall time
@@ -4261,7 +4324,7 @@ fi # leg 80
 # artifacts and count for nobody; delta writes an output of another name, so
 # only its program finds it; the compile and a bystander test count for
 # nobody either.
-if harness_leg '81: fresh runs per-test aliases forced, uncached and timed #fresh'; then
+leg_81() {
 fresh_label="fresh: forced, uncached, own build directory; per-test times; NOT RUN refused"
 if ! command -v python3 >/dev/null 2>&1; then
   skip "$fresh_label" "no python3 on PATH (tools/action-durations.sh needs it)"
@@ -4448,7 +4511,8 @@ PY
     report 1 "$fresh_label" "$fresh_detail"
   fi
 fi
-fi # leg 81
+}
+harness_leg_run '81: fresh runs per-test aliases forced, uncached and timed #fresh' leg_81
 
 # The same contract against a real dune, where the shared trace is live: a
 # manual `dune build` is mid-rule, holding dune's build lock, when a managed
@@ -4457,7 +4521,7 @@ fi # leg 81
 # made of the lock. (Deleting the shared trace at launch, as this record's
 # first version did, left the manual build writing into an unlinked file.)
 # A host with no dune skips it, as leg 79's trace leg does.
-if harness_leg '80: a manual dune beside a managed run keeps its live trace #digest'; then
+leg_80_live() {
 live_label="a manual dune running beside a managed run keeps its live trace (real dune)"
 live_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
   command -v dune) 2>/dev/null) || live_real=
@@ -4467,7 +4531,7 @@ else
   live_root=$TMP/live-trace
   mkdir -p "$live_root/tools" "$live_root/scripts"
   cp "$SRC" "$live_root/tools/test-run.sh"
-  stage_sourced "$live_root"
+  stage_sourced "$live_root" || { harness_abandon "$stage_error"; return; }
   cp "$HERE/action-durations.sh" "$live_root/tools/action-durations.sh"
   chmod +x "$live_root/tools/test-run.sh"
   printf '(lang dune 3.20)\n' >"$live_root/dune-project"
@@ -4500,14 +4564,15 @@ else
     report 1 "$live_label" "$live_detail"
   fi
 fi
-fi # leg 80
+}
+harness_leg_run '80: a manual dune beside a managed run keeps its live trace #digest' leg_80_live
 
 # The guard from leg 26 is not made redundant by the digest: it knows the
 # correct order and refuses without spawning dune. With a fixture that WOULD
 # refuse, the guard's refusal is the one that arrives, and the calls file --
 # empty here, one line for the digest's refusal -- is what separates the two
 # exit-2 outcomes.
-if harness_leg '37: the --cap guard refuses before dune is spawned #options'; then
+leg_37() {
 argv_mode=usage_option argv_probe guard-before-dune run build @cheap --cap 900
 argv_mode=
 if [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] \
@@ -4518,7 +4583,8 @@ else
   report 1 "the --cap guard still refuses before dune is spawned" \
     "exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: $argv_err; stdout: $argv_out"
 fi
-fi # leg 37
+}
+harness_leg_run '37: the --cap guard refuses before dune is spawned #options' leg_37
 
 # `repeat` has its own vocabulary and the same trap: N refused iterations are
 # byte-identical, so an unguarded set would report IDENTICAL over nothing.
@@ -4526,7 +4592,7 @@ fi # leg 37
 # there, the coordinator exits 2 over a recorded 1, and `wait` on the set
 # digests it under the same verdict. The control: a merely red iteration is
 # still repeated in full, with dune's status.
-if harness_leg '38: repeat stops after a refused first iteration #repeat'; then
+leg_38() {
 repeat_probe repeat-refused usage_option 3 build @cheap
 repeat_refused_label="repeat stops after a refused first iteration and exits 2 over a recorded 1"
 if [ "$repeat_rc" = 2 ] && [ "$(cat "$TMP/repeat-refused.counter")" = 1 ] \
@@ -4558,7 +4624,8 @@ else
   report 1 "repeat: a red iteration is repeated in full and keeps dune's status" \
     "exit $repeat_rc; iterations $(cat "$TMP/repeat-red-error.counter"); stdout: $repeat_out"
 fi
-fi # leg 38
+}
+harness_leg_run '38: repeat stops after a refused first iteration #repeat' leg_38
 
 # ---------------------------------------------------------------------------
 # Legs 40-47: attached run and detached start lifecycle (gh-ocannl-967).
@@ -4574,7 +4641,7 @@ life_prefix=$TMP/lifecycle
 life_pid= life_run=
 mkdir -p "$life_root/tools" "$life_root/scripts" "$life_runs" "$life_bin"
 cp "$SRC" "$life_root/tools/test-run.sh"
-stage_sourced "$life_root"
+stage_shared "$life_root"
 cp -R "$life_root" "$TMP/lifecycle-before"
 cat >"$life_bin/dune" <<'EOF'
 #!/usr/bin/env bash
@@ -4700,15 +4767,16 @@ life_capture stop last
 life_check 0 '^already finished:' 'stop on a completed run is idempotent'
 life_no_survivors 'stop'
 }
-if harness_leg '40-47: run/start lifecycle #lifecycle'; then
+leg_40_47() {
 lifecycle_core || lifecycle_abandoned '40-47 (start/status/stop)'
-fi # leg 40-47
+}
+harness_leg_run '40-47: run/start lifecycle #lifecycle' leg_40_47
 
 # Leg 74: inject a real TERM after fork returns but BEFORE its pid assignment.
 # No seam exists in production: only this fixture copy replaces that expression.
 # The child records its own identity before pausing, so every control survivor
 # is contained even if it never reached the ordinary pgid publication.
-if harness_leg '74: fork TERM before the pid assignment #lifecycle'; then
+leg_74() {
 case $(uname -s) in MSYS*|MINGW*) fork_posix=0 ;; *) fork_posix=1 ;; esac
 if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
   for fork_case in parent child no-mask inherited-handler; do
@@ -4738,7 +4806,11 @@ if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
       }
       { print }
       END { if (found != 1) exit 1 }
-    ' "$SRC" >"$life_root/tools/test-run.sh" || { report 1 'fork: seam extraction'; exit 1; }
+    ' "$SRC" >"$life_root/tools/test-run.sh" || {
+      cp "$SRC" "$life_root/tools/test-run.sh"
+      harness_abandon "fork: the seam '  \$pid = fork();' is not in $SRC exactly once"
+      return
+    }
     rm -f "$life_prefix.ready" "$life_prefix.release"
     FORK_PREFIX=$fork_prefix OCANNL_TOOL_TEST_RUNS=$life_runs LIFECYCLE_PREFIX=$life_prefix \
       LIFECYCLE_TOKEN_HELPER=$TMP/ps_token.sh PATH=$life_bin:$PATH \
@@ -4774,7 +4846,8 @@ if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
 else
   skip 'fork: signal window and negative controls' 'requires POSIX signals and readable process states'
 fi
-fi # leg 74
+}
+harness_leg_run '74: fork TERM before the pid assignment #lifecycle' leg_74
 
 # POSIX group delivery and ignored-on-entry INT are not native Windows signal
 # semantics. The general start/status/stop contract above still runs there.
@@ -5001,9 +5074,10 @@ if diff -r "$TMP/lifecycle-before" "$life_root" >"$TMP/lifecycle-tree.diff"; the
 else report 1 'lifecycle: every launch and recovery leaves the source tree byte-identical' "$(cat "$TMP/lifecycle-tree.diff")"; fi
 lifecycle_cleanup
 }
-if harness_leg '40-47: run/start lifecycle (signals, publication window, legacy lock) #lifecycle'; then
+leg_40_47_signals() {
 lifecycle_signals || lifecycle_abandoned '40-47 (signals, publication window, legacy lock)'
-fi # leg 40-47
+}
+harness_leg_run '40-47: run/start lifecycle (signals, publication window, legacy lock) #lifecycle' leg_40_47_signals
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)
@@ -5013,7 +5087,7 @@ fi # leg 40-47
 # global configuration are kept out of both the fixture's own git calls and the
 # launches (neither variable is one the shipping script drops), so a user's
 # hooks, signing or line-ending settings cannot move a verdict.
-if harness_leg '59-63, 66: the source a run tested #source'; then
+leg_59_63_66() {
 if ! command -v git >/dev/null 2>&1; then
   skip 'checkout: head and dirty recorded at launch (legs 59-63)' 'no git on PATH'
 else
@@ -5027,9 +5101,9 @@ else
     ck_dir=$(OCANNL_TOOL_TEST_RUNS=$ck_runs "$1/tools/test-run.sh" paths run last) || ck_dir=
   }
   ck_stage() { # <root>: the script and what it sources, nothing else
-    mkdir -p "$1/tools" "$1/scripts" || exit 2
-    cp "$SRC" "$1/tools/test-run.sh" || exit 2
-    stage_sourced "$1"
+    stage_error="cannot copy the script into $1"
+    mkdir -p "$1/tools" "$1/scripts" && cp "$SRC" "$1/tools/test-run.sh" || return 1
+    stage_sourced "$1" || return 1
     chmod +x "$1/tools/test-run.sh"
   }
   ck_init() { # <root>: a committed checkout with local identity and settings
@@ -5042,10 +5116,10 @@ else
       ck_git -C "$1" commit -q --no-verify -m fixture
   }
   ck_root=$TMP/checkout-repo
-  ck_stage "$ck_root"
+  ck_stage "$ck_root" || { harness_abandon "checkout: fixture root: $stage_error"; return; }
   printf 'first\n' >"$ck_root/NOTES"
   printf 'unchanged\n' >"$ck_root/README"
-  ck_init "$ck_root" >/dev/null 2>&1 || { report 1 'checkout: fixture repository'; exit 1; }
+  ck_init "$ck_root" >/dev/null 2>&1 || { harness_abandon 'checkout: the fixture repository could not be committed'; return; }
   ck_head=$(ck_git -C "$ck_root" rev-parse HEAD)
 
   # Leg 59: a clean checkout records its HEAD and an EMPTY dirty record.
@@ -5093,7 +5167,7 @@ else
   ck_other=$TMP/checkout-other
   mkdir -p "$ck_other"
   printf 'other\n' >"$ck_other/NOTES"
-  ck_init "$ck_other" >/dev/null 2>&1 || { report 1 'checkout: second fixture repository'; exit 1; }
+  ck_init "$ck_other" >/dev/null 2>&1 || { harness_abandon 'checkout: the second fixture repository could not be committed'; return; }
   GIT_DIR=$ck_other/.git GIT_WORK_TREE=$ck_other ck_launch "$ck_root"
   if [ "$ck_rc" = 0 ] && [ "$(cat "$ck_dir/head" 2>/dev/null)" = "$ck_head" ] \
      && grep -Fqx ' M NOTES' "$ck_dir/dirty"; then
@@ -5112,7 +5186,7 @@ else
   life_run=$(life paths run last)
   { [ "$life_rc" = 0 ] && [ ! -e "$life_run/head" ] && [ ! -e "$life_run/dirty" ]; } ||
     ck_detail="outside Git: exit $life_rc; $(ls "$life_run" 2>&1 | tr '\n' ' ')"
-  ck_stage "$ck_root/nested"
+  ck_stage "$ck_root/nested" || { harness_abandon "checkout: nested fixture root: $stage_error"; return; }
   ck_launch "$ck_root/nested"
   ck_nested_out=$(cat "$TMP/checkout.out")
   { [ "$ck_rc" = 0 ] && [ -n "$ck_dir" ] && [ ! -e "$ck_dir/head" ] && [ ! -e "$ck_dir/dirty" ]; } ||
@@ -5171,7 +5245,8 @@ EOF
   fi
   lifecycle_cleanup
 fi
-fi # leg 59-63, 66
+}
+harness_leg_run '59-63, 66: the source a run tested #source' leg_59_63_66
 
 # ---------------------------------------------------------------------------
 # Legs 53-58: the fleet's run-time slot, taken by the runner (gh-ocannl-1004)
@@ -5253,7 +5328,7 @@ slot_calls=
 # fail-closed default. The fake's recorded call is the argv the runner handed
 # the real slot, so it pins the wait (the cap bounds it) and that dune's own
 # argv passes through intact.
-if harness_leg '53: the slot kind #slot'; then
+leg_53() {
 slot_detail=
 for probe in "cpu:cc:sync_cc:--cpu" "unset:unset:cc:--gpu" "multidev:multidev_cc:cc:--cpu" \
              "gpu-test:cuda:cc:--gpu" "gpu-arrayjit:cc:hip:--gpu" "metal:cc:metal:--gpu" \
@@ -5343,11 +5418,12 @@ if [ -z "$slot_detail" ]; then
 else
   report 1 "slot: a fleet box's run takes its slot, --cpu only when none of the batch's resolved backends holds a GPU" "$slot_detail"
 fi
-fi # leg 53
+}
+harness_leg_run '53: the slot kind #slot' leg_53
 
 # Leg 54: a refused or unreachable slot is its own verdict, never a test one:
 # exit 75, dune never invoked, and the fleet's own line quoted in the log.
-if harness_leg '54: a refused or unreachable slot is SLOT REFUSED #slot'; then
+leg_54() {
 slot_detail=
 for mode in refuse unreachable; do
   slot_probe "slot-$mode" "$mode" cc cc run build @cheap
@@ -5363,10 +5439,11 @@ if [ -z "$slot_detail" ]; then
 else
   report 1 "slot: a refused or unreachable slot reports SLOT REFUSED (exit 75), and dune never runs" "$slot_detail"
 fi
-fi # leg 54
+}
+harness_leg_run '54: a refused or unreachable slot is SLOT REFUSED #slot' leg_54
 
 # Leg 55a: `start` prints the caller's dune command, not the supervisor's.
-if harness_leg '55a: start prints the caller'\''s command #slot'; then
+leg_55a() {
 slot_probe slot-start hold cc cc start build @cheap
 case $argv_out in
   *"execution slot"* | *"fake-fleet-worker"*) report 1 "slot: start prints the caller's command" "$argv_out" ;;
@@ -5374,24 +5451,26 @@ case $argv_out in
   *) report 1 "slot: start prints the caller's command" "${argv_out:-<nothing>}" ;;
 esac
 OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-slot-start "$repeat_root/tools/test-run.sh" wait last >/dev/null 2>&1
-fi # leg 55a
+}
+harness_leg_run '55a: start prints the caller'\''s command #slot' leg_55a
 
 # Leg 55: a red suite under a slot is still FAIL -- the slot's admission line
 # is what tells the two apart, not the status.
-if harness_leg '55: a red suite under a held slot is still FAIL #slot'; then
+leg_55() {
 argv_mode=red slot_probe slot-red hold cc cc run build @cheap
 case "$argv_rc:$argv_out" in
   1:*"verdict: FAIL"*) report 0 "slot: a red suite under a held slot is still FAIL" ;;
   *) report 1 "slot: a red suite under a held slot is still FAIL" "exit $argv_rc: $argv_out" ;;
 esac
-fi # leg 55
+}
+harness_leg_run '55: a red suite under a held slot is still FAIL #slot' leg_55
 
 # Leg 55b: inside a live measurement hold the slot admits the batch under the
 # hold (`inside measurement <id>`, lukstafi/ludics-lite#480) -- an admission
 # like a held slot's, so a refusal line the batch itself logs leaves a red
 # suite FAIL, never SLOT REFUSED. The probe's trailing `measurement <id>` still
 # reads as a fleet box.
-if harness_leg '55b: a batch inside a measurement hold is admitted #slot'; then
+leg_55b() {
 argv_mode=red slot_probe slot-measurement measurement cc cc run build @cheap
 case "$argv_rc:$argv_out" in
   1:*"verdict: FAIL"*)
@@ -5405,13 +5484,14 @@ case "$argv_rc:$argv_out" in
   *) report 1 "slot: a batch admitted inside a measurement hold is admitted, not SLOT REFUSED" \
        "exit $argv_rc: $argv_out" ;;
 esac
-fi # leg 55b
+}
+harness_leg_run '55b: a batch inside a measurement hold is admitted #slot' leg_55b
 
 # Leg 56: no slot where the fleet cannot give one safely -- a fleet-worker.sh
 # without the probe (a version from before nested slots, around which a
 # worker's own wrapper would cost two slots), the slot turned off, and repeat
 # -- each runs dune directly and says nothing about a slot.
-if harness_leg '56: no slot where the fleet cannot give one safely #slot'; then
+leg_56() {
 slot_detail=
 slot_probe slot-noprobe noprobe cc cc run build @cheap
 { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] && [ -z "$slot_calls" ] &&
@@ -5448,7 +5528,8 @@ if [ -z "$slot_detail" ]; then
 else
   report 1 "slot: no probe, the slot turned off, and repeat all run dune directly" "$slot_detail"
 fi
-fi # leg 56
+}
+harness_leg_run '56: no slot where the fleet cannot give one safely #slot' leg_56
 
 # Leg 57: the configurations the backends are read from are the ones that set
 # a backend. Every tracked `ocannl_config` naming one must sit in one of
@@ -5457,7 +5538,7 @@ fi # leg 56
 # the runner reads it too.
 # BATCH_CONFIG_DIRS as batch-backends.sh declares it, which legs 57 and 58 read.
 slot_dirs=$(sed -n 's/^BATCH_CONFIG_DIRS="\(.*\)"$/\1/p' "$HERE/batch-backends.sh")
-if harness_leg '57: backend-bearing configurations are the ones read #slot'; then
+leg_57() {
 slot_detail=
 [ -n "$slot_dirs" ] || slot_detail="BATCH_CONFIG_DIRS not found in batch-backends.sh"
 if [ -z "$slot_detail" ] && git -C "$HERE/.." rev-parse --git-dir >/dev/null 2>&1; then
@@ -5476,7 +5557,8 @@ if [ -z "$slot_detail" ]; then
 elif [ "$slot_detail" != skipped ]; then
   report 1 "batch: the backend-bearing configurations are the ones the backends are read from" "$slot_detail"
 fi
-fi # leg 57
+}
+harness_leg_run '57: backend-bearing configurations are the ones read #slot' leg_57
 
 # Leg 58: the two readers the backends come from are the ones test/config
 # builds. The legs above drive fakes, so a renamed executable, a dropped
@@ -5484,7 +5566,7 @@ fi # leg 57
 # pass them while every real batch fell back to every backend -- a narrower
 # width and a GPU token, silently. Pinned against the stanzas and the readers'
 # own sources instead.
-if harness_leg '58: the backend readers are test/config'\''s #slot'; then
+leg_58() {
 slot_detail=
 slot_src=$HERE/batch-backends.sh
 slot_built=$(sed -n 's|.*"\$dune" build \(\./test/config/[A-Za-z0-9_.]* \./test/config/[A-Za-z0-9_.]*\) .*|\1|p' "$slot_src")
@@ -5532,7 +5614,8 @@ if [ -z "$slot_detail" ]; then
 else
   report 1 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar" "$slot_detail"
 fi
-fi # leg 58
+}
+harness_leg_run '58: the backend readers are test/config'\''s #slot' leg_58
 
 # Leg 78: a test configuration's backend counts only where the batch reaches a
 # stanza that reads it (gh-ocannl-1095). A test configuration naming hip --
@@ -5542,7 +5625,7 @@ fi # leg 58
 # width and --cpu, its log saying why; one reaching a stanza that names cc
 # holds cc alone, the configuration unread. The control: the same batch
 # reaching a stanza that reads the configuration is hip's -- -j 4 and --gpu.
-if harness_leg '78: a configuration'\''s backend counts only where a reached stanza reads it #slot'; then
+leg_78() {
 reads_label="batch: a configuration's backend counts only where a reached stanza reads it"
 reads_detail=
 native_fleet=$fleet_none
@@ -5576,7 +5659,8 @@ if [ -z "$reads_detail" ]; then
 else
   report 1 "$reads_label" "$reads_detail"
 fi
-fi # leg 78
+}
+harness_leg_run '78: a configuration'\''s backend counts only where a reached stanza reads it #slot' leg_78
 
 # ---------------------------------------------------------------------------
 # Legs 75-77: a wedged device cannot hold a batch (gh-ocannl-1211)
@@ -5598,7 +5682,7 @@ fi # leg 78
 # fixture's dune is perl renamed through $0, which Linux (prctl) and macOS (the
 # argv area BSD ps reads) both show as the process name; the leg skips only
 # where a renamed process does not read back as `dune` (Git Bash, say).
-if harness_leg '75: the per-test cap #device'; then
+leg_75() {
 test_cap_label="test cap: a test past --test-cap ends the run as TIMEOUT naming it; a test inside it, a slow dune and the slot's holder do not"
 perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
 test_cap_named=$!
@@ -5688,7 +5772,8 @@ else
   unset REPEAT_TEST_ACTION_PID
   if [ -z "$test_cap_detail" ]; then report 0 "$test_cap_label"; else report 1 "$test_cap_label" "$test_cap_detail"; fi
 fi
-fi # leg 75
+}
+harness_leg_run '75: the per-test cap #device' leg_75
 
 # Leg 76: the device probe, against a stand-in (OCANNL_TOOL_DEVICE_PROBE) that
 # answers, fails fast, or never answers, per backend. A GPU batch's probe runs
@@ -5755,7 +5840,7 @@ probe_hang_run() { # start-evidence (pid|child) tag test-backend arrayjit-backen
   done
 }
 probe_calls= probe_hang_start= probe_hang_took=
-if harness_leg '76: the device probe #device'; then
+leg_76() {
 probe_label="device probe: a GPU batch whose fresh device query does not answer is DEVICE UNHEALTHY, dune never started"
 probe_detail=
 probe_root=$(cd "$repeat_root" && pwd -P)
@@ -5861,10 +5946,11 @@ build @cheap" ] && grep -qF "not probed: $want_exe did not build" "$argv_dir/dev
   done
 fi
 if [ -z "$probe_detail" ]; then report 0 "$probe_label"; else report 1 "$probe_label" "$probe_detail"; fi
-fi # leg 76
+}
+harness_leg_run '76: the device probe #device' leg_76
 
 # Leg 77: `plan` reports the probe and the per-test cap, and asks no device.
-if harness_leg '77: plan reports the probe and the per-test cap #device'; then
+leg_77() {
 plan_probe_detail=
 probe_run probe-plan hip cc "" "" plan build @cheap
 { [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && [ -z "$probe_calls" ] &&
@@ -5897,7 +5983,8 @@ if [ -z "$plan_probe_detail" ]; then
 else
   report 1 "plan: reports the device probe and the per-test cap, asking no device" "$plan_probe_detail"
 fi
-fi # leg 77
+}
+harness_leg_run '77: plan reports the probe and the per-test cap #device' leg_77
 
 # Leg 83: `repeat` has both bounds (gh-ocannl-1252). A repeat samples timing-dependent goldens,
 # often GPU tests, and ran with neither: a wedged device held it for N times the iteration cap.
@@ -5908,7 +5995,7 @@ fi # leg 77
 # batch's device probe runs before each iteration, inside it: a query that does not answer ends
 # the set as DEVICE UNHEALTHY (69) with dune never started -- not even its clean -- and an answer
 # lets every iteration run, the device asked once each.
-if harness_leg '83: repeat has both bounds #repeat'; then
+leg_83() {
 rb_label="repeat bounds: a test past the per-test cap ends the set as TIMEOUT naming it, a wedged device ends it as DEVICE UNHEALTHY; inside the cap, an answering device and a CPU batch's default do not"
 if [ -z "${test_cap_named_ok:-}" ]; then
   perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
@@ -6022,7 +6109,9 @@ else
   fi
   if [ -z "$rb_detail" ]; then report 0 "$rb_label"; else report 1 "$rb_label" "$rb_detail"; fi
 fi
-fi # leg 83
+}
+harness_leg_run '83: repeat has both bounds #repeat' leg_83
+
 
 # ---------------------------------------------------------------------------
 # Leg 79: credentials never reach dune (gh-ocannl-1280)
@@ -6037,7 +6126,7 @@ fi # leg 83
 # that dune's own trace. The negative control is the shipping script with its
 # scrub cut out, which must hand dune both credentials: an observer that cannot
 # see them proves nothing about the scrub.
-if harness_leg '79: credentials never reach dune #credentials'; then
+leg_79() {
 cred_label="credentials: dune runs without GH_TOKEN and FOO_API_KEY, a plain variable and OCANNL_TOOL_* still pass"
 cred_nc_label="negative control: with the scrub cut out, dune sees both credentials"
 cred_trace_label="credentials: the run's real dune trace names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable"
@@ -6045,8 +6134,8 @@ cred_trace_nc_label="negative control: with the scrub cut out, the real trace na
 cred_mutant=$(mutant no-credential-scrub \
   '/^  eval "\$\(credential_env_scrub_text\)" \|\|$/ { getline; print "  :"; next } { print }')
 if [ -z "$cred_mutant" ] || cmp -s "$SRC" "$cred_mutant"; then
-  echo "leg 79: the credential scrub could not be cut out of $SRC; the mutant is broken" >&2
-  exit 2
+  harness_abandon "the credential scrub could not be cut out of $SRC; the mutant is broken"
+  return
 fi
 cred_bin=$TMP/cred-bin
 mkdir -p "$cred_bin"
@@ -6064,7 +6153,7 @@ cred_root() { # name script -> a fixture root running SCRIPT as tools/test-run.s
   local root=$TMP/$1
   mkdir -p "$root/tools" "$root/scripts" "$root/_build"
   cp "$2" "$root/tools/test-run.sh"
-  stage_sourced "$root"
+  stage_sourced "$root" || return 1
   chmod +x "$root/tools/test-run.sh"
   printf '%s' "$root"
 }
@@ -6076,8 +6165,8 @@ cred_run() { # root runs-dir names-file subcommand argv...: the launch, with the
     "$root/tools/test-run.sh" "$@" >"$names.out" 2>&1
 }
 cred_has() { grep -qx -e "$1" "$2"; }
-cred_ship=$(cred_root cred-ship "$SRC")
-cred_cut=$(cred_root cred-cut "$cred_mutant")
+cred_ship=$(cred_root cred-ship "$SRC") && cred_cut=$(cred_root cred-cut "$cred_mutant") ||
+  { harness_abandon "cannot stage the credential fixture roots (what test-run.sh sources)"; return; }
 cred_rc=0
 PATH=$cred_bin:$PATH cred_run "$cred_ship" "$TMP/cred-runs" "$TMP/cred-ship.names" run build @fixture ||
   cred_rc=$?
@@ -6134,8 +6223,8 @@ cred_opam_run() { # tag script -> names file; 0 when the opam environment was as
   [ -e "$TMP/$1.asked" ]
 }
 if [ -z "$cred_opam_mutant" ] || cmp -s "$SRC" "$cred_opam_mutant"; then
-  echo "leg 79: select_dune's scrub could not be cut out of $SRC; the mutant is broken" >&2
-  exit 2
+  harness_abandon "select_dune's scrub could not be cut out of $SRC; the mutant is broken"
+  return
 elif PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v dune >/dev/null 2>&1; then
   skip "$cred_opam_label" "a dune in the system directories: select_dune never sources the opam environment"
   skip "$cred_opam_nc_label" "a dune in the system directories: select_dune never sources the opam environment"
@@ -6247,8 +6336,8 @@ cred_quiet_run() { # dir
     CRED_TEST_NAMES=$1.names PATH=$cred_bin:$PATH bash "$1/dune-quiet.sh" build @fixture >"$1.out" 2>&1
 }
 if cmp -s "$HERE/dune-quiet.sh" "$TMP/cred-quiet-cut/dune-quiet.sh"; then
-  echo "leg 79: the scrub could not be cut out of tools/dune-quiet.sh; the mutant is broken" >&2
-  exit 2
+  harness_abandon "the scrub could not be cut out of tools/dune-quiet.sh; the mutant is broken"
+  return
 fi
 cred_rc=0
 cred_quiet_run "$TMP/cred-quiet" || cred_rc=$?
@@ -6324,7 +6413,8 @@ else
     report 1 "$cred_trace_nc_label" "$cred_counts"
   fi
 fi
-fi # leg 79
+}
+harness_leg_run '79: credentials never reach dune #credentials' leg_79
 
 # ---------------------------------------------------------------------------
 # Leg 82: bisect (gh-ocannl-1225)
@@ -6339,7 +6429,7 @@ fi # leg 79
 # replaces tools/test-run.sh with one that exits 3 -- so a bisect that ran a
 # tested commit's own runner, rather than its frozen copy, aborts at the bad
 # end instead of finding anything.
-if harness_leg '82: bisect #bisect'; then
+leg_82() {
 if ! command -v git >/dev/null 2>&1; then
   skip 'bisect: exit mapping, backend, isolation (leg 82)' 'no git on PATH'
 else
@@ -6390,9 +6480,8 @@ EOF
     local s
     bi_n=$((bi_n + 1))
     bi_root=$TMP/bisect-repo-$bi_n
-    mkdir -p "$bi_root/tools" "$bi_root/scripts" || exit 2
-    cp "$SRC" "$bi_root/tools/test-run.sh" || exit 2
-    stage_sourced "$bi_root"
+    mkdir -p "$bi_root/tools" "$bi_root/scripts" && cp "$SRC" "$bi_root/tools/test-run.sh" || return 1
+    stage_sourced "$bi_root" || return 1
     printf 'pass\n' >"$bi_root/STATE"
     { bi_git init -q "$bi_root" && bi_git -C "$bi_root" config user.name harness &&
       bi_git -C "$bi_root" config user.email harness@invalid &&
@@ -6763,7 +6852,8 @@ EOF
   fi
   if [ -z "$bi_detail" ]; then report 0 "$l_cancel"; else report 1 "$l_cancel" "$bi_detail"; fi
 fi
-fi # leg 82
+}
+harness_leg_run '82: bisect #bisect' leg_82
 
 # ---------------------------------------------------------------------------
 # Leg 70: a leg that names no device still reads the fake (gh-ocannl-1108)
@@ -6779,8 +6869,9 @@ fi # leg 82
 # The controls: the path check refuses a probe unset in a subshell, which is
 # the leak; and an exported fixture pool caps the same hip run, so a probe
 # that never reached the width code cannot pass the uncapped half.
-if harness_leg '70: a leg that names no device reads the absent defaults #width'; then
+# Outside the body: leg 84 reads it, to tell that this leg reported.
 herm_label="a leg that names no device probe reads the harness's absent defaults: no device, no cap, no word"
+leg_70() {
 herm_detail=
 herm_view() { # the shipping readers' answers: paths, then dxg:nvidia:pool
   (
@@ -6832,6 +6923,69 @@ if [ -z "$herm_detail" ]; then
 else
   report 1 "$herm_label" "$herm_detail"
 fi
-fi # leg 70
+}
+harness_leg_run '70: a leg that names no device reads the absent defaults #width' leg_70
+
+# ---------------------------------------------------------------------------
+# Leg 84: a structural failure ends only its own leg (gh-ocannl-1374)
+# ---------------------------------------------------------------------------
+# Each leg's body is a function, and a check a leg cannot get past -- here,
+# leg 79's mutant that must cut the credential scrub out of test-run.sh -- ends
+# it through harness_abandon, not `exit`: the legs after it still run and are
+# reported. A copy of this harness runs against a copy of test-run.sh whose
+# scrub line is spelled so the mutant's pattern no longer matches it (the drift
+# the check exists for), with leg 79 and the file's last leg, 70, selected. The
+# copy must report leg 79 abandoned, report leg 70 and reach its footer. The
+# negative control is the same copy with that check's `return` put back as the
+# `exit 2` it was: the copy then aborts inside leg 79, saying so, and leg 70
+# never reports, so the oracle tells the two apart.
+self_label="a leg's structural failure ends that leg alone: leg 79's broken mutant is abandoned, and leg 70 after it still runs and reports"
+self_nc_label="negative control: the same check spelled as an exit aborts the harness inside leg 79, and leg 70 never reports"
+# The name leg 79 runs under, read from its own call below rather than restated.
+self_leg79=$(sed -n "s/^harness_leg_run '\\(79: [^']*\\)' leg_79\$/\\1/p" "$HERE/test-test-run.sh")
+self_run() { # tag: the copy under $TMP/self-<tag>, run on legs 79 and 70; sets self_rc, self_out
+  local root=$TMP/self-$1
+  self_rc=0
+  (
+    unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_EXPECTED_SKIPS \
+      OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD
+    mkdir -p "$root/tmp"
+    TMPDIR=$root/tmp bash "$root/tools/test-test-run.sh" --only '^(79|70):'
+  ) >"$root.out" 2>&1 || self_rc=$?
+  self_out=$(cat "$root.out")
+}
+self_stage() { # tag: a copy of tools/ and scripts/ with the scrub line respelled
+  local root=$TMP/self-$1
+  mkdir -p "$root" && cp -R "$HERE" "$root/tools" && cp -R "$HERE/../scripts" "$root/scripts" &&
+    awk '$0 == "  eval \"$(credential_env_scrub_text)\" ||" { n++; print "  eval \"$(credential_env_scrub_text)\"  ||"; next }
+         { print } END { exit n == 1 ? 0 : 1 }' "$SRC" >"$root/tools/test-run.sh" &&
+    bash -n "$root/tools/test-run.sh"
+}
+leg_84() {
+[ -n "$self_leg79" ] || { harness_abandon "no call runs leg 79 as leg_79 in $HERE/test-test-run.sh"; return; }
+local abandoned="FAIL  $self_leg79: abandoned, its later checks did not run"
+self_stage ship || { harness_abandon "the harness copy, or its respelled scrub line, could not be staged"; return; }
+self_run ship
+if [ "$self_rc" = 1 ] && grep -qxF "$abandoned" <<<"$self_out" &&
+   { grep -qxF "PASS  $herm_label" <<<"$self_out" || grep -qxF "FAIL  $herm_label" <<<"$self_out"; } &&
+   grep -qF "ran 2 leg(s):" <<<"$self_out" && ! grep -qF "aborted before finish" <<<"$self_out"; then
+  report 0 "$self_label"
+else
+  report 1 "$self_label" "exit $self_rc (want 1): $self_out"
+fi
+self_stage exit || { harness_abandon "the negative control's copy could not be staged"; return; }
+awk '$0 == "  harness_abandon \"the credential scrub could not be cut out of $SRC; the mutant is broken\"" {
+       print; getline; if ($0 == "  return") { n++; print "  exit 2"; next } }
+     { print } END { exit n == 1 ? 0 : 1 }' "$HERE/test-test-run.sh" >"$TMP/self-exit/tools/test-test-run.sh" ||
+  { harness_abandon "the negative control's exit could not be spliced into the harness copy"; return; }
+self_run exit
+if [ "$self_rc" = 2 ] && grep -qF "aborted before finish (rc=2) inside leg: $self_leg79" <<<"$self_out" &&
+   ! grep -qF "$herm_label" <<<"$self_out"; then
+  report 0 "$self_nc_label"
+else
+  report 1 "$self_nc_label" "exit $self_rc (want 2): $self_out"
+fi
+}
+harness_leg_run '84: a structural failure ends only its own leg #harness' leg_84
 
 finish

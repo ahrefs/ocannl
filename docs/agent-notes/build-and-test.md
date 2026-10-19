@@ -776,6 +776,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
   with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
   over the selected run and count its `FAIL  ` lines.
+- **A leg that cannot go on ends itself, never the harness** (gh-ocannl-1374). Each leg of
+  `tools/test-test-run.sh` is a function run by `harness_leg_run 'NAME' leg_N`; a check it cannot
+  get past (an extraction or mutant that matched nothing, a fixture repository that will not
+  commit, a fixture that never became ready) ends it with `harness_abandon DETAIL; return`: one
+  `FAIL  NAME: abandoned, its later checks did not run`, and the legs after it run and report.
+  An `exit` there ended the run and hid every later leg, the shape one leg's code drift kept
+  costing; the body's own last status is no verdict, only `report`/`skip`/`harness_abandon` are.
+  A shared fixture outside the legs that is not what they assume is a FAIL where it is built and
+  the run goes on; only a subject that cannot be staged at all (a missing script, the
+  sourced-files scan `stage_shared` runs) still exits 2. An `exit` that does escape a body is
+  named: `aborted before finish (rc=N) inside leg: NAME`. Leg 84 pins it on a copy of the
+  harness (leg 79 abandoned, leg 70 after it still reporting) against that copy with the check
+  spelled as an `exit`; `scripts/test-harness-support.sh` pins the primitives. `set -u`'s
+  unbound-variable abort is not containable this way and still ends the run.
 - Strict skips: the toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1` (every skip is a
   FAIL); the toolchain-free `harnesses` job runs `tools/test-harnesses.sh --shell --expected-skips
   tools/harness-skips-ci-shell.txt`, strict except for the `HARNESS<TAB>LABEL` lines listed

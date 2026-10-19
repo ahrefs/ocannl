@@ -5,7 +5,7 @@
 harness_args() {
   KEEP=0 failures=0 skipped=0 harness_finished=0
   harness_only= harness_only_set=0 legs_selected=0 legs_filtered=0
-  harness_ran=() harness_skips=()
+  harness_ran=() harness_skips=() harness_leg_running=
   while [ $# -gt 0 ]; do
     case $1 in
       --keep) KEEP=1 ;;
@@ -41,6 +41,24 @@ harness_leg() { # NAME
   legs_filtered=$((legs_filtered + 1))
   printf 'FILTERED  %s\n' "$1"
   return 1
+}
+# Run one leg whose body is a FUNCTION: `harness_leg_run 'NAME' leg_fn`, gated
+# as harness_leg gates. A body that cannot go on -- a fixture that is not what
+# its checks assume, an extraction that matched nothing -- ends with
+# `harness_abandon DETAIL; return`, which fails that leg alone; every later leg
+# still runs and is reported (gh-ocannl-1374). An `exit` there would end the
+# whole harness and hide them. The body's own status is not a verdict: its
+# last command's status is incidental, and only report/skip/harness_abandon
+# say anything.
+harness_leg_run() { # NAME FUNCTION
+  harness_leg "$1" || return 0
+  harness_leg_running=$1
+  "$2"
+  harness_leg_running=
+  return 0
+}
+harness_abandon() { # DETAIL -- inside a harness_leg_run body, then `return`
+  report 1 "${harness_leg_running:-a leg}: abandoned, its later checks did not run" "$1"
 }
 report() { # RC LABEL [DETAIL]
   if [ "$1" -eq 0 ]; then
@@ -115,7 +133,11 @@ finish() {
 harness_cleanup() {
   local rc=$?
   if [ "${harness_finished:-0}" != 1 ]; then
-    printf 'aborted before finish (rc=%s)\n' "$rc" >&2
+    if [ -n "${harness_leg_running:-}" ]; then
+      printf 'aborted before finish (rc=%s) inside leg: %s\n' "$rc" "$harness_leg_running" >&2
+    else
+      printf 'aborted before finish (rc=%s)\n' "$rc" >&2
+    fi
   fi
   # Callers release their owned children even with --keep.
   if declare -F cleanup_fixture >/dev/null; then cleanup_fixture; fi
