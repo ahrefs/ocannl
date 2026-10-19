@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# Legs for tools/ci-failed-rules.sh (gh-ocannl-1304), the listing a red CI
+# build job ends with. Its input is Dune's own output, so most legs build a
+# small real Dune project and read what that build printed: a red build lists
+# exactly the rule that failed, and the same project built green prints
+# nothing. The rest feed that captured log through what GitHub does to it
+# (timestamps, colour, CRLF, a byte-order mark, `gh run view --log` prefixes),
+# read it from a checkout of another revision, and pin the CI mode's
+# annotations and refusals. A mutant with the timestamp handling removed must
+# lose the GitHub-served leg, so that leg is seen to discriminate.
+# Usage: tools/test-ci-failed-rules.sh [--keep] [--only REGEX]
+#
+# In the `promotion` harness group, beside the other readers of Dune's output,
+# so CI runs it on current Dune and again at the declared floor.
+set -u
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+harness_args "$@"
+HERE=$(cd "$(dirname "$0")" && pwd)
+SRC=$HERE/ci-failed-rules.sh
+[ -f "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
+harness_scratch test-ci-failed-rules
+unset DUNE_BUILD_DIR DUNE_ROOT
+
+subject() { bash "$SRC" "$@"; }
+
+# Logs that need no build: a warning that did not fail the build stays out,
+# and the CI mode's refusals and host line.
+if harness_leg 'warning and alert blocks are left out #canned'; then
+  cat >"$TMP/warn.log" <<'LOG'
+File "lib/dune", line 3, characters 1-20:
+3 |  (flags (:standard))
+     ^^^^^^^^^^^^^^^^^^^
+Warning: this field is deprecated.
+File "lib/x.ml", line 2, characters 4-5:
+2 | let y = 1
+        ^
+Alert deprecated: Old.f
+File "lib/y.ml", line 4, characters 8-9:
+4 | let z = w
+            ^
+Error: Unbound value w
+LOG
+  out=$(cd "$TMP" && subject warn.log 2>&1); rc=$?
+  want='Failed dune rules (1), in the order dune reported them:
+  lib/y.ml:4  compile error
+      Error: Unbound value w'
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" 'warning and alert blocks are left out' "exit $rc; $out"
+fi
+if harness_leg 'CI mode on a missing log, and usage errors #canned'; then
+  out=$(subject --github "$TMP/absent.log" 2>&1); rc=$?
+  report "$([ "$rc" = 0 ] && [ "$out" = "No dune build log at $TMP/absent.log: this job failed before its dune build ran." ]; echo $?)" \
+    '--github on a missing log says the build never ran, exit 0' "exit $rc; $out"
+  out=$(subject "$TMP/absent.log" 2>&1); rc=$?
+  report "$([ "$rc" = 2 ] && [[ $out == *"cannot read"* ]]; echo $?)" 'a missing log is exit 2 outside CI mode' "exit $rc; $out"
+  out=$(subject --bogus 2>&1); rc=$?
+  report "$([ "$rc" = 2 ] && [[ $out == *"unknown argument"* ]]; echo $?)" 'an unknown option is exit 2' "exit $rc; $out"
+  : >"$TMP/empty.log"
+  printf 'OCANNL host: cpu="fixture"\n' >"$TMP/host.txt"
+  out=$(subject --github --host "$TMP/host.txt" "$TMP/empty.log" 2>&1); rc=$?
+  want="OCANNL host: cpu=\"fixture\"
+No failed dune rule in this job's build log: the failure lies in another step."
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" '--host prints the host line first; --github says when no rule failed' "exit $rc; $out"
+fi
+
+command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" 2>/dev/null
+harness_require dune
+
+proj=$TMP/proj
+mkdir -p "$proj/t" || exit 2
+printf '(lang dune 3.20)\n' >"$proj/dune-project"
+# The failing rule's name field sits in the middle of a stanza long enough
+# that dune's excerpt elides it, so only the source can name it -- the
+# revision leg below depends on that.
+write_fixture() { # EXIT-STATUS-OF-THE-FAILING-TEST
+  cat >"$proj/t/dune" <<DUNE
+(rule
+ (alias runtest-good)
+ (action
+  (progn)))
+
+(rule
+ ; The test under scrutiny. Its program exits
+ ; with the status the leg chooses, and the diff
+ ; rule below reads what it wrote. These lines
+ ; are long enough a stanza for dune to elide
+ ; its middle when it quotes the stanza, the
+ ; target field among it.
+ (target bad.actual)
+ (action
+  (with-stdout-to
+   %{target}
+   (run sh -c "echo noise from the failing test; exit $1"))))
+
+(rule
+ (alias runtest-bad)
+ (action
+  (diff bad.expected bad.actual)))
+
+(test
+ (name passing)
+ (modules passing))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-good)
+  (alias runtest-bad)))
+DUNE
+}
+printf 'noise from the failing test\n' >"$proj/t/bad.expected"
+printf 'let () = print_string "ok\\n"\n' >"$proj/t/passing.ml"
+printf 'ok\n' >"$proj/t/passing.expected"
+build() { # LOG TARGET...
+  local log=$1
+  shift
+  # CI=true: the display GitHub's runners get, which echoes each failing
+  # command.
+  (cd "$proj" && CI=true dune build --root . "$@") >"$log" 2>&1
+}
+first_two='Failed dune rules (1), in the order dune reported them:
+  t/dune:6-17  (rule) target bad.actual'
+ran_re="^      ran: \(cd _build/default/t && [^ ]*sh -c 'echo noise from the failing test; exit 3'\) > _build/default/t/bad\.actual$"
+# The listing of a red build: the header names the rule, its own target field
+# names it, and the command is the one dune ran. Nothing else is listed.
+listing_ok() { # OUTPUT RC
+  [ "$2" = 0 ] && [ "$(printf '%s\n' "$1" | sed -n '1,2p')" = "$first_two" ] &&
+    [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 3 ] &&
+    printf '%s\n' "$1" | sed -n '3p' | grep -qE "$ran_re"
+}
+
+write_fixture 3
+build "$TMP/red.log" @runtest; brc=$?
+if harness_leg 'a red build lists exactly the failing rule #dune'; then
+  out=$(cd "$proj" && subject "$TMP/red.log" 2>&1); rc=$?
+  if [ "$brc" = 1 ] && listing_ok "$out" "$rc"; then
+    report 0 'a red build lists exactly the failing rule'
+  else report 1 'a red build lists exactly the failing rule' "build exit $brc, exit $rc; $out"; fi
+  out=$(cd "$proj" && subject --github "$TMP/red.log" 2>&1); rc=$?
+  ann=$(printf '%s\n' "$out" | grep '^::error ')
+  if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$ann" | wc -l | tr -d ' ')" = 1 ] &&
+     [[ $ann == '::error file=t/dune,line=6,endLine=17,title=Failed dune rule::(rule) target bad.actual -- ran: (cd _build/default/t && '* ]]; then
+    report 0 '--github annotates the failing rule once'
+  else report 1 '--github annotates the failing rule once' "exit $rc; $out"; fi
+fi
+if harness_leg 'a GitHub-served log reads the same #dune'; then
+  # A job log as GitHub serves it: a byte-order mark, a timestamp on every
+  # line, dune's colour around the header, CRLF line ends; then the same lines
+  # behind the JOB<TAB>STEP<TAB> prefix of `gh run view --log-failed`.
+  esc=$(printf '\033')
+  awk -v esc="$esc" 'BEGIN { printf "\357\273\277" }
+    /^File "/ { $0 = esc "[0;1m" $0 esc "[0m" }
+    { printf "2026-10-19T13:11:44.%07dZ %s\r\n", NR, $0 }' "$TMP/red.log" >"$TMP/served.log"
+  awk '{ sub(/^\357\273\277/, ""); printf "Build (ubuntu-latest, 5.5.x, main)\tRun opam exec -- dune build\t%s\n", $0 }' \
+    "$TMP/served.log" >"$TMP/gh-view.log"
+  ok=0
+  for form in served gh-view; do
+    out=$(cd "$proj" && subject "$TMP/$form.log" 2>&1); rc=$?
+    listing_ok "$out" "$rc" || { ok=1; detail="$form: exit $rc; $out"; }
+  done
+  report "$ok" 'a GitHub-served log reads the same' "${detail:-}"
+  # The negative control: without the timestamp handling the header is not
+  # at the start of its line, and the served log lists nothing.
+  if mut=$(mutant no-timestamps '{ sub(/^  sub\("\^" ts, "", s\)$/, "  # timestamps kept") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/served.log" 2>&1); rc=$?
+    if grep -q '^  # timestamps kept$' "$mut" && ! listing_ok "$out" "$rc"; then
+      report 0 'negative control: keeping timestamps loses the served log'
+    else report 1 'negative control: keeping timestamps loses the served log' "mutant applied: $(grep -c 'timestamps kept' "$mut"); $out"; fi
+  else report 1 'negative control: keeping timestamps loses the served log' 'mutant did not build'; fi
+fi
+if harness_leg 'a log from another revision names nothing it cannot see #dune'; then
+  # Read from a checkout where the stanza has moved down a line: the lines
+  # dune quoted no longer match, so the name comes from the excerpt alone
+  # (which elides the target) rather than from whatever now sits there.
+  moved=$TMP/moved
+  mkdir -p "$moved/t" && { printf '; a line added since\n'; cat "$proj/t/dune"; } >"$moved/t/dune"
+  out=$(cd "$moved" && subject "$TMP/red.log" 2>&1); rc=$?
+  if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | sed -n '2p')" = '  t/dune:6-17  (rule)' ]; then
+    report 0 'a log from another revision names nothing it cannot see'
+  else report 1 'a log from another revision names nothing it cannot see' "exit $rc; $out"; fi
+fi
+if harness_leg 'a dune error without a location is listed #dune'; then
+  build "$TMP/alias.log" @t/runtest-nonesuch; brc=$?
+  out=$(cd "$proj" && subject "$TMP/alias.log" 2>&1); rc=$?
+  if [ "$brc" = 1 ] && [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | sed -n '1p')" = 'dune errors without a location (1):' ] &&
+     printf '%s\n' "$out" | sed -n '2p' | grep -q '^  Error: .*runtest-nonesuch'; then
+    report 0 'a dune error without a location is listed'
+  else report 1 'a dune error without a location is listed' "build exit $brc, exit $rc; $out"; fi
+fi
+if harness_leg 'a golden mismatch and a compile error are told apart #dune'; then
+  write_fixture 0
+  printf 'something else\n' >"$proj/t/passing.expected"
+  build "$TMP/golden.log" @runtest; brc=$?
+  printf 'let () = print_string 3\n' >"$proj/t/passing.ml"
+  build "$TMP/compile.log" @runtest; crc=$?
+  out=$(cd "$proj" && subject "$TMP/golden.log" "$TMP/compile.log" 2>&1); rc=$?
+  want='Failed dune rules (2), in the order dune reported them:
+  t/passing.expected:1  output differs from this golden
+  t/passing.ml:1  compile error'
+  if [ "$brc" = 1 ] && [ "$crc" = 1 ] && [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | sed -n '1,3p')" = "$want" ] &&
+     printf '%s\n' "$out" | sed -n '4p' | grep -q '^      Error: '; then
+    report 0 'a golden mismatch and a compile error are told apart'
+  else report 1 'a golden mismatch and a compile error are told apart' "builds $brc/$crc, exit $rc; $out"; fi
+  printf 'let () = print_string "ok\\n"\n' >"$proj/t/passing.ml"
+  printf 'ok\n' >"$proj/t/passing.expected"
+fi
+if harness_leg 'the green build prints nothing #dune'; then
+  write_fixture 0
+  build "$TMP/green.log" @runtest; brc=$?
+  out=$(cd "$proj" && subject "$TMP/green.log" 2>&1); rc=$?
+  report "$([ "$brc" = 0 ] && [ "$rc" = 0 ] && [ -z "$out" ]; echo $?)" 'the green build prints nothing' \
+    "build exit $brc, exit $rc; $out; $(cat "$TMP/green.log")"
+fi
+finish

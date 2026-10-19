@@ -233,6 +233,10 @@ jobs:
     # keep the cache disabled.
     env:
       DUNE_CACHE: disabled
+      # Which dune targets an unsharded job builds: one spelling, which the
+      # bash and the PowerShell build steps below both read (a sharded job
+      # asks tools/ci-shard.sh for its share instead).
+      SUITE_TARGETS: ${{ matrix.suite == 'train' && '@train' || '@default @runtest @bin-smoke' }}
     steps:
     - name: Set git to use LF
       run: |
@@ -474,9 +478,11 @@ jobs:
     # On the first ubuntu `main` shard only: one leg answers the question.
     - name: Check non-default module log level and trace semantics
       if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main' && startsWith(matrix.shard, '1/')
+      # `shell: bash` for pipefail, as on the build steps below.
+      shell: bash
       env:
         OCANNL_LOG_LEVEL_CC_BACKEND: 3
-      run: opam exec -- dune build "@check" "@test/operations/runtest-cc_backend_trace_name"
+      run: opam exec -- dune build "@check" "@test/operations/runtest-cc_backend_trace_name" 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
     # cc_march_census's two aarch64 columns skip without an aarch64 cross gcc,
     # and until gh-ocannl-1120 no runner had one: gh-ocannl-1112's bf16 spill reached
     # master unseen. The script stages gcc 13, the runner's own
@@ -511,19 +517,42 @@ jobs:
     # directories that keep multidev goldens (`grep -rl multidev_cc
     # test/*/dune`) over a full second suite.
     #
-    # The aliases are QUOTED for the Windows legs, whose default `run:` shell is
-    # PowerShell: unquoted, `@default`/`@runtest`/`@bin-smoke`/`@train` are splatted (empty)
-    # variables and the command degrades to a plain `dune build` that compiles
-    # everything and runs no tests -- a silent false green. bash and cmd are
-    # unaffected.
-    - if: ${{ !matrix.shard }}
-      run: opam exec -- dune build ${{ matrix.suite == 'train' && '"@train"' || '"@default" "@runtest" "@bin-smoke"' }}
+    # Every dune build step also copies its output into
+    # `$RUNNER_TEMP/dune-build.log`, which the failure listing at the end of
+    # the job reads (gh-ocannl-1304). The copy is a pipe into `tee`, and a pipe
+    # reports its LAST command's status: without pipefail the step would
+    # report tee's 0 for a red build -- a silent false green. So each bash
+    # build step says `shell: bash`, which GitHub runs with `-eo pipefail`
+    # (the implicit default shell is `bash -e`, without it), and the
+    # PowerShell one exits with dune's own `$LASTEXITCODE`.
+    # test/operations/ci_matrix.sh holds both.
+    #
+    # The targets come from SUITE_TARGETS (the job's env, above). The bash
+    # step word-splits it; on Windows, whose default `run:` shell is
+    # PowerShell, the step splits it into an array, whose elements reach dune
+    # as separate arguments. An `@`-word written out on that command line
+    # unquoted would instead be a splatted (empty) variable, and the command
+    # would degrade to a plain `dune build` that compiles everything and runs
+    # no tests -- a silent false green.
+    - if: ${{ !matrix.shard && runner.os != 'Windows' }}
+      shell: bash
+      run: opam exec -- dune build $SUITE_TARGETS 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
+    # PowerShell turns each line of a native command's redirected stderr into
+    # an error record, and `$ErrorActionPreference = 'stop'` (GitHub's
+    # template) could stop the step on the first of them; `"$_"` writes each
+    # record as its plain text, as the log shows it.
+    - if: ${{ !matrix.shard && runner.os == 'Windows' }}
+      run: |
+        $ErrorActionPreference = 'Continue'
+        opam exec -- dune build @($env:SUITE_TARGETS -split ' ') 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath "$env:RUNNER_TEMP\dune-build.log" -Append
+        exit $LASTEXITCODE
     # A sharded job builds the share of its suite that `tools/ci-shard.sh`
     # assigns it, still in one walk. The script refuses (exit 2) rather than
     # print a listing it could not validate, and the assignment is expanded
     # into the log, so a red shard names what it was carrying. ubuntu only,
     # which is why plain bash may word-split the targets.
     - if: ${{ matrix.shard }}
+      shell: bash
       env:
         SHARD: ${{ matrix.shard }}
         SUITE: ${{ matrix.suite }}
@@ -532,7 +561,7 @@ jobs:
         echo "::group::$SUITE shard $SHARD: $(printf '%s\n' "$targets" | wc -l) targets"
         printf '%s\n' "$targets"
         echo "::endgroup::"
-        opam exec -- dune build $targets
+        opam exec -- dune build $targets 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
     # cc_march_census writes its per-row table to a file rather than to stderr,
     # which dune truncates in the middle; the file lives in `_build` and dies
     # with the runner, so a failing leg keeps it as an artifact.
@@ -646,6 +675,28 @@ jobs:
         # Not covered: the second-launch lock refusal (exit 2), which needs a
         # run still holding the lock when the second arrives -- i.e. minutes of
         # real build, against a step meant to cost seconds.
+    # A red job's last output (gh-ocannl-1304): the dune rules that failed,
+    # read from the build steps' log, each also annotated on the run's
+    # summary page. Without it a red log ends with
+    # whatever test printed last while the failing rule is named thousands of
+    # lines up: gh-ocannl-1271's OCaml-5.3 red was blamed on the last test to
+    # print for three scheduled runs in a row. Last in the job, so even the
+    # Windows smoke step's output comes before it. It exits 1 on purpose: the
+    # job is red already, and a failed step is what `gh run view --log-failed`
+    # prints. Git Bash by absolute path on Windows, for the reasons the smoke
+    # step gives.
+    - name: List the failed dune rules
+      if: ${{ failure() && runner.os != 'Windows' }}
+      shell: bash
+      run: |
+        tools/ci-failed-rules.sh --github "$RUNNER_TEMP/dune-build.log"
+        exit 1
+    - name: List the failed dune rules (Windows)
+      if: ${{ failure() && runner.os == 'Windows' }}
+      shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
+      run: |
+        tools/ci-failed-rules.sh --github "$RUNNER_TEMP/dune-build.log"
+        exit 1
 
   # Formatting is a gate here, and a job of its own rather than a step of the
   # build: `dune build @fmt` compiles nothing, so this switch holds only the
