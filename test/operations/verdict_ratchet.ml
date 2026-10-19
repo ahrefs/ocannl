@@ -4133,6 +4133,32 @@ let () =
   let rows = Collections.Rows.map raw ~f:Fn.id in
   Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "raw" ] );
+    ( "refuses a gate that closes on the labelled collection a gated subset claim reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (Set.is_empty allowed)) ~on:"cc" "every requirement is allowed"
+    (Set.is_subset required ~of_:allowed)|ocaml},
+      [ "allowed" ] );
+    ( "refuses a gate read off the key a map update inserts into the population",
+      {ocaml|open Base
+let () =
+  let table = Map.update empty sample ~f:(fun _ -> 1) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all entries pass" (Map.to_alist table) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a field a matched record update gives",
+      {ocaml|open Base
+let () =
+  let probe = { defaults with found = raw } in
+  let rows = match probe with { found; _ } -> found in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off the base of a matched record update for a field it leaves",
+      {ocaml|open Base
+let () =
+  let probe = { defaults with found = raw } in
+  let rows = match probe with { kept; _ } -> kept in
+  Verdict.gated_all ~when_:(not (is_default defaults)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "defaults" ] );
     ( "follows a collection function through a value alias",
       {ocaml|open Base
 let () =

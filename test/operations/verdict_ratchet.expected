@@ -607,6 +607,10 @@ refuses a gate that closes on the collection a gated membership claim ranges ove
 refuses a gate that closes on the string a gated containment claim reads: true
 follows a collection module a local module exports through an open of it: true
 follows a collection module a local module exports through a path into it: true
+refuses a gate that closes on the labelled collection a gated subset claim reads: true
+refuses a gate read off the key a map update inserts into the population: true
+refuses a gate read off a field a matched record update gives: true
+refuses a gate read off the base of a matched record update for a field it leaves: true
 follows a collection function through a value alias: true
 follows a collection function a local open of List brings in: true
 accepts a gate beside a helper bound inside an open of List under a listed name: true

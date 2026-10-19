@@ -763,8 +763,15 @@ let quantified_arguments ~stdlib name arguments =
   let positional =
     List.filter_map arguments ~f:(function Ppxlib.Asttypes.Nolabel, a -> Some a | _ -> None)
   in
-  if stdlib then positional
-  else List.take positional (if String.is_substring name ~substring:"2" then 2 else 1)
+  (* The collection a predicate is labelled with: [Set.is_subset required ~of_:allowed]. *)
+  let of_ =
+    List.filter_map arguments ~f:(function
+      | Ppxlib.Asttypes.Labelled "of_", a -> Some a
+      | _ -> None)
+  in
+  (if stdlib then positional
+   else List.take positional (if String.is_substring name ~substring:"2" then 2 else 1))
+  @ of_
 
 (* What a gated claim the walk reached carries: the callee as written, the [Verdict.Claims] member
    it completes, whether that member is {!Verdict_callee.Ambiguous}, and every argument handed to it
@@ -976,7 +983,8 @@ let collection_functions =
          (* A removal selects its population, and on a mutable container it writes: what is left
             depends on the key removed. *)
          group Collection ~writes:On_mutable {| remove remove_multi |};
-         group Collection_and_callback ~writes:On_mutable {| update change update_and_return |};
+         (* An update builds its result from the key it inserts as well: [Map.update m key ~f]. *)
+         group Every_argument ~writes:On_mutable {| update change update_and_return |};
        ])
 
 let collection_function name = Map.find collection_functions name
@@ -1739,7 +1747,9 @@ let gate_census content =
             | _ -> all pattern)
         | Ppat_record (fields, _) -> (
             match literal () with
-            | { pexp_desc = Pexp_record (given, None); _ }, env, names ->
+            | { pexp_desc = Pexp_record (given, base); _ }, env, names ->
+                (* [{ defaults with found = raw }]: a field given is its component; one the update
+                   leaves is a part of the whole base. *)
                 List.concat_map fields ~f:(fun (field, inner) ->
                     (* What [record.field <- v] wrote into this field of the names on the way. *)
                     let written =
@@ -1755,7 +1765,12 @@ let gate_census content =
                     with
                     | Some (_, component) ->
                         self#parts ~extra:(extra @ written) inner (component, env)
-                    | None -> all inner)
+                    | None -> (
+                        match base with
+                        | Some base ->
+                            List.map (Lexical_scope.pattern_vars [ inner ]) ~f:(fun name ->
+                                (name, (base, env), extra @ written))
+                        | None -> all inner))
             | _ -> all pattern)
         | _ -> all pattern
 
