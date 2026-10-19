@@ -129,7 +129,7 @@ let leaves = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits base
 let scalar_blocktiles =
   List.filter leaves ~f:(fun q ->
       q.Autotune.sk_gpu && (not q.Autotune.sk_mma) && (not q.Autotune.sk_epilogue)
-      && (not q.Autotune.sk_coalesce)
+      && Option.is_none q.Autotune.sk_coalesce
       && Option.is_none q.Autotune.sk_swizzle
       && q.Autotune.sk_depth = 1)
 

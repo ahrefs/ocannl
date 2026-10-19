@@ -114,12 +114,11 @@ let () =
         (String.is_substring src ~substring:"(half)pow((float)("))
 
 (* The same operands as one [Vectorized] elementwise loop with both operands read from buffers: the
-   shape the explicit vector renderings take, unlike [run]'s fixed-index statements. On Metal the
-   packed route ([vector_style = `Packed_struct]) is where a pow call could meet a pack operand
-   instead of reaching [binop_syntax]'s widening arm, so this pins that every pow call there stays
-   the widened scalar form, whichever route the loop takes. Today none of it packs at half (Metal's
-   [vector_prec_ok] admits f32 only, and its per-lane [lane_expr] declines [ToPowOf] even at f32),
-   so the case guards the change that enables either. The extent, 27, is not a lane multiple, so a
+   shape the explicit vector renderings take, unlike [run]'s fixed-index statements. On the GPU
+   backends it takes the packed route ([vector_style = `Packed_struct], gh-ocannl-1295): [half8_t]
+   pack loads and stores with each lane computed as a scalar through [binop_syntax]. That is where a
+   pow call could meet a pack operand instead of reaching the widening arm, so this pins that every
+   pow call there stays the widened scalar form. The extent, 27, is not a lane multiple, so the
    packed rendering also keeps its serial remainder. *)
 let run_vec ~prec ~op ~name ~first_id =
   let len = List.length cases in
@@ -158,14 +157,13 @@ let () =
             Stdio.eprintf "(not part of the golden) vectorized case %d: half %h, f32 narrowed %h\n"
               i v want;
           ok);
-      (* The loop geometry is one the packed route takes (lane-aligned, device-resident, wider than
-         a pack): the same loop at f32 with a [Mul] packs. Without this the pow leg could be
-         declining for a reason of its own, and would say nothing about the packed route. *)
-      ignore (run_vec ~prec:Ops.single ~op:Mul ~name:"hpow_vec_ctl" ~first_id:19600 : float array);
-      gated ~when_:is_metal ~on:backend_name
-        "the vectorized loop's geometry packs on Metal (its f32 Mul twin renders packed)"
-        (String.is_substring (Generated.read "hpow_vec_ctl") ~substring:"reinterpret_cast");
       let src = Generated.read "hpow_vec" in
+      (* Without this the pow claim below could hold because the loop declined the packed route, and
+         would say nothing about it. *)
+      gated ~when_:(is_metal || cuda_like) ~on:backend_name
+        "the vectorized half pow loop renders packed (half8_t pack loads and stores)"
+        (String.is_substring src ~substring:"const half8_t*>(&"
+        && String.is_substring src ~substring:" half8_t*>(&");
       let widened = count src ~pattern:"(half)pow((float)(" and calls = count src ~pattern:"pow(" in
       gated ~when_:is_metal ~on:backend_name
         ~detail:(fun () -> Printf.sprintf "%d of %d pow calls widened" widened calls)
