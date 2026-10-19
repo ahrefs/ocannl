@@ -51,3 +51,8 @@ an unqualified mention under an open counts: true
 a same-named type elsewhere credits by name, conservatively: true
 dune's preprocessed interface beside its source is not an interface source: true
 a type's derived mentions are exactly what its derivers generate, members aside: true
+every derived export set is exactly what the installed derivers generate: true
+a generated helper or module referenced only through an extension point or a path is live: true
+a genuinely unused generated helper is reported: true
+a [%hash] of a bare constructor calls hash_<type>, not its fold: true
+a deriving with arguments the census does not model is refused: true

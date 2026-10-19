@@ -251,6 +251,7 @@ let raw_entries =
     ( "dead_export_scan.ml",
       [
         "[scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules";
+        "[scanner-refusal:b10ed46107421e53b9d08523e194ffa2] dead-export census does";
         "[scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch";
         "[scanner-refusal:a2a944c677a0439ea6a8b98ef3decc70] its mention counts";
         "[scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does";

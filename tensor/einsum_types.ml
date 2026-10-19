@@ -74,7 +74,7 @@ type parsed_axis_labels = {
   given_beg_output : axis_spec list;
   labels : axis_spec axis_map;
 }
-[@@deriving sexp_of, fields]
+[@@deriving sexp_of]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent
     whether additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for
     broadcasting). The string can be used to identify a row variable; parsing ["..."] yields the

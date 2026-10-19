@@ -488,8 +488,8 @@ let () =
 
 (* The derived half of a type's mentions, held equal to the derivers' own expansion rather than to a
    restatement of their naming rules. Referencing each registration links it, so [Driver] expands
-   the fixture with the real derivers; [hash] registers nothing a program can reference, so its
-   expander is called directly. *)
+   the fixture with the real derivers; [ppx_hash] exports nothing a program can reference, but its
+   archive is force-linked, so listing the library registers it. *)
 let _registered =
   ( Ppx_sexp_conv.sexp,
     Ppx_compare.compare,
@@ -532,15 +532,8 @@ let () =
         | Ptype_abstract | Ptype_open -> []
       in
       let structure = Test_utils.Config_key_scan.structure_of source in
-      let hashed =
-        if String.is_substring source ~substring:"hash" then
-          let rec_flag, _ = single_type_declaration source in
-          Ppx_hash_expander.str_type_decl ~loc:declaration.ptype_loc ~path:"Fixture"
-            (rec_flag, [ declaration ])
-        else []
-      in
       let expanded =
-        generated_names (Ppxlib.Driver.map_structure structure @ hashed)
+        generated_names (Ppxlib.Driver.map_structure structure)
         |> List.filter ~f:(fun name ->
             (* What [fields] names after a label and [variants] after a constructor falls under the
                member boundary: crediting it would credit the member's name. *)
@@ -560,3 +553,91 @@ let () =
         Stdio.eprintf "%s\n  expansion: %s\n  mentions:  %s\n" source
           (String.concat ~sep:" " expanded) (String.concat ~sep:" " mentions);
       equal)
+
+(* gh-ocannl-913: the value census over [hash], [enumerate], [fields] and [variants]. Each export
+   set is held equal to what the installed derivers generate -- values and modules alike,
+   member-named ones included -- rather than to a restatement of their naming rules. *)
+let () =
+  let fixtures =
+    [
+      "type t = A | B of int [@@deriving hash]";
+      "type named = A | B of int [@@deriving hash]";
+      "type ('a, 'b) param = 'a * 'b [@@deriving hash]";
+      "type alias = int [@@deriving hash]";
+      "type t = A | B of bool [@@deriving enumerate]";
+      "type poly = [ `One | `Two of bool ] [@@deriving enumerate]";
+      "type t = { label_a : int; mutable label_b : string } [@@deriving fields]";
+      "type record = { label_a : int; mutable label_b : string } [@@deriving fields]";
+      "type t = Open | RHS1 | Undet of int [@@deriving variants]";
+      "type poly = [ `Method | `B of int ] [@@deriving variants]";
+      "type named = A [@@deriving sexp, compare, equal, hash, enumerate, variants]";
+    ]
+  in
+  Verdict.p_all "every derived export set is exactly what the installed derivers generate" fixtures
+    ~f:(fun source ->
+      let _, declaration = single_type_declaration source in
+      let expanded =
+        generated_names
+          (Ppxlib.Driver.map_structure (Test_utils.Config_key_scan.structure_of source))
+        |> List.filter ~f:(fun name -> not (Scan.is_sexp_of_converter name))
+      in
+      let derivers = Scan.derivers_of_type_declaration declaration in
+      let model = Scan.derived_names ~derivers declaration in
+      let equal = List.equal String.equal expanded model in
+      if not equal then
+        Stdio.eprintf "%s\n  expansion: %s\n  model:     %s\n" source
+          (String.concat ~sep:" " expanded) (String.concat ~sep:" " model);
+      equal);
+  let gen =
+    {|
+type h = H [@@deriving hash]
+type e = E [@@deriving enumerate]
+type r = { field_a : int } [@@deriving fields]
+type v = Va [@@deriving variants]
+type unused = U [@@deriving hash, enumerate]
+type r2 = { other_field : int } [@@deriving fields]
+|}
+  in
+  let exports = Scan.exports_of_source ~source:"arrayjit/lib/gen.ml" gen in
+  let count sources key =
+    let sources = ("arrayjit/lib/gen.ml", gen) :: sources in
+    Hashtbl.find_exn (Scan.counts ~exports (Scan.references ~exports ~sources)) ("Gen." ^ key)
+  in
+  let through_extensions =
+    [
+      ( "user.ml",
+        "let a = [%hash: Gen.h]\n\
+         let b = [%hash_fold: Gen.h list]\n\
+         let c = [%all: Gen.e option]\n\
+         let d = Gen.Fields_of_r.names\n\
+         open Gen\n\
+         let e = Variants_of_v.to_rank\n" );
+    ]
+  in
+  Verdict.p_all
+    "a generated helper or module referenced only through an extension point or a path is live"
+    [ "hash_h"; "hash_fold_h"; "all_of_e"; "Fields_of_r"; "Variants_of_v" ] ~f:(fun key ->
+      count through_extensions key > 0);
+  Verdict.p_all "a genuinely unused generated helper is reported"
+    [
+      "hash_unused";
+      "hash_fold_unused";
+      "all_of_unused";
+      "is_va";
+      "va_val";
+      "other_field";
+      "Fields_of_r2";
+    ] ~f:(fun key -> count through_extensions key = 0);
+  let bare_hash =
+    Scan.references ~exports ~sources:[ ("user.ml", "let a = [%hash: Gen.unused]\n") ]
+    |> List.map ~f:(fun (reference : Scan.reference) -> reference.value)
+  in
+  Verdict.p "a [%hash] of a bare constructor calls hash_<type>, not its fold"
+    (List.equal String.equal bare_hash [ "hash_unused" ]);
+  Verdict.p "a deriving with arguments the census does not model is refused"
+    (match
+       Scan.exports_of_source ~source:"arrayjit/lib/args.ml"
+         "type r = { a : int } [@@deriving sexp_of, fields ~getters]"
+     with
+    | _ -> false
+    | exception Scan.Unmodelled_deriving_arguments { deriver = "fields"; line = 1 } -> true)
