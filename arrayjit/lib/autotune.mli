@@ -1688,10 +1688,11 @@ type model_choice = {
           and rates the tensorized families best, so on a backend where those are unbuildable it
           used to crown one and then degrade to the default (gh-ocannl-522). *)
   mc_excluded : int;
-      (** Sketch candidates kept out of the ranking on CUDA and HIP because they are not
-          numerics-preserving (gh-ocannl-1253: tensorized, conv, coalesced and the other forms
-          {!model_default}'s restriction leaves out, or any sketch at a site accumulating wider than
-          its storage); never scored, so neither in [mc_skipped] nor in [mc_rejected]. *)
+      (** Sketch candidates kept out of the ranking where the model starts from the seeded plan
+          (CUDA and HIP, seeding on) because they are not numerics-preserving (gh-ocannl-1253:
+          tensorized, conv, coalesced and the other forms {!model_default}'s restriction leaves out,
+          or any sketch at a site accumulating wider than its storage); never scored, so neither in
+          [mc_skipped] nor in [mc_rejected]. *)
 }
 
 val model_default_enabled : bool Lazy.t
@@ -1738,17 +1739,19 @@ val model_default :
     ties go to the default, and missing envelope constants, a disabled default annotator
     ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
     validation, or compilation failure fall back to the ordinary default pipeline — the reported
-    {!model_choice} then says ["default"]. On CUDA and HIP the model starts from the seeded untuned
-    plan instead (gh-ocannl-1253, {!seeded_plan} under the configured gate, [auto] included): it is
-    the incumbent every candidate must strictly beat and the pick when none does ([mc_label]
-    ["seeded"], even where no segment seeds and the plan is the default pipeline -- a plan the
-    compile then does not retry on a backend failure, as for the default), and the sketch candidates
-    are restricted to the seeding's numerics-preserving forms — scalar block tiles at a site
-    accumulating at its storage precision — so the pick never changes a value the untuned compile
-    computes. Fatal failures propagate without retrying. Once the compile is on that pipeline there
-    is nothing left to fall back to, so its failures propagate as they would from
-    {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and no
-    cache is involved — results depend only on the computation, backend, and envelope constants.
+    {!model_choice} then says ["default"]. On CUDA and HIP with the seeding on (as for
+    {!seeded_default}), the model starts from the seeded untuned plan instead (gh-ocannl-1253,
+    {!seeded_plan} under the configured gate, [auto] included): it is the incumbent every candidate
+    must strictly beat and the pick when none does ([mc_label] ["seeded"], even where no segment
+    seeds and the plan is the default pipeline -- a plan the compile then does not retry on a
+    backend failure, as for the default), the candidates compete on the program after the plan's
+    split prelude, and the sketch candidates are restricted to the seeding's numerics-preserving
+    forms — scalar block tiles at a site accumulating at its storage precision — so the pick never
+    changes a value the untuned compile computes. Fatal failures propagate without retrying. Once
+    the compile is on that pipeline there is nothing left to fall back to, so its failures propagate
+    as they would from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is
+    executed and no cache is involved — results depend only on the computation, backend, and
+    envelope constants.
 
     Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the routine
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic

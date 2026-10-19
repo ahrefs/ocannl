@@ -606,10 +606,13 @@ files.
   swizzle or pipelining; `accumulates_at_storage`: the site's accumulator precision IS its storage
   precision), and a device publishing neither constant (Metal, cc, an uncalibrated GPU) falls back
   to threshold 32 — integers stay the fallback. `tune`'s seeded candidate is the same resolved plan
-  (its digest in the trajectory identity, previous bullet). `model_default` starts from it: on a GPU
-  its incumbent is the seeded plan (`mc_label` `"seeded"`), and its sketch candidates are restricted
-  to the same numerics-preserving forms, so the model's pick never changes a value the untuned
-  default computes; on cc the incumbent stays the default pipeline. The census claim
+  (its digest in the trajectory identity, previous bullet). `model_default` starts from it wherever
+  the untuned compile seeds (CUDA and HIP, seeding on: the same `seeded_settings` decides both):
+  its incumbent is the seeded plan (`mc_label` `"seeded"`), its candidates compete on the program
+  after the plan's split prelude, and its sketch candidates are restricted to the same
+  numerics-preserving forms (counted as `mc_excluded`), so the model's pick never changes a value
+  the untuned default computes. Elsewhere — Metal, cc, or CUDA/HIP with the seeding off — the
+  incumbent stays the default pipeline and the whole family competes. The census claim
   (`test/operations/seeded_default`) pins capacity 0, no cache tier, against threshold 32 and is
   CUDA/HIP only; on cc the seeded default is off altogether.
 ## Dispatch bindings and device properties

@@ -4642,13 +4642,23 @@ let model_default ?name ?report ctx comp bindings =
           Int.incr n_rejected;
           None
     in
-    (* gh-ocannl-1253: on CUDA and HIP, where the model starts from the seeded plan, the family is
-       restricted to the numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at
-       a site accumulating at its storage precision), so a model pick never changes a result the
-       seeded plan would not: tensorized forms reround, the conv and coalesced families reorder the
+    (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
+       ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
+       incumbent every candidate must strictly beat, and the action taken when none does. [None]
+       where the untuned compile is the plain default (another backend, seeding off). *)
+    let seeding_here =
+      lazy
+        (if not is_gpu then None
+         else seeded_settings ~backend ~configured_gate:(fun () -> seeded_default_gate ~limits) ())
+    in
+    (* Where the model starts from the seeded plan, the family is restricted to the
+       numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
+       accumulating at its storage precision), so a model pick never changes a result the seeded
+       plan would not: tensorized forms reround, the conv and coalesced families reorder the
        reduction. Other leaves are kept out of the ranking, counted as not numerics-preserving
-       ([n_excluded]), never an error. Metal and the CPU backends keep the whole family. *)
-    let restricts_numerics = seeded_default_backend backend in
+       ([n_excluded]), never an error. Metal, the CPU backends and an unseeded CUDA/HIP compile keep
+       the whole family. *)
+    let restricts_numerics = lazy (Option.is_some (Lazy.force seeding_here)) in
     let preserving_site base_opt =
       lazy
         (match detect_matmul_canonical base_opt with
@@ -4657,7 +4667,7 @@ let model_default ?name ?report ctx comp bindings =
     in
     let score_sketch ?preserving base_opt p =
       if
-        restricts_numerics
+        Lazy.force restricts_numerics
         && not
              (scalar_blocktile p
              && Lazy.force (Option.value preserving ~default:(preserving_site base_opt)))
@@ -4756,15 +4766,6 @@ let model_default ?name ?report ctx comp bindings =
     (* The model-argmin pipeline choice for one lowering — label, roofline score (seconds), and the
        action reproducing it. Shared between the in-compile transform seam and the placement
        pre-search's leaf scoring (hermetic lowerings of decided placement vectors). *)
-    (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
-       ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
-       incumbent every candidate must strictly beat, and the action taken when none does. [None]
-       where the untuned compile is the plain default (another backend, seeding off). *)
-    let seeding_here =
-      lazy
-        (if not is_gpu then None
-         else seeded_settings ~backend ~configured_gate:(fun () -> seeded_default_gate ~limits) ())
-    in
     let seeded_segs ?on_choice seeding opt =
       let gate, min_serial, sink_enabled = seeding in
       seeded_apply ?on_choice ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial
