@@ -569,11 +569,14 @@ CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
   if (__atomic_load_n(&ocannl_deadline_armed, __ATOMIC_SEQ_CST)) {
     struct itimerval off;
     memset(&off, 0, sizeof off);
-    /* The disposition goes back first: a SIGALRM sent after this point meets the program's own
-       disposition, never the deadline's handler with the timer already cancelled -- which would
-       read as an expiry. A timer expiring in the window left kills by the default action. */
-    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
+    /* The timer is cancelled while the deadline's handler is still installed, so an expiry in the
+       moment before -- the region having in fact outlived its bound -- is still reported as the
+       deadline, never as a silent default-action death. Then no SIGALRM can be the deadline's any
+       more: the due time moves out of reach, so one that arrives before the disposition goes back
+       reads as external. */
     setitimer(ITIMER_REAL, &off, NULL);
+    ocannl_deadline_due_ns = INT64_MAX;
+    sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
     ocannl_deadline_reblock();
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
   }
