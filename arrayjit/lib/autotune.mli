@@ -1054,8 +1054,10 @@ type report = {
   fiss_sketch_backdrop_fallbacks : int;
       (** Staffed singles that were refused (a compile or run decline, not a contended window) and
           retried once without their staff (gh-ocannl-1138), so one invalid choice in the running
-          composite cannot mask another segment's seeds. A key stops being retried after its first
-          bare retry is refused too: its seeds then fail on their own. *)
+          composite cannot mask another segment's seeds. Every staffed refusal of a key is retried
+          until a staffed single of that key is admitted (or the composite's own choice for it is
+          reused), which shows the staff compatible: later refusals are the seeds' own and are not
+          retried. *)
   split_reduce_candidates : int;
       (** Split-reduce seeds (gh-ocannl-484 task 3): one candidate per {!split_reduce_sites} site
           within the [max_split_reduce_sites] cap and eligible [num_blocks] value — the two-pass
@@ -2681,6 +2683,12 @@ val apply_measurement_seam : label:string -> digest:string -> timing_result -> t
 (** Candidate-window admission and scripted measurement, shared by real searches and deterministic
     opposing controls. Production refuses contended windows before calling {!on_candidate_measured};
     {!with_uncontended_test_windows} explicitly opts a scripted fixture out of that refusal only. *)
+
+val staffed_singles_setting : unit -> bool
+(** Config [autotune_staffed_singles] as {!tune} resolves it (gh-ocannl-1138, default [false]):
+    whether its per-segment singles are swept against a running composite. A staffed search times
+    its recombination composites inside the sweep, so a test counting the bare search's extra
+    composite window reads this rather than restating the default. *)
 
 val default_seed_label : backend_name:string -> string option
 (** The label {!on_candidate_measured} receives for the candidate a search on [backend_name]

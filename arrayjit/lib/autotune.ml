@@ -513,6 +513,9 @@ let default_playoff_width = 2
    times candidates the other one never did. *)
 let default_staffed_singles = false
 
+let staffed_singles_setting () =
+  Utils.get_global_flag ~default:default_staffed_singles ~arg_name:"autotune_staffed_singles"
+
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
    winner tests first ([nothing_timed]). *)
 let timed_winner_exists = "Autotune.tune: a finite best time without a compiled candidate"
@@ -5302,9 +5305,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
            (int_setting ~default:8
            @@ Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"8"))
   in
-  let staffed_singles =
-    Utils.get_global_flag ~default:default_staffed_singles ~arg_name:"autotune_staffed_singles"
-  in
+  let staffed_singles = staffed_singles_setting () in
   let playoff_width =
     max 0
       (int_setting ~default:default_playoff_width
