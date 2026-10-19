@@ -409,6 +409,10 @@ static pthread_t ocannl_deadline_owner;    /* under the lock: the armed region's
 static int64_t ocannl_deadline_due_ns;     /* under the lock; monotonic */
 static char ocannl_deadline_msg[OCANNL_DEADLINE_MSG_MAX];
 static size_t ocannl_deadline_msg_len;
+static pthread_mutex_t ocannl_deadline_write_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ocannl_deadline_write_go = PTHREAD_COND_INITIALIZER;
+static int ocannl_deadline_write_requested; /* under the write lock */
+static int ocannl_deadline_written;         /* under the write lock */
 
 static int64_t ocannl_monotonic_ns(void) {
   struct timespec ts;
@@ -427,18 +431,32 @@ static void ocannl_deadline_atfork_child(void) {
   ocannl_deadline_thread_started = 0;
   ocannl_deadline_armed = 0;
   ocannl_deadline_dying = 0;
+  {
+    pthread_mutex_t fresh_write_lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t fresh_write_go = PTHREAD_COND_INITIALIZER;
+    ocannl_deadline_write_lock = fresh_write_lock;
+    ocannl_deadline_write_go = fresh_write_go;
+    ocannl_deadline_write_requested = 0;
+    ocannl_deadline_written = 0;
+  }
 }
 
 /* The diagnostic's write runs on a thread of its own, so the death never waits on it: a blocking
    fd 2 that is full, or that another writer fills between a readiness check and the write, can
-   hold this thread forever, and the process dies regardless. */
-static pthread_mutex_t ocannl_deadline_write_lock = PTHREAD_MUTEX_INITIALIZER;
-static int ocannl_deadline_written;
+   hold that thread forever, and the process dies regardless. The writer is started together with
+   the watchdog and waits for the death, so the death needs no thread creation, which could fail
+   under the very resource pressure that comes with a wedged process. */
 
 static void *ocannl_deadline_writer(void *arg) {
   const char *p = ocannl_deadline_msg;
-  size_t n = ocannl_deadline_msg_len;
+  size_t n;
   (void)arg;
+  pthread_mutex_lock(&ocannl_deadline_write_lock);
+  while (!ocannl_deadline_write_requested)
+    pthread_cond_wait(&ocannl_deadline_write_go, &ocannl_deadline_write_lock);
+  pthread_mutex_unlock(&ocannl_deadline_write_lock);
+  /* The diagnostic is final: the watchdog committed to the death before requesting the write. */
+  n = ocannl_deadline_msg_len;
   while (n > 0) {
     ssize_t w = write(2, p, n);
     if (w < 0) {
@@ -457,23 +475,19 @@ static void *ocannl_deadline_writer(void *arg) {
 static void ocannl_deadline_die(void) {
   struct sigaction dfl;
   sigset_t alrm;
-  pthread_t writer;
-  pthread_attr_t attr;
-  /* The writer inherits this thread's mask, every signal blocked: it never takes the program's. */
-  pthread_attr_init(&attr);
-  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  if (pthread_create(&writer, &attr, ocannl_deadline_writer, NULL) == 0) {
-    /* At most 2 s, in relative 10 ms naps: no wall-clock wait. */
-    struct timespec nap = {0, 10000000};
-    int i, done = 0;
-    for (i = 0; i < 200 && !done; i++) {
-      pthread_mutex_lock(&ocannl_deadline_write_lock);
-      done = ocannl_deadline_written;
-      pthread_mutex_unlock(&ocannl_deadline_write_lock);
-      if (!done) nanosleep(&nap, NULL);
-    }
+  struct timespec nap = {0, 10000000};
+  int i, done = 0;
+  pthread_mutex_lock(&ocannl_deadline_write_lock);
+  ocannl_deadline_write_requested = 1;
+  pthread_cond_signal(&ocannl_deadline_write_go);
+  pthread_mutex_unlock(&ocannl_deadline_write_lock);
+  /* At most 2 s, in relative 10 ms naps: no wall-clock wait. */
+  for (i = 0; i < 200 && !done; i++) {
+    pthread_mutex_lock(&ocannl_deadline_write_lock);
+    done = ocannl_deadline_written;
+    pthread_mutex_unlock(&ocannl_deadline_write_lock);
+    if (!done) nanosleep(&nap, NULL);
   }
-  pthread_attr_destroy(&attr);
   memset(&dfl, 0, sizeof dfl);
   dfl.sa_handler = SIG_DFL;
   sigemptyset(&dfl.sa_mask);
@@ -542,7 +556,11 @@ static int ocannl_deadline_start_thread(void) {
   pthread_sigmask(SIG_SETMASK, &all, &saved);
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  rc = pthread_create(&thread, &attr, ocannl_deadline_watchdog, NULL);
+  /* The writer first: a watchdog without it would have nothing to write the diagnostic with. A
+     writer left behind by a failed watchdog creation waits harmlessly, and a retry starts another
+     one; at most one ever writes, since only one watchdog can commit to the death. */
+  rc = pthread_create(&thread, &attr, ocannl_deadline_writer, NULL);
+  if (rc == 0) rc = pthread_create(&thread, &attr, ocannl_deadline_watchdog, NULL);
   pthread_attr_destroy(&attr);
   pthread_sigmask(SIG_SETMASK, &saved, NULL);
   if (rc != 0) return 0;
@@ -579,7 +597,9 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   size_t len;
   int armed = 2;
   pthread_t self = pthread_self();
-  if (!(seconds > 0.0) || seconds > 1e8) return Val_int(0);
+  if (!(seconds > 0.0)) return Val_int(0);
+  /* A bound past three years is a bound all the same, never "disabled". */
+  if (seconds > 1e8) seconds = 1e8;
   if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
       cur.sa_handler != SIG_DFL)
     return Val_int(0);
