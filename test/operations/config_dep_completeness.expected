@@ -31,6 +31,8 @@ Stanza kinds that cannot: executable, executables, copy_files, copy_files#, inst
 Actions that execute a program: run, dynamic-run, system, bash.
 Actions that do not: progn, concurrent, chdir, setenv, with-stdout-to, with-stderr-to, with-outputs-to, with-stdin-from, with-accepted-exit-codes, ignore-stdout, ignore-stderr, ignore-outputs, no-infer, echo, write-file, cat, copy, copy#, copy-and-add-line-directive, diff, diff?, cmp, pipe-stdout, pipe-stderr, pipe-outputs, format-dune-file, or, and, not. Anything else fails above.
 
+The ambient environment (gh-ocannl-1149) reaches a run through a copy of test/config/ambient/ocannl_config, which every rule depending on it in these directories reads: bin, test/einsum, test/gpt2, test/operations, test/operations/atomic_file_rename_scan_fixture, test/ppx, test/training; or through `ocannl_ambient` itself, depended on beside a configuration checked in, copied from test/config into: arrayjit/test, test/operations/profiles, test/operations/startup_streams.
+
 Exempt from the dependency, running an executable that reads no configuration:
   test/operations:python3, handed %{dep:gh1133_summary.py}, %{dep:../../benchmarks/gh1133_summary.py} -- the training-table report controls import only the stdlib Python summary module and launch no OCANNL executable, so no configuration reader is in reach
   test/operations:python3, handed %{dep:gh1002_kernels.py}, %{dep:../../benchmarks/gh1002_cells.py} -- the kernel-table controls import only Python modules and parse synthetic stderr; they launch no OCANNL executable and read no OCANNL configuration

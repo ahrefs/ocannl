@@ -1,7 +1,7 @@
 (ocamllex raw_rename)
 
 (copy_files
- (files ../../config/ocannl_config))
+ (files ../../config/ambient/ocannl_config))
 
 (copy_files
  (files ../../config/env_spelling_gate.ml))

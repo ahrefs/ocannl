@@ -449,6 +449,28 @@ type mma_arm = {
     names — CUDA's tf32 arm reads f32 storage as tf32, and accumulates at exactly the f32 that
     [accum_prec] already reports for f32 with the policy off. *)
 
+type mma_operand_place = [ `Device | `Shared | `Thread ] * [ `Plain | `Swizzled_b128 ]
+(** Where a tile-MMA input operand lives and how it is laid out, as the emission hooks see it: the
+    address space the renderer classifies the node into (workgroup-shared, device-resident, or a
+    per-thread array) and its physical layout ([`Swizzled_b128] for a [Low_level.Swizzle_b128]
+    staged tile). What {!field-codegen_capabilities.mma_operand_loads} decides the load path by. *)
+
+type mma_fragments = {
+  mf_tile : int * int * int;
+      (** The intrinsic tile [(tm, tn, tk)] the arm emits: an [a] fragment is [tm x tk], a [b]
+          fragment [tk x tn]. *)
+  mf_reloads : bool;
+      (** [true]: both fragments are loaded inside the [m/tm x n/tn x k/tk] tile loops, so each is
+          reloaded for every tile of the other operand's free axis (CUDA's inline-PTX arms);
+          [false]: each fragment loads once per reduction step and is reused across that axis
+          (CUDA's wmma arms). *)
+  mf_fragment_loads : bool;
+      (** [true]: each fragment not loaded through [ldmatrix] comes in whole, by one cooperative
+          matrix load (CUDA's wmma [load_matrix_sync]); [false]: by per-lane element gathers (the
+          inline-PTX arms). *)
+}
+(** An mma arm's fragment structure, as its emission loops load operands (gh-ocannl-1254). *)
+
 type codegen_capabilities = {
   supports_f64 : bool;
       (** Whether the backend dialect can represent f64 tensor storage. This is explicit rather than
@@ -473,6 +495,59 @@ type codegen_capabilities = {
           combination table those hooks consult; [None] where the table has no arm for them. Only
           the precision- and policy-level choice: extents, strides, address spaces, layouts and the
           device can still make a call decline. *)
+  mma_operand_loads :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:mma_emission_scope ->
+    ta:bool ->
+    tb:bool ->
+    a:mma_operand_place ->
+    b:mma_operand_place ->
+    bool * bool;
+      (** Which of the [a] and [b] operands the backend's mma arm for these storage precisions, in
+          this emission scope, loads with a warp-cooperative matrix load ([ldmatrix] on CUDA) rather
+          than per-lane gathers, given each operand's place and whether it is stored transposed
+          (gh-ocannl-1254). The very rule the emission and its rendering census apply (CUDA:
+          [Cuda_mma.operand_loads] over [Cuda_mma.arm_ldmatrix_operands]), so a cost model reading
+          it reads the decision the kernel makes. Like {!field-mma_arm}, only the arm- and
+          operand-level choice: a call the hook declines on extents or the device renders the scalar
+          fallback whatever this says. [(false, false)] on a backend without such a load. *)
+  mma_accepts :
+    d_prec:Ops.prec ->
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    m:int ->
+    n:int ->
+    k:int ->
+    fragment_target:(int * mma_operand_place) option ->
+    d:int * mma_operand_place ->
+    a:int * mma_operand_place ->
+    b:int * mma_operand_place ->
+    bool;
+      (** Whether the backend's mma hook accepts a statement with these storage precisions,
+          orientations, extents and, per operand, leading dimension and place — asked of the hook
+          itself (a C backend's [C_syntax_config.mma_syntax], which decides acceptance without the
+          operand addresses), so it holds every condition the emission checks: layouts, spaces,
+          strides, extents, the device's floor (gh-ocannl-1254). With [fragment_target] — the
+          backing target of a persistent accumulator, its leading dimension and place — the question
+          is the fragment-scope rendering, in the renderer's order: the enclosing
+          [mma_fragment_syntax] hook accepting that target and the operands, then the update-only
+          statement ([d]'s own leading dimension) against the fragment array. [false] on a backend
+          without the hook. *)
+  mma_operand_fragments :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:mma_emission_scope ->
+    mma_fragments option;
+      (** How the backend's mma arm for these storage precisions, in this emission scope, brings its
+          operands into registers: its intrinsic tile and whether it reloads each operand fragment
+          for every tile of the other's free axis (gh-ocannl-1254). The arm's own description, read
+          by the cost model's operand-load count, which has no count where this is [None]: no arm,
+          or a backend that does not describe its emission (the default). *)
   mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
           tiles, for a [(d, a, b)] storage triple: the backend's
@@ -502,6 +577,23 @@ let no_codegen_capabilities =
     accum_prec = Fn.id;
     asynchronous_staging_copy = false;
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
+    mma_operand_loads =
+      (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
+    mma_accepts =
+      (fun ~d_prec:_
+        ~a_prec:_
+        ~b_prec:_
+        ~ta:_
+        ~tb:_
+        ~m:_
+        ~n:_
+        ~k:_
+        ~fragment_target:_
+        ~d:_
+        ~a:_
+        ~b:_
+      -> false);
+    mma_operand_fragments = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
@@ -516,6 +608,12 @@ let no_codegen_capabilities =
     move exactly when the resolution does, on every backend, with nothing to add by hand. The record
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
     until it is rendered (warning 9).
+
+    [mma_operand_loads], [mma_accepts] and [mma_operand_fragments] are not rendered either
+    (gh-ocannl-1254): which operands load through [ldmatrix], and how often, is a fixed function of
+    the arm, which the [mma] row below already renders, and of each operand's transposition, space
+    and layout, which are the schedule's own content and so already in its canonical digest.
+    Rendering them would add no discrimination, only re-tunes.
 
     The fields deliberately not rendered are [mma_scope_workgroup_bytes] and
     [lane_all_reduce_workgroup_bytes] (the same argument holds for both): it decides whether a
@@ -533,6 +631,9 @@ let codegen_capabilities_fingerprint
       accum_prec;
       asynchronous_staging_copy;
       mma_arm;
+      mma_operand_loads = _;
+      mma_accepts = _;
+      mma_operand_fragments = _;
       mma_scope_workgroup_bytes = _;
       lane_all_reduce_workgroup_bytes = _;
     } =

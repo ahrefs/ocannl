@@ -199,13 +199,16 @@ type seg_key = { key_units : int list; key_digest : string }
     pre-schedule digest. The digest leaves placements out, so it cannot name a segment on its own:
     segments of one structure share a key only when their placement-aware digests agree too. *)
 
-val fiss_sketch_label : fine:bool -> (seg_key * sketch_params) list -> string
+val fiss_sketch_label :
+  ?staff:(seg_key * sketch_params) list -> fine:bool -> (seg_key * sketch_params) list -> string
 (** The label of a per-segment sketch candidate ([F_sketch[...]]) over its [(segment key, params)]
     entries: each entry is {!sketch_params_label} followed by [" @"] and a tag of its segment key —
     a tag of the digest, then [":u"] and the keyed segments' first units joined by ["+u"] — so
     one-entry candidates of two segments that admit the same parameters print apart, structurally
     identical segments included. Entries are separated by [','] in key order; [fine] marks the finer
-    segmentation. *)
+    segmentation. A staffed candidate (gh-ocannl-1138) appends [" | staff "] and its [?staff]
+    entries rendered alike, so the part before it is the candidate's focus and reads as the bare
+    single's whole label does. *)
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
@@ -714,7 +717,7 @@ type sr_site = {
 (** A reduction-dominated accumulation site eligible for {!Ir.Schedule.constructor-Split_reduce}
     seeding (gh-ocannl-484 task 3); see the implementation's field docs. Exposed for tests. *)
 
-val split_sites_label : (sr_site * int) list -> string
+val split_sites_label : ?staff:(sr_site * int) list -> (sr_site * int) list -> string
 (** The label of a split-reduce candidate ([F_split[...]]) over its [(site, num_blocks)] entries, in
     the [autotune_log] lines and {!report.best_label}: each entry renders every field of its site —
     the target by debug name and, where that differs, its id ([name#id]), the split axis, [red],
@@ -1110,7 +1113,10 @@ type report = {
           window and no admitted single. [`Proposed] means at least two usable singles staffed a
           proposal, but it did not complete a timing window; [`Refused] and [`Timed] record that
           proposal's refused or admitted window. Window outcomes are published before post-admission
-          callbacks can raise, including in partial reports. *)
+          callbacks can raise, including in partial reports. With staffed singles (config
+          [autotune_staffed_singles], gh-ocannl-1138) the coarse composite is the running composite,
+          which its last accepted staffed window already timed: [`Timed] then records that window,
+          and only a composite no window timed is proposed and timed apart. *)
   fiss_sketch_playoff_timed : int;
       (** The composite playoff's windows (gh-ocannl-1166), counted here and NOT in
           [fiss_sketch_timed]. A per-segment single is timed against every other segment's untuned
@@ -1124,6 +1130,17 @@ type report = {
   fiss_sketch_playoff_swaps : int;
       (** Of [fiss_sketch_playoff_timed], the alternates that ran faster than the incumbent
           composite and replaced it, so later segments' alternates build on them. *)
+  fiss_sketch_staffed_timed : int;
+      (** Of [fiss_sketch_timed], the staffed singles' windows (gh-ocannl-1138, config
+          [autotune_staffed_singles]): singles timed with the other keyed segments on the running
+          composite's choices rather than on their presets. [0] with the setting off. *)
+  fiss_sketch_backdrop_fallbacks : int;
+      (** Staffed singles that were refused (a compile or run decline, not a contended window) and
+          retried once without their staff (gh-ocannl-1138), so one invalid choice in the running
+          composite cannot mask another segment's seeds. Every staffed refusal of a key is retried
+          until a staffed single of that key is admitted (or the composite's own choice for it is
+          reused), which shows the staff compatible: later refusals are the seeds' own and are not
+          retried. *)
   split_reduce_candidates : int;
       (** Split-reduce seeds (gh-ocannl-484 task 3): one candidate per {!split_reduce_sites} site
           within the [max_split_reduce_sites] cap and eligible [num_blocks] value — the two-pass
@@ -1143,7 +1160,12 @@ type report = {
       (** Whether the eligible multi-site split-reduce composite compiled and reached a timing
           window. A completed window refused as unusable still counts: the field pins candidate
           reachability, independently of whether its timing verdict was usable. False when the
-          composite was ineligible, on cache replay, and on search-disabled calls. *)
+          composite was ineligible, on cache replay, and on search-disabled calls. With staffed
+          singles (gh-ocannl-1138) the composite is the running split composite, and its window the
+          last accepted staffed split single's. *)
+  split_reduce_backdrop_fallbacks : int;
+      (** The split-reduce counterpart of [fiss_sketch_backdrop_fallbacks] (gh-ocannl-1138): staffed
+          split singles refused and retried with no other site split, under the same rule. *)
   mma_candidates : int;
       (** Candidates whose label promises a tensorized ([Schedule.Tensorize]) pipeline that the
           search put through candidate compile: whole-routine and per-fission-segment sketch seeds,
@@ -1373,8 +1395,9 @@ val no_search_report : timing:timing_mode -> report
       or [round<k>]), [candidates] (the phase's total), [timed], [attempts], [compile_s],
       [timing_s], [best_ms], [best].
     - [candidate] ({!tune}, as EVERY candidate attempt starts): [routine], [elapsed_s], [phase]
-      ([seeds], [recombine], [playoff] or [round<k>]), [tried=<k>/<total>] (the ordinal of the
-      attempt starting within its phase; [?] when the phase's total is not known up front), [timed],
+      ([seeds], [staffed] (gh-ocannl-1138's staffed sweep, config [autotune_staffed_singles]),
+      [recombine], [playoff] or [round<k>]), [tried=<k>/<total>] (the ordinal of the attempt
+      starting within its phase; [?] when the phase's total is not known up front), [timed],
       [attempts] (this one included), [compile_s], [timing_s], [best_ms], [best] (all as of the
       attempt's start), and [attempt], the starting candidate's label. A search killed inside a
       candidate is therefore inside the one its last [candidate] line names. The rate is bounded by
@@ -1818,8 +1841,10 @@ val model_default :
     exceeds the cache capacity, at the cache bandwidth within it — {!ranking_capacity},
     {!ranking_cache_bandwidth}), and the argmin schedule is applied — zero measurement, one backend
     compile. The family search's bound stays the distinct-cell floor, below every ranking score.
-    Advisory by construction: a candidate without model coverage is never picked over the default,
-    ties go to the default, and missing envelope constants, a disabled default annotator
+    Sketch leaves whose scores tie exactly are ordered by their tile-MMA operand loads under the
+    backend's [mma_operand_loads] capability ({!model_family_search}, gh-ocannl-1254). Advisory by
+    construction: a candidate without model coverage is never picked over the default, ties go to
+    the default, and missing envelope constants, a disabled default annotator
     ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
     validation, or compilation failure fall back to the ordinary default pipeline — the reported
     {!model_choice} then says ["default"]. On CUDA and HIP with the seeding on (as for
@@ -1840,6 +1865,44 @@ val model_default :
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic
     lowerings of the placement search alike — and, as there, a comp carrying no
     {!Ir.Assignments.Block_comment} requires it. *)
+
+val model_operand_loads :
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
+  Ir.Low_level.optimized ->
+  Ir.Cost_model.load_count
+(** {!Ir.Cost_model.operand_load_count} under [capabilities]' [mma_operand_loads] rule and
+    [mma_operand_fragments] structure, for the statements its [mma_accepts] hook probe accepts: the
+    count {!model_family_search} breaks exact ties with and {!model_explain} reports
+    (gh-ocannl-1254): [Undescribed] where the backend describes no arm for some statement (every
+    backend but CUDA). The walk keys only [Loads]. *)
+
+val model_family_search :
+  ?on_rejected:(unit -> unit) ->
+  ?admit:(sketch_params -> bool) ->
+  ?on_excluded:(unit -> unit) ->
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  peak_flops:float option ->
+  peak_memory_bandwidth:float option ->
+  score:(Ir.Low_level.optimized list -> float option) ->
+  incumbent:float ->
+  Ir.Low_level.optimized ->
+  ((sketch_params * float) option * Ir.Schedule_space.search_stats * float option) option
+(** {!model_default}'s branch-and-bound walk over the factored matmul family ({!matmul_sketch_tree})
+    of one lowering: [(best, stats, bound)], where [best] is the first leaf whose [score] (of its
+    scheduled form) is strictly below [incumbent], the threshold tightening as leaves improve on it,
+    and [bound] the family's schedule-invariant roofline floor under the envelope. Exact ties
+    between leaves go to fewer tile-MMA operand load instructions ({!model_operand_loads} under
+    [capabilities] — {!model_default} passes the backend's; gh-ocannl-1254) between leaves that both
+    have tile-MMA sites, then to the first; a tie never displaces [incumbent]. Sketches are
+    scheduled at [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule
+    fails to apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is
+    scheduled ({!model_default}'s numerics-preserving restriction). [None] for a lowering with no
+    matmul site. Exposed so a test can drive the walk with stand-in limits and load rules on any
+    backend. *)
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
@@ -1952,6 +2015,18 @@ type seeded_segment =
   | Seeded_sunk of { digest : string; swaps : int }
       (** {!reduction_sink}'s [swaps] interchanges, then the default preset, likewise matched. *)
 
+type seeded_start = {
+  decide : Ir.Low_level.optimized -> sketch_params option;
+      (** The plan's per-segment decision: the sketch its gate admits on a segment, probed and
+          validated there, or [None] for the preset. *)
+  gate_tag : string;  (** The gate it reads, rendered for the search shape. *)
+}
+(** The seeded plan's decision rule, for {!tune}'s staffed start (gh-ocannl-1138, config
+    [autotune_staffed_singles]), which applies it to the search's own segments: the plan's recorded
+    decisions are taken on the split routine under the untuned segmentation and match no search key.
+    Carried in the plan so that the device readings the gate rests on reach {!tune} only through
+    {!seeded_plan}. *)
+
 type seeded_plan = {
   sp_split : (sr_site * int) list;
       (** The reductions split whole-routine before segmenting ({!seeded_split_sites}). *)
@@ -1961,6 +2036,9 @@ type seeded_plan = {
   sp_refined : int;
       (** Default segments replaced by their finer [arity_cuts] pieces ({!refine_segments}: a block
           takes its pieces where more of them seed). *)
+  sp_start : seeded_start option;
+      (** The plan's decision rule, as {!seeded_plan} derives it; [None] in the plans the untuned
+          compile builds for itself. *)
 }
 (** The seeded untuned plan as a replayable value (gh-ocannl-1388): what {!seeded_default} decides
     for one lowering. {!tune} derives it on its base lowering and seeds it as its FIRST candidate,
@@ -2072,6 +2150,49 @@ val seeded_default :
     compiler does not promote, though NVRTC does. Values stay bitwise the default's.
     [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
     with the seeding disabled too. Reads and writes no schedule cache. *)
+
+type explain = {
+  ex_floor_ms : float option;
+      (** The candidate's roofline lower bound ({!Ir.Cost_model.analyze}'s counts), as
+          [mc_model_ms]. *)
+  ex_rank_ms : float option;
+      (** Its ranking score ({!Ir.Cost_model.ranking_seconds}), the quantity {!model_default}
+          minimizes: per kernel the larger of the two legs below, summed. *)
+  ex_compute_ms : float option;  (** The compute leg, summed over the kernels. *)
+  ex_memory_ms : float option;
+      (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
+  ex_spilled : bool option;
+      (** Some kernel's working set exceeds the cache capacity; [None] where the ranking score was
+          not computed (no envelope constants, or an opaque kernel). *)
+  ex_operand_loads : Ir.Cost_model.load_count;
+      (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
+          over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if
+          any kernel is): not a price, the count {!model_default}'s family search breaks exact score
+          ties with (gh-ocannl-1254). *)
+  ex_admitted : bool;
+      (** Whether {!model_default}'s numerics-preserving restriction (in force where it starts from
+          the seeded plan, CUDA and HIP) admits the candidate to its ranking; the incumbent always
+          is. *)
+}
+(** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
+
+val model_explain :
+  ?name:string ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  (string * explain) list
+(** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
+    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): its incumbent first — ["seeded"]
+    where it starts from the seeded plan (CUDA and HIP under the seeded settings), else ["default"],
+    the untuned default pipeline — then every whole-routine sketch leaf of the program it searches
+    (the seeded plan's split prelude included), labeled as {!tune}'s [autotune_log] labels them, in
+    the family search's visiting order, each with whether the restriction admits it. The lowering is
+    {!Context.lowered_for_decisions}', so the context is untouched. Per-fission-segment
+    substitutions and the placement pre-search are not listed. Candidates whose scheduled form fails
+    to apply or validate are omitted, as {!model_default} excludes them. Where {!model_default}
+    ranks nothing — no envelope constants, or the default annotator off — the list is the default
+    pipeline alone. *)
 
 val untuned_compile :
   ?name:string ->
@@ -2535,6 +2656,18 @@ val on_candidate_attempt : (string -> unit) Seam.t
     must survive without losing the other arm's winner. Not a production seam: candidate failures
     that a backend {e can} attribute are contained without it (see [declines]). *)
 
+val on_staffed_start :
+  (menu:(seg_key * sketch_params list) list ->
+  (seg_key * sketch_params) list ->
+  (seg_key * sketch_params) list)
+  Seam.t
+(** Test seam for the staffed sweep (gh-ocannl-1138, config [autotune_staffed_singles]), called once
+    per search that sweeps with [~menu], the coarse segment keys and the parameters seeded for each,
+    and the running composite the sweep would start from (the seeded untuned plan's sketches matched
+    to those keys; empty where there is no seeded plan, on cc always); the sweep starts from its
+    result. It is how a test gives a key a choice before that key's own sweep, which only a seeded
+    plan does in production. The default is the identity and no configuration selects it. *)
+
 val on_candidate_preflight : (string -> unit) Seam.t
 (** Fault-injection seam for the pre-dispatch containment tests (gh-ocannl-564), called with a
     routine's name inside the {!Ir.Schedule_outcome.Preflight} region of its timing run, just before
@@ -2728,6 +2861,12 @@ val apply_measurement_seam : label:string -> digest:string -> timing_result -> t
 (** Candidate-window admission and scripted measurement, shared by real searches and deterministic
     opposing controls. Production refuses contended windows before calling {!on_candidate_measured};
     {!with_uncontended_test_windows} explicitly opts a scripted fixture out of that refusal only. *)
+
+val staffed_singles_setting : unit -> bool
+(** Config [autotune_staffed_singles] as {!tune} resolves it (gh-ocannl-1138, default [false]):
+    whether its per-segment singles are swept against a running composite. A staffed search times
+    its recombination composites inside the sweep, so a test counting the bare search's extra
+    composite window reads this rather than restating the default. *)
 
 val default_seed_label : backend_name:string -> string option
 (** The label {!on_candidate_measured} receives for the candidate a search on [backend_name]

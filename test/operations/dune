@@ -1,5 +1,5 @@
 (copy_files
- (files ../config/ocannl_config))
+ (files ../config/ambient/ocannl_config))
 
 ; The ambient-environment gate (gh-ocannl-652). `(universe)` makes dune rerun it on every
 ; invocation, which is the only way a rejected environment spelling reaches a check at all:
@@ -257,6 +257,7 @@
   (alias runtest-log_index_width_wide)
   (alias runtest-config_var_spellings)
   (alias runtest-foreign_c_stderr)
+  (alias runtest-foreign_c_stderr_noise)
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
@@ -2222,6 +2223,19 @@
  (modules dynamic_axis_coverage)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-1402: the loop-binder lint at Low_level.optimize's entry -- one binder per loop symbol
+; per routine, no free symbol -- refused by name on hand-built IR, with the well-formed shapes it
+; must keep accepting. Structural only: nothing executes.
+
+(test
+ (name loop_binder_lint)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules loop_binder_lint)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 ; gh-ocannl-696: the loop-carried recurrence construct [Scan_loop] on hand-built IR -- executed
 ; cumulative sums in both directions, the online-softmax recurrence, a per-row scan under a Grid
 ; outer loop, the placement and well-formedness contracts, schedule opacity and digest identity.
@@ -2673,6 +2687,43 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff foreign_c_stderr.expected foreign_c_stderr.actual)))
+
+; gh-ocannl-1370: the C stream the HIP backend installs collapses ROCr's per-event
+; `Signal 0x... time stamps may be invalid.` into a count and writes everything else through. The
+; child installs it the way the backend does and makes scripted writes; the parent reads back the
+; child's stderr under both values of the setting, which it pins on the child's COMMANDLINE, so an
+; ambient `OCANNL_COLLAPSE_FOREIGN_STDERR_NOISE` cannot rewrite this golden.
+
+(executables
+ (names foreign_c_stderr_noise foreign_c_stderr_noise_child)
+ (modules
+  foreign_c_stderr_noise
+  foreign_c_stderr_noise_child
+  foreign_c_stderr_noise_script)
+ (foreign_stubs
+  (language c)
+  (names foreign_c_stderr_noise_stubs))
+ (libraries base arrayjit.utils stdio unix fresh_process arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- the subject is the C runtime's stderr stream; it links no backend and
+ ; installs the stream the HIP backend would, directly through Utils.
+ (target foreign_c_stderr_noise.actual)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:foreign_c_stderr_noise.exe}
+    %{dep:foreign_c_stderr_noise_child.exe}))))
+
+(rule
+ (alias runtest-foreign_c_stderr_noise)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff foreign_c_stderr_noise.expected foreign_c_stderr_noise.actual)))
 
 ;; gh-ocannl-1036: device streams torn down at process exit, observed from a parent process --
 ;; the ROCm runtime reports a leaked stream on the exiting child's stderr, which nothing inside the
@@ -4875,6 +4926,7 @@
   (alias slow-env_spelling_gate)
   autotune_fission_sketch.expected
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -5436,6 +5488,87 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS))
  (modules schedule_ldmatrix_matmul)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1254: exact ranking ties go to fewer tile-MMA operand loads: the search's tie semantics,
+; and the gh-ocannl-1190 fp8 twins under a CUDA-shaped record with CUDA's pure load rule. Compiles
+; nothing.
+
+(test
+ (name model_load_tiebreak)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  ; The model-selection keys model_family_search, model_explain and model_default read, the
+  ; sketch family's economy, and the numerics policy the mma format triples resolve under.
+  (env_var OCANNL_MODEL_DEFAULT_GEOMETRY_LATTICE)
+  (env_var OCANNL_MODEL_DEFAULT_PLACEMENTS)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
+  (env_var OCANNL_NARROW_COMPUTE_F32)
+  ; The default pipeline model_explain and model_default score: the schedulers, their geometry,
+  ; lane and fission keys.
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  ; The seeded untuned plan model_default and model_explain start from on CUDA and HIP.
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
+  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
+ (modules model_load_tiebreak)
+ (libraries base stdio ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1254: the mma_operand_loads capability answers with the emission's own ldmatrix rule:
+; per staged operand place, what the capability names is what the kernel loads through ldmatrix.
+
+(test
+ (name mma_operand_loads)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  ; The numerics policy the arm table resolves under.
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
+  (env_var OCANNL_NARROW_COMPUTE_F32))
+ (modules mma_operand_loads)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -6582,6 +6715,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
@@ -8492,6 +8626,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_AUTOTUNE_LOG)
   (env_var OCANNL_AUTOTUNE_PROGRESS)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
@@ -8503,9 +8638,53 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_composite_playoff)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1138: staffed singles (autotune_staffed_singles), the running composite a per-segment
+; single is timed against. Scripted timings, pinned to cc, on Fissioned_chain's small menu, so the
+; model pre-filter's keys and the cc vector width it pins are declared beside the rule's own.
+
+(test
+ (name autotune_staffed_singles)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_AUTOTUNE_LOG)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_CC_VECTOR_REGISTERS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (modules autotune_staffed_singles)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1138: the fine segmentation's staffed sweep. The finer segmentation is GPU-only, so
+; the search runs on a GPU backend and every claim is skipped elsewhere.
+
+(test
+ (name autotune_staffed_fine)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION))
+ (modules autotune_staffed_fine)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
 
 ; gh-ocannl-1229: which units of each beam entry a round expands (autotune_round_expansion).
 ; Scripted timings, pinned to cc; its searches run on Fissioned_chain's small menu, so the model
@@ -8518,6 +8697,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
   (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION)
@@ -9152,6 +9332,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_BIG_MODELS)
@@ -9316,3 +9497,18 @@
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; ahrefs/ocannl#1387: a kernel the backend's compiler rejects is a typed decline (Backend_rejected
+; at stage "compiler") on every backend, so the isolated per-kernel instrument declines that kernel
+; instead of ending the table.
+
+(test
+ (name compile_failure_declines)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules compile_failure_declines)
+ (libraries base stdio pprint ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here)))

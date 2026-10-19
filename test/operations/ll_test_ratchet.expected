@@ -11,6 +11,7 @@ test/operations/access_fold.ml -- records=1 traversals=0
 test/operations/accum_max_one_extent.ml -- records=0 traversals=1
 test/operations/accum_width.ml -- records=10 traversals=1
 test/operations/affine_extraction.ml -- records=15 traversals=0
+test/operations/aligned_chains_shared_symbol.ml -- records=2 traversals=2
 test/operations/autotune_scope_provenance.ml -- records=1 traversals=0
 test/operations/autotune_smoke.ml -- records=0 traversals=1
 test/operations/back_to_back_runs.ml -- records=5 traversals=0

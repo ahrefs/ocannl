@@ -107,6 +107,7 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
   autotune_rounds
   autotune_search
   autotune_split_reduce_max_sites
+  autotune_staffed_singles
   model_peak_flops
   model_peak_memory_bandwidth
   strict_failure_classification
@@ -134,7 +135,8 @@ untimed-model -- they are the cache capacity and cache bandwidth of the analytic
   model_cache_bandwidth
   model_cache_capacity
 
-execution-neutral -- startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter follows
+execution-neutral -- startup and configuration-sourcing chatter, which descriptor foreign C-library chatter follows, and whether its known per-event noise is collapsed into a count
+  collapse_foreign_stderr_noise
   detach_c_stderr
   log_config_sourcing
   never_capture_stdout

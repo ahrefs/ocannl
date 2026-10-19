@@ -6,6 +6,14 @@
 ; directory; the source is shared, and its header says why the dependency is the world
 ; rather than 112 key names.
 
+; gh-ocannl-1149: this directory checks in a configuration of its own, so the shared one that
+; carries the ambient environment (see test/config/dune) is not what its tests read. They depend
+; on the record of the environment itself instead, which `config_dep_completeness` asks of every
+; rule here that reads a configuration.
+
+(copy_files
+ (files ../../config/ocannl_ambient))
+
 (copy_files
  (files ../../config/env_spelling_gate.ml))
 
@@ -95,6 +103,7 @@
  (target from_config_file.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -131,6 +140,7 @@
  (target from_cmdline.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -173,6 +183,7 @@
  (target from_cmdline_approximate.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -209,6 +220,7 @@
  (target from_env.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -250,6 +262,7 @@
  (target host_profile_flag.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -289,6 +302,7 @@
  (target explicit_beats_profile.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
@@ -333,6 +347,7 @@
  (target empty_cmdline_falls_through.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_AUTOTUNE_SEARCH)
   (env_var OCANNL_AUTOTUNE_ROUNDS)
   (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)

@@ -719,6 +719,22 @@
 # its winner whatever the margin. No profile sets it.
 #autotune_composite_playoff_margin=0.005
 
+# Whether `Autotune.tune` times its per-segment sketch singles against a running composite
+# (gh-ocannl-1138) rather than against every other segment's untuned preset. The search sweeps the
+# keyed segments one at a time; while one is swept, every other keyed segment carries the running
+# composite's choice for it (its staff), which starts from the seeded untuned plan's sketches where
+# a CUDA/HIP search has one, and after a segment's sweep its fastest single joins the composite. So
+# the best improves while the search seeds instead of only at the recombination composites it times
+# last, and a single's backdrop is the composite it would join (on gpt2_mini/CUDA the preset
+# backdrop was about ten times the composite's time). Times are compared only within one segment's
+# sweep, where the backdrop is the same; a staffed single that is refused is retried once without
+# its staff. The split-reduce sites are swept the same way, each site's split staffed with the
+# others'. Off by default: on gpt2_mini/CUDA it brought the first gain forward from the end of the
+# search to its start, but at about 30% more search time for the same crown (gh-ocannl-1138). It
+# shapes what a search times, not what a crowned schedule means, so a warm schedule cache replays
+# its winner whatever the setting. No profile sets it.
+#autotune_staffed_singles=false
+
 # Which units of each beam entry a beam-expansion round of `Autotune.tune` expands
 # (gh-ocannl-1229): `differing`, `full` or `head`. A fissioned routine's time is the sum of its
 # segments' times, and after the composite playoff the beam's runners-up are the head with a few
@@ -1025,6 +1041,18 @@
 # capture a driver's messages together with the program's. No effect where the C stderr stream
 # is not assignable (Windows).
 #detach_c_stderr=true
+
+# If true (the default), the HIP backend, when it opens a device (before its stream), replaces the C
+# runtime's stderr by a stream that collapses ROCr's `Signal 0x... time stamps may be invalid.`
+# lines into a count: the first is printed with a note that later ones are counted, and the count
+# is reported in one line at exit (gh-ocannl-1370). An assertions-enabled ROCr (Ubuntu 26.04's
+# libhsa-runtime64 7.1.0 on an APU) prints one per recorded event, 268,172 for one autotuning
+# test, and Dune truncates a long action output from the middle, dropping the test's own
+# diagnostics. Every other byte foreign C code writes passes through at once and in order, to the
+# same descriptor `detach_c_stderr` chose. Set to false to see each line. No effect off glibc and
+# Darwin, in a process that never opens a HIP device, or where the C stderr is already
+# wide-oriented (a cookie stream cannot be).
+#collapse_foreign_stderr_noise=true
 
 # If `false`, debug logs from routines are re-logged via the ppx_minidebug framework.
 # If `true`, the logs are in stream-specific files. WARNING: files are appended to, not overwritten.

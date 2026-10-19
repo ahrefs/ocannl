@@ -10,6 +10,15 @@ a duplicated binder is reported shadowed: true
 an unbound symbol reaches the free-symbol hook: true
 initial_tokens pre-bind it instead: true
 and it then renders positionally: true
+For_loop: a reference after the loop exits reaches the free-symbol hook: true
+For_loop: inside the loop it renders as the binder's token, after it as free: true
+Scan_loop: a reference after the loop exits reaches the free-symbol hook: true
+Scan_loop: inside the loop it renders as the binder's token, after it as free: true
+an inner binder's exit restores the outer binder's token: true
+a binder's exit restores an initial token: true
+a sibling binder re-binding an exited symbol is still reported shadowed: true
+schedule cache: the in-scope form is complete: true
+schedule cache: a use after the loop exits is incomplete: true
 a virtualization-inlined and a schedule-minted scope render differently: true
 structural mma: mma <cr_d>[#0,]<cr_a>[#0,]<cr_b>[#0,] false true 16 8 8 16 8 8 ?{nop;}
 structural mma is complete: true
