@@ -1194,8 +1194,13 @@ let () =
           y)
     in
     p "cvzb: the whole-routine blocked-shape conv site is zeroed in its lowering" zeroed;
-    p_exists "cvzb: the whole-routine zeroed site seeds a GPU row-block flavor" seeds ~f:(fun s ->
-        s.Autotune.sk_conv && s.Autotune.sk_gpu && s.Autotune.sk_bm > 0);
+    (* An 8-row block is a flavor only where it is a whole number of the advertised tile's rows
+       (Metal's 8x8x8; CUDA's 16-row tf32 tile cannot split this 16-row site into two blocks). *)
+    let label = "cvzb: the whole-routine zeroed site seeds a GPU row-block flavor" in
+    if advertised_tile_divides ~m:8 ~n:16 ~k:8 then
+      p_exists label seeds ~f:(fun s ->
+          s.Autotune.sk_conv && s.Autotune.sk_gpu && s.Autotune.sk_bm > 0)
+    else skipped label;
     p_all
       "cvzb: every whole-routine zeroed GPU candidate compiles, and matches the natural form run \
        twice"
