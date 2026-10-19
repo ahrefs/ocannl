@@ -4153,6 +4153,23 @@ let () =
   let rows = match probe with { found } -> found in
   Verdict.gated_all ~when_:(not (List.is_empty filtered)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
       [ "filtered" ] );
+    ( "accepts a gate read off a value written into another field of the matched record",
+      {ocaml|open Base
+type probe = { mutable found : int list; mutable metadata : int }
+let () =
+  let probe = { found = raw; metadata = 0 } in
+  probe.metadata <- sample;
+  let rows = match probe with { found; _ } -> found in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [] );
+    ( "names a writer partially applied to the container the population reads",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let push = Queue.enqueue queue in
+  push sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
+      [ "unlisted Queue.enqueue (partially applied)" ] );
     ( "follows a quantifier of a gated boolean through a value alias",
       {ocaml|open Base
 let () =

@@ -648,9 +648,12 @@ let line_break_census content =
       [Hashtbl.filter_keys_inplace x ~f], ...) is handed with [x], where [x] is the first positional
       argument in [Base]'s order and any of them in [Stdlib]'s. A function of a mutable collection
       module the table does not list, handed [x], may write into it: a claim that reaches [x] is
-      reported as unlisted. [x] is a name the source binds; a container only an [open] brought in is
-      not tracked. Only a write that may run before the claim counts ({!precedes}): one placed after
-      it, in code that cannot run again before it, is not followed.
+      reported as unlisted. So is a writer handed [x] alone ([let push = Queue.enqueue x]): a
+      partial application whose later call this reader does not follow. A field write [x.f <- e]
+      reaches [x] whole, and the [f] a pattern takes apart from [x]'s literal, not its other fields.
+      [x] is a name the source binds; a container only an [open] brought in is not tracked. Only a
+      write that may run before the claim counts ({!precedes}): one placed after it, in code that
+      cannot run again before it, is not followed.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -1215,6 +1218,10 @@ let gate_census content =
   let writes = Hashtbl.create (module Int) in
   (* A call of an unlisted function of a mutable collection module that was handed a binding, by the
      binding's identity: it may write into it, which the reader cannot follow. *)
+  (* [record.field <- v], by the record binding's identity: the field and what is written. A field
+     write leaves the record's other fields their literal components ({!parts}). *)
+  let field_writes = Hashtbl.create (module Int) in
+  let piped = Hash_set.create (module Int) in
   let unlisted_writes = Hashtbl.create (module Int) in
   let unlisted = ref [] in
   (* For {!precedes}: where each local [let]-bound function's name is spelled, by the binding's
@@ -1371,8 +1378,10 @@ let gate_census content =
       method written identity =
         List.iter (Hashtbl.find_multi unlisted_writes identity) ~f:(fun (call, point) ->
             if self#before point then unlisted_sink := call :: !unlisted_sink);
-        List.filter_map (Hashtbl.find_multi writes identity) ~f:(fun (written, env, point) ->
-            if self#before point then Some (written, env) else None)
+        List.filter_map
+          (Hashtbl.find_multi writes identity
+          @ List.map (Hashtbl.find_multi field_writes identity) ~f:(fun (_, written) -> written))
+          ~f:(fun (written, env, point) -> if self#before point then Some (written, env) else None)
 
       method local =
         next_local <- next_local - 1;
@@ -1617,8 +1626,8 @@ let gate_census content =
                      && (not (Hashtbl.mem writes identity))
                      && not (Hashtbl.mem unlisted_writes identity) ->
                   go (Set.add seen identity) rhs_env rhs
-              | _ -> (expr, env))
-          | _ -> (expr, env)
+              | _ -> (expr, env, Set.to_list seen))
+          | _ -> (expr, env, Set.to_list seen)
         in
         go (Set.empty (module Int)) env expr
 
@@ -1628,53 +1637,66 @@ let gate_census content =
          -- a name in a component's place is a part of that component alone, as
          [verdict_provenance.ml] reads destructured components; anywhere else, a part of the whole
          of [part]. So [match (on_gpu, raw) with _, xs -> xs] is built from [raw], not [on_gpu]. *)
-      method parts pattern ((part, part_env) as whole) =
+      method parts ?(extra = []) pattern ((part, part_env) as whole) =
         let all pattern =
-          List.map (Lexical_scope.pattern_vars [ pattern ]) ~f:(fun name -> (name, whole))
+          List.map (Lexical_scope.pattern_vars [ pattern ]) ~f:(fun name -> (name, whole, extra))
         in
         let literal () = self#literal part_env part in
         let same_constructor a b =
           String.equal (Ppxlib.Longident.last_exn a) (Ppxlib.Longident.last_exn b)
         in
         match pattern.ppat_desc with
-        | Ppat_var { txt; _ } -> [ (txt, whole) ]
-        | Ppat_alias (inner, { txt; _ }) -> (txt, whole) :: self#parts inner whole
-        | Ppat_constraint (inner, _) -> self#parts inner whole
+        | Ppat_var { txt; _ } -> [ (txt, whole, extra) ]
+        | Ppat_alias (inner, { txt; _ }) -> (txt, whole, extra) :: self#parts ~extra inner whole
+        | Ppat_constraint (inner, _) -> self#parts ~extra inner whole
         | Ppat_tuple patterns -> (
             match literal () with
-            | { pexp_desc = Pexp_tuple components; _ }, env
+            | { pexp_desc = Pexp_tuple components; _ }, env, _
               when List.length components = List.length patterns ->
                 List.concat
                   (List.map2_exn patterns components ~f:(fun pattern component ->
-                       self#parts pattern (component, env)))
+                       self#parts ~extra pattern (component, env)))
             | _ -> all pattern)
         | Ppat_construct (constructor, Some (_, inner)) -> (
             match literal () with
-            | { pexp_desc = Pexp_construct (built, Some payload); _ }, env
+            | { pexp_desc = Pexp_construct (built, Some payload); _ }, env, _
               when same_constructor constructor.txt built.txt ->
-                self#parts inner (payload, env)
+                self#parts ~extra inner (payload, env)
             | _ -> all pattern)
         | Ppat_variant (tag, Some inner) -> (
             match literal () with
-            | { pexp_desc = Pexp_variant (built, Some payload); _ }, env when String.equal tag built
-              ->
-                self#parts inner (payload, env)
+            | { pexp_desc = Pexp_variant (built, Some payload); _ }, env, _
+              when String.equal tag built ->
+                self#parts ~extra inner (payload, env)
             | _ -> all pattern)
         | Ppat_record (fields, _) -> (
             match literal () with
-            | { pexp_desc = Pexp_record (given, None); _ }, env ->
+            | { pexp_desc = Pexp_record (given, None); _ }, env, names ->
                 List.concat_map fields ~f:(fun (field, inner) ->
+                    (* What [record.field <- v] wrote into this field of the names on the way. *)
+                    let written =
+                      List.concat_map names ~f:(fun identity ->
+                          List.filter_map (Hashtbl.find_multi field_writes identity)
+                            ~f:(fun (written_field, write) ->
+                              if String.equal written_field (Ppxlib.Longident.last_exn field.txt)
+                              then Some write
+                              else None))
+                    in
                     match
                       List.find given ~f:(fun (name, _) -> same_constructor field.txt name.txt)
                     with
-                    | Some (_, component) -> self#parts inner (component, env)
+                    | Some (_, component) ->
+                        self#parts ~extra:(extra @ written) inner (component, env)
                     | None -> all inner)
             | _ -> all pattern)
         | _ -> all pattern
 
       method bind_parts env pattern whole =
-        List.fold (self#parts pattern whole) ~init:env ~f:(fun env (name, part) ->
-            Lexical_scope.bind_values env [ name ] { (self#local) with definition = Some part })
+        List.fold (self#parts pattern whole) ~init:env ~f:(fun env (name, part, extra) ->
+            let denotation = { (self#local) with definition = Some part } in
+            List.iter extra ~f:(fun write ->
+                Hashtbl.add_multi writes ~key:denotation.identity ~data:write);
+            Lexical_scope.bind_values env [ name ] denotation)
 
       (* The population's side: the collections it is built from. *)
       method population env expr =
@@ -1930,34 +1952,34 @@ let gate_census content =
         in
         go (Set.empty (module Int)) env callee
 
+      (* The binding written into, through any [let alias = rows] renaming on the way: a write
+         through an alias is a write into what it names. *)
+      method write_target env expr =
+        match expr.pexp_desc with
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup env name with
+            | Some
+                {
+                  definition =
+                    Some
+                      ( ({ pexp_desc = Pexp_ident _ | Pexp_constraint _ | Pexp_coerce _; _ } as
+                         aliased),
+                        env );
+                  _;
+                } ->
+                self#write_target env aliased
+            | Some { identity; _ } -> Some identity
+            | None -> None)
+        | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> self#write_target env inner
+        | _ -> None
+
       (* A write into a binding: [x := e], or a function {!collection_functions} marks as writing,
          handed [x]. *)
       method record_write env expr callee arguments =
         (* The container changes once the writer's arguments are evaluated: a claim in one of them
            ([Queue.enqueue queue (claim; v)]) runs before the write. *)
         let point = { (self#point_of expr) with effect_at = expr.pexp_loc.loc_end.pos_cnum } in
-        (* The binding written into, through any [let alias = rows] renaming on the way: a write
-           through an alias is a write into what it names. *)
-        let rec target env expr =
-          match expr.pexp_desc with
-          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
-              match Lexical_scope.lookup env name with
-              | Some
-                  {
-                    definition =
-                      Some
-                        ( ({ pexp_desc = Pexp_ident _ | Pexp_constraint _ | Pexp_coerce _; _ } as
-                           aliased),
-                          env );
-                    _;
-                  } ->
-                  target env aliased
-              | Some { identity; _ } -> Some identity
-              | None -> None)
-          | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> target env inner
-          | _ -> None
-        in
-        let target = target env in
+        let target = self#write_target env in
         let record identity written =
           List.iter written ~f:(fun e ->
               Hashtbl.add_multi writes ~key:identity ~data:(e, env, point))
@@ -2025,10 +2047,25 @@ let gate_census content =
                 if writes_into then
                   List.iter containers ~f:(fun container ->
                       Option.iter (target container) ~f:(fun identity ->
-                          record identity
-                            (List.filter positional ~f:(fun other ->
-                                 not (phys_equal other container))
-                            @ labeled "src" @ labeled "f" @ data)))
+                          match
+                            List.filter positional ~f:(fun other ->
+                                not (phys_equal other container))
+                            @ labeled "src" @ labeled "f" @ data
+                          with
+                          | [] ->
+                              (* A writer handed its container alone is partially applied ([let push
+                                 = Queue.enqueue queue]): what it writes arrives at a call this
+                                 reader does not follow, so a claim reaching the container is
+                                 refused. *)
+                              Hashtbl.add_multi unlisted_writes ~key:identity
+                                ~data:
+                                  ( ( String.concat ~sep:"."
+                                        (Read.flatten_longident
+                                           (Ppxlib.Longident.Ldot (prefix, name)))
+                                      ^ " (partially applied)",
+                                      callee.pexp_loc.loc_start.pos_lnum ),
+                                    point )
+                          | written -> record identity written))
             | _ -> ())
         | _ -> ()
 
@@ -2193,15 +2230,25 @@ let gate_census content =
                            | _ -> ())
                    | _ -> ())
                | _ -> ());
+               (* The application a pipeline absorbs ([Queue.enqueue queue] in [sample |>
+                  Queue.enqueue queue]) is written through here, not again on its own, where it
+                  would read as partially applied. *)
                match self#pipeline callee arguments with
-               | Some (callee, arguments, _) -> self#record_write env expr callee arguments
-               | None -> self#record_write env expr callee arguments)
-           | Pexp_setfield (record, _, value) ->
-               (* [probe.found <- v] writes [v] into [probe], as [probe := v] would: its value is no
-                  longer its definition alone ({!literal}). *)
-               self#record_write env expr
-                 (Ppxlib.Ast_builder.Default.evar ~loc:expr.pexp_loc ":=")
-                 [ (Ppxlib.Asttypes.Nolabel, record); (Ppxlib.Asttypes.Nolabel, value) ]
+               | Some (callee, arguments, absorbed) ->
+                   Option.iter absorbed ~f:(Hash_set.add piped);
+                   self#record_write env expr callee arguments
+               | None ->
+                   if not (Hash_set.mem piped (position expr)) then
+                     self#record_write env expr callee arguments)
+           | Pexp_setfield (record, field, value) ->
+               (* [probe.found <- v] writes [v] into [probe]'s [found]: following [probe] whole
+                  reaches it, and so does taking [found] apart ({!parts}). *)
+               let point =
+                 { (self#point_of expr) with effect_at = expr.pexp_loc.loc_end.pos_cnum }
+               in
+               Option.iter (self#write_target env record) ~f:(fun identity ->
+                   Hashtbl.add_multi field_writes ~key:identity
+                     ~data:(Ppxlib.Longident.last_exn field.txt, (value, env, point)))
            | _ -> ());
         (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with
