@@ -6310,6 +6310,20 @@ module C_syntax (B : C_syntax_config) = struct
               name
             in
             let lane_var = "ocannl_l__" in
+            (* One lane of the loop body, rendered as [pp_scalar] renders the same node at [prec],
+               arm by arm (gh-ocannl-1295): the same syntax hooks with the backend's widening
+               (Metal's half [pow] and [exp]), the same integer-power helper (a [powi] in the packed
+               main loop against a [pow] in the serial remainder would differ), projections showing
+               their selected operand alone, and no contraction the serial path does not make (an
+               [FMA] here is one the lowering synthesized under [fp_contract]). So packing cannot
+               change a value. Two departures, both declines: a heterogeneous operator (a [Where]'s
+               condition, the uniform-lane extraction) keeps its operands at their own precision,
+               which a pack of [prec] lanes cannot hold; and a pack load reads the whole pack before
+               the lane loop, so an operand evaluated only conditionally -- a [Where] arm, the gated
+               operand of a [Gated_second] operator -- may not mention the loop, or a guarded read
+               (possibly out of bounds, the guard's whole point) would become unconditional.
+               Loop-free subexpressions keep rendering inline, gates and all, through
+               [uniform_scalar]. *)
             let rec lane_expr (llsc : Low_level.scalar_t) (p : Ops.prec) : PPrint.document =
               if not ((scalar_mentions loop) llsc) then (uniform_scalar ctx) ~written prec llsc
               else if not (Ops.equal_prec p prec) then raise Vectorization_declined
@@ -6319,13 +6333,28 @@ module C_syntax (B : C_syntax_config) = struct
                     if not (Ops.equal_prec (Lazy.force tn.Tn.storage_prec) prec) then
                       raise Vectorization_declined;
                     string (vload tn idcs ^ ".v[" ^ lane_var ^ "]")
-                | Binop (((Ops.Add | Ops.Sub | Ops.Mul | Ops.Div) as op), (a, pa), (b, pb)) ->
-                    B.binop_syntax prec op (lane_expr a pa) (lane_expr b pb)
-                | Ternop (Ops.FMA, (a, pa), (b, pb), (c, pc)) ->
-                    B.ternop_syntax prec Ops.FMA (lane_expr a pa) (lane_expr b pb) (lane_expr c pc)
-                | Unop (Ops.Identity, (a, pa)) -> lane_expr a pa
-                | Unop (Ops.Neg, (a, pa)) -> parens (string "-" ^^ lane_expr a pa)
-                | _ -> raise Vectorization_declined
+                | Binop (Ops.ToPowOf, (base, pbase), (Constant exponent, _))
+                  when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
+                    integer_power_doc ~prec (lane_expr base pbase) exponent
+                | Binop (op, (a, pa), (b, pb)) -> (
+                    match Ops.binop_conditionality op with
+                    | Ops.Only_first -> lane_expr a pa
+                    | Ops.Only_second -> lane_expr b pb
+                    | Ops.Gated_second when (scalar_mentions loop) b -> raise Vectorization_declined
+                    | Ops.Both_operands | Ops.Gated_second ->
+                        if not (Ops.is_homogeneous_prec_binop op) then raise Vectorization_declined;
+                        group (B.binop_syntax prec op (lane_expr a pa) (lane_expr b pb)))
+                | Ternop (((Ops.FMA | Ops.Mul3) as op), (a, pa), (b, pb), (c, pc)) ->
+                    group
+                      (B.ternop_syntax prec op (lane_expr a pa) (lane_expr b pb) (lane_expr c pc))
+                | Unop (op, (a, pa)) ->
+                    if not (Ops.is_homogeneous_prec_unop op) then raise Vectorization_declined;
+                    group (B.unop_syntax prec op (lane_expr a pa))
+                | Ternop (Ops.Where, _, _, _)
+                | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get_dynamic _ | Embed_index _
+                | Constant _ | Constant_bits _ ->
+                    (* [Embed_index] of the loop would need the lane's own index, not the pack's. *)
+                    raise Vectorization_declined
             in
             List.iter sets ~f:(fun (tn, idcs, llsc) ->
                 if not (eligible tn idcs) then raise Vectorization_declined;

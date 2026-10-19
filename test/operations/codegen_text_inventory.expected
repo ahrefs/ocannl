@@ -175,23 +175,24 @@ test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: com
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
     "lane all-reduce into a scope local"
-test/operations/gpu_packed_prec.ml [also pins text this scan cannot name: untraced callback]
-    "bfloat16x8_t"
-    "float4_t"
-    "half8_t"
+test/operations/gpu_packed_prec.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component]
+    "(half)exp((float)("
+    "exp"
     "reinterpret_cast"
     "reinterpret_cast<"
+    ... ^ "("
     sprintf " %s*>(&"
     sprintf "const %s*>(&"
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     "for ("
 test/operations/half_float_power.ml
+    " half8_t*>(&"
     "(half)pow((float)("
     "__float2half(ocannl_pow_f32(__half2float("
+    "const half8_t*>(&"
     "hexp2("
     "ocannl_powi_"
     "pow("
-    "reinterpret_cast"
 test/operations/half_unary_math.ml
     "(half)" ^ ... ^ "((float)("
 test/operations/hardware_axes_parity.ml
