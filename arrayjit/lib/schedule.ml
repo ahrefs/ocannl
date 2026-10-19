@@ -468,15 +468,38 @@ type pad_mask = {
   pm_bound : int;
 }
 
+(* gh-ocannl-998: the accumulation a [Tile_mma] fallback states, fused. A tile multiply-accumulate
+   is fused on every tensor unit and in the cc register tile, so [Tensorize] writes a floating
+   plain-add accumulation [d += a * b] as the explicit [FMA] -- a schedule decision, not the
+   contraction licence, which may be off. [None] where the fallback stays unfused: an integer
+   accumulation (gh-ocannl-824), or no product accumulated into [d[di]]. The sketch seeding asks the
+   same question of the pre-schedule code (the register tile renders only a fused fallback). *)
+let fused_accumulation ~(d : Tn.t) ~(di : Indexing.axis_index array) (llsc : Low_level.scalar_t) :
+    Low_level.scalar_t option =
+  let is_d_read (sc : Low_level.scalar_t) =
+    match sc with
+    | Get (tn, idcs) -> Tn.equal tn d && Array.equal Indexing.equal_axis_index idcs di
+    | _ -> false
+  in
+  match llsc with
+  | Ternop (Ops.FMA, _, _, (acc, _)) when is_d_read acc -> Some llsc
+  | _ when not (Ops.is_float (Lazy.force d.Tn.storage_prec)) -> None
+  | Binop (Ops.Add, ((acc, _) as acc_arg), (Binop (Ops.Mul, x, y), _)) when is_d_read acc ->
+      Some (Ternop (Ops.FMA, x, y, acc_arg))
+  | Binop (Ops.Add, (Binop (Ops.Mul, x, y), _), ((acc, _) as acc_arg)) when is_d_read acc ->
+      Some (Ternop (Ops.FMA, x, y, acc_arg))
+  | _ -> None
+
 (* docs/proposals/tensorize-mma.md §3: replace the innermost serial [i × j × k] matmul micro-kernel
-   — whose body is a single accumulation [d[...] += a[...] * b[...]] (plain-add or FMA form, as
-   [optimize]'s simplify leaves it), possibly under pad/remainder guards (gh-ocannl-485) — with a
-   [Tile_mma] block statement wrapped in a fresh extent-[simd_width] [Workgroup] lane loop. The
-   statement covers the whole [m×n×k] block, so fragment residency across the reduction is an
-   intra-statement codegen concern; the original (guarded) nest becomes the scalar [fallback].
-   Divisibility by the backend's intrinsic tile is checked at emission ([mma_syntax] declines per
-   call and the fallback runs), since the schedule layer is backend-agnostic. Guards around the
-   accumulation are parsed as pad masks (returned for the contraction) or rejected loudly. *)
+   — whose body is a single accumulation [d[...] += a[...] * b[...]] (plain-add or FMA form,
+   whichever the contraction licence left), possibly under pad/remainder guards (gh-ocannl-485) —
+   with a [Tile_mma] block statement wrapped in a fresh extent-[simd_width] [Workgroup] lane loop.
+   The statement covers the whole [m×n×k] block, so fragment residency across the reduction is an
+   intra-statement codegen concern; the original (guarded) nest becomes the scalar [fallback], its
+   floating accumulation written in the fused form the tile computes. Divisibility by the backend's
+   intrinsic tile is checked at emission ([mma_syntax] declines per call and the fallback runs),
+   since the schedule layer is backend-agnostic. Guards around the accumulation are parsed as pad
+   masks (returned for the contraction) or rejected loudly. *)
 let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile (llc : Low_level.t)
     : Low_level.t * pad_mask list =
   let open Low_level in
@@ -743,6 +766,26 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
               subst_axis_index ~sym:i ~by:zero
                 (subst_axis_index ~sym:j ~by:zero (subst_axis_index ~sym:k ~by:zero idx)))
         in
+        (* The fallback states the block's arithmetic, fused as the tile computes it
+           ({!fused_accumulation}): the cc register tile renders only the fused form, bitwise equal
+           to this fallback. *)
+        let fused_fallback (c : Low_level.t) : Low_level.t =
+          let rec go (c : Low_level.t) : Low_level.t =
+            match c with
+            | Set ({ tn; idcs; llsc; _ } as set)
+              when Tn.equal tn d_tn && Array.equal Indexing.equal_axis_index idcs d_idcs ->
+                Set
+                  {
+                    set with
+                    llsc = Option.value (fused_accumulation ~d:d_tn ~di:d_idcs llsc) ~default:llsc;
+                  }
+            | For_loop fc -> For_loop { fc with body = go fc.body }
+            | If ({ body; _ } as guard) -> If { guard with body = go body }
+            | Seq (c1, c2) -> Seq (go c1, go c2)
+            | c -> c
+          in
+          go c
+        in
         For_loop
           {
             index = lane;
@@ -765,7 +808,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
                   ldb = b_ld;
                   tile;
                   lane;
-                  fallback = for_loop ifc;
+                  fallback = fused_fallback (for_loop ifc);
                 };
           })
   in

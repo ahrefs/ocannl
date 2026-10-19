@@ -38,6 +38,15 @@ module Tn = Ir.Tnode
 module Sched = Ir.Schedule
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+
+(* Bitwise parity between two kernel shapes is a claim about the program's arithmetic, so the
+   accumulations are explicit FMAs on every backend (the contraction licence, gh-ocannl-998) and the
+   C compiler contracts nothing of its own: left to its discretion, gcc fused [d + a * b] and the
+   elided [0 + a * b] differently, and the gradients differed in the last bit. *)
+let () =
+  Unix.putenv "OCANNL_FP_CONTRACT" "true";
+  Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 let batch = 2
 
 (* Distinct from every other extent of the model, so a node with two axes of this extent is one of
@@ -136,11 +145,21 @@ let square tn = Array.count (Lazy.force tn.Tn.dims) ~f:(fun d -> d = seq) >= 2
 let is_grad tn = List.mem tn.Tn.label "grad" ~equal:String.equal
 
 (* The pass's three accumulation forms, as they appear in a kernel list. *)
+(* A constant opening is the accumulation statement's own self-read replaced by zero, so it is read
+   at the root of the statement's value: a [0 + x] nested inside an expression is a zero-initialized
+   accumulator that virtualization collapsed into its single use, which the exact simplifier keeps
+   ([+0 + x] is not [x] for [x = -0]; the signed-zero fold is the [fp_finite_math] licence's,
+   gh-ocannl-998). *)
 let constant_openings segments =
-  Ll_test.count_scalar ~in_scopes:false
+  Ll_test.count_stmt ~in_scopes:false
     ~f:(function
-      | LL.Binop (Ir.Ops.Add, (LL.Constant 0., _), _)
-      | LL.Ternop (Ir.Ops.FMA, _, _, (LL.Constant 0., _)) ->
+      | LL.Set
+          {
+            llsc =
+              ( LL.Binop (Ir.Ops.Add, (LL.Constant 0., _), _)
+              | LL.Ternop (Ir.Ops.FMA, _, _, (LL.Constant 0., _)) );
+            _;
+          } ->
           true
       | _ -> false)
     (LL.unflat_lines (lines segments))

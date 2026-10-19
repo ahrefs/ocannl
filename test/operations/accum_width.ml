@@ -552,7 +552,11 @@ let default_bf16_block () =
     cc_only claim_shape (fun () ->
         let src = Generated.read ~ext:".c" "aw_bf16_naive" in
         let has s = String.is_substring src ~substring:s in
-        p claim_shape ((not (has "single_to_bfloat16(fmaf(")) && has "fmaf("));
+        (* Per-step narrowing reads the bf16 accumulator back and narrows the sum again; once per
+           cell, the f32 accumulator is narrowed by the store. The update is a plain add:
+           contraction is a licence, off by default (gh-ocannl-998). *)
+        p claim_shape
+          ((not (has "single_to_bfloat16((bfloat16_to_single(")) && has "= single_to_bfloat16(v"));
     (* Structural: a merge-buffer read is a separate read-only staging buffer, so [p =+ p.merge]
        stays a recognizable accumulation (no same-node merge REDUCTION is constructible — merge
        buffers are node-shaped — so the recognizer shape is the whole reachable surface). *)
@@ -1147,7 +1151,7 @@ let default_bf16_block () =
     cc_only claim_off_shape (fun () ->
         let src = Generated.read ~ext:".c" "aw_bf16_naive_off" in
         let has s = String.is_substring src ~substring:s in
-        p claim_off_shape (has "single_to_bfloat16(fmaf("));
+        p claim_off_shape (has "single_to_bfloat16((bfloat16_to_single("));
     (* The skip branch prints [all_claims] in its declared order, so that order must be exactly the
        sequence this branch reports: a claim missing from the list, a stale entry, a repeat, or one
        out of place would each move a golden line on the skip branch only (gh-ocannl-1130).

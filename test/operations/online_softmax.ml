@@ -44,8 +44,13 @@ module Online_softmax = Ir.Online_softmax
 (* The dune rule [runtest-online_softmax_fast_math] reruns this executable on cc under
    [cc_backend_fast_math], which the [approximate] profile turns on beside the rewrite: every claim
    below holds there too, since the flag takes [-ffinite-math-only] back (its golden differs from
-   this run's in the regime line alone). *)
+   this run's in the regime lines alone). *)
 let fast_math = Utils.get_global_flag ~default:false ~arg_name:"cc_backend_fast_math"
+
+(* [runtest-online_softmax_fp_licences] reruns it with the floating-point licences on
+   (gh-ocannl-998), as the [approximate] profile has them: their member runs after this rewrite in
+   the tier, and contraction must not hide the value reduction from the hoist. *)
+let fp_licences = Ir.Low_level.Fp_licence.(fields (of_config ()))
 let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"cc"
 let batch = 2
 
@@ -132,6 +137,9 @@ let report label (got : float array) =
 let () =
   eprintf "backend: %s (not part of the golden)\n%!" backend_name;
   printf "--- run under cc_backend_fast_math=%b ---\n" fast_math;
+  printf "--- with the floating-point licences: %s ---\n"
+    (String.concat ~sep:", "
+       (List.map fp_licences ~f:(fun (key, on) -> key ^ if on then " on" else " off")));
   printf "--- leg 1: the gate -- key off keeps the composed form ---\n";
   let composed = forward ~on:false ~layers:1 ~d_k:8 ~prefix:0 () in
   p "composed: no scan in the routine" (scans composed.optimized = 0);

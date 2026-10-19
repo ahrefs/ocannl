@@ -209,22 +209,24 @@ let () =
     let a = TDSL.ndarray av ~label:[ "nzv_a" ] ~output_dims:[ rows; cols ] () in
     let b = TDSL.ndarray bv ~label:[ "nzv_b" ] ~output_dims:[ rows; cols ] () in
     (* The lane-uniform multiplier: [-0.0] per row, broadcast along the vectorized axis. A scalar
-       [-0.0] constant would not do — the simplifier folds a multiply by a zero constant away
-       entirely — but a per-row array read mentions only the OUTER index, which is exactly what
-       "lane-uniform" means to the vectorizer, so it reaches the fused multiply-add through the
-       splat rather than through a binary operator's implicit (and exact) vector-scalar
-       broadcast. *)
+       [-0.0] constant would not do — the [fp_finite_math] licence folds a multiply by a zero
+       constant away entirely — but a per-row array read mentions only the OUTER index, which is
+       exactly what "lane-uniform" means to the vectorizer, so it reaches the fused multiply-add
+       through the splat rather than through a binary operator's implicit (and exact) vector-scalar
+       broadcast. The multiply-add is an explicit [fma] in ONE assignment, reading the inlined row
+       broadcast: a product tensor added in a second assignment is fused only by the contraction
+       licence, and never across the inlining boundary between the two (gh-ocannl-998). *)
     let s =
       TDSL.ndarray (Array.create ~len:rows (-0.0)) ~label:[ "nzv_s" ] ~output_dims:[ rows ] ()
     in
-    let%op c0 = s +* "i;ij=>ij" a + b in
+    let%op c0 = fma (s ++ "i=>ij") a b in
     let ctx_twin = run ~name:"nzv_twin" ~transform:(fun opt -> opt) (Train.forward c0) in
     let want = discriminating "nzv_twin" (Context.get_values ctx_twin c0.Tensor.value) in
     (* Both zero signs must actually occur, or half the discrimination above is imaginary. *)
     p "vectorized reference carries zeros of both signs"
       (Array.exists want ~f:is_neg_zero
       && Array.exists want ~f:(fun x -> Float.equal x 0. && not (Float.ieee_negative x)));
-    let%op c1 = s +* "i;ij=>ij" a + b in
+    let%op c1 = fma (s ++ "i=>ij") a b in
     let transform (opt : LL.optimized) =
       let j = Option.value_exn ~here:[%here] (innermost_loop opt.LL.llc) in
       Sched.apply [ Sched.Retype { axis = j; ty = LL.Vectorized } ] opt

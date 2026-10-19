@@ -518,6 +518,15 @@ val split_reduce :
     ([op, block, inner, combine]) so subsequent ops can annotate the pass-1 block loop and the
     combine nest's loops. *)
 
+val fused_accumulation :
+  d:Tnode.t -> di:Indexing.axis_index array -> Low_level.scalar_t -> Low_level.scalar_t option
+(** gh-ocannl-998: the accumulation into [d[di]] as a [Tile_mma] fallback states it -- fused, since
+    a tile multiply-accumulate is fused on every tensor unit and in the cc register tile. An [FMA]
+    accumulating into [d[di]] is returned as is and a floating plain add of a product is returned as
+    the [FMA] (a schedule decision, not the contraction licence); [None] for an integer accumulation
+    (gh-ocannl-824) or no product accumulated into [d[di]]. [Tensorize] writes its fallback through
+    it, and the sketch seeding asks it whether the register tile can render a site. *)
+
 val tensorize :
   ?tile:Register_tile.t ->
   i:Indexing.symbol ->
