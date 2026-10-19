@@ -1430,6 +1430,23 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   fields and record type, and each reading stanza; a `Cc_backend` that reads the key outside every
   named value, or whose values no longer reach it, and a lost anchor (module, fields or record type
   not found) are refused rather than deriving no reader.
+- **A program that starts a search on cc pins the width or says why it need not** (gh-ocannl-1368).
+  The bullet above makes a rerun at another width happen; this one keeps the DEFAULT run off the
+  host's auto-probed width, which on CI's x86 runners is 32 or 64 bytes at random and changed what
+  a 0.2 pre-filter kept (gh-ocannl-1363). `env_var_deps` derives the population: programs naming
+  `Autotune.tune` or a value of the framework library (`lib/`) that reaches it, transitively
+  (`Train.tune_placements`, `Calibrate.stream`; the golden lists them), with a run the backend rule
+  says can select cc or multidev_cc. Each either pins the width -- its initialization states
+  `cc_vector_bytes` (`Config_key_scan.stating_reach`: a literal that flows to `config_file_args`
+  or `putenv`, directly or through a support value such as `Fissioned_chain.small_menu_envelope`;
+  a statement inside a function the initializer never calls pins nothing), or every cc-capable rule
+  running it `setenv`s the variable -- or its program stanza carries `; cc-vector-width:
+  independent -- <reason>`. The reason has to be TRUE: a claim on what a search seeds, keeps or
+  crowns pins instead. A marker on a pinned program, a stale one, a second one and one on a rule
+  are refused. A test pruning any cc search with an envelope gets the pin from
+  `small_menu_envelope`, which states the vector file beside the envelope. The local proxy for both
+  x86 widths is `OCANNL_CC_VECTOR_BYTES=32` and `=64` on the arm box, which the ambient record
+  reruns.
 - Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
   and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory

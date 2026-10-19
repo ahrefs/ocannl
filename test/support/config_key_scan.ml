@@ -1512,6 +1512,107 @@ let value_paths_in_source content =
   iterator#structure (structure_of content);
   List.rev !found
 
+type stating = {
+  stating_values : string list;
+      (** The top-level values whose body states one of the literals, directly or by naming another
+          value that does. *)
+  states_at_init : bool;
+      (** Whether the module's initialization does: a top-level [let () = …], a bare expression, or
+          any top-level binding that is not a function, stating one directly or naming a value that
+          does. *)
+}
+
+(** Which top-level values of a module STATE one of [literals] -- set a setting rather than read it
+    -- and whether initializing the module does (gh-ocannl-1368: which programs pin the cc vector
+    width for every search they run).
+
+    A value states a literal when its body spells the literal and reaches a [sinks] value -- a path
+    whose last component is one of [sinks], [config_file_args] or [putenv] for a configuration key
+    -- through itself or the module's other top-level values it names: [Fissioned_chain.small_menu]
+    spells ["cc_vector_bytes"] in a list its local [state] writes into [Utils.config_file_args]. A
+    literal in an [~arg_name] argument is a READ and never counts, nor does one in a value that
+    reaches no sink -- a format string, a table of names. A value also states when it names one of
+    [external_states]' paths, which is how a caller follows a helper of another module.
+
+    Flow-insensitive, and an over-read where it errs: a value that sets the key and later unsets it
+    states it, and a closure the initializer builds without calling counts as called. Nested modules
+    and functor bodies are not walked; a pin there is not seen, which costs the program a marker
+    rather than passing it unpinned. *)
+let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals ~sinks content =
+  let structure = structure_of content in
+  let direct_of expr =
+    let literal = ref false and sink = ref false and names = ref [] in
+    let iterator =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          match expr.pexp_desc with
+          | Pexp_apply (fn, args) ->
+              self#expression fn;
+              List.iter args ~f:(fun (lbl, arg) ->
+                  if not (is_our_label lbl) then self#expression arg)
+          | _ ->
+              (match expr.pexp_desc with
+              | Pexp_ident { txt; _ } ->
+                  Option.iter (flatten_module_path txt) ~f:(fun path ->
+                      if List.mem sinks (List.last_exn path) ~equal:String.equal then sink := true;
+                      names := path :: !names)
+              | _ ->
+                  Option.iter (string_literal expr) ~f:(fun s ->
+                      if List.mem literals s ~equal:String.equal then literal := true));
+              super#expression expr
+      end
+    in
+    iterator#expression expr;
+    (!literal, !sink, !names)
+  in
+  let is_function expr = match expr.pexp_desc with Pexp_function _ -> true | _ -> false in
+  let named =
+    List.concat_map structure ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_value (_, bindings) ->
+            List.filter_map bindings ~f:(fun b ->
+                Option.map (pattern_name b.pvb_pat) ~f:(fun name -> (name, direct_of b.pvb_expr)))
+        | _ -> [])
+  in
+  let initializers =
+    List.concat_map structure ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_eval (expr, _) -> [ direct_of expr ]
+        | Pstr_value (_, bindings) ->
+            List.filter_map bindings ~f:(fun b ->
+                Option.some_if (not (is_function b.pvb_expr)) (direct_of b.pvb_expr))
+        | _ -> [])
+  in
+  let local name = List.Assoc.mem named name ~equal:String.equal in
+  (* Both closed to their fixpoint over the whole file: a name refers to any top-level value of that
+     spelling, the flow-insensitive over-read the header admits. *)
+  let fixpoint step =
+    let rec go set =
+      let set' =
+        List.fold named ~init:set ~f:(fun acc (name, direct) ->
+            if Set.mem acc name || not (step acc direct) then acc else Set.add acc name)
+      in
+      if Set.length set' = Set.length set then set else go set'
+    in
+    go (Set.empty (module String))
+  in
+  let names_any set names =
+    List.exists names ~f:(function [ name ] -> Set.mem set name && local name | _ -> false)
+  in
+  let sinking = fixpoint (fun set (_, sink, names) -> sink || names_any set names) in
+  let states_with set (literal, sink, names) =
+    (literal && (sink || names_any sinking names))
+    || names_any set names
+    || List.exists names ~f:(fun path -> List.length path >= 2 && external_states path)
+  in
+  let stating = fixpoint states_with in
+  {
+    stating_values = Set.to_list stating;
+    states_at_init = List.exists initializers ~f:(states_with stating);
+  }
+
 (** Every record type [content] declares at top level, with its labels:
     [type t = { a : int; b : int }] contributes [("t", ["a"; "b"])]. *)
 let record_type_labels content =

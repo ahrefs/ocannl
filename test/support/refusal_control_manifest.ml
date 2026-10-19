@@ -319,6 +319,11 @@ let raw_entries =
         "[scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value";
         "[scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names";
         "[scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost";
+        "[scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost";
+        "[scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does";
+        "[scanner-refusal:e96ac262e859176f6f0ec05d6f2f30cb] the wrong stanza";
+        "[scanner-refusal:0a10ab654cc394b5f797d88ea889d086] inside the parentheses";
+        "[scanner-refusal:be4bb5e070f7c1653c2f7236cb2e6a18] times and only";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
         "[scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend";
         "[scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker";
@@ -358,10 +363,14 @@ let raw_entries =
         "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
         "[scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width";
+        "[scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than";
+        "[scanner-refusal:a5037fa85258b959ae69eb55cacb101d] cc vector width";
+        "[scanner-refusal:6b095fc0a9009014360cdbe631ba7dbb] starts a search";
         "[scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
+        "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
         "[scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no";
@@ -517,6 +526,23 @@ let raw_entries =
         "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
         "[scanner-refusal:1980131e56fcd4b8e4810ba218228fe7] whose rule depends";
         "[scanner-refusal:a6af1a4eabd80e213ebd285160652900] argument stays ungated";
+        "[scanner-refusal:4bff8c4ce57f4125cd336ce630eaf5bb] a program starting";
+        "[scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent";
+        "[scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable";
+        "[scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization";
+        "[scanner-refusal:2d8dcb6d4cb3cf1dddaebcba00885023] whose initialization states";
+        "[scanner-refusal:f5d3d67316532feb905a0aad1bcfb1dc] function the initialization";
+        "[scanner-refusal:6454f0cfc83773267ad5cf7695226069] helper printing its";
+        "[scanner-refusal:be7654cb2fedf501f96178ab18687738] search started through";
+        "[scanner-refusal:7fbb55a505a047a588bcf2bfe6df0f36] program whose only";
+        "[scanner-refusal:c6749493265651edae753b4d91b6057f] program that starts";
+        "[scanner-refusal:297ca2b13030714ee532288bcdea6931] refused as contradictory";
+        "[scanner-refusal:008feff3fd3ac8bf0aa213425ccab973] marker declaring anything";
+        "[scanner-refusal:f73bf9597915d82e0263c79001cade55] stanza are refused";
+        "[scanner-refusal:46430b0f534e84dda590f0e5cb983438] marker's sentinel outside";
+        "[scanner-refusal:d3576c4f9152f9f5a8f7b5bd17bc7e39] no program's modules";
+        "[scanner-refusal:435bce2f838f426728b540ba5f6c905f] marker between stanzas";
+        "[scanner-refusal:3956653315998753df29070b7b38ae6c] entry point renamed";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );
@@ -811,6 +837,25 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:3d0e227333c3757cabc427ac4fb81130",
       "a linked library whose source the scan was never handed is refused, not read as making no \
        reads: true" );
+    ( "env_var_deps.ml:0a10ab654cc394b5f797d88ea889d086",
+      "a marker between stanzas is refused rather than attributed: true" );
+    ( "env_var_deps.ml:2dc2479687a000324b3f828912a7f4a8",
+      "an entry point renamed away is refused as a lost anchor, not read as no search: true" );
+    ( "env_var_deps.ml:677d819fac904c64b7025b4f17c07b5a",
+      "a marker on a program that starts no search is refused as stale: true" );
+    ( "env_var_deps.ml:6b095fc0a9009014360cdbe631ba7dbb",
+      "a program starting a search with a run that can select cc is reported when it neither pins \
+       the width nor carries the marker: true" );
+    ( "env_var_deps.ml:9de3b3fd1cd96a8d87e76bfa31534244",
+      "a marker declaring anything but `independent` is refused: true" );
+    ( "env_var_deps.ml:a5037fa85258b959ae69eb55cacb101d",
+      "a marker on a program that pins the width is refused as contradictory: true" );
+    ( "env_var_deps.ml:be4bb5e070f7c1653c2f7236cb2e6a18",
+      "the marker's sentinel outside a comment is refused: true" );
+    ( "env_var_deps.ml:e47faeb8aa90e38e3dd7b698f6ac8998",
+      "two markers on one stanza are refused: true" );
+    ( "env_var_deps.ml:e96ac262e859176f6f0ec05d6f2f30cb",
+      "a marker on a rule, which names no program's modules, is refused: true" );
     ( "env_var_deps.ml:77abb7920eac5544c6bf60dd498ec9cf",
       "a test projecting a width field off a limits record is reported, naming the variable and \
        the read, when its stanza declares neither: true" );
