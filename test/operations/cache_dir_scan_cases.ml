@@ -256,6 +256,13 @@ let () = My_ir.Schedule_cache.store ~dir:"autotune_cache_ir" key value|ocaml},
       {ocaml|module M = struct include Ir module Schedule_cache = Other end
 let () = M.Schedule_cache.store ~dir:"scratch" key value|ocaml},
       [] );
+    (* A later include shadows an earlier one's values only where it defines the same name, so every
+       recognized include stays a base (review round 2). *)
+    ( "a later include of another named module keeps the cache's values",
+      {ocaml|module M = struct include Ir.Schedule_cache include Ir end
+let () = M.store ~dir:"scratch" key value
+let () = M.Schedule_cache.store ~dir:"autotune_cache_both" key value|ocaml},
+      [ "~dir names scratch"; "~dir names autotune_cache_both" ] );
     ( "a structure including an unrelated module is not the cache",
       {ocaml|module Cache = struct include Other end
 let () = Cache.store ~dir:"scratch" key value|ocaml},
