@@ -296,7 +296,9 @@ let () =
           pass_fail "held" true;
           pass_fail "failed" false;
           fail "a message, not a claim";
-          pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false
+          pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false;
+          (* A message ending as a claim would: still no claim (gh-ocannl-1364). *)
+          fail "a message ending like a claim: false"
       | "manifest_held" -> manifest_ending ~first_holds:true
       | "manifest_failed" -> manifest_ending ~first_holds:false
       | "pass" -> p "the claim" true

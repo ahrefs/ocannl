@@ -389,9 +389,10 @@ grep -q '^rows: 3 printed of 6 in replay.expected$' "$fixture/result"
 grep -q '^success trailer omitted: 3 rows ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'trailer_omitted: no omitted-trailer line'; exit 1; }
 reached
-# Failed pass_fail claims, bare and detailed, beside a Verdict.fail message: a claim's stderr line
-# is its stdout row behind `FAIL: `, so the runner lists every such line, and the message, a `FAIL: `
-# row on both streams, is none of them.
+# Failed pass_fail claims, bare and detailed, beside Verdict.fail messages, one of them ending like a
+# claim: a claim's stderr line is its stdout row behind `FAIL: `, so the runner lists every such
+# line, and a message, a `FAIL: ` row on both streams, is none of them but one of the failure
+# messages listed apart (gh-ocannl-1364).
 replay pass_fail_forms 'held: PASS\nfailed: PASS\ndetailed: PASS\n' 1
 claims > "$fixture/claims"
 sed 's/^/FAIL: /' "$fixture/replay.stdout" > "$fixture/echoes"
@@ -400,6 +401,12 @@ grep -Fx -f "$fixture/echoes" "$fixture/replay.stderr" > "$fixture/expected" || 
   { echo 'pass_fail_forms: fewer than two failed claims echo their row on stderr'; exit 1; }
 cmp "$fixture/claims" "$fixture/expected" ||
   { cat "$fixture/result"; echo 'pass_fail_forms: the false claims are not the echoed rows'; exit 1; }
+grep '^FAIL: ' "$fixture/replay.stdout" > "$fixture/expected"
+[ "$(($(wc -l < "$fixture/expected")))" -ge 2 ] ||
+  { echo 'pass_fail_forms: fewer than two Verdict.fail messages on stdout'; exit 1; }
+messages > "$fixture/messages"
+cmp "$fixture/messages" "$fixture/expected" ||
+  { cat "$fixture/result"; echo 'pass_fail_forms: the failure messages are not the stdout FAIL rows'; exit 1; }
 grep -q '^rows: 3 printed of 3 in replay.expected$' "$fixture/result"
 reached
 # A scan's ending through the printers the scans share (gh-ocannl-1364): a failed claim leaves out its

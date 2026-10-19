@@ -45,10 +45,12 @@ Transcripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:
   pass_fail_forms stdout | failed: FAIL
   pass_fail_forms stdout | FAIL: a message, not a claim
   pass_fail_forms stdout | detailed: FAIL (got 1 want 2)
+  pass_fail_forms stdout | FAIL: a message ending like a claim: false
   pass_fail_forms stderr | FAIL: failed: FAIL
   pass_fail_forms stderr | FAIL: a message, not a claim
   pass_fail_forms stderr | FAIL: detailed: FAIL (got 1 want 2)
-  pass_fail_forms stderr | FAILED: 3 checks did not hold: "failed", "a message, not a claim", "detailed".
+  pass_fail_forms stderr | FAIL: a message ending like a claim: false
+  pass_fail_forms stderr | FAILED: 4 checks did not hold: "failed", "a message, not a claim", "detailed" and 1 more.
   manifest_held stdout | the first manifest claim: true
   manifest_held stdout | the last manifest claim: true
   manifest_held stdout |
