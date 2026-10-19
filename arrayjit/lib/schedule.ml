@@ -814,7 +814,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
   in
   (llc, !out_masks)
 
-(* The accumulation mints below forward [Low_level.loop_bounds llc] to [Low_level.peel_accum_nest],
+(* The accumulation mints below forward [Low_level.loop_ranges llc] to [Low_level.peel_accum_nest],
    so a runtime-extent guard ([i < s], gh-490) does not stop them: [s] is bound outside every loop
    and cannot select among enclosing iterations. Derived here rather than certified by [apply]'s
    caller, because declining is NOT neutral for these mints the way it is in codegen -- a refused
@@ -917,7 +917,7 @@ let coalesce_body ~outer ~inner ~merged ~p ~q (body : Low_level.t) : Low_level.t
   code body
 
 let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
-  let loop_ranges = lazy (Low_level.loop_bounds llc) in
+  let program_ranges = lazy (Low_level.loop_ranges llc) in
   let open Low_level in
   match op with
   | Stage _ | Privatize _ | Fuse_epilogue _ | Tensorize _ | Split_reduce _ | Fold_mma _ ->
@@ -1011,7 +1011,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                serial candidates still agree — both per-step. *)
             if Utils.debug_log_from_routines () then None
             else
-              Low_level.peel_accum_nest ~loop_bounds:(Lazy.force loop_ranges) ~free_of:[ axis ]
+              Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
                 fc.body
           in
           match mint with
@@ -1163,7 +1163,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           let mint =
             if Utils.debug_log_from_routines () then None
             else
-              Low_level.peel_accum_nest ~loop_bounds:(Lazy.force loop_ranges) ~free_of:[ axis ]
+              Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
                 fc.body
           in
           match mint with
@@ -2739,7 +2739,7 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
       let storage = Lazy.force target.Tn.storage_prec in
       let update_bases =
         List.map !updates ~f:(fun st ->
-            match peel_accum_nest ~loop_bounds:[] ~free_of:[] st with
+            match peel_accum_nest ~loop_ranges:Affine.Loop_ranges.empty ~free_of:[] st with
             | Some (_, idcs, base, _, _) when accum_base_widens ~tn:target ~idcs base -> Some base
             | _ -> None)
       in
@@ -2779,9 +2779,7 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
             (* Where [over] is a loop of [entry] itself, the tile narrows once per execution of it,
                which matches the serial rendering only where that is the level localizing the write;
                a loop a [Split] minted carries no such record. *)
-            let over_in_entry =
-              List.Assoc.mem (loop_bounds entry) over ~equal:Indexing.equal_symbol
-            in
+            let over_in_entry = Affine.Loop_ranges.mem (loop_ranges entry) over in
             match judged with
             | [] -> false
             | _ ->
@@ -4869,7 +4867,7 @@ let privatized_tile_widens ~tile (llc : Low_level.t) =
     | Set { tn; llsc; _ } when Tn.equal tn tile -> (
         (not (scalar_touches_tn tile llsc))
         ||
-        match peel_accum_nest ~loop_bounds:[] ~free_of:[] llc with
+        match peel_accum_nest ~loop_ranges:Affine.Loop_ranges.empty ~free_of:[] llc with
         | Some (_, idcs, base, _, _) -> accum_base_widens ~tn:tile ~idcs base
         | None -> false)
     | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn -> not (Tn.equal tn tile)
@@ -5226,9 +5224,9 @@ let loops_independent (opt : Low_level.optimized) ~(syms : Indexing.symbol list)
   let plc = opt.optimize_ctx.placements in
   let verdict_of loop =
     let accs = Low_level.affine_accesses loop in
-    let env = Low_level.loop_bounds loop in
-    let range = Affine.bounds_range env in
-    let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
+    let env = Low_level.loop_ranges loop in
+    let range = Affine.Loop_ranges.find env in
+    let dup = Affine.Loop_ranges.mem env in
     let pairs = List.map syms ~f:(fun s -> (s, s)) in
     let extent s = match range s with Some (lo, hi) -> hi - lo + 1 | None -> 1 in
     let outside =
@@ -6127,7 +6125,8 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
   (* Per-group loop-bound environments (the bare pseudo-group binds no loops): the box domains for
      the affine conflict queries below. *)
   let env_arr =
-    Array.of_list (List.map nests ~f:(fun n -> Low_level.loop_bounds n.n_loops) @ [ [] ])
+    Array.of_list
+      (List.map nests ~f:(fun n -> Low_level.loop_ranges n.n_loops) @ [ Affine.Loop_ranges.empty ])
   in
   (* Cross-group dependency edges (module comment, aligned cross-nest parallelism): a node written
      in one group and touched in another must have all its write/access pairs aligned — unless it is
@@ -6216,8 +6215,8 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
       &&
       (* Each nest ranges its own symbols: two nests may bind one symbol with different bounds, and
          one nest's bounds would drop the other's values (gh-ocannl-1282). *)
-      let range g = Affine.bounds_range env_arr.(g) in
-      let dup g s = List.Assoc.mem env_arr.(g) s ~equal:Indexing.equal_symbol in
+      let range g = Affine.Loop_ranges.find env_arr.(g) in
+      let dup g = Affine.Loop_ranges.mem env_arr.(g) in
       let pairs = List.zip_exn (List.take full_syms.(gi) l) (List.take full_syms.(gj) l) in
       let verdict =
         Affine.pair_conflict ~left_range:(range gi) ~right_range:(range gj) ~dup_left:(dup gi)
@@ -6291,9 +6290,9 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
      comment for the safety argument). *)
   List.iter2_exn nests chains ~f:(fun n chain ->
       let syms = chain_syms chain in
-      let env = Low_level.loop_bounds n.n_loops in
-      let range = Affine.bounds_range env in
-      let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
+      let env = Low_level.loop_ranges n.n_loops in
+      let range = Affine.Loop_ranges.find env in
+      let dup = Affine.Loop_ranges.mem env in
       let pairs = List.map syms ~f:(fun s -> (s, s)) in
       (* The agreement rule: all accesses agree on every component that mentions a parallel symbol.
          For materialized nodes it is the legacy (procedural) special case of the affine conflict

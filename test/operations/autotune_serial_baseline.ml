@@ -92,7 +92,8 @@ let () =
   let base = Option.value_exn ~here:[%here] !captured in
   (* Over the lowering's loops: an elementwise routine with no loops at all would bind nothing for
      the wrong reason. *)
-  p_empty "the tuner's base lowering binds no hardware dimension" ~over:(LL.loop_bounds base.LL.llc)
+  p_empty "the tuner's base lowering binds no hardware dimension"
+    ~over:(Ir.Affine.Loop_ranges.to_alist (LL.loop_ranges base.LL.llc))
     (LL.hardware_axes base.LL.llc);
   let default =
     Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices:[] base

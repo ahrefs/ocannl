@@ -62,7 +62,9 @@ let nest ~upto =
           };
     }
 
-let peels ~upto = Option.is_some (LL.peel_accum_nest ~loop_bounds:[] ~free_of:[] (nest ~upto))
+let peels ~upto =
+  Option.is_some
+    (LL.peel_accum_nest ~loop_ranges:Ir.Affine.Loop_ranges.empty ~free_of:[] (nest ~upto))
 
 let () =
   (* The control: the identical nest over a live range is still recognized. Without this, a peel
@@ -153,9 +155,9 @@ let () =
   let other = Idx.get_symbol () in
   (* Both enclosing levels are 4 wide, so no separation claim below can hold vacuously through a
      width-1 axis (a single-instance level has nothing to tell apart). *)
-  let loop_bounds = [ (enclosing, (0, 3)); (other, (0, 3)) ] in
+  let loop_ranges = Ir.Affine.Loop_ranges.of_bindings [ (enclosing, (0, 3)); (other, (0, 3)) ] in
   let peels ~guard_sym ~cell =
-    Option.is_some (LL.peel_accum_nest ~loop_bounds ~free_of:[] (guarded_nest ~guard_sym ~cell))
+    Option.is_some (LL.peel_accum_nest ~loop_ranges ~free_of:[] (guarded_nest ~guard_sym ~cell))
   in
   Verdict.p "a guard varying with the peeled index still peels"
     (peels ~guard_sym:`Peeled ~cell:`Shared);
@@ -192,7 +194,7 @@ let () =
   Verdict.p "the lane-private shape still peels when its guard bound is bound outside every loop"
     (Option.is_some
        (LL.peel_accum_nest
-          ~loop_bounds:[ (other, (0, 3)) ]
+          ~loop_ranges:(Ir.Affine.Loop_ranges.of_bindings [ (other, (0, 3)) ])
           ~free_of:[]
           (guarded_nest ~guard_sym:(`Mixed enclosing) ~cell:`Shared)));
   (* gh-490's runtime-extent guard is NOT constant-bounded: [Assignments.extent_guard] emits [i < s]
@@ -200,7 +202,7 @@ let () =
      therefore cannot select among enclosing iterations, and the peel must still take it, or every
      runtime-bounded reduction loses accumulator localization (and, on narrow storage, its
      gh-ocannl-639 accumulator width along with it). The classification is the program's own: the
-     complement of [Low_level.loop_bounds]. *)
+     complement of [Low_level.loop_ranges]. *)
   let extent_sym = Idx.get_symbol () in
   let extent_nest =
     let k = Idx.get_symbol () in
@@ -235,14 +237,14 @@ let () =
       }
   in
   Verdict.p "a runtime-extent guard peels: its bound is bound outside every loop"
-    (Option.is_some (LL.peel_accum_nest ~loop_bounds ~free_of:[] extent_nest));
+    (Option.is_some (LL.peel_accum_nest ~loop_ranges ~free_of:[] extent_nest));
   (* And it stops peeling the moment that same bound IS a loop index -- the classification is the
      program's, not a caller's promise, so this is the one thing that distinguishes the two. The
      cell is [acc[0]], which separates nothing, so the gh-ocannl-721 escape cannot rescue it. *)
   Verdict.p "the same guard is refused when its bound is a loop index"
     (Option.is_none
        (LL.peel_accum_nest
-          ~loop_bounds:((extent_sym, (0, 3)) :: loop_bounds)
+          ~loop_ranges:(Ir.Affine.Loop_ranges.bind loop_ranges extent_sym (0, 3))
           ~free_of:[] extent_nest))
 
 (* Having refused to peel it, codegen must still RENDER a dead level — and the [Unrolled] arm is

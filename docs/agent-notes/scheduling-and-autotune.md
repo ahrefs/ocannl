@@ -1920,7 +1920,7 @@ files.
   The default annotator DOES descend, registering the body's accesses like a serial loop's, so an
   enclosing loop the accesses prove independent keeps its `Grid` mapping — the carried state is
   per-iteration scratch of that loop (leg 4, Serial vs Grid parity on cc and Metal). For footprint
-  queries the scan index is an ordinary loop symbol: `loop_bounds`, interval analysis, and
+  queries the scan index is an ordinary loop symbol: `loop_ranges`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
 ## Timing identity
