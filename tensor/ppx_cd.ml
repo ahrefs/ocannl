@@ -22,7 +22,6 @@ type expr_type =
 let is_unknown = function Unknown -> true | _ -> false
 
 type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Prod | Scalar | Nonslot | Undet
-[@@deriving variants]
 
 let equal_projections_slot a b =
   match (a, b) with
@@ -464,8 +463,6 @@ let args_for ~loc = function
               `.value` or `.grad` notation",
         [%expr false],
         [%expr false] )
-
-let reduce_res_vbs rs = reduce_vbss @@ List.map rs ~f:(fun r -> r.vbs)
 
 let compare_slots a b =
   match (a, b) with
@@ -1101,7 +1098,11 @@ let translate ?ident_label (expr : expression) : result =
           else if has_prefix "pspace_" || has_suffix "_pspace" then Prod
           else Undet
         in
-        { default_result with typ = (if is_undet slot then Unknown else Tensor); slot }
+        {
+          default_result with
+          typ = (if equal_projections_slot slot Undet then Unknown else Tensor);
+          slot;
+        }
     | [%expr !.[%e? expr1]] ->
         (* Hardcoding these two patterns (!. and !..) to improve projection derivation expressivity
            and avoid treating the constants as already tensors. *)

@@ -1,13 +1,13 @@
 (** The source reader behind the dead implicit-export ratchet.
 
-    This is deliberately a first cut. An implementation without an [.mli] exports every
-    source-declared top-level [let] and [external], including helpers intended only for the
-    implementation. Source-declared [let] values whose name starts with [_] are excluded: the author
-    already marked them deliberately unused, matching OCaml warning 32. This also covers patterns
-    and extension payloads; externals and inferred deriving names retain their existing census
-    policy, including polymorphic-variant parser helpers. We enumerate those declarations in
-    [arrayjit/lib/], [tensor/] and [lib/], then count references from every other OCaml source.
-    Top-level type declarations are a second, coarser census with its own section below.
+    An implementation without an [.mli] exports every source-declared top-level [let] and
+    [external], including helpers intended only for the implementation. Source-declared [let] values
+    whose name starts with [_] are excluded: the author already marked them deliberately unused,
+    matching OCaml warning 32. This also covers patterns and extension payloads; externals and
+    inferred deriving names retain their existing census policy, including polymorphic-variant
+    parser helpers. We enumerate those declarations in [arrayjit/lib/], [tensor/] and [lib/], then
+    count references from every other OCaml source. Top-level type declarations are a second,
+    coarser census with its own section below.
 
     A reference is conservative: a direct qualified path ([M.v]), a path through a module alias, or
     an unqualified identifier inside the lexical range of [open M]. Alias scopes are deliberately
@@ -19,19 +19,33 @@
     reads dead. Receivers match by their last qualifier, and an includer that shadows an included
     value still credits it. These choices can hide a dead export through a false positive, but
     cannot falsely reject an ordinary use, save through an include this reader does not follow: of a
-    functor application, or inside a functor body or an anonymous structure. Values generated for
-    top-level types by [of_sexp], [compare], and [equal] derivings are included (a standalone
-    [of_sexp] deriving as much as the [of_sexp] half of [sexp]); their expression extensions count
-    as references without needing to spell the generated value. The [sexp_of] converters -- derived
-    or hand-written, recognized by the [sexp_of_] name prefix -- are excluded by policy: they are
-    the entry point for debugging and observability, and consumed as often through [ppx_minidebug]'s
-    typed log annotations, which expand to converter calls this source-level census cannot see, as
-    through spelled references. A [sexp_of] with no caller costs nothing and cannot drift from its
-    type, while removing it to satisfy a ratchet only takes the converter away from the next
-    debugging session. Values introduced by other PPX expansions or by an [include] of another
-    module inside the defining module remain outside this source-level census. A bare
-    [include struct ... end] declares into the module and is read like top-level items; a
-    constrained [include (struct ... end : S)] carries its own interface, which publishes
+    functor application, or inside a functor body or an anonymous structure.
+
+    Values and modules generated for top-level types by the [of_sexp], [compare], [equal], [hash],
+    [enumerate], [fields] and [variants] derivings are exports too (a standalone [of_sexp] deriving
+    as much as the [of_sexp] half of [sexp]; [fields]' accessors and [variants]' constructor values
+    included, and the [Fields_of_<type>] / [Variants_of_<type>] modules, used by any path that
+    reaches through them). A deriving applied to arguments ([fields ~getters]) is refused rather
+    than guessed at. Their expression extensions ([[%compare: ty]], [[%hash: ty]], [[%all: ty]],
+    ...) count as references without needing to spell the generated value, and so does what another
+    deriving's generated code calls on the type. Inside the defining source, such a call is a
+    SUPPORT reference (gh-ocannl-914): a [compare_scope] that the module's own [compare_entry] calls
+    cannot go while [compare_entry] is live, so it counts exactly while its caller does ({!counts}).
+    The synthetic cases hold every derived name and every inferred call equal to the installed PPX
+    expansion of a fixture corpus, so a PPX change fails as contract drift. An accessor is named
+    after its label, so the [open] rule above credits it for any bare identifier of that name in an
+    opened scope: [Einsum_types.parsed_axis_labels]' twelve getters read live that way though
+    nothing called them (gh-ocannl-913 removed the deriving).
+
+    The [sexp_of] converters -- derived or hand-written, recognized by the [sexp_of_] name prefix --
+    are excluded by policy: they are the entry point for debugging and observability, and consumed
+    as often through [ppx_minidebug]'s typed log annotations, which expand to converter calls this
+    source-level census cannot see, as through spelled references. A [sexp_of] with no caller costs
+    nothing and cannot drift from its type, while removing it to satisfy a ratchet only takes the
+    converter away from the next debugging session. Values introduced by other PPX expansions or by
+    an [include] of another module inside the defining module remain outside this source-level
+    census. A bare [include struct ... end] declares into the module and is read like top-level
+    items; a constrained [include (struct ... end : S)] carries its own interface, which publishes
     deliberately, so like a module with an [.mli] it is not censused. *)
 
 open Base
@@ -60,6 +74,11 @@ type reference = {
   source : string;
   line : int;
   spelling : string;
+  via : string option;
+      (** [Some caller] for a support reference (gh-ocannl-914): a call that the expansion of a
+          deriving in the defining source itself makes, from the generated value [caller] of the
+          same module. It counts only while [caller] is live ({!counts}). [None] for an ordinary
+          reference from another source. *)
 }
 
 let export_key ({ module_name; value; _ } : export) = module_name ^ "." ^ value
@@ -113,8 +132,47 @@ let derivers_of_type_declaration declaration =
               | _ -> [])
       | _ -> [])
 
+(** The derivers whose payload this census reads as [deriver ~arg ...] would change the generated
+    set ([fields ~getters], [compare ~localize], ...), and the census models only their
+    argument-free form. [sexp_of] is absent: its output is excluded by policy whatever the
+    arguments. *)
+let modelled_derivers =
+  [ "sexp"; "of_sexp"; "compare"; "equal"; "hash"; "enumerate"; "fields"; "variants" ]
+
+exception Unmodelled_deriving_arguments of { deriver : string; line : int }
+
+(** Raises {!Unmodelled_deriving_arguments} when [declaration] applies a modelled deriver to
+    arguments: the generated set then differs from the one {!derived_names} states, so the census
+    refuses rather than silently miscounting. *)
+let check_deriving_arguments declaration =
+  List.iter declaration.ptype_attributes ~f:(fun attribute ->
+      match (attribute.attr_name.txt, attribute.attr_payload) with
+      | "deriving", PStr items ->
+          List.iter items ~f:(fun item ->
+              match item.pstr_desc with
+              | Pstr_eval (expression, _) ->
+                  let applications =
+                    match expression.pexp_desc with
+                    | Pexp_tuple expressions -> expressions
+                    | _ -> [ expression ]
+                  in
+                  List.iter applications ~f:(fun application ->
+                      match application.pexp_desc with
+                      | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident deriver; _ }; _ }, _)
+                        when List.mem modelled_derivers deriver ~equal:String.equal ->
+                          raise
+                            (Unmodelled_deriving_arguments
+                               { deriver; line = application.pexp_loc.loc_start.pos_lnum })
+                      | _ -> ())
+              | _ -> ())
+      | _ -> ())
+
 let comparison_name deriver type_name =
   if String.equal type_name "t" then deriver else deriver ^ "_" ^ type_name
+
+(** A derived name that drops the type for [t]: [named ~t:"all" ~prefix:"all_of_"] is [all] for [t]
+    and [all_of_foo] for [foo]. *)
+let named ~t ~prefix type_name = if String.equal type_name "t" then t else prefix ^ type_name
 
 let is_polymorphic_variant declaration =
   match declaration.ptype_manifest with
@@ -126,13 +184,73 @@ let of_sexp_names declaration =
   let public = type_name ^ "_of_sexp" in
   if is_polymorphic_variant declaration then [ public; "__" ^ public ^ "__" ] else [ public ]
 
+(** [hash_<type>] (just [hash] for [t]) exists only for a type without parameters. *)
+let hash_names declaration =
+  let type_name = declaration.ptype_name.txt in
+  ("hash_fold_" ^ type_name)
+  ::
+  (if List.is_empty declaration.ptype_params then [ named ~t:"hash" ~prefix:"hash_" type_name ]
+   else [])
+
+(** The constructor-named values of [variants], as ppx_variants_conv spells a constructor:
+    lowercased whole ([RHS1] is [rhs1]), with a trailing [_] on a keyword ([Open] is [open_]).
+    Polymorphic tags count as constructors; an inherited row contributes none. *)
+let variants_constructors declaration =
+  let names =
+    match (declaration.ptype_kind, declaration.ptype_manifest) with
+    | Ptype_variant constructors, _ ->
+        List.map constructors ~f:(fun constructor -> constructor.pcd_name.txt)
+    | Ptype_abstract, Some { ptyp_desc = Ptyp_variant (rows, _, _); _ } ->
+        List.filter_map rows ~f:(fun row ->
+            match row.prf_desc with Rtag ({ txt; _ }, _, _) -> Some txt | Rinherit _ -> None)
+    | _ -> []
+  in
+  List.map names ~f:(fun name ->
+      let lowered = String.lowercase name in
+      if Ppxlib.Keyword.is_keyword lowered then lowered ^ "_" else lowered)
+
+let variants_module declaration =
+  named ~t:"Variants" ~prefix:"Variants_of_" declaration.ptype_name.txt
+
+let fields_module declaration = named ~t:"Fields" ~prefix:"Fields_of_" declaration.ptype_name.txt
+
+let record_labels declaration =
+  match declaration.ptype_kind with Ptype_record labels -> labels | _ -> []
+
+(** The label getters and the setters of the mutable labels that [fields] generates. *)
+let fields_accessors declaration =
+  List.concat_map (record_labels declaration) ~f:(fun label ->
+      let name = label.pld_name.txt in
+      match label.pld_mutable with Mutable -> [ name; "set_" ^ name ] | Immutable -> [ name ])
+
+(** The names a deriving generates that are spelled after a record label or a constructor: [fields]'
+    accessors and [variants]' constructor values with their [is_] and [_val] companions. The value
+    census exports them like any other; the type census does not credit them (see its section). *)
+let member_names ~derivers declaration =
+  List.concat_map derivers ~f:(function
+    | "fields" -> fields_accessors declaration
+    | "variants" ->
+        List.concat_map (variants_constructors declaration) ~f:(fun name ->
+            [ name; "is_" ^ name; name ^ "_val" ])
+    | _ -> [])
+  |> List.dedup_and_sort ~compare:String.compare
+
+(** Every top-level value and module a modelled deriving generates for [declaration] (a module name
+    is capitalized, a value name is not). The synthetic cases hold this set equal to the installed
+    derivers' own expansion. *)
 let derived_names ~derivers declaration =
   let type_name = declaration.ptype_name.txt in
   List.concat_map derivers ~f:(function
     | "of_sexp" | "sexp" -> of_sexp_names declaration
     | "compare" -> [ comparison_name "compare" type_name ]
     | "equal" -> [ comparison_name "equal" type_name ]
+    | "hash" -> hash_names declaration
+    | "enumerate" -> [ named ~t:"all" ~prefix:"all_of_" type_name ]
+    | "fields" ->
+        if List.is_empty (record_labels declaration) then [] else [ fields_module declaration ]
+    | "variants" -> [ variants_module declaration ]
     | _ -> [])
+  @ member_names ~derivers declaration
   |> List.dedup_and_sort ~compare:String.compare
 
 let is_sexp_of_converter value = String.is_prefix value ~prefix:"sexp_of_"
@@ -160,6 +278,7 @@ let exports_of_source ~source contents =
             }
             :: acc
         | Pstr_type (_, declarations) ->
+            List.iter declarations ~f:check_deriving_arguments;
             (* The parser attaches a group's trailing [@@deriving] to its last declaration, while
                the deriver applies it to every declaration in the mutually recursive group. *)
             let derivers = List.concat_map declarations ~f:derivers_of_type_declaration in
@@ -182,6 +301,19 @@ let exports_of_source ~source contents =
           | 0 -> String.compare a.source b.source
           | ordering -> ordering)
 
+(** The type declaration groups {!exports_of_source} censuses: those at the top level of
+    [structure], in an extension payload there, or in an [include struct ... end]. *)
+let top_level_type_groups structure =
+  let rec items structure = List.concat_map structure ~f:item
+  and item structure_item =
+    match structure_item.pstr_desc with
+    | Pstr_type (_, declarations) -> [ declarations ]
+    | Pstr_extension ((_, PStr nested), _) -> items nested
+    | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } -> items nested
+    | _ -> []
+  in
+  items structure
+
 let path_last path = List.last path
 
 let path_qualifier path =
@@ -197,22 +329,83 @@ let module_expr_name module_expr =
   | Pmod_ident { txt; _ } -> ( try Read.flatten_longident txt |> List.last with _ -> None)
   | _ -> None
 
+(** {2 What generated code references}
+
+    A reference names a FAMILY of derived values -- [of_sexp], [compare], [equal], [hash_fold],
+    [hash], [all] -- and a type, and spells [<family>_<type>] ({!derived_name_for_extension}). A
+    deriving references, for every type constructor its components spell, the family it calls there;
+    an expression extension ([[%compare: ty]], ...) does the same over its type. The synthetic cases
+    hold every such inference equal to the qualified calls in the installed PPX expansion
+    (gh-ocannl-914). *)
+
+(** The family an expression extension references through its type, [hash] aside (see
+    {!add_type_references}' caller): [[%compare.equal: ty]] is equality computed through [compare].
+*)
 let extension_deriver = function
   | "equal" -> Some "equal"
-  | "compare" -> Some "compare"
+  | "compare" | "compare.equal" -> Some "compare"
   | "of_sexp" -> Some "of_sexp"
+  | "hash_fold" -> Some "hash_fold"
+  | "hash" -> Some "hash"
+  | "all" -> Some "all"
   | _ -> None
 
 let derived_name_for_extension deriver type_name =
   match deriver with
   | "equal" | "compare" -> comparison_name deriver type_name
   | "of_sexp" -> type_name ^ "_of_sexp"
+  | "hash_fold" -> "hash_fold_" ^ type_name
+  | "hash" -> named ~t:"hash" ~prefix:"hash_" type_name
+  | "all" -> named ~t:"all" ~prefix:"all_of_" type_name
   | _ -> assert false
 
+(** The families a deriving's generated code calls on its components. [fields] and [variants] call
+    nothing on them. *)
 let reference_derivers = function
   | "sexp" | "of_sexp" -> [ "of_sexp" ]
   | ("compare" | "equal") as deriver -> [ deriver ]
+  | "hash" -> [ "hash_fold" ]
+  | "enumerate" -> [ "all" ]
   | _ -> []
+
+(** The generated value whose body holds [family]'s calls on [declaration]'s components: for a
+    polymorphic variant's parser that is the internal [__<type>_of_sexp__] helper, which the public
+    parser calls in turn. *)
+let referencing_value ~family declaration =
+  let type_name = declaration.ptype_name.txt in
+  if String.equal family "of_sexp" && is_polymorphic_variant declaration then
+    "__" ^ type_name ^ "_of_sexp__"
+  else derived_name_for_extension family type_name
+
+(** For a [hash] deriving on a parameterless alias of a parameterless type constructor, ppx_hash
+    defines [hash_<type>] as the aliased type's own [hash_<target>] rather than through
+    [hash_fold_<type>]: the path of that target. *)
+let hash_alias_target declaration =
+  match (declaration.ptype_params, declaration.ptype_kind, declaration.ptype_manifest) with
+  | [], Ptype_abstract, Some { ptyp_desc = Ptyp_constr ({ txt; _ }, []); _ } -> Some txt
+  | _ -> None
+
+(** Calls between the values one deriving generates for one type, as [(caller, callee)]: the public
+    parser calls the polymorphic-variant helper, [hash_<type>] calls [hash_fold_<type>] (or, on an
+    alias, the target's [hash_<target>], an ordinary reference), and the [Variants_of_<type>] and
+    [Fields_of_<type>] modules hold the constructor values and the accessors. *)
+let intrinsic_edges ~derivers declaration =
+  let type_name = declaration.ptype_name.txt in
+  List.concat_map derivers ~f:(function
+    | ("sexp" | "of_sexp") when is_polymorphic_variant declaration ->
+        [ (type_name ^ "_of_sexp", "__" ^ type_name ^ "_of_sexp__") ]
+    | "hash"
+      when List.is_empty declaration.ptype_params && Option.is_none (hash_alias_target declaration)
+      ->
+        [ (named ~t:"hash" ~prefix:"hash_" type_name, "hash_fold_" ^ type_name) ]
+    | "variants" ->
+        List.map (variants_constructors declaration) ~f:(fun name ->
+            (variants_module declaration, name))
+    | "fields" ->
+        List.map (fields_accessors declaration) ~f:(fun name -> (fields_module declaration, name))
+    | _ -> [])
+  |> List.dedup_and_sort ~compare:(fun (a1, b1) (a2, b2) ->
+      match String.compare a1 a2 with 0 -> String.compare b1 b2 | ordering -> ordering)
 
 let has_attribute name attributes =
   List.exists attributes ~f:(fun attribute -> String.equal attribute.attr_name.txt name)
@@ -234,6 +427,10 @@ let core_type_ignored ~deriver core_type =
       || opaque_sexp_wrapper core_type
   | "compare" -> has_attribute "compare.ignore" core_type.ptyp_attributes
   | "equal" -> has_attribute "equal.ignore" core_type.ptyp_attributes
+  (* ppx_hash also skips what [compare] ignores. *)
+  | "hash_fold" | "hash" ->
+      has_attribute "hash.ignore" core_type.ptyp_attributes
+      || has_attribute "compare.ignore" core_type.ptyp_attributes
   | _ -> false
 
 let label_ignored ~deriver label =
@@ -241,6 +438,9 @@ let label_ignored ~deriver label =
   | "of_sexp" -> has_attribute "sexp.ignore" label.pld_attributes
   | "compare" -> has_attribute "compare.ignore" label.pld_attributes
   | "equal" -> has_attribute "equal.ignore" label.pld_attributes
+  | "hash_fold" | "hash" ->
+      has_attribute "hash.ignore" label.pld_attributes
+      || has_attribute "compare.ignore" label.pld_attributes
   | _ -> false
 
 (** The name a top-level item of [source] is reached under: its module name, also for a dune select
@@ -323,7 +523,94 @@ let receiver_names ~modules ~parsed =
       (module_name, Set.to_list (close (Set.singleton (module String) module_name))))
   |> Map.of_alist_exn (module String)
 
-(** References to [exports] from [sources]. Sources are [(repository-relative path, contents)]. *)
+(** Walks [core_type] the way [family]'s generated code does, calling
+    [on_constr ~value path position] for every type constructor it calls [family] on: [path] is the
+    constructor's flattened path, [value] maps its last component to the derived value called, and
+    [position] is where it is spelled. Components an ignore attribute removes from [family]'s code
+    are skipped. With [internal_inherited], an inherited polymorphic-variant row calls the inherited
+    type's internal [__<type>_of_sexp__] parser helper rather than its public parser. *)
+let iter_type_references ~family ~internal_inherited ~on_constr core_type =
+  let visit ~internal_of_sexp core_type =
+    match core_type.ptyp_desc with
+    | Ptyp_constr ({ txt; _ }, _) -> (
+        match flattened_longident txt with
+        | None -> ()
+        | Some path ->
+            let value type_name =
+              if internal_of_sexp then "__" ^ type_name ^ "_of_sexp__"
+              else derived_name_for_extension family type_name
+            in
+            on_constr ~value path core_type.ptyp_loc.loc_start)
+    | _ -> ()
+  in
+  let types =
+    object (self)
+      inherit Ast_traverse.iter as super
+
+      method! core_type core_type =
+        if core_type_ignored ~deriver:family core_type then ()
+        else (
+          visit ~internal_of_sexp:false core_type;
+          super#core_type core_type)
+
+      method! row_field row_field =
+        match (family, internal_inherited, row_field.prf_desc) with
+        | "of_sexp", true, Rinherit inherited ->
+            if core_type_ignored ~deriver:family inherited then ()
+            else (
+              visit ~internal_of_sexp:true inherited;
+              match inherited.ptyp_desc with
+              | Ptyp_constr (_, arguments) -> List.iter arguments ~f:self#core_type
+              | _ -> self#core_type inherited)
+        | _ -> super#row_field row_field
+
+      method! label_declaration label =
+        if label_ignored ~deriver:family label then () else super#label_declaration label
+    end
+  in
+  types#core_type core_type
+
+(** What the derivings [derivers] of [declaration] call on other types, as
+    [on_constr ~caller ~family ~value path position] ({!iter_type_references}), [caller] being the
+    generated value of [declaration] whose body makes the call. A GADT constructor's result index is
+    not a component: no deriving calls anything on it. *)
+let iter_declaration_references ~derivers ~on_constr declaration =
+  List.iter derivers ~f:(fun deriver ->
+      List.iter (reference_derivers deriver) ~f:(fun family ->
+          let caller = referencing_value ~family declaration in
+          let on_constr = on_constr ~caller ~family in
+          let add_type = iter_type_references ~family ~internal_inherited:true ~on_constr in
+          let add_label label =
+            if not (label_ignored ~deriver:family label) then add_type label.pld_type
+          in
+          match declaration.ptype_kind with
+          | Ptype_abstract -> Option.iter declaration.ptype_manifest ~f:add_type
+          | Ptype_variant constructors ->
+              List.iter constructors ~f:(fun constructor ->
+                  match constructor.pcd_args with
+                  | Pcstr_tuple types -> List.iter types ~f:add_type
+                  | Pcstr_record labels -> List.iter labels ~f:add_label)
+          | Ptype_record labels -> List.iter labels ~f:add_label
+          | Ptype_open -> ());
+      match (deriver, hash_alias_target declaration, declaration.ptype_manifest) with
+      | "hash", Some target, Some manifest when not (core_type_ignored ~deriver:"hash" manifest)
+        -> (
+          match flattened_longident target with
+          | Some path ->
+              on_constr
+                ~caller:(named ~t:"hash" ~prefix:"hash_" declaration.ptype_name.txt)
+                ~family:"hash"
+                ~value:(derived_name_for_extension "hash")
+                path manifest.ptyp_loc.loc_start
+          | None -> ())
+      | _ -> ())
+
+(** References to [exports] from [sources]. Sources are [(repository-relative path, contents)].
+
+    A defining source contributes support references only ({!reference.via}): what the derivings of
+    its own top-level types call on its own types -- spelled unqualified there -- and the calls
+    between the values one deriving generates ({!intrinsic_edges}). Any other use inside the
+    defining source is an internal use, which does not need the export. *)
 let references ~(exports : export list) ~sources =
   let modules =
     List.map exports ~f:(fun export -> export.module_name)
@@ -341,154 +628,182 @@ let references ~(exports : export list) ~sources =
           | None -> Set.singleton (module String) export.value
           | Some values -> Set.add values export.value))
   in
+  let defines module_name source =
+    List.exists exports ~f:(fun export ->
+        String.equal export.module_name module_name && String.equal export.source source)
+  in
+  let is_module_name name = (not (String.is_empty name)) && Char.is_uppercase name.[0] in
   List.concat_map parsed ~f:(fun (source, structure) ->
       List.concat_map modules ~f:(fun module_name ->
-          let receivers, open_ranges =
-            List.fold
-              (Map.find_exn receiver_names module_name)
-              ~init:(Set.empty (module String), [])
-              ~f:(fun (receivers, open_ranges) name ->
-                let aliases, _opened, ranges = Read.module_bindings_of structure ~wanted:name in
-                ( Set.union receivers (Set.of_list (module String) (name :: aliases)),
-                  ranges @ open_ranges ))
-          in
           let names = Map.find_exn export_names module_name in
           let found = ref [] in
-          let add ~value ~line ~spelling =
+          let add ?via ~value ~line ~spelling () =
             if Set.mem names value then
-              found := { module_name; value; source; line; spelling } :: !found
+              found := { module_name; value; source; line; spelling; via } :: !found
           in
-          let add_type_references ~deriver ~internal_inherited ~line ~spelling core_type =
-            let types =
-              object (self)
+          if defines module_name source then (
+            List.iter (top_level_type_groups structure) ~f:(fun declarations ->
+                let derivers = List.concat_map declarations ~f:derivers_of_type_declaration in
+                List.iter declarations ~f:(fun declaration ->
+                    let line = declaration.ptype_loc.loc_start.pos_lnum in
+                    iter_declaration_references ~derivers declaration
+                      ~on_constr:(fun ~caller ~family ~value path _position ->
+                        match path with
+                        | [ type_name ] when not (String.equal (value type_name) caller) ->
+                            add ~via:caller ~value:(value type_name) ~line
+                              ~spelling:("[@@deriving] " ^ family ^ " over " ^ type_name)
+                              ()
+                        | _ -> ());
+                    List.iter (intrinsic_edges ~derivers declaration) ~f:(fun (caller, callee) ->
+                        if Set.mem names caller then
+                          add ~via:caller ~value:callee ~line
+                            ~spelling:("generated " ^ caller ^ " calls " ^ callee)
+                            ())));
+            List.rev !found)
+          else
+            let receivers, open_ranges =
+              List.fold
+                (Map.find_exn receiver_names module_name)
+                ~init:(Set.empty (module String), [])
+                ~f:(fun (receivers, open_ranges) name ->
+                  let aliases, _opened, ranges = Read.module_bindings_of structure ~wanted:name in
+                  ( Set.union receivers (Set.of_list (module String) (name :: aliases)),
+                    ranges @ open_ranges ))
+            in
+            (* A path naming one of this module's values: qualified by a receiver, or bare in the
+               scope of an [open] of one. *)
+            let resolve path pos =
+              match (path_last path, path_qualifier path) with
+              | Some last, Some receiver when Set.mem receivers receiver -> Some last
+              | Some last, None when Read.within open_ranges pos -> Some last
+              | _ -> None
+            in
+            let type_references ~spelling ~family ~value path (position : Lexing.position) =
+              match resolve path position.pos_cnum with
+              | Some type_name ->
+                  add ~value:(value type_name) ~line:position.pos_lnum
+                    ~spelling:(spelling ~family path) ()
+              | None -> ()
+            in
+            let iterator =
+              object
                 inherit Ast_traverse.iter as super
 
-                method private add_path ~internal_of_sexp core_type =
-                  match core_type.ptyp_desc with
-                  | Ptyp_constr ({ txt; _ }, _) -> (
-                      match flattened_longident txt with
-                      | None -> ()
-                      | Some path -> (
-                          let value type_name =
-                            if internal_of_sexp then "__" ^ type_name ^ "_of_sexp__"
-                            else derived_name_for_extension deriver type_name
-                          in
-                          match (path_last path, path_qualifier path) with
-                          | Some type_name, Some receiver when Set.mem receivers receiver ->
-                              add ~value:(value type_name) ~line ~spelling:(spelling path)
-                          | Some type_name, None
-                            when Read.within open_ranges core_type.ptyp_loc.loc_start.pos_cnum ->
-                              add ~value:(value type_name) ~line ~spelling:(spelling [ type_name ])
-                          | _ -> ()))
-                  | _ -> ()
+                method! structure_item item =
+                  (* An [include M] is not itself a use: it makes the including module a receiver of
+                     M's values ({!receiver_names}), and a use is a spelling through either. *)
+                  (match item.pstr_desc with
+                  | Pstr_type (_, declarations) ->
+                      let derivers = List.concat_map declarations ~f:derivers_of_type_declaration in
+                      List.iter declarations
+                        ~f:
+                          (iter_declaration_references ~derivers ~on_constr:(fun ~caller:_ ->
+                               type_references ~spelling:(fun ~family path ->
+                                   "[@@deriving] " ^ family ^ " over " ^ String.concat ~sep:"." path)))
+                  | _ -> ());
+                  super#structure_item item
 
-                method! core_type core_type =
-                  if core_type_ignored ~deriver core_type then ()
-                  else (
-                    self#add_path ~internal_of_sexp:false core_type;
-                    super#core_type core_type)
+                method! attribute attribute =
+                  if String.equal attribute.attr_name.txt "deriving" then ()
+                  else super#attribute attribute
 
-                method! row_field row_field =
-                  match (deriver, internal_inherited, row_field.prf_desc) with
-                  | "of_sexp", true, Rinherit inherited ->
-                      if core_type_ignored ~deriver inherited then ()
-                      else (
-                        self#add_path ~internal_of_sexp:true inherited;
-                        match inherited.ptyp_desc with
-                        | Ptyp_constr (_, arguments) -> List.iter arguments ~f:self#core_type
-                        | _ -> self#core_type inherited)
-                  | _ -> super#row_field row_field
+                (* A generated MODULE ([Fields_of_foo], [Variants]) is used through any path that
+                   continues past it, or names it, after a receiver -- or first in the scope of an
+                   [open] of one. *)
+                method! longident_loc { txt; loc } =
+                  match flattened_longident txt with
+                  | None -> ()
+                  | Some path -> (
+                      let pos = loc.loc_start.pos_cnum in
+                      let credit name =
+                        if is_module_name name then
+                          add ~value:name ~line:loc.loc_start.pos_lnum
+                            ~spelling:(String.concat ~sep:"." path) ()
+                      in
+                      let rec qualified = function
+                        | qualifier :: (component :: _ as rest) ->
+                            if Set.mem receivers qualifier then credit component;
+                            qualified rest
+                        | [ _ ] | [] -> ()
+                      in
+                      qualified path;
+                      match path with
+                      | first :: _ when Read.within open_ranges pos -> credit first
+                      | _ -> ())
 
-                method! label_declaration label =
-                  if label_ignored ~deriver label then () else super#label_declaration label
+                method! expression expression =
+                  (match Read.longident_of expression with
+                  | Some path -> (
+                      match resolve path expression.pexp_loc.loc_start.pos_cnum with
+                      | Some value ->
+                          add ~value ~line:expression.pexp_loc.loc_start.pos_lnum
+                            ~spelling:(String.concat ~sep:"." path) ()
+                      | None -> ())
+                  | None -> ());
+                  (match expression.pexp_desc with
+                  | Pexp_extension ({ txt; _ }, PTyp core_type) -> (
+                      let spelling ~family path =
+                        "[%" ^ txt ^ ": " ^ String.concat ~sep:"." path ^ "] (" ^ family ^ ")"
+                      in
+                      match (extension_deriver txt, core_type.ptyp_desc) with
+                      | None, _ -> ()
+                      (* [[%hash: foo]] calls [hash_foo] on a bare constructor, and folds
+                         otherwise. *)
+                      | Some "hash", Ptyp_constr ({ txt = path; _ }, [])
+                        when not (core_type_ignored ~deriver:"hash" core_type) -> (
+                          match flattened_longident path with
+                          | Some path ->
+                              type_references ~spelling ~family:"hash"
+                                ~value:(derived_name_for_extension "hash")
+                                path core_type.ptyp_loc.loc_start
+                          | None -> ())
+                      | Some family, _ ->
+                          let family = if String.equal family "hash" then "hash_fold" else family in
+                          iter_type_references ~family
+                            ~internal_inherited:(String.equal family "of_sexp")
+                            ~on_constr:(type_references ~spelling ~family)
+                            core_type)
+                  | _ -> ());
+                  super#expression expression
               end
             in
-            types#core_type core_type
-          in
-          let add_declaration_references ~deriver declaration =
-            let line = declaration.ptype_loc.loc_start.pos_lnum in
-            let spelling path =
-              "[@@deriving " ^ deriver ^ "] over " ^ String.concat ~sep:"." path
-            in
-            let add_type = add_type_references ~deriver ~internal_inherited:true ~line ~spelling in
-            let add_label label =
-              if not (label_ignored ~deriver label) then add_type label.pld_type
-            in
-            match declaration.ptype_kind with
-            | Ptype_abstract -> Option.iter declaration.ptype_manifest ~f:add_type
-            | Ptype_variant constructors ->
-                List.iter constructors ~f:(fun constructor ->
-                    match constructor.pcd_args with
-                    | Pcstr_tuple types -> List.iter types ~f:add_type
-                    | Pcstr_record labels -> List.iter labels ~f:add_label)
-            | Ptype_record labels -> List.iter labels ~f:add_label
-            | Ptype_open -> ()
-          in
-          let iterator =
-            object
-              inherit Ast_traverse.iter as super
+            iterator#structure structure;
+            List.rev !found))
 
-              method! structure_item item =
-                (* An [include M] is not itself a use: it makes the including module a receiver of
-                   M's values ({!receiver_names}), and a use is a spelling through either. *)
-                (match item.pstr_desc with
-                | Pstr_type (_, declarations) ->
-                    let derivers =
-                      List.concat_map declarations ~f:derivers_of_type_declaration
-                      |> List.concat_map ~f:reference_derivers
-                      |> List.dedup_and_sort ~compare:String.compare
-                    in
-                    List.iter derivers ~f:(fun deriver ->
-                        List.iter declarations ~f:(add_declaration_references ~deriver))
-                | _ -> ());
-                super#structure_item item
-
-              method! attribute attribute =
-                if String.equal attribute.attr_name.txt "deriving" then ()
-                else super#attribute attribute
-
-              method! expression expression =
-                (match Read.longident_of expression with
-                | Some path -> (
-                    match (path_last path, path_qualifier path) with
-                    | Some value, Some receiver when Set.mem receivers receiver ->
-                        add ~value ~line:expression.pexp_loc.loc_start.pos_lnum
-                          ~spelling:(String.concat ~sep:"." path)
-                    | Some value, None
-                      when Read.within open_ranges expression.pexp_loc.loc_start.pos_cnum ->
-                        add ~value ~line:expression.pexp_loc.loc_start.pos_lnum ~spelling:value
-                    | _ -> ())
-                | None -> ());
-                (match expression.pexp_desc with
-                | Pexp_extension ({ txt; _ }, PTyp core_type) -> (
-                    match extension_deriver txt with
-                    | None -> ()
-                    | Some deriver ->
-                        add_type_references ~deriver
-                          ~internal_inherited:(String.equal deriver "of_sexp")
-                          ~line:expression.pexp_loc.loc_start.pos_lnum
-                          ~spelling:(fun path ->
-                            "[%" ^ deriver ^ ": " ^ String.concat ~sep:"." path ^ "]")
-                          core_type)
-                | _ -> ());
-                super#expression expression
-            end
-          in
-          iterator#structure structure;
-          List.rev !found))
-  |> List.filter ~f:(fun reference ->
-      not
-        (List.exists exports ~f:(fun export ->
-             String.equal export.module_name reference.module_name
-             && String.equal export.source reference.source)))
-
+(** The reference count of each of [exports], keyed by {!export_key}. An ordinary reference counts
+    once. A support reference counts once while its caller is live -- referenced from outside or,
+    transitively, supported by a live caller -- since a generated value cannot be removed while a
+    live value of the same deriving family calls it; a support chain no outside reference reaches
+    keeps nothing alive. *)
 let counts ~(exports : export list) references =
   let table = Hashtbl.create (module String) in
   List.iter exports ~f:(fun export -> Hashtbl.set table ~key:(export_key export) ~data:0);
-  List.iter references ~f:(fun reference ->
-      Hashtbl.update table
-        (reference.module_name ^ "." ^ reference.value)
-        ~f:(fun count -> 1 + Option.value count ~default:0));
+  let key (reference : reference) = reference.module_name ^ "." ^ reference.value in
+  let ordinary, support =
+    List.partition_tf references ~f:(fun reference -> Option.is_none reference.via)
+  in
+  List.iter ordinary ~f:(fun reference ->
+      Hashtbl.update table (key reference) ~f:(fun count -> 1 + Option.value count ~default:0));
+  let caller_key (reference : reference) =
+    reference.module_name ^ "." ^ Option.value_exn reference.via
+  in
+  let live = Hash_set.create (module String) in
+  Hashtbl.iteri table ~f:(fun ~key ~data -> if data > 0 then Hash_set.add live key);
+  let rec spread () =
+    let grew =
+      List.fold support ~init:false ~f:(fun grew reference ->
+          if Hash_set.mem live (caller_key reference) && not (Hash_set.mem live (key reference))
+          then (
+            Hash_set.add live (key reference);
+            true)
+          else grew)
+    in
+    if grew then spread ()
+  in
+  spread ();
+  List.iter support ~f:(fun reference ->
+      if Hash_set.mem live (caller_key reference) then
+        Hashtbl.update table (key reference) ~f:(fun count -> 1 + Option.value count ~default:0));
   table
 
 (** {1 Type declarations}
@@ -528,24 +843,14 @@ type type_export = {
 let type_export_key ({ module_name; type_name; _ } : type_export) = module_name ^ "." ^ type_name
 
 (** The values and modules a deriving generates for [declaration], any spelling of which mentions
-    the type: the value census's {!derived_names}, plus what that census leaves out -- the [sexp_of]
-    converters and the [hash], [enumerate], [variants] and [fields] outputs. The label-named
-    accessors of [fields] are left out, by the label boundary above. The synthetic cases hold this
-    set equal to the derivers' own expansion. *)
+    the type: the value census's {!derived_names} -- less its {!member_names}, by the label boundary
+    above -- plus the [sexp_of] converters that census leaves out. The synthetic cases hold this set
+    equal to the derivers' own expansion. *)
 let deriving_mentions ~derivers declaration =
-  let type_name = declaration.ptype_name.txt in
-  let named ~t ~prefix = if String.equal type_name "t" then t else prefix ^ type_name in
-  derived_names ~derivers declaration
+  let members = Set.of_list (module String) (member_names ~derivers declaration) in
+  List.filter (derived_names ~derivers declaration) ~f:(fun name -> not (Set.mem members name))
   @ List.concat_map derivers ~f:(function
-    | "sexp" | "sexp_of" -> [ "sexp_of_" ^ type_name ]
-    | "hash" ->
-        (* The [hash_<type>] shorthand exists only for a type without parameters. *)
-        ("hash_fold_" ^ type_name)
-        ::
-        (if List.is_empty declaration.ptype_params then [ named ~t:"hash" ~prefix:"hash_" ] else [])
-    | "enumerate" -> [ named ~t:"all" ~prefix:"all_of_" ]
-    | "variants" -> [ named ~t:"Variants" ~prefix:"Variants_of_" ]
-    | "fields" -> [ named ~t:"Fields" ~prefix:"Fields_of_" ]
+    | "sexp" | "sexp_of" -> [ "sexp_of_" ^ declaration.ptype_name.txt ]
     | _ -> [])
   |> List.dedup_and_sort ~compare:String.compare
 
