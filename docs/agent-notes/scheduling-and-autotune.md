@@ -59,6 +59,26 @@ files.
   `wte.grad` + final-LN-grad union. Zero runs are stably sorted by shape in `collect_units` (they
   commute; units stay a function of the code), else the cuts fall at every alternation of a
   backward pass's shapes. Case 4 of `gpu_fission_mapping`.
+- Scratch (`Local`, a function-scope array on the C backends) is where the CPU preset and fission
+  part from the GPU reading (gh-ocannl-1343). A whole-node `Zero_out` of scratch conflicts with
+  nothing, so greedy grouping used to take it into the PRECEDING segment and cut before its
+  accumulation; the node then crossed the boundary, `promote_crossing` made it `On_device`, and the
+  promoted zero -- a bare materialized write -- bailed BOTH segments, which coalesced serial. In
+  mlp_bn_names the batch-norm statistics' zeros serialized the first layer's 1000x200x30 matmul that
+  way. `group_units` now lets such a zero join a segment only when the unit accumulating into its
+  node would join too; a `Solo` next unit that may touch the node (opaque units always may)
+  splits it off as well, so the zero shares the serial unit's fate (review round 2). Separately, `default_cpu` runs `analyze_parallel_chains ~shared_locals:true`:
+  a nest writing only scratch takes its chain from those writes (on GPU it runs whole per thread
+  over a per-thread copy, so the empty chain is right there; on cc a serial nest runs once, on one
+  core), falling back to the plain analysis when linking it bails OR costs the kernel its
+  `min_parallel` eligibility (a `y[i, j]` reading `s[i]` is trimmed to `[i]`; compare
+  threshold eligibility, never chain sizes -- the preset retypes only the outermost loop, which a
+  trim keeps, and a size comparison left the scratch nest serial in exactly the case it serves:
+  review round 1; the test's stats and rowstats legs pin both directions) -- `C_syntax.parallel_grid_safe`
+  stays the arbiter of whether a loop over a local renders in parallel. Mind the size: at the
+  default `stack_threshold_in_bytes` (16 KB) a scratch node holds at most 4096 cells, below the
+  default `cpu_schedule_min_parallel`, so the chain change bites in the tuner's `min_parallel:1`
+  presets or beside a large nest; the zero rule bites at any size. `test/operations/cpu_scratch_matmul_grid`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
@@ -1929,8 +1949,9 @@ files.
   under, its `replay` callback answering `None` for a segment left to its kind's preset, and keys
   its segments by first unit plus structural digest, `Autotune.seg_key`). Segments of one structure
   share a sketch key only when their placement-aware digests agree too, so repeated layers still
-  share one sketch. On the C backends fission's crossing promotions leave such twins agreeing in
-  placements; a GPU's restored `Local` products are what split them (`autotune_sketch_placements`).
+  share one sketch. A GPU's restored `Local` products are what split such twins
+  (`autotune_sketch_placements`); on the C backends a `Local` product's zero opens its own segment
+  (gh-ocannl-1343, above), so the twins differ in structure there instead.
   The replay-validity check rides
   on the position: segment `i`'s digest must equal the saved `i`th, and a recorded segmentation
   that does not partition the routine's units, or separates a scope-local definition from a use,

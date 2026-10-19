@@ -936,9 +936,16 @@ val default_cpu : ?min_parallel:int -> Low_level.optimized -> schedule
     nest's outermost parallelizable loop is merely retyped to [Grid] — pool-backed Grid rendering in
     the C backend (docs/proposals/gh-ocannl-164.md) partitions that loop into contiguous chunks
     executing on a process-global native thread pool, and a [Workgroup] split would only add loop
-    structure that runs serially inside a chunk. Returns the empty schedule below [min_parallel]
-    (default from config [cpu_schedule_min_parallel] = 16384; task fan-out costs more than a GPU
-    launch is worth on small kernels). *)
+    structure that runs serially inside a chunk. One departure from the GPU analysis
+    (gh-ocannl-1343): a nest that writes only scratch ([Local], a function-scope array on the C
+    backends) takes its chain from those writes instead of staying serial -- on GPU such a nest runs
+    whole in every thread over a per-thread copy, on the C backends a serial nest runs once, on one
+    core. Where linking such a nest to its readers bails, or trims a reader's chain so that the
+    kernel falls below [min_parallel] where the plain analysis met it, the plain analysis is the
+    result, and the C renderer's rule for locals under a pool-parallel loop stays the final word on
+    rendering. Returns the empty schedule below [min_parallel] (default from config
+    [cpu_schedule_min_parallel] = 16384; task fan-out costs more than a GPU launch is worth on small
+    kernels). *)
 
 val log_launches : bool Lazy.t
 (** Config [schedule_log_launches]: backend [compile] logs one stderr line per compiled segment with
@@ -980,12 +987,13 @@ val default_pipeline_fissions : unit -> bool
 val default_schedule_fingerprint : backend_name:string -> string
 (** A stable summary of the policy and configuration that shape the untuned default pipeline on this
     backend: the {!automatic_schedule_active} gate (["inactive"] when it is off — the untuned
-    default is then the unscheduled serial form), the [schedule_fission] gate, and the preset
-    thresholds ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] /
-    [cpu_schedule_min_parallel]). Diagnostics recorded against one default pipeline (e.g. the
-    autotuner's [default_ms], gh-ocannl-552) compare fingerprints to detect that a config change
-    redefined the default (Codex P2 on PR #279). Does not cover per-device hardware limits — cache
-    consumers already key per backend. *)
+    default is then the unscheduled serial form), the policy's version tags (bumped when a change
+    redefines the untuned default), the [schedule_fission] gate, and the preset thresholds
+    ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] / [cpu_schedule_min_parallel]).
+    Diagnostics recorded against one default pipeline (e.g. the autotuner's [default_ms],
+    gh-ocannl-552) compare fingerprints to detect that a config change redefined the default (Codex
+    P2 on PR #279). Does not cover per-device hardware limits — cache consumers already key per
+    backend. *)
 
 val maybe_default_schedule :
   backend_name:string ->
