@@ -54,6 +54,7 @@ if [[ -e "$out" ]] && [[ -n "$(ls -A "$out" 2>/dev/null)" ]]; then
   exit 2
 fi
 mkdir -p "$out"
+out=$(cd "$out" && pwd) # absolute: the cells run from the checkout's root
 exec > >(tee -a "$out/driver.log") 2>&1
 
 # No ambient configuration reaches a cell: every OCANNL_* variable is dropped and the checkout's

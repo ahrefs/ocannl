@@ -2239,8 +2239,12 @@ let ranking_cache_bandwidth ~limits =
    [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
 let segments_ranking ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
     (segs : LL.optimized list) : (float * float) option =
-  let cache_capacity_bytes, max_resident_threads = ranking_capacity ~limits in
-  let cache_capacity_bytes = Option.value capacity ~default:cache_capacity_bytes in
+  (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
+     the configuration it overrides, a malformed override of it included. *)
+  let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
+  let cache_capacity_bytes =
+    match capacity with Some c -> c | None -> fst (ranking_capacity ~limits)
+  in
   let cache_bandwidth =
     match cache_bandwidth with Some cb -> cb | None -> ranking_cache_bandwidth ~limits
   in

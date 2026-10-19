@@ -6168,7 +6168,9 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH))
  (action
   (with-stdout-to
    %{target}
@@ -6289,7 +6291,9 @@
     %{dep:model_default_fallback.exe}
     "--ocannl_backend=cc"
     "--ocannl_model_peak_flops=1e12"
-    "--ocannl_model_peak_memory_bandwidth=1e6"))))
+    "--ocannl_model_peak_memory_bandwidth=1e6"
+    "--ocannl_model_cache_capacity=none"
+    "--ocannl_model_cache_bandwidth=none"))))
 
 (rule
  (alias runtest-model_default_fallback)
@@ -6929,7 +6933,9 @@
     "--ocannl_model_default_schedule=true"
     "--ocannl_model_default_placements=2"
     "--ocannl_model_peak_flops=1e9"
-    "--ocannl_model_peak_memory_bandwidth=1e12"))))
+    "--ocannl_model_peak_memory_bandwidth=1e12"
+    "--ocannl_model_cache_capacity=none"
+    "--ocannl_model_cache_bandwidth=none"))))
 
 (rule
  (alias runtest-model_default_placements)
@@ -9077,7 +9083,8 @@
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules cost_model_reuse)
  (libraries base stdio ocannl arrayjit.verdict ll_test))
 
