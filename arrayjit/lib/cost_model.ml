@@ -681,8 +681,8 @@ let spills ?cache_capacity_bytes (r : reuse) =
   | Some capacity -> r.ru_working_set_bytes > capacity
   | None -> false
 
-let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    (s : summary) (r : reuse option) : float option =
+let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    (s : summary) (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun dram ->
@@ -698,10 +698,16 @@ let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes 
                   (* A cache slower than DRAM would make raising the capacity raise the score. *)
                   Float.max (total /. dram) (requested /. Float.max cache dram)))
   in
-  let legs =
-    List.filter_opt [ Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p); memory ]
+  (Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p), memory)
+
+let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    (s : summary) (r : reuse option) : float option =
+  let compute, memory =
+    ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
   in
-  match legs with [] -> None | l -> Some (List.reduce_exn l ~f:Float.max)
+  match List.filter_opt [ compute; memory ] with
+  | [] -> None
+  | l -> Some (List.reduce_exn l ~f:Float.max)
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?max_resident_threads ~is_global (code : Low_level.t) : float option =
@@ -712,6 +718,228 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
     | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
+
+(* {2 Tile-MMA operand loads — gh-ocannl-1254}
+
+   Not a priced term: a count the untimed choosers break exact ranking ties with. Twins that differ
+   only in a staged tile's physical layout touch the same cells with the same operations, so every
+   score above ties them; what differs is how many instructions a lane issues to bring the operand
+   tiles into registers, which the backend's own load rule decides. *)
+
+type operand_load =
+  | Ldmatrix of { lane_bytes : int }
+  | Fragment_load
+  | Gather of { elt_bytes : int }
+[@@deriving sexp_of, equal]
+
+let operand_place (opt : Low_level.optimized) (tn : Tn.t) : Backend_intf.mma_operand_place =
+  let space =
+    if Set.mem opt.Low_level.workgroup_shared tn then `Shared
+    else if Tn.Placements.is_local_peek opt.Low_level.optimize_ctx.Low_level.placements tn then
+      `Thread
+    else `Device
+  in
+  let layout =
+    match Map.find opt.Low_level.swizzled tn with
+    | Some Low_level.Swizzle_b128 -> `Swizzled_b128
+    | Some Low_level.Swizzle_elem | None -> `Plain
+  in
+  (space, layout)
+
+let operand_load_instructions ~lanes ~elements ~elt_bytes = function
+  (* One matrix load delivers [lane_bytes] to each lane; a partial one still costs an
+     instruction. *)
+  | Ldmatrix { lane_bytes } ->
+      ((elements * elt_bytes) + (lane_bytes * lanes) - 1) / (lane_bytes * lanes)
+  (* One cooperative load per fragment ([nvcuda::wmma::load_matrix_sync]). *)
+  | Fragment_load -> 1
+  (* One load per element a lane gathers, whatever its width. *)
+  | Gather _ -> (elements + lanes - 1) / lanes
+
+let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
+    (opt : Low_level.optimized) =
+  let prec tn = Lazy.force tn.Tn.storage_prec in
+  let layout tn ~ld ~idcs =
+    Low_level.mma_operand_layout
+      (Map.find opt.Low_level.swizzled tn)
+      ~ld ~idcs ~dims:(Lazy.force tn.Tn.dims)
+  in
+  (* An operand as the hooks receive it: its leading dimension, space and layout — or nothing, where
+     the renderer declines the layout before any hook (the scalar fallback renders). *)
+  let operand tn ~ld ~idcs =
+    match layout tn ~ld ~idcs with
+    | `Decline _ -> None
+    | (`Plain | `Swizzled_b128) as layout -> Some (ld, (fst (operand_place opt tn), layout))
+  in
+  (* The persistent-fragment regions the renderer recognizes ([Low_level.fragment_region], its own
+     recognition), keyed by fragment: the backing target as the fragment scope addresses it, or
+     [None] where the target's layout declines the scope (the ordinary rendering follows). *)
+  let regions = Hashtbl.create (module Tn) in
+  let rec find_regions (c : Low_level.t) =
+    (match Low_level.fragment_region c with
+    | Some r when Set.mem opt.Low_level.simdgroup_fragments r.Low_level.fr_fragment ->
+        Hashtbl.set regions ~key:r.fr_fragment
+          ~data:(operand r.fr_target ~ld:r.fr_target_ld ~idcs:r.fr_target_base)
+    | Some _ | None -> ());
+    match c with
+    | Low_level.Seq (c1, c2) ->
+        find_regions c1;
+        find_regions c2
+    | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> find_regions body
+    | Tile_mma _ | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
+    | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier ->
+        ()
+  in
+  find_regions opt.Low_level.llc;
+  let sites = ref [] in
+  let rec go ~scale ~env (c : Low_level.t) =
+    match c with
+    | Low_level.Seq (c1, c2) ->
+        go ~scale ~env c1;
+        go ~scale ~env c2
+    | For_loop { index; from_; to_; body; _ } | Scan_loop { index; from_; to_; body; _ } ->
+        let extent = max 0 (to_ - from_ + 1) in
+        go ~scale:(scale * extent) ~env:((index, extent) :: env) body
+    | If { body; _ } -> go ~scale ~env body
+    | Tile_mma
+        {
+          d = d_tn, d_idcs;
+          a = a_tn, a_idcs;
+          b = b_tn, b_idcs;
+          ta;
+          tb;
+          m;
+          n;
+          k;
+          ldd;
+          lda;
+          ldb;
+          lane;
+          _;
+        } ->
+        let lanes =
+          max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
+        in
+        let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
+        (* The emission scope and acceptance, both the renderer's and the backend hook's own
+           decisions, asked in the renderer's order. A recognized region of a marked fragment
+           renders in the fragment scope over its backing target when the hook accepts it there,
+           else as statements against the target; any other statement on its own, with its own
+           destination. A statement whose layouts or hooks decline renders scalar or register-tiled
+           code: nothing the arm description says applies to it. *)
+        let scope =
+          match
+            ( operand a_tn ~ld:lda ~idcs:a_idcs,
+              operand b_tn ~ld:ldb ~idcs:b_idcs,
+              operand d_tn ~ld:ldd ~idcs:d_idcs )
+          with
+          | Some a, Some b, own -> (
+              let accepts ~fragment_target ~d =
+                operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~fragment_target ~d ~a ~b
+              in
+              let on_its_own =
+                Option.bind own ~f:(fun own ->
+                    Option.some_if
+                      (accepts ~fragment_target:None ~d:own)
+                      (Backend_intf.Mma_per_statement, snd a, snd b))
+              in
+              match Hashtbl.find regions d_tn with
+              | Some (Some target) ->
+                  let fragment_update =
+                    match own with
+                    | Some own -> accepts ~fragment_target:(Some target) ~d:own
+                    | None -> false
+                  in
+                  if fragment_update then Some (Backend_intf.Mma_fragment_scope, snd a, snd b)
+                  else
+                    Option.some_if
+                      (accepts ~fragment_target:None ~d:target)
+                      (Backend_intf.Mma_per_statement, snd a, snd b)
+              | Some None | None -> on_its_own)
+          | _ -> None
+        in
+        let description =
+          Option.map scope ~f:(fun (scope, a_place, b_place) ->
+              ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:a_place ~b:b_place,
+                operand_fragments ~a_prec ~b_prec ~d_prec ~scope ))
+        in
+        (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
+           [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm; an arm whose fragments
+           load whole ([mf_fragment_loads], wmma) issues one load per fragment. *)
+        let classify tn ldm ~fragment_loads ~lane_bytes =
+          if ldm then Ldmatrix { lane_bytes }
+          else if fragment_loads then Fragment_load
+          else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
+        in
+        (* Per intrinsic tile [(tm, tn, tk)] of the arm's own description, the emission loads [a]
+           fragments ([tm x tk]) and [b] fragments ([tk x tn]): once per reduction step each, reused
+           across the other's free axis, or — where the arm reloads — for every tile of that axis
+           too. A statement the backend does not describe, or whose extents the tile does not divide
+           (the arm declines it), has no count. *)
+        let site =
+          match description with
+          | Some
+              ( (a_ldm, b_ldm),
+                Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads; mf_fragment_loads } )
+            when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
+              let mt = m / tm and nt = n / tn and kt = k / tk in
+              let a_frags, b_frags =
+                if mf_reloads then (mt * nt * kt, mt * nt * kt) else (mt * kt, nt * kt)
+              in
+              Some
+                ( scale / lanes,
+                  [
+                    ( a_tn,
+                      tm * tk,
+                      a_frags,
+                      classify a_tn a_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:16 );
+                    ( b_tn,
+                      tk * tn,
+                      b_frags,
+                      classify b_tn b_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:8 );
+                  ],
+                  lanes )
+          | Some (_, _) | None -> None
+        in
+        sites := site :: !sites
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+    | Set_local _ | Declare_local _ | Workgroup_barrier ->
+        ()
+  in
+  go ~scale:1 ~env:[] opt.Low_level.llc;
+  List.rev !sites
+
+type load_count = No_tile_mma | Undescribed | Loads of int [@@deriving sexp_of, equal]
+
+let combine_load_counts counts =
+  if List.exists counts ~f:(equal_load_count Undescribed) then Undescribed
+  else
+    match
+      List.filter_map counts ~f:(function Loads n -> Some n | No_tile_mma | Undescribed -> None)
+    with
+    | [] -> No_tile_mma
+    | ns -> Loads (List.sum (module Int) ns ~f:Fn.id)
+
+let operand_load_count ~operand_accepts ~operand_fragments ~operand_loads opt =
+  match tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads opt with
+  | [] -> No_tile_mma
+  | sites when List.exists sites ~f:Option.is_none -> Undescribed
+  | sites ->
+      let sites = List.filter_opt sites in
+      Loads
+        (List.sum
+           (module Int)
+           sites
+           ~f:(fun (executions, operands, lanes) ->
+             executions
+             * List.sum
+                 (module Int)
+                 operands
+                 ~f:(fun (tn, elements, fragments, cls) ->
+                   fragments
+                   * operand_load_instructions ~lanes ~elements
+                       ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
+                       cls)))
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 

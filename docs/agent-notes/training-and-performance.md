@@ -123,6 +123,31 @@ files.
   at least `analyze`'s distinct bytes at DRAM bandwidth, so it is never below any bound, which
   `test/operations/cost_model_reuse` claims over every leaf of a sketch tree. Never feed the
   ranking score to a bound: a kernel that hits in cache would then trip `BOUND VIOLATION`.
+- Exact ranking ties go to fewer tile-MMA operand loads (gh-ocannl-1254), never a priced term.
+  The count describes emitted code only through the backend's own arm description, never a
+  cost-model copy of it: `mma_operand_loads` (which operands use `ldmatrix`; CUDA's
+  `Cuda_mma.operand_loads`, which the census reads too) and `mma_operand_fragments` (the arm's own
+  tile, not the descriptor's, whether its loop nest reloads each operand per tile of the other's
+  free axis — inline-PTX yes, wmma no — and whether a fragment loads whole, wmma's
+  `load_matrix_sync`), both per emission scope; operand layouts go through
+  `Low_level.mma_operand_layout`, the renderer's own decline; and `mma_accepts`, the
+  backend's own `mma_syntax` hook probed without addresses, decides both whether a statement counts
+  at all and in which scope, in the renderer's order: a fragment-marked statement through its
+  region (`Low_level.fragment_region`, the renderer's own recognition, finds the backing target), in the
+  fragment scope where `mma_fragment_syntax` accepts the target and the update-only call, else as
+  statements against the target; an unmarked one per statement. A
+  backend that describes no arm (CPU register tiles, Metal, HIP) gets `Undescribed`, code with no
+  `Tile_mma` `No_tile_mma` (`Cost_model.load_count`), and a keyless leaf neither wins nor loses a tie: each review round of staging#1216 that restated an
+  emission detail in the cost model found the next arm it got wrong. `Schedule_space.search
+  ~tie_break` lets a tied keyed leaf displace a keyed best, never the incumbent, and enters a
+  subtree bounded at the threshold only under a keyed best. `Autotune.model_family_search` is the
+  walk `model_default` runs, exposed so `test/operations/model_load_tiebreak` drives it on cc with a
+  CUDA-shaped record and capability; `Autotune.model_explain` lists what the model sees of each
+  whole-routine candidate. The swizzled staged fp8 twin beats its plain twin, but at the
+  gh-ocannl-1190 shape neither is the argmin: an unstaged tensorized leaf ranks strictly below
+  every staged one (the staging copies add ops, the shared tiles add distinct-cell bytes, and the
+  per-block global reads are the same), so making `model_default` pick a staged twin needs the
+  model to price what staging buys, not a tie-break.
 - The ranking score's `cache_capacity_bytes` and `cache_bandwidth` are calibrated, not looked up
   (gh-ocannl-1253): the working set sums per-block footprints that co-resident blocks share, so
   the boundary sits above any L2. `tools/calibrate_cache_capacity.exe`

@@ -618,6 +618,45 @@ let () =
         ],
         "build @q2/runtest",
         "names nothing + reads config" );
+      (* gh-ocannl-1149: the copy every test directory reads is test/config's configuration with the
+         ambient record appended. It resolves test/config's backend, so long as its producer has
+         exactly that shape; one appending anything else is a generated configuration. *)
+      ( "a reader beside the configuration carrying the ambient record",
+        [
+          ( "test/config",
+            {dune|(subdir ambient
+ (rule
+  (target ocannl_config)
+  (deps ../ocannl_config ../ocannl_ambient)
+  (action
+   (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))|dune}
+          );
+          ( "q3",
+            {dune|(copy_files ../test/config/ambient/ocannl_config)
+(test (name rq3) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+          );
+        ],
+        "build @q3/runtest",
+        "names nothing + reads config" );
+      ( "a reader beside an ambient configuration that appends more than the record",
+        [
+          ( "test/config",
+            {dune|(subdir ambient
+ (rule
+  (target ocannl_config)
+  (deps ../ocannl_config ../ocannl_ambient)
+  (action
+   (with-stdout-to
+    %{target}
+    (progn (cat ../ocannl_config) (cat ../ocannl_ambient) (echo "backend=hip\n"))))))|dune}
+          );
+          ( "q4",
+            {dune|(copy_files ../test/config/ambient/ocannl_config)
+(test (name rq4) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+          );
+        ],
+        "build @q4/runtest",
+        "unknown: " );
       ( "a workspace program run by name",
         [
           ( "w",

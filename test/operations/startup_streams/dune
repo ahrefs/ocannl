@@ -6,6 +6,14 @@
 ; directory; the source is shared, and its header says why the dependency is the world
 ; rather than 112 key names.
 
+; gh-ocannl-1149: this directory checks in a configuration of its own, so the shared one that
+; carries the ambient environment (see test/config/dune) is not what its tests read. They depend
+; on the record of the environment itself instead, which `config_dep_completeness` asks of every
+; rule here that reads a configuration.
+
+(copy_files
+ (files ../../config/ocannl_ambient))
+
 (copy_files
  (files ../../config/env_spelling_gate.ml))
 
@@ -86,6 +94,7 @@
  (target stdout_clean.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)
@@ -130,6 +139,7 @@
  (target default_stderr.raw)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)
@@ -150,6 +160,7 @@
  (target default_stderr.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)
@@ -181,6 +192,7 @@
  (target bootstrap_precedence.raw)
  (deps
   ocannl_config
+  ocannl_ambient
   bootstrap_conflict/ocannl_config
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
@@ -205,6 +217,7 @@
  (target bootstrap_precedence.actual)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
   (env_var OCANNL_LOG_CONFIG_SOURCING)
   (env_var OCANNL_LOG_LEVEL)

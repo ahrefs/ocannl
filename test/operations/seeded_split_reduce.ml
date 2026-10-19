@@ -11,9 +11,10 @@
    beside the default pipeline's result held to the same; the inputs are NOT dyadic, so a split
    result bitwise equal to the default's would mean no split ran. A threshold above the serial chain
    splits nothing and must then be bitwise the default's, and a threshold of 0 disables the split.
-   On CUDA the split must happen; elsewhere it must not, and the routine must be bitwise the
-   default's: on HIP the split measured 1.42x slower on gpt2_mini_train b256, so HIP keeps the
-   unsplit plan (and the CPU backends never had the seeded default). *)
+   Where the untuned compile splits ([Autotune.seeded_split_backend]: CUDA and HIP, since
+   gh-ocannl-1412 gave the first pass coalesced lanes) the split must happen; elsewhere it must not,
+   and the routine must be bitwise the default's (the CPU backends and Metal have no seeded
+   default). *)
 
 open Base
 open Ocannl
@@ -21,7 +22,7 @@ open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
-let splits_here = String.is_substring backend_name ~substring:"cuda"
+let splits_here = Autotune.seeded_split_backend backend_name
 
 let nb = 128
 and ns = 64
@@ -96,23 +97,25 @@ let () =
       Stdio.eprintf "split: %s into %d blocks (not part of the golden)\n" (Ir.Tnode.debug_name tn)
         blocks);
   Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA the seeded default splits the bias gradient at a threshold below its serial chain"
+    "on CUDA and HIP the seeded default splits the bias gradient at a threshold below its serial \
+     chain"
     (split_bgrad r);
   Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA the split routine compiles without falling back to the default" (not r.sd_fell_back);
+    "on CUDA and HIP the split routine compiles without falling back to the default"
+    (not r.sd_fell_back);
   Verdict.gated ~when_:(not splits_here) ~on:backend_name
-    "off CUDA, HIP included, the seeded default splits nothing" (List.is_empty r.sd_split);
+    "off CUDA and HIP the seeded default splits nothing" (List.is_empty r.sd_split);
   p_exists "the bias gradient is not trivially zero" (Array.to_list default) ~f:(fun v ->
       Float.(abs v > 1.));
   within "the default pipeline's bias gradient is within the f32 tolerance of the f64 reference"
     default;
   within "the seeded default's bias gradient is within the f32 tolerance of the f64 reference" split;
   Verdict.gated_all ~when_:(not splits_here) ~on:backend_name
-    "off CUDA, HIP included, the seeded default's bias gradient is bitwise the default's"
+    "off CUDA and HIP the seeded default's bias gradient is bitwise the default's"
     (List.zip_exn (Array.to_list split) (Array.to_list default))
     ~f:(fun (a, b) -> bitwise a b);
   Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA the split changed the summation order: some cell differs from the default's"
+    "on CUDA and HIP the split changed the summation order: some cell differs from the default's"
     (Array.exists2_exn split default ~f:(fun a b -> not (bitwise a b)));
   (* The threshold: above every serial chain of the fixture -- the loss sum's [nb * ns * no] too,
      should the detector ever propose it -- nothing qualifies, and 0 disables the split. *)
@@ -126,7 +129,7 @@ let () =
 (* gh-ocannl-1253: [model_default] starts from the seeded plan, split prelude included. On CUDA and
    HIP its pick computes the bias gradient bitwise as the seeded default does at the configured
    threshold (1024 unless the configuration says otherwise, below this fixture's 8192-row chain): on
-   CUDA that is the split order, which a pick dropping the prelude would not reproduce. *)
+   both that is the split order, which a pick dropping the prelude would not reproduce. *)
 let () =
   let report = ref None in
   let model =

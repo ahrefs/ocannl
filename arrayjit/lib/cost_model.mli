@@ -223,6 +223,18 @@ val ranking_seconds_of :
     two-tier memory leg (section contract; [None] for the reuse means no per-block charge, the
     roofline). Bandwidths in bytes/s. [None] when neither peak is given. *)
 
+val ranking_legs_of :
+  ?peak_flops:float ->
+  ?peak_memory_bandwidth:float ->
+  ?cache_capacity_bytes:int ->
+  ?cache_bandwidth:float ->
+  summary ->
+  reuse option ->
+  float option * float option
+(** The two legs {!ranking_seconds_of} takes the larger of: [(compute, memory)] in seconds, each
+    [None] when its peak is not given. For reports that explain a score ([Autotune.model_explain]).
+*)
+
 val ranking_seconds :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
@@ -235,6 +247,98 @@ val ranking_seconds :
 (** {!ranking_seconds_of} over {!analyze} and, when a capacity or a cache bandwidth is given,
     {!reuse_traffic}. A ranking score, not a runtime prediction — and, unlike {!roofline_seconds},
     not a lower bound either. *)
+
+(** {2 Tile-MMA operand loads (gh-ocannl-1254)}
+
+    Not a priced term and not part of any score: a count the untimed choosers break {e exact}
+    ranking ties with ([Autotune.model_default]'s family search, through {!Schedule_space.search}'s
+    [tie_break]). Twins that differ only in a staged tile's physical layout — the plain and
+    [Swizzle_b128] staged fp8 twins of gh-ocannl-1190 — touch the same cells with the same
+    operations, so {!analyze} and the ranking score tie them; what differs is how a lane brings each
+    operand tile into registers, which the backend's load rule decides
+    ({!Backend_intf.codegen_capabilities.mma_operand_loads}, the rule its emission applies).
+
+    Each [Tile_mma] operand is classified, in the statement's emission scope, from its place —
+    workgroup-shared, per-thread ([Local]) or device, and its [optimized.swizzled] layout — by that
+    rule. The count, per execution of the statement (the enclosing loop extents over its lane
+    extent), is per lane: an [ldmatrix] operand costs one instruction per [lane_bytes] it delivers
+    to each lane — 16 for [a], CUDA's emitted [.x4] form, and 8 for [b], its [.x2] form — a fragment
+    the arm loads whole (wmma's [load_matrix_sync]) one load, a gathered one one load per element
+    (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32 32-bit words) — counted per intrinsic
+    fragment of the arm's own tile, with the reloads its loop nest repeats
+    ({!Backend_intf.mma_fragments}), since ties fall between geometries too. Only a backend that
+    describes its arms counts at all (CUDA). A statement whose accumulator the schedule marked in
+    [optimized.simdgroup_fragments] is counted in the fragment scope where the backend's hook
+    accepts it there as an update-only call, and every other statement per statement where the hook
+    accepts it with its destination's own place ([mma_accepts], the hook itself); a statement the
+    hook declines both ways has no count. *)
+
+type operand_load =
+  | Ldmatrix of { lane_bytes : int }
+      (** A warp-cooperative matrix load ([ldmatrix] on CUDA) delivering [lane_bytes] to each lane
+          per instruction. *)
+  | Fragment_load
+      (** A whole fragment loaded by one cooperative call (CUDA's wmma [load_matrix_sync]). *)
+  | Gather of { elt_bytes : int }  (** Per-lane gathers of [elt_bytes]-wide elements. *)
+[@@deriving sexp_of, equal]
+
+val operand_place : Low_level.optimized -> Tnode.t -> Backend_intf.mma_operand_place
+(** A [Tile_mma] operand's space and layout as the renderer classifies them: workgroup-shared when
+    the schedule placed the node there, per-thread when its placement is [Local], device otherwise;
+    [`Swizzled_b128] for a [Swizzle_b128] entry of [optimized.swizzled]. *)
+
+type load_count =
+  | No_tile_mma
+      (** The code has no [Tile_mma]: not zero loads — it loads its operands by paths this count
+          does not see — but nothing to count. *)
+  | Undescribed
+      (** Some statement the backend does not describe, or whose extents its arm's tile does not
+          divide: a partial count would order candidates by the part it sees. *)
+  | Loads of int
+[@@deriving sexp_of, equal]
+
+val combine_load_counts : load_count list -> load_count
+(** Several kernels' counts as one candidate's: [Undescribed] if any is, else the sum of the [Loads]
+    ([No_tile_mma] when there are none). *)
+
+val operand_load_count :
+  operand_accepts:
+    (d_prec:Ops.prec ->
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    m:int ->
+    n:int ->
+    k:int ->
+    fragment_target:(int * Backend_intf.mma_operand_place) option ->
+    d:int * Backend_intf.mma_operand_place ->
+    a:int * Backend_intf.mma_operand_place ->
+    b:int * Backend_intf.mma_operand_place ->
+    bool) ->
+  operand_fragments:
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    Backend_intf.mma_fragments option) ->
+  operand_loads:
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    ta:bool ->
+    tb:bool ->
+    a:Backend_intf.mma_operand_place ->
+    b:Backend_intf.mma_operand_place ->
+    bool * bool) ->
+  Low_level.optimized ->
+  load_count
+(** The per-lane load instructions of every [Tile_mma] operand, summed over the statements'
+    executions (see the section contract), under a backend's load rule ([operand_loads], its
+    [mma_operand_loads]) and fragment structure ([operand_fragments], its [mma_operand_fragments]),
+    for the statements its hook accepts ([operand_accepts], its [mma_accepts]: a declined statement
+    is [Undescribed]); {!load_count} says when there is nothing, or nothing complete, to count. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 

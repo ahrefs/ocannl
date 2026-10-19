@@ -5696,11 +5696,15 @@ fi # leg 75
 # bound refuses the batch as DEVICE UNHEALTHY (69) with dune never started and
 # the query killed, while one that fails fast is recorded and passed over. An
 # unread batch probes every GPU backend; a CPU batch probes nothing and keeps
-# the slot call the other legs pin. The real probe is bin/device_props.
+# the slot call the other legs pin. The real probe is bin/device_props. A hang
+# is judged only in a run the stand-in started in (probe_hang_run, below).
 probe_fake=$TMP/fake-device-probe.sh
 cat >"$probe_fake" <<'FAKE'
 #!/usr/bin/env bash
 b=${1#--ocannl_backend=}
+# A stand-in the bound KILLs before it records anything, as a loaded box can make one
+# (gh-ocannl-1366): once, where the leg left the marker.
+if [ -e "$FAKE_PROBE_CALLS.unstarted" ]; then rm -f "$FAKE_PROBE_CALLS.unstarted"; exec sleep 30; fi
 printf '%s %s\n' "$PWD" "$*" >>"$FAKE_PROBE_CALLS"
 # A stand-in that forks its query rather than exec'ing it leaves the query behind its own exit
 # unless the probe's bound reaches the whole tree (FAKE_PROBE_FORK; gh-ocannl-1252).
@@ -5714,49 +5718,98 @@ case " ${FAKE_PROBE_ABSENT:-} " in *" $b "*) echo "no $b here" >&2; exit 2 ;; es
 echo "static.device[0].device_name = fake $b"
 FAKE
 chmod +x "$probe_fake"
+# One bound, two questions: whether the query answered, and -- for a stand-in that never answers
+# -- whether it had started, recording its call and pid, before the bound KILLed it. A loaded box
+# can delay the stand-in's start past a second (gh-ocannl-1366), so the two are kept apart. A query
+# that answers runs under probe_answer_cap, which it never comes near and so never waits out. A
+# hang is judged by probe_hang_run, whose bound starts at 1s and is tripled, up to
+# probe_hang_cap_max, for as long as the stand-in has not recorded its start: a run it never
+# started in proves nothing about the query the leg asked for, so it is repeated rather than
+# judged, with a note (none where the leg withholds the start itself: probe_hang_late). probe_cap is
+# the bound the last run had, which the checks quote.
+probe_answer_cap=30 probe_hang_cap_max=27 probe_cap=
 probe_run() { # tag test-backend arrayjit-backend hang absent subcommand [argv...]
   local tag=$1 bt=$2 ba=$3 hang=$4 absent=$5
   shift 5
+  probe_cap=${probe_run_cap:-$probe_answer_cap}
   : >"$TMP/$tag.probe"
+  rm -f "$TMP/$tag.probe.pid" "$TMP/$tag.probe.child"
   FAKE_PROBE_CALLS=$TMP/$tag.probe FAKE_PROBE_HANG=$hang FAKE_PROBE_ABSENT=$absent \
-  OCANNL_TOOL_DEVICE_PROBE=$probe_fake OCANNL_TOOL_DEVICE_PROBE_CAP=1 \
+  OCANNL_TOOL_DEVICE_PROBE=$probe_fake OCANNL_TOOL_DEVICE_PROBE_CAP=$probe_cap \
     slot_probe "$tag" hold "$bt" "$ba" "$@"
   probe_calls=$(cat "$TMP/$tag.probe")
 }
-probe_calls=
+probe_hang_run() { # start-evidence (pid|child) tag test-backend arrayjit-backend hang absent subcommand [argv...]
+  local evidence=$1 cap=1
+  shift
+  while :; do
+    probe_hang_start=$SECONDS
+    probe_run_cap=$cap probe_run "$@"
+    probe_hang_took=$((SECONDS - probe_hang_start))
+    [ ! -s "$TMP/$1.probe.$evidence" ] || return 0
+    [ "$cap" -lt "$probe_hang_cap_max" ] || return 0
+    [ -n "${probe_hang_late:-}" ] ||
+      printf '      note: %s: the stand-in had not started within %ss; judging a run bounded at %ss\n' \
+        "$1" "$cap" "$((cap * 3))"
+    cap=$((cap * 3))
+  done
+}
+probe_calls= probe_hang_start= probe_hang_took=
 if harness_leg '76: the device probe #device'; then
 probe_label="device probe: a GPU batch whose fresh device query does not answer is DEVICE UNHEALTHY, dune never started"
 probe_detail=
 probe_root=$(cd "$repeat_root" && pwd -P)
-probe_start=$SECONDS
-probe_run probe-hang hip cc hip "" run build @cheap
-probe_took=$((SECONDS - probe_start))
+probe_hang_run pid probe-hang hip cc hip "" run build @cheap
 case $argv_out in
-  *"verdict: DEVICE UNHEALTHY (a fresh device query did not answer; nothing ran) (exit 69)"*"hip: NO ANSWER within 1s"*) ;;
+  *"verdict: DEVICE UNHEALTHY (a fresh device query did not answer; nothing ran) (exit 69)"*"hip: NO ANSWER within ${probe_cap}s"*) ;;
   *) probe_detail="hang: digest: $argv_out" ;;
 esac
 [ -n "$probe_detail" ] || { [ "$argv_rc" = 69 ] && [ -z "$argv_calls" ]; } ||
   probe_detail="hang: exit $argv_rc (want 69); dune calls: ${argv_calls:-<none>}"
-[ -n "$probe_detail" ] || [ "$probe_took" -lt 15 ] || probe_detail="hang: the refusal took ${probe_took}s under a 1s bound"
+[ -n "$probe_detail" ] || [ "$probe_hang_took" -lt $((probe_cap + 14)) ] ||
+  probe_detail="hang: the refusal took ${probe_hang_took}s under a ${probe_cap}s bound"
 case $slot_calls in
-  "execution slot --wait 600 --gpu -- "*" $probe_root/tools/test-run.sh _probe dune $probe_fake 1 hip -- dune build @cheap") ;;
+  "execution slot --wait 600 --gpu -- "*" $probe_root/tools/test-run.sh _probe dune $probe_fake $probe_cap hip -- dune build @cheap") ;;
   *) [ -n "$probe_detail" ] || probe_detail="hang: the probe is not the slot's command, ahead of dune: $slot_calls" ;;
 esac
 [ -n "$probe_detail" ] || [ "$probe_calls" = "$probe_root/test/config --ocannl_backend=hip" ] ||
   probe_detail="hang: the query was not asked once, for hip, from test/config: $probe_calls"
-[ -n "$probe_detail" ] || grep -q "did not answer within 1s" "$argv_dir/log" ||
+[ -n "$probe_detail" ] || grep -q "did not answer within ${probe_cap}s" "$argv_dir/log" ||
   probe_detail="hang: the log does not say why dune never started: $(cat "$argv_dir/log")"
 if [ -z "$probe_detail" ]; then
   probe_pid=$(cat "$TMP/probe-hang.probe.pid" 2>/dev/null)
-  case $(pstate "${probe_pid:-0}") in
+  if [ -z "$probe_pid" ]; then
+    probe_detail="hang: the stand-in recorded its call but no pid within ${probe_cap}s"
+  else
+    case $(pstate "$probe_pid") in
+      '' | Z) ;;
+      *) probe_detail="hang: the query (pid $probe_pid) survived its bound"; kill -KILL "$probe_pid" 2>/dev/null ;;
+    esac
+  fi
+fi
+# A stand-in KILLed before it recorded its start -- as one was on a loaded box (gh-ocannl-1366) --
+# does not fail the leg: its run is repeated under a wider bound, and that run is judged. The
+# first run's stand-in records nothing by construction (the marker), not by a race with the
+# bound, so the judged run is exactly the second, bounded at 3s.
+if [ -z "$probe_detail" ]; then
+  : >"$TMP/probe-late.probe.unstarted"
+  probe_hang_late=1 probe_hang_run pid probe-late hip cc hip "" run build @cheap
+  probe_pid=$(cat "$TMP/probe-late.probe.pid" 2>/dev/null)
+  { [ "$probe_cap" = 3 ] && [ ! -e "$TMP/probe-late.probe.unstarted" ] && [ "$argv_rc" = 69 ] &&
+    [ -z "$argv_calls" ] && [ -n "$probe_pid" ] &&
+    [ "$probe_calls" = "$probe_root/test/config --ocannl_backend=hip" ] &&
+    grep -qF "hip: NO ANSWER within 3s" "$argv_dir/device-probe"; } ||
+    probe_detail="unstarted: judged under ${probe_cap}s (want 3s); exit $argv_rc (want 69); dune calls: ${argv_calls:-<none>}; probes: ${probe_calls:-<none>}"
+  case ${probe_pid:+$(pstate "$probe_pid")} in
     '' | Z) ;;
-    *) probe_detail="hang: the query (pid $probe_pid) survived its bound"; kill -KILL "$probe_pid" 2>/dev/null ;;
+    *) kill -KILL "$probe_pid" 2>/dev/null
+       [ -n "$probe_detail" ] || probe_detail="unstarted: the query (pid $probe_pid) survived its bound" ;;
   esac
 fi
 # A query a forking stand-in left behind is killed with it: the bound KILLs the query's whole
 # process group (Codex review round 2 on PR #1172).
 if [ -z "$probe_detail" ]; then
-  FAKE_PROBE_FORK=1 probe_run probe-fork hip cc hip "" run build @cheap
+  FAKE_PROBE_FORK=1 probe_hang_run child probe-fork hip cc hip "" run build @cheap
   probe_child=$(cat "$TMP/probe-fork.probe.child" 2>/dev/null)
   if [ "$argv_rc" != 69 ] || [ -z "$probe_child" ]; then
     probe_detail="fork: exit $argv_rc (want 69); forked query: ${probe_child:-none recorded}"
@@ -5815,7 +5868,7 @@ if harness_leg '77: plan reports the probe and the per-test cap #device'; then
 plan_probe_detail=
 probe_run probe-plan hip cc "" "" plan build @cheap
 { [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && [ -z "$probe_calls" ] &&
-  grep -qF "device probe: hip, bounded at 1s" <<<"$argv_out" &&
+  grep -qF "device probe: hip, bounded at ${probe_answer_cap}s" <<<"$argv_out" &&
   grep -qF "test cap: 1500s for each process dune starts, the default for a GPU batch" <<<"$argv_out"; } ||
   plan_probe_detail="gpu: exit $argv_rc; probes: ${probe_calls:-<none>}; plan: $argv_out"
 # The default's scope: no CPU batch, no @slow target; an explicit cap is kept
@@ -5935,13 +5988,15 @@ else
   # The device probe: a query that never answers ends the set before the first iteration's dune
   # -- its clean included -- and one that answers lets each iteration run, asked once each.
   if [ -z "$rb_detail" ]; then
-    probe_run rb-probe-hang hip cc hip "" repeat 3 build @cheap
+    probe_hang_run pid rb-probe-hang hip cc hip "" repeat 3 build @cheap
     { [ "$argv_rc" = 69 ] && [ -z "$argv_calls" ] && [ "$(grep -c . "$TMP/rb-probe-hang.probe")" = 1 ] &&
       grep -qF "repeat result: DEVICE UNHEALTHY -- iteration 1's device probe got no answer, and the set stopped there (1 of 3 iterations started)" <<<"$argv_out" &&
-      grep -qF "hip: NO ANSWER within 1s" "$argv_dir/device-probe"; } ||
+      grep -qF "hip: NO ANSWER within ${probe_cap}s" "$argv_dir/device-probe"; } ||
       rb_detail="probe hang: exit $argv_rc; dune calls: ${argv_calls:-<none>}; probes: $probe_calls; output: $argv_out"
     rb_probe_pid=$(cat "$TMP/rb-probe-hang.probe.pid" 2>/dev/null)
-    case $(pstate "${rb_probe_pid:-0}") in
+    [ -n "$rb_detail" ] || [ -n "$rb_probe_pid" ] ||
+      rb_detail="probe hang: the stand-in recorded no pid within ${probe_cap}s"
+    case ${rb_probe_pid:+$(pstate "$rb_probe_pid")} in
       '' | Z) ;;
       *) kill -KILL "$rb_probe_pid" 2>/dev/null
          [ -n "$rb_detail" ] || rb_detail="probe hang: the query (pid $rb_probe_pid) survived its bound" ;;

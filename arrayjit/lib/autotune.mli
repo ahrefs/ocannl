@@ -629,6 +629,12 @@ type sr_site = {
           {!Ir.Schedule.constructor-Coalesce}, applied after [sr_swaps] and before the split, merges
           into the loop [sr_axis] names (see {!coalesce_reduction_pair}); [None] when [sr_axis] is a
           loop of the lowering. *)
+  sr_block_hoist : Ir.Indexing.symbol list;
+      (** gh-ocannl-1412: the accumulation-cell loops enclosing [sr_axis] once [sr_swaps] and
+          [sr_coalesce] are applied, outermost first. The prelude interchanges the split's block
+          loop above them, so the first pass runs [for block: for cells: ..] and the GPU presets
+          give its lanes the cell axes, contiguous in memory, rather than the blocks, [chunk] rows
+          apart. Empty for a scatter site and where that interchange is not [Op_legal]. *)
 }
 [@@deriving sexp_of]
 (** A reduction-dominated accumulation site eligible for {!Ir.Schedule.constructor-Split_reduce}
@@ -639,8 +645,9 @@ val split_sites_label : ?staff:(sr_site * int) list -> (sr_site * int) list -> s
     the [autotune_log] lines and {!report.best_label}: each entry renders every field of its site —
     the target by debug name and, where that differs, its id ([name#id]), the split axis, [red],
     [out], [cost], the block count, [dyn], the interchange chain pair by pair ([swap:o/i+o/i]) and
-    the coalesced reduction pair ([coalesce:o*i]) — so two sites that differ in any one field never
-    share a label (gh-ocannl-1230). Entries are separated by [','], which no entry contains. *)
+    the coalesced reduction pair ([coalesce:o*i]) and the cell loops the block loop is hoisted above
+    ([hoist:c+c]) — so two sites that differ in any one field never share a label (gh-ocannl-1230).
+    Entries are separated by [','], which no entry contains. *)
 
 val coalesce_reduction_pair :
   ?static_indices:Ir.Indexing.static_symbol list ->
@@ -690,9 +697,10 @@ val split_reduce_sites :
 val split_reduce_prelude : (sr_site * int) list -> Ir.Schedule.schedule
 (** The whole-routine prelude splitting each [(site, num_blocks)]: per site its interchange
     ([sr_swaps]), its coalescing ([sr_coalesce], minting the merged loop under the symbol [sr_axis]
-    names, as detection probed it), then the {!Ir.Schedule.constructor-Split_reduce}. The schedule
-    the search's [F_split] candidates and the untuned CUDA split ({!seeded_split_sites}) both apply.
-    Exposed for tests. *)
+    names, as detection probed it), the {!Ir.Schedule.constructor-Split_reduce}, then the [Swap]s
+    hoisting the split's block loop above the cell loops [sr_block_hoist] names (gh-ocannl-1412).
+    The schedule the search's [F_split] candidates and the untuned split ({!seeded_split_sites})
+    both apply. Exposed for tests. *)
 
 val share_cap : cap:int -> (string * 'a list) list -> 'a list * (string * int) list
 (** gh-ocannl-685: spend a cap round-robin across named categories instead of as a prefix over their
@@ -1758,8 +1766,10 @@ val model_default :
     exceeds the cache capacity, at the cache bandwidth within it — {!ranking_capacity},
     {!ranking_cache_bandwidth}), and the argmin schedule is applied — zero measurement, one backend
     compile. The family search's bound stays the distinct-cell floor, below every ranking score.
-    Advisory by construction: a candidate without model coverage is never picked over the default,
-    ties go to the default, and missing envelope constants, a disabled default annotator
+    Sketch leaves whose scores tie exactly are ordered by their tile-MMA operand loads under the
+    backend's [mma_operand_loads] capability ({!model_family_search}, gh-ocannl-1254). Advisory by
+    construction: a candidate without model coverage is never picked over the default, ties go to
+    the default, and missing envelope constants, a disabled default annotator
     ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
     validation, or compilation failure fall back to the ordinary default pipeline — the reported
     {!model_choice} then says ["default"]. On CUDA and HIP with the seeding on (as for
@@ -1780,6 +1790,44 @@ val model_default :
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic
     lowerings of the placement search alike — and, as there, a comp carrying no
     {!Ir.Assignments.Block_comment} requires it. *)
+
+val model_operand_loads :
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
+  Ir.Low_level.optimized ->
+  Ir.Cost_model.load_count
+(** {!Ir.Cost_model.operand_load_count} under [capabilities]' [mma_operand_loads] rule and
+    [mma_operand_fragments] structure, for the statements its [mma_accepts] hook probe accepts: the
+    count {!model_family_search} breaks exact ties with and {!model_explain} reports
+    (gh-ocannl-1254): [Undescribed] where the backend describes no arm for some statement (every
+    backend but CUDA). The walk keys only [Loads]. *)
+
+val model_family_search :
+  ?on_rejected:(unit -> unit) ->
+  ?admit:(sketch_params -> bool) ->
+  ?on_excluded:(unit -> unit) ->
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  peak_flops:float option ->
+  peak_memory_bandwidth:float option ->
+  score:(Ir.Low_level.optimized list -> float option) ->
+  incumbent:float ->
+  Ir.Low_level.optimized ->
+  ((sketch_params * float) option * Ir.Schedule_space.search_stats * float option) option
+(** {!model_default}'s branch-and-bound walk over the factored matmul family ({!matmul_sketch_tree})
+    of one lowering: [(best, stats, bound)], where [best] is the first leaf whose [score] (of its
+    scheduled form) is strictly below [incumbent], the threshold tightening as leaves improve on it,
+    and [bound] the family's schedule-invariant roofline floor under the envelope. Exact ties
+    between leaves go to fewer tile-MMA operand load instructions ({!model_operand_loads} under
+    [capabilities] — {!model_default} passes the backend's; gh-ocannl-1254) between leaves that both
+    have tile-MMA sites, then to the first; a tie never displaces [incumbent]. Sketches are
+    scheduled at [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule
+    fails to apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is
+    scheduled ({!model_default}'s numerics-preserving restriction). [None] for a lowering with no
+    matmul site. Exposed so a test can drive the walk with stand-in limits and load rules on any
+    backend. *)
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
@@ -1831,9 +1879,9 @@ val seeded_default_backend : string -> bool
 (** Whether {!seeded_default} seeds on this backend ({!Context.backend_name}): CUDA and HIP. *)
 
 val seeded_split_backend : string -> bool
-(** Whether {!seeded_default} splits long reductions on this backend: CUDA only (see
-    {!seeded_split_sites}). A test states what each backend promises through these, never a restated
-    list. *)
+(** Whether {!seeded_default} splits long reductions on this backend: wherever it seeds, CUDA and
+    HIP (see {!seeded_split_sites}). A test states what each backend promises through these, never a
+    restated list. *)
 
 val search_shaping_key_read : backend:string -> string -> bool
 (** Whether a search on [backend] can read the [Utils.Search_shaping] configuration key [key]
@@ -1861,10 +1909,11 @@ val seeded_split_sites :
     most half the split loop's extent and at most the square root of the chain, gh-ocannl-1414)
     giving the most first-pass threads up to 32768, else the smallest such; a chain too short for
     every count is not split. The choice reads no device property, so the split, and the summation
-    order it fixes, depend on the routine alone. CUDA only ([backend] is the
-    {!Context.backend_name}): on HIP the split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to
-    1256 ms, gfx1151 unified memory) where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the
-    unsplit plan; elsewhere the result is empty. Exposed for tests. *)
+    order it fixes, depend on the routine alone. Empty where {!seeded_split_backend} is false
+    ([backend] is the {!Context.backend_name}). The split was CUDA's alone until its first pass ran
+    the block loop outside the cell loops ([sr_block_hoist], gh-ocannl-1412): before that, HIP's
+    gpt2_mini_train b256 step measured 1.42x SLOWER split (885 to 1256 ms, gfx1151 unified memory)
+    where CUDA gained 1.39x. Exposed for tests. *)
 
 (** Which segments {!seeded_default} seeds (gh-ocannl-1253). *)
 type seed_gate =
@@ -2015,7 +2064,7 @@ val seeded_default :
     summation order, and only sites whose accumulator is at their storage precision are seeded, so
     the seeded sketches leave the routine's results bitwise the default's.
 
-    Before segmenting (on CUDA), the reductions {!seeded_split_sites} admits at [min_serial]
+    Before segmenting (on CUDA and HIP), the reductions {!seeded_split_sites} admits at [min_serial]
     (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split
     whole-routine, as the search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm
     parameter gradient, which the default runs as one thread per output cell walking every batch row
@@ -2031,6 +2080,49 @@ val seeded_default :
     compiler does not promote, though NVRTC does. Values stay bitwise the default's.
     [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
     with the seeding disabled too. Reads and writes no schedule cache. *)
+
+type explain = {
+  ex_floor_ms : float option;
+      (** The candidate's roofline lower bound ({!Ir.Cost_model.analyze}'s counts), as
+          [mc_model_ms]. *)
+  ex_rank_ms : float option;
+      (** Its ranking score ({!Ir.Cost_model.ranking_seconds}), the quantity {!model_default}
+          minimizes: per kernel the larger of the two legs below, summed. *)
+  ex_compute_ms : float option;  (** The compute leg, summed over the kernels. *)
+  ex_memory_ms : float option;
+      (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
+  ex_spilled : bool option;
+      (** Some kernel's working set exceeds the cache capacity; [None] where the ranking score was
+          not computed (no envelope constants, or an opaque kernel). *)
+  ex_operand_loads : Ir.Cost_model.load_count;
+      (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
+          over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if
+          any kernel is): not a price, the count {!model_default}'s family search breaks exact score
+          ties with (gh-ocannl-1254). *)
+  ex_admitted : bool;
+      (** Whether {!model_default}'s numerics-preserving restriction (in force where it starts from
+          the seeded plan, CUDA and HIP) admits the candidate to its ranking; the incumbent always
+          is. *)
+}
+(** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
+
+val model_explain :
+  ?name:string ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  (string * explain) list
+(** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
+    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): its incumbent first — ["seeded"]
+    where it starts from the seeded plan (CUDA and HIP under the seeded settings), else ["default"],
+    the untuned default pipeline — then every whole-routine sketch leaf of the program it searches
+    (the seeded plan's split prelude included), labeled as {!tune}'s [autotune_log] labels them, in
+    the family search's visiting order, each with whether the restriction admits it. The lowering is
+    {!Context.lowered_for_decisions}', so the context is untouched. Per-fission-segment
+    substitutions and the placement pre-search are not listed. Candidates whose scheduled form fails
+    to apply or validate are omitted, as {!model_default} excludes them. Where {!model_default}
+    ranks nothing — no envelope constants, or the default annotator off — the list is the default
+    pipeline alone. *)
 
 val untuned_compile :
   ?name:string ->

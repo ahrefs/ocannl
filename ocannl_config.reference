@@ -344,7 +344,7 @@
 # backends.
 #gpu_default_sketch_min_reduction=auto
 
-# The same untuned compiles also split a CUDA reduction whose serial chain per output cell --
+# The same untuned compiles also split a reduction whose serial chain per output cell --
 # its accumulation's trip count over the output's cell count -- is at least this long
 # (gh-ocannl-1325): the bias and layer-norm parameter gradients of a training step, which the
 # default runs as one thread per parameter walking every batch row in sequence, become a parallel
@@ -354,9 +354,10 @@
 # plan's cooperative all-reduces do, and as the autotuner's own split-reduce candidates do; the
 # `reproducible` profile pins it at 0. A maintainer-approved exception to the rule that a
 # numerics-changing gate defaults off and joins the `approximate` payload (it reassociates within
-# about 2.4e-6 relative on gpt2_mini_train's losses). CUDA only: on gpt2_mini_train at batch 256 the split took
-# the CUDA step from 543 to 391 ms (RTX 5070 Ti) but the HIP step from 885 to 1256 ms (gfx1151,
-# unified memory), so HIP ignores this key and keeps the unsplit plan. Ignored where
+# about 2.4e-6 relative on gpt2_mini_train's losses). On gpt2_mini_train at batch 256 the split took
+# the CUDA step from 543 to 391 ms (RTX 5070 Ti); on HIP it was 1.42x slower until the split's
+# first pass ran its block loop outside the cell loops (gh-ocannl-1412), after which the HIP step
+# went from about 940 to 630 ms (gfx1151, unified memory). Ignored where
 # gpu_default_sketch_min_reduction is ignored too, except that it does not need the sketch seeding
 # on. 0 disables the split. At 1024 (gh-ocannl-1414), gpt2_mini_train at batch 256 splits its 26
 # bias and layer-norm parameter gradients and its loss sum (32768 rows each), as at 4096; at
@@ -1027,6 +1028,18 @@
 # capture a driver's messages together with the program's. No effect where the C stderr stream
 # is not assignable (Windows).
 #detach_c_stderr=true
+
+# If true (the default), the HIP backend, when it opens a device (before its stream), replaces the C
+# runtime's stderr by a stream that collapses ROCr's `Signal 0x... time stamps may be invalid.`
+# lines into a count: the first is printed with a note that later ones are counted, and the count
+# is reported in one line at exit (gh-ocannl-1370). An assertions-enabled ROCr (Ubuntu 26.04's
+# libhsa-runtime64 7.1.0 on an APU) prints one per recorded event, 268,172 for one autotuning
+# test, and Dune truncates a long action output from the middle, dropping the test's own
+# diagnostics. Every other byte foreign C code writes passes through at once and in order, to the
+# same descriptor `detach_c_stderr` chose. Set to false to see each line. No effect off glibc and
+# Darwin, in a process that never opens a HIP device, or where the C stderr is already
+# wide-oriented (a cookie stream cannot be).
+#collapse_foreign_stderr_noise=true
 
 # If `false`, debug logs from routines are re-logged via the ppx_minidebug framework.
 # If `true`, the logs are in stream-specific files. WARNING: files are appended to, not overwritten.
