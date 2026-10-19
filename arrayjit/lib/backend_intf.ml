@@ -464,6 +464,10 @@ type mma_fragments = {
           reloaded for every tile of the other operand's free axis (CUDA's inline-PTX arms);
           [false]: each fragment loads once per reduction step and is reused across that axis
           (CUDA's wmma arms). *)
+  mf_fragment_loads : bool;
+      (** [true]: each fragment not loaded through [ldmatrix] comes in whole, by one cooperative
+          matrix load (CUDA's wmma [load_matrix_sync]); [false]: by per-lane element gathers (the
+          inline-PTX arms). *)
 }
 (** An mma arm's fragment structure, as its emission loops load operands (gh-ocannl-1254). *)
 

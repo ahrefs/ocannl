@@ -1612,3 +1612,34 @@ val fragment_target_ld :
 (** The transfer target's leading-dimension stride in elements: the stride of the axis carrying the
     row copy symbol (the outermost of {!fragment_transfer}'s copy symbols), the minor dim without
     one. *)
+
+type fragment_region = {
+  fr_init : t;  (** The init transfer, fragment <- target. *)
+  fr_reduction : t;
+  fr_store : t;  (** The store transfer, target <- fragment. *)
+  fr_rest : t list;  (** Statements following the region in the same body. *)
+  fr_fragment : Tnode.t;
+  fr_target : Tnode.t;  (** The backing target the transfers read and write. *)
+  fr_target_base : Indexing.axis_index array;  (** The target's base indices at the tile origin. *)
+  fr_target_ld : int;  (** {!fragment_target_ld} of the target. *)
+  fr_tile : t;  (** The one [Tile_mma] accumulating into the fragment in the reduction. *)
+}
+
+val fragment_region : t -> fragment_region option
+(** The persistent-fragment region [Schedule.contract_tensorized_accumulator] synthesizes,
+    recognized at the head of a statement sequence: init transfer, reduction, store transfer
+    agreeing on fragment, target, lane, width and indices, with exactly one [Tile_mma] into the
+    fragment. The renderer's recognition ([C_syntax], which also requires the fragment to be marked
+    in [optimized.simdgroup_fragments]) and the cost model's operand-load count (gh-ocannl-1254)
+    share it. *)
+
+val mma_operand_layout :
+  swizzle_kind option ->
+  ld:int ->
+  idcs:Indexing.axis_index array ->
+  dims:int array ->
+  [ `Plain | `Swizzled_b128 | `Decline of string ]
+(** A tile-MMA operand's layout as the emission hooks receive it: [`Plain] unswizzled,
+    [`Swizzled_b128] for a b128-swizzled rank-2 tile addressed from its origin with its minor dim as
+    leading dimension; [`Decline] (with the reason) for any other swizzle, which renders the scalar
+    fallback without reaching a hook. Shared by the renderer and the cost model (gh-ocannl-1254). *)

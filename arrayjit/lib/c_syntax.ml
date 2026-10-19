@@ -3927,17 +3927,7 @@ module C_syntax (B : C_syntax_config) = struct
      [`Swizzled_b128] are (the latter only when the access is reconstructible from the pointer and
      leading dimension alone — see {!type-mma_layout}), everything else names its decline reason. *)
   let operand_layout ctx tn ~ld ~idcs ~dims : [ mma_layout | `Decline of string ] =
-    match (swizzle_of ctx) tn with
-    | None -> `Plain
-    | Some Low_level.Swizzle_elem ->
-        `Decline "element-granularity swizzle (no intrinsic load form matches it)"
-    | Some Low_level.Swizzle_b128 ->
-        if Array.length dims <> 2 then `Decline "b128-swizzled operand of rank <> 2"
-        else if ld <> dims.(1) then
-          `Decline "b128-swizzled operand whose leading dimension is not its minor dim"
-        else if not (Array.for_all idcs ~f:(function Indexing.Fixed_idx 0 -> true | _ -> false))
-        then `Decline "b128-swizzled operand not accessed from the tile origin"
-        else `Swizzled_b128
+    Low_level.mma_operand_layout ((swizzle_of ctx) tn) ~ld ~idcs ~dims
 
   (* An operand tuple carrying a decline reason cannot be handed to an emission hook. *)
   let narrow_operand (ptr, ld, space, layout) : mma_operand option =
@@ -4469,24 +4459,6 @@ module C_syntax (B : C_syntax_config) = struct
   let render_mma_fragment_scope ctx ~render (c : Low_level.t) : PPrint.document option =
     let open Low_level in
     let open PPrint in
-    let nonempty =
-      List.filter (flat_lines [ c ]) ~f:(function Noop | Comment _ -> false | _ -> true)
-    in
-    let unwrap_transfer = fragment_transfer in
-    let rec collect_fragment_tiles fragment acc = function
-      | Tile_mma { d = d, _; _ } as tm when Tn.equal d fragment -> tm :: acc
-      | Seq (a, b) -> collect_fragment_tiles fragment (collect_fragment_tiles fragment acc a) b
-      | For_loop { body; _ } | If { body; _ } -> collect_fragment_tiles fragment acc body
-      | _ -> acc
-    in
-    let zero_symbols syms idx =
-      let bound s = List.mem syms s ~equal:Indexing.equal_symbol in
-      match idx with
-      | Indexing.Iterator s when bound s -> Indexing.Fixed_idx 0
-      | Indexing.Affine { symbols; offset } ->
-          Indexing.affine ~symbols:(List.filter symbols ~f:(fun (_, s) -> not (bound s))) ~offset
-      | other -> other
-    in
     let operand_space tn : mma_space = ((thread_storage ctx) tn :> mma_space) in
     (* The a/b operands of a fragment scope are described, not addressed: no pointer is rendered for
        them here. Their addresses belong to the [Tile_mma] sites inside the reduction loop, which
@@ -4505,106 +4477,95 @@ module C_syntax (B : C_syntax_config) = struct
       let ptr = parens (string (get_ident tn) ^^ string " + " ^^ pp_array_offset (idcs, dims)) in
       (prec, (ptr, ld, operand_space tn, (operand_layout ctx) tn ~ld ~idcs ~dims))
     in
-    (* The target's leading-dimension stride ([Low_level.fragment_target_ld]). The transfer nests
-       are synthesized by [Schedule.contract_tensorized_accumulator], so the outermost serial copy
-       loop is the fragment's row by construction. *)
-    let target_ld_of = fragment_target_ld in
-    match nonempty with
-    | init :: reduction :: store :: rest -> (
-        (* [rest] is any statements following the marked region in the same body — in particular the
-           lane-0 epilogue statement fused by [Schedule.Fuse_epilogue] (gh-ocannl-486). They render
-           after the region's rendering: the backend hooks end with the visibility barrier that the
-           epilogue's re-reads of the just-stored target need. *)
-        match
-          (unwrap_transfer ~into_fragment:true init, unwrap_transfer ~into_fragment:false store)
-        with
-        | ( Some (lane1, width1, fragment, target, init_idcs, init_syms),
-            Some (lane2, width2, fragment2, target2, store_idcs, _) )
-          when Set.mem !(ctx.current_simdgroup_fragments) fragment
-               && Tn.equal fragment fragment2 && Tn.equal target target2 && width1 = width2
-               && Indexing.equal_symbol lane1 lane2
-               && Array.equal Indexing.equal_axis_index init_idcs store_idcs -> (
-            match collect_fragment_tiles fragment [] reduction with
-            | [ Tile_mma { a; b; ta; tb; m; n; k; lda; ldb; _ } ] -> (
-                let target_base = Array.map init_idcs ~f:(zero_symbols init_syms) in
-                (* [init_syms] is innermost-first, so its last element is the outermost (row) copy
-                   symbol; [init_idcs] still carries it. *)
-                let t_ld = target_ld_of ~row_sym:(List.last init_syms) (target, init_idcs) in
-                let d_prec, target_raw = operand t_ld (target, target_base) in
-                let a_prec, a_raw = source lda a in
-                let b_prec, b_raw = source ldb b in
-                (* Operands whose layout no intrinsic load form matches (the element-granularity
-                   swizzle; a b128 tile not addressable from its origin) decline the fragment hooks;
-                   falling through to [None] keeps the ordinary rendering, whose [Tile_mma]s decline
-                   to the swizzle-aware scalar fallback. A [`Swizzled_b128] staged tile does NOT
-                   decline here (gh-ocannl-481 item 3, D3): the per-call hooks below judge it, and
-                   an accumulator-resident wmma scope that cannot feed from [ldmatrix] declines
-                   there — leaving the ordinary [mma_syntax] path, which can. *)
-                match (narrow_operand target_raw, narrow_source a_raw, narrow_source b_raw) with
-                | Some target_op, Some a_src, Some b_src -> (
-                    let fragment_name = Printf.sprintf "__mma_fragment_%d" fragment.Tn.uid in
-                    let render_with active =
-                      let old = !(ctx.active_mma_accumulator) in
-                      ctx.active_mma_accumulator := Some active;
-                      Exn.protect
-                        ~f:(fun () -> render reduction)
-                        ~finally:(fun () -> ctx.active_mma_accumulator := old)
-                    in
-                    let fragment_doc =
-                      if Utils.debug_log_from_routines () then None
-                      else
-                        Option.bind B.mma_fragment_syntax ~f:(fun emit ->
-                            emit ~d_prec ~a_prec ~b_prec ~m ~n ~k ~fragment:fragment_name
-                              ~target:target_op ~a:a_src ~b:b_src ~body:(fun () ->
-                                render_with (Active_fragment (fragment, fragment_name))))
-                    in
-                    let rendered =
-                      match fragment_doc with
-                      | Some _ as doc -> doc
-                      | None when Utils.debug_log_from_routines () -> None
-                      | None ->
-                          Option.bind B.mma_syntax ~f:(fun emit ->
-                              (* When the fragment hook declined this call (HIP until its
-                                 persistent-fragment mapping lands, CUDA's fp8 combination,
-                                 unsupported precisions), preserve the existing per-[k_o] intrinsic
-                                 path by aliasing the marked local back to the original target when
-                                 that exact MMA call is supported. Unsupported calls retain the
-                                 explicit lane-0 local-array fallback.
+    (* [fr_rest] is any statements following the marked region in the same body — in particular the
+       lane-0 epilogue statement fused by [Schedule.Fuse_epilogue] (gh-ocannl-486). They render
+       after the region's rendering: the backend hooks end with the visibility barrier that the
+       epilogue's re-reads of the just-stored target need. The region itself is
+       [Low_level.fragment_region]'s, shared with the cost model's operand-load count
+       (gh-ocannl-1254). *)
+    match Low_level.fragment_region c with
+    | Some
+        {
+          fr_init = init;
+          fr_reduction = reduction;
+          fr_store = store;
+          fr_rest = rest;
+          fr_fragment = fragment;
+          fr_target = target;
+          fr_target_base = target_base;
+          fr_target_ld = t_ld;
+          fr_tile = Tile_mma { a; b; ta; tb; m; n; k; lda; ldb; _ };
+        }
+      when Set.mem !(ctx.current_simdgroup_fragments) fragment -> (
+        let d_prec, target_raw = operand t_ld (target, target_base) in
+        let a_prec, a_raw = source lda a in
+        let b_prec, b_raw = source ldb b in
+        (* Operands whose layout no intrinsic load form matches (the element-granularity swizzle; a
+           b128 tile not addressable from its origin) decline the fragment hooks; falling through to
+           [None] keeps the ordinary rendering, whose [Tile_mma]s decline to the swizzle-aware
+           scalar fallback. A [`Swizzled_b128] staged tile does NOT decline here (gh-ocannl-481 item
+           3, D3): the per-call hooks below judge it, and an accumulator-resident wmma scope that
+           cannot feed from [ldmatrix] declines there — leaving the ordinary [mma_syntax] path,
+           which can. *)
+        match (narrow_operand target_raw, narrow_source a_raw, narrow_source b_raw) with
+        | Some target_op, Some a_src, Some b_src -> (
+            let fragment_name = Printf.sprintf "__mma_fragment_%d" fragment.Tn.uid in
+            let render_with active =
+              let old = !(ctx.active_mma_accumulator) in
+              ctx.active_mma_accumulator := Some active;
+              Exn.protect
+                ~f:(fun () -> render reduction)
+                ~finally:(fun () -> ctx.active_mma_accumulator := old)
+            in
+            let fragment_doc =
+              if Utils.debug_log_from_routines () then None
+              else
+                Option.bind B.mma_fragment_syntax ~f:(fun emit ->
+                    emit ~d_prec ~a_prec ~b_prec ~m ~n ~k ~fragment:fragment_name ~target:target_op
+                      ~a:a_src ~b:b_src ~body:(fun () ->
+                        render_with (Active_fragment (fragment, fragment_name))))
+            in
+            let rendered =
+              match fragment_doc with
+              | Some _ as doc -> doc
+              | None when Utils.debug_log_from_routines () -> None
+              | None ->
+                  Option.bind B.mma_syntax ~f:(fun emit ->
+                      (* When the fragment hook declined this call (HIP until its
+                         persistent-fragment mapping lands, CUDA's fp8 combination, unsupported
+                         precisions), preserve the existing per-[k_o] intrinsic path by aliasing the
+                         marked local back to the original target when that exact MMA call is
+                         supported. Unsupported calls retain the explicit lane-0 local-array
+                         fallback.
 
-                                 This is [mma_syntax] as a support predicate: the emission it
-                                 returns is never applied here — the reduction is re-rendered below,
-                                 and each [Tile_mma] applies its own, in a position where the a/b
-                                 addresses (a pipelined tile's rotating copy among them,
-                                 gh-ocannl-487) exist. *)
-                              match
-                                emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d:target_op ~a:a_src
-                                  ~b:b_src
-                              with
-                              | Some _ -> Some (render_with (Active_target (fragment, target_op)))
-                              | None -> None)
-                    in
-                    match rendered with
-                    | Some doc ->
-                        ctx.rendered_simdgroup_fragments :=
-                          Set.add !(ctx.rendered_simdgroup_fragments) fragment;
-                        Some (separate hardline (doc :: List.map rest ~f:render))
-                    | None ->
-                        (* Scalar/local fallback: lane 0 performs the synthesized transfers.
-                           Hardware backends need the same outer visibility barriers as the ordinary
-                           Tile_mma load/store path, so the init observes sibling zeroing and later
-                           statements observe the final store. Serial C renderers need no
-                           barriers. *)
-                        let body_doc =
-                          separate hardline
-                            (List.map (init :: reduction :: store :: rest) ~f:render)
-                        in
-                        Some
-                          (match B.barrier_syntax with
-                          | Some barrier ->
-                              string barrier ^^ hardline ^^ body_doc ^^ hardline ^^ string barrier
-                          | None -> body_doc))
-                | _ -> None)
-            | _ -> None)
+                         This is [mma_syntax] as a support predicate: the emission it returns is
+                         never applied here — the reduction is re-rendered below, and each
+                         [Tile_mma] applies its own, in a position where the a/b addresses (a
+                         pipelined tile's rotating copy among them, gh-ocannl-487) exist. *)
+                      match
+                        emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d:target_op ~a:a_src ~b:b_src
+                      with
+                      | Some _ -> Some (render_with (Active_target (fragment, target_op)))
+                      | None -> None)
+            in
+            match rendered with
+            | Some doc ->
+                ctx.rendered_simdgroup_fragments :=
+                  Set.add !(ctx.rendered_simdgroup_fragments) fragment;
+                Some (separate hardline (doc :: List.map rest ~f:render))
+            | None ->
+                (* Scalar/local fallback: lane 0 performs the synthesized transfers. Hardware
+                   backends need the same outer visibility barriers as the ordinary Tile_mma
+                   load/store path, so the init observes sibling zeroing and later statements
+                   observe the final store. Serial C renderers need no barriers. *)
+                let body_doc =
+                  separate hardline (List.map (init :: reduction :: store :: rest) ~f:render)
+                in
+                Some
+                  (match B.barrier_syntax with
+                  | Some barrier ->
+                      string barrier ^^ hardline ^^ body_doc ^^ hardline ^^ string barrier
+                  | None -> body_doc))
         | _ -> None)
     | _ -> None
 

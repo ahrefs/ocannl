@@ -726,7 +726,10 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
    score above ties them; what differs is how many instructions a lane issues to bring the operand
    tiles into registers, which the backend's own load rule decides. *)
 
-type operand_load = Ldmatrix of { lane_bytes : int } | Gather of { elt_bytes : int }
+type operand_load =
+  | Ldmatrix of { lane_bytes : int }
+  | Fragment_load
+  | Gather of { elt_bytes : int }
 [@@deriving sexp_of, equal]
 
 let operand_place (opt : Low_level.optimized) (tn : Tn.t) : Backend_intf.mma_operand_place =
@@ -748,33 +751,46 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
      instruction. *)
   | Ldmatrix { lane_bytes } ->
       ((elements * elt_bytes) + (lane_bytes * lanes) - 1) / (lane_bytes * lanes)
+  (* One cooperative load per fragment ([nvcuda::wmma::load_matrix_sync]). *)
+  | Fragment_load -> 1
   (* One load per element a lane gathers, whatever its width. *)
   | Gather _ -> (elements + lanes - 1) / lanes
 
 let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
     (opt : Low_level.optimized) =
   let prec tn = Lazy.force tn.Tn.storage_prec in
-  (* Each persistent fragment's backing target, read off its init transfer the way the renderer
-     reads it ([Low_level.fragment_transfer], [Low_level.fragment_target_ld]). *)
-  let targets = Hashtbl.create (module Tn) in
-  let rec find_targets (c : Low_level.t) =
-    match Low_level.fragment_transfer ~into_fragment:true c with
-    | Some (_, _, fragment, target, idcs, syms) ->
-        Hashtbl.set targets ~key:fragment
-          ~data:
-            ( Low_level.fragment_target_ld ~row_sym:(List.last syms) (target, idcs),
-              operand_place opt target )
-    | None -> (
-        match c with
-        | Low_level.Seq (c1, c2) ->
-            find_targets c1;
-            find_targets c2
-        | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> find_targets body
-        | Tile_mma _ | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
-        | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier ->
-            ())
+  let layout tn ~ld ~idcs =
+    Low_level.mma_operand_layout
+      (Map.find opt.Low_level.swizzled tn)
+      ~ld ~idcs ~dims:(Lazy.force tn.Tn.dims)
   in
-  find_targets opt.Low_level.llc;
+  (* An operand as the hooks receive it: its leading dimension, space and layout — or nothing, where
+     the renderer declines the layout before any hook (the scalar fallback renders). *)
+  let operand tn ~ld ~idcs =
+    match layout tn ~ld ~idcs with
+    | `Decline _ -> None
+    | (`Plain | `Swizzled_b128) as layout -> Some (ld, (fst (operand_place opt tn), layout))
+  in
+  (* The persistent-fragment regions the renderer recognizes ([Low_level.fragment_region], its own
+     recognition), keyed by fragment: the backing target as the fragment scope addresses it, or
+     [None] where the target's layout declines the scope (the ordinary rendering follows). *)
+  let regions = Hashtbl.create (module Tn) in
+  let rec find_regions (c : Low_level.t) =
+    (match Low_level.fragment_region c with
+    | Some r when Set.mem opt.Low_level.simdgroup_fragments r.Low_level.fr_fragment ->
+        Hashtbl.set regions ~key:r.fr_fragment
+          ~data:(operand r.fr_target ~ld:r.fr_target_ld ~idcs:r.fr_target_base)
+    | Some _ | None -> ());
+    match c with
+    | Low_level.Seq (c1, c2) ->
+        find_regions c1;
+        find_regions c2
+    | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> find_regions body
+    | Tile_mma _ | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
+    | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier ->
+        ()
+  in
+  find_regions opt.Low_level.llc;
   let sites = ref [] in
   let rec go ~scale ~env (c : Low_level.t) =
     match c with
@@ -785,48 +801,74 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
         let extent = max 0 (to_ - from_ + 1) in
         go ~scale:(scale * extent) ~env:((index, extent) :: env) body
     | If { body; _ } -> go ~scale ~env body
-    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; ta; tb; m; n; k; ldd; lda; ldb; lane; _ } ->
+    | Tile_mma
+        {
+          d = d_tn, d_idcs;
+          a = a_tn, a_idcs;
+          b = b_tn, b_idcs;
+          ta;
+          tb;
+          m;
+          n;
+          k;
+          ldd;
+          lda;
+          ldb;
+          lane;
+          _;
+        } ->
         let lanes =
           max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
         in
         let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
-        (* The emission scope and acceptance, both the backend hook's own decisions: a statement
-           whose accumulator the schedule marked a persistent fragment renders as an update-only
-           call in the fragment scope when the hook accepts it there, and otherwise — like every
-           unmarked statement — on its own, if the hook accepts it with its destination's real
-           place. A statement it declines both ways renders scalar or register-tiled code: nothing
-           the arm description says applies to it. *)
-        let accepts ~fragment_target ~d =
-          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~fragment_target ~d
-            ~a:(lda, operand_place opt a_tn)
-            ~b:(ldb, operand_place opt b_tn)
-        in
-        let own = (ldd, operand_place opt d_tn) in
+        (* The emission scope and acceptance, both the renderer's and the backend hook's own
+           decisions, asked in the renderer's order. A recognized region of a marked fragment
+           renders in the fragment scope over its backing target when the hook accepts it there,
+           else as statements against the target; any other statement on its own, with its own
+           destination. A statement whose layouts or hooks decline renders scalar or register-tiled
+           code: nothing the arm description says applies to it. *)
         let scope =
-          if not (Set.mem opt.Low_level.simdgroup_fragments d_tn) then
-            Option.some_if (accepts ~fragment_target:None ~d:own) Backend_intf.Mma_per_statement
-          else
-            (* A marked accumulator renders through its region: the fragment scope over the backing
-               target when the hook accepts it there, else statements against the target itself. A
-               marked statement whose region is not recognized has no count. *)
-            Option.bind (Hashtbl.find targets d_tn) ~f:(fun target ->
-                if accepts ~fragment_target:(Some target) ~d:own then
-                  Some Backend_intf.Mma_fragment_scope
-                else
-                  Option.some_if
-                    (accepts ~fragment_target:None ~d:target)
-                    Backend_intf.Mma_per_statement)
+          match
+            ( operand a_tn ~ld:lda ~idcs:a_idcs,
+              operand b_tn ~ld:ldb ~idcs:b_idcs,
+              operand d_tn ~ld:ldd ~idcs:d_idcs )
+          with
+          | Some a, Some b, own -> (
+              let accepts ~fragment_target ~d =
+                operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~fragment_target ~d ~a ~b
+              in
+              let on_its_own =
+                Option.bind own ~f:(fun own ->
+                    Option.some_if
+                      (accepts ~fragment_target:None ~d:own)
+                      (Backend_intf.Mma_per_statement, snd a, snd b))
+              in
+              match Hashtbl.find regions d_tn with
+              | Some (Some target) ->
+                  let fragment_update =
+                    match own with
+                    | Some own -> accepts ~fragment_target:(Some target) ~d:own
+                    | None -> false
+                  in
+                  if fragment_update then Some (Backend_intf.Mma_fragment_scope, snd a, snd b)
+                  else
+                    Option.some_if
+                      (accepts ~fragment_target:None ~d:target)
+                      (Backend_intf.Mma_per_statement, snd a, snd b)
+              | Some None | None -> on_its_own)
+          | _ -> None
         in
         let description =
-          Option.map scope ~f:(fun scope ->
-              ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:(operand_place opt a_tn)
-                  ~b:(operand_place opt b_tn),
+          Option.map scope ~f:(fun (scope, a_place, b_place) ->
+              ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:a_place ~b:b_place,
                 operand_fragments ~a_prec ~b_prec ~d_prec ~scope ))
         in
         (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
-           [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm. *)
-        let classify tn ldm ~lane_bytes =
+           [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm; an arm whose fragments
+           load whole ([mf_fragment_loads], wmma) issues one load per fragment. *)
+        let classify tn ldm ~fragment_loads ~lane_bytes =
           if ldm then Ldmatrix { lane_bytes }
+          else if fragment_loads then Fragment_load
           else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
         in
         (* Per intrinsic tile [(tm, tn, tk)] of the arm's own description, the emission loads [a]
@@ -836,7 +878,9 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
            (the arm declines it), has no count. *)
         let site =
           match description with
-          | Some ((a_ldm, b_ldm), Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads })
+          | Some
+              ( (a_ldm, b_ldm),
+                Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads; mf_fragment_loads } )
             when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
               let mt = m / tm and nt = n / tn and kt = k / tk in
               let a_frags, b_frags =
@@ -845,8 +889,14 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
               Some
                 ( scale / lanes,
                   [
-                    (a_tn, tm * tk, a_frags, classify a_tn a_ldm ~lane_bytes:16);
-                    (b_tn, tk * tn, b_frags, classify b_tn b_ldm ~lane_bytes:8);
+                    ( a_tn,
+                      tm * tk,
+                      a_frags,
+                      classify a_tn a_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:16 );
+                    ( b_tn,
+                      tk * tn,
+                      b_frags,
+                      classify b_tn b_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:8 );
                   ],
                   lanes )
           | Some (_, _) | None -> None

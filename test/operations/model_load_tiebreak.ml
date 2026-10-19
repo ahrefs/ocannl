@@ -331,6 +331,12 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
         -> false);
     }
   in
+  (* An element-granularity swizzle has no intrinsic load form: the renderer declines it before any
+     hook, so the count does too, whatever the hook would say. *)
+  all "an element-swizzled twin has no count" (fun (p, _, _) ->
+      match schedule { p with Autotune.sk_swizzle = Some LL.Swizzle_elem } with
+      | o -> CM.equal_load_count (Autotune.model_operand_loads ~capabilities:rule o) CM.Undescribed
+      | exception _ -> false);
   all "a statement the hook declines has no count" (fun (_, plain, swz) ->
       CM.equal_load_count
         (Autotune.model_operand_loads ~capabilities:declining plain)
@@ -492,8 +498,15 @@ let () =
     | (label, ex) :: _ ->
         List.mem [ "default"; "seeded" ] label ~equal:String.equal && ex.Autotune.ex_admitted
     | [] -> false);
-  p_pairwise_distinct "model_explain's labels are distinct" (List.map explained ~f:fst)
-    ~equal:String.equal ~to_string:Fn.id;
+  (* Without envelope constants (the C backends carry none) [model_default] ranks nothing, and
+     [model_explain] lists only the default pipeline. *)
+  let ranks = match Autotune.envelope_legs ~limits with None, None -> false | _ -> true in
+  if ranks then
+    p_pairwise_distinct "model_explain's labels are distinct" (List.map explained ~f:fst)
+      ~equal:String.equal ~to_string:Fn.id
+  else
+    p "model_explain's labels are distinct"
+      (match explained with [ ("default", _) ] -> true | _ -> false);
   p_all "every explained ranking score is at least its bound" explained ~f:(fun (_, ex) ->
       match (ex.Autotune.ex_rank_ms, ex.ex_floor_ms) with
       | Some r, Some f -> Float.(r >= f)

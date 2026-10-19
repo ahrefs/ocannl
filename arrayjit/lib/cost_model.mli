@@ -262,9 +262,10 @@ val ranking_seconds :
     workgroup-shared, per-thread ([Local]) or device, and its [optimized.swizzled] layout — by that
     rule. The count, per execution of the statement (the enclosing loop extents over its lane
     extent), is per lane: an [ldmatrix] operand costs one instruction per [lane_bytes] it delivers
-    to each lane — 16 for [a], CUDA's emitted [.x4] form, and 8 for [b], its [.x2] form — a gathered
-    one one load per element (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32 32-bit words) —
-    counted per intrinsic fragment of the arm's own tile, with the reloads its loop nest repeats
+    to each lane — 16 for [a], CUDA's emitted [.x4] form, and 8 for [b], its [.x2] form — a fragment
+    the arm loads whole (wmma's [load_matrix_sync]) one load, a gathered one one load per element
+    (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32 32-bit words) — counted per intrinsic
+    fragment of the arm's own tile, with the reloads its loop nest repeats
     ({!Backend_intf.mma_fragments}), since ties fall between geometries too. Only a backend that
     describes its arms counts at all (CUDA). A statement whose accumulator the schedule marked in
     [optimized.simdgroup_fragments] is counted in the fragment scope where the backend's hook
@@ -276,6 +277,8 @@ type operand_load =
   | Ldmatrix of { lane_bytes : int }
       (** A warp-cooperative matrix load ([ldmatrix] on CUDA) delivering [lane_bytes] to each lane
           per instruction. *)
+  | Fragment_load
+      (** A whole fragment loaded by one cooperative call (CUDA's wmma [load_matrix_sync]). *)
   | Gather of { elt_bytes : int }  (** Per-lane gathers of [elt_bytes]-wide elements. *)
 [@@deriving sexp_of, equal]
 

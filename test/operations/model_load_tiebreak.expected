@@ -17,6 +17,7 @@ stand-in: each pair has exactly equal ranking scores: true
 stand-in: under CUDA's load rule each swizzled twin issues fewer operand loads: true
 stand-in: under a rule without ldmatrix each pair issues equal operand loads: true
 stand-in: the arm's reloads count: a reusing arm issues fewer loads than the record's own: true
+stand-in: an element-swizzled twin has no count: true
 stand-in: a statement the hook declines has no count: true
 stand-in: a marked statement the hook accepts as a fragment update is counted in the fragment scope: true
 stand-in: a marked statement the hook declines as a fragment update is counted per statement: true
@@ -31,6 +32,7 @@ backend record: each pair has exactly equal ranking scores: true
 backend record: under CUDA's load rule each swizzled twin issues fewer operand loads: true
 backend record: under a rule without ldmatrix each pair issues equal operand loads: true
 backend record: the arm's reloads count: a reusing arm issues fewer loads than the record's own: true
+backend record: an element-swizzled twin has no count: true
 backend record: a statement the hook declines has no count: true
 backend record: a marked statement the hook accepts as a fragment update is counted in the fragment scope: true
 backend record: a marked statement the hook declines as a fragment update is counted per statement: true

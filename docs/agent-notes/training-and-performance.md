@@ -127,11 +127,13 @@ files.
   The count describes emitted code only through the backend's own arm description, never a
   cost-model copy of it: `mma_operand_loads` (which operands use `ldmatrix`; CUDA's
   `Cuda_mma.operand_loads`, which the census reads too) and `mma_operand_fragments` (the arm's own
-  tile, not the descriptor's, and whether its loop nest reloads each operand per tile of the
-  other's free axis: inline-PTX yes, wmma no), both per emission scope; and `mma_accepts`, the
+  tile, not the descriptor's, whether its loop nest reloads each operand per tile of the other's
+  free axis — inline-PTX yes, wmma no — and whether a fragment loads whole, wmma's
+  `load_matrix_sync`), both per emission scope; operand layouts go through
+  `Low_level.mma_operand_layout`, the renderer's own decline; and `mma_accepts`, the
   backend's own `mma_syntax` hook probed without addresses, decides both whether a statement counts
   at all and in which scope, in the renderer's order: a fragment-marked statement through its
-  region (`Low_level.fragment_transfer` finds the backing target, as the renderer does), in the
+  region (`Low_level.fragment_region`, the renderer's own recognition, finds the backing target), in the
   fragment scope where `mma_fragment_syntax` accepts the target and the update-only call, else as
   statements against the target; an unmarked one per statement. A
   backend that describes no arm (CPU register tiles, Metal, HIP) gets `Undescribed`, code with no

@@ -178,7 +178,13 @@ let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
 
 let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
-      { Backend_intf.mf_tile = arm_tile arm; mf_reloads = arm_reloads_operands arm })
+      {
+        Backend_intf.mf_tile = arm_tile arm;
+        mf_reloads = arm_reloads_operands arm;
+        (* wmma's opaque fragments load whole through [load_matrix_sync]; the inline-PTX arms gather
+           per lane. *)
+        mf_fragment_loads = (match arm with Wmma _ -> true | Inline_ptx _ -> false);
+      })
 
 let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->

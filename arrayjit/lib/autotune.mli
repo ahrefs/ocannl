@@ -2060,7 +2060,9 @@ val model_explain :
     the family search's visiting order, each with whether the restriction admits it. The lowering is
     {!Context.lowered_for_decisions}', so the context is untouched. Per-fission-segment
     substitutions and the placement pre-search are not listed. Candidates whose scheduled form fails
-    to apply or validate are omitted, as {!model_default} excludes them. *)
+    to apply or validate are omitted, as {!model_default} excludes them. Where {!model_default}
+    ranks nothing — no envelope constants, or the default annotator off — the list is the default
+    pipeline alone. *)
 
 val untuned_compile :
   ?name:string ->

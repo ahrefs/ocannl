@@ -5265,47 +5265,60 @@ let model_explain ?name ctx comp bindings =
           ex_admitted;
         }
   in
-  (* [model_default]'s incumbent and searched program, as it derives them. *)
-  let seeding = model_seeding ~backend ~limits in
-  let incumbent_label, incumbent =
-    match seeding with
-    | Some (gate, min_serial, sink_enabled) ->
-        ( "seeded",
-          seeded_apply ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial ~sink_enabled
-            (scratch_of opt) )
-    | None ->
-        ( "default",
-          Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
-            (scratch_of opt) )
-  in
-  let base =
-    match seeding with
-    | Some (_, min_serial, _) ->
-        fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
-    | None -> opt
-  in
-  let admits = model_admits ~seeding ~accum_prec base in
-  let leaves =
-    match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base with
-    | Some tree ->
-        Sspace.leaves
-          (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-    | None -> sketch_seed_params ~is_gpu ~is_cpu ~limits base
-  in
-  (* Exactly the leaves [model_default] can score: a schedule that fails to apply, or whose
-     scheduled form fails validation, is excluded from its ranking too. *)
-  (incumbent_label, explain incumbent)
-  :: List.filter_map leaves ~f:(fun p ->
-      match
-        validate_segments_for_model ~limits
-          [
-            Sched.apply_classified ~static_indices
-              (sketch_schedule ~accum_prec ~p base)
-              (scratch_of base);
-          ]
-      with
-      | exception Outcome.Cause_at _ -> None
-      | segs -> Some (spec_label (Whole (W_sketch p)), explain ~ex_admitted:(admits p) segs))
+  (* [model_default]'s early exits: without envelope constants, or with the default annotator off,
+     it ranks nothing and compiles the default pipeline. *)
+  if
+    (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
+    || not (Sched.automatic_schedule_active ~backend_name:backend)
+  then
+    [
+      ( "default",
+        explain
+          (Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
+             (scratch_of opt)) );
+    ]
+  else
+    (* [model_default]'s incumbent and searched program, as it derives them. *)
+    let seeding = model_seeding ~backend ~limits in
+    let incumbent_label, incumbent =
+      match seeding with
+      | Some (gate, min_serial, sink_enabled) ->
+          ( "seeded",
+            seeded_apply ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial
+              ~sink_enabled (scratch_of opt) )
+      | None ->
+          ( "default",
+            Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
+              (scratch_of opt) )
+    in
+    let base =
+      match seeding with
+      | Some (_, min_serial, _) ->
+          fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
+      | None -> opt
+    in
+    let admits = model_admits ~seeding ~accum_prec base in
+    let leaves =
+      match matmul_sketch_tree ~is_gpu ~is_cpu ~limits base with
+      | Some tree ->
+          Sspace.leaves
+            (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+      | None -> sketch_seed_params ~is_gpu ~is_cpu ~limits base
+    in
+    (* Exactly the leaves [model_default] can score: a schedule that fails to apply, or whose
+       scheduled form fails validation, is excluded from its ranking too. *)
+    (incumbent_label, explain incumbent)
+    :: List.filter_map leaves ~f:(fun p ->
+        match
+          validate_segments_for_model ~limits
+            [
+              Sched.apply_classified ~static_indices
+                (sketch_schedule ~accum_prec ~p base)
+                (scratch_of base);
+            ]
+        with
+        | exception Outcome.Cause_at _ -> None
+        | segs -> Some (spec_label (Whole (W_sketch p)), explain ~ex_admitted:(admits p) segs))
 
 let untuned_compile ?name ctx comp bindings =
   if Lazy.force model_default_enabled then model_default ?name ctx comp bindings
