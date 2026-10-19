@@ -624,6 +624,11 @@ refuses a gate written through an alias of the ref: true
 refuses a fold in a function-case predicate's guard: true
 refuses a fold in a match guard whose patterns match anything: true
 accepts a function-case predicate that selects on the element: true
+refuses a gate a module of the source binds: true
+accepts a value of a module the source names Sys: true
+refuses a gate a try computes from the configuration: true
+refuses a gate read off a field of a record that also holds the test's data: true
+accepts a field of a record that holds the test's data: true
 accepts a ref the test alone writes: true
 refuses a fold spelled as a match on the backend with a passing case: true
 accepts a match on the backend every case of which the test computes: true

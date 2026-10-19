@@ -1591,11 +1591,12 @@ let gate_census content =
     [Utils.settings] (its fields being the configuration), and what is computed from those and
     constants alone: an application of a function from outside the source to run-constant and
     constant arguments, at least one of them run-constant ([backend_is_cpu backend_name],
-    [String.equal backend_name "metal"], [not on_gpu]); an [if] or [match] over such parts; a field,
-    a [lazy] or a constructor of one; a name bound to one by [let], anywhere in the source -- or,
-    for a cell the source assigns into with [:=], to a run-constant value in its initializer or in
-    any write, whatever their order. A constant is a literal, a constructor of constants, or a
-    library value.
+    [String.equal backend_name "metal"], [not on_gpu]); an [if], [match] or [try] over such parts; a
+    field, a [lazy] or a constructor of one, a field of a record the source writes out being that
+    field's value; a name bound to one by [let], anywhere in the source, a qualified path into a
+    module of the source ([Gates.on_cpu]) being that module's binding of the name -- or, for a cell
+    the source assigns into with [:=], to a run-constant value in its initializer or in any write,
+    whatever their order. A constant is a literal, a constructor of constants, or a library value.
 
     So [on_cpu], [on_gpu], [is_metal], [seeds_here = Autotune.seeded_default_backend backend_name]
     and a [lazy] hardware probe are gates; a value computed from the program under test -- a census,
@@ -1619,7 +1620,8 @@ let gate_census content =
     fold: a cell's writes are not ordered against its reads (above); a configuration reader is
     run-constant whatever it is handed ([Context.hardware_limits ctx] of an element's own [ctx]);
     and [Sys], [Utils.settings] and the reader names are recognized by spelling, so a module the
-    source binds under one of those names is read as the standard one. *)
+    source binds under one of those names is read as the standard one, unless the path names a
+    binding of that module of the source. *)
 
 type run_constancy =
   | Constant  (** A literal, a constructor of constants, a library value. *)
@@ -1686,6 +1688,11 @@ let folded_gate_census content =
      is known. *)
   let writes = Hashtbl.create (module Int) in
   let pending = ref [] in
+  (* The value bindings of the source's own modules, by qualified name ([Gates.on_cpu]), the last
+     binding of a name winning: a qualified path into a module of this source is that binding. By
+     name, not by module identity -- an alias of the module ([module G = Gates]) is not followed. *)
+  let members = Hashtbl.create (module String) in
+  let modules = ref [] in
   let path_of expr =
     match (strip_constraints expr).pexp_desc with
     | Pexp_ident { txt; _ } -> Option.try_with (fun () -> Read.flatten_longident txt)
@@ -1727,6 +1734,29 @@ let folded_gate_census content =
 
       method! attribute _ attr = attr
 
+      method! module_binding env binding =
+        match binding.pmb_name.txt with
+        | Some name ->
+            modules := name :: !modules;
+            Exn.protect
+              ~f:(fun () -> super#module_binding env binding)
+              ~finally:(fun () -> modules := List.tl_exn !modules)
+        | None -> super#module_binding env binding
+
+      method! define ~top env rec_flag bindings ~walk =
+        let denotes = super#define ~top env rec_flag bindings ~walk in
+        (if not (List.is_empty !modules) then
+           let prefix = String.concat ~sep:"." (List.rev !modules) in
+           List.iter2_exn bindings denotes ~f:(fun binding denotation ->
+               Option.iter (Read.pattern_name binding.pvb_pat) ~f:(fun name ->
+                   Hashtbl.set members ~key:(prefix ^ "." ^ name) ~data:denotation)));
+        denotes
+
+      (* The binding a qualified path names in a module of this source. *)
+      method source_member expr =
+        Option.bind (path_of expr) ~f:(fun path ->
+            Hashtbl.find members (String.concat ~sep:"." path))
+
       (* The path of a callee from outside this source: qualified, or a name nothing here binds. *)
       method external_path env callee =
         match path_of callee with
@@ -1756,7 +1786,6 @@ let folded_gate_census content =
         | Pexp_lazy inner
         | Pexp_constraint (inner, _)
         | Pexp_coerce (inner, _, _)
-        | Pexp_field (inner, _)
         | Pexp_sequence (_, inner)
         | Pexp_open (_, inner)
         | Pexp_newtype (_, inner) ->
@@ -1788,6 +1817,46 @@ let folded_gate_census content =
                     known)
             | Some _ -> Varying
             | None -> Constant)
+        | Pexp_field (record, { txt = field; _ }) -> (
+            (* A field of a record the source writes out is that field's value, not the whole
+               record's. *)
+            let field = Ppxlib.Longident.last_exn field in
+            let rec literal env expr =
+              match (strip_constraints expr).pexp_desc with
+              | Pexp_record (fields, _) -> Some (fields, env)
+              | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                  match Lexical_scope.lookup env name with
+                  | Some { identity; definition = Some (rhs, rhs_env) }
+                    when List.is_empty (Hashtbl.find_multi writes identity) ->
+                      literal rhs_env rhs
+                  | _ -> None)
+              | _ -> None
+            in
+            match literal env record with
+            | Some (fields, fields_env) -> (
+                match
+                  List.find fields ~f:(fun ({ txt; _ }, _) ->
+                      String.equal (Ppxlib.Longident.last_exn txt) field)
+                with
+                | Some (_, value) -> self#constancy fields_env value
+                | None -> self#constancy env record)
+            | None -> self#constancy env record)
+        | Pexp_try (body, cases) ->
+            join
+              (self#constancy env body
+              :: List.map cases ~f:(fun case ->
+                  self#constancy (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs))
+        | Pexp_ident _ when Option.is_some (self#source_member expr) -> (
+            match self#source_member expr with
+            | Some { identity; definition = Some (rhs, rhs_env) } -> (
+                match Hashtbl.find constancy identity with
+                | Some known -> known
+                | None ->
+                    Hashtbl.set constancy ~key:identity ~data:Varying;
+                    let known = self#constancy rhs_env rhs in
+                    Hashtbl.set constancy ~key:identity ~data:known;
+                    known)
+            | _ -> Varying)
         | Pexp_ident _ -> (
             match Option.map (path_of expr) ~f:List.rev with
             | Some (_ :: "Sys" :: _) -> Run_constant

@@ -4295,6 +4295,34 @@ let () = p "the path is portable" (!gate || portable (Context.auto ()))|ocaml},
       ( "accepts a function-case predicate that selects on the element",
         {ocaml|let () = p_all "every present row matches" rows ~f:(function Some row -> row.ok | None -> true)|ocaml},
         [] );
+      ( "refuses a gate a module of the source binds",
+        {ocaml|module Gates = struct
+  let cpu = Sched.backend_is_cpu backend_name
+end
+
+let () = p "the census renders tiled" ((not Gates.cpu) || census_ok (Context.auto ()))|ocaml},
+        [ "Gates.cpu" ] );
+      ( "accepts a value of a module the source names Sys",
+        {ocaml|module Sys = struct
+  let win32 = false
+end
+
+let () = p "the path is portable" (Sys.win32 || portable (Context.auto ()))|ocaml},
+        [] );
+      ( "refuses a gate a try computes from the configuration",
+        {ocaml|let cc_requested = try String.equal (Sys.getenv "BACKEND") "cc" with Not_found -> false
+let () = p "the census renders tiled" ((not cc_requested) || census_ok (Context.auto ()))|ocaml},
+        [ "cc_requested" ] );
+      ( "refuses a gate read off a field of a record that also holds the test's data",
+        {ocaml|let () =
+  let state = { gate = on_cpu; observation = probe (Context.auto ()) } in
+  p "the census renders tiled" ((not state.gate) || census_ok (Context.auto ()))|ocaml},
+        [ "state.gate" ] );
+      ( "accepts a field of a record that holds the test's data",
+        {ocaml|let () =
+  let state = { gate = on_cpu; observation = probe (Context.auto ()) } in
+  p "the probe passes or the census renders" (state.observation || census_ok (Context.auto ()))|ocaml},
+        [] );
       ( "accepts a ref the test alone writes",
         {ocaml|let () =
   let ready = ref false in
