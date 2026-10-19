@@ -200,6 +200,10 @@ a field filled through a top-level alias of a structure the limits file defines 
 a `Cc_backend` value re-exported by `include` of an alias of a structure is a width value: true
 and so is one bound by a destructuring top-level `let`: true
 an alias of some other module's `Backend_intf` does not name the library's synthetic limits, and an update through it is a read: true
+and a bare `Backend_intf.no_hardware_limits` may come from any `open`, so an update of it is a read: true
+a `Cc_backend` value reached through an alias of its parent module is a read: true
+a linked library with dune's default module set in a directory the globs never reach is refused: true
+a value re-exported by `include` through two module aliases is a width value: true
 
 Synthetic controls: ambient gates derive identity from the program actually run.
 a renamed direct-utils universe test and its resolved runner are gates: true
@@ -400,6 +404,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:bea334cae6dc5ff82766eb1a3460ce00] Cc_backend
   [scanner-refusal:9030a635de21129bfd2b27cbf880edc3] destructuring top-level let
   [scanner-refusal:284de09cb0fa8165a928b27489ff432b] Backend_intf
+  [scanner-refusal:3571dda50442efc2c734e28a3ad9e4f8] Backend_intf.no_hardware_limits
+  [scanner-refusal:07de1e1a3e2d7b7fc3b4e521233c0397] Cc_backend
+  [scanner-refusal:7bd8773fde8c6bdebc92968b5cfbb687] dune's default module
+  [scanner-refusal:4170b6912074554ea1731ee6535d3426] re-exported by include
   [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree
   [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree
   [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias

@@ -1396,6 +1396,21 @@ let main () =
                     ~f:(fun at -> Printf.sprintf "`%s`" (String.drop_prefix spelling at)))
               |> List.dedup_and_sort ~compare:String.compare
           in
+          (* And any path ENDING in `Cc_backend.v`, whatever qualifies it -- `module C = Context`
+             then `C.Cc_backend.v` (Codex P2, round 12) -- an over-read of another module's
+             `Cc_backend` that costs a declaration. *)
+          let suffixed =
+            let tails =
+              List.map width_values ~f:(fun v -> width_module :: String.split v ~on:'.')
+            in
+            List.filter_map (Sources.value_paths_in_source content) ~f:(fun path ->
+                List.find tails ~f:(fun tail ->
+                    List.length path >= List.length tail
+                    && List.equal String.equal tail
+                         (List.drop path (List.length path - List.length tail))))
+            |> List.map ~f:(fun tail -> Printf.sprintf "`%s`" (String.concat ~sep:"." tail))
+          in
+          let named = List.dedup_and_sort (named @ suffixed) ~compare:String.compare in
           match
             named
             @ Sources.field_reads_in_source content ~fields:width_fields
@@ -1445,8 +1460,16 @@ let main () =
                          List.concat_map [ "modules_without_implementation"; "virtual_modules" ]
                            ~f:(fun field -> List.map (atoms field) ~f:String.lowercase)
                        in
-                       List.filter (Scan.modules_of ~directory_modules group stanza) ~f:(fun m ->
-                           not (List.mem interface_only (String.lowercase m) ~equal:String.equal))),
+                       (* A default module set in a directory the globs never reach is every source
+                          there, none of which was handed over: stood for by one placeholder the
+                          unseen-source refusal reports (Codex P2, round 12). *)
+                       if
+                         Option.is_none (Scan.field stanza "modules")
+                         && not (Set.mem scanned_dirs directory)
+                       then [ "<every module of the directory>" ]
+                       else
+                         List.filter (Scan.modules_of ~directory_modules group stanza) ~f:(fun m ->
+                             not (List.mem interface_only (String.lowercase m) ~equal:String.equal))),
                       (* Every atom of the field, so `(re_export x)` and a `(select …)`'s
                          alternatives are followed too; an atom naming no program-local library
                          matches nothing (Codex P2, round 3). *)
@@ -5518,6 +5541,8 @@ let width_control () =
   write_file
     (Stdlib.Filename.concat root "test/virt_impl/vm.ml")
     "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n";
+  (* And one there with dune's default module set. *)
+  write_file (Stdlib.Filename.concat root "other/implicit/dune") "(library\n (name implicit_lib))\n";
   (* A library whose directory the scan's globs do not reach: its source is never handed over. *)
   write_file
     (Stdlib.Filename.concat root "other/lib/dune")
@@ -5529,9 +5554,9 @@ let width_control () =
   let paths =
     "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
     :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
-    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: "other/lib/dune" :: "test/virt/dune"
-    :: "test/virt_impl/dune" :: "test/virt_impl/vm.ml" :: backend_home :: width_limits_home
-    :: width_limits_type_home :: List.map context ~f:fst
+    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: "other/lib/dune"
+    :: "other/implicit/dune" :: "test/virt/dune" :: "test/virt_impl/dune" :: "test/virt_impl/vm.ml"
+    :: backend_home :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
   in
   let run ?(backend = Some width_backend_stub) ?(limits = width_limits_stub)
       ?(helper = "let () = ()\n") ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe
@@ -5678,6 +5703,32 @@ let width_control () =
       ~probe:"let () = ignore (Context.Cc_backend.Width.registers ())\n" `Neither
   in
   let via_default_impl = run ~links:" vlib" ~probe:"let () = ()\n" `Neither in
+  let opened_suffix =
+    run
+      ~probe:
+        "open Local\n\
+         let narrow = { Backend_intf.no_hardware_limits with \
+         Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let parent_alias =
+    run ~probe:"module C = Context\nlet () = ignore (C.Cc_backend.registers ())\n" `Neither
+  in
+  let implicit_library = run ~links:" implicit_lib" ~probe:"let () = ()\n" `Declares in
+  let via_multi_hop =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            end\n\
+            module W = Public\n\
+            module X = W\n\
+            include X\n\
+            let vector_bytes_setting () = Public.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
   let foreign_alias =
     run
       ~probe:
@@ -5831,6 +5882,14 @@ let width_control () =
   let foreign_alias_ok =
     refused foreign_alias && says "leaving `simd_vector_bytes` to its base" foreign_alias
   in
+  let opened_suffix_ok =
+    refused opened_suffix && says "leaving `simd_vector_bytes` to its base" opened_suffix
+  in
+  let parent_alias_ok = refused parent_alias && says "`Cc_backend.registers`" parent_alias in
+  let implicit_library_ok =
+    exited 1 implicit_library && says "library implicit_lib, which a program links" implicit_library
+  in
+  let via_multi_hop_ok = refused via_multi_hop && says "`Cc_backend.registers`" via_multi_hop in
   let via_default_impl_ok =
     refused via_default_impl && says "library vimpl (vm.ml)" via_default_impl
   in
@@ -5878,6 +5937,10 @@ let width_control () =
   if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
   if not via_nested_include_ok then report "via-nested-include" via_nested_include;
   if not via_default_impl_ok then report "via-default-impl" via_default_impl;
+  if not opened_suffix_ok then report "opened-suffix" opened_suffix;
+  if not parent_alias_ok then report "parent-alias" parent_alias;
+  if not implicit_library_ok then report "implicit-library" implicit_library;
+  if not via_multi_hop_ok then report "via-multi-hop" via_multi_hop;
   if not foreign_alias_ok then report "foreign-alias" foreign_alias;
   if not via_aliased_include_ok then report "via-aliased-include" via_aliased_include;
   if not via_destructuring_ok then report "via-destructuring" via_destructuring;
@@ -5998,6 +6061,18 @@ let width_control () =
     "an alias of some other module's `Backend_intf` does not name the library's synthetic limits, \
      and an update through it is a read"
     foreign_alias_ok;
+  Verdict.p
+    "and a bare `Backend_intf.no_hardware_limits` may come from any `open`, so an update of it is \
+     a read"
+    opened_suffix_ok;
+  Verdict.p "a `Cc_backend` value reached through an alias of its parent module is a read"
+    parent_alias_ok;
+  Verdict.p
+    "a linked library with dune's default module set in a directory the globs never reach is \
+     refused"
+    implicit_library_ok;
+  Verdict.p "a value re-exported by `include` through two module aliases is a width value"
+    via_multi_hop_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)

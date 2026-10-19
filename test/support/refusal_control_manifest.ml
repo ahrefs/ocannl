@@ -448,6 +448,10 @@ let raw_entries =
         "[scanner-refusal:bea334cae6dc5ff82766eb1a3460ce00] Cc_backend";
         "[scanner-refusal:9030a635de21129bfd2b27cbf880edc3] destructuring top-level let";
         "[scanner-refusal:284de09cb0fa8165a928b27489ff432b] Backend_intf";
+        "[scanner-refusal:3571dda50442efc2c734e28a3ad9e4f8] Backend_intf.no_hardware_limits";
+        "[scanner-refusal:07de1e1a3e2d7b7fc3b4e521233c0397] Cc_backend";
+        "[scanner-refusal:7bd8773fde8c6bdebc92968b5cfbb687] dune's default module";
+        "[scanner-refusal:4170b6912074554ea1731ee6535d3426] re-exported by include";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";

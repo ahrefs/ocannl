@@ -1141,12 +1141,17 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             Option.map (flatten_module_path txt) ~f:(fun path -> (alias, path))
         | _ -> None)
   in
-  let expand = function
-    | head :: rest -> (
-        match List.Assoc.find aliases head ~equal:String.equal with
-        | Some path -> path @ rest
-        | None -> head :: rest)
-    | [] -> []
+  (* Transitively: [module X = W] over [module W = Public] reaches [Public] (Codex P2, round 12),
+     with a guard against a malformed cycle. *)
+  let expand path =
+    let rec go seen = function
+      | head :: rest when not (List.mem seen head ~equal:String.equal) -> (
+          match List.Assoc.find aliases head ~equal:String.equal with
+          | Some target -> go (head :: seen) (target @ rest)
+          | None -> head :: rest)
+      | path -> path
+    in
+    go [] path
   in
   let placed = ref (Set.empty (module Int)) in
   (* What a binding's body reads itself, and every value path it names -- resolved later, against
@@ -1426,6 +1431,25 @@ let settings_field_initializers content =
   iterator#structure (structure_of content);
   List.rev !found
 
+(** Every value path [content] names, flattened: [C.Cc_backend.vector_bytes_setting] contributes
+    [["C"; "Cc_backend"; "vector_bytes_setting"]]. *)
+let value_paths_in_source content =
+  let found = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_ident { txt; _ } ->
+            Option.iter (flatten_module_path txt) ~f:(fun path -> found := path :: !found)
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  iterator#structure (structure_of content);
+  List.rev !found
+
 (** Every record type [content] declares at top level, with its labels:
     [type t = { a : int; b : int }] contributes [("t", ["a"; "b"])]. *)
 let record_type_labels content =
@@ -1535,15 +1559,13 @@ let field_reads_in_source content ~fields ~record_fields ~constant_base:(base_ho
          [no_hardware_limits] bound to a device's limits is not the library's constant (Codex P2,
          round 4). A qualified path, or a bare name the file never binds, is judged by
          [constant_bases]. *)
-      (* A module path naming the home: a non-empty suffix of [base_home] ([Ir.Backend_intf], or
-         [Backend_intf] under an [open Ir]), none of whose modules the file rebinds --
+      (* A module path naming the home: [base_home] itself ([Ir.Backend_intf]), none of whose
+         modules the file rebinds -- a bare [Backend_intf] may come from any [open] (Codex P2,
+         round 12), and
          [module Ir = Local] or [module BI = Local.Backend_intf] name Local's (Codex P2, rounds 6
          and 11). *)
       let canonical_home path =
-        (not (List.is_empty path))
-        && List.length path <= List.length base_home
-        && List.equal String.equal path
-             (List.drop base_home (List.length base_home - List.length path))
+        List.equal String.equal path base_home
         && not (List.exists path ~f:(fun m -> Map.mem module_aliases m))
       in
       let constant_ident txt =
