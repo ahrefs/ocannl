@@ -1613,7 +1613,13 @@ let gate_census content =
     ([census_ok && ((not on_metal) || dialect_ok)]), which the claim checks partly everywhere -- the
     label then promises both halves, and only the reader of the label can tell that the second is
     vacuous off Metal. Each is a place a folded gate can hide; none is one this reader reports where
-    the fold is not there. *)
+    the fold is not there.
+
+    The other direction has three known places, each loud -- a refusal of a claim that does not
+    fold: a cell's writes are not ordered against its reads (above); a configuration reader is
+    run-constant whatever it is handed ([Context.hardware_limits ctx] of an element's own [ctx]);
+    and [Sys], [Utils.settings] and the reader names are recognized by spelling, so a module the
+    source binds under one of those names is read as the standard one. *)
 
 type run_constancy =
   | Constant  (** A literal, a constructor of constants, a library value. *)
@@ -1687,6 +1693,13 @@ let folded_gate_census content =
   in
   let is_function expr =
     match (strip_constraints expr).pexp_desc with Pexp_function _ -> true | _ -> false
+  in
+  let rec irrefutable pattern =
+    match pattern.ppat_desc with
+    | Ppat_any | Ppat_var _ -> true
+    | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> irrefutable inner
+    | Ppat_tuple parts -> List.for_all parts ~f:irrefutable
+    | _ -> false
   in
   let is_bool expr value =
     match (strip_constraints expr).pexp_desc with
@@ -1795,8 +1808,10 @@ let folded_gate_census content =
         | Pexp_ifthenelse (condition, yes, no) ->
             join (List.map (condition :: yes :: Option.to_list no) ~f:(self#constancy env))
         | Pexp_match (scrutinee, cases) ->
+            (* Cases whose patterns all match anything select by their guards alone. *)
+            let selects = not (List.for_all cases ~f:(fun case -> irrefutable case.pc_lhs)) in
             join
-              (self#constancy env scrutinee
+              ((if selects then self#constancy env scrutinee else Constant)
               :: List.map cases ~f:(fun case ->
                   let env = self#bind_patterns env [ case.pc_lhs ] in
                   join
@@ -1895,8 +1910,23 @@ let folded_gate_census content =
             | Pfunction_body body when is_function body -> self#bodies env body ~seen
             | Pfunction_body body -> [ (body, env) ]
             | Pfunction_cases (cases, _, _) ->
-                List.map cases ~f:(fun case ->
-                    (case.pc_rhs, self#bind_patterns env [ case.pc_lhs ])))
+                (* [function p when g -> x | ...] is a match over the element, guards and all. *)
+                let element = "element" in
+                [
+                  ( {
+                      expr with
+                      pexp_desc =
+                        Pexp_match
+                          ( {
+                              expr with
+                              pexp_desc =
+                                Pexp_ident
+                                  { txt = Ppxlib.Longident.Lident element; loc = expr.pexp_loc };
+                            },
+                            cases );
+                    },
+                    Lexical_scope.bind_values env [ element ] self#local );
+                ])
         | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
             match Lexical_scope.lookup env name with
             | Some { identity; definition = Some (rhs, rhs_env) }
@@ -1944,8 +1974,24 @@ let folded_gate_census content =
                 (Nolabel, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }); (Nolabel, written);
               ] )
           when self#connective env callee [ ":=" ] -> (
-            match Lexical_scope.lookup env name with
-            | Some { identity; _ } -> Hashtbl.add_multi writes ~key:identity ~data:(written, env)
+            (* Through any [let alias = cell] renaming: a write through an alias is a write into the
+               cell. *)
+            let rec cell env name =
+              match Lexical_scope.lookup env name with
+              | Some
+                  {
+                    definition =
+                      Some
+                        ( { pexp_desc = Pexp_ident { txt = Ppxlib.Longident.Lident aliased; _ }; _ },
+                          env );
+                    _;
+                  } ->
+                  cell env aliased
+              | Some { identity; _ } -> Some identity
+              | None -> None
+            in
+            match cell env name with
+            | Some identity -> Hashtbl.add_multi writes ~key:identity ~data:(written, env)
             | None -> ())
         | _ -> ());
         (match expr.pexp_desc with

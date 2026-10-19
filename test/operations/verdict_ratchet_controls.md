@@ -645,7 +645,7 @@ fails; the narrower ambiguity mutation in its row replaced them.
 The folded-gate reader (`Verdict_scan.folded_gate_census`) refuses a `Verdict` claim whose value has
 a run-constant disjunct -- a value the configuration fixes, such as `on_cpu` -- beside one the test
 computed. Every run used tools/mutation-run.sh on the named module and the focused verdict_ratchet
-alias, on the reader as first pushed (the rows marked review round 1 or 2, and the Sys row's rerun, on
+alias, on the reader as first pushed (the rows marked review round 1, 2 or 3, and the Sys row's rerun, on
 that round's reader), exited 1 on exactly the listed false claims, and restored the
 source byte-for-byte with cmp; the baseline run `20261019T172927Z-24672` exited 0. "The name-gated
 refusals" are the thirteen refusals whose gate is a name (all but the two if refusals and the
@@ -670,6 +670,9 @@ lazy-probe, host and settings ones).
 | A cell that ever holds a run-constant is a gate, whatever order it is written in (review round 2) | `verdict_scan.ml`: a written cell joins its values | Failed: `refuses a ref that ever holds a run-constant, whatever overwrites it`; `refuses a gate assigned over a ref the test initialized`; and the ref-write refusal | `20261019T181803Z-5963` |
 | A match with a passing case is a disjunction over its scrutinee (review round 2) | `verdict_scan.ml`: that arm dropped | Failed: `refuses a fold spelled as a match on the backend with a passing case` | `20261019T181824Z-15831` |
 | A match splits only where a case is the passing constant (review round 2) | `verdict_scan.ml`: every match read as having a passing case | Failed: `accepts a match on the backend every case of which the test computes`, and the corpus claim | `20261019T181843Z-24194` |
+| A write through an alias of a cell is a write into the cell (review round 3) | `verdict_scan.ml`: the write keyed by the name written | Failed: `refuses a gate written through an alias of the ref` | `20261019T183310Z-13614` |
+| A function-case predicate is a match over the element, guards included (review round 3) | `verdict_scan.ml`: each case's body read alone | Failed: `refuses a fold in a function-case predicate's guard` | `20261019T183329Z-22037` |
+| Cases whose patterns all match anything select by their guards alone (review round 3) | `verdict_scan.ml`: the scrutinee always read | Failed: `refuses a fold in a match guard whose patterns match anything`; the function-case refusal | `20261019T183349Z-36660` |
 | A gated claim's gate makes a copy of its own negation unreachable (review round 1) | `verdict_scan.ml`: the gate's disjuncts not discounted | Failed: `accepts a gated claim whose value repeats its own gate`; `accepts a gated_all whose predicate repeats a conjunct of its gate` | `20261019T180056Z-65750` |
 | A Sys host value is run-constant | `verdict_scan.ml`: no value of Sys (rerun on the round-1 reader) | Failed: `refuses a host gate folded into a claim's value`, and the any-value and ref-write refusals | `20261019T175949Z-31538` |
 | A library call over run-constant and constant arguments is run-constant | `verdict_scan.ml`: every library call computed | Failed: every refusal but the host and settings ones, and the planted-refusal control | `20261019T173400Z-33261` |
@@ -697,6 +700,7 @@ The accepting neighbours no single mutation above turns red are exercised on eve
 `accepts the gated spelling of the same claim`;
 `accepts a skip spelled as a branch`;
 `accepts a ref the test alone writes`;
+`accepts a function-case predicate that selects on the element`;
 `accepts an implication whose antecedent the test computed`.
 
 The shipped shape, re-seeded into the corpus: in `test/operations/tile_mma_declines.ml`, one of

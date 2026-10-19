@@ -620,6 +620,10 @@ refuses a fold read off any value of Sys: true
 refuses a gate a later assignment writes into a ref: true
 refuses a ref that ever holds a run-constant, whatever overwrites it: true
 refuses a gate assigned over a ref the test initialized: true
+refuses a gate written through an alias of the ref: true
+refuses a fold in a function-case predicate's guard: true
+refuses a fold in a match guard whose patterns match anything: true
+accepts a function-case predicate that selects on the element: true
 accepts a ref the test alone writes: true
 refuses a fold spelled as a match on the backend with a passing case: true
 accepts a match on the backend every case of which the test computes: true

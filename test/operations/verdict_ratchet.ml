@@ -4277,6 +4277,24 @@ let () = p "the path is portable" (!gate || portable (Context.auto ()))|ocaml},
   gate := Sys.win32;
   p "the path is portable" (!gate || portable (Context.auto ()))|ocaml},
         [ "not (!gate)" ] );
+      ( "refuses a gate written through an alias of the ref",
+        {ocaml|let () =
+  let gate = ref false in
+  let alias = gate in
+  alias := Sys.win32;
+  p "the path is portable" (!gate || portable (Context.auto ()))|ocaml},
+        [ "not (!gate)" ] );
+      ( "refuses a fold in a function-case predicate's guard",
+        {ocaml|let () = p_all "every row renders tiled" rows ~f:(function row when on_cpu -> row.tiled | _ -> true)|ocaml},
+        [ "not (match element with | row when on_cpu -> false | _ -> true)" ] );
+      ( "refuses a fold in a match guard whose patterns match anything",
+        {ocaml|let () =
+  let census = compile_census (Context.auto ()) in
+  p "the census renders tiled" (match census with c when on_cpu -> renders c | _ -> true)|ocaml},
+        [ "not (match census with | c when on_cpu -> false | _ -> true)" ] );
+      ( "accepts a function-case predicate that selects on the element",
+        {ocaml|let () = p_all "every present row matches" rows ~f:(function Some row -> row.ok | None -> true)|ocaml},
+        [] );
       ( "accepts a ref the test alone writes",
         {ocaml|let () =
   let ready = ref false in
