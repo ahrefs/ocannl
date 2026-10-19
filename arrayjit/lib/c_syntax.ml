@@ -2894,13 +2894,13 @@ module C_syntax (B : C_syntax_config) = struct
         (** Set by [compile_proc]: the kernel's hardware-annotated loops with their positional slots
             (docs/proposals/axis-types-for-loops.md §1/§5), consulted by [pp_ll]'s [For_loop] case
             to render hardware index bindings. *)
-    current_loop_bounds : (Indexing.symbol * (int * int)) list ref;
-        (** Every symbol bound by a loop in the routine, with its iteration range. The accumulator
-            peel needs the COMPLEMENT: a guard symbol outside this set is bound outside every loop
-            -- a static index parameter, a runtime extent -- so it cannot select among an enclosing
-            level's iterations, which is what keeps gh-490's runtime-extent guard ([i < s])
-            peelable. The ranges are what lets it ask whether the accumulated cell tells two
-            enclosing instances apart ([Affine.separates], gh-ocannl-721). *)
+    current_loop_ranges : Affine.Loop_ranges.t ref;
+        (** Every symbol bound by a loop in the routine, with the hull of its iteration ranges. The
+            accumulator peel needs the COMPLEMENT: a guard symbol outside this set is bound outside
+            every loop -- a static index parameter, a runtime extent -- so it cannot select among an
+            enclosing level's iterations, which is what keeps gh-490's runtime-extent guard
+            ([i < s]) peelable. The ranges are what lets it ask whether the accumulated cell tells
+            two enclosing instances apart ([Affine.separates], gh-ocannl-721). *)
     current_workgroup_shared : Set.M(Tn).t ref;
         (** Set by [compile_proc]: nodes placed in workgroup-shared memory. Their declarations carry
             [shared_decl_prefix] and cannot use [= {0}] (not allowed for
@@ -4196,9 +4196,9 @@ module C_syntax (B : C_syntax_config) = struct
          bound under its body. Loops enclosing the Grid loop are shared across chunks (chunks of one
          dispatch execute under the same outer-iteration values, with a join before the next), which
          is exactly the query's treatment of unlisted symbols. *)
-      let env = (sym, grid_range) :: Low_level.loop_bounds body in
-      let range = Affine.bounds_range env in
-      let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
+      let env = Affine.Loop_ranges.bind (Low_level.loop_ranges body) sym grid_range in
+      let range = Affine.Loop_ranges.find env in
+      let dup = Affine.Loop_ranges.mem env in
       let feasible =
         Hashtbl.for_all locals ~f:(fun info ->
             (* The legacy procedural shared rule (every access mentions [sym] and all accesses agree
@@ -6120,11 +6120,11 @@ module C_syntax (B : C_syntax_config) = struct
       =
     (* The decision itself — the peel and every decline — is {!Low_level.decide_accum_width}'s, the
        one owner [Schedule.Privatize] asks too (gh-ocannl-1151); this level supplies the
-       serialized-slot predicate and the routine's loop bounds, and turns the peel's report into the
+       serialized-slot predicate and the routine's loop ranges, and turns the peel's report into the
        census verdict. *)
     match
       Low_level.decide_accum_width ~extra_level:(serialized_hardware ctx)
-        ~loop_bounds:!(ctx.current_loop_bounds) ~index:i ~from_ ~to_ body
+        ~loop_ranges:!(ctx.current_loop_ranges) ~index:i ~from_ ~to_ body
     with
     | Low_level.Accum_not_a_nest refusal -> Accum_not_a_nest refusal
     | Low_level.Accum_base { tn; idcs; base; debug; rebuild; report; pinned } ->
@@ -7681,7 +7681,7 @@ module C_syntax (B : C_syntax_config) = struct
         rendered_accumulation_scopes = Hash_set.create (module Int);
         volatility_events = ref [];
         current_hardware_axes = ref (Low_level.hardware_axes llc);
-        current_loop_bounds = ref (Low_level.loop_bounds llc);
+        current_loop_ranges = ref (Low_level.loop_ranges llc);
         current_workgroup_shared = ref workgroup_shared;
         current_thread_axes = ref [];
         current_active_slots = ref [];

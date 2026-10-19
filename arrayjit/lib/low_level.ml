@@ -161,7 +161,7 @@ type t =
           [Schedule.find_loops_env] / [rewrite_loop], so an op naming either symbol declines with
           the usual no-such-loop [Invalid_argument]); enclosing loops keep their full menu, since
           the state is per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary
-          affine loop symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval
+          affine loop symbol for footprint purposes ({!loop_ranges}, {!affine_accesses}, interval
           analysis) -- a scan's accesses stay affine and dense even though its values are serial. *)
   | Zero_out of Tn.t
   | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
@@ -5677,9 +5677,9 @@ let input_and_output_nodes optimized =
         (inputs, outputs)),
     optimized.merge_node )
 
-(** All [For_loop] bindings within [llc] (loop symbols are unique within a routine), with inclusive
-    iteration bounds — the box environment for {!Affine} queries over the routine's accesses. *)
-let loop_bounds (llc : t) : (Indexing.symbol * (int * int)) list =
+(** Every loop binding within [llc], one hulled range per symbol — the box environment for {!Affine}
+    queries over the routine's accesses. Sibling loops may rebind one symbol (gh-ocannl-1305). *)
+let loop_ranges (llc : t) : Affine.Loop_ranges.t =
   let open Access_fold in
   let policy =
     {
@@ -5699,11 +5699,11 @@ let loop_bounds (llc : t) : (Indexing.symbol * (int * int)) list =
           Continue
             (match stmt with
             | For_loop { index; from_; to_; _ } | Scan_loop { index; from_; to_; _ } ->
-                (index, (from_, to_)) :: acc
+                Affine.Loop_ranges.bind acc index (from_, to_)
             | _ -> acc));
     }
   in
-  List.rev (fold ~policy ~hooks ~init:[] llc)
+  fold ~policy ~hooks ~init:Affine.Loop_ranges.empty llc
 
 (** Calls [touch] on every tnode whose context buffer the statement reads or writes, [on_opaque] on
     [Staged_compilation] (its accesses cannot be enumerated). Scope-local reads/writes
@@ -6279,7 +6279,7 @@ let scope_updates_reduce_op ~id (llc : t) : Ops.binop option =
    [Schedule.Unroll ~materialize:true] and [Schedule.Partition], so the transforms and the emission
    cannot drift in what nests they recognize. Guard legality — whether the peeled levels may include
    a given [If] at all — is asked of {!Affine.peel_guard} and {!Affine.separates} rather than
-   decided here (gh-ocannl-722); [loop_bounds] is {!loop_bounds} of the enclosing program, which is
+   decided here (gh-ocannl-722); [loop_ranges] is {!loop_ranges} of the enclosing program, which is
    what classifies a guard symbol as an enclosing level, a peeled one, or an index bound outside
    every loop.
 
@@ -6532,7 +6532,7 @@ type peel_refusal =
 type peel_report = { levels : int; guards : peel_guard_verdict list; refusal : peel_refusal option }
 [@@deriving sexp_of]
 
-let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free_of body :
+let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_ranges ~free_of body :
     (Tn.t
     * Indexing.axis_index array
     * [ `Update of scalar_t | `Scope of scope_id * t list ]
@@ -6558,7 +6558,7 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
      symbols it can only admit conditionally are carried in [pending] until the base, where the
      accumulated cell is finally in hand and {!Affine.separates} decides whether each of those
      instances owns a distinct cell. *)
-  let range = Affine.bounds_range loop_bounds in
+  let range = Affine.Loop_ranges.find loop_ranges in
   let loop_bound s = Option.is_some (range s) in
   let peeled ~free_of s = List.exists free_of ~f:(Indexing.equal_symbol s) in
   let guard_symbols (llsc : scalar_t) =
@@ -6705,12 +6705,12 @@ type accum_decision =
       pinned : accum_skip option;
     }
 
-let decide_accum_width ~extra_level ~loop_bounds ~index ~from_ ~to_ body =
+let decide_accum_width ~extra_level ~loop_ranges ~index ~from_ ~to_ body =
   let report = ref None in
   match
     peel_accum_nest ~extra_level
       ~report:(fun r -> report := Some r)
-      ~loop_bounds ~free_of:[ index ] body
+      ~loop_ranges ~free_of:[ index ] body
   with
   | None ->
       Accum_not_a_nest
@@ -6777,7 +6777,7 @@ type serial_accum = { sa_level : Indexing.symbol option; sa_widens : bool }
    reached with no level localizing keeps its storage cell's width, narrowing per step, except a
    scope-form base, whose scope local codegen's census types at the residency anyway. *)
 let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
-  let loop_bounds = loop_bounds llc in
+  let loop_ranges = loop_ranges llc in
   let extra_level index axis = equal_axis_type axis Workgroup_reduce && serialized index axis in
   let acc = ref [] in
   let rec stmt (llc : t) =
@@ -6790,7 +6790,7 @@ let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
           | Grid -> false
         in
         let decision =
-          if asks then Some (decide_accum_width ~extra_level ~loop_bounds ~index ~from_ ~to_ body)
+          if asks then Some (decide_accum_width ~extra_level ~loop_ranges ~index ~from_ ~to_ body)
           else None
         in
         match decision with
@@ -6806,7 +6806,7 @@ let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
     | If { body; _ } | Scan_loop { body; _ } -> stmt body
     | _ when is_accumulating_write ~tn llc ->
         let widens =
-          match peel_accum_nest ~loop_bounds ~free_of:[] llc with
+          match peel_accum_nest ~loop_ranges ~free_of:[] llc with
           | Some (_, idcs, (`Scope _ as base), _, _) -> accum_base_widens ~tn ~idcs base
           | Some (_, _, `Update _, _, _) | None -> false
         in
@@ -6846,7 +6846,7 @@ type workgroup_reduce_site = {
 let warp_reduce_cell_statement ~index (stmts : t list) =
   match stmts with
   | [ (Set _ as st) ] -> (
-      match peel_accum_nest ~loop_bounds:[] ~free_of:[ index ] st with
+      match peel_accum_nest ~loop_ranges:Affine.Loop_ranges.empty ~free_of:[ index ] st with
       | Some (_, _, `Update _, _, _) -> true
       | Some (_, _, `Scope _, _, _) | None -> false)
   | _ -> false
@@ -7479,14 +7479,14 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
       let rec level ~extra ~bounds (llc : t) =
         match llc with
         | For_loop { index; from_; to_; body; _ } -> (
-            let bounds = (index, (from_, to_)) :: bounds in
+            let bounds = Affine.Loop_ranges.bind bounds index (from_, to_) in
             match
-              peel_accum_nest ~extra_level:extra ~loop_bounds:bounds ~free_of:[ index ] body
+              peel_accum_nest ~extra_level:extra ~loop_ranges:bounds ~free_of:[ index ] body
             with
             | Some (tn', _, _, _, _) when Tn.equal tn tn' -> Some index
             | _ -> level ~extra ~bounds body)
         | Scan_loop { index; from_; to_; body; _ } ->
-            level ~extra ~bounds:((index, (from_, to_)) :: bounds) body
+            level ~extra ~bounds:(Affine.Loop_ranges.bind bounds index (from_, to_)) body
         | If { body; _ } -> level ~extra ~bounds body
         | Seq (a, b) -> if writes_tn a then level ~extra ~bounds a else level ~extra ~bounds b
         | _ -> None
@@ -7502,11 +7502,11 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
         in
         match llc with
         | For_loop ({ index; from_; to_; body; _ } as r) -> (
-            let bounds = (index, (from_, to_)) :: bounds in
+            let bounds = Affine.Loop_ranges.bind bounds index (from_, to_) in
             if not (Indexing.equal_symbol index l) then
               under ~bounds (fun body -> For_loop { r with body }) body
             else
-              match peel_accum_nest ~loop_bounds:bounds ~free_of:[ index ] body with
+              match peel_accum_nest ~loop_ranges:bounds ~free_of:[ index ] body with
               | Some (tn', idcs, `Update llsc, debug, rebuild) when Tn.equal tn tn' ->
                   if not (accum_update_widens ~tn ~idcs llsc) then `Pinned
                   else
@@ -7539,7 +7539,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
               | _ -> `Refused)
         | Scan_loop ({ index; from_; to_; body; _ } as r) ->
             under
-              ~bounds:((index, (from_, to_)) :: bounds)
+              ~bounds:(Affine.Loop_ranges.bind bounds index (from_, to_))
               (fun body -> Scan_loop { r with body })
               body
         | If r -> under (fun body -> If { r with body }) r.body
@@ -7552,8 +7552,8 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
       | _ when not (List.for_all repeated ~f:program_ordered) -> None
       | _ -> (
           match
-            ( level ~extra:(fun _ _ -> false) ~bounds:[] stmt,
-              level ~extra:(fun _ _ -> true) ~bounds:[] stmt )
+            ( level ~extra:(fun _ _ -> false) ~bounds:Affine.Loop_ranges.empty stmt,
+              level ~extra:(fun _ _ -> true) ~bounds:Affine.Loop_ranges.empty stmt )
           with
           | None, None -> guarded_rewrite repeated
           | Some l, Some l'
@@ -7561,7 +7561,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
                  && Poly.equal
                       (List.Assoc.find stmt_binders l ~equal:Indexing.equal_symbol)
                       (Some (Some Serial)) -> (
-              match scope_at ~l ~bounds:[] stmt with
+              match scope_at ~l ~bounds:Affine.Loop_ranges.empty stmt with
               | `Scoped stmt -> Some stmt
               | `Pinned -> guarded_rewrite repeated
               | `Refused | `Unprofitable -> None)

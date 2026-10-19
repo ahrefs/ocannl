@@ -141,7 +141,7 @@ let () =
   let hidden = sym () in
   let scopes = put (scope (loop ~upto:2 hidden (LL.Set_local (scope_id, embed hidden)))) in
   p "loop bounds sees scalar-position loops"
-    (List.mem (List.map (LL.loop_bounds scopes) ~f:fst) hidden ~equal:Idx.equal_symbol);
+    (Ir.Affine.Loop_ranges.mem (LL.loop_ranges scopes) hidden);
   p "statement-local census excludes assignments instantiated inside scopes"
     (not (Hashtbl.mem (LL.scope_value_syms scopes) scope_id.scope_id));
   let tile =

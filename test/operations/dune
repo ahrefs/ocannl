@@ -8729,6 +8729,18 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1305: Low_level.loop_ranges hulls every binding of a reused loop symbol -- sibling
+; nests and sibling inner loops on raw post-schedule-shaped IR -- and an access-validity query
+; ranged by it sees the second sibling's cells. Structural only: nothing executes.
+
+(test
+ ; ocannl-backend: none -- pure Low_level traversal and Affine queries, no execution.
+ (name loop_ranges_hull)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules loop_ranges_hull)
+ (libraries base arrayjit.ir arrayjit.ll_builders arrayjit.verdict))
+
 (test
  ; ocannl-backend: none -- pure Low_level traversal and analysis, no execution.
  (name access_fold)

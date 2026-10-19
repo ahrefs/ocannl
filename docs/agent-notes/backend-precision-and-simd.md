@@ -480,7 +480,7 @@ files.
   STATIC symbol, a kernel parameter bound at launch. (`Schedule`'s Pad guards ARE constant-bounded;
   the two shapes are easy to conflate.) A static symbol cannot select among enclosing loop
   iterations, but the peel cannot tell it from a loop index on its own, so it reads the
-  classification off the program: the REQUIRED `~loop_bounds` is `Low_level.loop_bounds` of the
+  classification off the program: the REQUIRED `~loop_ranges` is `Low_level.loop_ranges` of the
   enclosing code — the same "box environment for Affine queries" the engine's other consumers pass,
   which also supplies the iteration ranges `separates` needs. A guard symbol in it that is not
   peeled is an enclosing level's index; one outside it is bound outside every loop and is harmless.

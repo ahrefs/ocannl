@@ -258,7 +258,7 @@ files.
   statement, iterating `concurrent` symbols independently, can share a cell only if they agree on
   every symbol of `syms`), and `Affine.peel_guard` is the symbol-set classification that decides
   when to ask it, with `Affine.within_box` — the interval companion of `covers_box` — answering the
-  access-validity half that separation does not. `Low_level.peel_accum_nest` is the consumer; `Low_level.loop_bounds` is the box
+  access-validity half that separation does not. `Low_level.peel_accum_nest` is the consumer; `Low_level.loop_ranges` is the box
   environment both take (do not add a second walker for it — round 7 of gh-693 did, and gh-722
   removed the duplicate). Soundness direction, as everywhere in the engine: a proven "separated" is
   proven, and anything it cannot interpret declines.
@@ -266,9 +266,12 @@ files.
   takes `~left_range ~right_range`, ranging a side's `Left_v`/`Right_v` variables by that side and a
   `Shared` one by the hull of the sides sharing it. Loop symbols are not unique: sibling loops (two
   nests, or two inner loops of one nest) may rebind one symbol with different bounds, and lending
-  one side's bounds to the other once let `aligned_chains` accept a cross-thread dependence. Build a
-  side's range from a loop environment with `Affine.bounds_range` (the hull of every binding), never
-  `List.Assoc.find`, whose first binding drops the siblings'; `aligned_chains_shared_symbol.ml` pins it.
+  one side's bounds to the other once let `aligned_chains` accept a cross-thread dependence. A side's
+  range comes from an `Affine.Loop_ranges.t` — `Low_level.loop_ranges` of the side's code, ONE hulled
+  range per symbol, an abstract map so no lookup can keep a first binding and drop the siblings'
+  (gh-ocannl-1305: the per-binding list it replaced invited `List.Assoc.find`, the within-nest hole
+  of gh-1282); `aligned_chains_shared_symbol.ml` pins the query, `loop_ranges_hull.ml` the hull. An
+  access's own `a_loops` stays a list: it is one enclosing chain, not a routine's loops.
 - **`Sub_axis` has ONE meaning, and "unknown" is never written into a map** (gh-ocannl-1162): the
   axis adds zero to the row-major offset while keeping its stride, so a `Sub_axis` run makes the
   component after it a flattened index over the run (lowering's flat stores, `Row`'s strided
@@ -394,7 +397,8 @@ files.
   per routine, no free symbol; `test/operations/loop_binder_lint`), so hand-built IR mints a symbol
   per loop too. The lint is entry-only on purpose: past `optimize`, schedule rewrites emit sibling
   nests sharing symbols by design (the staging transfer nests in `schedule.ml`), so post-optimize
-  consumers such as `Schedule.aligned_chains` must still tolerate a shared binder —
+  consumers such as `Schedule.aligned_chains` must still tolerate a shared binder (range them by
+  `Low_level.loop_ranges`, which hulls it) —
   `aligned_chains_shared_symbol` builds that shape by renaming the optimized code.
   `test/operations/test_block_tensor.ml`'s gradient fixtures are the regression coverage to keep in mind when changing concat lowering or
   the virtualizer's symbol ownership, alongside the hand-built
