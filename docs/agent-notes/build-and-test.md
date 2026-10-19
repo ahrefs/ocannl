@@ -1351,9 +1351,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   through `re_export` and `select` forms too), do one of three things. They name such a value through `Context.Cc_backend` (alias and `open`
   included). They project such a field or match it in a record pattern. Or they write
   `{ base with … }`, overwriting any label of the type and leaving a width field to a non-constant
-  base. A constant base is `Backend_intf.no_hardware_limits` (directly, through an alias of
-  `Backend_intf`, or bare where the file does not bind the name), or a name every binding of which
-  is a constant record or a function returning one. staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
+  base. A constant base is `Ir.Backend_intf.no_hardware_limits` spelled in full (or through
+  a module alias every binding of which names `Ir.Backend_intf`, with no module on the path rebound
+  by the file), or a name every binding of which is a constant record or a function returning one. staging#1094's `{ device_limits with simd_vector_bytes = 16 }`
   keeps the device's register count, so it is a read. Every rule running such a program declares or
   pins the variable, or depends on `(universe)`. A library with inline tests is a program of its
   own: its `(inline_tests (deps …))` and every per-module rule running its runner answer for it. A
