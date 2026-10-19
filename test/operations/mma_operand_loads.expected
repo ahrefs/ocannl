@@ -1,0 +1,14 @@
+bf16_ab: the kernel loads through ldmatrix exactly the operands the capability names: true
+bf16_ab_trans: the kernel loads through ldmatrix exactly the operands the capability names: true
+fp8_a: the kernel loads through ldmatrix exactly the operands the capability names: true
+fp8_b_trans: the kernel loads through ldmatrix exactly the operands the capability names: true
+fp8_twin_swizzled: the kernel loads through ldmatrix exactly the operands the capability names: true
+fp8_twin_plain: the kernel loads through ldmatrix exactly the operands the capability names: true
+fp8_a_trans_gather: the kernel loads through ldmatrix exactly the operands the capability names: true
+f16_wmma: the kernel loads through ldmatrix exactly the operands the capability names: true
+on CUDA some leg's capability answers (true, true): true
+on CUDA some leg's capability answers (true, false): true
+on CUDA some leg's capability answers (false, true): true
+on CUDA some leg's capability answers (false, false): true
+only a swizzled shared operand is ever loaded through ldmatrix: true
+off CUDA the capability answers (false, false) everywhere: true

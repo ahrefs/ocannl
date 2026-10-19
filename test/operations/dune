@@ -5492,6 +5492,87 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1254: exact ranking ties go to fewer tile-MMA operand loads: the search's tie semantics,
+; and the gh-ocannl-1190 fp8 twins under a CUDA-shaped record with CUDA's pure load rule. Compiles
+; nothing.
+
+(test
+ (name model_load_tiebreak)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  ; The model-selection keys model_family_search, model_explain and model_default read, the
+  ; sketch family's economy, and the numerics policy the mma format triples resolve under.
+  (env_var OCANNL_MODEL_DEFAULT_GEOMETRY_LATTICE)
+  (env_var OCANNL_MODEL_DEFAULT_PLACEMENTS)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
+  (env_var OCANNL_NARROW_COMPUTE_F32)
+  ; The default pipeline model_explain and model_default score: the schedulers, their geometry,
+  ; lane and fission keys.
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  ; The seeded untuned plan model_default and model_explain start from on CUDA and HIP.
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
+  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
+ (modules model_load_tiebreak)
+ (libraries base stdio ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1254: the mma_operand_loads capability answers with the emission's own ldmatrix rule:
+; per staged operand place, what the capability names is what the kernel loads through ldmatrix.
+
+(test
+ (name mma_operand_loads)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  ; The numerics policy the arm table resolves under.
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
+  (env_var OCANNL_NARROW_COMPUTE_F32))
+ (modules mma_operand_loads)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name schedule_swizzle_matmul)
  (package neural_nets_lib)

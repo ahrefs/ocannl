@@ -156,6 +156,36 @@ let arm_ldmatrix_operands arm ~ta ~tb ~a ~b =
   | Inline_ptx (M16n8k16 _) -> (a, b)
   | Wmma _ -> (false, false)
 
+(* An operand [ldmatrix] can both reach and de-conflict: the swizzled 16-byte-unit layout in shared
+   memory. Everything else keeps per-lane gathers. *)
+let ldmatrix_eligible : Backend_intf.mma_operand_place -> bool = function
+  | `Shared, `Swizzled_b128 -> true
+  | (`Shared | `Device | `Thread), (`Plain | `Swizzled_b128) -> false
+
+(* The emission scope's arm: the census reads it off the statement's destination, the cost model off
+   the schedule's simdgroup fragments. *)
+let operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
+  match resolve_arm ~a_prec ~b_prec ~d_prec ~scope with
+  | None -> (false, false)
+  | Some arm -> arm_ldmatrix_operands arm ~ta ~tb ~a:(ldmatrix_eligible a) ~b:(ldmatrix_eligible b)
+
+(* The inline-PTX bodies load an [a] and a [b] fragment inside their [__mi x __ni x __ki] loops, so
+   each is reloaded for every tile of the other's free axis; wmma loads its B row of fragments and
+   then each A fragment once per [__ki] step, reusing them across [__mi] / [__ni]. Stated beside the
+   hooks that emit those loops ([Cuda_backend]'s [mma_syntax] bodies and its wmma
+   [k_loop_lines]). *)
+let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
+
+let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
+  Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
+      {
+        Backend_intf.mf_tile = arm_tile arm;
+        mf_reloads = arm_reloads_operands arm;
+        (* wmma's opaque fragments load whole through [load_matrix_sync]; the inline-PTX arms gather
+           per lane. *)
+        mf_fragment_loads = (match arm with Wmma _ -> true | Inline_ptx _ -> false);
+      })
+
 let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->
       {

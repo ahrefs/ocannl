@@ -10486,3 +10486,125 @@ let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
         unflat_lines [ left_loop; middle_loop; right_loop ]
   in
   build_loops ~any_padding_so_far:false 0 []
+
+(* The accumulator transfers [Schedule.contract_tensorized_accumulator] synthesizes around a
+   persistent fragment's reduction: lane { if lane==0 { fragment <- target } } (the init) and lane {
+   if lane==0 { target <- fragment } } (the store). Shared by the renderer's fragment-scope
+   recognition ([C_syntax]) and the cost model's operand-load count, so both read the region the
+   same way. *)
+let is_lane0_guard lane = function
+  | Binop (Ops.Cmpeq, (Embed_index (Indexing.Iterator guard_lane), _), (Constant zero, _))
+  | Binop (Ops.Cmpeq, (Constant zero, _), (Embed_index (Indexing.Iterator guard_lane), _)) ->
+      Indexing.equal_symbol lane guard_lane && Float.equal zero 0.
+  | _ -> false
+
+let fragment_transfer ~into_fragment = function
+  | For_loop
+      { index = lane; from_ = 0; to_; axis = Workgroup; body = If { cond = cond, _; body }; _ }
+    when is_lane0_guard lane cond ->
+      let rec descend syms = function
+        | For_loop { index; axis = Serial; body; _ } -> descend (index :: syms) body
+        | Set { tn = fragment; llsc = Get (target, target_idcs); _ } when into_fragment ->
+            Some (lane, to_ + 1, fragment, target, target_idcs, syms)
+        | Set { tn = target; llsc = Get (fragment, _); idcs = target_idcs; _ }
+          when not into_fragment ->
+            Some (lane, to_ + 1, fragment, target, target_idcs, syms)
+        | _ -> None
+      in
+      descend [] body
+  | _ -> None
+
+(* The target's leading-dimension stride: the stride of the axis carrying the transfer nest's
+   outermost (row) copy symbol — the minor dim in the plain case, larger when interior batch axes
+   sit between the tile roles (gh-ocannl-528). *)
+let fragment_target_ld ~(row_sym : Indexing.symbol option) ((tn : Tnode.t), idcs) =
+  let dims = Lazy.force tn.Tnode.dims in
+  let rank = Array.length dims in
+  let default = if rank >= 1 then dims.(rank - 1) else 1 in
+  match row_sym with
+  | None -> default
+  | Some s -> (
+      match Array.findi idcs ~f:(fun _ idx -> Indexing.axis_index_mentions_symbol s idx) with
+      | Some (p, _) ->
+          let ld = ref 1 in
+          for x = p + 1 to rank - 1 do
+            ld := !ld * dims.(x)
+          done;
+          !ld
+      | None -> default)
+
+type fragment_region = {
+  fr_init : t;
+  fr_reduction : t;
+  fr_store : t;
+  fr_rest : t list;
+  fr_fragment : Tnode.t;
+  fr_target : Tnode.t;
+  fr_target_base : Indexing.axis_index array;
+  fr_target_ld : int;
+  fr_tile : t;
+}
+
+(* The whole region: init transfer, reduction, store transfer (any following statements are
+   [fr_rest]), the two transfers agreeing on fragment, target, lane, width and indices, and exactly
+   one [Tile_mma] accumulating into the fragment inside the reduction. *)
+let fragment_region (c : t) =
+  let nonempty =
+    List.filter (flat_lines [ c ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+  in
+  let rec collect_fragment_tiles fragment acc = function
+    | Tile_mma { d = d, _; _ } as tm when Tnode.equal d fragment -> tm :: acc
+    | Seq (a, b) -> collect_fragment_tiles fragment (collect_fragment_tiles fragment acc a) b
+    | For_loop { body; _ } | If { body; _ } -> collect_fragment_tiles fragment acc body
+    | _ -> acc
+  in
+  let zero_symbols syms idx =
+    let bound s = List.mem syms s ~equal:Indexing.equal_symbol in
+    match idx with
+    | Indexing.Iterator s when bound s -> Indexing.Fixed_idx 0
+    | Indexing.Affine { symbols; offset } ->
+        Indexing.affine ~symbols:(List.filter symbols ~f:(fun (_, s) -> not (bound s))) ~offset
+    | other -> other
+  in
+  match nonempty with
+  | init :: reduction :: store :: rest -> (
+      match
+        (fragment_transfer ~into_fragment:true init, fragment_transfer ~into_fragment:false store)
+      with
+      | ( Some (lane1, width1, fragment, target, init_idcs, init_syms),
+          Some (lane2, width2, fragment2, target2, store_idcs, _) )
+        when Tnode.equal fragment fragment2 && Tnode.equal target target2 && width1 = width2
+             && Indexing.equal_symbol lane1 lane2
+             && Array.equal Indexing.equal_axis_index init_idcs store_idcs -> (
+          match collect_fragment_tiles fragment [] reduction with
+          | [ tile ] ->
+              Some
+                {
+                  fr_init = init;
+                  fr_reduction = reduction;
+                  fr_store = store;
+                  fr_rest = rest;
+                  fr_fragment = fragment;
+                  fr_target = target;
+                  fr_target_base = Array.map init_idcs ~f:(zero_symbols init_syms);
+                  (* [init_syms] is innermost-first, so its last element is the outermost (row) copy
+                     symbol; [init_idcs] still carries it. *)
+                  fr_target_ld =
+                    fragment_target_ld ~row_sym:(List.last init_syms) (target, init_idcs);
+                  fr_tile = tile;
+                }
+          | _ -> None)
+      | _ -> None)
+  | _ -> None
+
+let mma_operand_layout (swizzle : swizzle_kind option) ~ld ~idcs ~dims =
+  match swizzle with
+  | None -> `Plain
+  | Some Swizzle_elem -> `Decline "element-granularity swizzle (no intrinsic load form matches it)"
+  | Some Swizzle_b128 ->
+      if Array.length dims <> 2 then `Decline "b128-swizzled operand of rank <> 2"
+      else if ld <> dims.(1) then
+        `Decline "b128-swizzled operand whose leading dimension is not its minor dim"
+      else if not (Array.for_all idcs ~f:(function Indexing.Fixed_idx 0 -> true | _ -> false))
+      then `Decline "b128-swizzled operand not accessed from the tile origin"
+      else `Swizzled_b128

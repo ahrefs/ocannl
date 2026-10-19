@@ -555,34 +555,25 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
 
     let mma_plain = function `Plain -> true | `Swizzled_b128 -> false
 
-    (* An operand eligible for the warp-cooperative [ldmatrix] load (gh-ocannl-481 item 3): the
-       swizzled 16-byte-unit layout, in shared memory, which is the only combination whose per-lane
-       row addresses [ldmatrix] can both reach and de-conflict. Everything else keeps the per-lane
-       gathers, which stay correct for plain shared tiles and device pointers alike. Note the
-       asymmetry the arms rely on: eligibility is [space AND layout], but the DECLINE is on the
-       layout alone — a swizzled operand an arm cannot [ldmatrix] must not silently fall through to
-       row-major gathers, whatever space it sits in. *)
+    (* An operand eligible for the warp-cooperative [ldmatrix] load (gh-ocannl-481 item 3):
+       [Cuda_mma.ldmatrix_eligible] (shared memory in the swizzled 16-byte-unit layout); a fragment
+       is never one. Everything else keeps the per-lane gathers, which stay correct for plain shared
+       tiles and device pointers alike. Note the asymmetry the arms rely on: eligibility is [space
+       AND layout], but the DECLINE is on the layout alone — a swizzled operand an arm cannot
+       [ldmatrix] must not silently fall through to row-major gathers, whatever space it sits in. *)
     let mma_ldm = function
-      | `Shared, `Swizzled_b128 -> true
-      | (`Shared | `Device | `Thread | `Fragment _), (`Plain | `Swizzled_b128) -> false
+      | ((`Shared | `Device | `Thread) as space), layout ->
+          Cuda_mma.ldmatrix_eligible (space, layout)
+      | `Fragment _, (`Plain | `Swizzled_b128) -> false
 
-    (* The same per-operand load choice drives emission and its census: the arm's own
-       [Cuda_mma.arm_ldmatrix_operands] over each operand's eligibility. *)
+    (* The same per-operand load choice drives emission, its census and the cost model's load
+       tie-break: the arm's own [Cuda_mma.arm_ldmatrix_operands] over each operand's eligibility.
+       The census and the capability read [Cuda_mma.operand_loads], its per-statement-arm form. *)
     let mma_ldmatrix_operands arm ~ta ~tb ~a ~b =
       Cuda_mma.arm_ldmatrix_operands arm ~ta ~tb ~a:(mma_ldm a) ~b:(mma_ldm b)
 
-    (* The census sees no destination, so it reads the per-statement arm. An accepted update-only
-       call whose fragment-scope arm differs (wide uniform f16's wmma) has plain operands, wmma
-       declining swizzled ones, so that arm's [false] is what this answers for it too. *)
-    let mma_uses_ldmatrix ~a_prec ~b_prec ~d_prec ~ta ~tb ~a:(_, a_space, a_layout)
-        ~b:(_, b_space, b_layout) =
-      match Cuda_mma.resolve_arm ~a_prec ~b_prec ~d_prec ~scope:Backend_intf.Mma_per_statement with
-      | None -> false
-      | Some arm ->
-          let a_ldm, b_ldm =
-            mma_ldmatrix_operands arm ~ta ~tb ~a:(a_space, a_layout) ~b:(b_space, b_layout)
-          in
-          a_ldm || b_ldm
+    let mma_operand_loads = Cuda_mma.operand_loads
+    let mma_operand_fragments = Cuda_mma.operand_fragments
 
     (* Shared by statement and scope for the inline-PTX arms: the intrinsic divides the block, the
        device meets the arm's floor, and every operand is plain or shared-swizzled. The 16-bit arms
