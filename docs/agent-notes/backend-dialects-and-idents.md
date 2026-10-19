@@ -342,6 +342,17 @@ configuration.
   suffix); and two dune rules running ONE executable share its subdirectory and so sweep each
   other, which `cc_kept_library`'s rules serialize with a dune lock.
 
+- A failed cc kernel compile blames the generated code only after a trivial kernel compiles under
+  the same command, flags and link flags (gh-ocannl-1350, `Cc_backend.toolchain_fault`,
+  `test/operations/cc_toolchain_attribution`). When it does not, the failure is a
+  `Backend_rejected` at `Schedule_outcome.toolchain_stage` with severity `Configuration`:
+  uncontainable, since a toolchain that compiles nothing rejects every candidate alike, and
+  rendered as `Utils.User_error`, never with `C_syntax.codegen_bug_claim`. It names the setting
+  whose flag fails on its own (`Cc_backend.kernel_compiler_flag_settings` pairs each flag with its
+  setting), the compiler command when even the bare command fails, and every flag setting when
+  only their combination does. Probing rather than matching compiler stderr keeps it independent of
+  the compiler's wording; it runs only on a failure, once per process per configuration.
+
 - Repeated inner CPU `Grid` loops require at least 16,384 scalar updates per native dispatch
   (gh-ocannl-933, `C_syntax.grid_update_count`). The estimate multiplies only the Grid and its
   body extents, includes scalar `Local_scope` work, and saturates before overflow; enclosing

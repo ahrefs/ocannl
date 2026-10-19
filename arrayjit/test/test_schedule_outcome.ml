@@ -97,6 +97,34 @@ let () =
               in
               assert (equal_phase contained_elsewhere.phase Backend_compile);
               assert (equal_cause contained_elsewhere.cause rejection))));
+  (* gh-ocannl-1350: a toolchain that compiles no trivial kernel rejects every candidate alike, so
+     its typed rejection at [Backend_compile] ends a search too, rendered as a user error; the same
+     stage at link, or the compiler stage at compile, stays a decline. *)
+  let toolchain =
+    backend_rejection ~stage:toolchain_stage ~severity:Configuration "toolchain diagnostic"
+  in
+  List.iter [ Candidate; Cache_replay; Advisory; User_schedule ] ~f:(fun provenance ->
+      List.iter [ true; false ] ~f:(fun strict ->
+          let fatal =
+            protect ~strict ~classify_backend:no_backend_classification ~provenance ~phase:Transform
+              (fun () -> raise (Cause_at (Backend_compile, toolchain)))
+            |> expect_fatal
+          in
+          assert (equal_phase fatal.phase Backend_compile);
+          assert (Option.equal equal_cause fatal.cause (Some toolchain));
+          assert (
+            match fatal.exn with
+            | Utils.User_error msg -> String.equal msg "toolchain diagnostic"
+            | _ -> false);
+          List.iter
+            [ (Backend_link, toolchain); (Backend_compile, backend_rejection "codegen diagnostic") ]
+            ~f:(fun (phase, cause) ->
+              let contained =
+                protect ~strict ~classify_backend:no_backend_classification ~provenance
+                  ~phase:Transform (fun () -> raise (Cause_at (phase, cause)))
+                |> expect_classified
+              in
+              assert (equal_cause contained.cause cause))));
   (* Nor is every link-time rejection fatal: the compiler stage at link stays a decline. *)
   let link_compiler_rejection = backend_rejection "declined at link" in
   let contained_at_link =

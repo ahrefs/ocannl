@@ -1,0 +1,7 @@
+mode: codegen
+backend: cc
+the compile fails with a typed cc rejection: true
+the failure is the compiler stage's, as a codegen failure: true
+the severity is Compiler_bug: true
+the detail keeps the bug claim: true
+Context.compile raises Invalid_argument with the bug claim: true

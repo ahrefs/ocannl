@@ -23,7 +23,7 @@ type resource =
   | Device_memory
 [@@deriving sexp_of, compare, equal]
 
-type severity = Expected | Compiler_bug [@@deriving sexp_of, compare, equal]
+type severity = Expected | Compiler_bug | Configuration [@@deriving sexp_of, compare, equal]
 
 type execution_effect = No_device_writes | Writes_may_have_occurred
 [@@deriving sexp_of, compare, equal]
@@ -66,11 +66,13 @@ let key_of_cause = function
 let dlopen_stage = "dlopen"
 let artifact_missing_stage = "artifact_missing"
 let codesign_stage = "codesign"
+let toolchain_stage = "toolchain"
 
 let uncontainable phase cause =
   match (phase, cause) with
   | Backend_link, Backend_rejected { stage; _ } ->
       List.mem [ dlopen_stage; artifact_missing_stage; codesign_stage ] stage ~equal:String.equal
+  | Backend_compile, Backend_rejected { stage; _ } -> String.equal stage toolchain_stage
   | _ -> false
 
 type fatal = {
@@ -193,7 +195,8 @@ let detail_of_cause = function
 
 let exception_of_cause cause =
   match cause with
-  | Resource_exceeded _ -> Utils.User_error (detail_of_cause cause)
+  | Resource_exceeded _ | Backend_rejected { severity = Configuration; _ } ->
+      Utils.User_error (detail_of_cause cause)
   | Illegal_schedule _ | Unsupported _ | Backend_rejected _ | Unclassified _ | Seed_evicted _
   | Not_dispatched _ ->
       Invalid_argument (detail_of_cause cause)

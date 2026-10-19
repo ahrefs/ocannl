@@ -956,15 +956,15 @@ let compile_failure_detail ~exit_code ~source_note ~command ~compiler_output =
     command compiler_output
 
 (* The flags every kernel compile passes after the compiler command (output, link and log
-   redirections aside). One definition, because [test/operations/bridge_arm_coverage] preprocesses
-   the retained kernel sources under them to read which bridge arm each kernel compiled into
-   (gh-ocannl-1145): a reading under any other flags would describe a target no kernel was built
-   for. *)
-let kernel_compiler_flags () =
+   redirections aside), each paired with the setting it comes from. One definition, because
+   [test/operations/bridge_arm_coverage] preprocesses the retained kernel sources under them to read
+   which bridge arm each kernel compiled into (gh-ocannl-1145): a reading under any other flags
+   would describe a target no kernel was built for; and because a failed compile names the setting
+   whose flag the toolchain rejects (gh-ocannl-1350, [toolchain_fault]). *)
+let kernel_compiler_flag_settings () =
   let optimization_flag = "-O" ^ Int.to_string (optimization_level ()) in
   let arch_flag = String.strip (arch_flags ()) in
   let simd_flag = String.strip (simd_flags ()) in
-  let fast_math_flag = fast_math_flag () in
   (* [-fopenmp] must also reach the link step (this command compiles and links); harmless for
      kernels without parallel Grid loops. *)
   let parallel_flag =
@@ -973,17 +973,120 @@ let kernel_compiler_flags () =
     | `Dispatch | `None -> None
   in
   [
-    Some optimization_flag;
-    Option.some_if (not (String.is_empty arch_flag)) arch_flag;
-    Option.some_if (not (String.is_empty simd_flag)) simd_flag;
-    fast_math_flag;
+    Some ("cc_backend_optimization_level", optimization_flag);
+    Option.some_if (not (String.is_empty arch_flag)) ("cc_backend_arch_flags", arch_flag);
+    Option.some_if (not (String.is_empty simd_flag)) ("cc_backend_simd_flags", simd_flag);
+    Option.map (fast_math_flag ()) ~f:(fun flag -> ("cc_backend_fast_math", flag));
     (* AFTER [-ffast-math], which itself sets contraction to fast: clang documents that the last of
        the two wins, so the explicit knob has to come last or [cc_backend_fp_contract=off] would
        silently do nothing in the one combination where it is load-bearing (Codex P2 on PR #291). *)
-    fp_contract_flag ();
-    parallel_flag;
+    Option.map (fp_contract_flag ()) ~f:(fun flag -> ("cc_backend_fp_contract", flag));
+    Option.map parallel_flag ~f:(fun flag -> ("cc_parallel_grid", flag));
   ]
-  |> List.filter_opt |> String.concat ~sep:" "
+  |> List.filter_opt
+
+let kernel_compiler_flags () =
+  String.concat ~sep:" " (List.map (kernel_compiler_flag_settings ()) ~f:snd)
+
+(* gh-ocannl-1350: a kernel compile can fail for a reason that has nothing to do with the generated
+   code -- an explicit [cc_backend_arch_flags] the compiler does not know, a
+   [cc_backend_compiler_command] that names no compiler, a broken local toolchain -- and the report
+   would still call it a bug in OCANNL. So a failed compile first compiles a trivial kernel the same
+   way: the same command, flags and link flags. If that fails too, the configuration is at fault,
+   and narrowing it down costs a few more probes: the command alone with the link flags, then each
+   setting's flag on its own. Asking the toolchain rather than reading its stderr keeps this
+   independent of which compiler is installed and how it words its errors. Failures are the rare
+   path, but an autotune search can fail many candidates, so the diagnosis is computed once per
+   process per configuration. *)
+type toolchain_probe = Probe_compiles | Probe_fails of { command : string; output : string }
+
+let probe_kernel_toolchain ~flags =
+  let src = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" ".c" in
+  let lib = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" Utils.dynamic_library_extension in
+  let log = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" ".log" in
+  let result =
+    try
+      Stdio.Out_channel.write_all src ~data:"int ocannl_toolchain_probe(void) { return 0; }\n";
+      let command =
+        Printf.sprintf "%s %s %s -o %s %s" (compiler_command ()) (Stdlib.Filename.quote src) flags
+          (Stdlib.Filename.quote lib) (Lazy.force kernel_link_flags)
+      in
+      if Stdlib.Sys.command (Printf.sprintf "%s > %s 2>&1" command (Stdlib.Filename.quote log)) = 0
+      then Some Probe_compiles
+      else
+        let output =
+          try Stdio.In_channel.read_all log with _ -> "(unable to read probe output)"
+        in
+        Some (Probe_fails { command; output })
+    with _ -> None
+  in
+  List.iter [ src; lib; log ] ~f:(fun f -> try Stdlib.Sys.remove f with _ -> ());
+  result
+
+type toolchain_fault = {
+  culprits : (string * string) list;
+      (** The settings the probes isolate, each with the value the compile passed for it. *)
+  alone : bool;  (** Whether each culprit fails on its own, rather than only in combination. *)
+  probe_command : string;
+  probe_output : string;
+}
+
+let diagnose_toolchain () =
+  let flag_settings = kernel_compiler_flag_settings () in
+  let fails ~flags =
+    match probe_kernel_toolchain ~flags with Some (Probe_fails _) -> true | _ -> false
+  in
+  (* A probe that could not even run (no temp directory) attributes nothing: the generated code
+     keeps the blame, as it did before. *)
+  match probe_kernel_toolchain ~flags:(kernel_compiler_flags ()) with
+  | None | Some Probe_compiles -> None
+  | Some (Probe_fails { command = probe_command; output = probe_output }) ->
+      let culprits, alone =
+        if fails ~flags:"" then
+          let command =
+            match Utils.get_global_arg ~default:"" ~arg_name:"cc_backend_compiler_command" with
+            | "" -> compiler_command () ^ " (unset: resolved from `ocamlc -config`)"
+            | command -> command
+          in
+          ([ ("cc_backend_compiler_command", command) ], true)
+        else
+          match List.filter flag_settings ~f:(fun (_, flag) -> fails ~flags:flag) with
+          | [] -> (flag_settings, false)
+          | culprits -> (culprits, true)
+      in
+      Some { culprits; alone; probe_command; probe_output }
+
+let toolchain_fault =
+  let mutex = Stdlib.Mutex.create () in
+  let diagnoses = Hashtbl.create (module String) in
+  fun () ->
+    let key =
+      String.concat ~sep:"\000"
+        [ compiler_command (); kernel_compiler_flags (); Lazy.force kernel_link_flags ]
+    in
+    Stdlib.Mutex.protect mutex (fun () ->
+        Hashtbl.find_or_add diagnoses key ~default:diagnose_toolchain)
+
+let toolchain_failure_detail { culprits; alone; probe_command; probe_output } ~exit_code ~command
+    ~compiler_output =
+  let named =
+    String.concat ~sep:", "
+      (List.map culprits ~f:(fun (setting, value) -> Printf.sprintf "%s (%S)" setting value))
+  in
+  Printf.sprintf
+    "OCANNL cc backend: the C toolchain configuration fails to compile even a trivial kernel, so \
+     the generated code is not what failed (exit code %d).\n\
+     %s: %s\n\
+     Probe command: %s\n\
+     Probe output:\n\
+     %s\n\
+     Kernel compilation command: %s\n\
+     Kernel compiler output:\n\
+     %s"
+    exit_code
+    (if alone then "The setting the toolchain rejects"
+     else "No single setting fails alone; the toolchain rejects these together")
+    named probe_command probe_output command compiler_output
 
 let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
   (* The pool restriction (gh-ocannl-530) must be in force before the first [-fopenmp] kernel is
@@ -1061,19 +1164,36 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
     remove temp_log;
     (* A compiler can exit non-zero after writing part of its output. *)
     if library_owned then remove libname;
-    let detail =
-      compile_failure_detail ~exit_code:_rc ~source_note ~command:_cmdline ~compiler_output
-    in
-    raise
-      (Schedule_outcome.Cause_at
-         ( Schedule_outcome.Backend_compile,
-           Schedule_outcome.Backend_rejected
-             {
-               backend = name;
-               stage = "compiler";
-               severity = Schedule_outcome.Compiler_bug;
-               detail;
-             } )))
+    (* gh-ocannl-1350: before blaming the generated code, ask whether this toolchain configuration
+       compiles anything at all. *)
+    match toolchain_fault () with
+    | Some fault ->
+        raise
+          (Schedule_outcome.Cause_at
+             ( Schedule_outcome.Backend_compile,
+               Schedule_outcome.Backend_rejected
+                 {
+                   backend = name;
+                   stage = Schedule_outcome.toolchain_stage;
+                   severity = Schedule_outcome.Configuration;
+                   detail =
+                     toolchain_failure_detail fault ~exit_code:_rc ~command:_cmdline
+                       ~compiler_output;
+                 } ))
+    | None ->
+        let detail =
+          compile_failure_detail ~exit_code:_rc ~source_note ~command:_cmdline ~compiler_output
+        in
+        raise
+          (Schedule_outcome.Cause_at
+             ( Schedule_outcome.Backend_compile,
+               Schedule_outcome.Backend_rejected
+                 {
+                   backend = name;
+                   stage = "compiler";
+                   severity = Schedule_outcome.Compiler_bug;
+                   detail;
+                 } )))
   else remove temp_log;
   (* All three post-compile host-boundary failures are typed, uncontainable link rejections. *)
   let reject_link stage detail =

@@ -245,6 +245,9 @@
   (alias runtest-cc_kept_library)
   (alias runtest-cc_kept_library-debug)
   (alias runtest-cc_temp_library_sweep)
+  (alias runtest-cc_toolchain_attribution-arch_flags)
+  (alias runtest-cc_toolchain_attribution-compiler_command)
+  (alias runtest-cc_toolchain_attribution-codegen)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -1231,6 +1234,92 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff cc_kept_library-debug.expected cc_kept_library-debug.actual)))
+
+; gh-ocannl-1350: a cc compile failure under a toolchain configuration that compiles no trivial
+; kernel either is a typed, fatal configuration error naming the setting; a genuine codegen failure
+; (float renamed to an undeclared type) keeps the bug claim.
+
+(executable
+ (name cc_toolchain_attribution)
+ (modules cc_toolchain_attribution)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the toolchain is the cc compile's; the command line pins the backend.
+ (target cc_toolchain_attribution-arch_flags.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_toolchain_attribution.exe}
+    arch_flags
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_cc_backend_arch_flags=-mocannl-gh1350-no-such-flag))))
+
+(rule
+ (alias runtest-cc_toolchain_attribution-arch_flags)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_toolchain_attribution-arch_flags.expected
+   cc_toolchain_attribution-arch_flags.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the toolchain is the cc compile's; the command line pins the backend.
+ (target cc_toolchain_attribution-compiler_command.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_toolchain_attribution.exe}
+    compiler_command
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_cc_backend_compiler_command=ocannl-gh1350-no-such-compiler))))
+
+(rule
+ (alias runtest-cc_toolchain_attribution-compiler_command)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_toolchain_attribution-compiler_command.expected
+   cc_toolchain_attribution-compiler_command.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the toolchain is the cc compile's; the command line pins the backend.
+ (target cc_toolchain_attribution-codegen.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_toolchain_attribution.exe}
+    codegen
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dfloat=ocannl_gh1350_undeclared_type"))))
+
+(rule
+ (alias runtest-cc_toolchain_attribution-codegen)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_toolchain_attribution-codegen.expected
+   cc_toolchain_attribution-codegen.actual)))
 
 ; gh-ocannl-1268: a process's startup removes the temporary cc libraries of processes that are gone
 ; (Windows keeps a loaded DLL past its routine's exit) and keeps those of running processes. Two
