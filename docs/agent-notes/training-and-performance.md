@@ -238,6 +238,24 @@ files.
   touches (`C_syntax.derive_kparams`), because parameter names are disambiguated over the code and
   an untouched entry -- a node whose zero `gpu_elide_covered_zeros` dropped -- otherwise shared
   its name with another (ahrefs/ocannl#1387; `shipped_kernels_alone` pins it).
+- **HIP in-step attribution: `BACKEND=hip gh1133_cells.sh ... kprof`** (gh-ocannl-1392) traces
+  with `rocprofv3 --kernel-trace`, which sees the replayed hipGraph's nodes without a flag, and
+  states each cell's memory model (unified on minix's gfx1151, discrete on tuf's gfx1102) from the
+  backend's own `integrated` query -- `unified_addressing` reads false on both, so it says nothing
+  about the memory model. The boxes' Ubuntu ROCm ships no rocprofv3, and its HSA runtime is built
+  without rocprofiler-register, so no rocprofiler-sdk loaded into it sees a kernel (a run under
+  `HSA_TOOLS_LIB` exits 0 with no trace). `benchmarks/rocprofv3-install.sh` unpacks AMD's
+  profiler plus AMD's HSA runtime alone, rootless; rocprofv3 puts that lib/ on LD_LIBRARY_PATH,
+  so the step keeps the system's HIP and hiprtc. AMD's 7.1.0 HSA runtime segfaults in the first
+  `hipStreamCreateWithPriority` under Ubuntu's 7.1 HIP (also under AMD's own 7.1 HIP); 7.2.4's
+  works. Two non-exclusive runs per box (correctness legs, one repeat each, not measurements):
+  every cell mapped; the in-step medians summed to 89-93% of the inference step p50 and 77-108%
+  of the training one -- above 100% on tuf's training cell, so before quoting a HIP share as
+  precise, check on an exclusive box how rocprofv3's dispatch stamps add up against the step. On
+  tuf the inference cell's isolated minima summed to 1.63x their in-step medians in one run (56
+  kernels ISO, single kernels 2.7-3.1x off identical twins) and 1.02x in the next (none ISO),
+  while the in-step medians moved under 5%: on a shared box an isolated HIP window is as exposed
+  to a co-tenant as CUDA's (above).
 - That digest covers the compiled result, NOT the diagnostics. When re-measuring a search's
   decline census after changing only an error message or a log line, `rm benchmarks/autotune_cache/*.sexp`
   first — otherwise the second run reports `state=cache-replay`, `timed=0`, `declines=[]` and every
