@@ -949,7 +949,15 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
   payload's key list is read from `ocannl_config.reference`'s checked quote of it); the failure
   records carry it too, the sweep warns once before the first cell runs, and the report header
   adds a line naming each outranked variable and in how many OCANNL rows. To give the cells such a
-  key, use `--cell-flag`.
+  key, use `--cell-flag`. That stamp is the sweep's *prediction* from the argv it built; the runner
+  reports the *observation* beside it (gh-ocannl-1337): `ambient_ocannl_resolved`, on the result
+  line and on every checkpoint, maps each inherited variable OCANNL reads as a key to the value and
+  source it resolved from (`environment` when it applied). The sweep compares the two per variable
+  — `commandline` expected for one outranked by its own argument, `profile '<name>' via the
+  commandline` for one the profile's payload outranks, `environment` otherwise — and a row the
+  runner contradicts fails the **SHADOWING GATE**, carries `shadowing_mismatch`, and is named on a
+  report header line; a failure record checks its stamp against its checkpoint the same way.
+  A variable OCANNL does not read as a key (`OCANNL_TOOL_*`, an unknown name) makes no claim.
 - **The peak-memory column** (gh-ocannl-1006, the report side of gh-ocannl-616). `peak MiB` is the
   peak device footprint over a cell's **timed steps**, and the column appears in a workload's
   table once any row in it measured one. Three things make it easy to misread, and the report

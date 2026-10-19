@@ -634,6 +634,9 @@ def shadowed_ambient(ambient, argv):
     `ambient_ocannl_env` records, but it did not apply there, and the row says so. A variable
     OCANNL never reads under that spelling (it reads `OCANNL_` + the upper-cased key) or holding
     an empty value (unset, to OCANNL) has nothing to be outranked and is left out.
+
+    A prediction: the runner reports where each inherited key actually resolved
+    (`ambient_ocannl_resolved`), and `shadowing_check` fails a row it contradicts (gh-ocannl-1337).
     """
     settings = cmdline_settings(argv)
     profile_arg = settings.get("profile")
@@ -660,6 +663,63 @@ def ocannl_cell(model, backend, regime, variant, flags, ambient):
         "ambient_ocannl_shadowed": shadowed_ambient(ambient, args),
     }
     return [str(ocannl_exe(model)), *args], stamp
+
+
+def predicted_source(var, by):
+    """The source OCANNL should report for the inherited variable `var` that a stamp names as
+    outranked by the argument `by`, in `Utils.config_source_label`'s spelling: `commandline` when
+    `by` sets the variable's own key, the profile's label when it is the profile argument whose
+    payload sets it."""
+    key = var[len("OCANNL_") :].lower()
+    arg_key, _, value = by[len(CLI_SETTING_PREFIX) :].partition("=")
+    if arg_key == key:
+        return "commandline"
+    return f"profile '{value.strip().lower()}' via the commandline"
+
+
+def shadowing_mismatches(predicted, observed):
+    """Where a cell's `ambient_ocannl_shadowed` stamp disagrees with its runner's
+    `ambient_ocannl_resolved` (gh-ocannl-1337), as `{variable: what disagrees}`: empty when they
+    agree, None when either side is missing (a runner predating the field, a non-OCANNL row).
+
+    The stamp is a prediction, made from the argv the sweep built and the profile payload's key
+    list as `ocannl_config.reference` quotes it (`shadowed_ambient`); the runner's record is where
+    each inherited key actually resolved from in the process that ran. Every variable the runner
+    reports is predicted to resolve from the environment, unless the stamp names it outranked, and
+    then from the outranking argument (`predicted_source`). A variable the stamp names that the
+    runner does not report inheriting is a mismatch too: the stamp accounts for a setting the
+    process never read. A variable on neither side -- one OCANNL does not read as a key (a
+    reserved `OCANNL_TOOL_*`, an unknown key), or a blank one -- makes no claim either way.
+    Compared by key, not by spelling, since a case-insensitive environment can hand the runner a
+    name spelt otherwise than the sweep read it.
+    """
+    if predicted is None or observed is None:
+        return None
+    stamped = {var[len("OCANNL_") :].lower(): (var, by) for var, by in predicted.items()}
+    found = {}
+    seen = set()
+    for var, entry in sorted(observed.items()):
+        key = entry.get("key", var[len("OCANNL_") :].lower())
+        seen.add(key)
+        claim = stamped.get(key)
+        expected = predicted_source(*claim) if claim else "environment"
+        source = entry.get("source", "?")
+        if source != expected:
+            said = f"stamped outranked by {display_arg(claim[1])}" if claim else "stamped applied"
+            found[display_value(var)] = f"{said}, but the runner resolved it from {source}"
+    for key, (var, by) in sorted(stamped.items()):
+        if key not in seen:
+            found[display_value(var)] = (
+                f"stamped outranked by {display_arg(by)}, but the runner inherited no such setting"
+            )
+    return found
+
+
+def shadowing_mismatch_note(mismatches):
+    """`shadowing_mismatches` as one line of text, or None when there is nothing to say."""
+    if not mismatches:
+        return None
+    return "; ".join(f"{var} {what}" for var, what in sorted(mismatches.items()))
 
 
 def display_arg(arg):
@@ -799,6 +859,25 @@ def regime_check(results):
         else:
             continue
         mismatched.append(r)
+    return mismatched
+
+
+def shadowing_check(results):
+    """Rows whose `ambient_ocannl_shadowed` stamp the runner's own record contradicts
+    (`shadowing_mismatches`, gh-ocannl-1337). The stamp is what the report's outranked-variables
+    header line and a reader of results.jsonl take as the account of which inherited settings did
+    not apply in a cell; a wrong one misattributes the configuration a number was measured under.
+    `shadowing_mismatch` says which variable and how, in words the run log prints. Rows from a
+    runner predating the record are not checked.
+    """
+    mismatched = []
+    for r in results:
+        note = shadowing_mismatch_note(
+            shadowing_mismatches(r.get("ambient_ocannl_shadowed"), r.get("ambient_ocannl_resolved"))
+        )
+        if note:
+            r["shadowing_mismatch"] = note
+            mismatched.append(r)
     return mismatched
 
 
@@ -1239,9 +1318,21 @@ def failure_record(
     `cell_stamp` is what an OCANNL cell's row would have said about its own command line
     (`ocannl_cell`): the per-cell flags it was given, and the ambient variables that line
     outranks -- the record otherwise states the inherited environment as though all of it applied.
+    Where the checkpoint records where its process resolved each inherited key, the stamp is
+    checked against it, and `shadowing_mismatch` names any disagreement (`shadowing_mismatches`).
     """
     record = {"cell": label, "why": note, "regime": regime, "ambient_ocannl_env": ambient}
     record.update(cell_stamp or {})
+    # The stamp checked against the runner's own record, where the checkpoint carries one
+    # (gh-ocannl-1337): a failed cell's stamp is as much a claim as a row's.
+    shadowing = shadowing_mismatch_note(
+        shadowing_mismatches(
+            (cell_stamp or {}).get("ambient_ocannl_shadowed"),
+            (checkpoint or {}).get("ambient_ocannl_resolved"),
+        )
+    )
+    if shadowing:
+        record["shadowing_mismatch"] = shadowing
     if checkpoint is not None:
         # The losses a killed cell completed, kept beside the failure and never among the results.
         record["checkpoint"] = checkpoint
@@ -2396,6 +2487,43 @@ def shadowed_env_line(results, failures=()):
     )
 
 
+def shadowing_mismatch_line(results, failures=()):
+    """The report's header line naming each OCANNL cell whose runner contradicted its
+    `ambient_ocannl_shadowed` stamp (`shadowing_mismatches`, gh-ocannl-1337), or None when none
+    did. The outranked-variables line above it is built from the stamps, so where the process that
+    ran says otherwise, the report says so beside it rather than only in the run log. A failed cell
+    counts through the checkpoint it left, as it does for that line."""
+    notes = [
+        (gate_label(r), note)
+        for r in results
+        if r.get("framework") == "ocannl"
+        and (
+            note := shadowing_mismatch_note(
+                shadowing_mismatches(
+                    r.get("ambient_ocannl_shadowed"), r.get("ambient_ocannl_resolved")
+                )
+            )
+        )
+    ]
+    for f in map(lambda f: Failure(*f), failures):
+        note = shadowing_mismatch_note(
+            shadowing_mismatches(
+                (f.stamp or {}).get("ambient_ocannl_shadowed"),
+                (f.checkpoint or {}).get("ambient_ocannl_resolved"),
+            )
+        )
+        if note:
+            notes.append((f"{f.label} (failed)", note))
+    if not notes:
+        return None
+    return (
+        "ambient OCANNL_* stamps their runner contradicted (a stamp is the sweep's prediction from "
+        "a cell's command line; the runner reports where each inherited key resolved): "
+    ) + "; ".join(
+        f"{label}: {note}" for label, note in notes
+    )
+
+
 def report(
     results, out_dir, unavailable=(), failures=(), digests_path=None, ambient=None, skipped=()
 ):
@@ -2448,6 +2576,9 @@ def report(
     shadowed_line = shadowed_env_line(results, failures)
     if shadowed_line:
         lines.append(shadowed_line + "\n")
+    contradicted_line = shadowing_mismatch_line(results, failures)
+    if contradicted_line:
+        lines.append(contradicted_line + "\n")
     for workload in sorted({r["workload"] for r in results}):
         lines.append(f"\n## {display_value(workload)}\n")
         rows = [r for r in results if r["workload"] == workload]
@@ -3276,6 +3407,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     regime_mismatches = regime_check(results)
+    shadowing_mismatched = shadowing_check(results)
     precision_mismatches = precision_check(results)
     report(results, RESULTS_DIR, unavailable, failures, ambient=ambient, skipped=skipped)
     ok = True
@@ -3348,6 +3480,22 @@ def main():
             log_line(
                 f"REGIME GATE: {len(regime_mismatches)} cell(s) ran under a regime other than the "
                 f"one dispatched: {labels}"
+            ),
+            flush=True,
+        )
+    if shadowing_mismatched:
+        # The stamp is the row's account of which inherited settings did not apply; the runner
+        # says otherwise, so the account is wrong about the configuration the number was measured
+        # under (gh-ocannl-1337).
+        ok = False
+        labels = ", ".join(
+            f"{gate_label(r)} ({r['shadowing_mismatch']})" for r in shadowing_mismatched
+        )
+        print(
+            log_line(
+                f"SHADOWING GATE: {len(shadowing_mismatched)} cell(s) whose runner contradicts "
+                f"their stamp of the ambient OCANNL_* variables their command line outranks: "
+                f"{labels}"
             ),
             flush=True,
         )
