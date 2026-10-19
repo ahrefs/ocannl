@@ -717,6 +717,12 @@ type sr_site = {
           {!Ir.Schedule.constructor-Coalesce}, applied after [sr_swaps] and before the split, merges
           into the loop [sr_axis] names (see {!coalesce_reduction_pair}); [None] when [sr_axis] is a
           loop of the lowering. *)
+  sr_block_hoist : Ir.Indexing.symbol list;
+      (** gh-ocannl-1412: the accumulation-cell loops enclosing [sr_axis] once [sr_swaps] and
+          [sr_coalesce] are applied, outermost first. The prelude interchanges the split's block
+          loop above them, so the first pass runs [for block: for cells: ..] and the GPU presets
+          give its lanes the cell axes, contiguous in memory, rather than the blocks, [chunk] rows
+          apart. Empty for a scatter site and where that interchange is not [Op_legal]. *)
 }
 [@@deriving sexp_of]
 (** A reduction-dominated accumulation site eligible for {!Ir.Schedule.constructor-Split_reduce}
@@ -727,8 +733,9 @@ val split_sites_label : ?staff:(sr_site * int) list -> (sr_site * int) list -> s
     the [autotune_log] lines and {!report.best_label}: each entry renders every field of its site —
     the target by debug name and, where that differs, its id ([name#id]), the split axis, [red],
     [out], [cost], the block count, [dyn], the interchange chain pair by pair ([swap:o/i+o/i]) and
-    the coalesced reduction pair ([coalesce:o*i]) — so two sites that differ in any one field never
-    share a label (gh-ocannl-1230). Entries are separated by [','], which no entry contains. *)
+    the coalesced reduction pair ([coalesce:o*i]) and the cell loops the block loop is hoisted above
+    ([hoist:c+c]) — so two sites that differ in any one field never share a label (gh-ocannl-1230).
+    Entries are separated by [','], which no entry contains. *)
 
 val coalesce_reduction_pair :
   ?static_indices:Ir.Indexing.static_symbol list ->
@@ -778,9 +785,10 @@ val split_reduce_sites :
 val split_reduce_prelude : (sr_site * int) list -> Ir.Schedule.schedule
 (** The whole-routine prelude splitting each [(site, num_blocks)]: per site its interchange
     ([sr_swaps]), its coalescing ([sr_coalesce], minting the merged loop under the symbol [sr_axis]
-    names, as detection probed it), then the {!Ir.Schedule.constructor-Split_reduce}. The schedule
-    the search's [F_split] candidates and the untuned CUDA split ({!seeded_split_sites}) both apply.
-    Exposed for tests. *)
+    names, as detection probed it), the {!Ir.Schedule.constructor-Split_reduce}, then the [Swap]s
+    hoisting the split's block loop above the cell loops [sr_block_hoist] names (gh-ocannl-1412).
+    The schedule the search's [F_split] candidates and the untuned split ({!seeded_split_sites})
+    both apply. Exposed for tests. *)
 
 val share_cap : cap:int -> (string * 'a list) list -> 'a list * (string * int) list
 (** gh-ocannl-685: spend a cap round-robin across named categories instead of as a prefix over their
@@ -1968,9 +1976,9 @@ val seeded_default_backend : string -> bool
 (** Whether {!seeded_default} seeds on this backend ({!Context.backend_name}): CUDA and HIP. *)
 
 val seeded_split_backend : string -> bool
-(** Whether {!seeded_default} splits long reductions on this backend: CUDA only (see
-    {!seeded_split_sites}). A test states what each backend promises through these, never a restated
-    list. *)
+(** Whether {!seeded_default} splits long reductions on this backend: wherever it seeds, CUDA and
+    HIP (see {!seeded_split_sites}). A test states what each backend promises through these, never a
+    restated list. *)
 
 val seeded_split_sites :
   backend:string ->
@@ -1985,10 +1993,11 @@ val seeded_split_sites :
     most half the split loop's extent and at most the square root of the chain, gh-ocannl-1414)
     giving the most first-pass threads up to 32768, else the smallest such; a chain too short for
     every count is not split. The choice reads no device property, so the split, and the summation
-    order it fixes, depend on the routine alone. CUDA only ([backend] is the
-    {!Context.backend_name}): on HIP the split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to
-    1256 ms, gfx1151 unified memory) where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the
-    unsplit plan; elsewhere the result is empty. Exposed for tests. *)
+    order it fixes, depend on the routine alone. Empty where {!seeded_split_backend} is false
+    ([backend] is the {!Context.backend_name}). The split was CUDA's alone until its first pass ran
+    the block loop outside the cell loops ([sr_block_hoist], gh-ocannl-1412): before that, HIP's
+    gpt2_mini_train b256 step measured 1.42x SLOWER split (885 to 1256 ms, gfx1151 unified memory)
+    where CUDA gained 1.39x. Exposed for tests. *)
 
 (** Which segments {!seeded_default} seeds (gh-ocannl-1253). *)
 type seed_gate =
@@ -2139,7 +2148,7 @@ val seeded_default :
     summation order, and only sites whose accumulator is at their storage precision are seeded, so
     the seeded sketches leave the routine's results bitwise the default's.
 
-    Before segmenting (on CUDA), the reductions {!seeded_split_sites} admits at [min_serial]
+    Before segmenting (on CUDA and HIP), the reductions {!seeded_split_sites} admits at [min_serial]
     (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split
     whole-routine, as the search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm
     parameter gradient, which the default runs as one thread per output cell walking every batch row

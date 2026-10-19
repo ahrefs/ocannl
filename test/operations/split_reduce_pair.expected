@@ -39,7 +39,7 @@ one accumulation over the two-loop band is a coalesced site: true
 two accumulations over the two-loop band yield no site: true
 two accumulations under a 128-row batch loop yield no site either: true
 the matmul detector reads a write nested in a loop's statement sequence without raising: true
-on CUDA the untuned plan splits the batch-8 bias gradient into 32 blocks: true
-on CUDA the split routine compiles without falling back to the default: true
-off CUDA the untuned plan splits nothing: true
+on CUDA and HIP the untuned plan splits the batch-8 bias gradient into 32 blocks: true
+on CUDA and HIP the split routine compiles without falling back to the default: true
+off CUDA and HIP the untuned plan splits nothing: true
 the untuned plan's bias gradient is the exact sum: true

@@ -7579,7 +7579,7 @@
 ; gradient, a small-output contraction over two axes -- is split with the pair coalesced, or
 ; interchanged where an operand read along one loop declines the coalescing. Detection, executed
 ; parity on dyadic inputs (bitwise the default and the exact sum on every backend), the saved-form
-; round trip, and the untuned CUDA split at an explicit threshold; backend-uniform.
+; round trip, and the untuned CUDA/HIP split at an explicit threshold; backend-uniform.
 
 (test
  (name split_reduce_pair)
@@ -9512,3 +9512,36 @@
  (libraries base stdio pprint ocannl arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here)))
+
+; gh-ocannl-1412: a split reduction's first pass runs its block loop outside the cell loops, so the
+; GPU presets put the lanes on the cell axis -- detection, the prelude's loop order beside a control
+; site without the hoist, the lanes under this device's preset (GPU backends), and executed parity:
+; bitwise the unhoisted split, within an f32 tolerance of an f64 reference. Backend-uniform.
+
+(test
+ (name split_reduce_block_hoist)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_TF32_MATMULS)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules split_reduce_block_hoist)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

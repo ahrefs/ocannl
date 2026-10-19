@@ -1878,6 +1878,12 @@ type sr_site = {
       (** The reduction pair [(outer, inner)] that a [Coalesce], applied after [sr_swaps] and before
           the split, merges into the loop [sr_axis] names (gh-ocannl-1414,
           {!coalesce_reduction_pair}). [None] when [sr_axis] is a loop of the lowering. *)
+  sr_block_hoist : Idx.symbol list;
+      (** The accumulation-cell loops enclosing [sr_axis] once [sr_swaps] and [sr_coalesce] are
+          applied, outermost first, which the prelude interchanges the split's block loop above
+          (gh-ocannl-1412): the first pass then iterates [for block: for cells: ..], and the presets
+          give its lanes the cell axes rather than the blocks. Empty for a scatter site and where
+          that interchange is not [Op_legal]. *)
 }
 [@@deriving sexp_of]
 
@@ -1931,6 +1937,63 @@ let sr_hermetic (o : LL.optimized) =
     LL.traced_store = Hashtbl.copy o.LL.traced_store;
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
+
+(* One site's prelude up to and including its split: the enabling interchange, the coalescing of its
+   reduction pair (re-minting the merged loop under [axis]), then [split], the [Sched.Split_reduce]
+   op. *)
+let sr_split_ops ~swaps ~coalesce ~axis split : Sched.schedule =
+  List.map swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner })
+  @ (match coalesce with
+    | None -> []
+    | Some (outer, inner) -> [ Sched.Coalesce { outer; inner; merged = axis } ])
+  @ [ split ]
+
+(* The adjacent interchanges hoisting the split's block loop [block] above [cells], the loops
+   enclosing it outermost first: innermost first, so each [Swap] finds [block] directly below the
+   loop it passes. *)
+let sr_block_hoist_ops ~block cells : Sched.schedule =
+  List.rev_map cells ~f:(fun outer -> Sched.Swap { outer; inner = block })
+
+(* The loops enclosing the loop [sym] in [llc], outermost first, or [None] when no loop is [sym]. *)
+let rec sr_loops_above sym (llc : LL.t) : Idx.symbol list option =
+  match llc with
+  | LL.For_loop { index; _ } when Idx.equal_symbol index sym -> Some []
+  | LL.For_loop { index; body; _ } -> Option.map (sr_loops_above sym body) ~f:(fun l -> index :: l)
+  | LL.Seq (a, b) -> (
+      match sr_loops_above sym a with Some _ as r -> r | None -> sr_loops_above sym b)
+  | LL.If { body; _ } -> sr_loops_above sym body
+  | _ -> None
+
+(* gh-ocannl-1412: the cell loops a static site's split leaves around its block loop, when hoisting
+   the block loop above all of them is [Op_legal] on the split code; else none. The split puts its
+   block loop where the reduction loop was, below the cell loops the pinning discipline requires
+   ([for cells: for block: { init; for inner: .. }]), and the GPU presets map the outer loop of such
+   a chain to the grid and the inner one to the lanes. The lanes then walked the blocks, [chunk]
+   rows apart, so every lane of a wavefront loaded its own cache line on every row: on
+   gpt2_mini_train b256 the bias-gradient first passes cost HIP's unified-memory gfx1151 about 400
+   ms of a 1260 ms step, where CUDA's caches absorbed it. Hoisted, the lanes walk the cell axes, as
+   the elementwise nests that produce the summed rows do. Each cell's contributions keep their
+   order: a cell is one tuple of cell-loop values, accumulated in its own partials row by one
+   block. *)
+let sr_block_hoist ~static_indices (opt : LL.optimized) ~axis ~tn ~swaps ~coalesce =
+  let split, block, _, _ = Sched.split_reduce ~axis ~target:tn ~num_blocks:2 in
+  match
+    Sched.apply_classified ~static_indices
+      (sr_split_ops ~swaps ~coalesce ~axis split)
+      (sr_hermetic opt)
+  with
+  | exception Outcome.Cause_at _ -> []
+  | split_opt -> (
+      match sr_loops_above block split_opt.LL.llc with
+      | None | Some [] -> []
+      | Some cells ->
+          let ops = sr_block_hoist_ops ~block cells in
+          let verdicts = Sched.schedule_legality split_opt ops in
+          if
+            List.length verdicts = List.length ops
+            && List.for_all verdicts ~f:(fun (_, v) -> Sched.equal_op_verdict v Sched.Op_legal)
+          then cells
+          else [])
 
 (* [coalesce_reduction_pair] (gh-ocannl-1414) lives in {!Sketch_families}, which this module
    includes: the contraction layout of the coalesced sketch branch (gh-ocannl-1279) prepares its
@@ -2083,6 +2146,9 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
                 sr_dynamic = dynamic;
                 sr_swaps = swaps;
                 sr_coalesce = coalesce;
+                sr_block_hoist =
+                  (if dynamic then []
+                   else sr_block_hoist ~static_indices opt ~axis:s ~tn ~swaps ~coalesce);
               }
               :: !acc)
   in
@@ -2112,17 +2178,15 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
 
 (* The whole-routine prelude splitting [sites], each at its block count: per site, the gh-537
    enabling interchange (empty for a site splittable as lowered), the gh-ocannl-1414 coalescing of
-   its reduction pair (re-minting the merged loop under the symbol detection probed), then the split
-   itself. Sites are distinct statements, so their preludes compose. Shared by the search's
-   [F_split] seeds and the untuned plan's split ({!seeded_split_sites}, gh-ocannl-1325). *)
+   its reduction pair (re-minting the merged loop under the symbol detection probed), the split
+   itself, then the gh-ocannl-1412 interchange of the block loop above the cell loops
+   ([sr_block_hoist]). Sites are distinct statements, so their preludes compose. Shared by the
+   search's [F_split] seeds and the untuned plan's split ({!seeded_split_sites}, gh-ocannl-1325). *)
 let split_reduce_prelude (sites : (sr_site * int) list) : Sched.schedule =
   List.concat_map sites ~f:(fun (s, num_blocks) ->
-      let op, _, _, _ = Sched.split_reduce ~axis:s.sr_axis ~target:s.sr_target ~num_blocks in
-      List.map s.sr_swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner })
-      @ (match s.sr_coalesce with
-        | None -> []
-        | Some (outer, inner) -> [ Sched.Coalesce { outer; inner; merged = s.sr_axis } ])
-      @ [ op ])
+      let op, block, _, _ = Sched.split_reduce ~axis:s.sr_axis ~target:s.sr_target ~num_blocks in
+      sr_split_ops ~swaps:s.sr_swaps ~coalesce:s.sr_coalesce ~axis:s.sr_axis op
+      @ sr_block_hoist_ops ~block s.sr_block_hoist)
 
 (** {2 Analytic cost-model scoring (gh-ocannl-491, the selection half)}
 
@@ -2867,7 +2931,7 @@ let fiss_sketch_label ?(staff = []) ~fine entries =
    entries' separator. *)
 let split_site_label (s, num_blocks) =
   let name = Ir.Tnode.debug_name s.sr_target and id = Ir.Tnode.id s.sr_target in
-  Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s%s"
+  Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s%s%s"
     (if String.equal name id then name else name ^ "#" ^ id)
     (Idx.symbol_ident s.sr_axis) s.sr_red s.sr_out s.sr_cost num_blocks
     (if s.sr_dynamic then " dyn" else "")
@@ -2881,6 +2945,9 @@ let split_site_label (s, num_blocks) =
     (match s.sr_coalesce with
     | None -> ""
     | Some (outer, inner) -> " coalesce:" ^ Idx.symbol_ident outer ^ "*" ^ Idx.symbol_ident inner)
+    (match s.sr_block_hoist with
+    | [] -> ""
+    | cells -> " hoist:" ^ String.concat ~sep:"+" (List.map cells ~f:Idx.symbol_ident))
 
 let split_sites_label ?(staff = []) sites =
   let render sites = String.concat ~sep:"," (List.map sites ~f:split_site_label) in
@@ -2895,8 +2962,9 @@ let split_sites_label ?(staff = []) sites =
 let seeded_plan_digest (plan : seeded_plan) =
   let split =
     List.map plan.sp_split ~f:(fun (s, b) ->
-        Printf.sprintf "split %s red%d out%d cost%d b%d swaps%d%s" (Ir.Tnode.debug_name s.sr_target)
-          s.sr_red s.sr_out s.sr_cost b (List.length s.sr_swaps)
+        Printf.sprintf "split %s red%d out%d cost%d b%d swaps%d hoist%d%s"
+          (Ir.Tnode.debug_name s.sr_target) s.sr_red s.sr_out s.sr_cost b (List.length s.sr_swaps)
+          (List.length s.sr_block_hoist)
           (if s.sr_dynamic then " dyn" else ""))
   in
   let segments =
@@ -4343,12 +4411,11 @@ let seeded_params_judged ~limits ~accum_prec ~min_reduction (seg : LL.optimized)
 let seeded_params ~limits ~accum_prec ~min_reduction seg =
   Result.ok (seeded_params_judged ~limits ~accum_prec ~min_reduction seg)
 
-(* The untuned split is CUDA's alone (gh-ocannl-1325). On gpt2_mini_train b256 it took the CUDA step
-   from 543 to 391 ms, but HIP's from 885 to 1256 ms (minix, gfx1151, unified memory): HIP's
-   compiler does not register-promote such accumulators (gh-ocannl-1348), so the first pass
-   presumably round-trips its partials cell through device memory on every row. A HIP-safe first
-   pass is a follow-up; until then HIP keeps the unsplit plan. *)
-let seeded_split_backend backend = String.is_substring backend ~substring:"cuda"
+(* The untuned split runs wherever the seeded default does (gh-ocannl-1325, gh-ocannl-1412). It was
+   CUDA's alone until its first pass ran the block loop outside the cell loops ([sr_block_hoist]):
+   with the lanes walking the blocks, the HIP b256 step went from 885 to 1256 ms on gfx1151's
+   unified memory where CUDA's caches absorbed the scattered loads. *)
+let seeded_split_backend backend = seeded_default_backend backend
 
 let seeded_split_min_serial () =
   let raw =
@@ -4464,8 +4531,7 @@ let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_o
     | None, None -> configured_gate ()
   in
   let gate_off () = match gate () with Min_reduction n -> n <= 0 | Ranked _ -> false in
-  (* Resolved on CUDA only: the threshold is a CUDA setting, so a malformed value must not break a
-     HIP compile that ignores it. *)
+  (* Resolved only where the split runs, so a malformed value breaks no compile that ignores it. *)
   let min_serial () =
     if not (seeded_split_backend backend) then 0
     else match min_serial with Some n -> n | None -> seeded_split_min_serial ()
