@@ -1521,41 +1521,27 @@ let value_paths_in_source content =
   iterator#structure (structure_of content);
   List.rev !found
 
-type stating = {
-  stating_values : string list;
-      (** The top-level values whose body states one of the literals, directly or by naming another
-          value that does. *)
-  states_at_init : bool;
-      (** Whether the module's initialization does: a top-level [let () = …], a bare expression, or
-          any top-level binding that is not a function, stating one directly or naming a value that
-          does. *)
-}
-
 (** Which top-level values of a module STATE one of [literals] -- set a setting rather than read it
-    -- and whether initializing the module does (gh-ocannl-1368: which programs pin the cc vector
-    width for every search they run).
+    (gh-ocannl-1368: which support values pin the cc vector file, the derivation its blessed helpers
+    are held equal to).
 
     A statement is a WRITE that carries the literal in its arguments: an application of one of
     [table_writes] ([Hashtbl.set], ...) to one of [tables] ([Utils.config_file_args]), or of one of
     [env_writes] ([Unix.putenv]). A value also states the literal when it hands it to a top-level
     value of the same module that writes whatever it is given -- [Fissioned_chain.small_menu] passes
     ["cc_vector_bytes"] in a list to its local [state], whose body is a [Hashtbl.set] on the table
-    -- when it names a value that states it, and when it names one of [external_states]' paths,
-    which is how a caller follows a helper of another module. A literal outside a write's arguments
-    is not a statement: a [Hashtbl.mem] on the table, an [~arg_name] read, a format string, a table
-    of names (Codex P2, round 1 of staging#1263).
+    -- and when it names a value that states it. A literal outside a write's arguments is not a
+    statement: a [Hashtbl.mem] on the table, an [~arg_name] read, a format string, a table of names
+    (Codex P2, round 1 of staging#1263).
 
     A write whose value is a string literal [pins] rejects states nothing -- ["-1"] and [""] leave
     the cc width on its auto-probe -- and neither does a [(literal, value)] pair whose value is one;
     a computed value is trusted.
 
     Flow-insensitive within a value, and an over-read where it errs: a value that sets the key and
-    later unsets it states it, and a closure the initializer builds without calling counts as
-    called. A literal reaching a write through a local binding, or nested modules and functor
-    bodies, are not followed; a pin there is not seen, which costs the program a marker rather than
-    passing it unpinned. *)
-let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals ~tables
-    ~table_writes ~env_writes ~pins content =
+    later unsets it states it. A literal reaching a write through a local binding, or nested modules
+    and functor bodies, are not followed. *)
+let stating_reach ~literals ~tables ~table_writes ~env_writes ~pins content =
   let structure = structure_of content in
   let ident_path expr =
     match expr.pexp_desc with Pexp_ident { txt; _ } -> flatten_module_path txt | _ -> None
@@ -1637,22 +1623,12 @@ let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals 
     iterator#expression expr;
     (!writes, !states, !calls, !names)
   in
-  let is_function expr = match expr.pexp_desc with Pexp_function _ -> true | _ -> false in
   let named =
     List.concat_map structure ~f:(fun item ->
         match item.pstr_desc with
         | Pstr_value (_, bindings) ->
             List.filter_map bindings ~f:(fun b ->
                 Option.map (pattern_name b.pvb_pat) ~f:(fun name -> (name, direct_of b.pvb_expr)))
-        | _ -> [])
-  in
-  let initializers =
-    List.concat_map structure ~f:(fun item ->
-        match item.pstr_desc with
-        | Pstr_eval (expr, _) -> [ direct_of expr ]
-        | Pstr_value (_, bindings) ->
-            List.filter_map bindings ~f:(fun b ->
-                Option.some_if (not (is_function b.pvb_expr)) (direct_of b.pvb_expr))
         | _ -> [])
   in
   let local name = List.Assoc.mem named name ~equal:String.equal in
@@ -1675,14 +1651,38 @@ let stating_reach ?(external_states = fun (_ : string list) -> false) ~literals 
   let writing = fixpoint (fun set (writes, _, _, names) -> writes || names_any set names) in
   let states_with set (_, states, calls, names) =
     states || names_any writing calls || names_any set names
-    || List.exists names ~f:(fun path ->
-        (match path with [ name ] -> not (local name) | _ -> true) && external_states path)
   in
-  let stating = fixpoint states_with in
-  {
-    stating_values = Set.to_list stating;
-    states_at_init = List.exists initializers ~f:(states_with stating);
-  }
+  Set.to_list (fixpoint states_with)
+
+(** Each top-level item of [content], in source order: whether evaluating it runs code at module
+    initialization -- a bare expression, or a binding of anything but a function -- and every value
+    path it names, nested modules and function bodies included (gh-ocannl-1368: whether a program
+    pins the cc vector file before its first search). *)
+let initialization_items content =
+  List.map (structure_of content) ~f:(fun item ->
+      let paths = ref [] in
+      let iterator =
+        object
+          inherit Ast_traverse.iter as super
+
+          method! expression expr =
+            (match expr.pexp_desc with
+            | Pexp_ident { txt; _ } ->
+                Option.iter (flatten_module_path txt) ~f:(fun path -> paths := path :: !paths)
+            | _ -> ());
+            super#expression expr
+        end
+      in
+      iterator#structure_item item;
+      let runs =
+        match item.pstr_desc with
+        | Pstr_eval _ -> true
+        | Pstr_value (_, bindings) ->
+            List.exists bindings ~f:(fun b ->
+                match b.pvb_expr.pexp_desc with Pexp_function _ -> false | _ -> true)
+        | _ -> false
+      in
+      (runs, List.rev !paths))
 
 (** Every record type [content] declares at top level, with its labels:
     [type t = { a : int; b : int }] contributes [("t", ["a"; "b"])]. *)

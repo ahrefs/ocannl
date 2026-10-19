@@ -1439,14 +1439,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   says can select cc or multidev_cc. Each either pins the vector FILE -- `cc_vector_bytes` and
   `cc_vector_registers`, since at a pinned width AVX2 and AVX-512 still differ in register count,
   which caps the register tiles seeded -- or its program stanza carries `; cc-vector-width:
-  independent -- <reason>`. Per key and cc-capable run, a `setenv` around the run decides (it must
-  set a value the key accepts, never `-1` or `""`, and it outranks the configuration file);
-  without one, the program's initialization must state the key (`Config_key_scan.stating_reach`:
-  a WRITE carrying the literal, a `Hashtbl.set` into `config_file_args` or a `putenv`, directly or
-  by handing it to a local writer, or a call of a support value that does, such as
-  `Fissioned_chain.small_menu_envelope`, followed by what each reference resolves to; a read of the
-  table, a statement inside a function the initializer never calls, and a literal `-1` or `""`
-  pin nothing). Each program of a plural `(tests)` stanza answers on its own. The reason has to be TRUE: a claim on what a search seeds, keeps or
+  independent -- <reason>`. Per key and cc-capable run, a `--ocannl_<key>=` argument or a
+  `setenv` around the run decides (it must set a value the key accepts, never `-1` or `""`); only
+  without either does the initializer count, and then only a call of a BLESSED helper
+  (`vector_file_pin_values`: `Fissioned_chain.small_menu`/`small_menu_envelope`) in a top-level
+  item before any search -- a program's own `Hashtbl.set` of the keys is no pin. The blessing is
+  held equal to a derivation (`Config_key_scan.stating_reach`: the support values whose bodies
+  write every key), so a new pinning helper is blessed in review. Each program of a plural
+  `(tests)` stanza answers on its own, and a support value reaching `Autotune.tune` starts a search
+  as the entry point does. The narrowness is deliberate: three review rounds of proving arbitrary
+  statements of a setting each found a new way to write one. The reason has to be TRUE: a claim on what a search seeds, keeps or
   crowns pins instead. A marker on a pinned program, a stale one, a second one and one on a rule
   are refused. A test pruning any cc search with an envelope gets the pin from
   `small_menu_envelope`, which states the vector file beside the envelope. The local proxy for both
