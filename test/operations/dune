@@ -2192,6 +2192,23 @@
  (modules schedule_refusal_scan)
  (libraries base stdio ppxlib test_utils arrayjit.verdict))
 
+; gh-ocannl-1351: every render-time typed decline (a `Cause_at` at `Backend_codegen`) has an entry in
+; the agent note's inventory, classified paired-with-the-oracle or render-only by how its site
+; builds it. The sources are globbed, so a decline added in any arrayjit module is seen.
+
+(test
+ ; ocannl-backend: none -- parses the arrayjit sources and one agent note as text; links no backend.
+ (name render_decline_inventory)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  ../../docs/agent-notes/scheduling-and-autotune.md
+  (glob_files ../../arrayjit/lib/*.ml))
+ (action
+  (run %{test} ../../docs/agent-notes/scheduling-and-autotune.md %{deps}))
+ (modules render_decline_inventory)
+ (libraries base stdio ppxlib test_utils arrayjit.verdict))
+
 ; gh-ocannl-817: real-graph reachability probe plus the explicit Set_vec_unop lowering boundary.
 
 (test
