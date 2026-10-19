@@ -31,4 +31,6 @@ matmul: each coalesced layout names a refusal exactly when it seeds nothing: tru
 matmul: the head line names the family and its refutation count: true
 autotune_log_seeding is on for this run: true
 log_seeding writes exactly the rendered census: true
+the seeded default prints a census line for its plan: true
+the seeded default prints one census line per segment of its plan: true
 tune emits a whole-routine census line: true

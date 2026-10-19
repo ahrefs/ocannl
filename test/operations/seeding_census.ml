@@ -266,6 +266,27 @@ let () =
     (List.equal String.equal logged
        (Autotune.seeding_census_lines ~where:"probe"
           (Autotune.seeding_census ~is_gpu:true ~is_cpu:false ~limits:gpu_limits opt)));
+  (* The untuned seeded default (a CUDA/HIP pipeline, derived here for "cuda" on the synthetic
+     limits): one census line per segment of the plan it chooses. *)
+  let plan = ref None in
+  let seeded =
+    capture (fun () ->
+        plan :=
+          Autotune.seeded_plan ~min_reduction:1 ~backend:"cuda" ~limits:gpu_limits ~accum_prec:Fn.id
+            ~static_indices:[] mopt)
+  in
+  let seeded_lines =
+    List.filter seeded ~f:(fun l ->
+        String.is_prefix l ~prefix:Autotune.seeding_census_prefix
+        && mentions l ~sub:"where=\"seeded_default segment u")
+  in
+  p_exists "the seeded default prints a census line for its plan" seeded_lines ~f:(fun l ->
+      mentions l ~sub:" seeded: " || mentions l ~sub:" refused: ");
+  (match !plan with
+  | Some { Autotune.sp_segments = Some (_, segments); _ } ->
+      p "the seeded default prints one census line per segment of its plan"
+        (List.length seeded_lines = List.length segments)
+  | _ -> ());
   let va = TDSL.ndarray [| 1.; 2.; 3.; 4. |] ~label:[ "pa" ] ~output_dims:[ 4 ] () in
   let vb = TDSL.ndarray [| 4.; 3.; 2.; 1. |] ~label:[ "pb" ] ~output_dims:[ 4 ] () in
   let%op sum = va + vb in

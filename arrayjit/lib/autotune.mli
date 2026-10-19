@@ -531,8 +531,8 @@ val matmul_sketch_tree :
     Seeding refusals are decided before a candidate exists, so the decline report and
     [schedule_log_declines] (render and compile declines) cannot hold them. The census reads them
     off the judgment the seeds come from; config [autotune_log_seeding] prints it for every lowering
-    {!tune} and {!model_default} seed, and one line per distinct segment of the untuned seeded
-    default. See {!Sketch_families.seeding_census} for the fields' documentation. *)
+    {!tune} and {!model_default} seed, and one line per segment of the plan the untuned seeded
+    default chooses. See {!Sketch_families.seeding_census} for the fields' documentation. *)
 
 type conv_leg = {
   leg_seeds : sketch_params list;

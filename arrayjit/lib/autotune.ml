@@ -4391,15 +4391,21 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
      segment alone: a sketch that does not apply or validate there leaves the segment to the default
      preset rather than costing the routine its other seeds. *)
   let decided = Hashtbl.create (module String) in
-  (* The census line per distinct segment code, every kind of segment included (gh-ocannl-1407). *)
-  let census_printed = Hash_set.create (module String) in
+  (* Each segment code's census verdict, every kind of segment included (gh-ocannl-1407). Recorded
+     as decided and printed once the plan's segmentation is chosen ([census_plan]), so a segment of
+     the segmentation the refinement discards prints nothing. *)
+  let census_verdicts = Hashtbl.create (module String) in
   let census ~key verdict =
+    if log_seeding_enabled () then Hashtbl.set census_verdicts ~key:(Lazy.force key) ~data:verdict
+  in
+  let census_plan segments =
     if log_seeding_enabled () then
-      let key = Lazy.force key in
-      if not (Hash_set.mem census_printed key) then (
-        Hash_set.add census_printed key;
-        print_seeding_lines
-          [ Printf.sprintf "%s where=\"seeded_default segment\" %s" seeding_census_prefix verdict ])
+      print_seeding_lines
+        (List.map segments ~f:(fun (at, _, _, _, pre) ->
+             Printf.sprintf "%s where=\"seeded_default segment u%d\" %s" seeding_census_prefix at
+               (Option.value ~default:"undecided"
+                  (Hashtbl.find census_verdicts
+                     (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre)))))
   in
   let seed_of kind pre =
     let key = lazy (digest ~with_placements:false pre ^ "|" ^ digest ~with_placements:true pre) in
@@ -4503,6 +4509,7 @@ let seeded_decisions ~limits ~accum_prec ~static_indices ~gate ~ranked_below ~si
           ~seed:(fun k pre ->
             Option.map (seed_of k pre) ~f:(fun p -> (p, digest ~with_placements:false pre)))
       in
+      census_plan hybrid;
       (* The segments no sketch takes, one decision per distinct segment code like the seeds. *)
       let sink_decided = Hashtbl.create (module String) in
       let segments =

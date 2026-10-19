@@ -1866,7 +1866,7 @@ files.
   `declines` nor `schedule_log_declines` (render and compile declines) can hold it. The census
   (`autotune-seeding:` lines on stderr, `Autotune.seeding_census` for a test) is printed for every
   lowering `tune` and `model_default` seed — the whole routine and each coarse and fine fission
-  segment — and once per distinct segment of the CUDA/HIP seeded default. Each line names the
+  segment — and once per segment of the plan the CUDA/HIP seeded default chooses. Each line names the
   family that claimed the lowering, its site and seed count, then its refusals: the matmul tree's
   refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (`c_zeroed`,
   the companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
