@@ -576,6 +576,20 @@ let case label f =
     run; the exit status is taken care of without it. *)
 let any_failed () = not (List.is_empty !failed_names)
 
+(** [success_trailer ?blank_line rows] prints each of [rows] as an [OK: <row>] line, behind an empty
+    line when [blank_line], provided no check has failed so far -- and nothing otherwise: a scan's
+    closing statement of what its claims established, which a failing run must not print. It is the
+    one shape a success trailer takes. [tools/mutation-run.sh] matches a failing run of a scan
+    against its golden without the trailer's [OK: ] rows and the empty line before them, and
+    [tools/test-mutation-run.sh] replays [verdict_teardown]'s transcripts of runs that print through
+    here, so a trailer reworded here turns that harness red instead of the runner reading every
+    failing run of every scan as stopped early (gh-ocannl-1364). Each row prints on one line
+    ({!one_line}). *)
+let success_trailer ?(blank_line = false) rows =
+  if not (any_failed ()) then (
+    if blank_line then Stdio.print_string "\n";
+    List.iter rows ~f:(fun row -> Stdio.printf "OK: %s\n" (one_line row)))
+
 (** Ends a NEGATIVE-CONTROL run, one whose failures are the output its golden pins: exits 1 when
     something failed and 0 when nothing did, without the teardown's ["FAILED: n checks …"] line.
     That line totals the failure lines above it, and a total in a golden merges wrong -- two

@@ -3488,12 +3488,12 @@ let main () =
       refusal_diagnostics ~f:(fun (source, diagnostic) ->
         (not (Set.mem orphan_keys (refusal_key source diagnostic)))
         && Set.is_empty stale_refusal_exemptions));
-  if not (Verdict.any_failed ()) then
-    printf
-      "\n\
-       OK: every `(env_var ...)` addressed to OCANNL names a spelling a run reads, every test \
+  Verdict.success_trailer ~blank_line:true
+    [
+      "every `(env_var ...)` addressed to OCANNL names a spelling a run reads, every test \
        directory carries the ambient gate, and every per-module tracing gate is declared by the \
-       library whose modules read it.\n";
+       library whose modules read it.";
+    ];
   if repository_census then
     List.Assoc.find sources "test/operations/env_var_deps.ml" ~equal:String.equal
     |> Option.iter ~f:(fun source -> Refusal_manifest.print source)

@@ -10,8 +10,7 @@ let report dune_files =
   List.iter result.refusals ~f:(printf "Verdict refusal run: %s\n");
   eprintf "Refusal stream scan: %d Dune files, %d Verdict refusal runs\n" (List.length dune_files)
     (List.length result.refusals);
-  if not (Verdict.any_failed ()) then
-    printf "OK: accepted Verdict failures inherit neither stream.\n"
+  Verdict.success_trailer [ "accepted Verdict failures inherit neither stream." ]
 
 let () =
   match Array.to_list Stdlib.Sys.argv with

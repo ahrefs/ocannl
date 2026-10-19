@@ -248,8 +248,7 @@ let () =
           fail "second claim\n  expected a, got b";
           p "third claim" false;
           p "last claim" true;
-          if not (Verdict.any_failed ()) then
-            Stdio.printf "\nOK: every claim held.\nOK: four claims checked.\n"
+          Verdict.success_trailer ~blank_line:true [ "every claim held."; "four claims checked." ]
       | "pass_fail_forms" ->
           pass_fail "held" true;
           pass_fail "failed" false;
