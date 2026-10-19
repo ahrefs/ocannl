@@ -179,6 +179,15 @@ files.
   untuned default keeps the separate zero kernel because an untiled accumulation with its zero
   register-forwarded measured 7% slower on HIP gfx1151 (unified memory), although its emitted
   source differs only in that forwarding.
+- A whole-routine sketch expands its own site's whole-node zero with the site's geometry
+  (`zero_geometry` for matmuls; `conv_zero_geometry` for the GPU conv leg, gh-ocannl-503), which is
+  the nest and geometry the fold above gives the per-cell zero. So where one fission segment holds
+  the whole routine, its sketch candidates compile to their whole-routine twins' digests and dedup
+  (`schedule_conv_gemm`'s `cvu` pins `fiss_sketch_timed = 0` on metal): count the whole-routine
+  candidates before reading a zero per-segment timing count as a regression. The expanded zero's
+  loops follow the output's AXIS order (`Expand_zero`), the site's chain its NEST order; the conv
+  expansion reorders the zero nest through `c_d_syms` before `annotate`, since thread identity
+  across nests is positional.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
@@ -2089,13 +2098,13 @@ files.
   lowering `tune` and `model_default` seed — the whole routine and each coarse and fine fission
   segment — and once per segment of the plan the CUDA/HIP seeded default chooses. Each line names the
   family that claimed the lowering, its site and seed count, then its refusals: the matmul tree's
-  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (`c_zeroed`,
-  the companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
+  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (the
+  companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
   lowering's conv nests whatever family claimed it. The conv gates record their own reasons
   (`Sketch_families.conv_seed_judgment`), so the census cannot drift from the seeder. Use it
-  before citing a seeding gate as evidence: gh-503's trigger ("the decline census shows conv
-  seeds declining on `c_zeroed`") named a stream that could never show it, and its census run
-  found the binding gates were the matmul family claiming the routine first and the companion cap.
+  before citing a seeding gate as evidence: the decline census can never show a seeding refusal,
+  and on real training graphs the binding conv gates are usually the matmul family claiming the
+  whole routine first and the companion cap, not the gate an issue names.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

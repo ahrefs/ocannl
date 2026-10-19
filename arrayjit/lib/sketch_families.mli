@@ -249,6 +249,7 @@ type conv_site = {
   c_red : Ir.Indexing.symbol;
   c_nred : int;
   c_d : Ir.Tnode.t;
+  c_d_syms : Ir.Indexing.symbol list;
   c_a : Ir.Tnode.t;
   c_b : Ir.Tnode.t;
   c_zeroed : bool;

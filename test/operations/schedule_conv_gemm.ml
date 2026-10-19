@@ -21,15 +21,16 @@
    saved form. - The GPU staged leg: the same re-association with Grid-typed outer loops,
    cooperative shared staging at the kernel-window anchor, and [Tensorize] at the backend lane width
    — value-pinned on metal against the natural form (tolerance tier), and seeded per fission segment
-   on backends with an mma capability (intrinsic-tile divisibility gates, unzeroed segments only). -
-   The Grid conv flavor on aligned-merged segments: with more than one companion nest the pipeline
-   adopts the default preset's whole-segment Grid geometry ([Sched.default_cpu]'s aligned cross-nest
-   analysis), value-pinned on the C backends and seeded per fission segment. - Strided rows
-   (gh-ocannl-502): the compacting [Stage] packs a stride-2 window densely, so the strided site
-   seeds the same flavors as a unit-stride one — pinned by the seed counts, by executing {e every}
-   proposed candidate against the natural form (candidates are timed, not value-checked), and by the
-   tuned stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a
-   conv site. *)
+   on backends with an mma capability, and on the whole routine, whose zeroed site the pipeline
+   expands with its own geometry (gh-ocannl-503): every whole-routine GPU seed executed. - The Grid
+   conv flavor on aligned-merged segments: with more than one companion nest the pipeline adopts the
+   default preset's whole-segment Grid geometry ([Sched.default_cpu]'s aligned cross-nest analysis),
+   value-pinned on the C backends and seeded per fission segment. - Strided rows (gh-ocannl-502):
+   the compacting [Stage] packs a stride-2 window densely, so the strided site seeds the same
+   flavors as a unit-stride one — pinned by the seed counts, by executing {e every} proposed
+   candidate against the natural form (candidates are timed, not value-checked), and by the tuned
+   stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a conv
+   site. *)
 
 open Base
 open Ocannl
@@ -86,6 +87,12 @@ let tensorized_capability =
     (Ll_test.tensorized_capability ~is_gpu:(not on_cpu) ~is_cpu:on_cpu
        ~limits:(Context.hardware_limits (Context.auto ()))
        ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single)
+
+(* The seeder's own judgment that a GPU conv leg can seed an f32 site on this backend. *)
+let gpu_capable =
+  lazy
+    ((not on_cpu)
+    && match Lazy.force tensorized_capability with `Advertised -> true | `Withheld _ -> false)
 
 let rendered_tensorized (census : Ir.C_syntax.mma_summary) =
   let ok = Ll_test.rendered_tensorized census in
@@ -471,6 +478,13 @@ let () =
      fused-epilogue twin (2-D convs fuse since the whole-window contraction, gh-ocannl-501; the
      unfused Grid candidate fails validation — the tail write is uncovered — and only its twin
      survives); the tuned routine matches the untuned twin === *)
+  (* A tuning report's seeding counts, on stderr (not part of the golden): what a failing count
+     claim saw. *)
+  let show_counts tag (r : Autotune.report) =
+    Stdio.eprintf "%s: sketch_candidates=%d epilogue=%d fiss_sketch_candidates=%d fiss_timed=%d\n"
+      tag r.Autotune.sketch_candidates r.Autotune.epilogue_sketch_candidates
+      r.Autotune.fiss_sketch_candidates r.Autotune.fiss_sketch_timed
+  in
   let clean_cache dir =
     if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
       Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
@@ -510,9 +524,13 @@ let () =
   let got_t = Context.get_values ctx y.Tensor.value in
   (match !reports with
   | [ r ] ->
+      show_counts "cvt" r;
+      (* metal: the whole-routine zeroed site's two GPU staged flavors, each with its fused-epilogue
+         twin (gh-ocannl-503); a GPU leg that cannot seed an f32 site proposes none. *)
       p "conv sketches seeded (serial+grid, with fused-epilogue twins)"
-        (if on_cpu then
+        (if on_cpu || has_uniform_f32_mma then
            r.Autotune.sketch_candidates = 4 && r.Autotune.epilogue_sketch_candidates = 2
+         else if Lazy.force gpu_capable then r.Autotune.sketch_candidates > 0
          else r.Autotune.sketch_candidates = 0)
   | _ -> p "conv sketches seeded (serial+grid, with fused-epilogue twins)" false);
   p_all2 "tuned conv+tail matches the untuned twin within tolerance" got_t want_t ~f:(fun a b ->
@@ -717,9 +735,117 @@ let () =
   else (
     skipped "cvu: GPU staged conv pipeline matches the natural form within tolerance";
     skipped "cvu: the GPU staged conv pipeline's routine is labeled tensorized");
+  (* --- The whole-routine zeroed GPU site (gh-ocannl-503): unfissioned, the conv output's
+     whole-node [Zero_out] shares the annotated kernel, so the pipeline expands it into a per-cell
+     nest with the site's own geometry (Grid outer loops, the row-block split, the column over the
+     [Tensorize] lane width as a [Workgroup] loop) — or [validate_parallel] rejects the candidate.
+     Every GPU seed the seeder proposes on the whole-routine lowering is compiled WITHOUT the
+     fission seam and executed against the natural form (candidates are timed, not value-checked, so
+     an unsound seed would be crowned silently). The zero is load-bearing: the routine runs twice,
+     so a zero nest that missed cells would leave the first run's sums in them. Two graphs: the conv
+     alone ([cvz]), and the conv with its bias+relu tail ([cvzt]), whose unfused seeds decline at
+     the companion-coverage gate (the tail cannot follow the accumulation nest's full chain, the
+     same verdict as on the fission segment) while the fused-epilogue twins compile. Gated on the
+     seeder's own capability judgment for an f32 site, never on the seed list. --- *)
+  let whole_routine_gpu_leg ~tag ~build ~want =
+    let limits = Context.hardware_limits (Context.auto ()) in
+    let seeds = ref [] and zeroed = ref false in
+    (let y = build (tag ^ "_p") in
+     let transform (opt : LL.optimized) =
+       seeds := Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits opt;
+       zeroed :=
+         Option.exists (Autotune.detect_conv opt.LL.llc) ~f:(fun site -> site.Autotune.c_zeroed);
+       opt
+     in
+     ignore
+       (Context.compile
+          ~lowered_transform:(fun o -> [ transform o ])
+          (Context.auto ())
+          (named (tag ^ "_probe") (Train.forward y))
+          Ir.Indexing.Empty));
+    Stdio.eprintf "%s: %d GPU seeds on the whole-routine lowering (not part of the golden)\n" tag
+      (List.length !seeds);
+    let run_seed i p_ =
+      let name = Printf.sprintf "%s_%d" tag i in
+      let y = build name in
+      let transform (opt : LL.optimized) =
+        Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:p_ opt) opt
+      in
+      match
+        Context.compile
+          ~lowered_transform:(fun o -> [ transform o ])
+          (Context.auto ())
+          (named name (Train.forward y))
+          Ir.Indexing.Empty
+      with
+      (* [Context.compile] reports the transform's typed decline as its message. *)
+      | exception Invalid_argument msg
+        when String.is_substring msg ~substring:"companion coverage (gh-521)" ->
+          Stdio.eprintf "%s: declined at companion coverage (not part of the golden)\n" name;
+          `Declined
+      | ctx, routine ->
+          let ctx = Context.run ctx routine in
+          let ctx = Context.run ctx routine in
+          let got = Context.get_values ctx y.Tensor.value in
+          `Ran
+            ( (not (Array.is_empty got))
+              && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+              rendered_tensorized routine.Context.mma )
+    in
+    (!zeroed, !seeds, List.mapi !seeds ~f:run_seed)
+  in
+  let ran = function `Ran _ -> true | `Declined -> false in
+  let ran_ok f = function `Ran r -> f r | `Declined -> true in
+  if Lazy.force gpu_capable then (
+    let zeroed, seeds, results =
+      whole_routine_gpu_leg ~tag:"cvz" ~want:want8 ~build:(fun sub ->
+          let _, _, y = make_conv8 sub in
+          y)
+    in
+    p "cvz: the whole-routine conv site is zeroed in its lowering" zeroed;
+    p_all "cvz: the whole-routine zeroed site seeds GPU staged conv flavors" seeds ~f:(fun s ->
+        s.Autotune.sk_conv && s.Autotune.sk_gpu);
+    p_all
+      "cvz: every whole-routine zeroed GPU candidate compiles, and matches the natural form run \
+       twice"
+      results ~f:(function
+      | `Ran (ok, _) -> ok
+      | `Declined -> false);
+    p_all "cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized" results
+      ~f:(ran_ok snd);
+    let zeroed, seeds, results =
+      whole_routine_gpu_leg ~tag:"cvzt" ~want:want_t ~build:(fun sub ->
+          let _, _, _, y = make_tail sub in
+          y)
+    in
+    p "cvzt: the whole-routine conv+tail site is zeroed in its lowering" zeroed;
+    p_all "cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors" seeds
+      ~f:(fun s -> s.Autotune.sk_conv && s.Autotune.sk_gpu);
+    p_exists "cvzt: a whole-routine zeroed conv+tail GPU candidate compiles" results ~f:ran;
+    p_all
+      "cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run \
+       twice"
+      results ~f:(ran_ok fst);
+    p_all "cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized"
+      results ~f:(ran_ok snd))
+  else
+    List.iter ~f:skipped
+      [
+        "cvz: the whole-routine conv site is zeroed in its lowering";
+        "cvz: the whole-routine zeroed site seeds GPU staged conv flavors";
+        "cvz: every whole-routine zeroed GPU candidate compiles, and matches the natural form run \
+         twice";
+        "cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized";
+        "cvzt: the whole-routine conv+tail site is zeroed in its lowering";
+        "cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors";
+        "cvzt: a whole-routine zeroed conv+tail GPU candidate compiles";
+        "cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run \
+         twice";
+        "cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized";
+      ];
   (* --- Seeding + tuning on the conv-alone graph: the C backends seed serial + Grid per fission
-     segment (and whole-routine); metal seeds the staged GPU flavor per fission segment (the
-     whole-routine site is zeroed, hence gated). --- *)
+     segment (and whole-routine); metal seeds the staged GPU flavor per fission segment and on the
+     whole routine, whose zeroed site the pipeline expands (gh-ocannl-503). --- *)
   clean_cache "autotune_cache_conv_gpu";
   let _, _, y = make_conv8 "cvu_t" in
   let reports = ref [] in
@@ -736,12 +862,17 @@ let () =
   let got_u = Context.get_values ctx y.Tensor.value in
   (match !reports with
   | [ r ] ->
-      (* metal: the whole-extent staged flavor plus its pd2 pipelined twin (gh-ocannl-487). *)
+      show_counts "cvu" r;
+      (* metal: the whole-extent staged flavor plus its pd2 pipelined twin (gh-ocannl-487), on the
+         whole routine (gh-ocannl-503) and per fission segment. No per-segment candidate is timed:
+         GPU fission folds the conv's zero into a per-cell companion of the one segment, and the
+         whole-routine pipeline expands it into that same nest with that same geometry, so each
+         per-segment candidate compiles to its whole-routine twin's digest and dedups. *)
       p "cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
         (if has_uniform_f32_mma then
-           r.Autotune.sketch_candidates = 0
+           r.Autotune.sketch_candidates = 2
            && r.Autotune.fiss_sketch_candidates = 2
-           && r.Autotune.fiss_sketch_timed = 2
+           && r.Autotune.fiss_sketch_timed = 0
          else if on_cpu then
            r.Autotune.sketch_candidates = 2
            && r.Autotune.fiss_sketch_candidates = 2
@@ -843,12 +974,14 @@ let () =
   let got_u2 = Context.get_values ctx y.Tensor.value in
   (match !reports with
   | [ r ] ->
-      (* metal: the staged flavor plus its pd2 pipelined twin (gh-ocannl-487). *)
+      show_counts "cvu2" r;
+      (* metal: the staged flavor plus its pd2 pipelined twin (gh-ocannl-487), on the whole routine
+         and per segment, where each dedups against its whole-routine twin (see [cvu]). *)
       p "cvu2: stride-2 conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
         (if has_uniform_f32_mma then
-           r.Autotune.sketch_candidates = 0
+           r.Autotune.sketch_candidates = 2
            && r.Autotune.fiss_sketch_candidates = 2
-           && r.Autotune.fiss_sketch_timed = 2
+           && r.Autotune.fiss_sketch_timed = 0
          else if on_cpu then
            r.Autotune.sketch_candidates = 2
            && r.Autotune.fiss_sketch_candidates = 2
@@ -1041,6 +1174,7 @@ let () =
   let got_b = Context.get_values ctx y.Tensor.value in
   (match !reports with
   | [ r ] ->
+      show_counts "cvb" r;
       (* cc per-segment: serial + grid + one row-block panel (bm=8, 16/8=2 panels) = 3. metal
          per-segment: whole-extent staged + one threadgroup-block (bm=8), each with its pd2
          pipelined twin (gh-ocannl-487) = 4. *)
@@ -1051,6 +1185,39 @@ let () =
   | _ -> p "cvb: blocked flavors seeded per fission segment" false);
   p_all2 "cvb: tuned blocked conv matches the untuned twin within tolerance" got_b want16
     ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+  (* The same site whole-routine (gh-ocannl-503, see [cvz]): the dividing 8-row block flavor and the
+     pipelined twins, with the expanded zero's row loop split into the same [Grid] blocks. *)
+  if Lazy.force gpu_capable then (
+    let zeroed, seeds, results =
+      whole_routine_gpu_leg ~tag:"cvzb" ~want:want16 ~build:(fun sub ->
+          let _, _, y = make_conv16 sub in
+          y)
+    in
+    p "cvzb: the whole-routine blocked-shape conv site is zeroed in its lowering" zeroed;
+    (* An 8-row block is a flavor only where it is a whole number of the advertised tile's rows
+       (Metal's 8x8x8; CUDA's 16-row tf32 tile cannot split this 16-row site into two blocks). *)
+    let label = "cvzb: the whole-routine zeroed site seeds a GPU row-block flavor" in
+    if advertised_tile_divides ~m:8 ~n:16 ~k:8 then
+      p_exists label seeds ~f:(fun s ->
+          s.Autotune.sk_conv && s.Autotune.sk_gpu && s.Autotune.sk_bm > 0)
+    else skipped label;
+    p_all
+      "cvzb: every whole-routine zeroed GPU candidate compiles, and matches the natural form run \
+       twice"
+      results ~f:(function
+      | `Ran (ok, _) -> ok
+      | `Declined -> false);
+    p_all "cvzb: every whole-routine zeroed GPU candidate's routine is labeled tensorized" results
+      ~f:(ran_ok snd))
+  else
+    List.iter ~f:skipped
+      [
+        "cvzb: the whole-routine blocked-shape conv site is zeroed in its lowering";
+        "cvzb: the whole-routine zeroed site seeds a GPU row-block flavor";
+        "cvzb: every whole-routine zeroed GPU candidate compiles, and matches the natural form run \
+         twice";
+        "cvzb: every whole-routine zeroed GPU candidate's routine is labeled tensorized";
+      ];
 
   (* === Blocked flavor on an aligned-merged segment (gh-ocannl-500): the realistic convnet shape,
      conv + materialized companions. The whole-segment Grid geometry comes from the aligned
@@ -1139,6 +1306,7 @@ let () =
   let got_mb = Context.get_values ctx y.Tensor.value in
   (match !reports with
   | [ r ] ->
+      show_counts "cvmb" r;
       (* cc merged fission segment: serial + aligned-grid + one serial row-block panel, each with
          its fused-epilogue twin (gh-ocannl-501) = 6, all compiling (the aligned twins omit the
          preset [Retype] on the consumed tail nest — fuse-before-annotate). metal: GPU conv seeds
@@ -1226,6 +1394,7 @@ let () =
   let got_m = Context.get_values ctx y.Tensor.value in
   (match !reports with
   | [ r ] ->
+      show_counts "cva" r;
       (* cc: the whole routine seeds the serial flavor and its fused twin (the routine carries the
          conv's [Zero_out], so the aligned analysis bails there and no Grid flavor is seeded); per
          fission segment serial + aligned-grid, each with its fused-epilogue twin, all four timed
