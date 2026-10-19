@@ -31,12 +31,8 @@ module M = Ir.Cuda_mma
 let top_cc = 200
 let ccs = List.range 0 top_cc ~stop:`inclusive
 
-let policies =
-  List.concat_map [ N.Fp16_auto; N.Fp16_narrow; N.Fp16_wide ] ~f:(fun fp16_arithmetic ->
-      List.concat_map [ N.Bf16_auto; N.Bf16_narrow; N.Bf16_wide ] ~f:(fun bf16_arithmetic ->
-          List.concat_map [ false; true ] ~f:(fun tf32_matmuls ->
-              List.map [ false; true ] ~f:(fun narrow_compute_f32 ->
-                  { N.tf32_matmuls; narrow_compute_f32; fp16_arithmetic; bf16_arithmetic }))))
+(* Every numerics policy, enumerated by the type, so a field added to it joins the sweep. *)
+let policies = N.all
 
 let triples =
   List.concat_map Ir.Ops.all_precs ~f:(fun a_prec ->
