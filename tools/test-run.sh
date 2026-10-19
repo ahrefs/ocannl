@@ -164,6 +164,10 @@
 # But a launcher that swallows the status -- e.g. an agent harness's background
 # mode reporting its own wrapper's 0 -- turns that refusal into a false green,
 # so read the message, not only the code: a usage error runs no tests at all.
+# A red run whose log carries, at a line's start, the line a GPU backend's
+# device-init deadline writes before its process dies by SIGALRM
+# (gh-ocannl-1281) keeps dune's status under the verdict `WEDGED DEVICE`, and
+# the digest quotes that line: the device, not the tests, is what to read.
 #
 # Everything after the options is dune's argv, verbatim (default: `runtest`):
 #   tools/test-run.sh run runtest test/operations
@@ -2090,6 +2094,11 @@ slot_refusal() { # <run dir>; 0 iff the slot was refused and dune never ran
   ! grep -Eq '^EXECUTION SLOT [^ ]+: (slot [0-9]+ of [0-9]+.* held for|inside slot [0-9]+ of [0-9]+|inside measurement [^ ]+)' "$1/log"
 }
 
+# The fixed start of the line a GPU backend's device-init deadline writes
+# before it kills its process: Utils.device_init_deadline_tag, which
+# test/operations/device_init_deadline checks this spelling against.
+device_init_deadline_tag='OCANNL device_init_deadline:'
+
 digest_rc=
 digest() {
   local dir=$1 rc verdict fp complaint= refusal_src prelude_bytes
@@ -2134,6 +2143,21 @@ digest() {
     126 | 127) verdict="ERROR (toolchain/setup: nothing ran)" ;;
     *) verdict=FAIL ;;
   esac
+  # A GPU backend's in-process deadline on device initialization
+  # (gh-ocannl-1281, Utils.with_device_init_deadline): past it the process
+  # writes one line opening with the tag below and dies by SIGALRM (142 in a
+  # shell). Under dune that death is a red action, exit 1, and dune's default
+  # display does not name the signal -- so the line is the evidence, read only
+  # at a line's start (a test quoting a child's stderr indents it). A red run
+  # carrying it is a wedged device, not a test result; any other code keeps its
+  # own verdict and gets the same lines.
+  local wedged=
+  if [ "$rc" != 0 ]; then
+    wedged=$(tail -c 10000000 "$dir/log" 2>/dev/null |
+             awk -v tag="$device_init_deadline_tag" 'index($0, tag) == 1' | sort -u | head -n 3)
+    [ -z "$wedged" ] || [ "$verdict" != FAIL ] ||
+      verdict="WEDGED DEVICE (a GPU device initialization outlived device_init_deadline and died by SIGALRM; not judged)"
+  fi
   # A `fresh` run is green only where every named test has a fresh time (see
   # fresh_timings): one with no process of its own is NOT RUN, the refusal's
   # code, and times the trace could not give are UNTIMED.
@@ -2183,6 +2207,13 @@ digest() {
     echo "  legitimately long? rerun with --test-cap 0 (no per-test cap) or a larger --test-cap"
     ! grep -qx 'kind gpu' "$dir/test-cap" ||
       echo "  on this GPU batch, read the kernel journal before rerunning (journalctl -k: gfxhub/CPC faults, ring timeouts, NVRM Xid)"
+  fi
+  if [ -n "$wedged" ]; then
+    echo "wedged device (the device_init_deadline's own line):"
+    printf '%s\n' "$wedged" | sed 's/^/  /'
+    echo "  stop GPU work on this box and read the kernel journal before rerunning (journalctl -k:" \
+         "gfxhub/CPC faults, ring timeouts, NVRM Xid); a legitimately slow cold start? raise" \
+         "device_init_deadline (0 disables)"
   fi
   [ ! -s "$dir/test-cap-off" ] ||
     echo "per-test cap: off for this run ($(cat "$dir/test-cap-off")); only the run's cap bounded it"
