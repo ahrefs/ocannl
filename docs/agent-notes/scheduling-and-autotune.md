@@ -66,7 +66,8 @@ files.
   promoted zero -- a bare materialized write -- bailed BOTH segments, which coalesced serial. In
   mlp_bn_names the batch-norm statistics' zeros serialized the first layer's 1000x200x30 matmul that
   way. `group_units` now lets such a zero join a segment only when the unit accumulating into its
-  node would join too. Separately, `default_cpu` runs `analyze_parallel_chains ~shared_locals:true`:
+  node would join too; a `Solo` next unit that may touch the node (opaque units always may)
+  splits it off as well, so the zero shares the serial unit's fate (review round 2). Separately, `default_cpu` runs `analyze_parallel_chains ~shared_locals:true`:
   a nest writing only scratch takes its chain from those writes (on GPU it runs whole per thread
   over a per-thread copy, so the empty chain is right there; on cc a serial nest runs once, on one
   core), falling back to the plain analysis when linking it bails OR costs the kernel its

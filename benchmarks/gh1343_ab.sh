@@ -25,9 +25,13 @@
 #   STEPS   timed steps per invocation (after 20 warmup steps).
 #
 # Exit: 0 every cell valid; 1 a cell failed or the summary is incomplete; 2 usage.
-# Hermetic: every OCANNL_* variable is unset and the backend is on argv (--ocannl_backend=cc).
+# Hermetic: every OCANNL_* variable is unset and the backend is on argv (--ocannl_backend=cc), and
+# so is every OpenMP runtime control (OMP_*, GOMP_*, KMP_*): on Linux the pool-parallel loops run on
+# OpenMP, and an inherited OMP_NUM_THREADS=1 would quietly serialize exactly what is measured.
+# `build` refuses a ROOT with uncommitted tracked changes: both sides must be built from committed
+# sources for provenance.txt's "only the scheduler differs" to hold.
 set -u
-while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
+while read -r v; do unset "$v"; done < <(env | sed -nE 's/^((OCANNL|OMP|GOMP|KMP)_[A-Za-z0-9_]*)=.*/\1/p')
 usage() { sed -n '/^# Usage/,/^# Exit/p' "$0" | sed '$d' >&2; exit 2; }
 BENCH=test/training/bench_mlp_bn_step.exe
 
@@ -80,6 +84,10 @@ case "${1:-}" in
     mkdir -p "$BIN" && BIN=$(cd "$BIN" && pwd -P) || exit 2
     git -C "$ROOT" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null \
       || { echo "gh1343_ab: no commit $BASE in $ROOT" >&2; exit 2; }
+    if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]; then
+      echo "gh1343_ab: $ROOT has uncommitted tracked changes; build both sides from a clean HEAD" >&2
+      exit 2
+    fi
     (cd "$ROOT" && dune build "./$BENCH") || exit 1
     cp "$ROOT/_build/default/$BENCH" "$BIN/after.exe" || exit 1
     WT=$(mktemp -d "${TMPDIR:-/tmp}/gh1343-before.XXXXXX") || exit 1

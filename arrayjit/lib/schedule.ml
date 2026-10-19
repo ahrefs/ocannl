@@ -8063,19 +8063,26 @@ let group_units ?max_chain ?(arity_cuts = false) ?(fold_zeros = false) ?mapping 
      the preceding segment while that unit cuts, the zero leaves its node crossing the boundary: the
      crossing is promoted to [On_device], and the promoted zero, a bare materialized write, bails
      the annotation of BOTH segments -- which then coalesce into one serial kernel. So such a zero
-     joins the current segment only when the next unit, touching the node, would join it too. *)
+     joins the current segment only when the next unit, touching the node, would join it too. A next
+     unit that cannot join a [`Normal] segment at all -- a [`Solo] one, whose accesses are unknown
+     when it is opaque to the analysis -- splits the zero off whenever it may touch the node (review
+     round 2): the zero then shares the serial unit's fate instead of the preceding segment's. *)
   let scratch_zero (u : funit) =
     match List.filter u.f_stmts ~f:(function Low_level.Noop | Comment _ -> false | _ -> true) with
     | [ Low_level.Zero_out tn ] when not (Tn.Placements.is_materialized_peek plc tn) -> Some tn
     | _ -> None
   in
+  let touches tn ~reads ~writes = Set.mem reads tn || Set.mem writes tn in
   let splits_from_user seg u next =
     match (scratch_zero u, next) with
-    | Some tn, { f_kind = `Normal; f_sum = Some s'; _ } :: _
-      when (not (Set.mem seg.g_reads tn || Set.mem seg.g_writes tn))
-           && (Set.mem s'.s_reads tn || Set.mem s'.s_writes tn) ->
-        let with_zero = merge_segs ~kind:`Normal seg (seg_of_unit u) in
-        not (mergeable with_zero s' (List.hd_exn next))
+    | Some tn, v :: _ when not (touches tn ~reads:seg.g_reads ~writes:seg.g_writes) -> (
+        match v with
+        | { f_kind = `Normal; f_sum = Some s'; _ } ->
+            touches tn ~reads:s'.s_reads ~writes:s'.s_writes
+            && not (mergeable (merge_segs ~kind:`Normal seg (seg_of_unit u)) s' v)
+        | { f_kind = `Normal; f_sum = None; _ } -> false
+        | { f_kind = `Solo | `Zeros; f_sum; _ } ->
+            Option.for_all f_sum ~f:(fun s' -> touches tn ~reads:s'.s_reads ~writes:s'.s_writes))
     | _ -> false
   in
   let rec go cur acc = function

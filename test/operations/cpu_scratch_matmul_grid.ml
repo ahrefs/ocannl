@@ -221,3 +221,41 @@ let () =
   p "transposed: every Grid loop renders on the pool"
     (grid_loops segments > 0 && pool_rendered src = grid_loops segments);
   p_all2 "transposed: values equal the unscheduled compile's, bit for bit" got want ~f:Float.equal
+
+(* 4. [solo], hand-built IR under the tuner's presets: a parallel nest writing [x], then a scratch
+   zero, then a unit the analysis can only run serially ([`Solo]: it accumulates [m[0]], a
+   materialized write no chain loop covers) that accumulates into the scratch node. The zero must go
+   with that unit rather than join the preceding segment, or the node crosses the cut, its promotion
+   makes the zero a bare materialized write, and the [x] nest loses its [Grid] (review round 2). *)
+let () =
+  let n = 32 in
+  let node = Ll_test.node_factory ~first_id:13430 ~dims:[| n; n |] () in
+  let a = node "sa" and x = node "sx" and m = node ~dims:[| 1 |] "sm" in
+  let s = node ~dims:[| n |] "ss" in
+  List.iter [ a; x; m ] ~f:Ll_test.materialize;
+  let i = Ll_test.sym () and j = Ll_test.sym () and i2 = Ll_test.sym () and j2 = Ll_test.sym () in
+  let open Ll_test in
+  let program =
+    seq
+      (loop_n i n
+         (loop_n j n (set x [| iter i; iter j |] (add (get a [| iter i; iter j |]) (c 1.)))))
+      (seq (zero s)
+         (loop_n i2 n
+            (seq
+               (loop_n j2 n
+                  (set s [| iter i2 |] (add (get s [| iter i2 |]) (get x [| iter i2; iter j2 |]))))
+               (set m [| fixed 0 |] (add (get m [| fixed 0 |]) (get s [| iter i2 |]))))))
+  in
+  let o = optimize ~materialized:[ a; x; m ] ~name:"scratch_solo" program in
+  p "solo: the accumulated node is scratch"
+    (not (Tn.Placements.is_materialized_peek o.LL.optimize_ctx.LL.placements s));
+  let segments =
+    List.map
+      (Sched.fission_scheduled
+         ~preset:(Sched.default_cpu ~min_parallel:1)
+         ~zero_sched:(fun _ -> [])
+         ~static_indices:[] o)
+      ~f:(fun (_, _, _, post) -> post)
+  in
+  p "solo: the preceding nest keeps its Grid" (grid_writer segments x);
+  p_all "solo: the serial unit stays serial" (writer_axes segments m) ~f:(Fn.non is_grid)
