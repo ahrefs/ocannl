@@ -47,8 +47,37 @@ let section detail ~from ~until =
       let rest = String.drop_prefix detail (i + String.length from) in
       Option.map (String.substr_index rest ~pattern:until) ~f:(fun j -> String.prefix rest j))
 
+(* A configuration-wide [-Werror] echoes the routine's declaration in BOTH the kernel's and the
+   probe's compiler output; routine-name attribution must not take that for a name collision. The
+   same report under [Compiler_bug] is attributed, which is what makes the report a discriminating
+   one. *)
+let attribution_keeps severity =
+  let routine = "gh1350_attribution" in
+  let detail =
+    Printf.sprintf
+      "kernel.c:3:6: error: no previous prototype for function '%s' [-Werror,-Wmissing-prototypes]\n\
+      \    3 | void %s(void) {\n"
+      routine routine
+  in
+  let exn =
+    Outcome.Cause_at
+      ( Outcome.Backend_compile,
+        Outcome.Backend_rejected { backend = "cc"; stage = "test"; severity; detail } )
+  in
+  match
+    Ir.C_syntax.attribute_routine_name_failure
+      ~routine_names:[ (routine, routine) ]
+      exn (Stdlib.Printexc.get_callstack 1)
+  with
+  | () -> false
+  | exception raised -> phys_equal raised exn
+
 let () =
   Stdio.printf "mode: %s\n" mode;
+  p "a configuration fault echoing the routine's declaration is not taken for its name's failure"
+    (attribution_keeps Outcome.Configuration);
+  p "the same report under Compiler_bug is attributed to the routine name"
+    (not (attribution_keeps Outcome.Compiler_bug));
   let ctx = Context.auto () in
   Stdio.printf "backend: %s\n" (Context.backend_name ctx);
   let x = TDSL.range 16 in

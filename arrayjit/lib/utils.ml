@@ -1820,15 +1820,19 @@ let process_nonce =
 let library_kernel_name_limit = 64
 
 (** [library_kernel_name base_name] is the kernel name such a file name carries:
-    {!clean_filename}[ base_name], cut to {!library_kernel_name_limit} bytes at a UTF-8 character
-    boundary. *)
+    {!clean_filename}[ base_name] when it fits in {!library_kernel_name_limit} bytes; otherwise a
+    prefix of it cut at a UTF-8 character boundary, then ['-'] and 8 hex digits of the whole name's
+    digest, within the same limit. The digest keeps apart two long names sharing their opening
+    bytes, so that a reader matching artifacts by kernel name never takes one routine's for
+    another's. *)
 let library_kernel_name base_name =
   let name = clean_filename base_name in
   if String.length name <= library_kernel_name_limit then name
   else
+    let digest = String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string name)) 8 in
     (* Back off from a UTF-8 continuation byte, so no character is split. *)
     let rec cut i = if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then cut (i - 1) else i in
-    String.prefix name (cut library_kernel_name_limit)
+    String.prefix name (cut (library_kernel_name_limit - 1 - String.length digest)) ^ "-" ^ digest
 
 (** [owned_artifact_name ~pid ~nonce ~run_id ~extension base_name] is the file name of an artifact
     of the kernel [base_name]'s compile [run_id] that the process [pid] (with {!process_nonce}
@@ -2048,8 +2052,10 @@ let () =
      can be created, or the file system has no locks -- leaves the cleanup as it was before
      gh-ocannl-1335: owner-named artifacts of running owners stay, everything else goes. *)
   let remove_root ~base root =
+    (* Tried whenever [base] is a directory, [root] or not: a root absent now may be created, and
+       written into under its lock, by a sibling before the removal below reads it. *)
     let lock =
-      match lstat_kind root with
+      match lstat_kind base with
       | Some Unix.S_DIR -> (
           match Artifacts_lock.open_ base with
           | exception Unix.Unix_error _ -> `Unlockable

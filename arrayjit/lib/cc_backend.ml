@@ -1001,11 +1001,19 @@ let kernel_compiler_flags () =
 type toolchain_probe = Probe_compiles | Probe_fails of { command : string; output : string }
 
 let probe_kernel_toolchain ~flags =
-  let src = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" ".c" in
-  let lib = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" Utils.dynamic_library_extension in
-  let log = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" ".log" in
+  (* Every temporary is allocated inside the guard, and only the allocated ones are removed: a temp
+     directory that fails here (full, gone) must leave the original rejection standing. *)
+  let allocated = ref [] in
+  let temp suffix =
+    let path = Stdlib.Filename.temp_file "ocannl_cc_toolchain_" suffix in
+    allocated := path :: !allocated;
+    path
+  in
   let result =
     try
+      let src = temp ".c" in
+      let lib = temp Utils.dynamic_library_extension in
+      let log = temp ".log" in
       Stdio.Out_channel.write_all src ~data:"int ocannl_toolchain_probe(void) { return 0; }\n";
       let command =
         Printf.sprintf "%s %s %s -o %s %s" (compiler_command ()) (Stdlib.Filename.quote src) flags
@@ -1020,7 +1028,7 @@ let probe_kernel_toolchain ~flags =
         Some (Probe_fails { command; output })
     with _ -> None
   in
-  List.iter [ src; lib; log ] ~f:(fun f -> try Stdlib.Sys.remove f with _ -> ());
+  List.iter !allocated ~f:(fun f -> try Stdlib.Sys.remove f with _ -> ());
   result
 
 type toolchain_fault = {
@@ -1062,7 +1070,14 @@ let toolchain_fault =
   fun () ->
     let key =
       String.concat ~sep:"\000"
-        [ compiler_command (); kernel_compiler_flags (); Lazy.force kernel_link_flags ]
+        [
+          compiler_command ();
+          (* What the command resolves to: an executable replaced in place, or a PATH change, is
+             another toolchain under the same spelling. *)
+          compiler_executable_identity (compiler_command ());
+          kernel_compiler_flags ();
+          Lazy.force kernel_link_flags;
+        ]
     in
     Stdlib.Mutex.protect mutex (fun () ->
         Hashtbl.find_or_add diagnoses key ~default:diagnose_toolchain)

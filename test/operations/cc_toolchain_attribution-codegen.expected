@@ -1,4 +1,6 @@
 mode: codegen
+a configuration fault echoing the routine's declaration is not taken for its name's failure: true
+the same report under Compiler_bug is attributed to the routine name: true
 backend: cc
 the compile fails with a typed cc rejection: true
 the failure is the compiler stage's, as a codegen failure: true

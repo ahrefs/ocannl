@@ -7,9 +7,9 @@
    system temp directory instead.
 
    A routine's name has no length limit and a file name has one, so the name carries at most
-   [Utils.library_kernel_name_limit] bytes of it, cut at a character boundary: the test compiles a
-   routine whose name alone nearly fills a file-name component, and reads a cut through two-byte
-   characters off the naming function itself.
+   [Utils.library_kernel_name_limit] bytes of it, cut at a character boundary and followed by a
+   digest of the whole name: the test compiles a routine whose name alone nearly fills a file-name
+   component, and reads a cut through two-byte characters off the naming function itself.
 
    Processes of one executable share that directory, and each one's startup empties it
    ([clean_up_build_files_on_startup] and [clean_up_log_files_on_startup], on by default, off in the
@@ -119,18 +119,27 @@ let parent () =
   p "the long-named routine's library is kept, under its cut name" (List.length long_kept = 1);
   p_all "the long-named routine's library name fits a file-name component" long_kept ~f:(fun path ->
       String.length (Stdlib.Filename.basename path) <= 255);
+  (* The digest in a cut name keeps apart routines whose names share their opening bytes. *)
+  p_empty "no library is found for another routine sharing the long name's opening bytes"
+    ~over:long_kept
+    (Generated.kept_libraries ~owner:`Any (long_routine ^ "_other"));
   (* The cut never splits a character: a name of two-byte characters, placed so that the limit falls
      inside one. *)
-  let wide_routine = "kernel_" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
+  let wide_routine = "kernel" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
   let wide_name =
     Utils.kept_library_name ~pid:departed_pid ~nonce:"0badf00d" ~run_id:1 wide_routine
   in
-  p "a kept library's name carries a whole-character prefix within the kernel-name limit"
+  p "a kept library's name carries a whole-character prefix and a digest within the limit"
     (Option.exists (Utils.parse_kept_library_name wide_name) ~f:(fun { Utils.kernel_name; _ } ->
          String.length kernel_name <= Utils.library_kernel_name_limit
-         && String.length kernel_name > Utils.library_kernel_name_limit - 2
-         && String.is_prefix wide_routine ~prefix:kernel_name
-         && Stdlib.String.is_valid_utf_8 kernel_name));
+         && Stdlib.String.is_valid_utf_8 kernel_name
+         &&
+         match String.rsplit2 kernel_name ~on:'-' with
+         | Some (prefix, digest) ->
+             String.length digest = 8
+             && String.length prefix >= Utils.library_kernel_name_limit - 10
+             && String.is_prefix wide_routine ~prefix
+         | None -> false));
   (* 3. This process's ownerless artifacts: a log, and under debug files the long-named routine's
      debug source, which no child writes. *)
   let log = Utils.diagn_log_file "gh1335_parent.log" in

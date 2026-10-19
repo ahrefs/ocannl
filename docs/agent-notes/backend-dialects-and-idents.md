@@ -302,7 +302,8 @@ configuration.
   executable share that directory -- the OS id (`Utils.os_process_id`), never `Unix.getpid`, which
   on Windows answers a process-local handle -- and the per-process random nonce because an OS id is
   not unique across PID namespaces. The kernel name in such a name, and in the temporary source's,
-  is cut to `Utils.library_kernel_name_limit` bytes at a character boundary
+  is cut within `Utils.library_kernel_name_limit` bytes at a character boundary and suffixed with a
+  digest of the whole name, so two long names sharing their opening bytes stay apart
   (`Utils.library_kernel_name`): a routine name has no length limit, a file-name component does,
   and clang names its own temporaries after the source. Tests list kept libraries with
   `Test_utils.Generated.kept_libraries` (`test/operations/cc_kept_library`). The library is unlinked right after `dlopen`: the kernel
@@ -349,7 +350,9 @@ configuration.
   `test/operations/cc_toolchain_attribution`). When it does not, the failure is a
   `Backend_rejected` at `Schedule_outcome.toolchain_stage` with severity `Configuration`:
   uncontainable, since a toolchain that compiles nothing rejects every candidate alike, and
-  rendered as `Utils.User_error`, never with `C_syntax.codegen_bug_claim`. It names the setting
+  rendered as `Utils.User_error`, never with `C_syntax.codegen_bug_claim`, and
+  `C_syntax.attribute_routine_name_failure` passes it through untouched (a configuration-wide
+  `-Werror` echoes the routine's declaration, which would otherwise read as a name collision). It names the setting
   whose flag fails on its own (`Cc_backend.kernel_compiler_flag_settings` pairs each flag with its
   setting), the compiler command when even the bare command fails, and every flag setting when
   only their combination does. Probing rather than matching compiler stderr keeps it independent of

@@ -81,7 +81,7 @@ let parent () =
   in
   (* A routine name past every file-name component limit (255 bytes), of two-byte characters placed
      so that the kernel-name cut falls inside one. *)
-  let long_routine = "kernel_" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
+  let long_routine = "kernel" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
   let departed_long =
     plant_temp_library ~routine:long_routine ~pid:departed_pid ~nonce:"0badf00d" ()
   in
@@ -101,12 +101,17 @@ let parent () =
     [ departed; departed_fresh; running; departed_long ] ~f:(fun f -> Option.is_some (owner_of f));
   p_none "the ownerless, the unmarked and the unrelated library name no owner"
     [ ownerless; foreign; unrelated ] ~f:(fun f -> Option.is_some (owner_of f));
-  p "a long routine name is cut to a whole-character prefix within the kernel-name limit"
+  p "a long routine name is cut to a whole-character prefix and a digest within the limit"
     (Option.exists (owner_of departed_long) ~f:(fun { Utils.kernel_name; _ } ->
          String.length kernel_name <= Utils.library_kernel_name_limit
-         && String.length kernel_name > Utils.library_kernel_name_limit - 2
-         && String.is_prefix long_routine ~prefix:kernel_name
-         && Stdlib.String.is_valid_utf_8 kernel_name));
+         && Stdlib.String.is_valid_utf_8 kernel_name
+         &&
+         match String.rsplit2 kernel_name ~on:'-' with
+         | Some (prefix, digest) ->
+             String.length digest = 8
+             && String.length prefix >= Utils.library_kernel_name_limit - 10
+             && String.is_prefix long_routine ~prefix
+         | None -> false));
   p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
   p "the departed library's process is seen as gone" (not (Utils.process_alive departed_pid));
   let exe = Stdlib.Sys.executable_name in

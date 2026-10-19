@@ -1993,43 +1993,53 @@ let codegen_bug_claim ~artifact = codegen_bug_claim_prefix ^ artifact
     output in particular -- verbatim: cc's report carries that claim for the unattributed case, and
     here it would contradict the message quoting it (the unattributed re-raise keeps it). *)
 let attribute_routine_name_failure ?report ~routine_names exn backtrace =
-  let report =
-    match (report, exn) with
-    | Some report, _ -> report
-    (* The compiler's report as each backend raises it: a [Failure] (Metal), a
-       {!Schedule_outcome.Cause_at} detail (cc), or a toolchain exception whose registered printer
-       renders the log (nvrtc, hiprtc). *)
-    | None, (Failure report | Invalid_argument report | Utils.User_error report) -> report
-    | None, Schedule_outcome.Cause_at (_, cause) -> Schedule_outcome.detail_of_cause cause
-    | None, exn -> Stdlib.Printexc.to_string exn
-  in
-  match routine_name_in_diagnostics ~routine_names:(List.map routine_names ~f:fst) report with
-  | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace
-  | Some emitted ->
-      let given =
-        List.Assoc.find routine_names ~equal:String.equal emitted |> Option.value ~default:emitted
+  match exn with
+  | Schedule_outcome.Cause_at
+      (_, Schedule_outcome.Backend_rejected { severity = Schedule_outcome.Configuration; _ }) ->
+      (* A toolchain configuration that compiles no trivial kernel either (gh-ocannl-1350) is not
+         the routine name's failure, however the compiler's output echoes its declaration -- a
+         configuration-wide [-Werror] does. *)
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+  | _ -> (
+      let report =
+        match (report, exn) with
+        | Some report, _ -> report
+        (* The compiler's report as each backend raises it: a [Failure] (Metal), a
+           {!Schedule_outcome.Cause_at} detail (cc), or a toolchain exception whose registered
+           printer renders the log (nvrtc, hiprtc). *)
+        | None, (Failure report | Invalid_argument report | Utils.User_error report) -> report
+        | None, Schedule_outcome.Cause_at (_, cause) -> Schedule_outcome.detail_of_cause cause
+        | None, exn -> Stdlib.Printexc.to_string exn
       in
-      let quoted =
-        String.split report ~on:'\n'
-        |> List.filter ~f:(fun line -> not (String.is_prefix line ~prefix:codegen_bug_claim_prefix))
-        |> String.concat ~sep:"\n"
-      in
-      let spelled =
-        if String.equal given emitted then Printf.sprintf "%S" given
-        else Printf.sprintf "%S (emitted as %S)" given emitted
-      in
-      Stdlib.Printexc.raise_with_backtrace
-        (Utils.User_error
-           (Printf.sprintf
-              "The routine name %s does not compile: the compiler's error points at that routine's \
-               declaration, so the name most likely collides with an identifier the backend's \
-               toolchain headers declare, or with another routine of the same batch \
-               (gh-ocannl-707). Rename the routine (the [~name] argument, or the [Block_comment] \
-               label it was derived from). If a fresh name fails the same way, this is a bug in \
-               OCANNL. The compiler's report follows.\n\
-               %s"
-              spelled quoted))
-        backtrace
+      match routine_name_in_diagnostics ~routine_names:(List.map routine_names ~f:fst) report with
+      | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace
+      | Some emitted ->
+          let given =
+            List.Assoc.find routine_names ~equal:String.equal emitted
+            |> Option.value ~default:emitted
+          in
+          let quoted =
+            String.split report ~on:'\n'
+            |> List.filter ~f:(fun line ->
+                not (String.is_prefix line ~prefix:codegen_bug_claim_prefix))
+            |> String.concat ~sep:"\n"
+          in
+          let spelled =
+            if String.equal given emitted then Printf.sprintf "%S" given
+            else Printf.sprintf "%S (emitted as %S)" given emitted
+          in
+          Stdlib.Printexc.raise_with_backtrace
+            (Utils.User_error
+               (Printf.sprintf
+                  "The routine name %s does not compile: the compiler's error points at that \
+                   routine's declaration, so the name most likely collides with an identifier the \
+                   backend's toolchain headers declare, or with another routine of the same batch \
+                   (gh-ocannl-707). Rename the routine (the [~name] argument, or the \
+                   [Block_comment] label it was derived from). If a fresh name fails the same way, \
+                   this is a bug in OCANNL. The compiler's report follows.\n\
+                   %s"
+                  spelled quoted))
+            backtrace)
 
 (** {!C_syntax_config.full_printf_support} for a dialect whose [printf] does support [%g] — every
     backend except Metal, whose MSL [printf] does not. Such a backend still gives the scaled-integer

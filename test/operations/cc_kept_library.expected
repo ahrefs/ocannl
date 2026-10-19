@@ -7,7 +7,8 @@ the routine computes 3x + 1 from its kept library: true
 a routine with a 240-byte name computes 3x + 1 from its kept library: true
 the long-named routine's library is kept, under its cut name: true
 the long-named routine's library name fits a file-name component: true
-a kept library's name carries a whole-character prefix within the kernel-name limit: true
+no library is found for another routine sharing the long name's opening bytes: true
+a kept library's name carries a whole-character prefix and a digest within the limit: true
 this process is seen as running: true
 the stale library's process is seen as gone: true
 the child process compiled and ran the same routine name: true

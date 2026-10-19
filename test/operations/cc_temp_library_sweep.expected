@@ -1,6 +1,6 @@
 the planted temporary libraries name their owners: true
 the ownerless, the unmarked and the unrelated library name no owner: true
-a long routine name is cut to a whole-character prefix within the kernel-name limit: true
+a long routine name is cut to a whole-character prefix and a digest within the limit: true
 this process is seen as running: true
 the departed library's process is seen as gone: true
 the first child compiled and ran its routine: true
