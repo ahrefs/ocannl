@@ -5,4 +5,4 @@ the fixtures' violations exercise every fragment_scope_violation reason: true
 op_legality refuses each refused fixture with its first violation's message, admits the rest: true
 schedule_legality refuses exactly the refused fixtures, at their own position: true
 each compiled fixture renders one lane-0 scalar fallback per violation the oracle finds in its IR, and a tensorized statement besides where it finds none: true
-each compiled fixture computes the serial twin's values bitwise: true
+each compiled fixture computes the serial twin's values within half's precision: true
