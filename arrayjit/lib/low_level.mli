@@ -674,6 +674,26 @@ val decide_accum_width :
     passes its own ([C_syntax.serialized_hardware]); [loop_bounds] is {!loop_bounds} of the
     enclosing program, as for {!peel_accum_nest}. Pure but for the routine-logging flag it reads. *)
 
+val accum_decision_widens : accum_decision -> bool
+(** Whether the decision holds the accumulator at the backend's residency: a base the level
+    localizes ([pinned = None]) that {!accum_base_widens}. A scope-form base whose scope local an
+    RNG conversion reaches is localized at storage width — codegen's census types that scope at
+    storage — so it localizes without widening. *)
+
+val serial_accum_widths :
+  serialized:(Indexing.symbol -> axis_type -> bool) -> tn:Tnode.t -> t -> bool list
+(** For each accumulating write of [tn] in the program (a [Set] reading its own cell, a scope-form
+    accumulation, an accumulating [Set_dynamic]), in program order, whether the program's SERIAL
+    rendering holds its accumulator at the backend's accumulator residency — {!decide_accum_width}
+    asked at exactly the levels [C_syntax.pp_ll] asks it at, top-down, with [serialized] as the
+    serialized-slot predicate: Serial, [Unrolled] and [Vectorized] levels always, [Workgroup] /
+    [Workgroup_reduce] levels where [serialized] says the backend renders them serially, [Grid]
+    levels never. The first level whose decision localizes a base of [tn] answers for that base
+    ({!accum_decision_widens}); a raw write no level localizes narrows per step, a scope-form one is
+    typed at the residency by codegen's census all the same. [Tile_mma] accumulations are not
+    entered. [Schedule.Privatize] reads its tile width off this, asked of the program its schedule
+    was applied to (gh-ocannl-1151). *)
+
 val zero_initializer_target : t -> Tnode.t option
 (** A whole-node zero, or its unconditional covering positive-zero [Expand_zero] loop nest. *)
 

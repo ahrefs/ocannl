@@ -6707,6 +6707,62 @@ let decide_accum_width ~extra_level ~loop_bounds ~index ~from_ ~to_ body =
       in
       Accum_base { tn; idcs; base; debug; rebuild; report = !report; pinned }
 
+let accum_decision_widens = function
+  | Accum_base { tn; idcs; base; pinned = None; _ } -> accum_base_widens ~tn ~idcs base
+  | Accum_base { pinned = Some _; _ } | Accum_not_a_nest _ -> false
+
+(* gh-ocannl-1151: what the serial rendering of [llc] does with each accumulating write of [tn],
+   asked of {!decide_accum_width} exactly where code generation asks it. [C_syntax.pp_ll] recurses
+   top-down and decides at every level whose rendering can localize — Serial, [Unrolled] and
+   [Vectorized] always, a [Workgroup] / [Workgroup_reduce] level only where the backend renders it
+   serially ([serialized]), a [Grid] level never (its fallback is the plain serial loop) — and the
+   first level whose decision is a base localizes that base, at the residency when its base widens.
+   A write reached with no level localizing keeps its storage cell's width, narrowing per step,
+   except a scope-form base, whose scope local codegen's census types at the residency anyway. A
+   [Tile_mma] is not entered: its accumulation's width is the intrinsic's. *)
+let serial_accum_widths ~serialized ~tn (llc : t) : bool list =
+  let loop_bounds = loop_bounds llc in
+  let extra_level index axis = equal_axis_type axis Workgroup_reduce && serialized index axis in
+  let acc = ref [] in
+  let rec stmt (llc : t) =
+    match llc with
+    | For_loop { index; from_; to_; body; axis } -> (
+        let asks =
+          match axis with
+          | Serial | Unrolled | Vectorized -> true
+          | Workgroup | Workgroup_reduce -> serialized index axis
+          | Grid -> false
+        in
+        let decision =
+          if asks then Some (decide_accum_width ~extra_level ~loop_bounds ~index ~from_ ~to_ body)
+          else None
+        in
+        match decision with
+        | Some (Accum_base { tn = tn'; pinned = None; _ } as d) ->
+            (* Localized here. Another node's base sits at the end of a single-statement chain,
+               which holds no write of [tn]. *)
+            if Tn.equal tn tn' then acc := accum_decision_widens d :: !acc
+        | Some (Accum_base { pinned = Some _; _ } | Accum_not_a_nest _) | None -> stmt body)
+    | Seq (a, b) ->
+        stmt a;
+        stmt b
+    | If { body; _ } | Scan_loop { body; _ } -> stmt body
+    | Set { tn = tn'; _ } when Tn.equal tn tn' && has_accumulating_cell llc ->
+        let widens =
+          match peel_accum_nest ~loop_bounds ~free_of:[] llc with
+          | Some (_, idcs, (`Scope _ as base), _, _) -> accum_base_widens ~tn ~idcs base
+          | Some (_, _, `Update _, _, _) | None -> false
+        in
+        acc := widens :: !acc
+    | Set_dynamic { tn = tn'; llsc; _ } when Tn.equal tn tn' && scalar_touches_tn tn llsc ->
+        acc := false :: !acc
+    | Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ | Declare_local _ | Zero_out _ | Noop
+    | Comment _ | Staged_compilation _ | Workgroup_barrier | Tile_mma _ ->
+        ()
+  in
+  stmt llc;
+  List.rev !acc
+
 (* gh-ocannl-1168 / gh-ocannl-1238. The [Workgroup_reduce] sites the renderer owns the communication
    of, and whether workgroup-uniform control reaches each: the lane all-reduce into a reassociable
    scope local ([C_syntax.try_lane_all_reduce]) and the warp-shuffle tree into a cell

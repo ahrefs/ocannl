@@ -301,21 +301,29 @@ type optop =
           accumulator residency: construct the op with {!privatize}, which resolves it from the
           rendering backend's [codegen_capabilities.accum_prec], so the privatized reduction widens
           and narrows exactly where the serial rendering's scope local does (gh-ocannl-1116). Like
-          the backend's own residency, it applies only to what code generation would widen, decided
-          by code generation's own peel ({!Low_level.peel_accum_nest}) over the SOURCE-order nest:
-          [over]'s subtree, less the schedule's own scratch (staging copies into [tile]-namespace
-          nodes, barriers), must be one chain of loops and guards down to a single update of
-          [target]; the reduction loops of that chain (those [target]'s cell does not mention)
-          around the update under its guards must peel, to a raw update or a scope-form base that
-          {!Low_level.accum_base_widens} accepts. A widened scope-form base is re-keyed to the tile.
-          Any other body — sibling statements of any kind, a guard the peel will not cross, a
-          non-reduction or mixed-operator recurrence, an RNG-bearing contribution, routine logging —
-          gets a storage-precision tile, which code generation renders exactly as it would [target],
-          so the narrowing points do not move. A hardware-typed loop [target]'s cell does not
-          mention, between [over] and the update, is rejected: it would split the accumulation
-          across threads. Any other admissible value is an explicit numerics choice of the schedule,
-          e.g. the storage precision reproduces per-step narrowing. Part of the schedule's identity
-          (the cache saves it). *)
+          the backend's own residency, it applies only to what code generation would widen, and the
+          decision is code generation's own, {!Low_level.decide_accum_width}, asked of the program
+          the schedule was APPLIED TO — never of the nest as earlier ops in the same schedule left
+          it, nor rebuilt from it (gh-ocannl-1151): every accumulating write of [target] there must
+          be one the serial rendering widens ({!Low_level.serial_accum_widths}, asked once vouching
+          for no hardware level and once for every one, since which hardware levels a backend
+          serializes is code generation's knowledge — where the two answers differ the op is
+          rejected), and the update [over]'s subtree now holds must itself pass
+          {!Low_level.accum_base_widens}. A widened scope-form update is re-keyed to the tile. So a
+          [Stage] applied by an EARLIER [apply] is part of the program this one judges: its loads
+          are sibling statements of the reduction, which code generation does not localize, and the
+          tile stays at storage. Likewise sibling statements of any kind, a reduction level the cell
+          varies under, a non-reduction or mixed-operator recurrence, an RNG-bearing contribution
+          and routine logging all get a storage-precision tile, which code generation renders
+          exactly as it would [target], so the narrowing points do not move. After all ops, {!apply}
+          re-checks each wide tile against the final program ({!privatized_tile_widens}) and falls
+          it back to storage precision where a later op left an accumulation the decision does not
+          widen ({!privatize_fallbacks}). A [target] whose storage is already its residency (f32,
+          f64) is unaffected by all of this. A hardware-typed loop [target]'s cell does not mention,
+          between [over] and the update, is rejected: it would split the accumulation across
+          threads. Any other admissible value is an explicit numerics choice of the schedule, e.g.
+          the storage precision reproduces per-step narrowing. Part of the schedule's identity (the
+          cache saves it). *)
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
       (** Expand the unique [Zero_out tn] statement into an ordinary loop nest over the supplied
           symbols (one per axis of [tn]'s padded dims; see {!expand_zero}). Whole-node [Zero_out] of
@@ -590,7 +598,9 @@ val apply :
     when shared); the optimization context and merge node are never changed. Raises
     [Invalid_argument] when an op references a loop that does not exist at its point in the
     schedule, or violates an op precondition (see {!optop}) -- the rendering of the typed refusal
-    {!apply_classified} passes through. An empty schedule is the identity.
+    {!apply_classified} passes through. An empty schedule is the identity. Every op is applied with
+    the program the schedule started from in hand, which [Privatize] judges its tile width on, and
+    its wide tiles are re-checked against the final program last ({!privatized_tile_widens}).
 
     The barrier elision (gh-ocannl-487, widened to every staged anchor by gh-ocannl-567) is a
     synchronization-only rewrite — bitwise identical output, on every backend path. It rests on the
@@ -614,6 +624,17 @@ val apply_classified :
     the finalization passes -- a bare [Invalid_argument], an array bound, a [List.zip_exn] -- is a
     transform bug and propagates untyped, hence fatal under [strict_failure_classification]
     (gh-ocannl-1323). *)
+
+val privatized_tile_widens : tile:Tn.t -> Low_level.t -> bool
+(** The final-program re-check of a [Privatize] tile minted at the accumulator residency
+    (gh-ocannl-1151): every write of [tile] in the program is either a transfer (it does not read
+    the tile) or a self-accumulating update whose base {!Low_level.accum_base_widens} — a
+    [Tile_mma]'s scalar fallback judged like any statement. {!apply} falls a tile failing it back to
+    its target's storage precision. Exposed for tests. *)
+
+val privatize_fallbacks : unit -> (Tn.t * Tn.t) list
+(** The [(target, tile)] pairs whose wide [Privatize] tile {!apply}'s final re-check fell back to
+    storage precision in the calling domain, most recent first. *)
 
 val with_transform_fault : (optop -> unit) -> (unit -> 'a) -> 'a
 (** Test seam (gh-ocannl-1323): [with_transform_fault fault body] runs [body] with [fault] called on

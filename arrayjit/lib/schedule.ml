@@ -2340,31 +2340,6 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       zero_fringe = Set.add opt.zero_fringe tile;
     }
 
-(* A statement whose provenance is the schedule and not the source program, identified POSITIVELY
-   (round 8: every negative rule leaked a member): a [Stage] load — a [Set] into a [tile]-namespace
-   node of a plain copy, i.e. a read of ANOTHER node, a constant fill, or [Stage]'s [Where]-form
-   edge guard over those — or a [Workgroup_barrier] (lowering never emits one; staging does), and
-   what the peel itself strips ([Noop], [Comment]). Everything else is kept as a statement: tile
-   read-modify-writes (a previous [Privatize]'s relocated accumulation), [Split_reduce]'s partial
-   writes and scatters, any computation, vector writes, zeroings, scope locals, staged
-   compilation. *)
-let rec schedule_scratch (llc : Low_level.t) =
-  let rec plain_copy ~tn (v : Low_level.scalar_t) =
-    match v with
-    | Low_level.Get (src, _) -> not (Tn.equal src tn)
-    | Constant _ -> true
-    | Ternop (Ops.Where, _, (a, _), (b, _)) -> plain_copy ~tn a && plain_copy ~tn b
-    | _ -> false
-  in
-  match llc with
-  | Low_level.Noop | Comment _ | Workgroup_barrier -> true
-  | Seq (a, b) -> schedule_scratch a && schedule_scratch b
-  | For_loop { body; _ } | If { body; _ } -> schedule_scratch body
-  | Set { tn; llsc; _ } -> String.equal tn.Tn.namespace tile_namespace && plain_copy ~tn llsc
-  | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Staged_compilation _ | Declare_local _
-  | Set_local _ | Scan_loop _ | Tile_mma _ ->
-      false
-
 (** {2 [Privatize]: accumulator privatization}
 
     Virtualization already privatizes accumulators — that is what [Local_scope] is — but it is
@@ -2389,14 +2364,15 @@ let rec schedule_scratch (llc : Low_level.t) =
     Tile precision: [acc_prec], the backend's accumulator residency for [target]'s storage
     ({!privatize} resolves it), so the tile is the materialized twin of the scope local the serial
     rendering widens into and narrows once at the store-back (gh-ocannl-1116) — where code
-    generation's own peel, asked of the source-order nest, would widen (see [tile_prec] below; the
-    interface documents the rule). Any other body keeps a storage-precision tile, which code
-    generation renders exactly as it would [target], so the narrowing points do not move. Before it
-    the tile was minted at storage precision, and every step of the privatized reduction narrowed
-    where the serial and scope renderings did not — a seeded [Privatize] silently changed a tuned
-    reduction's width. *)
+    generation's own accumulator-width decision, asked of the program the schedule was applied to,
+    would widen (gh-ocannl-1151; see [tile_prec] below, and the interface documents the rule). Any
+    other body keeps a storage-precision tile, which code generation renders exactly as it would
+    [target], so the narrowing points do not move. Before it the tile was minted at storage
+    precision, and every step of the privatized reduction narrowed where the serial and scope
+    renderings did not — a seeded [Privatize] silently changed a tuned reduction's width. *)
 
-let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_level.optimized =
+let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.optimized) :
+    Low_level.optimized =
   let open Low_level in
   let acc_prec = exact_widening ~what:"Schedule.Privatize: acc_prec" target acc_prec in
   let iprec = Ops.index_prec () in
@@ -2492,6 +2468,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
          run under the {e same} predicate, or stale lanes clobber the result. *)
       let accesses = ref [] in
       let has_write = ref false in
+      let updates = ref [] in
       let rec scan stack conds llc =
         match llc with
         | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
@@ -2524,6 +2501,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
                        ^ " inside the privatized loop would split the accumulation across threads")
                   | _ -> ());
               has_write := true;
+              updates := llc :: !updates;
               accesses := (idcs, stack, conds) :: !accesses);
             scan_scalar stack conds llsc
         | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
@@ -2741,64 +2719,57 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       in
       let scalar_acc = Array.is_empty tile_axes in
       let tile_dims = if scalar_acc then [| 1 |] else Array.map tile_axes ~f:snd in
-      (* Which width the tile takes (gh-ocannl-1116 review rounds 1-4, Codex P1s on staging PR
-         #880). A STORAGE-precision tile is rendered by code generation exactly as [target] would be
-         — the same per-nest peel, the same declines — so it narrows wherever the unprivatized
-         schedule does. The residency is for the case a reordering schedule breaks: a source
-         reduction nest code generation peels and holds wide, laid out so that the tile's cell
-         varies under inner loops where no peel reaches it. So the question is code generation's
-         own, asked of the SOURCE-order nest, reconstructed without re-deriving any part of the
-         peel: the privatized loop's subtree with the schedule's scratch statements dropped
-         ({!schedule_scratch}) must be one chain of loops and guards down to the single update of
-         [target] — any other statement beside it (a write of another node, a [Declare_local] /
-         [Set_local] computation, a second update) is kept, so the chain fails exactly where the
-         peel refuses a level carrying siblings. The loops the cell does not mention are the
-         reduction levels, kept in order with the guards; the output loops, which a schedule sinks
-         inside, are dropped. [Low_level.peel_accum_nest] then decides the nest with the routine's
-         loop bounds, and [accum_base_widens] its base — a raw update or a scope-form base a
-         previous materializing rewrite minted, which code generation hoists through the outer
-         reduction levels. Everything else keeps storage. *)
-      let widened_scope = ref None in
-      let tile_prec =
-        let storage = Lazy.force target.Tn.storage_prec in
-        let rec chain (llc : t) =
-          match
-            List.filter (flat_lines [ llc ]) ~f:(fun st ->
-                code_touches_tn target st || not (schedule_scratch st))
-          with
-          | [ For_loop { index; from_; to_; body; axis } ] ->
-              Option.map (chain body) ~f:(fun (levels, st) ->
-                  (`Loop { index; from_; to_; body = Noop; axis } :: levels, st))
-          | [ If { cond; body } ] ->
-              Option.map (chain body) ~f:(fun (levels, st) -> (`Guard cond :: levels, st))
-          | [ (Set { tn; _ } as st) ] when Tn.equal tn target -> Some ([], st)
-          | _ -> None
-        in
-        match chain fc.body with
-        | Some (levels, (Set { idcs; _ } as st)) -> (
-            let mentioned sym = Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol sym) in
-            let nest =
-              List.fold_right
-                (`Loop { fc with body = Noop } :: levels)
-                ~init:st
-                ~f:(fun level body ->
-                  match level with
-                  | `Guard cond -> If { cond; body }
-                  | `Loop (fl : floop) when mentioned fl.index -> body
-                  | `Loop fl ->
-                      For_loop
-                        { index = fl.index; from_ = fl.from_; to_ = fl.to_; body; axis = fl.axis })
-            in
-            match peel_accum_nest ~loop_bounds:(loop_bounds opt.llc) ~free_of:[] nest with
-            | Some (_, _, base, _, _) when accum_base_widens ~tn:target ~idcs base ->
-                (match base with `Scope (id, _) -> widened_scope := Some id | `Update _ -> ());
-                acc_prec
-            | _ -> storage)
-        | _ -> storage
+      (* Which width the tile takes (gh-ocannl-1116, gh-ocannl-1151). A STORAGE-precision tile is
+         rendered by code generation exactly as [target] would be — the same per-nest decision, the
+         same declines — so it narrows wherever the unprivatized schedule does. The residency is for
+         the case a reordering schedule breaks: a reduction the serial rendering holds wide, laid
+         out so that the tile's cell varies under inner loops where no peel reaches it. Whether the
+         serial rendering holds it wide is code generation's own decision
+         ([Low_level.decide_accum_width]), asked of [entry] — the program the schedule was applied
+         to, not the nest earlier ops of this schedule left — at every level code generation asks it
+         ([Low_level.serial_accum_widths]): every accumulating write of [target] there must widen.
+         Which hardware levels a backend renders serially is code generation's knowledge, so the
+         question is asked vouching for none and for every one, and refused where the answers
+         differ. The update as it now stands in [over]'s subtree must itself be a base the decision
+         widens ([accum_base_widens]); a scope-form one names the scope to re-key below. Before
+         gh-ocannl-1151 this rebuilt the peel's input from the privatized subtree (scratch
+         statements classified away, mentioned loops dropped), and eight review rounds found it
+         disagreeing with codegen one shape at a time. *)
+      let storage = Lazy.force target.Tn.storage_prec in
+      let update_bases =
+        List.map !updates ~f:(fun st ->
+            match peel_accum_nest ~loop_bounds:[] ~free_of:[] st with
+            | Some (_, idcs, base, _, _) when accum_base_widens ~tn:target ~idcs base -> Some base
+            | _ -> None)
       in
+      let wide =
+        (not (Ops.equal_prec acc_prec storage))
+        && (let judge serialized = serial_accum_widths ~serialized ~tn:target entry in
+            let bound = judge (fun _ _ -> false) in
+            let serialized =
+              judge (fun _ -> function
+                | Workgroup | Workgroup_reduce -> true
+                | Serial | Unrolled | Vectorized | Grid -> false)
+            in
+            if not (List.equal Bool.equal bound serialized) then
+              refuse
+                ("Schedule.Privatize: whether the serial rendering widens " ^ Tn.debug_name target
+               ^ "'s accumulation depends on whether the backend renders a hardware-typed level \
+                  serially, which the transform cannot know");
+            (not (List.is_empty bound)) && List.for_all bound ~f:Fn.id)
+        && (not (List.is_empty update_bases))
+        && List.for_all update_bases ~f:Option.is_some
+      in
+      let widened_scopes =
+        if wide then
+          List.filter_map update_bases ~f:(function Some (`Scope (id, _)) -> Some id | _ -> None)
+        else []
+      in
+      let tile_prec = if wide then acc_prec else storage in
       let tile =
-        Tn.create ~namespace:tile_namespace (Tn.Specified tile_prec) ~id:(fresh_tile_id ())
-          ~label:("acc" :: target.Tn.label)
+        Tn.create ~namespace:tile_namespace
+          (if wide then Tn.Default tile_prec else Tn.Specified tile_prec)
+          ~id:(fresh_tile_id ()) ~label:("acc" :: target.Tn.label)
           ~unpadded_dims:(lazy tile_dims)
           ~padding:(lazy None)
           ()
@@ -2806,6 +2777,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local
         (Site "176:tensorize-acc-tile");
       ignore (get_node opt.traced_store tile : traced_array);
+      if wide then wide_tiles := (target, tile) :: !wide_tiles;
       let tile_read_idcs =
         if scalar_acc then [| Indexing.Fixed_idx 0 |]
         else
@@ -2876,11 +2848,11 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
          scope the peel accepted as the base: another scope keyed to [target] inside the
          contribution is not the accumulator and keeps its typing (round 5). *)
       let remapped =
-        match !widened_scope with
-        | None -> remapped
-        | Some base_id ->
+        match widened_scopes with
+        | [] -> remapped
+        | base_ids ->
             let rekey (id : scope_id) =
-              if equal_scope_id id base_id then { id with tn = tile } else id
+              if List.mem base_ids id ~equal:equal_scope_id then { id with tn = tile } else id
             in
             let rec go (llc : t) : t =
               match llc with
@@ -4702,7 +4674,7 @@ let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_
   let llc = rewrite_loop ~what:"Schedule.Fold_mma" ~sym:outer opt.llc ~f:(fun _ -> nest) in
   { opt with llc; workgroup_shared = Set.add (Set.add opt.workgroup_shared s2) u2 }
 
-let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
+let apply_opt_op ~entry ~wide_tiles (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
   match op with
   | Stage
       {
@@ -4718,7 +4690,8 @@ let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized 
       } ->
       apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_stride
         ~pipeline_depth ~tile_prec opt
-  | Privatize { target; over; acc_prec } -> apply_privatize ~target ~over ~acc_prec opt
+  | Privatize { target; over; acc_prec } ->
+      apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec opt
   | Tensorize _ -> apply_tensorize op opt
   | Fold_mma { query; lane; block; width } -> apply_fold_mma ~query ~lane ~block ~width opt
   | Fuse_epilogue { target; shared } -> apply_fuse_epilogue ~target ~shared opt
@@ -4734,6 +4707,12 @@ let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized 
   | (Split _ | Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _) as
     op ->
       { opt with llc = apply_op opt.Low_level.llc op }
+
+(* One op applied on its own, outside {!apply_typed}: the legality probes and the zero-expansion
+   check. [Privatize] judges its tile width on the program the op is given, and there is no final
+   re-check — a probe's result is discarded, or (zero expansion) mints no tile. *)
+let probe_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
+  apply_opt_op ~entry:opt.Low_level.llc ~wide_tiles:(ref []) opt op
 
 (* gh-ocannl-537: the recognizer's answer to "which loops would have to enclose the reduction for
    this site to be splittable". Probed hermetically like [op_legality]'s [Split_reduce] arm — the
@@ -4842,16 +4821,67 @@ let with_transform_fault fault body =
   Stdlib.Domain.DLS.set transform_fault fault;
   Exn.protect ~f:body ~finally:(fun () -> Stdlib.Domain.DLS.set transform_fault previous)
 
+(* gh-ocannl-1151: whether a [Privatize] tile minted at the residency still holds an accumulation
+   the shared decision widens, in the FINAL program of its [apply] — after every later op and the
+   finalization passes. [apply_privatize] judged the program the schedule started from and the
+   update as it stood when the op ran; a later op of the same schedule rewrites the update again.
+   Every write of the tile must be either a transfer (it does not read the tile: the init-load, or a
+   zero) or a self-accumulating update whose base {!Low_level.accum_base_widens}; a [Tile_mma]
+   accumulates at its own precision, and its scalar fallback is judged like any statement. *)
+let privatized_tile_widens ~tile (llc : Low_level.t) =
+  let open Low_level in
+  let rec ok (llc : t) =
+    match llc with
+    | Seq (a, b) -> ok a && ok b
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> ok body
+    | Tile_mma { fallback; _ } -> ok fallback
+    | Set { tn; llsc; _ } when Tn.equal tn tile -> (
+        (not (scalar_touches_tn tile llsc))
+        ||
+        match peel_accum_nest ~loop_bounds:[] ~free_of:[] llc with
+        | Some (_, idcs, base, _, _) -> accum_base_widens ~tn:tile ~idcs base
+        | None -> false)
+    | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn -> not (Tn.equal tn tile)
+    | Set _ | Set_local _ | Declare_local _ | Noop | Comment _ | Staged_compilation _
+    | Workgroup_barrier ->
+        true
+  in
+  ok llc
+
+(* The wide tiles whose final-program re-check failed, as (target, tile), most recent first: each
+   fell back to the target's storage precision. Per domain, like [transform_fault]. *)
+let privatize_fallbacks_key : (Tn.t * Tn.t) list ref Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () -> ref [])
+
+let privatize_fallbacks () = !(Stdlib.Domain.DLS.get privatize_fallbacks_key)
+
+(* The re-check {!apply_typed} runs over the tiles its [Privatize]s minted wide. A tile whose
+   precision a later op already forced cannot fall back, and is refused rather than left wide. *)
+let recheck_privatized_tiles ~wide_tiles (llc : Low_level.t) =
+  List.iter (List.rev wide_tiles) ~f:(fun (target, tile) ->
+      if not (privatized_tile_widens ~tile llc) then begin
+        if Lazy.is_val tile.Tn.storage_prec then
+          refuse
+            ("Schedule.Privatize: a later op left the accumulation of " ^ Tn.debug_name target
+           ^ "'s tile one the shared decision does not widen, after its precision was already \
+              consumed");
+        Tn.update_prec tile (Lazy.force target.Tn.storage_prec);
+        let log = Stdlib.Domain.DLS.get privatize_fallbacks_key in
+        log := (target, tile) :: !log
+      end)
+
 (* The candidate-facing application: an op precondition refusal arrives typed ({!refuse}), every
-   other exception as raised. *)
+   other exception as raised. Every op sees the program the schedule started from as its [entry]:
+   [Privatize] judges its tile's width there (gh-ocannl-1151). *)
 let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optimized) :
     Low_level.optimized =
   if List.is_empty sched then opt
   else
+    let entry = opt.Low_level.llc and wide_tiles = ref [] in
     let opt =
       List.fold sched ~init:opt ~f:(fun opt op ->
           Stdlib.Domain.DLS.get transform_fault op;
-          apply_opt_op opt op)
+          apply_opt_op ~entry ~wide_tiles opt op)
     in
     let opt = elide_staged_barriers opt in
     let llc = opt.Low_level.llc in
@@ -4866,6 +4896,7 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
       then Low_level.hoist_cross_statement_cse @@ Low_level.eliminate_common_subexpressions llc
       else llc
     in
+    recheck_privatized_tiles ~wide_tiles:!wide_tiles llc;
     { opt with llc }
 
 let apply ?static_indices sched opt =
@@ -5256,7 +5287,7 @@ let stage_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
     }
   in
-  match apply_opt_op hermetic op with
+  match probe_opt_op hermetic op with
   | exception Schedule_outcome.Cause_at (_, cause) ->
       Op_illegal (Schedule_outcome.detail_of_cause cause)
   | staged -> (
@@ -5371,7 +5402,7 @@ let staging_scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict 
             optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
           }
     in
-    match apply_opt_op probe op with
+    match probe_opt_op probe op with
     | exception Schedule_outcome.Cause_at _ -> None
     | applied ->
         Option.map (pipeline_violation applied) ~f:(fun v ->
@@ -5424,7 +5455,7 @@ let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       (* Pure reindexing: the merged loop runs the pair's iterations in the original order at the
          original addresses, so only applicability is in question -- the recognition is a pure
          function of the code, probed like [Split_reduce] below. *)
-      match apply_opt_op opt op with
+      match probe_opt_op opt op with
       | exception Schedule_outcome.Cause_at (_, cause) ->
           Op_illegal (Schedule_outcome.detail_of_cause cause)
       | (_ : Low_level.optimized) -> Op_legal)
@@ -5487,7 +5518,7 @@ let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
           optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
         }
       in
-      match apply_opt_op hermetic op with
+      match probe_opt_op hermetic op with
       | exception Schedule_outcome.Cause_at (_, cause) ->
           Op_illegal (Schedule_outcome.detail_of_cause cause)
       | (_ : Low_level.optimized) -> Op_legal)
@@ -5511,6 +5542,9 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
       optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
     }
   in
+  (* Applied the way {!apply_typed} applies it: every op sees the program the schedule started from
+     as its [entry] ([Privatize] judges its tile width there). *)
+  let entry = opt.Low_level.llc and wide_tiles = ref [] in
   let rec go opt acc = function
     | [] -> List.rev acc
     | op :: tl -> (
@@ -5518,7 +5552,7 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
         match v with
         | Op_illegal _ -> List.rev ((op, v) :: acc)
         | _ -> (
-            match apply_opt_op opt op with
+            match apply_opt_op ~entry ~wide_tiles opt op with
             | opt' -> go opt' ((op, v) :: acc) tl
             | exception Schedule_outcome.Cause_at (_, cause) ->
                 (* Rendered as the exception {!apply} raises for it, so the message reads as before
@@ -8133,7 +8167,7 @@ let reduction_zero_fold ~zero_sched (opt : Low_level.optimized) (zero : Low_leve
          the same code whatever the policy; the policy (asked without keeping the symbols its
          schedule mints) only decides whether a NEW fold is proposed. *)
       let expand () =
-        (apply_opt_op { opt with llc = zero } (fst (expand_zero ~tn))).Low_level.llc
+        (probe_opt_op { opt with llc = zero } (fst (expand_zero ~tn))).Low_level.llc
       in
       let proposed =
         dry_run (fun () ->
