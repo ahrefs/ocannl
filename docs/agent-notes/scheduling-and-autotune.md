@@ -1793,6 +1793,29 @@ files.
   so a new entry field reaches every planted entry through one default. `schedule_cache_regime`
   pins the record itself: committed and admitted I/O, the regime, lock, read and commit refusals,
   keyless calls, and nesting.
+- **A claim that rests on a recording retries the recording, then skips with a reason** (gh-ocannl-1086).
+  A recording run whose evidence is unclean records nothing by design, and every "the replay
+  ships the recorded X" claim written as `(not stored) || X` then passes vacuously — about half
+  the runs on a loaded box, with no trace. `placement_store` re-runs each recording (run 1, run 6,
+  the cross-process recorder) in a FRESH directory, up to three attempts (the same directory would
+  replay the first attempt's clean searches), and gates the dependent claims through
+  `Verdict.gated ~aggregation:`Environment` on why no entry exists, so the sweep counts the skip.
+  The test's "clean" predicate is `Train.tune_placements`' own recording rule — uncontended, no
+  terminal failure, a finite best — under which an abandoned flip is a measured loser, not spoiled
+  evidence; a stricter test-side copy (requiring every report `Searched`/`Cache_replay`) disagrees
+  with the recorder exactly when a flip is abandoned.
+- **A timing lineage's schedule does not compile into a caller lineage that lowers differently**
+  (gh-ocannl-1386). With `?timing_ctx` deciding a node materialized that the caller leaves
+  virtual, `Autotune.tune` rebases the timing lineage's base lowering onto the caller's placements
+  for the cache replay and the winner compile (`compile_candidate`'s `rebase`). A whole-routine
+  winner then emits code reading an undeclared buffer — on cc a classified decline, so the untuned
+  default ships; on Metal an unclassified `Failure`, fatal under strict classification — and a
+  FISSIONED winner raises `Tnode.Placements.promote_local_to_device: … is virtual`, fatal too, so
+  the arm (or the placement store's replayed search) dies. On cc which kind wins is timing noise,
+  which made `placement_store`'s timing-context warm replay flake on CI. The test pins around it
+  (its own directory, fissioned candidates ranked last through `Autotune.on_candidate_measured`;
+  on Metal its run-6 claims are counted skips); pinning fissioned candidates FIRST for the warm run
+  reproduces the CI failure deterministically.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the
