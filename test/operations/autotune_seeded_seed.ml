@@ -59,7 +59,7 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let () = Unix.putenv "OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION" "32"
 
 (* What the untuned compile promises here, read off the predicates it consults: seeding on CUDA and
-   HIP, the split on CUDA alone (gh-ocannl-1325: HIP keeps the unsplit plan). *)
+   HIP, the split likewise ([Autotune.seeded_split_backend], gh-ocannl-1325, gh-ocannl-1412). *)
 let seeds_here = Autotune.seeded_default_backend backend_name
 let splits_here = Autotune.seeded_split_backend backend_name
 
@@ -214,8 +214,8 @@ let () =
       p "on CUDA/HIP the untuned plan seeds a contraction"
         (match choice with Some c -> not (List.is_empty c.Autotune.sd_seeded) | None -> false));
   Verdict.gate ~when_:splits_here ~on:backend_name
-    "where the untuned compile splits (CUDA), the plan splits a reduction" (fun () ->
-      p "where the untuned compile splits (CUDA), the plan splits a reduction"
+    "where the untuned compile splits (CUDA and HIP), the plan splits a reduction" (fun () ->
+      p "where the untuned compile splits (CUDA and HIP), the plan splits a reduction"
         (match choice with Some c -> not (List.is_empty c.Autotune.sd_split) | None -> false));
   Verdict.gated ~when_:(not seeds_here) ~on:backend_name
     "off CUDA/HIP the untuned compile is the plain default" (Option.is_none untuned_digest);

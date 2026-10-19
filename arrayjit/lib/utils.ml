@@ -71,6 +71,7 @@ let known_config_keys =
       "clean_up_log_files_on_startup";
       "never_capture_stdout";
       "detach_c_stderr";
+      "collapse_foreign_stderr_noise";
       (* ppx_minidebug *)
       "snapshot_every_sec";
       "time_tagged";
@@ -166,6 +167,7 @@ let known_config_keys =
       "autotune_pad_waste_max";
       "autotune_composite_playoff_width";
       "autotune_composite_playoff_margin";
+      "autotune_staffed_singles";
       "autotune_round_expansion";
       "autotune_log";
       "autotune_progress";
@@ -397,6 +399,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_pad_waste_max";
         "autotune_composite_playoff_width";
         "autotune_composite_playoff_margin";
+        "autotune_staffed_singles";
         "autotune_round_expansion";
         "autotune_keep_fraction";
         "autotune_bound_pruning";
@@ -453,10 +456,14 @@ let config_key_classification : (config_key_class * string * string list) list =
        its seeded-plan candidate reads auto as the fallback threshold",
       [ "model_cache_capacity"; "model_cache_bandwidth" ] );
     ( Execution_neutral,
-      "startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter \
-       follows",
+      "startup and configuration-sourcing chatter, which descriptor foreign C-library chatter \
+       follows, and whether its known per-event noise is collapsed into a count",
       [
-        "suppress_welcome_message"; "log_config_sourcing"; "never_capture_stdout"; "detach_c_stderr";
+        "suppress_welcome_message";
+        "log_config_sourcing";
+        "never_capture_stdout";
+        "detach_c_stderr";
+        "collapse_foreign_stderr_noise";
       ] );
     ( Execution_neutral,
       "debug artifacts and where they go: the files are written beside the run, the kernels are \
@@ -618,6 +625,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_pad_waste_max", (Float_at_least { floor = 1.; fallback = 2. }, "2."));
     ("autotune_composite_playoff_width", (Integer, "2"));
     ("autotune_composite_playoff_margin", (Float_number, "0.005"));
+    ("autotune_staffed_singles", (Flag, "false"));
     ("autotune_round_expansion", (Keyword, "differing"));
     ("autotune_keep_fraction", (Float_number, "1."));
     ("autotune_bound_pruning", (Flag, "false"));
@@ -2234,6 +2242,32 @@ external detach_c_stderr : unit -> bool = "ocannl_detach_c_stderr"
    harness or capture wrapper has had a chance to redirect fd 2. *)
 let c_stderr_detached =
   get_global_flag ~default:true ~arg_name:"detach_c_stderr" && detach_c_stderr ()
+
+external c_stderr_replaceable : unit -> bool = "ocannl_c_stderr_replaceable"
+(** Whether this C runtime's [stderr] can be replaced at all (glibc, Darwin): the predicate both
+    {!detach_c_stderr} and {!collapse_c_stderr_noise} are compiled under, so a test can tell a host
+    that cannot from a stub that failed. *)
+
+external collapse_c_stderr_noise : unit -> bool = "ocannl_collapse_c_stderr_noise"
+(** Replace the C runtime's [stderr] by a stream that writes through to the same descriptor but
+    collapses the ROCm runtime's [Signal 0x... time stamps may be invalid.] lines into a count
+    (gh-ocannl-1370): the first is written, with a note that later ones are counted, and the count
+    is reported in one line at exit. Every other byte is written through at once and in order.
+    Reports whether it took effect (glibc and Darwin only). Idempotent.
+
+    {!c_stderr_detached} keeps the line out of a ppx_expect golden, but not off the run log, where
+    an assertions-enabled ROCr prints one per recorded event -- 268,172 for one autotuning test --
+    and Dune truncates a long action output from the middle, which is where the test's own
+    diagnostics were. *)
+
+(** Whether the C runtime's [stderr] collapses the ROCm runtime's per-event chatter, installing the
+    filter on first force when [collapse_foreign_stderr_noise] (default true) asks for it. The HIP
+    backend forces it when it opens a device, before creating its stream; nothing else does, so no
+    other process's C stream is replaced. *)
+let c_stderr_noise_collapsed =
+  lazy
+    (get_global_flag ~default:true ~arg_name:"collapse_foreign_stderr_noise"
+    && collapse_c_stderr_noise ())
 
 (** What {!bounded_exit_teardown} did with one resource. *)
 type exit_teardown_outcome =

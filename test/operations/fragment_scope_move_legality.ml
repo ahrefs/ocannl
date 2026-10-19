@@ -5,9 +5,9 @@
    The scope: [Tensorize]'s accumulator contraction brackets the contracted loop chain with a lane-0
    load of the fragment and a lane-0 store-back, and marks the fragment. [C_syntax] maps a bracket
    holding exactly one [Tile_mma] to persistent intrinsic fragments when it meets it at the head of
-   a statement sequence ([Schedule.recognize_fragment_scope], shared by both sides). A [Tile_mma]
-   outside such a scope still compiles: it declines to the lane-0 scalar fallback. #1229's CUDA
-   probe on gpt2_mini timed 17 such round-1 candidates at 4.1-7.5 ms against the 2.21 ms head, all a
+   a statement sequence ([Low_level.fragment_region], shared by both sides). A [Tile_mma] outside
+   such a scope still compiles: it declines to the lane-0 scalar fallback. #1229's CUDA probe on
+   gpt2_mini timed 17 such round-1 candidates at 4.1-7.5 ms against the 2.21 ms head, all a
    materializing [Unroll]: of the attention out-projections' [Base] contraction axis, and of the
    logits tile's [Split_outer] contraction block.
 
@@ -147,16 +147,17 @@ let around s = Option.value_exn s.around
    copy symbols for both). *)
 let copy_column (applied : LL.optimized) =
   let fragments = applied.LL.simdgroup_fragments in
-  let rec find (c : LL.t) =
-    match c with
-    | LL.Seq (c1, c2) -> (
-        match Sched.recognize_fragment_scope ~fragments c with
-        | Some fs -> Some (List.hd_exn fs.Sched.fs_load.Sched.ft_syms)
-        | None -> Option.first_some (find c1) (find c2))
-    | LL.For_loop { body; _ } | LL.If { body; _ } -> find body
-    | _ -> None
-  in
-  Option.value_exn (find applied.LL.llc)
+  List.find_map_exn (LL.flat_lines [ applied.LL.llc ]) ~f:(fun stmt ->
+      let rec find (c : LL.t) =
+        match LL.fragment_transfer ~into_fragment:true c with
+        | Some (_, _, fragment, _, _, syms) when Set.mem fragments fragment -> List.hd syms
+        | _ -> (
+            match c with
+            | LL.Seq (c1, c2) -> Option.first_some (find c1) (find c2)
+            | LL.For_loop { body; _ } | LL.If { body; _ } -> find body
+            | _ -> None)
+      in
+      find stmt)
 
 let violation_matches expect (vs : Sched.fragment_scope_violation list) =
   match expect with

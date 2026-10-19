@@ -47,6 +47,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (action
   (run %{bin:ocannl_read_config} "--read=backend")))
@@ -56,6 +57,49 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  ocannl_ambient
   (env_var OCANNL_BACKEND))
  (action
   (run %{bin:ocannl_read_config} "--read=backend_extension")))
+
+; gh-ocannl-1149: the environment as a dependency. `ocannl_ambient` records the ambient
+; `OCANNL_*` environment addressed to the configuration (the program's header says which part and
+; why); `(universe)` reruns it on every invocation, and dune's early cutoff stops at its output while
+; that is unchanged. `ambient/ocannl_config` is the shared configuration with that record appended
+; as comments: it is what every test directory copies, so every rule depending on its
+; `ocannl_config` -- which `config_dep_completeness` asks of every rule running a program that reads
+; one -- reruns when the environment changes, with no `(env_var …)` naming a key. A directory that
+; checks in a configuration of its own depends on `ocannl_ambient` beside it instead.
+;
+; No `(package …)`: arrayjit/test copies `ocannl_ambient` too, and must find it under
+; `dune build -p arrayjit`. The command-line pins keep the reader quiet on stderr whatever the
+; environment says -- they outrank it for the run without changing what the environment holds. The
+; program writes its target itself rather than through `with-stdout-to`: an ambient tracing setting
+; can make `Utils` print to stdout, which must not land in every test's configuration.
+
+(executable
+ (name ocannl_ambient_env)
+ (modules ocannl_ambient_env)
+ (libraries base stdio unix arrayjit.utils))
+
+(rule
+ ; ocannl-backend: none -- links arrayjit.utils alone and only reads the environment.
+ (target ocannl_ambient)
+ (deps ocannl_config (universe))
+ (action
+  (run
+   %{exe:ocannl_ambient_env.exe}
+   --ocannl_suppress_welcome_message=true
+   --ocannl_log_config_sourcing=false)))
+
+(subdir
+ ambient
+ (rule
+  (target ocannl_config)
+  (deps ../ocannl_config ../ocannl_ambient)
+  (action
+   (with-stdout-to
+    %{target}
+    (progn
+     (cat ../ocannl_config)
+     (cat ../ocannl_ambient))))))

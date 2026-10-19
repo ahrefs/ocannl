@@ -160,6 +160,24 @@ let () =
          List.map keys ~f:(fun key -> Autotune.fiss_sketch_label ~fine [ (key, lo) ])))
     ~equal:String.equal ~to_string:Fn.id
 
+(* A staffed single (gh-ocannl-1138) is a single of its focus, timed against the running composite's
+   choices for the other keys: its label is the bare single's with the staff appended after [" |
+   staff "] -- so a reader that splits the focus off still reads the bare label -- and two staffs
+   print apart, so the singles of one key swept in two backgrounds never share a label. *)
+let () =
+  let key_a = { Autotune.key_units = [ 0 ]; key_digest = Stdlib.Digest.(to_hex (string "a")) }
+  and key_b = { Autotune.key_units = [ 2 ]; key_digest = Stdlib.Digest.(to_hex (string "b")) } in
+  let bare = Autotune.fiss_sketch_label ~fine:false [ (key_a, lo) ] in
+  let staffed staff = Autotune.fiss_sketch_label ~staff ~fine:false [ (key_a, lo) ] in
+  p "an empty staff prints the bare label" (String.equal (staffed []) bare);
+  p "a staffed label is the bare one's focus followed by its staff"
+    (String.is_prefix
+       (staffed [ (key_b, hi) ])
+       ~prefix:(String.chop_suffix_exn bare ~suffix:"]" ^ " | staff "));
+  p_pairwise_distinct "staffs of different parameters print apart"
+    [ bare; staffed [ (key_b, lo) ]; staffed [ (key_b, hi) ] ]
+    ~equal:String.equal ~to_string:Fn.id
+
 (* --- Part 1b: every field of a split-reduce site reaches its label --- *)
 
 (* Two targets of one debug name -- two nodes labeled alike: the label must tell them apart by more
@@ -181,6 +199,7 @@ let site_lo : Autotune.sr_site =
     sr_dynamic = false;
     sr_swaps = [ (sym 2, sym 1) ];
     sr_coalesce = None;
+    sr_block_hoist = [];
   }
 
 let site_hi : Autotune.sr_site =
@@ -193,6 +212,7 @@ let site_hi : Autotune.sr_site =
     sr_dynamic = true;
     sr_swaps = [ (sym 4, sym 3) ];
     sr_coalesce = Some (sym 5, sym 6);
+    sr_block_hoist = [ sym 7 ];
   }
 
 (* The fields as the type's derived s-expression lists them, in declaration order. *)
@@ -218,6 +238,7 @@ let site_updates : (string * (donor:Autotune.sr_site -> Autotune.sr_site -> Auto
     ("sr_dynamic", fun ~donor s -> { s with sr_dynamic = donor.sr_dynamic });
     ("sr_swaps", fun ~donor s -> { s with sr_swaps = donor.sr_swaps });
     ("sr_coalesce", fun ~donor s -> { s with sr_coalesce = donor.sr_coalesce });
+    ("sr_block_hoist", fun ~donor s -> { s with sr_block_hoist = donor.sr_block_hoist });
   ]
 
 let () =
@@ -245,6 +266,17 @@ let () =
        (String.equal
           (Autotune.split_sites_label [ (site_lo, 32) ])
           (Autotune.split_sites_label [ (site_lo, 16) ])));
+  (* A staffed split single (gh-ocannl-1138) appends its staff after [" | staff "], as a staffed
+     sketch single does, so its focus reads as the bare label and two staffs print apart. *)
+  let bare = Autotune.split_sites_label [ (site_lo, 32) ] in
+  let staffed b = Autotune.split_sites_label ~staff:[ (site_hi, b) ] [ (site_lo, 32) ] in
+  p "a staffed split label is the bare one's focus followed by its staff"
+    (String.equal (Autotune.split_sites_label ~staff:[] [ (site_lo, 32) ]) bare
+    && String.is_prefix (staffed 8) ~prefix:(String.chop_suffix_exn bare ~suffix:"]" ^ " | staff ")
+    );
+  p_pairwise_distinct "split staffs of different block counts print apart"
+    [ bare; staffed 8; staffed 16 ]
+    ~equal:String.equal ~to_string:Fn.id;
   p_none "no site label carries a comma"
     (List.concat_map site_updates ~f:(fun (_, update) ->
          [

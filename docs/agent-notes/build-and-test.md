@@ -976,6 +976,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   sends the group TERM from inside the wait's first probe, against a plain-`sup_alive` control;
   the unshimmed GROUP_TERM leg hit it only under load (one run in 25 at background QoS on a busy
   mac-studio, none in 35 at normal priority).
+- **A short bound that kills a stand-in cannot also be the time it gets to start** (gh-ocannl-1366).
+  The device-probe hang legs (`tools/test-test-run.sh` 76 and 83) ran their never-answering
+  stand-in under a 1 s bound and then read the call and pid it records first thing; on a loaded
+  mac-studio its start alone outlasted the second, the bound KILLed it before it wrote a byte, and
+  the leg failed with an empty record (`the query was not asked once`) while the verdict under test
+  was right. The clock starts at the fork, before `exec`, so no stand-in is fast enough to rule
+  this out. `probe_hang_run` now judges only a run the stand-in started in: one that left no start
+  record is repeated under a bound three times as wide (up to 27 s), with a `note:` line; a
+  stand-in that answers runs under a 30 s bound it never waits out. Leg 76 pins the
+  widening with a stand-in that records nothing on its first run (a marker file, not a delay: the
+  bound is polled, so a delay only races it), which must be judged in the second, at 3 s. A
+  stand-in delayed 1.5 s before recording reproduced the original failure on the base tree; a
+  natural reproduction was not found (mac-studio at load 70, CPU and fresh-exe churn, started it
+  within 0.2 s).
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
@@ -1279,6 +1293,28 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   setting; there dropping any one dep fails the run. Dune also plants an empty `.git` above every
   sandbox, so nothing inside one can read the enclosing checkout's repository: a test of a
   revision-stamping helper builds a repository of its own.
+- **The environment reaches a test through its `ocannl_config` dependency** (gh-ocannl-1149). Dune
+  reruns a rule for a variable only where the rule declares it, and nothing tied the hand-written
+  `(env_var OCANNL_<KEY>)` lists to what the linked pipeline reads: review found one missing key per
+  round, and every test compiling through `Context.compile` read dozens of keys it never declared.
+  So `test/config/dune` runs `ocannl_ambient_env` under `(universe)` -- once per invocation,
+  milliseconds -- writing `ocannl_ambient`, a sorted, escaped, comment-only record of the
+  environment variables `Utils.classify_env_var` addresses to the configuration, and appends it to
+  the shared configuration as `test/config/ambient/ocannl_config`, which every test directory
+  copies. An unchanged environment gives a byte-identical file and dune's early cutoff stops there
+  (checked: a test declaring no key reruns under a newly set `OCANNL_TF32_MATMULS` and is served
+  from the cache on the next identical invocation). Left out: the `OCANNL_TOOL_`/`OCANNL_LOG_LEVEL_<MODULE>`
+  namespaces (test-run.sh exports a fresh run directory in the former every run, which would rerun
+  the whole suite), and `OCANNL_BACKEND`, whose per-stanza declaration-or-marker rule above stays,
+  so switching backends between sweep legs does not rerun backend-pinned stanzas. A directory that
+  checks in its own configuration (`arrayjit/test`, `profiles/`, `startup_streams/`) copies
+  `ocannl_ambient` and lists it beside `ocannl_config`. `config_dep_completeness` requires one of
+  the three -- the carrying copy as the nearest configuration, `ocannl_ambient`, or `(universe)` --
+  of every site it requires a configuration of, and checks both producers in `test/config/dune`;
+  `Slot_kind` reads the carrying copy as test/config's backend only while its producer has exactly
+  the two-`cat` shape. `env_var_deps`' per-key derivations below (named schedule values, the cc
+  width, guards, `Generated.init`) predate the record and still ask for their declarations, which
+  are redundant for any rule the record reaches.
 - **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
   run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
   `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one
@@ -1335,7 +1371,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   modeled, so a rerun is the cost. Not followed: functor bodies, functions passed as values,
   modules outside `arrayjit/lib`, and reads the backend makes on its own while compiling
   (`Backends.compile` consulting `Schedule.log_launches`) -- that is the `Context.compile` route. Out of scope on purpose: a program reaching the pipeline only through
-  `Context.compile` (every compiled test), a library, and an executable no rule runs. The failure
+  `Context.compile` (every compiled test; the ambient record above answers for it), a library, and
+  an executable no rule runs. The failure
   message lists the exact `(env_var …)` lines to add; the golden lists the derived key universe, so
   a new key the pipeline reaches shows up as a diff and as a failure on each stanza that reaches it.
 - **A test that reads the cc vector width declares `(env_var OCANNL_CC_VECTOR_BYTES)` — derived
@@ -1448,7 +1485,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   per-test aliases depend on the gate explicitly, while dune's GENERATED `runtest-<name>` aliases do
   not — a targeted run of a `(test)` stanza can be served stale under a rejected spelling — and
   `env_var_deps` checks that every alias with test actions in a directory carries that directory's
-  gate.
+  gate. A golden pair carries it on the rule making the diffed output, `(deps (alias
+  runtest-env_spelling_gate) …)`, not on the diff's alias rule (gh-ocannl-1378): the gate still runs
+  before the test, a cached output is never re-run for it (an alias dependency adds no digest; the
+  gate's `(universe)` reruns only the gate), and `dune rules` shows a file rule's alias
+  dependencies where it never shows an alias rule's, so `tools/test-run.sh affected` lists every
+  pair when the gate changes. `env_var_deps` follows that route: an alias whose rule reads an
+  output of a gate-dependent rule is gated. A rule that runs and diffs in one alias action (the
+  `slow-`/`train-` shape) keeps the dependency on itself.
 - Deleting a file target out from under dune is not a way to force it to re-run: `dune build
   <that target>` afterwards exits 0 having produced nothing (observed on dune 3.23.1 with
   `test/operations/<name>.exe.output`), and `-f/--force` does not rescue it — `--force` only
@@ -1662,10 +1706,27 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   since a skip prints `p`'s line and the pair breaks the golden on the host that skips. The rule,
   the remedy (`Verdict.gated`) and what the reader cannot see are in the conventions note. A new
   claim entry point that takes a label and a boolean joins `claim_kinds` in
-  `verdict_provenance.ml`, or the quantifier reader goes blind at its call sites. The refusal
+  `verdict_provenance.ml`, or the quantifier reader goes blind at its call sites; a new
+  `Verdict.Claims` member of any kind joins `Verdict_callee.members`, which `verdict_ratchet` holds
+  equal to the module. The refusal
   reader cannot go blind that way: `refusal_control_scan_cases` holds `refusing_claims` plus
   `non_refusing_claims` (`refusal_control_scan.ml`) equal to the members `Verdict.Claims` binds,
   read from `verdict.ml`, so a new `Claims` member is red until judged in one of them.
+- Whose a claim is -- `Verdict`'s or not -- is ONE resolver's answer (gh-ocannl-1361):
+  `test/support/verdict_callee.ml` walks a source once through `Lexical_scope` and every Verdict
+  reader (the provenance layer, `Verdict_scan.claim_calls` behind the line-break and dialect
+  readers, `gate_census`) looks the callee up by its location. Before it, each reader decided for
+  itself and they drifted: staging#1150 fixed the line-break reader in six rounds, one edge per
+  round, while the provenance layer still read a `module Verdict = Local_printer` as `Verdict`. A
+  claim name that reaches `Verdict` only past an `open` of a module the resolver cannot read (any
+  but `Verdict`, the source's own structures and the standard libraries) is `Ambiguous`, whether
+  unqualified or qualified (`Verdict.p` may be that module's `Verdict`): still read, and its
+  refusal adds the qualify-the-call remedy. The resolver answers LEXICALLY; the provenance layer
+  alone carries a module through a functor application (`Make (Verdict)`), asking the resolver only
+  whether the argument's path denotes `Verdict`. A question about Verdict ownership goes into the
+  resolver, never into one reader, and `verdict_ratchet`'s agreement controls -- one claim each
+  reader would refuse, spelled every way the resolver distinguishes -- fail when the readers
+  disagree.
 - `verdict_ratchet`'s fourth reader is about GATES (gh-ocannl-1289): `Verdict_scan.gate_census`
   refuses a `Verdict` `gated_all`/`gated_alli`/`gated_exists` claim whose `~when_` reads the
   population it quantifies or a collection that population is built from. Such a gate closes when
@@ -1683,9 +1744,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `test/support/verdict_scan.ml` states the exact forms, which arguments of which library
   functions count (selectors, generators, Stdlib order), and the boundary: a population threaded
   through a function parameter, a record field, an unqualified call under `open List` or a
-  destructured `let`, and `Verdict.gated`'s boolean, are not read; a `gated_*` application the
-  reader cannot complete is refused as unread rather than counted clean. Its recognized forms are
-  held equal to the `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
+  destructured `let` is not read; a gated application the reader cannot complete is refused as
+  unread rather than counted clean. `Verdict.gated`'s boolean is read too (gh-ocannl-1361): its
+  population is what the boolean's quantifiers (`for_all`, `exists`, `is_empty`, ... of a
+  collection module) range over, through names, writes, `not`/`&&`/`||` and branches, so
+  `gated ~when_:(not (List.is_empty xs)) label ((not (List.is_empty xs)) && List.for_all xs …)` is
+  refused; a boolean that quantifies nothing has no population. Its recognized forms are held
+  equal to the `gated` and `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
   (`p "…" ((not on_cpu) || ok)`), which prints `true` where it should report a skip, is a
   different shape it does not see. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
@@ -2175,7 +2240,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   registers a target and plain `dune build` (@all) runs the training that the `(test)` stanza only
   ran under `runtest` — and `no-infer` also drops the dependency `diff` would have inferred on its
   golden, so the golden goes in `deps` by hand. And the new `runtest-<name>` alias is a build entry
-  point, so the directory needs a `runtest-env_spelling_gate` rule for it to depend on and an
+  point, so the directory needs a `runtest-env_spelling_gate` rule for its output rule to depend on
+  and an
   `(alias (name runtest) (deps (alias runtest-<name>)))` stanza, both of which `env_var_deps`
   checks.
 - Splitting a golden per backend is a decision about WHAT the golden holds, not a formatting choice,
@@ -2270,14 +2336,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   disambiguates longer identifiers). Budget the resulting promote as expected work, in its own
   commit, after diff-confirming the delta is rename-only.
 - **Which per-test aliases a change reaches is dune's answer, not a guess**:
-  `tools/test-run.sh affected REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`) prints them,
-  one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh run build`
-  or `fresh`; stderr says what each changed path reached and gives per-directory counts. Run it
-  before the pre-push batch with the merge-base as REV, `$(git merge-base HEAD <base>)`, where
-  `<base>` is the remote-tracking `master` of `lukstafi/ocannl-staging` (`git remote -v` names
-  it: remote names are not the contract). The base branch itself would also count every commit
-  it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases for a
-  69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
+  `tools/test-run.sh affected --since BASE | REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`)
+  prints them, one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh
+  run build` or `fresh`; stderr says what each changed path reached and gives per-directory counts.
+  Run it before the pre-push batch as `--since <base>`, where `<base>` is the remote-tracking
+  `master` of `lukstafi/ocannl-staging` (`git remote -v` names it: remote names are not the
+  contract): it compares the worktree with `git merge-base HEAD <base>` (gh-ocannl-1379). A bare REV
+  that is not an ancestor of HEAD is warned about, since the base branch's tip would also count
+  every commit it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases
+  for a 69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
   workspace` (modules and library edges), `dune describe external-lib-deps` (the ppx-rewriter
   edges and the `tests` stanzas the first omits), `dune show aliases`/`targets`, and `dune
   rules` for each alias's own targets and each generated module file. Those dependencies are how
@@ -2289,7 +2356,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   in its directory but an owned module source, and for a changed non-build input anywhere: a
   doc, script or golden edit lists those ~49 too. Its header states the boundary as an
   allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
-  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3.
+  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3. Two
+  portability points (gh-ocannl-1389): only `dune rules`' stdout is the answer, since on a cold
+  `_build` printing a rule builds the `%{read:…}` file it depends on (`ocannl_backend_extension.txt`)
+  and that action's chatter lands on dune's stderr; and a library edge between two stanzas this
+  build does not compile is skipped, since `external-lib-deps` gives public names while such a
+  stanza may use a local one (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380

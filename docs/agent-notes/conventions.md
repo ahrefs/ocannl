@@ -116,7 +116,12 @@ files.
   to fd 2 so the library's own reporting is unchanged. It is not filtering — no line is dropped or
   rewritten, the chatter still reaches the real stderr and the run log. The forcing case was ROCm's
   per-event chatter (see the backends note); the general rule is that a golden should never be able
-  to acquire a line from a library the program never named.
+  to acquire a line from a library the program never named. The run log is the other place chatter
+  costs: Dune truncates a long action output from the middle, so thousands of foreign lines erase a
+  test's own diagnostics. The one known line of that volume is collapsed into a count by the HIP
+  backend (`collapse_foreign_stderr_noise`, gh-ocannl-1370), recognized exactly and printed once;
+  any other line passes through, and a new noise source gets its own exact pattern, never a
+  looser one.
 - Prefer the minimal targeted fix over speculative hardening: offer hardening separately as an
   option with its costs, don't fold it into the fix.
 - Git refuses to check out or update a branch that ANOTHER worktree has checked out. This is

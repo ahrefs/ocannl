@@ -5,13 +5,18 @@
 # and then runs this script. It prints aliases and runs none of them.
 #
 # Usage:
+#   tools/test-run.sh affected --since BASE [-- PATHSPEC...]
 #   tools/test-run.sh affected REV | REV..REV | REV...REV [-- PATHSPEC...]
 #   tools/test-run.sh affected --files PATH...
 #
 # The changed paths come from `git diff --name-only` with the given revision
 # argument, in git's own forms: one REV compares it with the working tree, so
 # uncommitted edits count, and files git does not track yet are added to that
-# form. There is no default base: remote names are not the contract here.
+# form. `--since BASE` is that form with REV the merge-base of HEAD and BASE
+# (the base branch, e.g. the staging remote's `master`): a branch's own
+# changes, whatever BASE gained since it forked. A REV that is not an ancestor
+# of HEAD draws a warning, since its own later commits then count as changes.
+# There is no default base: remote names are not the contract here.
 # `--files` names repository-relative paths directly, without git.
 #
 # stdout: one alias per line, `@DIR/FAMILY-NAME[-VARIANT]`, sorted, ready for
@@ -28,7 +33,11 @@
 #   - `dune describe external-lib-deps`: every stanza with the project
 #     libraries it names, ppx rewriters included (`tests` ones and those this
 #     build does not compile too, such as an optional backend library; their
-#     modules stay unknown). Its edges are added to the first answer's.
+#     modules stay unknown). Its edges are added to the first answer's. A
+#     library it names that neither answer lists is skipped when the stanza
+#     naming it is one this build does not compile either (the listing gives
+#     public names only, and such a stanza may use a local one); from any other
+#     stanza it stops the run.
 #   - `dune show aliases DIR...` and `dune show targets DIR...`: the aliases
 #     and the targets of every directory holding a `dune` file. A `NAME.exe`
 #     target no stanza there names is a `tests` stanza naming no library,
@@ -46,7 +55,9 @@
 #     own text. A compiled artifact a rule reads
 #     (a stanza's `.NAME.objs` files, an installed library's) makes that
 #     stanza one of the rule's owners, like an executable the rule runs; an
-#     alias a rule needs (`(deps (alias ...))`) is recorded as well.
+#     alias a rule needs (`(deps (alias ...))`) is recorded as well. Only its
+#     stdout is read: printing a rule can build what its dependencies are
+#     computed from, and those actions' output goes to dune's stderr.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped:
@@ -99,10 +110,12 @@
 #     build input (a script, a config, a golden: what an alias rule's own
 #     `(deps)` name, as `runtest-sweep_harness` names `tools/sweep.sh`).
 #     An alias whose own targets' rules need a printed alias is printed too,
-#     to a fixpoint. Not seen: what an opaque action reads outside its
-#     directory otherwise, and an alias an action itself needs (the ambient
-#     `runtest-env_spelling_gate` most aliases name), which `dune rules` does
-#     not dump in any form it accepts (`@DIR/NAME`, `@@DIR/NAME`).
+#     to a fixpoint: a golden pair's output rule carries the ambient
+#     `runtest-env_spelling_gate` for this reason (gh-ocannl-1378). Not seen:
+#     what an opaque action reads outside its directory otherwise, and an
+#     alias an alias rule's own `(deps)` name (a run-and-diff rule's gate),
+#     which `dune rules` does not dump in any form it accepts (`@DIR/NAME`,
+#     `@@DIR/NAME`).
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -118,10 +131,11 @@ command -v perl >/dev/null 2>&1 || die "perl not found"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
 trap 'rm -rf "${tmp:?}"' EXIT
 
-usage="usage: affected REV | REV..REV | REV...REV [-- PATHSPEC...] | affected --files PATH..."
+usage="usage: affected --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected --files PATH..."
 mode=git
 revs=()
 paths=()
+since=
 if [ "${1:-}" = --files ]; then
   shift
   [ $# -ge 1 ] || die "--files needs at least one path ($usage)"
@@ -131,10 +145,16 @@ else
   while [ $# -gt 0 ]; do
     case $1 in
       --) shift; paths=("$@"); break ;;
+      --since)
+        [ $# -ge 2 ] || die "--since needs the base branch, e.g. --since <remote>/master ($usage)"
+        [ -z "$since" ] || die "--since given twice ($usage)"
+        since=$2; shift 2 ;;
+      --since=*) [ -z "$since" ] || die "--since given twice ($usage)"; since=${1#--since=}; shift ;;
       -*) die "unknown option: $1 ($usage)" ;;
       *) revs+=("$1"); shift ;;
     esac
   done
+  [ -z "$since" ] || [ ${#revs[@]} -eq 0 ] || die "--since BASE and a revision argument are exclusive ($usage)"
   [ ${#revs[@]} -le 1 ] || die "one revision argument at most, got ${#revs[@]} ($usage)"
 fi
 
@@ -146,11 +166,22 @@ else
   [ "$in_git" = 1 ] || die "not a git checkout; use --files"
   # No default base: which remote carries the base branch is the checkout's
   # business (AGENTS.md: remote names are not the contract), so it is named.
+  if [ -n "$since" ]; then
+    # The branch's own changes: from where it left BASE, not from BASE's tip,
+    # which would also count every commit BASE gained since (gh-ocannl-1379).
+    git rev-parse --verify -q "${since}^{commit}" >/dev/null || die "not a revision: $since"
+    base=$(git merge-base HEAD "$since") || die "HEAD and $since share no history"
+    echo "affected: --since $since: comparing with the merge-base ${base}" >&2
+    revs=("$base")
+  fi
   [ ${#revs[@]} -eq 1 ] ||
-    die "name the base: affected REV (the branch's base, e.g. \$(git merge-base HEAD <base-branch>)), REV..REV, or --files PATH... ($usage)"
+    die "name the base: affected --since <base-branch>, REV, REV..REV, or --files PATH... ($usage)"
   case ${revs[0]} in
     *..*) ;;
-    *) git rev-parse --verify -q "${revs[0]}^{commit}" >/dev/null || die "not a revision: ${revs[0]}" ;;
+    *)
+      git rev-parse --verify -q "${revs[0]}^{commit}" >/dev/null || die "not a revision: ${revs[0]}"
+      git merge-base --is-ancestor "${revs[0]}" HEAD ||
+        echo "affected: warning: ${revs[0]} is not an ancestor of HEAD, so its own later commits count as changes too; --since ${revs[0]} compares with the merge-base instead" >&2 ;;
   esac
   git diff --name-only --no-renames "${revs[0]}" -- ${paths[@]+"${paths[@]}"} >"$tmp/changed" ||
     die "git diff ${revs[0]} failed"
@@ -315,14 +346,20 @@ for my $e (@$entries) {
   }
   push @edges, [$i, field($v, "internal_deps")];
 }
-my %skipped_optional;
+my (%skipped_optional, %skipped_off_build);
 for my $edge (@edges) {
   my ($i, $deps) = @$edge;
   for my $d (items($deps)) {
     my ($n, $k) = pair($d, "internal_deps");
     if (defined $lib_by_name{$n}) { push @{$st[$i]{to}}, $lib_by_name{$n} }
     elsif ($k eq "optional") { $skipped_optional{$n} = 1 }
-    else { fail("$st[$i]{kind} @{$st[$i]{names}} ($st[$i]{dir}) uses project library $n, which dune does not describe") }
+    # A stanza this build does not compile (an optional backend library whose
+    # platform package is absent) may name another such library by its local
+    # name, which this listing does not give -- only the public one: on Linux,
+    # `metal_backend` requires `metal_math_api_runtime` (gh-ocannl-1389). No
+    # stanza this build compiles links either one, so the edge carries no reach.
+    elsif ($st[$i]{undescribed}) { $skipped_off_build{"$n (required by " . label($i) . ")"} = 1 }
+    else { fail(label($i) . " uses project library $n, which dune does not describe") }
   }
 }
 
@@ -446,10 +483,18 @@ sub dune_rules {
   while (@todo) {
     my ($len, @batch) = (0);
     while (@todo && (!@batch || $len + length($todo[0]) + 3 < $arg_budget)) { $len += length($todo[0]) + 3; push @batch, shift @todo }
+    # Only stdout is the answer. To print a rule, dune builds what the rule's
+    # dependencies are computed from (a `%{read:...}` file, say), and what those
+    # actions print reaches dune's stderr: on a cold build directory that was
+    # `Wrote value of 'backend_extension' to ocannl_backend_extension.txt` in the
+    # middle of the sexps (gh-ocannl-1389). stderr is kept for the failure message.
     my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
-    if (!$pid) { open STDERR, ">&", \*STDOUT; exec "dune", "rules", "--root", ".", @batch; exit 127 }
+    if (!$pid) {
+      open STDERR, ">", "$tmp/rules-err" or exit 126;
+      exec "dune", "rules", "--root", ".", @batch; exit 127;
+    }
     my $text = do { local $/; <$fh> };
-    close $fh or fail("dune rules failed:\n$text");
+    close $fh or fail("dune rules failed:\n" . slurp("$tmp/rules-err") . $text);
     push @rules, @{parse_sexp($text, "dune rules")};
   }
   return @rules;
@@ -481,7 +526,7 @@ while (@queue) {
   $queried{$_} = 1 for @queue;
   my %next;
   for my $rule (dune_rules(@queue)) {
-    ref $rule or fail("unexpected atom in dune rules output");
+    ref $rule or fail("unexpected atom in dune rules output: $rule");
     my $tg = field($rule, "targets");
     my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
     my (%r, %p, @g, %v, %ad);
@@ -725,6 +770,7 @@ printf STDERR "affected: %s: %d reached executable stanza(s) no per-test alias r
 # Only worth saying when a changed module has no stanza here: it may belong to one of these.
 if (@unmapped) {
   print STDERR "affected: optional library $_ is not in this build; edges to it skipped\n" for sort keys %skipped_optional;
+  print STDERR "affected: library $_ is not in this build, nor is the stanza requiring it; edge skipped\n" for sort keys %skipped_off_build;
 }
 print STDERR "affected: listed as unattributed: $_ (no stanza of its directory has that name, no targets of its own; its directory is touched)\n" for sort keys %unattributed;
 printf STDERR "affected: %s: %d per-test alias(es) whose actions dune does not dump, listed for the changed paths there\n", $_, $opaque_hit{$_} for sort keys %opaque_hit;

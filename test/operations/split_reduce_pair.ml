@@ -16,11 +16,11 @@
    exact in f32), so the split's reassociation cannot move a bit, and a dropped or doubled row moves
    a cell. - The coalesced prelude round-trips through the schedule cache's saved form. -
    [Autotune.detect_matmul] reads the accumulation form of a write inside a loop whose body is a
-   sequence (the shape of a split's first pass) instead of raising. - The untuned CUDA plan splits
-   the batch-8 bias gradient at a threshold its 1024-row chain meets, into 32 blocks (not 512: the
-   block count stays within the square root of the chain), and the seeded routine keeps the exact
-   sums; off CUDA it splits nothing. - The contraction composition (gh-ocannl-1279): the
-   contraction-coalesced sketches' prefix coalesces exactly the [(h, e)] pair the split site
+   sequence (the shape of a split's first pass) instead of raising. - The untuned CUDA/HIP plan
+   splits the batch-8 bias gradient at a threshold its 1024-row chain meets, into 32 blocks (not
+   512: the block count stays within the square root of the chain), and the seeded routine keeps the
+   exact sums; off CUDA and HIP it splits nothing. - The contraction composition (gh-ocannl-1279):
+   the contraction-coalesced sketches' prefix coalesces exactly the [(h, e)] pair the split site
    records; on the code that prefix prepares, the merged k is a single uncoalesced site whose
    prelude, behind the prefix, gives the same exact sums; the split and the serial-K tiles label
    apart; and the production out projection, far above [sr_out_max], is no site, though the split of
@@ -36,7 +36,7 @@ module L = Ll_test
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
-let splits_here = String.is_substring backend_name ~substring:"cuda"
+let splits_here = Autotune.seeded_split_backend backend_name
 let is_gpu = Sched.backend_is_gpu backend_name
 let is_cpu = Sched.backend_is_cpu backend_name
 
@@ -422,7 +422,7 @@ let () =
   p "the matmul detector reads a write nested in a loop's statement sequence without raising"
     (match Autotune.detect_matmul llc with _ -> true | exception Invalid_argument _ -> false)
 
-(* --- The untuned CUDA plan. --- *)
+(* --- The untuned CUDA/HIP plan. --- *)
 
 let () =
   let comp, g, exact = bias_grad ~label:"srs" ~table:true in
@@ -440,11 +440,12 @@ let () =
       Stdio.eprintf "split: %s into %d blocks (not part of the golden)\n" (Ir.Tnode.debug_name tn)
         blocks);
   Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA the untuned plan splits the batch-8 bias gradient into 32 blocks"
+    "on CUDA and HIP the untuned plan splits the batch-8 bias gradient into 32 blocks"
     (List.exists r.sd_split ~f:(fun (tn, blocks) -> Ir.Tnode.equal tn g && blocks = 32));
   Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA the split routine compiles without falling back to the default" (not r.sd_fell_back);
-  Verdict.gated ~when_:(not splits_here) ~on:backend_name "off CUDA the untuned plan splits nothing"
-    (List.is_empty r.sd_split);
+    "on CUDA and HIP the split routine compiles without falling back to the default"
+    (not r.sd_fell_back);
+  Verdict.gated ~when_:(not splits_here) ~on:backend_name
+    "off CUDA and HIP the untuned plan splits nothing" (List.is_empty r.sd_split);
   p_alli "the untuned plan's bias gradient is the exact sum" (Array.to_list values) ~f:(fun o v ->
       bitwise v exact.(o))

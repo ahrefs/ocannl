@@ -85,6 +85,46 @@ val arm_ldmatrix_operands : arm -> ta:bool -> tb:bool -> a:bool -> b:bool -> boo
     use [ldmatrix] in both; wmma never. Shared by emission and its census, and the per-arm place an
     operand-load description for the cost model hangs (gh-ocannl-1254). *)
 
+val ldmatrix_eligible : Backend_intf.mma_operand_place -> bool
+(** Whether an operand can be loaded with [ldmatrix] at all (gh-ocannl-481 item 3): the swizzled
+    16-byte-unit layout in shared memory, the only combination whose per-lane row addresses
+    [ldmatrix] can both reach and de-conflict. The emission's eligibility test. *)
+
+val operand_loads :
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  d_prec:Ops.prec ->
+  scope:Backend_intf.mma_emission_scope ->
+  ta:bool ->
+  tb:bool ->
+  a:Backend_intf.mma_operand_place ->
+  b:Backend_intf.mma_operand_place ->
+  bool * bool
+(** {!arm_ldmatrix_operands} of the scope's arm ({!resolve_arm}) over each operand's
+    {!ldmatrix_eligible}: which operands an accepted call loads with [ldmatrix]. The backend's
+    [C_syntax_config.mma_operand_loads], so the rendering census and
+    {!Backend_intf.codegen_capabilities.mma_operand_loads} — what the cost model's load tie-break
+    reads (gh-ocannl-1254) — both answer with the emission's own rule. [(false, false)] for a triple
+    with no arm. *)
+
+val arm_reloads_operands : arm -> bool
+(** Whether the arm's emission reloads each operand's intrinsic fragment for every tile of the other
+    operand's free axis: the inline-PTX bodies load both fragments inside their [m x n x k] tile
+    loops, wmma loads each fragment once per reduction step and reuses it. *)
+
+val operand_fragments :
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  d_prec:Ops.prec ->
+  scope:Backend_intf.mma_emission_scope ->
+  Backend_intf.mma_fragments option
+(** The scope's arm ({!resolve_arm}) as its emission loads operands: {!arm_tile} — the arm's own
+    tile, not the descriptor's (uniform f16 under [Fp16_wide] emits m16n8k16 per statement under an
+    advertised 16x16x16) — and {!arm_reloads_operands}; [None] with no arm. The backend's
+    [C_syntax_config.mma_operand_fragments], published as
+    {!Backend_intf.codegen_capabilities.mma_operand_fragments} for the cost model's operand-load
+    count (gh-ocannl-1254). *)
+
 (** {1 Per-arm rendering data} *)
 
 type wmma_info = {

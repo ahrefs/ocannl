@@ -1,11 +1,19 @@
 === cross-nest: two nests bind the same inner symbol ===
+ac_shared_wf: the queried routine binds s in two loops: true
 shared s, writer nest first: aligned_chains declines: true
+ac_shared_rf: the queried routine binds s in two loops: true
 shared s, reader nest first: aligned_chains declines: true
+ac_fresh_wf: the queried routine binds s once: true
 control: fresh reader symbol, writer nest first: aligned_chains declines: true
+ac_fresh_rf: the queried routine binds s once: true
 control: fresh reader symbol, reader nest first: aligned_chains declines: true
+ac_own_row: the queried routine binds s in two loops: true
 control: shared s, reader on its own row: aligned_chains accepts: true
 
 === within one nest: sibling loops bind the same symbol ===
+ac_nest_shared: the queried routine binds s in two loops: true
 shared s, sibling loops under p: aligned_chains declines: true
+ac_nest_fresh: the queried routine binds s once: true
 control: fresh second sibling symbol: aligned_chains declines: true
+ac_nest_own_row: the queried routine binds s in two loops: true
 control: shared s, reader on its own row: aligned_chains accepts: true

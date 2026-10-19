@@ -445,10 +445,12 @@ module Canonical_render = struct
   type policy = {
     emit_tn : Tn.t -> unit;  (** Render a tensor node reference. *)
     emit_free_sym : Indexing.symbol -> unit;
-        (** Render a symbol that neither an enclosing loop binder nor {!initial_tokens} bound. *)
+        (** Render a symbol that is in the scope of neither an enclosing loop binder nor
+            {!initial_tokens} — including a reference after its loop exited (gh-ocannl-1403). *)
     on_bind_loop : Indexing.symbol -> id:int -> shadowed:bool -> unit;
-        (** Called when a [For_loop] binder mints the token ["b<id>"]. [shadowed] iff the symbol
-            already had a token: a duplicated binder makes symbol references ambiguous. *)
+        (** Called when a [For_loop] / [Scan_loop] binder mints the token ["b<id>"]. [shadowed] iff
+            the symbol was bound before in this walk — by an enclosing binder, an exited one, or
+            {!initial_tokens}: a duplicated binder makes symbol references ambiguous. *)
     mark_incomplete : unit -> unit;
         (** Called when an opaque construct makes the rendering an unfaithful summary of the code.
         *)
@@ -462,17 +464,30 @@ module Canonical_render = struct
       caller digests [buf] (usually after its own preamble and companion sections). *)
   let emit ~(buf : Buffer.t) (p : policy) (llc : t) : unit =
     let add = Buffer.add_string buf in
-    (* The in-scope rendering token per symbol (shadow-aware: inner binders overwrite). *)
+    (* The in-scope rendering token per symbol (shadow-aware: inner binders overwrite, and a loop's
+       exit restores what its binder overwrote — gh-ocannl-1403 — so a reference after the loop
+       reaches [emit_free_sym] rather than rendering as the exited binder's token). *)
     let tokens = Hashtbl.create (module Indexing.Symbol) in
     List.iter p.initial_tokens ~f:(fun (key, data) -> Hashtbl.set tokens ~key ~data);
+    (* Every symbol ever bound in this walk, in scope or not: a binder re-binding one is [shadowed]
+       even after the earlier binder exited, since a consumer's symbol resolution (the schedule
+       cache's first-binding map) is ambiguous either way. *)
+    let ever_bound = Hash_set.create (module Indexing.Symbol) in
+    List.iter p.initial_tokens ~f:(fun (key, _) -> Hash_set.add ever_bound key);
     let base_count = ref 0 in
-    let bind_loop s =
+    (* Binds [s] for the extent of [in_scope ()], then restores the token it overwrote. *)
+    let with_loop_binder s ~in_scope =
       let id = !base_count in
       Int.incr base_count;
-      p.on_bind_loop s ~id ~shadowed:(Hashtbl.mem tokens s);
+      p.on_bind_loop s ~id ~shadowed:(Hash_set.mem ever_bound s);
+      Hash_set.add ever_bound s;
+      let outer = Hashtbl.find tokens s in
       let tok = "b" ^ Int.to_string id in
       Hashtbl.set tokens ~key:s ~data:tok;
-      tok
+      in_scope tok;
+      match outer with
+      | Some data -> Hashtbl.set tokens ~key:s ~data
+      | None -> Hashtbl.remove tokens s
     in
     let emit_sym s =
       match Hashtbl.find tokens s with Some tok -> add tok | None -> p.emit_free_sym s
@@ -585,12 +600,12 @@ module Canonical_render = struct
           emit a;
           emit b
       | For_loop { index; from_; to_; body; axis } ->
-          let tok = bind_loop index in
-          add
-            (Printf.sprintf "for %s=%d..%d@%s{" tok from_ to_
-               (Sexp.to_string (sexp_of_axis_type axis)));
-          emit body;
-          add "}"
+          with_loop_binder index ~in_scope:(fun tok ->
+              add
+                (Printf.sprintf "for %s=%d..%d@%s{" tok from_ to_
+                   (Sexp.to_string (sexp_of_axis_type axis)));
+              emit body;
+              add "}")
       | Scan_loop { index; from_; to_; direction; carried; body } ->
           (* gh-ocannl-696: the inits render before the binder, in the order they evaluate; a
              carried pair renders as [prev<-next], so swapping the two ids changes the digest. *)
@@ -602,12 +617,12 @@ module Canonical_render = struct
               add ":=";
               emit_scalar init;
               add ";");
-          let tok = bind_loop index in
-          add
-            (Printf.sprintf "scan %s=%d..%d@%s{" tok from_ to_
-               (Sexp.to_string (sexp_of_scan_direction direction)));
-          emit body;
-          add "}"
+          with_loop_binder index ~in_scope:(fun tok ->
+              add
+                (Printf.sprintf "scan %s=%d..%d@%s{" tok from_ to_
+                   (Sexp.to_string (sexp_of_scan_direction direction)));
+              emit body;
+              add "}")
       | Zero_out tn ->
           add "zero ";
           emit_tn tn;
@@ -9774,6 +9789,117 @@ let validate_scan_loops plc (llc : t) : unit =
   Option.iter (scan_loop_violation plc llc) ~f:(fun msg ->
       invalid_arg ("Low_level.validate_scan_loops: " ^ msg))
 
+(* gh-ocannl-1402: the loop-binder lint. Two generators broke sibling-binder uniqueness
+   independently -- concat segments (gh-ocannl-765) and padding-margin strips (gh-ocannl-1384) --
+   and every flat symbol-keyed consumer misread it SILENTLY: [def_loop_ranges] and
+   [Schedule.statement_mappings] kept one loop's extent, and the canonical render's shadow check
+   declined the routine for both digest caches without a word. A free symbol is the dual defect: an
+   index no loop and no static index gives a value to renders as an undeclared identifier, and every
+   extent table lacks it. The walk is one pass over the routine with a hash set, cheap next to the
+   analysis it gates. *)
+let loop_binder_violation (static_indices : Indexing.static_symbol list) (root : t) : string option
+    =
+  let exception Malformed of string in
+  let reject msg = raise (Malformed msg) in
+  let ident = Indexing.symbol_ident in
+  let statics =
+    Set.of_list (module Indexing.Symbol) (List.map static_indices ~f:(fun s -> s.static_symbol))
+  in
+  (* Every binder seen so far in the routine, with a description of the loop that bound it. *)
+  let bound = Hashtbl.create (module Indexing.Symbol) in
+  let bind ~what index ~from_ ~to_ =
+    let here = Printf.sprintf "%s %s = %d..%d" what (ident index) from_ to_ in
+    if Set.mem statics index then
+      reject (here ^ " binds a static index of the routine, which is already bound outside it");
+    (match Hashtbl.find bound index with
+    | Some first ->
+        reject
+          (here ^ " rebinds a symbol already bound by " ^ first
+         ^ "; every loop must mint its own symbol (one binder per symbol per routine) -- a shared \
+            binder is misread by every flat symbol-keyed consumer of the routine")
+    | None -> ());
+    Hashtbl.set bound ~key:index ~data:here
+  in
+  let use ~scope ~where s =
+    if not (Set.mem scope s) then
+      reject
+        (Printf.sprintf
+           "%s mentions the symbol %s, which no enclosing loop binds and which is not a static \
+            index of the routine"
+           where (ident s))
+  in
+  let idx ~scope ~where (i : Indexing.axis_index) =
+    match i with
+    | Fixed_idx _ | Sub_axis -> ()
+    | Iterator s -> use ~scope ~where s
+    | Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> use ~scope ~where s)
+    | Concat syms -> List.iter syms ~f:(use ~scope ~where)
+  in
+  let idcs ~scope ~where tn a =
+    Array.iter a ~f:(idx ~scope ~where:(where ^ " of " ^ Tn.debug_name tn))
+  in
+  let rec proc ~scope (llc : t) =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
+        ()
+    | Seq (a, b) ->
+        proc ~scope a;
+        proc ~scope b
+    | For_loop { index; from_; to_; body; axis } ->
+        bind ~what:("the " ^ axis_type_label axis ^ " loop") index ~from_ ~to_;
+        proc ~scope:(Set.add scope index) body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        (* The inits evaluate before the scan's index is bound. *)
+        List.iter carried ~f:(fun c -> scalar ~scope c.init);
+        bind ~what:"the scan" index ~from_ ~to_;
+        proc ~scope:(Set.add scope index) body
+    | Set { tn; idcs = a; llsc; _ } ->
+        idcs ~scope ~where:"a Set" tn a;
+        scalar ~scope llsc
+    | Set_dynamic { tn; idcs = a; dyn_value = v, _; llsc; _ } ->
+        idcs ~scope ~where:"a Set_dynamic" tn a;
+        scalar ~scope v;
+        scalar ~scope llsc
+    | Set_from_vec { tn; idcs = a; arg = v, _; _ } ->
+        idcs ~scope ~where:"a Set_from_vec" tn a;
+        scalar ~scope v
+    | Set_local (_, llsc) -> scalar ~scope llsc
+    | If { cond = c, _; body } ->
+        scalar ~scope c;
+        proc ~scope body
+    | Tile_mma { d = d_tn, d_idcs; a = a_tn, a_idcs; b = b_tn, b_idcs; lane; fallback; _ } ->
+        use ~scope ~where:"a Tile_mma's lane" lane;
+        idcs ~scope ~where:"a Tile_mma" d_tn d_idcs;
+        idcs ~scope ~where:"a Tile_mma" a_tn a_idcs;
+        idcs ~scope ~where:"a Tile_mma" b_tn b_idcs;
+        proc ~scope fallback
+  and scalar ~scope (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { id; body; orig_indices; _ } ->
+        idcs ~scope ~where:"a Local_scope's call-site indices" id.tn orig_indices;
+        proc ~scope body
+    | Get (tn, a) -> idcs ~scope ~where:"a Get" tn a
+    | Get_merge_buffer (tn, a) -> idcs ~scope ~where:"a Get_merge_buffer" tn a
+    | Get_dynamic { tn; idcs = a; dyn_value = v, _; _ } ->
+        idcs ~scope ~where:"a Get_dynamic" tn a;
+        scalar ~scope v
+    | Embed_index i -> idx ~scope ~where:"an Embed_index" i
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar ~scope a;
+        scalar ~scope b;
+        scalar ~scope c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar ~scope a;
+        scalar ~scope b
+    | Unop (_, (a, _)) -> scalar ~scope a
+    | Get_local _ | Constant _ | Constant_bits _ -> ()
+  in
+  match proc ~scope:statics root with () -> None | exception Malformed msg -> Some msg
+
+let validate_loop_binders static_indices (llc : t) : unit =
+  Option.iter (loop_binder_violation static_indices llc) ~f:(fun msg ->
+      invalid_arg ("Low_level.validate_loop_binders: " ^ msg))
+
 let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-584: the pipeline's entry gate for scope purity, ahead of the analysis cache so a
      digest hit cannot skip it. Codegen's gate alone would not do: [hoist_cross_statement_cse] lifts
@@ -9783,6 +9909,9 @@ let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   validate_scope_bodies llc;
   (* gh-ocannl-696: the scan contract, same two-gate discipline (codegen holds the exit gate). *)
   validate_scan_loops input_ctx.placements llc;
+  (* gh-ocannl-1402: one binder per loop symbol, no free symbol -- a lowering generator's defect,
+     refused where it is still the generator's shape rather than misread downstream. *)
+  validate_loop_binders static_indices llc;
   specialize_proc input_ctx (cached_analyze_proc static_indices llc)
 
 let code_hum_margin = ref 100
@@ -10357,3 +10486,125 @@ let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
         unflat_lines [ left_loop; middle_loop; right_loop ]
   in
   build_loops ~any_padding_so_far:false 0 []
+
+(* The accumulator transfers [Schedule.contract_tensorized_accumulator] synthesizes around a
+   persistent fragment's reduction: lane { if lane==0 { fragment <- target } } (the init) and lane {
+   if lane==0 { target <- fragment } } (the store). Shared by the renderer's fragment-scope
+   recognition ([C_syntax]) and the cost model's operand-load count, so both read the region the
+   same way. *)
+let is_lane0_guard lane = function
+  | Binop (Ops.Cmpeq, (Embed_index (Indexing.Iterator guard_lane), _), (Constant zero, _))
+  | Binop (Ops.Cmpeq, (Constant zero, _), (Embed_index (Indexing.Iterator guard_lane), _)) ->
+      Indexing.equal_symbol lane guard_lane && Float.equal zero 0.
+  | _ -> false
+
+let fragment_transfer ~into_fragment = function
+  | For_loop
+      { index = lane; from_ = 0; to_; axis = Workgroup; body = If { cond = cond, _; body }; _ }
+    when is_lane0_guard lane cond ->
+      let rec descend syms = function
+        | For_loop { index; axis = Serial; body; _ } -> descend (index :: syms) body
+        | Set { tn = fragment; llsc = Get (target, target_idcs); _ } when into_fragment ->
+            Some (lane, to_ + 1, fragment, target, target_idcs, syms)
+        | Set { tn = target; llsc = Get (fragment, _); idcs = target_idcs; _ }
+          when not into_fragment ->
+            Some (lane, to_ + 1, fragment, target, target_idcs, syms)
+        | _ -> None
+      in
+      descend [] body
+  | _ -> None
+
+(* The target's leading-dimension stride: the stride of the axis carrying the transfer nest's
+   outermost (row) copy symbol — the minor dim in the plain case, larger when interior batch axes
+   sit between the tile roles (gh-ocannl-528). *)
+let fragment_target_ld ~(row_sym : Indexing.symbol option) ((tn : Tnode.t), idcs) =
+  let dims = Lazy.force tn.Tnode.dims in
+  let rank = Array.length dims in
+  let default = if rank >= 1 then dims.(rank - 1) else 1 in
+  match row_sym with
+  | None -> default
+  | Some s -> (
+      match Array.findi idcs ~f:(fun _ idx -> Indexing.axis_index_mentions_symbol s idx) with
+      | Some (p, _) ->
+          let ld = ref 1 in
+          for x = p + 1 to rank - 1 do
+            ld := !ld * dims.(x)
+          done;
+          !ld
+      | None -> default)
+
+type fragment_region = {
+  fr_init : t;
+  fr_reduction : t;
+  fr_store : t;
+  fr_rest : t list;
+  fr_fragment : Tnode.t;
+  fr_target : Tnode.t;
+  fr_target_base : Indexing.axis_index array;
+  fr_target_ld : int;
+  fr_tile : t;
+}
+
+(* The whole region: init transfer, reduction, store transfer (any following statements are
+   [fr_rest]), the two transfers agreeing on fragment, target, lane, width and indices, and exactly
+   one [Tile_mma] accumulating into the fragment inside the reduction. *)
+let fragment_region (c : t) =
+  let nonempty =
+    List.filter (flat_lines [ c ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+  in
+  let rec collect_fragment_tiles fragment acc = function
+    | Tile_mma { d = d, _; _ } as tm when Tnode.equal d fragment -> tm :: acc
+    | Seq (a, b) -> collect_fragment_tiles fragment (collect_fragment_tiles fragment acc a) b
+    | For_loop { body; _ } | If { body; _ } -> collect_fragment_tiles fragment acc body
+    | _ -> acc
+  in
+  let zero_symbols syms idx =
+    let bound s = List.mem syms s ~equal:Indexing.equal_symbol in
+    match idx with
+    | Indexing.Iterator s when bound s -> Indexing.Fixed_idx 0
+    | Indexing.Affine { symbols; offset } ->
+        Indexing.affine ~symbols:(List.filter symbols ~f:(fun (_, s) -> not (bound s))) ~offset
+    | other -> other
+  in
+  match nonempty with
+  | init :: reduction :: store :: rest -> (
+      match
+        (fragment_transfer ~into_fragment:true init, fragment_transfer ~into_fragment:false store)
+      with
+      | ( Some (lane1, width1, fragment, target, init_idcs, init_syms),
+          Some (lane2, width2, fragment2, target2, store_idcs, _) )
+        when Tnode.equal fragment fragment2 && Tnode.equal target target2 && width1 = width2
+             && Indexing.equal_symbol lane1 lane2
+             && Array.equal Indexing.equal_axis_index init_idcs store_idcs -> (
+          match collect_fragment_tiles fragment [] reduction with
+          | [ tile ] ->
+              Some
+                {
+                  fr_init = init;
+                  fr_reduction = reduction;
+                  fr_store = store;
+                  fr_rest = rest;
+                  fr_fragment = fragment;
+                  fr_target = target;
+                  fr_target_base = Array.map init_idcs ~f:(zero_symbols init_syms);
+                  (* [init_syms] is innermost-first, so its last element is the outermost (row) copy
+                     symbol; [init_idcs] still carries it. *)
+                  fr_target_ld =
+                    fragment_target_ld ~row_sym:(List.last init_syms) (target, init_idcs);
+                  fr_tile = tile;
+                }
+          | _ -> None)
+      | _ -> None)
+  | _ -> None
+
+let mma_operand_layout (swizzle : swizzle_kind option) ~ld ~idcs ~dims =
+  match swizzle with
+  | None -> `Plain
+  | Some Swizzle_elem -> `Decline "element-granularity swizzle (no intrinsic load form matches it)"
+  | Some Swizzle_b128 ->
+      if Array.length dims <> 2 then `Decline "b128-swizzled operand of rank <> 2"
+      else if ld <> dims.(1) then
+        `Decline "b128-swizzled operand whose leading dimension is not its minor dim"
+      else if not (Array.for_all idcs ~f:(function Indexing.Fixed_idx 0 -> true | _ -> false))
+      then `Decline "b128-swizzled operand not accessed from the tile origin"
+      else `Swizzled_b128

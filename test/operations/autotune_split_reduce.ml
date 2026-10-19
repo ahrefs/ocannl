@@ -33,6 +33,14 @@ module Cache_plant = Test_utils.Cache_plant
 (* The report's outcome as the questions this test asks of it (gh-ocannl-677): the outcome is a
    variant naming one of five mutually exclusive states, so a claim names the state it means instead
    of combining flags — [not (replayed r)] in particular does NOT say a search ran. *)
+(* The windows a search spends on its multi-site composite beyond the singles: one, timed after them,
+   in the bare search; none in a staffed search (config [autotune_staffed_singles], gh-ocannl-1138),
+   whose composite is its last accepted staffed single. *)
+let composite_window (r : Autotune.report) =
+  if Autotune.staffed_singles_setting () then 0
+  else if r.Autotune.split_reduce_composite_timed then 1
+  else 0
+
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
@@ -324,8 +332,7 @@ let () =
          else r.Autotune.split_reduce_candidates >= 2);
       p "best-timed singles recombined into a composite"
         (if is_cpu then
-           (r.Autotune.split_reduce_timed - if r.Autotune.split_reduce_composite_timed then 1 else 0)
-           = r.Autotune.split_reduce_candidates
+           r.Autotune.split_reduce_timed - composite_window r = r.Autotune.split_reduce_candidates
            && Bool.equal r.Autotune.split_reduce_composite_timed
                 r.Autotune.split_reduce_composite_eligible
          else r.Autotune.split_reduce_timed > 0)
@@ -346,7 +353,12 @@ let () =
       let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
       ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
         split_attempt := String.is_prefix label ~prefix:"F_split[";
-        selected := !split_attempt && Bool.equal composite (String.mem label ',') );
+        (* A multi-site window: the recombined composite's, or a staffed single's
+           (gh-ocannl-1138). *)
+        selected :=
+          !split_attempt
+          && Bool.equal composite
+               (String.mem label ',' || String.is_substring label ~substring:" | staff ") );
       ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun _ ->
         if !split_attempt then Int.incr windows );
       ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
@@ -498,8 +510,7 @@ let () =
          when EACH site contributed a usable best-timed single. Under contention a refused single
          cannot staff that composite, but still counts as reaching the timing window. *)
       p "the interchanged bias-gradient candidate reaches timing"
-        ((r.Autotune.split_reduce_timed - if r.Autotune.split_reduce_composite_timed then 1 else 0)
-         = r.Autotune.split_reduce_candidates
+        (r.Autotune.split_reduce_timed - composite_window r = r.Autotune.split_reduce_candidates
         && Bool.equal r.Autotune.split_reduce_composite_timed
              r.Autotune.split_reduce_composite_eligible)
   | None ->

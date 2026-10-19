@@ -296,6 +296,10 @@ let exempt_zero_reference_exports =
        boolean, not the stub. Publishing the stub is still right -- a caller that has taken fd 2
        over for its own reasons can redo the detachment -- but nothing in the tree needs to. *)
     "Utils.detach_c_stderr";
+    (* Not pre-existing, and the same shape (gh-ocannl-1370): the stub behind
+       [Utils.c_stderr_noise_collapsed], which the HIP backend forces; nothing else calls the
+       stub. *)
+    "Utils.collapse_c_stderr_noise";
     "Utils.default_indent";
     "Utils.doc_of_sexp";
     "Utils.enable_runtime_debug";

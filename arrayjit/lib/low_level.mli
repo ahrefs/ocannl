@@ -352,10 +352,12 @@ module Canonical_render : sig
   type policy = {
     emit_tn : Tnode.t -> unit;  (** Render a tensor node reference. *)
     emit_free_sym : Indexing.symbol -> unit;
-        (** Render a symbol that neither an enclosing loop binder nor {!initial_tokens} bound. *)
+        (** Render a symbol that is in the scope of neither an enclosing loop binder nor
+            {!initial_tokens} — including a reference after its loop exited (gh-ocannl-1403). *)
     on_bind_loop : Indexing.symbol -> id:int -> shadowed:bool -> unit;
-        (** Called when a [For_loop] binder mints the token ["b<id>"]. [shadowed] iff the symbol
-            already had a token: a duplicated binder makes symbol references ambiguous. *)
+        (** Called when a [For_loop] / [Scan_loop] binder mints the token ["b<id>"]. [shadowed] iff
+            the symbol was bound before in this walk — by an enclosing binder, an exited one, or
+            {!initial_tokens}: a duplicated binder makes symbol references ambiguous. *)
     mark_incomplete : unit -> unit;
         (** Called when an opaque construct makes the rendering an unfaithful summary of the code.
         *)
@@ -876,6 +878,21 @@ val validate_scan_loops : Tnode.Placements.t -> t -> unit
     scan, no opaque callback inside, and a non-empty range. Raises [Invalid_argument] naming the
     scan and the clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline:
     {!optimize} on the way in, backend codegen on the way out. *)
+
+val validate_loop_binders : Indexing.static_symbol list -> t -> unit
+(** gh-ocannl-1402: the loop-binder lint. Each loop symbol is bound by at most one loop ([For_loop]
+    or [Scan_loop]) in the whole routine -- sibling loops included, not only nested ones -- and
+    never by a loop when it is one of the routine's static indices; every symbol an index mentions
+    ([Iterator], [Affine], [Concat], [Embed_index], a [Local_scope]'s call-site indices, a
+    [Tile_mma]'s lane) is bound by an enclosing loop or is a static index. Raises [Invalid_argument]
+    naming the symbol and the loops involved. Every flat symbol-keyed consumer -- extent tables,
+    [Schedule.statement_mappings], the canonical render behind both digest caches -- relies on this,
+    and misreads a violation silently: concat segments (gh-ocannl-765) and padding-margin strips
+    (gh-ocannl-1384) each broke it once. Applied by {!optimize} on the way in, ahead of the analysis
+    cache, so lowering's generators are held to it; hand-built IR must mint a fresh symbol per loop
+    too. Entry-only by design, unlike {!validate_scope_bodies}: past [optimize], schedule rewrites
+    emit sibling nests that share symbols (the staging transfer nests), and the renderer and the
+    post-optimize analyses accept that shape. *)
 
 val validate_parallel :
   ?warp_size:int -> ?reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit
@@ -1593,3 +1610,53 @@ val to_doc_cstyle :
 val to_doc :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
 (** Adheres to the %cd syntax. *)
+
+val fragment_transfer :
+  into_fragment:bool ->
+  t ->
+  (Indexing.symbol * int * Tnode.t * Tnode.t * Indexing.axis_index array * Indexing.symbol list)
+  option
+(** One of the accumulator transfers [Schedule.contract_tensorized_accumulator] synthesizes around a
+    persistent fragment's reduction —
+    [lane { if lane == 0 { serial copy loops { fragment <- target } } }] for [into_fragment], the
+    store back otherwise — as
+    [(lane, lane width, fragment, target, target indices, copy symbols innermost-first)]. The
+    renderer's fragment-scope recognition and the cost model's operand-load count (gh-ocannl-1254)
+    both read regions through it. *)
+
+val fragment_target_ld :
+  row_sym:Indexing.symbol option -> Tnode.t * Indexing.axis_index array -> int
+(** The transfer target's leading-dimension stride in elements: the stride of the axis carrying the
+    row copy symbol (the outermost of {!fragment_transfer}'s copy symbols), the minor dim without
+    one. *)
+
+type fragment_region = {
+  fr_init : t;  (** The init transfer, fragment <- target. *)
+  fr_reduction : t;
+  fr_store : t;  (** The store transfer, target <- fragment. *)
+  fr_rest : t list;  (** Statements following the region in the same body. *)
+  fr_fragment : Tnode.t;
+  fr_target : Tnode.t;  (** The backing target the transfers read and write. *)
+  fr_target_base : Indexing.axis_index array;  (** The target's base indices at the tile origin. *)
+  fr_target_ld : int;  (** {!fragment_target_ld} of the target. *)
+  fr_tile : t;  (** The one [Tile_mma] accumulating into the fragment in the reduction. *)
+}
+
+val fragment_region : t -> fragment_region option
+(** The persistent-fragment region [Schedule.contract_tensorized_accumulator] synthesizes,
+    recognized at the head of a statement sequence: init transfer, reduction, store transfer
+    agreeing on fragment, target, lane, width and indices, with exactly one [Tile_mma] into the
+    fragment. The renderer's recognition ([C_syntax], which also requires the fragment to be marked
+    in [optimized.simdgroup_fragments]) and the cost model's operand-load count (gh-ocannl-1254)
+    share it. *)
+
+val mma_operand_layout :
+  swizzle_kind option ->
+  ld:int ->
+  idcs:Indexing.axis_index array ->
+  dims:int array ->
+  [ `Plain | `Swizzled_b128 | `Decline of string ]
+(** A tile-MMA operand's layout as the emission hooks receive it: [`Plain] unswizzled,
+    [`Swizzled_b128] for a b128-swizzled rank-2 tile addressed from its origin with its minor dim as
+    leading dimension; [`Decline] (with the reason) for any other swizzle, which renders the scalar
+    fallback without reaching a hook. Shared by the renderer and the cost model (gh-ocannl-1254). *)

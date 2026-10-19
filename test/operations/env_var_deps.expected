@@ -32,6 +32,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   autotune_round_expansion
   autotune_rounds
   autotune_search
+  autotune_staffed_singles
   backend
   bf16_arithmetic
   big_models
@@ -203,7 +204,9 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test lowered_nest_order: Ir.Schedule.apply
   test/operations/dune, test matmul_interchange: Ir.Schedule.apply
   test/operations/dune, test metal_threadgroup_overflow: Ir.Schedule.apply
+  test/operations/dune, test mma_operand_loads: Ir.Schedule.apply
   test/operations/dune, test mma_tensorization_label: Ir.Schedule.apply
+  test/operations/dune, test model_load_tiebreak: Ir.Schedule.apply
   test/operations/dune, test narrow_storage_compute: Ir.Schedule.apply
   test/operations/dune, test online_softmax_block: Ir.Schedule.apply
   test/operations/dune, test online_softmax_block_mma: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
@@ -235,6 +238,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test schedule_strided_1x1: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_swizzle_matmul: Ir.Schedule.apply
   test/operations/dune, test scratch_value_variance: Ir.Schedule.default_gpu
+  test/operations/dune, test split_reduce_block_hoist: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented
   test/operations/dune, test split_reduce_pair: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented, Ir.Schedule.op_legality
   test/operations/dune, test thread_private_gate: Ir.Schedule.check_hardware_limits_classified, Ir.Schedule.thread_private_bytes
   test/operations/dune, test tile_mma_declines: Ir.Schedule.apply
@@ -256,6 +260,7 @@ Programs reading the cc vector width, every rule running which declares or pins 
   test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, test autotune_staffed_singles: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector_bytes`
   test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
@@ -349,6 +354,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-flip_bound_pruning
   test/operations/dune                     @runtest-flip_twins
   test/operations/dune                     @runtest-foreign_c_stderr
+  test/operations/dune                     @runtest-foreign_c_stderr_noise
   test/operations/dune                     @runtest-generated_provenance
   test/operations/dune                     @runtest-gh1002_kernels
   test/operations/dune                     @runtest-gh1133_summary
@@ -476,7 +482,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   dune: nothing that runs a test executable
   lib/dune: nothing that runs a test executable
   tensor/dune: nothing that runs a test executable
-  test/config/dune: declares OCANNL_BACKEND
+  test/config/dune: declares OCANNL_BACKEND; markers: none
   test/einsum/dune: declares OCANNL_BACKEND; markers: none
   test/gpt2/dune: declares OCANNL_BACKEND; markers: none
   test/operations/atomic_file_rename_scan_fixture/dune: markers: none

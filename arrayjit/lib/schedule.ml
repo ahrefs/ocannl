@@ -5430,68 +5430,13 @@ let pipeline_violation (opt : Low_level.optimized) : pipeline_violation option =
             then Some (Read_outside_rotor { tile; rotor })
             else None)
 
-(* gh-ocannl-1342: the fragment scope's structure. [contract_tensorized_accumulator] marks a
-   simdgroup fragment ([Low_level.optimized.simdgroup_fragments]) and brackets the contracted loop
-   chain with a lane-0 load of the fragment and a lane-0 store-back:
-
-   lane { if lane==0 { fragment <- target } }; reduction; lane { if lane==0 { target <- fragment } }
-
-   [C_syntax] maps such a region to persistent intrinsic fragments only when it recognizes it, and
-   recognizes it structurally, through {!recognize_fragment_scope} below — the one statement of the
-   shape, shared by the renderer and the oracle. Everything about the region the backend hooks then
-   judge (precisions, operand layouts) is capability, not structure, and stays the renderer's. *)
-type fragment_transfer = {
-  ft_lane : Indexing.symbol;
-  ft_width : int;
-  ft_fragment : Tn.t;
-  ft_target : Tn.t;
-  ft_target_idcs : Indexing.axis_index array;
-  ft_syms : Indexing.symbol list;
-}
-
-let fragment_transfer ~into_fragment (stmt : Low_level.t) : fragment_transfer option =
-  let open Low_level in
-  let is_lane0_guard lane = function
-    | Binop (Ops.Cmpeq, (Embed_index (Indexing.Iterator guard_lane), _), (Constant zero, _))
-    | Binop (Ops.Cmpeq, (Constant zero, _), (Embed_index (Indexing.Iterator guard_lane), _)) ->
-        Indexing.equal_symbol lane guard_lane && Float.equal zero 0.
-    | _ -> false
-  in
-  match stmt with
-  | For_loop
-      { index = lane; from_ = 0; to_; axis = Workgroup; body = If { cond = cond, _; body }; _ }
-    when is_lane0_guard lane cond ->
-      let transfer ~fragment ~target ~target_idcs syms =
-        Some
-          {
-            ft_lane = lane;
-            ft_width = to_ + 1;
-            ft_fragment = fragment;
-            ft_target = target;
-            ft_target_idcs = target_idcs;
-            ft_syms = syms;
-          }
-      in
-      let rec descend syms = function
-        | For_loop { index; axis = Serial; body; _ } -> descend (index :: syms) body
-        | Set { tn = fragment; llsc = Get (target, target_idcs); _ } when into_fragment ->
-            transfer ~fragment ~target ~target_idcs syms
-        | Set { tn = target; llsc = Get (fragment, _); idcs = target_idcs; _ }
-          when not into_fragment ->
-            transfer ~fragment ~target ~target_idcs syms
-        | _ -> None
-      in
-      descend [] body
-  | _ -> None
-
-type fragment_scope = {
-  fs_init : Low_level.t;
-  fs_reduction : Low_level.t;
-  fs_store : Low_level.t;
-  fs_rest : Low_level.t list;
-  fs_load : fragment_transfer;
-  fs_tile : Low_level.t;
-}
+(* gh-ocannl-1342: the fragment scope. [contract_tensorized_accumulator] marks a simdgroup fragment
+   ([Low_level.optimized.simdgroup_fragments]) and brackets the contracted loop chain with a lane-0
+   load of the fragment and a lane-0 store-back. [C_syntax] maps such a region to persistent
+   intrinsic fragments only when it recognizes it: {!Low_level.fragment_region} (shared with the
+   renderer and the cost model) at the head of a statement sequence, over a marked fragment.
+   Everything about the region the backend hooks then judge (precisions, operand layouts) is
+   capability, not structure, and stays the renderer's. *)
 
 (* The [Tile_mma] statements into a fragment satisfying [into] in [c], in program order; fallbacks
    are not entered (they render instead of, not beside, the statement). *)
@@ -5510,33 +5455,10 @@ let nonempty_lines (c : Low_level.t) : Low_level.t list =
     | Low_level.Noop | Low_level.Comment _ -> false
     | _ -> true)
 
-let recognize_fragment_scope ~(fragments : Set.M(Tn).t) (c : Low_level.t) : fragment_scope option =
-  match nonempty_lines c with
-  | init :: reduction :: store :: rest -> (
-      match
-        (fragment_transfer ~into_fragment:true init, fragment_transfer ~into_fragment:false store)
-      with
-      | Some load, Some back
-        when Set.mem fragments load.ft_fragment
-             && Tn.equal load.ft_fragment back.ft_fragment
-             && Tn.equal load.ft_target back.ft_target
-             && load.ft_width = back.ft_width
-             && Indexing.equal_symbol load.ft_lane back.ft_lane
-             && Array.equal Indexing.equal_axis_index load.ft_target_idcs back.ft_target_idcs -> (
-          match fragment_tiles ~into:(Tn.equal load.ft_fragment) reduction with
-          | [ tile ] ->
-              Some
-                {
-                  fs_init = init;
-                  fs_reduction = reduction;
-                  fs_store = store;
-                  fs_rest = rest;
-                  fs_load = load;
-                  fs_tile = tile;
-                }
-          | _ -> None)
-      | _ -> None)
-  | _ -> None
+let recognize_fragment_scope ~(fragments : Set.M(Tn).t) (c : Low_level.t) :
+    Low_level.fragment_region option =
+  Option.filter (Low_level.fragment_region c) ~f:(fun r ->
+      Set.mem fragments r.Low_level.fr_fragment)
 
 (* The invariant: every [Tile_mma] into a marked fragment is the one statement of a scope the
    renderer recognizes. The renderer declines a tile outside one to the lane-0 scalar fallback,
@@ -5583,10 +5505,10 @@ let fragment_scope_violations (opt : Low_level.optimized) : fragment_scope_viola
       match c with
       | Seq (c1, c2) -> (
           match recognize_fragment_scope ~fragments c with
-          | Some fs ->
-              covered := fs.fs_tile :: !covered;
-              walk fs.fs_reduction;
-              List.iter fs.fs_rest ~f:walk
+          | Some r ->
+              covered := r.fr_tile :: !covered;
+              walk r.fr_reduction;
+              List.iter r.fr_rest ~f:walk
           | None ->
               walk c1;
               walk c2)
@@ -5603,17 +5525,16 @@ let fragment_scope_violations (opt : Low_level.optimized) : fragment_scope_viola
           let lines = Array.of_list (nonempty_lines c) in
           let len = Array.length lines in
           Array.iteri lines ~f:(fun p s ->
-              match fragment_transfer ~into_fragment:true s with
-              | Some load when marked load.ft_fragment ->
-                  let fragment = load.ft_fragment in
+              match Low_level.fragment_transfer ~into_fragment:true s with
+              | Some (_, _, fragment, _, _, _) when marked fragment ->
                   let rec close q =
                     if q >= len then None
                     else
-                      match fragment_transfer ~into_fragment:false lines.(q) with
-                      | Some back when Tn.equal back.ft_fragment fragment -> Some q
+                      match Low_level.fragment_transfer ~into_fragment:false lines.(q) with
+                      | Some (_, _, back, _, _, _) when Tn.equal back fragment -> Some q
                       | _ -> (
-                          match fragment_transfer ~into_fragment:true lines.(q) with
-                          | Some again when Tn.equal again.ft_fragment fragment -> None
+                          match Low_level.fragment_transfer ~into_fragment:true lines.(q) with
+                          | Some (_, _, again, _, _, _) when Tn.equal again fragment -> None
                           | _ -> close (q + 1))
                   in
                   Option.iter

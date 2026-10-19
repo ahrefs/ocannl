@@ -33,11 +33,16 @@
    replays nothing. Either leaves the recorded entry untouched. The leg runs first, while this
    process holds no device.
 
-   Times never enter the golden; the claims that involve one are waived by the load's own evidence
-   (contention-refused windows), as autotune_arm_containment.ml does. The claims that rest on a
-   store or a lookup having happened are waived, as environment skips, by the filesystem's own
-   evidence: a refusal the cache absorbed, which [Schedule_cache.recording_cache_io] reports
-   (gh-ocannl-1040), or a run whose own context has no timing identity (gh-ocannl-1043). *)
+   Times never enter the golden. A recording rests on clean evidence -- every search the run
+   observed had no contention-refused window, did not fail, and timed something -- which the load
+   can spoil; such a run records nothing, by design. So every recording run (run 1, run 6, the
+   cross-process recorder) is retried in a fresh directory until one attempt records, up to
+   [recording_attempts] times (gh-ocannl-1086). Where none did, the claims resting on the recording
+   are not waived as a silent [true]: they are skipped through [Verdict], an environment skip naming
+   why, which the sweep counts. The claims that rest on a store or a lookup having happened are
+   likewise skipped on the filesystem's own evidence: a refusal the cache absorbed, which
+   [Schedule_cache.recording_cache_io] reports (gh-ocannl-1040), or a run whose own context has no
+   timing identity (gh-ocannl-1043). *)
 
 open Base
 open Ocannl
@@ -63,14 +68,58 @@ let placement_keys ?(cache_dir = cache_dir) () =
 
 let read_entry key = Option.value_exn (SC.lookup_placements ~dir:cache_dir ~key:(Some key))
 
-let completed (r : Autotune.report) =
-  match r.Autotune.outcome with Autotune.Searched | Autotune.Cache_replay -> true | _ -> false
-
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
 let uncontended (r : Autotune.report) = r.Autotune.timings_contended = 0
 let source_digest (r : Autotune.report) = r.Autotune.source_digest
+
+(* The evidence a recording rests on, as [Train.tune_placements] judges it: every search the run
+   observed had no contention-refused window, did not fail, and timed something. A flip the
+   abandonment rule stopped early was measured, briefly, and lost: it does not spoil the
+   evidence. *)
+let clean_report (r : Autotune.report) =
+  uncontended r
+  && Option.is_none (Autotune.terminal_failure r)
+  && Float.is_finite r.Autotune.best_ms
+
+let clean_evidence reports = List.for_all reports ~f:clean_report
+
+(* A search that failed outright: the evidence is unclean, but not by the load, so a retry would
+   only fail again. *)
+let failed_search reports =
+  List.exists reports ~f:(fun r -> Option.is_some (Autotune.terminal_failure r))
+
+(* --- Recording retries (gh-ocannl-1086). A recording run whose evidence was unclean records
+   nothing, and every claim about what it recorded -- and every replay of it -- then has nothing to
+   check. Retried in a FRESH directory, so the attempt the claims judge is a cold run like the
+   first: in the same one, the searches that were clean the first time would replay their schedule
+   entries instead. --- *)
+
+let recording_attempts = 3
+
+(* [attempt], each time after [fresh ()], until [settled] holds of its result or
+   [recording_attempts] attempts ran: every attempt's result, in order, so the last is the run's. *)
+let attempts_until ~fresh ~settled attempt =
+  let rec go k acc =
+    fresh ();
+    let r = attempt () in
+    let acc = r :: acc in
+    if settled r || k >= recording_attempts then List.rev acc else go (k + 1) acc
+  in
+  go 1 []
+
+(* Why a recording run's entry is absent, as the skip reason of the claims resting on it: no timing
+   identity to key on, a refused store, a compared search that failed, or unclean evidence on every
+   attempt. A clean, keyed, unrefused run that recorded nothing is no environment: its record claim
+   fails. *)
+let unrecorded_on ~identity ~failed ~clean stores =
+  if not identity then Cache_plant.unkeyed_on
+  else if List.exists stores ~f:Cache_plant.refused then Cache_plant.refused_on
+  else if failed then "a compared search failed"
+  else if not clean then
+    Printf.sprintf "unclean evidence on all %d recording attempts" recording_attempts
+  else "a clean recording run that recorded nothing"
 
 let graph ~label =
   let mav =
@@ -120,21 +169,58 @@ let refused_in ops label = Cache_plant.refused_in (List.concat ops) label
    process-wide claim before run 8 keeps red. *)
 let unless_refused ops label b = Cache_plant.unless_refused (List.concat ops) label b
 
+(* [label] over [b], evaluated where the recording it rests on happened ([recorded]) and none of the
+   operations [ops] was refused. Where the recording is absent it is skipped on [on] (from
+   {!unrecorded_on}), a counted environment skip rather than the vacuous [true] it used to be
+   (gh-ocannl-1086); a refusal skips it as [unless_refused] does. *)
+let given_recording ~recorded ~on ops label b =
+  if refused_in ops label then skipped ~aggregation:`Environment ~backend:refused_on label
+  else gated ~aggregation:`Environment ~when_:recorded ~on label b
+
+(* A recording run's own record claim: [b] (it recorded) where its context is keyed, none of its
+   placement stores [ops] was refused, and its evidence was [clean]; skipped otherwise, on the
+   reason that holds. *)
+let records_when_clean ~identity ~failed ~clean ops label b =
+  if not identity then Cache_plant.unless_unkeyed ~identity label b
+  else
+    given_recording ~recorded:clean
+      ~on:(unrecorded_on ~identity ~failed ~clean (List.concat ops))
+      ops label b
+
+(* gh-ocannl-1386: the measurement seam under [~rank_fissioned_last], which ranks every fissioned
+   candidate (the [F_] labels [Autotune.spec_label] gives them) one second behind its reading, so a
+   search crowns a whole-routine schedule whenever it timed one. The windows it sees are admitted
+   ones only: contention still refuses as in production. Counted, so stderr shows the ranking
+   reached candidates at all. *)
+let fissioned_ranked_last = ref 0
+
+let fissioned_last_ranking ~label ~digest:_ ms =
+  if String.is_prefix label ~prefix:"F_" then (
+    Int.incr fissioned_ranked_last;
+    ms +. 1000.)
+  else ms
+
 (* One placement tune of [graph]'s routine from [ctx] (a fresh [Context.auto ()] by default) with
    [cache_dir] as the cache directory, run and read back: the arm and flip reports in order, what
    shipped, whether the intermediate shipped materialized, the values, and what its persistence came
-   to. *)
-let tune_in ?ship_arm ?placement_store ?timing_ctx ?ctx ~cache_dir (mc, t2, comp) =
+   to. [~rank_fissioned_last] runs it under {!fissioned_last_ranking}. *)
+let tune_in ?ship_arm ?placement_store ?timing_ctx ?(rank_fissioned_last = false) ?ctx ~cache_dir
+    (mc, t2, comp) =
   let ctx = match ctx with Some ctx -> ctx | None -> Context.auto () in
   let identity = Option.is_some (Context.timing_identity ctx) in
   let arms = ref [] and flips = ref [] and shipped = ref None in
+  let tune () =
+    Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~inline_flips:2
+      ~report:(fun r -> arms := r :: !arms)
+      ~flip_report:(fun r -> flips := r :: !flips)
+      ~on_ship:(fun what -> shipped := Some what)
+      ?ship_arm ?placement_store ?timing_ctx ctx t2 comp Ir.Indexing.Empty
+  in
   let (ctx_t, routine_t), io =
     SC.recording_cache_io (fun () ->
-        Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~inline_flips:2
-          ~report:(fun r -> arms := r :: !arms)
-          ~flip_report:(fun r -> flips := r :: !flips)
-          ~on_ship:(fun what -> shipped := Some what)
-          ?ship_arm ?placement_store ?timing_ctx ctx t2 comp Ir.Indexing.Empty)
+        if rank_fissioned_last then
+          Autotune.Seam.with_value Autotune.on_candidate_measured fissioned_last_ranking tune
+        else tune ())
   in
   let ctx_t = Context.run ctx_t routine_t in
   let got = Context.get_values ctx_t t2.Tensor.value in
@@ -197,10 +283,8 @@ let child role =
   out "flips" (Int.to_string (List.length flips));
   out "shipped" shipped;
   out "materialized" (Bool.to_string materialized);
-  out "clean"
-    (Bool.to_string
-       (List.for_all (arms @ flips) ~f:(fun r ->
-            completed r && uncontended r && Float.is_finite r.Autotune.best_ms)));
+  out "clean" (Bool.to_string (clean_evidence (arms @ flips)));
+  out "failed" (Bool.to_string (failed_search (arms @ flips)));
   out "replayed" (Bool.to_string (match arms with [ r ] -> replayed r | _ -> false));
   out "source" (match arms with [ r ] -> source_digest r | _ -> "-");
   out "values" (floats got);
@@ -233,6 +317,7 @@ type child_report = {
   shipped : string;
   materialized : bool;
   clean : bool;
+  failed : bool;
   replayed : bool;
   source : string;
   values : float array;
@@ -270,6 +355,7 @@ let spawn_child role =
             shipped = field "shipped";
             materialized = Bool.of_string (field "materialized");
             clean = Bool.of_string (field "clean");
+            failed = Bool.of_string (field "failed");
             replayed = Bool.of_string (field "replayed");
             source = field "source";
             values = floats "values";
@@ -299,16 +385,15 @@ let spawn_child role =
 (* --- Run 7 (gh-ocannl-1021): across a process boundary, ahead of everything that would give this
    process a device. The recorder child tunes cold into a fresh directory; the replaying child must
    pose the same problem and replay its decision; the control child poses another problem against
-   the same directory. The replay claims are waived exactly where run 2's are: when the recorder
-   recorded nothing (its evidence was unclean, or the store is unavailable), the schedule-cache
-   replay also when its evidence was contended, and each claim when the cache I/O it rests on was
-   refused (gh-ocannl-1040). --- *)
+   the same directory. The recorder is retried, each time into a fresh directory, until one attempt
+   records (gh-ocannl-1086). The replay claims are skipped exactly where run 2's are: when no
+   attempt recorded (its evidence was unclean every time, or the store is unavailable), and each
+   claim when the cache I/O it rests on was refused (gh-ocannl-1040). --- *)
 
 (* The stores the children attempted, for the process-wide claim before run 8. *)
 let xproc_stores = ref []
 
 let () =
-  clean_cache xproc_cache_dir;
   (* The one placement entry the directory holds, with its rendering; [None] for none or several. *)
   let held () =
     match placement_keys ~cache_dir:xproc_cache_dir () with
@@ -326,7 +411,17 @@ let () =
              (SC.lookup_placements ~dir:xproc_cache_dir ~key:(Some k))
              ~f:SC.sexp_of_placement_entry)
   in
-  let record = spawn_child Record in
+  (* A recorder that failed outright, or whose search did, settles too: retrying would only fail
+     again. *)
+  let record_attempts =
+    attempts_until
+      ~fresh:(fun () -> clean_cache xproc_cache_dir)
+      ~settled:(function
+        | None -> true
+        | Some c -> c.clean || c.failed || Option.is_some (held ()) || not c.persisted.identity)
+      (fun () -> spawn_child Record)
+  in
+  let record = List.last_exn record_attempts in
   p "the recording process runs to completion and reports what it observed" (Option.is_some record);
   let on_record f = Option.value_map record ~default:false ~f in
   let reference = Option.value_map record ~default:[||] ~f:(fun c -> c.reference) in
@@ -336,12 +431,21 @@ let () =
   let recorded = held () in
   let entry = Option.map recorded ~f:(fun (_, e, _) -> e) in
   let recorder_clean = on_record (fun c -> c.clean) in
-  Stdio.eprintf "run 7 (not part of the golden): recorder shipped %s, clean %b, stored %b\n%!"
+  Stdio.eprintf
+    "run 7 (not part of the golden): recorder shipped %s, clean %b, stored %b, after %d attempt(s)\n\
+     %!"
     (Option.value_map record ~default:"nothing" ~f:(fun c -> c.shipped))
-    recorder_clean (Option.is_some entry);
+    recorder_clean (Option.is_some entry) (List.length record_attempts);
   let replay = spawn_child Replay in
   let on_replay f = Option.value_map replay ~default:false ~f in
   let ops select c = Option.value_map c ~default:[] ~f:(fun c -> select c.persisted) in
+  let unrecorded =
+    unrecorded_on
+      ~identity:(on_record (fun c -> c.persisted.identity))
+      ~failed:(on_record (fun c -> c.failed))
+      ~clean:recorder_clean (ops placement_stores record)
+  in
+  let given_entry = given_recording ~recorded:(Option.is_some entry) ~on:unrecorded in
   p "the replaying process runs to completion and reports what it observed" (Option.is_some replay);
   p "the replaying process numbers the graph's tensor nodes differently"
     (on_record (fun r -> on_replay (fun c -> c.uid <> r.uid)));
@@ -355,36 +459,40 @@ let () =
     "across processes, the replay is exact when the recording process recorded a decision: one \
      search, no flips"
     (on_replay (fun c -> if Option.is_some entry then c.arms = 1 && c.flips = 0 else c.arms = 2));
-  unless_refused
+  given_entry
     [ ops placement_lookups replay ]
     "a cross-process replay ships the recorded label"
     (on_replay (fun c ->
          match entry with
-         | None -> true
+         | None -> false
          | Some e -> String.equal c.shipped (SC.shipped_label e.SC.decision)));
-  unless_refused
+  given_entry
     [ ops placement_lookups replay ]
     "a cross-process replay ships the recorded placement of the intermediate"
-    (on_replay (fun c ->
-         Option.is_none entry || on_record (fun r -> Bool.equal c.materialized r.materialized)));
-  unless_refused
+    (on_replay (fun c -> on_record (fun r -> Bool.equal c.materialized r.materialized)));
+  (* An entry is recorded only over clean evidence, so the gate's second half is the record's own
+     precondition, kept explicit: the schedule entry this replays is the recorder's clean
+     search's. *)
+  given_recording
+    ~recorded:(Option.is_some entry && recorder_clean)
+    ~on:unrecorded
     [ ops schedule_stores record; ops lookups replay ]
     "a cross-process replay's one search is a schedule-cache replay"
-    (on_replay (fun c -> Option.is_none entry || (not recorder_clean) || c.replayed));
-  unless_refused
+    (on_replay (fun c -> c.replayed));
+  given_entry
     [ ops placement_lookups replay ]
     "a cross-process replay's one search tunes the lowering the recorded decision was measured on"
     (on_replay (fun c ->
-         match entry with None -> true | Some e -> String.equal c.source e.SC.outcome_digest));
-  (* Waived when the recorder recorded nothing: the replaying child's tune is then a cold one of its
-     own, free to record what its evidence allows. *)
-  p "a cross-process replay leaves the recorded decision untouched, and records nothing beside it"
-    (Option.is_none recorded
-    || (untouched recorded && List.length (placement_keys ~cache_dir:xproc_cache_dir ()) = 1));
+         match entry with None -> false | Some e -> String.equal c.source e.SC.outcome_digest));
+  (* Skipped when the recorder recorded nothing: the replaying child's tune is then a cold one of
+     its own, free to record what its evidence allows. *)
+  given_entry []
+    "a cross-process replay leaves the recorded decision untouched, and records nothing beside it"
+    (untouched recorded && List.length (placement_keys ~cache_dir:xproc_cache_dir ()) = 1);
   (* The control: a too-coarse identity -- one blind to what the lineage decided -- would hand it
      the entry the store now holds for the recorded problem (the recorder's, or, when the recorder's
      evidence was unclean, the replaying child's re-tune): one search where the arms belong. With no
-     entry at all the claim cannot discriminate, which stderr says. *)
+     entry at all neither control claim can discriminate, so both are skipped then. *)
   let held_before_control = held () in
   Stdio.eprintf "control (not part of the golden): the store holds %s for the recorded problem\n%!"
     (if Option.is_some held_before_control then "an entry" else "no entry");
@@ -396,12 +504,15 @@ let () =
   p_all2 "the control process's routine computes the right values"
     (Option.value_map control ~default:[||] ~f:(fun c -> c.values))
     reference ~f:approx;
-  p "the control process replays nothing recorded: both arms report"
+  let given_held = given_recording ~recorded:(Option.is_some held_before_control) ~on:unrecorded in
+  given_held [] "the control process replays nothing recorded: both arms report"
     (on_control (fun c -> c.arms = 2));
-  p "the control process leaves the entry recorded for the other problem untouched"
+  given_held [] "the control process leaves the entry recorded for the other problem untouched"
     (untouched held_before_control);
   xproc_stores :=
-    List.concat_map [ record; replay; control ] ~f:(ops (fun p -> List.filter p.io ~f:is_store))
+    List.concat_map
+      (record_attempts @ [ replay; control ])
+      ~f:(ops (fun p -> List.filter p.io ~f:is_store))
 
 let () =
   clean_cache cache_dir;
@@ -435,35 +546,59 @@ let () =
           (SC.digest
              (Train.placement_problem ~timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty))));
   (* --- The runs. --- *)
-  let run ?ship_arm ?placement_store ?timing_ctx () =
-    tune_in ?ship_arm ?placement_store ?timing_ctx ~cache_dir (mc, t2, comp)
+  let run ?ship_arm ?placement_store ?timing_ctx ?rank_fissioned_last ?(cache_dir = cache_dir) () =
+    tune_in ?ship_arm ?placement_store ?timing_ctx ?rank_fissioned_last ~cache_dir (mc, t2, comp)
+  in
+  (* A recording run, retried into a fresh [cache_dir] until an attempt records (gh-ocannl-1086):
+     every attempt's run with the placement keys it left. Settled by a recording, by clean evidence
+     (whose record claim then judges it), by a search that failed outright, or by a context with no
+     timing identity to key on. *)
+  let recording_run ?timing_ctx ?rank_fissioned_last ~cache_dir () =
+    attempts_until
+      ~fresh:(fun () -> clean_cache cache_dir)
+      ~settled:(fun ((arms, flips, _, _, _, persisted), keys) ->
+        (not (List.is_empty keys))
+        || clean_evidence (arms @ flips)
+        || failed_search (arms @ flips)
+        || not persisted.identity)
+      (fun () ->
+        let r = run ?timing_ctx ?rank_fissioned_last ~cache_dir () in
+        (r, placement_keys ~cache_dir ()))
   in
   (* --- Run 1: cold. --- *)
-  let arms1, flips1, shipped1, materialized1, got1, persisted1 = run () in
+  let attempts1 = recording_run ~cache_dir () in
+  let (arms1, flips1, shipped1, materialized1, got1, persisted1), keys1 = List.last_exn attempts1 in
   p "the cold run reports both arms in position" (List.length arms1 = 2);
   p_all2 "the cold run's routine computes the right values" got1 expected ~f:approx;
-  let observed1 = arms1 @ flips1 in
-  let clean1 =
-    List.for_all observed1 ~f:(fun r ->
-        completed r && uncontended r && Float.is_finite r.Autotune.best_ms)
-  in
-  let keys1 = placement_keys () in
+  let clean1 = clean_evidence (arms1 @ flips1) in
   (* Non-emptiness is the recorded case; a run whose evidence the load spoiled records nothing. *)
   let stored1 = List.length keys1 = 1 in
   Stdio.eprintf
-    "run 1 (not part of the golden): shipped %s, %d arm and %d flip reports, clean %b, stored %b\n\
+    "run 1 (not part of the golden): shipped %s, %d arm and %d flip reports, clean %b, stored %b, \
+     after %d attempt(s)\n\
      %!"
-    shipped1 (List.length arms1) (List.length flips1) clean1 stored1;
+    shipped1 (List.length arms1) (List.length flips1) clean1 stored1 (List.length attempts1);
   (* Gated on the run's own context (gh-ocannl-1043): the store keys on that context's timing
      identity, so a reference context's says nothing about whether this run could record. *)
-  Cache_plant.unless_unkeyed_or_refused ~identity:persisted1.identity (placement_stores persisted1)
-    "the cold run records exactly one decision, whenever its evidence was clean"
-    ((not clean1) || stored1);
-  p_all "a decision is never recorded over refused windows or a failed search" observed1
-    ~f:(fun r -> (not stored1) || (completed r && uncontended r));
-  p "the recorded decision is the shipped one"
-    ((not stored1)
-    || String.equal (SC.shipped_label (read_entry (List.hd_exn keys1)).SC.decision) shipped1);
+  let failed1 = failed_search (arms1 @ flips1) in
+  records_when_clean ~identity:persisted1.identity ~failed:failed1 ~clean:clean1
+    [ placement_stores persisted1 ]
+    "the cold run records exactly one decision, whenever its evidence was clean" stored1;
+  (* Over every attempt, the discarded ones included: an unclean attempt is exactly where a decision
+     must NOT have been recorded. *)
+  p_all "a decision is never recorded over refused windows or a failed search"
+    (List.concat_map attempts1 ~f:(fun ((arms, flips, _, _, _, _), keys) ->
+         List.map (arms @ flips) ~f:(fun r -> (keys, r))))
+    ~f:(fun (keys, r) -> List.is_empty keys || clean_report r);
+  let unrecorded1 =
+    unrecorded_on ~identity:persisted1.identity ~failed:failed1 ~clean:clean1
+      (placement_stores persisted1)
+  in
+  let given_stored1 = given_recording ~recorded:stored1 ~on:unrecorded1 in
+  given_stored1 [] "the recorded decision is the shipped one"
+    (match keys1 with
+    | [ k ] -> String.equal (SC.shipped_label (read_entry k).SC.decision) shipped1
+    | _ -> false);
   (* gh-ocannl-1022: the guard is what was tuned. The arms tune distinct lowerings (the intermediate
      is policy-virtual in A and materialized in B), which is what keeps the equalities below from
      being satisfied by accident. The shipped search is exact for an arm; a refined winner is one of
@@ -479,51 +614,51 @@ let () =
   let shipped_searches1 =
     match (shipped1, arms1) with "A", [ ra; _ ] -> [ ra ] | "B", [ _; rb ] -> [ rb ] | _ -> flips1
   in
-  p "the recorded outcome digest is the shipped search's own source digest"
+  given_stored1 [] "the recorded outcome digest is the shipped search's own source digest"
     (match entry1 with
-    | None -> not stored1
+    | None -> false
     | Some e ->
         List.exists shipped_searches1 ~f:(fun r ->
             String.equal (source_digest r) e.SC.outcome_digest));
-  p "a fresh lowering of the recorded decision reproduces the digest the shipped search tuned"
+  given_stored1 []
+    "a fresh lowering of the recorded decision reproduces the digest the shipped search tuned"
     (match entry1 with
-    | None -> not stored1
+    | None -> false
     | Some e ->
         String.equal e.SC.outcome_digest
           (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty e.SC.decision));
   (* --- Run 2: warm. --- *)
   let arms2, flips2, shipped2, materialized2, got2, persisted2 = run () in
   p_all2 "the warm run's routine computes the right values" got2 expected ~f:approx;
-  (* A refused lookup makes the warm run a cold one; the claims resting on the replay are waived
-     then, as on a refused store. *)
+  (* A refused lookup makes the warm run a cold one; the claims resting on the replay are skipped
+     then, as on a refused store, and where run 1 recorded nothing. The first claim reads both ways:
+     without an entry the warm run must search both arms. *)
   unless_refused
     [ placement_lookups persisted2 ]
     "the warm run replays the decision exactly when the cold run recorded one: one search, no flips"
     (if stored1 then List.length arms2 = 1 && List.length flips2 = 0 else List.length arms2 = 2);
-  unless_refused
+  given_stored1
     [ placement_lookups persisted2 ]
-    "a replay ships the recorded label"
-    ((not stored1) || String.equal shipped2 shipped1);
-  unless_refused
+    "a replay ships the recorded label" (String.equal shipped2 shipped1);
+  given_stored1
     [ placement_lookups persisted2 ]
     "a replay ships the recorded placement of the intermediate"
-    ((not stored1) || Bool.equal materialized2 materialized1);
+    (Bool.equal materialized2 materialized1);
   (* The recorded decision reproduces the lowering the cold run tuned: the one search is a
-     schedule-cache replay of the winner the cold run's shipped search crowned. Waived only by the
-     cold run's shipped search having stored nothing, which under a clean run 1 it did not. *)
-  unless_refused
+     schedule-cache replay of the winner the cold run's shipped search crowned, which a clean run 1
+     -- the only kind that records -- stored. *)
+  given_recording ~recorded:(stored1 && clean1) ~on:unrecorded1
     [ schedule_stores persisted1; lookups persisted2 ]
     "a replay's one search is a schedule-cache replay"
-    ((not stored1) || (not clean1) || match arms2 with [ r ] -> replayed r | _ -> false);
+    (match arms2 with [ r ] -> replayed r | _ -> false);
   (* The same fact without the cache in between (gh-ocannl-1022): the replayed search tuned the very
-     lowering whose digest the entry records. Not waived by contention. *)
-  unless_refused
+     lowering whose digest the entry records. *)
+  given_stored1
     [ placement_lookups persisted2 ]
     "a replay's one search tunes the lowering the recorded decision was measured on"
     (match (entry1, arms2) with
-    | None, _ -> not stored1
     | Some e, [ r ] -> String.equal (source_digest r) e.SC.outcome_digest
-    | Some _, _ -> false);
+    | _ -> false);
   (* --- Run 2b: a replayed search that fails without poisoning the lineage is a losing arm, not a
      failed tune: the recorded decision is treated as stale and the arms are searched. The failure
      is injected at the first candidate attempt of the process from here on -- the replayed search's
@@ -543,8 +678,8 @@ let () =
   p "a failed replay is not reported; the arms it falls back to report in position"
     (List.length arms2b = 2);
   (* --- Run 3: a forced arm neither consults nor records the store. Whichever run recorded the
-     entry -- run 1, or run 2 re-tuning after a contended run 1 -- is what must survive; a run the
-     load kept from recording anything waives the entry-level claims. --- *)
+     entry -- run 1, or run 2 re-tuning after an unclean run 1 -- is what must survive; where no run
+     recorded anything the entry-level claims are skipped. --- *)
   let recorded = Option.map (List.hd (placement_keys ())) ~f:(fun k -> (k, read_entry k)) in
   let snapshot () =
     Option.map recorded ~f:(fun (k, _) -> SC.sexp_of_placement_entry (read_entry k))
@@ -552,11 +687,12 @@ let () =
   let before = snapshot () in
   (* Whichever run recorded it -- run 1 under a clean load, else the re-tune that run 2 or 2b fell
      back to -- the entry the store holds is one a fresh lowering of its decision reproduces
-     (gh-ocannl-1022). Run 1's claims above are waived exactly when run 1 recorded nothing; this one
-     only when no run did. *)
-  p "the entry the store holds is reproduced by a fresh lowering of its decision"
+     (gh-ocannl-1022). Run 1's claims above are skipped exactly when run 1 recorded nothing; this
+     one only when no run did. *)
+  gated ~aggregation:`Environment ~when_:(Option.is_some recorded) ~on:unrecorded1
+    "the entry the store holds is reproduced by a fresh lowering of its decision"
     (match recorded with
-    | None -> true
+    | None -> false
     | Some (_, e) ->
         String.equal e.SC.outcome_digest
           (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty e.SC.decision));
@@ -577,14 +713,16 @@ let () =
   p_all2 "the bypassed-store run's routine computes the right values" got3b expected ~f:approx;
   p "a bypassed store compares both arms, in position, whatever the store holds"
     (List.length arms3b = 2);
-  (* Waived where run 1 could not cache (gh-ocannl-1043: its own context's identity), and on a
-     refused store or lookup in between. *)
+  (* Skipped where run 1 could not cache (gh-ocannl-1043: its own context's identity) or never had
+     clean evidence, and on a refused store or lookup in between. *)
   let label =
     "a bypassed store's arms replay the schedule cache, whenever the cold run cached them"
   in
   if refused_in [ schedule_stores persisted1; lookups persisted3b ] label then
     skipped ~aggregation:`Environment ~backend:refused_on label
-  else p_all label arms3b ~f:(fun r -> (not (persisted1.identity && clean1)) || replayed r);
+  else
+    gated_all ~aggregation:`Environment ~when_:(persisted1.identity && clean1) ~on:unrecorded1 label
+      arms3b ~f:replayed;
   p "a bypassed store leaves the recorded decision untouched"
     (Option.equal Sexp.equal before (snapshot ())
     && List.length (placement_keys ()) = Option.length recorded);
@@ -613,36 +751,56 @@ let () =
                 SC.store_placements ~dir:cache_dir ~key:(Some key) (corrupt e)))
       in
       let corrupting = List.filter corrupting ~f:is_placement in
-      let arms, _, _, _, got, persisted = run () in
+      let arms, flips, _, _, got, persisted = run () in
       stale_placement_stores := !stale_placement_stores @ corrupting @ placement_stores persisted;
       stale_runs := !stale_runs @ [ (persisted, arms) ];
       p_all2
         (Printf.sprintf "after an entry that %s, the routine computes the right values" how)
         got expected ~f:approx;
-      (* Waived also on a refused read of it: the run then never saw the stale entry, and tunes both
-         arms cold. *)
-      unless_refused
+      (* Skipped also on a refused read of it: the run then never saw the stale entry, and tunes
+         both arms cold. *)
+      given_recording ~recorded:(Option.is_some recorded) ~on:unrecorded1
         [ corrupting; placement_lookups persisted ]
         (Printf.sprintf "an entry that %s is ignored and the placements re-tuned" how)
-        (Option.is_none recorded || List.length arms = 2);
-      let clean =
-        List.for_all arms ~f:(fun r ->
-            completed r && uncontended r && Float.is_finite r.Autotune.best_ms)
-      in
-      unless_refused
+        (List.length arms = 2);
+      (* The re-tune records under the same rule as any run, so its flips count too. Not retried:
+         the stale entry would have to be planted again, and the warm directory would replay a
+         cached abandonment. *)
+      let clean = clean_evidence (arms @ flips) in
+      given_recording
+        ~recorded:(clean && Option.is_some recorded)
+        ~on:
+          (if Option.is_none recorded then unrecorded1
+           else
+             unrecorded_on ~identity:persisted.identity
+               ~failed:(failed_search (arms @ flips))
+               ~clean (placement_stores persisted))
         [ corrupting; placement_stores persisted ]
         (Printf.sprintf "an entry that %s is overwritten by the re-tune, given clean evidence" how)
-        ((not clean)
-        || Option.value_map recorded ~default:true ~f:(fun (key, e) ->
-            Option.value_map
-              (SC.lookup_placements ~dir:cache_dir ~key:(Some key))
-              ~default:false ~f:(overwritten e))));
+        (Option.value_map recorded ~default:false ~f:(fun (key, e) ->
+             Option.value_map
+               (SC.lookup_placements ~dir:cache_dir ~key:(Some key))
+               ~default:false ~f:(overwritten e))));
   (* --- Run 6 (gh-ocannl-1022): the arms searched in a timing lineage that inherits a decision --
      the intermediate materialized -- which the caller's lineage does not. The shipped search tuned
      the TIMING lineage's lowering, so that is the digest recorded, and the replay guard recomputes
      it in the timing lineage: recomputed in the caller's, which lowers the default placements
-     differently (the precondition claim), a recorded default would never replay. A new problem, so
-     a new entry beside run 1's. --- *)
+     differently (the precondition claim), a recorded default would never replay. A new problem,
+     recorded with the same retries as run 1.
+
+     Its own directory, and fissioned candidates ranked last (gh-ocannl-1386). Every schedule these
+     searches crown is tuned on the timing lineage's lowering, where the intermediate is
+     materialized, and compiled into the caller's lineage, where it is virtual. On cc a
+     whole-routine winner then fails to compile there, a classified decline, and the untuned default
+     ships; a FISSIONED winner instead dies promoting the virtual intermediate to a device buffer,
+     which strict classification makes fatal -- the replayed search with it, and the warm run goes
+     back to the arms, depending on whether the noise in the timings crowned a fissioned schedule.
+     That is a property of compiling a timing lineage's schedule into a caller's lineage that lowers
+     differently, not of the placement store; these two runs pin around it. (On Metal the
+     whole-routine compile failure is unclassified, hence fatal as well: there run 6 never records,
+     and its claims are skipped as a failed search.) The materialize-all lineage of run 1's arm B
+     lowers to the same program as this timing lineage, so a shared directory would hand these
+     searches run 1's unranked winner as a schedule-cache hit. --- *)
   let timing_ctx () = Context.decide_materialized (Context.auto ()) [ mc.Tensor.value ] in
   p "the caller's and the timing lineage lower the default placements differently"
     (not
@@ -650,57 +808,83 @@ let () =
           (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty SC.Default)
           (Train.placement_outcome_digest ~timing_ctx:(timing_ctx ()) (Context.auto ()) t2 comp
              Ir.Indexing.Empty SC.Default)));
-  let keys_before6 = placement_keys () in
-  let arms6, flips6, shipped6, _, got6, persisted6 = run ~timing_ctx:(timing_ctx ()) () in
+  let timing_cache_dir = "autotune_cache_placement_store_timing" in
+  let attempts6 =
+    recording_run ~timing_ctx:(timing_ctx ()) ~rank_fissioned_last:true ~cache_dir:timing_cache_dir
+      ()
+  in
+  let (arms6, flips6, shipped6, _, got6, persisted6), keys6 = List.last_exn attempts6 in
   p_all2 "with a timing context, the cold run's routine computes the right values" got6 expected
     ~f:approx;
-  let clean6 =
-    List.for_all (arms6 @ flips6) ~f:(fun r ->
-        completed r && uncontended r && Float.is_finite r.Autotune.best_ms)
-  in
+  let clean6 = clean_evidence (arms6 @ flips6) in
   let entry6 =
-    List.find_map (placement_keys ()) ~f:(fun k ->
-        if List.mem keys_before6 k ~equal:String.equal then None else Some (read_entry k))
+    match keys6 with [ k ] -> SC.lookup_placements ~dir:timing_cache_dir ~key:(Some k) | _ -> None
   in
-  Stdio.eprintf "run 6 (not part of the golden): shipped %s, clean %b, stored %b\n%!" shipped6
-    clean6 (Option.is_some entry6);
-  Cache_plant.unless_unkeyed_or_refused ~identity:persisted6.identity (placement_stores persisted6)
+  Stdio.eprintf
+    "run 6 (not part of the golden): shipped %s, clean %b, stored %b, after %d attempt(s); %d \
+     fissioned candidate timings ranked last\n\
+     %!"
+    shipped6 clean6 (Option.is_some entry6) (List.length attempts6) !fissioned_ranked_last;
+  let failed6 = failed_search (arms6 @ flips6) in
+  records_when_clean ~identity:persisted6.identity ~failed:failed6 ~clean:clean6
+    [ placement_stores persisted6 ]
     "with a timing context, the cold run records a decision of its own, whenever its evidence was \
      clean"
-    ((not clean6) || Option.is_some entry6);
+    (Option.is_some entry6);
+  let given_entry6 =
+    given_recording ~recorded:(Option.is_some entry6)
+      ~on:
+        (unrecorded_on ~identity:persisted6.identity ~failed:failed6 ~clean:clean6
+           (placement_stores persisted6))
+  in
   let shipped_searches6 =
     match (shipped6, arms6) with "A", [ ra; _ ] -> [ ra ] | "B", [ _; rb ] -> [ rb ] | _ -> flips6
   in
-  p "with a timing context, the recorded outcome digest is the shipped search's own source digest"
+  given_entry6 []
+    "with a timing context, the recorded outcome digest is the shipped search's own source digest"
     (match entry6 with
-    | None -> true
+    | None -> false
     | Some e ->
         List.exists shipped_searches6 ~f:(fun r ->
             String.equal (source_digest r) e.SC.outcome_digest));
-  p
+  given_entry6 []
     "with a timing context, a fresh lowering of the recorded decision in the timing lineage \
      reproduces it"
     (match entry6 with
-    | None -> true
+    | None -> false
     | Some e ->
         String.equal e.SC.outcome_digest
           (Train.placement_outcome_digest ~timing_ctx:(timing_ctx ()) (Context.auto ()) t2 comp
              Ir.Indexing.Empty e.SC.decision));
-  let arms6w, flips6w, shipped6w, _, got6w, persisted6w = run ~timing_ctx:(timing_ctx ()) () in
+  let arms6w, flips6w, shipped6w, _, got6w, persisted6w =
+    run ~timing_ctx:(timing_ctx ()) ~rank_fissioned_last:true ~cache_dir:timing_cache_dir ()
+  in
   p_all2 "with a timing context, the warm run's routine computes the right values" got6w expected
     ~f:approx;
+  Stdio.eprintf
+    "run 6w (not part of the golden): arms [%s], %d flip reports, shipped %s, entry %s, source \
+     digests [%s] vs recorded %s\n\
+     %!"
+    (String.concat ~sep:"; "
+       (List.map arms6w ~f:(fun r ->
+            Printf.sprintf "%s contended=%d best=%.4f"
+              (Autotune.outcome_name r.Autotune.outcome)
+              r.Autotune.timings_contended r.Autotune.best_ms)))
+    (List.length flips6w) shipped6w
+    (Option.value_map entry6 ~default:"none" ~f:(fun e -> SC.shipped_label e.SC.decision))
+    (String.concat ~sep:"; " (List.map arms6w ~f:source_digest))
+    (Option.value_map entry6 ~default:"-" ~f:(fun e -> e.SC.outcome_digest));
   (* "No flips" is an absence: an empty flip-report list is the passing case, as in run 2. *)
-  unless_refused
+  given_entry6
     [ placement_lookups persisted6w ]
     "with a timing context, the warm run replays the recorded decision: one search, no flips, the \
      recorded label, tuning the recorded lowering"
     (match (entry6, arms6w) with
-    | None, _ -> true
     | Some e, [ r ] ->
         List.length flips6w = 0
         && String.equal shipped6w (SC.shipped_label e.SC.decision)
         && String.equal (source_digest r) e.SC.outcome_digest
-    | Some _, _ -> false);
+    | _ -> false);
   (* --- Every claim above that rests on a store or a lookup is waived when it was refused, which is
      right for a transient refusal and wrong for one that is no accident: a filename the filesystem
      rejects, a permission, a commit that always fails. Those refuse EVERY store (of a directory),
@@ -709,10 +893,13 @@ let () =
      refusals excluded), not all of any directory's placement or schedule stores may be refused --
      never waived by a refusal. --- *)
   let stores p = List.filter p.io ~f:is_store in
+  let attempt_persisted attempts = List.map attempts ~f:(fun ((_, _, _, _, _, p), _) -> p) in
   let attempted =
     !xproc_stores
     @ List.concat_map
-        [ persisted1; persisted2; persisted2b; persisted3; persisted3b; persisted6; persisted6w ]
+        (attempt_persisted attempts1
+        @ [ persisted2; persisted2b; persisted3; persisted3b ]
+        @ attempt_persisted attempts6 @ [ persisted6w ])
         ~f:stores
     @ !stale_placement_stores
   in
@@ -722,8 +909,8 @@ let () =
      something and had no refused window stores into [cache_dir] ([Autotune.tune]'s rule) -- so that
      directory's schedule group has two attempts by construction; told from the reports, never from
      the stores the claim judges (gh-ocannl-1115). Contention that leaves fewer is an environment
-     the claim cannot judge. Flips and the cross-process leg go uncounted: counting fewer only skips
-     more. *)
+     the claim cannot judge. Flips, the cross-process leg and run 6's own directory go uncounted:
+     counting fewer only skips more. *)
   let stores_winner (r : Autotune.report) =
     (match r.Autotune.outcome with Autotune.Searched -> true | _ -> false)
     && uncontended r
@@ -732,15 +919,8 @@ let () =
   let storing_searches =
     List.sum
       (module Int)
-      ([
-         (persisted1, arms1);
-         (persisted2, arms2);
-         (persisted2b, arms2b);
-         (persisted3, arms3);
-         (persisted3b, arms3b);
-         (persisted6, arms6);
-         (persisted6w, arms6w);
-       ]
+      (List.map attempts1 ~f:(fun ((arms, _, _, _, _, p), _) -> (p, arms))
+      @ [ (persisted2, arms2); (persisted2b, arms2b); (persisted3, arms3); (persisted3b, arms3b) ]
       @ !stale_runs)
       ~f:(fun (p, arms) -> if p.identity then List.count arms ~f:stores_winner else 0)
   in
@@ -773,19 +953,17 @@ let () =
      every placement store run 8 attempted must be reported refused -- for any reason: on a host
      that refuses the staging file's creation itself (a Windows path beyond MAX_PATH,
      gh-ocannl-1040's rog leg) the injected hook never fires, and [schedule_cache_regime] pins the
-     injected reason, and a clean run must have attempted one. A contended run that attempted none
-     has nothing to show, and says so. *)
+     injected reason -- and the run must have attempted one. The gate is the keyed run being clean,
+     told from its reports and never from the stores the claim judges (gh-ocannl-1115,
+     gh-ocannl-1361): a contended run is skipped whether or not it stored, since a gate that opened
+     on the stores being there would turn a regression that stops attempting them into a skip. *)
   let stores8 = placement_stores persisted8 in
-  let clean8 =
-    List.for_all (arms8 @ flips8) ~f:(fun r ->
-        completed r && uncontended r && Float.is_finite r.Autotune.best_ms)
-  in
+  let clean8 = clean_evidence (arms8 @ flips8) in
   Stdio.eprintf
     "run 8 (not part of the golden): clean %b, %d placement stores, %d refused cache operations\n%!"
     clean8 (List.length stores8)
     (List.count persisted8.io ~f:refused);
-  gated ~aggregation:`Environment
-    ~when_:(persisted8.identity && (clean8 || not (List.is_empty stores8)))
-    ~on:"no timing identity, or a contended run that attempted no placement store"
+  gated ~aggregation:`Environment ~when_:(persisted8.identity && clean8)
+    ~on:"no timing identity, or a contended run"
     "under refused commits, the cold run reports its placement store's refusal"
     ((not (List.is_empty stores8)) && List.for_all stores8 ~f:refused)

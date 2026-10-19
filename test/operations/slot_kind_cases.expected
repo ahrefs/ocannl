@@ -260,6 +260,10 @@ build @q/runtest (a reader beside a configuration copied from a directory the ru
 a reader beside a configuration copied from a directory the runner does not read answers unknown: true
 build @q2/runtest (a reader beside a configuration copied from one it does) names nothing + reads config
 a reader beside a configuration copied from one it does answers names nothing + reads config: true
+build @q3/runtest (a reader beside the configuration carrying the ambient record) names nothing + reads config
+a reader beside the configuration carrying the ambient record answers names nothing + reads config: true
+build @q4/runtest (a reader beside an ambient configuration that appends more than the record) unknown: it reaches the rule producing ocannl_config in test/config/ambient, whose generated ocannl_config sets the backend past the configuration
+a reader beside an ambient configuration that appends more than the record answers unknown: true
 build @w/wp (a workspace program run by name) unknown: it reaches the rule on wp in w, whose run of the workspace program gpu_tool, unmarked this does not model exactly
 a workspace program run by name answers unknown: true
 build @@c/probe (a glob over copies)     names nothing + reads config

@@ -17,7 +17,8 @@
 #   CAP   wall cap in seconds per build and per cell; a capped cell's process group is terminated
 #         and the cell counts as failed.
 #   STEP  build | provenance | step | seg | trainseg | kprof | summary
-#     build       dune build of bench_gpt and bench_gpt_diag in both checkouts.
+#     build       dune build of bench_gpt and bench_gpt_diag in both checkouts, and of this
+#                 checkout's bin/device_props (kprof's device probe).
 #     provenance  both revisions, clean-tree checks, the fixtures' digests against the m4-max
 #                 content-v1 rows of fixtures/DIGESTS.txt, and the host state.
 #     step        the step-time matrix: FIXTURES x TREATMENTS, REPEATS passes over the cell list,
@@ -29,15 +30,20 @@
 #     trainseg    training-fixture counterpart of seg: the shipped backprop + SGD segments, with
 #                 full-step controls BEFORE isolated timing mutates weights/gradients. Requires a
 #                 runner with gh-ocannl-1170 (an old forward-only diagnostic is refused).
-#     kprof       per-kernel attribution of the step itself (gh-ocannl-1347; BACKEND=cuda, nsys on
-#                 PATH): FIXTURES x TREATMENTS, REPEATS passes ordered as `step`'s, each a step
-#                 cell (bench_gpt, the per-kernel table on) under `nsys profile --trace=cuda
-#                 --cuda-graph-trace=node` with an nvidia-smi clock sampler beside it. Every
-#                 shipped segment's device duration over the timed steps is joined with the same
-#                 compile's isolated minimum (benchmarks/kernel_attribution.py, which refuses a
-#                 cell it cannot map), and rows where the two disagree, or the in-step spread is
-#                 wide, are flagged: only the in-step column attributes step time. The step time
-#                 of a kprof cell carries the tracer's overhead (2-3% on rog); it enters no matrix.
+#     kprof       per-kernel attribution of the step itself (gh-ocannl-1347): FIXTURES x
+#                 TREATMENTS, REPEATS passes ordered as `step`'s, each a step cell (bench_gpt, the
+#                 per-kernel table on) under a device tracer -- BACKEND=cuda: `nsys profile
+#                 --trace=cuda --cuda-graph-trace=node` (nsys and nvidia-smi on PATH), an
+#                 nvidia-smi clock sampler beside it; BACKEND=hip (gh-ocannl-1392): `rocprofv3
+#                 --kernel-trace` (ROCPROFV3, default rocprofv3 on PATH; benchmarks/rocprofv3-install.sh
+#                 provides one where the distribution ships none), after a device probe
+#                 (bin/device_props) whose one device's memory model, unified or discrete, every
+#                 cell states. Every shipped segment's device duration over the timed steps is
+#                 joined with the same compile's isolated minimum (benchmarks/kernel_attribution.py,
+#                 which refuses a cell it cannot map), and rows where the two disagree, or the
+#                 in-step spread is wide, are flagged: only the in-step column attributes step
+#                 time. The step time of a kprof cell carries the tracer's overhead (2-3% on rog);
+#                 it enters no matrix.
 #     summary     OUT/summary.md from the numbered passes' result lines: median p50 per cell, the
 #                 p50 of each repeat, the widest p90/p10 of the cell's repeats, the ratio to the
 #                 same fixture's base cell, and the losses' largest relative difference from base.
@@ -74,7 +80,7 @@
 #             2 gives a head of 64 lanes, 4 a head of 128) -- meaningful with a d1 <T> on a
 #             fixture whose head is wider than 32
 #   sr<N>     this checkout's runner, --ocannl_gpu_default_split_reduce_min_serial=<N>, N a
-#             non-negative count: the serial chain per output cell from which the untuned CUDA plan
+#             non-negative count: the serial chain per output cell from which the untuned CUDA/HIP plan
 #             splits a reduction (gh-ocannl-1325; 0 splits nothing) -- the same-binary threshold
 #             A/B of gh-ocannl-1414, whose two-loop batch reductions chain 1024 rows at batch 8
 #   fold<T>   treatment <T> plus --ocannl_online_softmax_block=16 (the single-pass block fold of
@@ -152,6 +158,8 @@ cd "$root/benchmarks" || exit 2
 echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend=$backend repeats=$repeats"
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
+# kprof on HIP: the tracer, and the lines every cell's .err states (set by the kprof step).
+rocprof= kprof_header=
 # Whether the step-time matrix was asked for: summary owes one only then (OUT starts empty, so no
 # earlier invocation's cells can be in it either way).
 step_stage=0
@@ -219,16 +227,22 @@ capped() {
   return "$st"
 }
 
-# [cell FIXTURE TREATMENT TAG [EXE [profile]]]: with `profile`, the runner runs under nsys (the
-# CUDA graph traced node by node, so each segment of the replayed step is its own record), writing
-# OUT/CELL.nsys-rep, and an nvidia-smi sampler records OUT/CELL.smi.csv for the cell's duration.
+# [cell FIXTURE TREATMENT TAG [EXE [profile]]]: with `profile`, the runner runs under the backend's
+# tracer. On CUDA that is nsys (the CUDA graph traced node by node, so each segment of the replayed
+# step is its own record), writing OUT/CELL.nsys-rep, and an nvidia-smi sampler records
+# OUT/CELL.smi.csv for the cell's duration. On HIP it is rocprofv3, whose kernel trace records each
+# dispatch at the HSA queue (graph nodes included) in OUT/CELL_kernel_trace.csv, beside
+# OUT/CELL_agent_info.csv; the cell's .err states KPROF_HEADER (the tracer and the memory model).
 cell() {
-  local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} profile=${5:-} flags r st smi
+  local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} profile=${5:-} flags r st smi=
   flags=$(flags_of "$treatment") || { failed=1; return 1; }
   r=$(runner_root "$treatment")
   local name="$backend-$fixture-$treatment-$tag" wrap=()
   echo "backend=$backend fixture=$fixture treatment=$treatment runner=$r flags=[$flags]" >"$out/$name.err"
-  if [ -n "$profile" ]; then
+  if [ -n "$profile" ] && [ "$backend" = hip ]; then
+    printf '%s\n' "$kprof_header" >>"$out/$name.err"
+    wrap=("$rocprof" --kernel-trace --output-format csv -d "$out" -o "$name" --)
+  elif [ -n "$profile" ]; then
     wrap=(nsys profile --trace=cuda --cuda-graph-trace=node --sample=none --cpuctxsw=none
       --force-overwrite=true -o "$out/$name")
     nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,pstate,power.draw,temperature.gpu,clocks_event_reasons.active \
@@ -244,7 +258,7 @@ cell() {
     --ocannl_autotune_search=false --ocannl_debug_log_from_routines=false \
     --ocannl_output_debug_files_in_build_directory=false $flags
   st=$?
-  if [ -n "$profile" ]; then
+  if [ -n "$smi" ]; then
     kill "$smi" 2>/dev/null
     wait "$smi" 2>/dev/null
   fi
@@ -257,6 +271,31 @@ pass_cells() {
   for f in $2; do for t in $treatments; do list="$list $f:$t"; done; done
   if [ $((pass % 2)) -eq 0 ]; then echo "$list" | tr ' ' '\n' | sed '/^$/d' | awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }'
   else echo "$list" | tr ' ' '\n' | sed '/^$/d'; fi
+}
+
+# [hip_memory_model]: the memory model of the one HIP device, from this checkout's device probe
+# (bin/device_props: the backend's own `integrated` query, the one its hardware limits read), as
+# `unified|discrete (NAME, ARCH: integrated=BOOL)`. Fails, saying why, on a probe that does not run,
+# sees other than one device (the cell would not say which it ran on; HIP_VISIBLE_DEVICES pins
+# one), or reports no `integrated` flag (a checkout older than gh-ocannl-1392).
+hip_memory_model() {
+  local props n integrated model
+  props=$("$root/_build/default/bin/device_props.exe" --ocannl_backend=hip </dev/null 2>/dev/null) || {
+    echo "gh1133: the device probe $root/_build/default/bin/device_props.exe failed"
+    return 1
+  }
+  n=$(printf '%s\n' "$props" | sed -n 's/^static\.device_count = //p')
+  if [ "$n" != 1 ]; then
+    echo "gh1133: kprof on HIP states the memory model of the one device it ran on, and the probe sees ${n:-no} devices (pin one with HIP_VISIBLE_DEVICES)"
+    return 1
+  fi
+  integrated=$(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.integrated = //p')
+  case $integrated in
+    true) model=unified ;;
+    false) model=discrete ;;
+    *) echo "gh1133: the device probe reports no integrated flag for device 0; the memory model is unknown"; return 1 ;;
+  esac
+  echo "$model ($(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.device_name = //p'), $(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.gcn_arch_name = //p'): integrated=$integrated)"
 }
 
 need_identity() {
@@ -296,8 +335,11 @@ for step in "$@"; do
     build)
       ok=1
       for tree in "$root" "$base"; do
+        probe=()
+        [ "$tree" = "$root" ] && probe=(bin/device_props.exe)
         capped "build-$(basename "$tree")" dune build --root "$tree" \
-          benchmarks/runners/ocannl/bench_gpt.exe benchmarks/runners/ocannl/bench_gpt_diag.exe || ok=0
+          benchmarks/runners/ocannl/bench_gpt.exe benchmarks/runners/ocannl/bench_gpt_diag.exe \
+          ${probe[@]+"${probe[@]}"} || ok=0
       done
       [ "$ok" = 1 ] && built=1 ;;
     provenance)
@@ -340,19 +382,39 @@ for step in "$@"; do
       done ;;
     kprof)
       need_identity kprof || continue
-      if [ "$backend" != cuda ] || ! command -v nsys >/dev/null || ! command -v nvidia-smi >/dev/null; then
-        echo "gh1133: kprof needs BACKEND=cuda with nsys and nvidia-smi on PATH (backend: $backend)"
-        failed=1
-        continue
-      fi
+      case $backend in
+        cuda)
+          if ! command -v nsys >/dev/null || ! command -v nvidia-smi >/dev/null; then
+            echo "gh1133: kprof on CUDA needs nsys and nvidia-smi on PATH"
+            failed=1
+            continue
+          fi ;;
+        hip)
+          rocprof=${ROCPROFV3:-rocprofv3}
+          if ! command -v "$rocprof" >/dev/null; then
+            echo "gh1133: kprof on HIP needs rocprofv3 (ROCPROFV3, or on PATH; benchmarks/rocprofv3-install.sh installs one)"
+            failed=1
+            continue
+          fi
+          model=$(hip_memory_model) || { echo "$model"; failed=1; continue; }
+          kprof_header="kprof: tracer $(command -v "$rocprof") --kernel-trace ($("$rocprof" --version 2>&1 | sed -n 's/^ *version: *//p' | head -1))
+kprof: memory model $model"
+          printf '%s\n' "$kprof_header" ;;
+        *)
+          echo "gh1133: kprof needs BACKEND=cuda (nsys) or BACKEND=hip (rocprofv3), not $backend"
+          failed=1
+          continue ;;
+      esac
       for pass in $(seq 1 "$repeats"); do
         for c in $(pass_cells "$pass" "$fixtures"); do
           name="$backend-${c%%:*}-${c#*:}-kprof$pass"
           cell "${c%%:*}" "${c#*:}" "kprof$pass" bench_gpt profile || continue
-          # The per-launch table of the trace; the SQLite export it goes through is not kept.
-          nsys stats --report cuda_gpu_trace --format csv --force-export=true \
-            --output "$out/$name" "$out/$name.nsys-rep" >>"$out/$name.err" 2>&1 || failed=1
-          rm -f "${out:?}/$name.sqlite"
+          if [ "$backend" = cuda ]; then
+            # The per-launch table of the trace; the SQLite export it goes through is not kept.
+            nsys stats --report cuda_gpu_trace --format csv --force-export=true \
+              --output "$out/$name" "$out/$name.nsys-rep" >>"$out/$name.err" 2>&1 || failed=1
+            rm -f "${out:?}/$name.sqlite"
+          fi
           python3 "$root/benchmarks/kernel_attribution.py" check "$out" "$name.out" || failed=1
         done
       done ;;
