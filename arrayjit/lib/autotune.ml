@@ -4155,11 +4155,17 @@ let compile_advisory ?name ?on_fallback ?fallback_if ?on_unrecovered lowered_tra
       match on_unrecovered with
       | Some f -> f classified
       | None -> Outcome.raise_failure failure)
-  | Error (Outcome.Classified classified) ->
+  | Error (Outcome.Classified classified) -> (
       (* Typed compiler rejection is the advisory fallback boundary. Fatal failures are propagated
          above without paying for a second compile. *)
       Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
-      Context.compile ?name ctx comp bindings
+      (* [Context.compile], spelled out so that a classified failure of the fallback itself also
+         reaches [on_unrecovered]: there is then nothing left to fall back to here either. *)
+      match Context.compile_outcome ?name ~provenance:Outcome.User_schedule ctx comp bindings with
+      | Ok result -> result
+      | Error (Outcome.Classified classified) when Option.is_some on_unrecovered ->
+          (Option.value_exn on_unrecovered) classified
+      | Error failure -> Outcome.raise_failure failure)
 
 (* gh-ocannl-1254: a candidate's tile-MMA operand loads under the backend's own description of its
    arms: their load rule and fragment structure. *)
@@ -5431,11 +5437,12 @@ let model_default ?name ?report ctx comp bindings =
           let ctx' = Context.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
           let picked = ref true in
           (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under the
-             picked placements ([applied_pick] was false: the pick's win was the placement move
+             picked placements: [applied_pick] was false (the pick's win was the placement move
              itself, so the failing compile was already the default pipeline — under [ctx'], not
-             under [ctx]). The pick is advisory, so abandon it and rerun the ordinary selection from
-             the caller's own placements. Only the classified cause comes here (gh-ocannl-1390): a
-             fatal failure — an untyped exception a transform or the builder raised, under
+             under [ctx]), or its fallback to the default pipeline under [ctx'] failed classified
+             too. The pick is advisory, so abandon it and rerun the ordinary selection from the
+             caller's own placements. Only the classified cause comes here (gh-ocannl-1390): a fatal
+             failure — an untyped exception a transform or the builder raised, under
              [strict_failure_classification] — propagates, rather than being retried from the
              default placements as one more decline. *)
           let on_unrecovered (classified : Outcome.classified_cause) =

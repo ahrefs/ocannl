@@ -1870,11 +1870,11 @@ val compile_advisory :
     [fallback_if] (default: always) is consulted first, for transforms that may themselves have
     degraded to the default pipeline — [false] re-raises the original exception, backtrace included,
     instead of duplicating a compile that has nothing to fall back to; given [on_unrecovered], that
-    classified cause is handed to it instead of raised, so a caller with a fallback of its own acts
-    on the classified rejection alone, never on a fatal failure (gh-ocannl-1390). For advisory
-    transforms only: a failure of the default pipeline itself propagates. [name] names the routine,
-    exactly as {!Context.compile}'s does, and reaches the fallback compile too. See {!model_default}
-    (gh-ocannl-519). *)
+    classified cause is handed to it instead of raised — as is a classified failure of the fallback
+    compile itself — so a caller with a fallback of its own acts on a classified rejection alone,
+    never on a fatal failure (gh-ocannl-1390). For advisory transforms only: a failure of the
+    default pipeline itself propagates. [name] names the routine, exactly as {!Context.compile}'s
+    does, and reaches the fallback compile too. See {!model_default} (gh-ocannl-519). *)
 
 val model_default :
   ?name:string ->
