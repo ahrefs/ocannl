@@ -1207,13 +1207,21 @@ val launch_geometry_excess :
     on Metal) exempts its dimensions. The workgroup thread PRODUCT is deliberately not a row: it is
     not a per-dimension geometry question, and only the gate checks it. *)
 
+val workgroup_allocation_bytes : capabilities:Backend_intf.codegen_capabilities -> int -> int
+(** One workgroup-shared array's charge: its declared bytes rounded up to the backend's
+    {!field:Backend_intf.workgroup_allocation_alignment} (gh-ocannl-1330). What
+    {!workgroup_memory_bytes} charges each allocation it counts, and what a prediction of it charges
+    each tile. *)
+
 val workgroup_memory_bytes :
   capabilities:Backend_intf.codegen_capabilities -> Low_level.optimized -> int
-(** The static workgroup-shared bytes the kernel will declare: its [workgroup_shared] tiles (a
-    pipelined tile counted once per rotating copy) plus, per tile-MMA emission scope, the rendering
-    backend's {!field:Backend_intf.mma_scope_workgroup_bytes} for that scope's storage triple —
-    Metal's converted destination boundary declares a coordinate table there (gh-ocannl-1205). A
-    scope is one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
+(** The static workgroup-shared bytes the kernel will declare, each array charged by
+    {!workgroup_allocation_bytes} (Metal rounds every [threadgroup] array up to 4 bytes,
+    gh-ocannl-1330): its [workgroup_shared] tiles (a pipelined tile, one array of rotating copies,
+    counted once per copy) plus, per tile-MMA emission scope, the rendering backend's
+    {!field:Backend_intf.mma_scope_workgroup_bytes} for that scope's storage triple — Metal's
+    converted destination boundary declares a coordinate table there (gh-ocannl-1205). A scope is
+    one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
     simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same
     count. Plus, per lane all-reduce site that stages per-simdgroup partials
     ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
@@ -1253,6 +1261,16 @@ val check_hardware_limits :
     [compile] calls this after any [?lowered_transform] (or the default annotator, which already
     respects the limits), turning driver-level launch failures into early, named errors. A no-op for
     all-[None] limits. *)
+
+val with_gate_capabilities :
+  (Backend_intf.codegen_capabilities -> Backend_intf.codegen_capabilities) -> f:(unit -> 'a) -> 'a
+(** Test seam (gh-ocannl-1330): runs [f] with {!check_hardware_limits_classified} judging by
+    [adjust capabilities] instead of the capabilities it is handed, in the calling domain only,
+    restoring the previous adjustment on return or exception. The default is the identity and no
+    configuration selects another. What it is for: reaching a refusal downstream of the gate (the
+    driver's own) with a kernel the exact gate would refuse first —
+    [test/operations/metal_threadgroup_overflow] removes the per-allocation rounding. Not a
+    production seam: a schedule the gate misjudges is a defect of the estimate. *)
 
 val check_hardware_limits_classified :
   name:string ->

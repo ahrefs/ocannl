@@ -613,6 +613,12 @@ module Impl = struct
 
     let shared_decl_prefix = Some "threadgroup "
 
+    (* Metal rounds each [threadgroup] array up to 4 bytes (measured on an M4 Max, gh-ocannl-1226:
+       two odd-length [half] tiles whose exact sizes total the limit make pipeline creation request
+       4 bytes more), so the schedule-level estimate rounds each allocation the same way
+       (gh-ocannl-1330). *)
+    let workgroup_allocation_alignment = 4
+
     (* Warp-shuffle rendering of [Workgroup_reduce] accumulation loops (gh-ocannl-462):
        [ocannl_shfl_xor] wraps [simd_shuffle_xor] (builtins_metal.ml). Apple-silicon simdgroups are
        32 threads wide (the same width [mma_syntax] relies on). *)

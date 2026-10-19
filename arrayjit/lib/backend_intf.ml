@@ -555,6 +555,14 @@ type codegen_capabilities = {
           resolver and declaration its emitting hooks use. Non-zero only for Metal's converted
           destination boundary (gh-ocannl-1205). [Schedule.check_hardware_limits_classified] adds it
           per scope to the staged tiles. *)
+  workgroup_allocation_alignment : int;
+      (** The granule the device's allocator rounds each workgroup-shared array up to, in bytes: the
+          backend's [C_syntax_config.workgroup_allocation_alignment]. Metal rounds every
+          [threadgroup] array to 4 bytes (measured on an M4 Max: two odd-length [half] tiles whose
+          exact bytes total the limit are refused, the driver requesting 4 bytes more,
+          gh-ocannl-1226), so [Schedule.workgroup_memory_bytes] rounds each allocation it counts up
+          to this before summing (gh-ocannl-1330); [1] where the sum of exact sizes is what the
+          device allocates. *)
   lane_all_reduce_workgroup_bytes : extent:int -> prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one lane all-reduce site declares for its per-simdgroup
           partials (gh-ocannl-1168): a reduction of [extent] lanes into a scope local residing at
@@ -595,6 +603,7 @@ let no_codegen_capabilities =
       -> false);
     mma_operand_fragments = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
+    workgroup_allocation_alignment = 1;
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
 
@@ -615,15 +624,15 @@ let no_codegen_capabilities =
     and layout, which are the schedule's own content and so already in its canonical digest.
     Rendering them would add no discrimination, only re-tunes.
 
-    The fields deliberately not rendered are [mma_scope_workgroup_bytes] and
-    [lane_all_reduce_workgroup_bytes] (the same argument holds for both): it decides whether a
-    schedule FITS, never what a kernel computes, and it is a function of the storage triple, the
-    numerics policy and the backend, which the key already carries ([Schedule_cache.numerics_tag]
-    and the backend identity), so rendering it would add no discrimination. An emitter change that
-    grows the scratch is caught without it: a replayed winner passes the same
-    [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one that no longer
-    fits is refused there as a typed cause, which autotune answers by re-searching (gh-ocannl-572:
-    over-keying is a defect too). *)
+    The fields deliberately not rendered are [mma_scope_workgroup_bytes],
+    [workgroup_allocation_alignment] and [lane_all_reduce_workgroup_bytes] (the same argument holds
+    for all three): it decides whether a schedule FITS, never what a kernel computes, and it is a
+    function of the storage triple, the numerics policy and the backend, which the key already
+    carries ([Schedule_cache.numerics_tag] and the backend identity), so rendering it would add no
+    discrimination. An emitter change that grows the scratch is caught without it: a replayed winner
+    passes the same [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one
+    that no longer fits is refused there as a typed cause, which autotune answers by re-searching
+    (gh-ocannl-572: over-keying is a defect too). *)
 let codegen_capabilities_fingerprint
     {
       supports_f64;
@@ -635,6 +644,7 @@ let codegen_capabilities_fingerprint
       mma_accepts = _;
       mma_operand_fragments = _;
       mma_scope_workgroup_bytes = _;
+      workgroup_allocation_alignment = _;
       lane_all_reduce_workgroup_bytes = _;
     } =
   let p = Ops.prec_string in

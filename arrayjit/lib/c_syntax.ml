@@ -1004,6 +1004,13 @@ module type C_syntax_config = sig
       kernel. An upper bound per scope: a call the hook then declines (extents, spaces, layouts)
       declares nothing, which the estimate does not try to predict. *)
 
+  val workgroup_allocation_alignment : int
+  (** The granule, in bytes, the device's allocator rounds each [shared_decl_prefix] array up to
+      (gh-ocannl-1330), published as
+      {!Backend_intf.codegen_capabilities.workgroup_allocation_alignment} for the schedule-level
+      estimate to round each allocation by. Metal: 4 (measured). Default 1: the declared sizes add
+      up exactly. *)
+
   val kernel_log_param : (string * string) option
   (** Kernel parameter for logging, if any. E.g., (Some ("int", "log_id")) or (Some ("const char*",
       "log_file_name")). *)
@@ -1080,6 +1087,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
             && statement (PPrint.empty, ldd, `Fragment fragment_name, d_layout));
     mma_operand_fragments = Config.mma_operand_fragments;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
+    workgroup_allocation_alignment = Config.workgroup_allocation_alignment;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
        simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
        residency (the precisions [ocannl_shfl_xor] is overloaded at), routine logging off -- and
@@ -2176,6 +2184,7 @@ struct
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
   let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0
+  let workgroup_allocation_alignment = 1
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
   let styled_log_arg doc =

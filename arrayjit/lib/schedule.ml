@@ -8708,26 +8708,35 @@ let mma_emission_scopes (opt : Low_level.optimized) : (Tn.t * Tn.t * Tn.t) list 
   in
   List.rev (go [] opt.llc)
 
+(* gh-ocannl-1330: one workgroup-shared array's charge, its declared bytes rounded up to the
+   backend's allocation granule — Metal allocates each [threadgroup] array in 4-byte units, so exact
+   sizes summed under-count odd-length [half] tiles. An empty allocation declares nothing. *)
+let workgroup_allocation_bytes ~(capabilities : Backend_intf.codegen_capabilities) bytes =
+  let align = max 1 capabilities.Backend_intf.workgroup_allocation_alignment in
+  (bytes + align - 1) / align * align
+
 let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
     (opt : Low_level.optimized) : int =
+  let alloc = workgroup_allocation_bytes ~capabilities in
   let staged =
     Set.fold opt.workgroup_shared ~init:0 ~f:(fun acc tn ->
         (* A pipelined tile is allocated as [pt_depth] rotating copies (gh-ocannl-487): the IR-level
            dims stay single-copy, so the accounting multiplies here, matching the codegen
-           declaration. *)
+           declaration — one array of [pt_depth] copies, so rounded once. *)
         let copies =
           match Map.find opt.Low_level.pipelined tn with
           | Some { Low_level.pt_depth; _ } -> pt_depth
           | None -> 1
         in
-        acc + (copies * Lazy.force tn.Tn.size_in_bytes))
+        acc + alloc (copies * Lazy.force tn.Tn.size_in_bytes))
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
   let mma_scratch =
     List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
         acc
-        + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
-            ~b_prec:(prec b))
+        + alloc
+            (capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
+               ~b_prec:(prec b)))
   in
   (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
      one declaration per site (a duplicated copy is its own site). The local resides at its compute
@@ -8742,7 +8751,7 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
           capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent ~prec:p
         in
         let p = prec site.lar_local.Low_level.tn in
-        acc + max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p)))
+        acc + alloc (max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p))))
 
 (* gh-ocannl-1313: the per-work-item scratch the kernel declares — the function-scope arrays
    [C_syntax]'s [local_decls] emits, one per [Local]-settling node of the kernel's traced store,
@@ -8761,8 +8770,21 @@ let thread_private_bytes (opt : Low_level.optimized) : int =
         acc + Tn.size_in_bytes_peek tn
       else acc)
 
+(* gh-ocannl-1330: the test seam over the capabilities the gate judges by, one value per domain like
+   [Autotune.Seam] (which this module cannot reuse: [Autotune] depends on it). The default is the
+   identity and no configuration selects anything else. *)
+let gate_capabilities_seam :
+    (Backend_intf.codegen_capabilities -> Backend_intf.codegen_capabilities) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () -> Fn.id)
+
+let with_gate_capabilities adjust ~f =
+  let prior = Stdlib.Domain.DLS.get gate_capabilities_seam in
+  Stdlib.Domain.DLS.set gate_capabilities_seam adjust;
+  Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set gate_capabilities_seam prior)
+
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
+  let capabilities = (Stdlib.Domain.DLS.get gate_capabilities_seam) capabilities in
   Option.iter limits.max_threads_per_workgroup ~f:(fun max_threads ->
       let block = (Low_level.launch_dims opt.llc).block in
       let block_product = Array.fold block ~init:1 ~f:( * ) in
