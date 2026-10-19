@@ -6711,16 +6711,42 @@ let accum_decision_widens = function
   | Accum_base { tn; idcs; base; pinned = None; _ } -> accum_base_widens ~tn ~idcs base
   | Accum_base { pinned = Some _; _ } | Accum_not_a_nest _ -> false
 
-(* gh-ocannl-1151: what the serial rendering of [llc] does with each accumulating write of [tn],
-   asked of {!decide_accum_width} exactly where code generation asks it. [C_syntax.pp_ll] recurses
-   top-down and decides at every level whose rendering can localize — Serial, [Unrolled] and
-   [Vectorized] always, a [Workgroup] / [Workgroup_reduce] level only where the backend renders it
-   serially ([serialized]), a [Grid] level never (its fallback is the plain serial loop) — and the
-   first level whose decision is a base localizes that base, at the residency when its base widens.
-   A write reached with no level localizing keeps its storage cell's width, narrowing per step,
-   except a scope-form base, whose scope local codegen's census types at the residency anyway. A
-   [Tile_mma] is not entered: its accumulation's width is the intrinsic's. *)
-let serial_accum_widths ~serialized ~tn (llc : t) : bool list =
+(* gh-ocannl-1151: the accumulating writes of [tn] in program order — a [Set] reading its own cell
+   (raw or scope-form), an accumulating [Set_dynamic] — through the statement positions
+   {!serial_accum_widths} walks: loops, guards and sequences, never a [Tile_mma] or a scope body. *)
+let is_accumulating_write ~tn (llc : t) =
+  match llc with
+  | Set { tn = tn'; _ } -> Tn.equal tn tn' && has_accumulating_cell llc
+  | Set_dynamic { tn = tn'; llsc; _ } -> Tn.equal tn tn' && scalar_touches_tn tn llsc
+  | _ -> false
+
+let accumulating_writes ~tn (llc : t) : t list =
+  let acc = ref [] in
+  let rec stmt (llc : t) =
+    match llc with
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> stmt body
+    | Seq (a, b) ->
+        stmt a;
+        stmt b
+    | _ when is_accumulating_write ~tn llc -> acc := llc :: !acc
+    | _ -> ()
+  in
+  stmt llc;
+  List.rev !acc
+
+type serial_accum = { sa_level : Indexing.symbol option; sa_widens : bool }
+
+(* gh-ocannl-1151: what the serial rendering of [llc] does with each accumulating write of [tn] (one
+   entry per {!accumulating_writes} member, in the same order), asked of {!decide_accum_width}
+   exactly where code generation asks it. [C_syntax.pp_ll] recurses top-down and decides at every
+   level whose rendering can localize — Serial, [Unrolled] and [Vectorized] always, a [Workgroup] /
+   [Workgroup_reduce] level only where the backend renders it serially ([serialized]), a [Grid]
+   level never (its fallback is the plain serial loop) — and the first level whose decision is a
+   base localizes that base, at the residency when its base widens. The peel descends
+   single-statement levels only, so a localized level holds exactly one accumulating write. A write
+   reached with no level localizing keeps its storage cell's width, narrowing per step, except a
+   scope-form base, whose scope local codegen's census types at the residency anyway. *)
+let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
   let loop_bounds = loop_bounds llc in
   let extra_level index axis = equal_axis_type axis Workgroup_reduce && serialized index axis in
   let acc = ref [] in
@@ -6741,24 +6767,21 @@ let serial_accum_widths ~serialized ~tn (llc : t) : bool list =
         | Some (Accum_base { tn = tn'; pinned = None; _ } as d) ->
             (* Localized here. Another node's base sits at the end of a single-statement chain,
                which holds no write of [tn]. *)
-            if Tn.equal tn tn' then acc := accum_decision_widens d :: !acc
+            if Tn.equal tn tn' then
+              acc := { sa_level = Some index; sa_widens = accum_decision_widens d } :: !acc
         | Some (Accum_base { pinned = Some _; _ } | Accum_not_a_nest _) | None -> stmt body)
     | Seq (a, b) ->
         stmt a;
         stmt b
     | If { body; _ } | Scan_loop { body; _ } -> stmt body
-    | Set { tn = tn'; _ } when Tn.equal tn tn' && has_accumulating_cell llc ->
+    | _ when is_accumulating_write ~tn llc ->
         let widens =
           match peel_accum_nest ~loop_bounds ~free_of:[] llc with
           | Some (_, idcs, (`Scope _ as base), _, _) -> accum_base_widens ~tn ~idcs base
           | Some (_, _, `Update _, _, _) | None -> false
         in
-        acc := widens :: !acc
-    | Set_dynamic { tn = tn'; llsc; _ } when Tn.equal tn tn' && scalar_touches_tn tn llsc ->
-        acc := false :: !acc
-    | Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ | Declare_local _ | Zero_out _ | Noop
-    | Comment _ | Staged_compilation _ | Workgroup_barrier | Tile_mma _ ->
-        ()
+        acc := { sa_level = None; sa_widens = widens } :: !acc
+    | _ -> ()
   in
   stmt llc;
   List.rev !acc

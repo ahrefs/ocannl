@@ -375,9 +375,14 @@ files.
   that can localize, and which `apply_privatize` asks of the program `Schedule.apply` was HANDED
   (`entry`, threaded through `apply_opt_op`), never of the nest earlier ops of the same schedule
   left: `Low_level.serial_accum_widths` walks it top-down as `pp_ll` does and answers per
-  accumulating write of the target, all of which must widen, and the update now in the privatized
-  subtree must itself pass `Low_level.accum_base_widens` (a scope-form one is re-keyed to the tile,
-  since codegen types a scope local by its id's node). Which hardware levels a backend serializes is
+  accumulating write of the target (`Low_level.accumulating_writes` order) with the level that
+  localizes it. The privatized subtree must hold ONE update of the target passing
+  `Low_level.accum_base_widens` (two sibling reductions narrow between each other serially; a
+  scope-form update is re-keyed to the tile, since codegen types a scope local by its id's node),
+  the entry write it descends from must widen — matched by position, as ops never reorder a node's
+  accumulating writes, else every entry write must, so an unrelated narrow recurrence of the same
+  node does not decide it — and where `over` is an entry loop it must be the localizing level, as
+  the tile narrows once per execution of `over` (all three from the local Codex review). Which hardware levels a backend serializes is
   codegen's fact, so the walk is asked vouching for none and for every one, and the op is refused
   where the answers differ — the pattern `Low_level.seed_first_write` already used. After all ops
   `apply_typed` re-checks each wide tile against the FINAL program

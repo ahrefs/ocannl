@@ -304,11 +304,16 @@ type optop =
           the backend's own residency, it applies only to what code generation would widen, and the
           decision is code generation's own, {!Low_level.decide_accum_width}, asked of the program
           the schedule was APPLIED TO — never of the nest as earlier ops in the same schedule left
-          it, nor rebuilt from it (gh-ocannl-1151): every accumulating write of [target] there must
-          be one the serial rendering widens ({!Low_level.serial_accum_widths}, asked once vouching
-          for no hardware level and once for every one, since which hardware levels a backend
-          serializes is code generation's knowledge — where the two answers differ the op is
-          rejected), and the update [over]'s subtree now holds must itself pass
+          it, nor rebuilt from it (gh-ocannl-1151). [over]'s subtree must hold exactly ONE update of
+          [target], itself a base {!Low_level.accum_base_widens} accepts (sibling accumulations
+          narrow between each other in the serial rendering); the write of [entry] it descends from
+          — the same position among [target]'s {!Low_level.accumulating_writes}, which schedule ops
+          never reorder, or every such write where a materialization changed their count — must be
+          one the serial rendering widens ({!Low_level.serial_accum_widths}, asked once vouching for
+          no hardware level and once for every one, since which hardware levels a backend serializes
+          is code generation's knowledge — where the two answers differ the op is rejected); and
+          where [over] is itself a loop of that program, the serial rendering must localize the
+          write at [over], since the tile narrows once per execution of it.
           {!Low_level.accum_base_widens}. A widened scope-form update is re-keyed to the tile. So a
           [Stage] applied by an EARLIER [apply] is part of the program this one judges: its loads
           are sibling statements of the reduction, which code generation does not localize, and the

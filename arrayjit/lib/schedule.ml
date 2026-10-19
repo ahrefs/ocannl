@@ -2458,6 +2458,7 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
     unflat_lines
       (List.filteri stmts ~f:(fun pos _ -> not (Option.equal Int.equal zero_pos (Some pos))))
   in
+  let program = llc in
   rewrite_loop ~what:"Schedule.Privatize" ~sym:over llc ~f:(fun fc ->
       if not (equal_axis_type fc.axis Serial) then
         refuse "Schedule.Privatize: the accumulation loop must be Serial";
@@ -2744,21 +2745,51 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
       in
       let wide =
         (not (Ops.equal_prec acc_prec storage))
-        && (let judge serialized = serial_accum_widths ~serialized ~tn:target entry in
+        &&
+        match (!updates, update_bases) with
+        | [ update ], [ Some _ ] -> (
+            (* ONE update: two sibling accumulations inside [over] narrow between each other in the
+               serial rendering, which a tile wide across [over] would erase. *)
+            let judge serialized = serial_accum_widths ~serialized ~tn:target entry in
             let bound = judge (fun _ _ -> false) in
             let serialized =
               judge (fun _ -> function
                 | Workgroup | Workgroup_reduce -> true
                 | Serial | Unrolled | Vectorized | Grid -> false)
             in
-            if not (List.equal Bool.equal bound serialized) then
+            let equal_sa a b =
+              Option.equal Indexing.equal_symbol a.sa_level b.sa_level
+              && Bool.equal a.sa_widens b.sa_widens
+            in
+            if not (List.equal equal_sa bound serialized) then
               refuse
                 ("Schedule.Privatize: whether the serial rendering widens " ^ Tn.debug_name target
                ^ "'s accumulation depends on whether the backend renders a hardware-typed level \
                   serially, which the transform cannot know");
-            (not (List.is_empty bound)) && List.for_all bound ~f:Fn.id)
-        && (not (List.is_empty update_bases))
-        && List.for_all update_bases ~f:Option.is_some
+            (* The entry write this update descends from: schedule ops rewrite a statement's loops
+               in place and never reorder a node's accumulating writes, so the k-th accumulating
+               write of [target] now is the k-th in [entry] — when the counts agree. Where they do
+               not (a materialization copied the update), every entry write must widen. *)
+            let current = accumulating_writes ~tn:target program in
+            let judged =
+              match List.findi current ~f:(fun _ st -> phys_equal st update) with
+              | Some (k, _) when List.length current = List.length bound -> [ List.nth_exn bound k ]
+              | _ -> bound
+            in
+            (* Where [over] is a loop of [entry] itself, the tile narrows once per execution of it,
+               which matches the serial rendering only where that is the level localizing the write;
+               a loop a [Split] minted carries no such record. *)
+            let over_in_entry =
+              List.Assoc.mem (loop_bounds entry) over ~equal:Indexing.equal_symbol
+            in
+            match judged with
+            | [] -> false
+            | _ ->
+                List.for_all judged ~f:(fun sa ->
+                    sa.sa_widens
+                    && ((not over_in_entry)
+                       || Option.equal Indexing.equal_symbol sa.sa_level (Some over))))
+        | _ -> false
       in
       let widened_scopes =
         if wide then
