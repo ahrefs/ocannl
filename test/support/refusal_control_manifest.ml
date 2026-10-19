@@ -187,6 +187,7 @@ let raw_entries =
         "[scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient";
         "[scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads";
         "[scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan";
+        "[scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics";
         "[scanner-refusal:6d151bed80a45201e61d096c2c38d210] which has no";
         "[scanner-refusal:5509acc7fac8ff0412e3631b49c06dc7] change directory without";
         "[scanner-refusal:cb948484fece727200c2dc74529ab671] the ambient environment";
@@ -683,6 +684,8 @@ let raw_direct_evidence =
     ( "config_dep_completeness.ml:6c29eb9b1db92bba229707a7cd8e1b5b",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:cebf445823df462f70b459a86b20e3d3",
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
+    ( "config_dep_completeness.ml:5e382153a89be91293964b5417659f1a",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:6d151bed80a45201e61d096c2c38d210",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );

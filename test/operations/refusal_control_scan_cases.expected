@@ -169,6 +169,7 @@ config_dep_completeness.ml: [scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] a
 config_dep_completeness.ml: [scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
+config_dep_completeness.ml: [scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:6d151bed80a45201e61d096c2c38d210] which has no (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:5509acc7fac8ff0412e3631b49c06dc7] change directory without (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:cb948484fece727200c2dc74529ab671] the ambient environment (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true

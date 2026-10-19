@@ -1319,7 +1319,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   still passed under it, verified. `(sandbox always preserve_file_kind)` (copy or hardlink) is the
   setting; there dropping any one dep fails the run. Dune also plants an empty `.git` above every
   sandbox, so nothing inside one can read the enclosing checkout's repository: a test of a
-  revision-stamping helper builds a repository of its own.
+  revision-stamping helper builds a repository of its own. `config_dep_completeness` requires the
+  setting of every rule whose program it cannot place — a PATH interpreter handed a workspace file,
+  a shell line (gh-ocannl-1359). Sandboxing `runtest-gh1002_kernels` surfaced the hazard live: it
+  never listed `box_gate.py`, which `gh1002_cells.py` imports at its top, and passed because
+  `kernel_attribution` copied it. Such a rule keeps its alias-only `(no-infer (progn … (diff …)))`
+  form inside the sandbox: dune stages the diffed output out of it, so `dune promote` works as
+  before, while splitting the run into a target-producing rule draws `bin_smoke_membership_scan`'s
+  refusal of any target producer running an opaque command.
 - **The environment reaches a test through its `ocannl_config` dependency** (gh-ocannl-1149). Dune
   reruns a rule for a variable only where the rule declares it, and nothing tied the hand-written
   `(env_var OCANNL_<KEY>)` lists to what the linked pipeline reads: review found one missing key per

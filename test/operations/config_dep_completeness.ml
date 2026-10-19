@@ -18,7 +18,10 @@
    `ocannl_config` in the deps dune uses when it runs them; - every `(rule ...)` that runs an
    executable does too -- the predicate that carries the content, because an `(executable)` stanza
    has no `deps` field at all, so the dep belongs on its companion rule; - and a directory with any
-   such stanza has an `ocannl_config` to depend on in the first place.
+   such stanza has an `ocannl_config` to depend on in the first place; - and a rule running
+   something whose reads this scan cannot place -- a PATH interpreter handed a workspace script, a
+   shell line -- runs it in a sandbox that copies (`(sandbox always preserve_file_kind)`), so that
+   dune enforces the dependency list this scan cannot (gh-ocannl-1359).
 
    What the golden holds, and what it deliberately does not: the KINDS of test-running stanza each
    dune file has, not how many of each. A tally there moved on every test added anywhere in the
@@ -296,6 +299,7 @@ let () =
                  declared_config_paths;
                  declared_ambient_paths;
                  depends_on_universe;
+                 isolating_sandbox;
                  declares_config = _;
                  (* gh-ocannl-659's business, checked by `env_var_deps`; this test is about the
                     config dep. *)
@@ -331,6 +335,24 @@ let () =
                     (Stdlib.Filename.dirname
                        (repo_relative (Scan.split_path (stanza_dir site)) declared)))
             in
+            (* gh-ocannl-1359: what such a site runs, and so what it reads, is past this scan's
+               reach -- a PATH interpreter handed a workspace script, a shell line -- and so is
+               whether its hand-listed dependencies are all of them. Unsandboxed, an unlisted file
+               is present whenever another rule happened to copy it, so the omission passes
+               everywhere but a fresh build. Dune can enforce the list where this scan cannot, in a
+               sandbox that copies: required whether or not the site is exempt from the config dep,
+               which is a different question. *)
+            (match kind with
+            | Scan.Unreadable_directory when not isolating_sandbox ->
+                fail
+                  (Printf.sprintf
+                     "%s runs `%s`, whose reads this check cannot place, outside an isolating \
+                      sandbox -- an unlisted file it reads passes whenever another rule copied it. \
+                      Add `(sandbox always preserve_file_kind)` to its deps: `always` alone may \
+                      pick the symlink sandbox, which an interpreter resolves straight back into \
+                      _build (build-and-test.md#dune-mechanics)"
+                     dune_file name)
+            | _ -> ());
             (* An exemption is spent only where the dep is actually absent, so declaring it anyway
                makes the entry stale and the list gets pruned rather than growing quietly. *)
             let exempt =

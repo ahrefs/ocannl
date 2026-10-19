@@ -9181,6 +9181,16 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; Host-only controls for the benchmark driver's report validator.
+;
+; The three Python controls below hand-list the benchmark modules their scripts import, and run in
+; a copying sandbox (gh-ocannl-1359): unsandboxed, an import of an unlisted module passes whenever
+; another rule happened to copy that module into _build/default/benchmarks (gh1002_kernels went
+; without `box_gate.py` that way, which gh1002_cells.py imports at its top). `(sandbox always)`
+; alone would pick the symlink sandbox, where Python resolves the script back into _build/default
+; and finds the neighbours anyway; `preserve_file_kind` rules that out. `config_dep_completeness`
+; requires the setting of every rule whose program it cannot place, these among them
+; (build-and-test.md#dune-mechanics). Each stays an alias-only action that diffs its own output:
+; a target-producing rule running an opaque command is one `bin_smoke_membership_scan` refuses.
 
 (rule
  ; ocannl-backend: none -- runs Python report controls and launches no OCANNL executable.
@@ -9191,7 +9201,8 @@
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9217,7 +9228,8 @@
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9239,9 +9251,11 @@
   gh1002_kernels.py
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn

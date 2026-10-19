@@ -22,6 +22,7 @@ let render (site : Scan.site) =
     (if String.is_empty where then "" else "in " ^ where ^ ": ")
     (Scan.kind_name site.Scan.kind) site.Scan.name
     (if site.Scan.declares_config then " [declares]" else "")
+  ^ if site.Scan.isolating_sandbox then " [sandboxed]" else ""
 
 (* Each case pairs a dune-file body with the sites the scan should report, in order. *)
 let cases =
@@ -244,6 +245,33 @@ let cases =
        check asks for an exemption with a reason rather than guessing. *)
     ( "a PATH tool handed something from the workspace is unplaceable",
       {dune|(rule (alias runtest) (deps helper.py) (action (run python3 %{dep:test_it.py})))|dune},
+      [
+        "rule whose working directory this scan cannot establish: python3, handed %{dep:test_it.py}";
+      ] );
+    (* gh-ocannl-1359: such a site must run in a sandbox that isolates it, and only both settings
+       together do -- `always` alone may pick the symlink sandbox, which Python resolves back into
+       _build, and `preserve_file_kind` alone sandboxes nothing unless the invocation asks. *)
+    ( "a copying sandbox is read off the deps, in either order",
+      {dune|(rule (alias runtest) (deps (sandbox preserve_file_kind always))
+ (action (run python3 %{dep:test_it.py})))|dune},
+      [
+        "rule whose working directory this scan cannot establish: python3, handed \
+         %{dep:test_it.py} [sandboxed]";
+      ] );
+    ( "the symlink-permitting sandbox does not isolate",
+      {dune|(rule (alias runtest) (deps (sandbox always)) (action (run python3 %{dep:test_it.py})))|dune},
+      [
+        "rule whose working directory this scan cannot establish: python3, handed %{dep:test_it.py}";
+      ] );
+    ( "a file-kind constraint without `always` sandboxes nothing",
+      {dune|(rule (alias runtest) (deps (sandbox preserve_file_kind))
+ (action (run python3 %{dep:test_it.py})))|dune},
+      [
+        "rule whose working directory this scan cannot establish: python3, handed %{dep:test_it.py}";
+      ] );
+    ( "only a top-level sandbox form is read",
+      {dune|(rule (alias runtest) (deps (:s (sandbox always preserve_file_kind)))
+ (action (run python3 %{dep:test_it.py})))|dune},
       [
         "rule whose working directory this scan cannot establish: python3, handed %{dep:test_it.py}";
       ] );
@@ -1645,10 +1673,11 @@ let artifact_reader_cases =
    cases above, which exercise the reading they rest on in process. The scanner runs as a child over
    a tree built to trip them -- a stanza head and an action head it cannot classify, a binaries
    mapping, a shell action, a command it cannot read, a test without the config dep, a test in a
-   directory no config reaches, and a rule reading a checked-in config with no record of the ambient
-   environment (gh-ocannl-1149) -- and once over no dune file at all. Every exemption is stale in
-   such a tree too, and the tree has no test/config/dune producing that record. What each child
-   refused is what `raw_direct_evidence` attributes to the two claims. *)
+   directory no config reaches, a rule reading a checked-in config with no record of the ambient
+   environment (gh-ocannl-1149), and a Python script run under the symlink-permitting sandbox
+   (gh-ocannl-1359) -- and once over no dune file at all. Every exemption is stale in such a tree
+   too, and the tree has no test/config/dune producing that record. What each child refused is what
+   `raw_direct_evidence` attributes to the two claims. *)
 let refusal_tree =
   [
     ("t/ocannl_config", "");
@@ -1660,6 +1689,7 @@ let refusal_tree =
 (rule (alias runtest-d) (action (frobnicate ./d.exe)))
 (test (name e) (modules e))
 (rule (alias runtest-f) (deps ocannl_config) (action (run ./f.exe)))
+(rule (alias runtest-g) (deps ocannl_config (sandbox always)) (action (run python3 %{dep:g.py})))
 |dune}
     );
     ("unconfigured/dune", "(test (name a) (modules a))\n");
