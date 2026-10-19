@@ -1914,6 +1914,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   inputs that exercise the intended values and gradients above the floor, and report their scales
   alongside the errors; retain saturated or zero cases as separate edge-case coverage. Leg 6's
   scale report is diagnostic, not an enforced lower-bound claim.
+- Executed parity cannot say a routine RAN tensorized (gh-ocannl-1283): a `Tile_mma` that declines
+  at codegen renders the lane-0 scalar fallback, which computes the same values, so only the
+  routine's mma census (`Context.routine.mma`, `Ll_test.execute_with_census`) tells the two apart.
+  `tensorized_census_ratchet` (gh-ocannl-1309) holds it: a `Verdict` claim whose label names
+  tensorization (`tensoriz`, the word `mma`, ...) AND asserts parity (`match…`, `bitwise`,
+  `parity`, `reference`, ...), in a top-level item that executes a routine, is refused unless that
+  item -- or a top-level helper of the file it references -- JUDGES the census
+  (`Ll_test.rendered_tensorized`/`all_tensorized`/`census_agrees_with_capability`/..., a
+  `C_syntax` tensorization comparison, constructor or field). Binding the census and discarding it
+  does not count. The closed lists and the boundary are in `Test_utils.Tensorized_census_scan`'s
+  header; the two that matter when writing a test: the granularity is the top-level item, so one
+  judgment covers every leg in a big `let () =`, and a label whose tensorization word arrives
+  through a function parameter is not read -- name the claim's tensorized leg in its literal text
+  and judge its census beside it.
 
 ## Hand-built IR tests
 
