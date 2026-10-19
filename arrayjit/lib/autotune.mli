@@ -1670,8 +1670,8 @@ val flip_twin_identity :
 
 type model_choice = {
   mc_label : string;
-      (** ["default"], or the winning candidate's spec label (matching the [autotune_log] labels).
-      *)
+      (** ["default"], ["seeded"] (the seeded untuned plan, on CUDA and HIP), or the winning
+          candidate's spec label (matching the [autotune_log] labels). *)
   mc_model_ms : float option;
       (** The applied winner's roofline lower bound in ms ({!Ir.Cost_model.analyze}'s counts) — not
           a runtime prediction; [None] when selection did not run. *)
@@ -1733,11 +1733,16 @@ val model_default :
     ties go to the default, and missing envelope constants, a disabled default annotator
     ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
     validation, or compilation failure fall back to the ordinary default pipeline — the reported
-    {!model_choice} then says ["default"]. Fatal failures propagate without retrying. Once the
-    compile is on that pipeline there is nothing left to fall back to, so its failures propagate as
-    they would from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is
-    executed and no cache is involved — results depend only on the computation, backend, and
-    envelope constants.
+    {!model_choice} then says ["default"]. On CUDA and HIP the model starts from the seeded untuned
+    plan instead (gh-ocannl-1253, {!seeded_plan} under the configured gate, [auto] included): it is
+    the incumbent every candidate must strictly beat and the pick when none does ([mc_label]
+    ["seeded"], even where no segment seeds and the plan is the default pipeline), and the sketch
+    candidates are restricted to the seeding's numerics-preserving forms — scalar block tiles at a
+    site accumulating at its storage precision — so the pick never changes a value the untuned
+    compile computes. Fatal failures propagate without retrying. Once the compile is on that
+    pipeline there is nothing left to fall back to, so its failures propagate as they would from
+    {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and no
+    cache is involved — results depend only on the computation, backend, and envelope constants.
 
     Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the routine
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic
@@ -1864,6 +1869,7 @@ type seeded_plan = {
 
 val seeded_plan :
   ?min_reduction:int ->
+  ?seed_gate:seed_gate ->
   ?min_serial:int ->
   ?reduction_sink:bool ->
   backend:string ->
@@ -1874,12 +1880,10 @@ val seeded_plan :
   seeded_plan option
 (** The plan {!seeded_default} would compile [opt] under, derived on a hermetic copy; [None] where
     that is the plain default pipeline (another backend, scheduling or fission off, the thresholds
-    at 0, or nothing to split, seed or sink). The optional arguments are {!seeded_default}'s. One
-    exception (gh-ocannl-1253): this is {!tune}'s candidate, so it reads
-    [gpu_default_sketch_min_reduction=auto] as the fallback threshold 32 rather than ranking — a
-    ranked gate reads the device description's [Untimed] fields, which nothing {!tune} reaches may
-    read until the resolved plan joins the search trajectory's identity. Under [auto], the search's
-    floor is the threshold plan. *)
+    at 0, or nothing to split, seed or sink). The optional arguments are {!seeded_default}'s, the
+    [auto] gate included: {!tune} seeds this plan first, and the plan's {!seeded_plan_digest} joins
+    the search trajectory's identity, so a gate steered by the device description's [Untimed]
+    capacity reaches the search only as the plan it resolved to (gh-ocannl-1253). *)
 
 val seeded_plan_digest : seeded_plan -> string
 (** The plan's identity from its content (split sites by target name, extents and block count; the
