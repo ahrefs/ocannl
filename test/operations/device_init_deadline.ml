@@ -155,6 +155,12 @@ let () =
   gated_all ~when_ ~on ~aggregation:`Environment
     "opening a device, and reading the properties or limits, are guarded the same way" entries
     ~f:(fun (_, o) -> holds o ~f:(died_by_deadline "cuda"));
+  let tiny = run ~deadline:"0.000001" [ "stall"; "cuda"; "num_devices"; "30" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "a deadline of one microsecond, which can expire before arming returns, still reads as the \
+     deadline: SIGALRM with the diagnostic"
+    (holds tiny ~f:(fun o ->
+         by_sigalrm o && (not (says o "survived")) && Option.is_some (diagnostic o)));
   let disabled = run ~deadline:"0" [ "stall"; "cuda"; "num_devices"; "1.5" ] in
   gated ~when_ ~on ~aggregation:`Environment
     "with device_init_deadline=0 a stall three times the deadline above runs out and the process \

@@ -393,6 +393,7 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
 #if !defined(_WIN32)
 #include <pthread.h>
 #include <sys/time.h>
+#include <time.h>
 
 #define OCANNL_DEADLINE_MSG_MAX 1024
 static char ocannl_deadline_msg[OCANNL_DEADLINE_MSG_MAX];
@@ -400,8 +401,18 @@ static size_t ocannl_deadline_msg_len;
 static struct sigaction ocannl_deadline_saved;
 static sigset_t ocannl_deadline_saved_mask;
 static int ocannl_deadline_armed; /* accessed through __atomic builtins */
-/* Set once the timer has been started: before that, a zero timer is no evidence of expiry. */
-static volatile sig_atomic_t ocannl_deadline_started;
+/* When the timer is due on the monotonic clock, in nanoseconds, recorded BEFORE it is started, and
+   how early a reading may sit and still count as the expiry (clock granularity). Before the timer
+   is started it reads zero, so a zero timer alone is no evidence; a zero timer at or past the due
+   time is, because the timer never fires before its interval has elapsed. */
+static volatile int64_t ocannl_deadline_due_ns;
+static volatile int64_t ocannl_deadline_slack_ns;
+
+static int64_t ocannl_monotonic_ns(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+  return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
 
 static void ocannl_deadline_write(const char *p, size_t n) {
   while (n > 0) {
@@ -437,11 +448,16 @@ static void ocannl_deadline_handler(int sig, siginfo_t *info, void *uctx) {
   (void)info;
   (void)uctx;
   /* The deadline is recognized positively, by the timer itself: [arm] starts it with no interval, so
-     it reads zero exactly when it has expired. A SIGALRM raised, queued or sent by anything else
-     (si_code SI_USER, SI_TKILL, SI_QUEUE, ...) arrives with the timer still running. A failed read
-     counts as external, so the deadline's line is never written without evidence. */
-  expired = ocannl_deadline_started && getitimer(ITIMER_REAL, &left) == 0 &&
-            left.it_value.tv_sec == 0 && left.it_value.tv_usec == 0;
+     it reads zero once it has expired -- and at or past its due time, which tells an expiry from
+     the moment before [setitimer] ran. A SIGALRM raised, queued or sent by anything else (si_code
+     SI_USER, SI_TKILL, SI_QUEUE, ...) arrives with the timer still running, or before it is due. A
+     failed read counts as external, so the deadline's line is never written without evidence. */
+  {
+    int64_t now = ocannl_monotonic_ns();
+    expired = getitimer(ITIMER_REAL, &left) == 0 && left.it_value.tv_sec == 0 &&
+              left.it_value.tv_usec == 0 && now >= 0 &&
+              now >= ocannl_deadline_due_ns - ocannl_deadline_slack_ns;
+  }
   /* Termination must not wait on the diagnostic: a full blocking pipe on fd 2 (a parent that does
      not drain the child's stderr) would block the write forever. So the default disposition and an
      unblocked mask come first, then a 2 s backstop alarm: if the write blocks, that alarm kills the
@@ -523,13 +539,26 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
     return Val_false;
   }
+  {
+    /* Recorded before the timer starts, so an expiry -- however soon -- finds it in place. */
+    int64_t now = ocannl_monotonic_ns();
+    int64_t interval_ns =
+        (int64_t)deadline.it_value.tv_sec * 1000000000 + (int64_t)deadline.it_value.tv_usec * 1000;
+    if (now < 0) {
+      ocannl_deadline_reblock();
+      sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
+      __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
+      return Val_false;
+    }
+    ocannl_deadline_slack_ns = interval_ns / 2 < 1000000 ? interval_ns / 2 : 1000000;
+    ocannl_deadline_due_ns = now + interval_ns;
+  }
   if (setitimer(ITIMER_REAL, &deadline, NULL) != 0) {
     ocannl_deadline_reblock();
     sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
     return Val_false;
   }
-  ocannl_deadline_started = 1;
   return Val_true;
 #endif
 }
@@ -547,7 +576,6 @@ CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
        disposition, never the deadline's handler with the timer already cancelled -- which would
        read as an expiry. A timer expiring in the window left kills by the default action. */
     sigaction(SIGALRM, &ocannl_deadline_saved, NULL);
-    ocannl_deadline_started = 0;
     setitimer(ITIMER_REAL, &off, NULL);
     ocannl_deadline_reblock();
     __atomic_store_n(&ocannl_deadline_armed, 0, __ATOMIC_SEQ_CST);
