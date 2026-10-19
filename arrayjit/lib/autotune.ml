@@ -4506,6 +4506,7 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ~backend ~
    [model_default], which starts from it (gh-ocannl-1253). *)
 let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~backend ~limits ~accum_prec
     ~static_indices ~gate ~min_serial ~sink_enabled (opt : LL.optimized) : LL.optimized list =
+  let t0 = Unix.gettimeofday () in
   let opt, split = seeded_split ~backend ~min_serial ~static_indices opt in
   on_choice (seeded_plan_choice { sp_split = split; sp_segments = None; sp_refined = 0 });
   let plan =
@@ -4513,6 +4514,9 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~backend ~limits ~
       ~ranked_below:(seeded_ranker ~limits ~accum_prec ~static_indices)
       ~sink_enabled ~split opt
   in
+  (* gh-ocannl-1253: the derivation [tune] repeats (as [seeded_plan]) on a trajectory-matched warm
+     hit, timed so its cost can be read off any untuned compile. *)
+  logf "seeded_default: plan derived in %.3f s" (Unix.gettimeofday () -. t0);
   let (_, tuples), applied =
     seeded_replay ~limits ~accum_prec ~static_indices plan.sp_segments opt
   in

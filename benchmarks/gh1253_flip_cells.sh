@@ -13,7 +13,9 @@
 #   OUT        results directory, created, and refused unless empty: OUT/driver.log is everything
 #              this script prints, each cell writes OUT/<cell>.out (the runner's result line) and
 #              OUT/<cell>.err (its log, the census line included), and OUT/summary.txt one line per
-#              cell: fixture, gate, pass, census (the seeded segments and their geometries), step ms.
+#              cell: fixture, gate, pass, step ms, the seeded-plan derivation time of each untuned
+#              compile (the cost tune repeats on a trajectory-matched warm hit), and the census (the
+#              seeded segments and their geometries).
 #   CAP        wall cap in seconds per cell (default 1800).
 #   FIXTURE_DIR (environment) where gpt2_mini_train{,_b256}.safetensors are read from (default
 #              this box's main checkout store, ~/ocannl-staging/benchmarks/fixtures: a fresh
@@ -67,7 +69,7 @@ gpt=$root/_build/default/benchmarks/runners/ocannl/bench_gpt.exe
 
 failed=0
 cell() {
-  local fixture=$1 gate=$2 pass=$3 name="$1-gate$2-pass$3" census ms
+  local fixture=$1 gate=$2 pass=$3 name="$1-gate$2-pass$3" census ms derive
   echo "== cell $name"
   if BENCH_FIXTURE="$fixture_dir/$fixture.safetensors" BENCH_TUNE=0 BENCH_MATERIALIZE=0 \
     BENCH_DEBUG=0 perl -e 'alarm shift; exec @ARGV' "$cap" "$gpt" \
@@ -77,7 +79,9 @@ cell() {
     >"$out/$name.out" 2>"$out/$name.err"; then
     census=$(grep -o 'seeded_default: [0-9]* of [0-9]* segments seeded.*' "$out/$name.err" | tail -1)
     ms=$(grep -o '"step_ms":[0-9.e+-]*' "$out/$name.out" | tail -1 | cut -d: -f2)
-    echo "$fixture gate=$gate pass=$pass step_ms=${ms:-?} census=[${census:-none logged}]" |
+    derive=$(grep -o 'seeded_default: plan derived in [0-9.]* s' "$out/$name.err" |
+      sed 's/.* in //' | paste -sd, -)
+    echo "$fixture gate=$gate pass=$pass step_ms=${ms:-?} plan_derivation=[${derive:-none logged}] census=[${census:-none logged}]" |
       tee -a "$out/summary.txt"
   else
     echo "   FAILED (exit $?)"

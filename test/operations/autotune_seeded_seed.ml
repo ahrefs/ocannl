@@ -10,12 +10,12 @@
 
    The fixture is one dense layer with a bias, [y = w * x + b], backpropagated through [loss = sum
    (y *. dy)] over [nb * ns] = 4096 rows: the weight gradient's reduction (4096) and the forward
-   product's (96) both reach the default seeding threshold (32), and the bias gradient's serial
-   chain (4096 rows per output cell) and the loss sum's reach the default split threshold (1024), so
-   on CUDA the plan seeds AND splits; HIP never splits untuned (gh-ocannl-1325), so there it seeds
-   only. Which backend promises what is read off [Autotune.seeded_default_backend] and
-   [seeded_split_backend], the predicates the untuned compile consults. Every setting is the
-   configuration's default: the search reads them, as the untuned compile does.
+   product's (96) both reach the seeding threshold (32), and the bias gradient's serial chain (4096
+   rows per output cell) and the loss sum's reach the default split threshold (1024), so on CUDA the
+   plan seeds AND splits; HIP never splits untuned (gh-ocannl-1325), so there it seeds only. Which
+   backend promises what is read off [Autotune.seeded_default_backend] and [seeded_split_backend],
+   the predicates the untuned compile consults. Every setting is the configuration's default but the
+   seeding gate (below): the search reads them, as the untuned compile does.
 
    The search's measurements are scripted through [Autotune.on_candidate_measured] (gh-ocannl-1027)
    with the windows opted out of host contention ([with_uncontended_test_windows], gh-ocannl-1156):
@@ -49,6 +49,14 @@ open Verdict.Claims
 module SC = Ir.Schedule_cache
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+
+(* gh-ocannl-1253: the seeding gate is pinned at threshold 32, the default before [auto]. Every
+   claim below needs a plan that seeds, and the ranked [auto] gate seeds nothing on this fixture on
+   HIP, even with every working set past the cache: whether a sketch beats the preset is its call,
+   while what this test checks -- the search seeds the plan the untuned compile ships, whatever the
+   gate resolved it to -- is the gate's to feed, not to decide. The untuned compile and the search
+   read the same setting, set before the first compile reads it. *)
+let () = Unix.putenv "OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION" "32"
 
 (* What the untuned compile promises here, read off the predicates it consults: seeding on CUDA and
    HIP, the split on CUDA alone (gh-ocannl-1325: HIP keeps the unsplit plan). *)
