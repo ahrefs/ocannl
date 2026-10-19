@@ -6288,7 +6288,7 @@ ML
   rm -f "$direct_fd_root/tools/test-run-mutant.sh"
   perl -0pe 's/stderr=err,\s*pass_fds=INHERITED\)/stderr=err)/' "$HERE/replay-rules.sh" \
     >"$direct_fd_root/tools/replay-rules.sh"
-  if grep -q 'pass_fds' "$direct_fd_root/tools/replay-rules.sh" || ! bash -n "$direct_fd_root/tools/replay-rules.sh"; then
+  if grep -q 'pass_fds=INHERITED' "$direct_fd_root/tools/replay-rules.sh" || ! bash -n "$direct_fd_root/tools/replay-rules.sh"; then
     report 1 "$direct_fd_label" "the mutant was not made"
   else
     direct_escape escape-fd "$direct_fd_root/tools/test-run.sh"

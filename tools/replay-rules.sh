@@ -98,7 +98,10 @@ def inherited_fds():
     return tuple(fds)
 
 
-INHERITED = inherited_fds()
+# A native Windows python inherits no descriptor but stdio and refuses `pass_fds` outright;
+# its children's descriptors are the handles Windows passes, and there is no FIFO witness to
+# keep (POSIX pythons, MSYS's and Cygwin's included, take the list).
+INHERITED = inherited_fds() if os.name != 'nt' else ()
 
 
 def die(code, msg):
@@ -528,7 +531,7 @@ def run(argv):
             se = tempfile.TemporaryFile(buffering=0)
             try:
                 st = interp(rule['action'], p['root'], env, null, so, se, None)
-            except (Failed, OSError) as e:
+            except (Failed, OSError, ValueError) as e:
                 se.write(('replay-rules: %s\n' % e).encode())
                 st = 1
             finally:
