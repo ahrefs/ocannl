@@ -6656,6 +6656,136 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
   Option.iter report ~f:(fun f -> f rep);
   result
 
+(* gh-ocannl-1151: the accumulator-width decision of one reduction level, extracted from
+   [C_syntax.decide_accum_width] (gh-ocannl-754) so that code generation and [Schedule.Privatize]
+   ask ONE question. Before, the schedule side re-derived a subset of it ([peel_accum_nest] over a
+   rebuilt nest plus {!accum_base_widens}) and drifted: no dead-level decline, no serialized
+   hardware level. *)
+type accum_skip = Skip_debug_logging | Skip_dead_level | Skip_accum_pinned
+
+type accum_decision =
+  | Accum_not_a_nest of peel_refusal
+  | Accum_base of {
+      tn : Tn.t;
+      idcs : Indexing.axis_index array;
+      base : [ `Update of scalar_t | `Scope of scope_id * t list ];
+      debug : string;
+      rebuild : t -> t;
+      report : peel_report option;
+      pinned : accum_skip option;
+    }
+
+let decide_accum_width ~extra_level ~loop_bounds ~index ~from_ ~to_ body =
+  let report = ref None in
+  match
+    peel_accum_nest ~extra_level
+      ~report:(fun r -> report := Some r)
+      ~loop_bounds ~free_of:[ index ] body
+  with
+  | None ->
+      Accum_not_a_nest
+        (match !report with
+        | Some { refusal = Some refusal; _ } -> refusal
+        | _ ->
+            (* [peel_accum_nest] reports exactly once, and a [None] result carries a refusal; this
+               arm exists only so a census cannot invent a verdict. *)
+            Refused_not_a_nest)
+  | Some (tn, idcs, base, debug, rebuild) ->
+      (* The declines, in the order the serial rendering has always applied them: routine logging
+         keeps the traceable per-step [Set] form; a dead level performs no accesses (the peel's own
+         refusal covers the levels BELOW this one, whose bounds it sees, and this is the same
+         refusal for the level being decided); an update mentioning an RNG conversion renders at
+         storage precision, so localizing it would change the draw, not move it (gh-ocannl-517,
+         gh-ocannl-682). *)
+      let pinned =
+        if Utils.debug_log_from_routines () then Some Skip_debug_logging
+        else if to_ < from_ then Some Skip_dead_level
+        else
+          match base with
+          | `Update llsc when mentions_rng_conversion llsc -> Some Skip_accum_pinned
+          | `Update _ | `Scope _ -> None
+      in
+      Accum_base { tn; idcs; base; debug; rebuild; report = !report; pinned }
+
+let accum_decision_widens = function
+  | Accum_base { tn; idcs; base; pinned = None; _ } -> accum_base_widens ~tn ~idcs base
+  | Accum_base { pinned = Some _; _ } | Accum_not_a_nest _ -> false
+
+(* gh-ocannl-1151: the accumulating writes of [tn] in program order — a [Set] reading its own cell
+   (raw or scope-form), an accumulating [Set_dynamic] — through the statement positions
+   {!serial_accum_widths} walks: loops, guards and sequences, never a [Tile_mma] or a scope body. *)
+let is_accumulating_write ~tn (llc : t) =
+  match llc with
+  | Set { tn = tn'; _ } -> Tn.equal tn tn' && has_accumulating_cell llc
+  | Set_dynamic { tn = tn'; llsc; _ } -> Tn.equal tn tn' && scalar_touches_tn tn llsc
+  | _ -> false
+
+let accumulating_writes ~tn (llc : t) : t list =
+  let acc = ref [] in
+  let rec stmt (llc : t) =
+    match llc with
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> stmt body
+    | Seq (a, b) ->
+        stmt a;
+        stmt b
+    | _ when is_accumulating_write ~tn llc -> acc := llc :: !acc
+    | _ -> ()
+  in
+  stmt llc;
+  List.rev !acc
+
+type serial_accum = { sa_level : Indexing.symbol option; sa_widens : bool }
+
+(* gh-ocannl-1151: what the serial rendering of [llc] does with each accumulating write of [tn] (one
+   entry per {!accumulating_writes} member, in the same order), asked of {!decide_accum_width}
+   exactly where code generation asks it. [C_syntax.pp_ll] recurses top-down and decides at every
+   level whose rendering can localize — Serial, [Unrolled] and [Vectorized] always, a [Workgroup] /
+   [Workgroup_reduce] level only where the backend renders it serially ([serialized]), a [Grid]
+   level never (its fallback is the plain serial loop) — and the first level whose decision is a
+   base localizes that base, at the residency when its base widens. The peel descends
+   single-statement levels only, so a localized level holds exactly one accumulating write. A write
+   reached with no level localizing keeps its storage cell's width, narrowing per step, except a
+   scope-form base, whose scope local codegen's census types at the residency anyway. *)
+let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
+  let loop_bounds = loop_bounds llc in
+  let extra_level index axis = equal_axis_type axis Workgroup_reduce && serialized index axis in
+  let acc = ref [] in
+  let rec stmt (llc : t) =
+    match llc with
+    | For_loop { index; from_; to_; body; axis } -> (
+        let asks =
+          match axis with
+          | Serial | Unrolled | Vectorized -> true
+          | Workgroup | Workgroup_reduce -> serialized index axis
+          | Grid -> false
+        in
+        let decision =
+          if asks then Some (decide_accum_width ~extra_level ~loop_bounds ~index ~from_ ~to_ body)
+          else None
+        in
+        match decision with
+        | Some (Accum_base { tn = tn'; pinned = None; _ } as d) ->
+            (* Localized here. Another node's base sits at the end of a single-statement chain,
+               which holds no write of [tn]. *)
+            if Tn.equal tn tn' then
+              acc := { sa_level = Some index; sa_widens = accum_decision_widens d } :: !acc
+        | Some (Accum_base { pinned = Some _; _ } | Accum_not_a_nest _) | None -> stmt body)
+    | Seq (a, b) ->
+        stmt a;
+        stmt b
+    | If { body; _ } | Scan_loop { body; _ } -> stmt body
+    | _ when is_accumulating_write ~tn llc ->
+        let widens =
+          match peel_accum_nest ~loop_bounds ~free_of:[] llc with
+          | Some (_, idcs, (`Scope _ as base), _, _) -> accum_base_widens ~tn ~idcs base
+          | Some (_, _, `Update _, _, _) | None -> false
+        in
+        acc := { sa_level = None; sa_widens = widens } :: !acc
+    | _ -> ()
+  in
+  stmt llc;
+  List.rev !acc
+
 (* gh-ocannl-1168 / gh-ocannl-1238. The [Workgroup_reduce] sites the renderer owns the communication
    of, and whether workgroup-uniform control reaches each: the lane all-reduce into a reassociable
    scope local ([C_syntax.try_lane_all_reduce]) and the warp-shuffle tree into a cell
