@@ -1135,10 +1135,14 @@ files.
   seeded floor (3.70 ms) until two late keys left on presets were swept, and it came within 5% of its
   final best only at 77% of its timings (bare search: 96%; ABBA, crowns and step p50 unchanged).
   A refused (not contended) staffed single is retried bare once (`fiss_sketch_backdrop_fallbacks`),
-  until a key's bare retry is refused too; a key whose staffed singles ALL decline cannot join that
+  until a staffed single of the key is admitted (the staff is then known compatible, so later
+  refusals are the seeds' own). A key's incumbent is its own choice as timed in the sweep, or the
+  running composite whole (for a key with no choice, the key on its preset): a single joins only by
+  beating it. A key whose staffed singles ALL decline cannot join that
   staff (the composite holding both is the refused code), so its fastest bare single, the composite
   of that key alone, replaces the running composite when faster as a whole routine. The last key's
-  winning window IS the coarse composite, so `fs_composite` is set from it at admission, and the
+  winning window IS the coarse composite, so `fs_composite` is set from it at admission (and stays
+  `Timed` if a bare replacement later shrinks the composite; the split flags likewise), and the
   playoff skips a key whose sweep ran inside the incumbent.
   The fine segmentation (GPU, gh-ocannl-574) keeps its own composite: a fine key the finer cuts left
   unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded rule's,

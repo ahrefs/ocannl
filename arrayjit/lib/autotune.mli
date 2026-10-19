@@ -1307,8 +1307,9 @@ val no_search_report : timing:timing_mode -> report
       or [round<k>]), [candidates] (the phase's total), [timed], [attempts], [compile_s],
       [timing_s], [best_ms], [best].
     - [candidate] ({!tune}, as EVERY candidate attempt starts): [routine], [elapsed_s], [phase]
-      ([seeds], [recombine], [playoff] or [round<k>]), [tried=<k>/<total>] (the ordinal of the
-      attempt starting within its phase; [?] when the phase's total is not known up front), [timed],
+      ([seeds], [staffed] (gh-ocannl-1138's staffed sweep, config [autotune_staffed_singles]),
+      [recombine], [playoff] or [round<k>]), [tried=<k>/<total>] (the ordinal of the attempt
+      starting within its phase; [?] when the phase's total is not known up front), [timed],
       [attempts] (this one included), [compile_s], [timing_s], [best_ms], [best] (all as of the
       attempt's start), and [attempt], the starting candidate's label. A search killed inside a
       candidate is therefore inside the one its last [candidate] line names. The rate is bounded by

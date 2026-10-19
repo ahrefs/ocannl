@@ -35,8 +35,11 @@
 
    [refused] fault-injects a refusal of the first staffed single ([on_candidate_preflight]): it is
    retried bare at once, and that bare twin is timed. [refused_all] refuses every attempt of the
-   second key, staffed and bare: the first bare retry is refused too, so the key's later refusals
-   are not retried. [refused_staffed] refuses only the second key's staffed attempts: their bare
+   second key, staffed and bare: none is admitted, so every staffed refusal is retried bare, and the
+   progress record never counts past an announced total; once a staffed single of the key is
+   admitted ([refused_after]), no later refusal is retried. [slower] keeps a key whose sketches all
+   lose to its preset out of the composite, and [shrunk] keeps a timed composite's outcome after a
+   bare replacement. [refused_staffed] refuses only the second key's staffed attempts: their bare
    retries are timed, and the composite takes the fastest of them. [partial] cuts a search at its
    first admitted staffed window: the partial report already says the composite was timed.
 
@@ -84,12 +87,12 @@ let hashed entry = 2. +. (Float.of_int (Stdlib.Hashtbl.hash entry % 1000) /. 100
 let preset_ms = 50.
 let keyed_segments = 2
 
-let routine_ms ~cost label =
+let routine_ms ?(keyed = keyed_segments) ~cost label =
   if is_sketch label then
     let f, s = parts label in
     let entries = f @ s in
     List.sum (module Float) entries ~f:cost
-    +. (preset_ms *. Float.of_int (keyed_segments - List.length entries))
+    +. (preset_ms *. Float.of_int (keyed - List.length entries))
   else 1000.
 
 (* An entry's label text, as [parts] reads it off a candidate label. *)
@@ -117,8 +120,8 @@ let untuned (qg, comp) =
    [autotune_staffed_singles] and [autotune_composite_playoff_width] for this search only; [?start]
    gives the running composite its start; [?refuse] refuses (at pre-dispatch validation, a contained
    decline) every attempt whose label it holds for. *)
-let search ?(staffed = true) ?(log = false) ?width ?start ?refuse ?(cache_dir = "") ?chain ~tag
-    ~cost () =
+let search ?(staffed = true) ?(log = false) ?(progress = false) ?keyed ?width ?start ?refuse
+    ?(cache_dir = "") ?chain ~tag ~cost () =
   let qg, comp = match chain with Some c -> c | None -> Fissioned_chain.chain_with_output () in
   let report = ref None and measured = ref [] and attempts = ref [] and current = ref "" in
   let settings =
@@ -133,7 +136,7 @@ let search ?(staffed = true) ?(log = false) ?width ?start ?refuse ?(cache_dir = 
         List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
         Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
             measured := label :: !measured;
-            routine_ms ~cost label)
+            routine_ms ?keyed ~cost label)
         @@ fun () ->
         Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
             current := label;
@@ -149,7 +152,7 @@ let search ?(staffed = true) ?(log = false) ?width ?start ?refuse ?(cache_dir = 
         @@ fun () ->
         let ctx, routine =
           Autotune.with_uncontended_test_windows (fun () ->
-              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~log ~progress:false
+              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~log ~progress
                 ~report:(fun r -> report := Some r)
                 (Context.cpu ()) comp Ir.Indexing.Empty)
         in
@@ -385,8 +388,12 @@ let () =
              | Ir.Schedule_outcome.Unclassified_key (Ir.Schedule_outcome.Preflight, _) -> true
              | _ -> false))
 
-(* --- refused_all: a key whose seeds fail on their own stops being retried --- *)
+(* --- refused_all: until a staffed single of the key is admitted, every refusal is retried --- *)
 
+(* Every attempt of the second key is refused, staffed and bare: no staffed single of it is ever
+   admitted, so nothing shows its staff compatible, and each staffed refusal is retried bare (Codex
+   P1 on PR #1215). The search's progress record, captured, never counts an attempt past its phase's
+   announced total (Codex P2 on PR #1215: the retries are attempts the seed total did not count). *)
 let () =
   let second = ref None in
   (* The second key is the first one a staffed attempt focuses on. *)
@@ -397,20 +404,130 @@ let () =
     && (not (is_composite label))
     && Option.exists !second ~f:(fun k -> String.equal k (key_of (List.hd_exn (focus label))))
   in
-  let o = search ~width:0 ~refuse ~tag:"refused_all" ~cost () in
+  let o, lines =
+    with_stderr_captured (fun () ->
+        search ~progress:true ~width:0 ~refuse ~tag:"refused_all" ~cost ())
+  in
   let r = o.report in
-  match !second with
+  (match !second with
   | None -> p "refused_all: a staffed single was refused" false
   | Some k ->
       let ofk =
         List.filter o.attempts ~f:(fun l ->
             is_single l && String.equal (key_of (List.hd_exn (focus l))) k)
       in
-      p "refused_all: the first bare retry, refused too, is the only one"
-        (r.Autotune.fiss_sketch_backdrop_fallbacks = 1
-        && List.count ofk ~f:(fun l -> not (is_staffed l)) = 1);
-      p "refused_all: every staffed single of the key was still attempted"
-        (List.count ofk ~f:is_staffed >= 3)
+      let staffed_n = List.count ofk ~f:is_staffed in
+      p "refused_all: every staffed refusal was retried bare, none of them admitted"
+        (staffed_n >= 3
+        && r.Autotune.fiss_sketch_backdrop_fallbacks = staffed_n
+        && List.count ofk ~f:(fun l -> not (is_staffed l)) = staffed_n));
+  (* [tried=<k>/<total>], with [?] for a phase announced without a total. *)
+  let tried =
+    List.filter_map lines ~f:(fun line ->
+        if not (String.is_prefix line ~prefix:"autotune-progress: ") then None
+        else
+          List.find_map (String.split line ~on:' ') ~f:(fun w ->
+              Option.bind (String.chop_prefix w ~prefix:"tried=") ~f:(fun v ->
+                  match String.split v ~on:'/' with [ k; t ] -> Some (k, t) | _ -> None)))
+  in
+  p_all "progress: no attempt is counted past its phase's announced total" tried ~f:(fun (k, t) ->
+      String.equal t "?" || Int.of_string k <= Int.of_string t)
+
+(* --- refused_after: once a staffed single of the key is admitted, refusals are its seeds' own
+   --- *)
+
+(* The second key's first staffed single is admitted, and every later attempt of that key, staffed
+   or bare, is refused: its staff is shown compatible, so no refusal is retried bare. *)
+let () =
+  let second = ref None and admitted = ref false in
+  let refuse label =
+    if not (is_staffed label) then false
+    else
+      let k = key_of (List.hd_exn (focus label)) in
+      if Option.is_none !second then second := Some k;
+      if not (Option.exists !second ~f:(String.equal k)) then false
+      else if !admitted then true
+      else (
+        admitted := true;
+        false)
+  in
+  let o = search ~width:0 ~refuse ~tag:"refused_after" ~cost () in
+  let r = o.report in
+  match !second with
+  | Some k ->
+      let staffed_of_k =
+        List.count o.attempts ~f:(fun l ->
+            is_staffed l && String.equal (key_of (List.hd_exn (focus l))) k)
+      in
+      p "refused_after: after an admitted staffed single, no refusal of the key is retried bare"
+        (staffed_of_k >= 3 && r.Autotune.fiss_sketch_backdrop_fallbacks = 0)
+  | None -> p "refused_after: the second key was swept staffed" false
+
+(* --- slower: a key whose every single is slower than its preset stays on it --- *)
+
+(* The second key's sketches all cost more than its preset: the running composite, which holds the
+   key on its preset and was timed whole, is that key's incumbent, so none of its singles joins
+   (Codex P1 on PR #1215), by the search's own log lines. *)
+let () =
+  let second = ref None in
+  let cost entry =
+    if Option.exists !second ~f:(String.equal (key_of entry)) then preset_ms +. hashed entry
+    else hashed entry
+  in
+  let refuse label =
+    if is_staffed label && Option.is_none !second then
+      second := Some (key_of (List.hd_exn (focus label)));
+    false
+  in
+  let o, lines =
+    with_stderr_captured (fun () -> search ~log:true ~width:0 ~refuse ~tag:"slower" ~cost ())
+  in
+  let staffed_lines = List.filter lines ~f:(String.is_prefix ~prefix:"autotune: staffed: ") in
+  let joins k l =
+    String.is_prefix l ~prefix:("autotune: staffed: segment " ^ k ^ ": ")
+    && String.is_substring l ~substring:"joins the running composite"
+  in
+  match (keys o.measured, !second) with
+  | [ first; k ], Some k' when String.equal k k' ->
+      p_exists "slower: the first key joined the composite" staffed_lines ~f:(joins first);
+      p_none "slower: no single of the slower key joined it" staffed_lines ~f:(joins k);
+      p "slower: the crown is the first key's single, the second on its preset"
+        (List.length (focus o.report.Autotune.best_label) = 1
+        && (not (is_staffed o.report.Autotune.best_label))
+        && String.equal (key_of (List.hd_exn (focus o.report.Autotune.best_label))) first)
+  | _ -> p "slower: the search swept the chain's two keys" false
+
+(* --- shrunk: a composite window timed stays the outcome after a bare replacement --- *)
+
+(* Three keys: the first two are swept into a timed composite, then the third key's staffed singles
+   are all refused and its bare single, the faster whole routine, replaces the composite. The
+   composite window completed, so the report still says Timed (Codex P2 on PR #1215). *)
+let () =
+  let seen = ref [] in
+  let early k = List.mem (List.take (List.rev !seen) 2) k ~equal:String.equal in
+  let refuse label =
+    if is_single label then (
+      let k = key_of (List.hd_exn (focus label)) in
+      if not (List.mem !seen k ~equal:String.equal) then seen := k :: !seen;
+      is_staffed label && not (early k))
+    else false
+  in
+  let cost entry =
+    if early (key_of entry) then 40. +. (hashed entry /. 10.) else hashed entry /. 10.
+  in
+  let o, lines =
+    with_stderr_captured (fun () ->
+        search ~log:true ~width:0 ~keyed:3 ~refuse
+          ~chain:(Fissioned_chain.chain_with_output ~third:true ())
+          ~tag:"shrunk" ~cost ())
+  in
+  p "shrunk: three keys were swept" (List.length (keys o.measured) = 3);
+  p "shrunk: the third key's bare single replaced the composite"
+    (List.exists lines ~f:(fun l ->
+         String.is_prefix l ~prefix:"autotune: staffed: segment "
+         && String.is_substring l ~substring:"replaces the running composite"));
+  p "shrunk: the report keeps the composite window it timed"
+    (Poly.equal o.report.Autotune.fiss_sketch_composite `Timed)
 
 (* --- refused_staffed: a key whose staffed singles all decline competes as a whole routine --- *)
 

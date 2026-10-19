@@ -6686,8 +6686,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           let fiss_single_results = ref [] in
           progress_phase_begin "seeds"
             (Some
-               (List.length pre_sweep_specs + List.length coarse_single_specs
-               + (if staffed then List.length fine_single_specs + List.length sr_specs else 0)
+               (List.length pre_sweep_specs
+               + (if staffed then 0 else List.length coarse_single_specs)
                + List.length post_sweep_specs));
           let run_seed spec =
             let result = try_spec spec in
@@ -6723,7 +6723,6 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              names a choice for the log. Keys compare by [equal_key] and choices structurally. *)
           let sweeper ~equal_key ~keys ~single ~describe =
             let running = ref [] and running_ms = ref None and swept_against = ref [] in
-            let bare_exhausted = ref [] in
             let without key choices =
               List.filter choices ~f:(fun (k, _) -> not (equal_key k key))
             in
@@ -6734,6 +6733,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             let sweep_key (key, ps) =
               let staff = without key !running in
               let bare = ref [] in
+              (* A staffed single of this key admitted shows the staff compatible with it, so any
+                 later refusal is the seed's own and is not retried bare (Codex P1 on PR #1215: a
+                 cap on the first refused bare retry stopped the retries of a key whose staff was
+                 the culprit after one seed that was invalid on its own). Until then, every refusal
+                 is retried. *)
+              let staff_admitted = ref false in
               swept_against := (key, staff) :: !swept_against;
               let current = List.Assoc.find !running ~equal:equal_key key in
               let ps =
@@ -6751,44 +6756,45 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                         match try_spec (single key staff p) with
                         | Some ((_, ms) as r) ->
                             admit r;
+                            staff_admitted := true;
                             Some (p, ms)
                         | None -> (
                             match !last_attempt with
-                            | `Dedup (Some ms) -> Some (p, ms)
-                            | `Declined
-                              when (not (List.is_empty staff))
-                                   && not (List.mem !bare_exhausted key ~equal:equal_key) ->
+                            | `Dedup (Some ms) ->
+                                staff_admitted := true;
+                                Some (p, ms)
+                            | `Declined when (not (List.is_empty staff)) && not !staff_admitted ->
                                 Int.incr n_backdrop_fallbacks;
                                 logf "%s: refused with its staff; retrying it bare"
                                   (spec_label (single key staff p));
-                                (match try_spec (single key [] p) with
-                                | Some ((_, ms) as r) ->
+                                Option.iter
+                                  (try_spec (single key [] p))
+                                  ~f:(fun ((_, ms) as r) ->
                                     admit r;
-                                    bare := (p, ms) :: !bare
-                                | None -> (
-                                    match !last_attempt with
-                                    | `Declined -> bare_exhausted := key :: !bare_exhausted
-                                    | _ -> ()));
+                                    bare := (p, ms) :: !bare);
                                 None
                             | _ -> None)))
               in
               let by_time (_, a) (_, b) = Float.compare a b in
+              (* The incumbent in this backdrop: the composite's own choice for the key as timed
+                 here, or else the running composite itself, timed whole -- for a key with no
+                 choice, the key on its preset (Codex P1 on PR #1215: a key whose every single was
+                 slower than its preset used to join anyway, and later keys were swept around the
+                 slower composite). *)
+              let current_ms =
+                Option.bind current ~f:(fun q -> List.Assoc.find results ~equal:Poly.equal q)
+              in
+              let incumbent_ms = Option.first_some current_ms !running_ms in
               (match List.min_elt results ~compare:by_time with
               | Some (p, ms) ->
-                  (* The fastest in this backdrop; a tie keeps the composite's own choice. *)
-                  let p, ms =
-                    match
-                      Option.bind current ~f:(fun q ->
-                          Option.map (List.Assoc.find results ~equal:Poly.equal q) ~f:(fun q_ms ->
-                              (q, q_ms)))
-                    with
-                    | Some (q, q_ms) when Float.(q_ms <= ms) -> (q, q_ms)
-                    | _ -> (p, ms)
-                  in
-                  if not (Option.exists current ~f:(Poly.equal p)) then
-                    logf "staffed: %s joins the running composite (%.4f ms)" (describe key p) ms;
-                  running := in_key_order ((key, p) :: without key !running);
-                  running_ms := Some ms
+                  (* The fastest in this backdrop replaces the incumbent only by being faster; a tie
+                     keeps it. *)
+                  if Option.for_all incumbent_ms ~f:(fun i -> Float.(ms < i)) then (
+                    logf "staffed: %s joins the running composite (%.4f ms%s)" (describe key p) ms
+                      (Option.value_map incumbent_ms ~default:"" ~f:(Printf.sprintf " < %.4f ms"));
+                    running := in_key_order ((key, p) :: without key !running);
+                    running_ms := Some ms)
+                  else Option.iter current_ms ~f:(fun q_ms -> running_ms := Some q_ms)
               | None -> (
                   (* Every staffed single of the key was refused, and some of its bare retries were
                      admitted (Codex P1 on PR #1215): the key cannot join this staff, since the
@@ -6913,6 +6919,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               ~single:(fun s staff b -> Fiss (F_split { sites = [ (s, b) ]; staff }))
               ~describe:(fun s b -> "split site " ^ split_site_label (s, b))
           in
+          (* Its own phase, with no total announced: a bare retry or a start choice outside the menu
+             adds an attempt, and a start choice already timed takes one away (Codex P2 on PR
+             #1215). *)
+          if staffed then progress_phase_begin "staffed" None;
           if staffed then (
             sweep ~pre_of:coarse_pre
               ~start:
@@ -6980,6 +6990,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
                   best_single_for ~fine_ok:false key)
           in
+          (* A staffed composite window admitted during the sweep stays the outcome, published there
+             (Codex P2 on PR #1215): the running composite can shrink back to one key after it, when
+             a later key's bare single replaced it, and the window still completed. *)
+          let composite_window_timed = staffed && Poly.equal !fs_composite `Timed in
           (* Missing singles justify undecided only when every missing coarse key had a viable
              window refused and no later equivalent single supplied a measurement. A refusal from an
              unrelated segment or family cannot excuse a missing proposal. *)
@@ -7015,6 +7029,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   Some (recombined, false, ms)
               | true, None | false, _ -> try_composite ~fine:false recombined
           in
+          if composite_window_timed then fs_composite := `Timed;
           (* The fine composite (gh-ocannl-574): the fine winner in a multi-segment routine needs
              the freed site's best AND the other segments' bests in one candidate. Keys address the
              fine segmentation; segments unchanged by the finer cuts share their digest with the
@@ -7052,8 +7067,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           (* Staffed, the running split composite, timed by its last accepted window when that
              schedules every site. *)
           let recombined = if staffed then !sr_running else recombined in
-          sr_composite_eligible := List.length recombined >= 2;
-          if !sr_composite_eligible then
+          (* As for the sketch composite above, a staffed multi-site window admitted during the
+             sweep keeps the outcome eligible and timed, whatever the running composite ended as. *)
+          let eligible_now = List.length recombined >= 2 in
+          sr_composite_eligible := (staffed && !sr_composite_eligible) || eligible_now;
+          if eligible_now then
             if staffed && Option.is_some !sr_running_ms then sr_composite_timed := true
             else Option.iter (try_spec (Fiss (F_split { sites = recombined; staff = [] }))) ~f:admit;
           (* The composite playoff (gh-ocannl-1166; see [default_playoff_margin]), after every

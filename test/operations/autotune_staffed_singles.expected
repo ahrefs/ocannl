@@ -29,8 +29,15 @@ refused: the attempt after the refusal is its bare twin: true
 refused: the bare twin was timed: true
 refused: the refused staffed single was never timed: true
 refused: the refusal is a contained pre-dispatch decline: true
-refused_all: the first bare retry, refused too, is the only one: true
-refused_all: every staffed single of the key was still attempted: true
+refused_all: every staffed refusal was retried bare, none of them admitted: true
+progress: no attempt is counted past its phase's announced total: true
+refused_after: after an admitted staffed single, no refusal of the key is retried bare: true
+slower: the first key joined the composite: true
+slower: no single of the slower key joined it: true
+slower: the crown is the first key's single, the second on its preset: true
+shrunk: three keys were swept: true
+shrunk: the third key's bare single replaced the composite: true
+shrunk: the report keeps the composite window it timed: true
 refused_staffed: every refused staffed single was retried bare and timed: true
 refused_staffed: the key's fastest bare retry, the faster routine, replaced the composite: true
 refused_staffed: the crown is that bare single: true
