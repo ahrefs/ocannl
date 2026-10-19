@@ -4756,10 +4756,15 @@ let model_default ?name ?report ctx comp bindings =
         (if not is_gpu then None
          else seeded_settings ~backend ~configured_gate:(fun () -> seeded_default_gate ~limits) ())
     in
-    let seeded_segs seeding opt =
+    let seeded_segs ?on_choice seeding opt =
       let gate, min_serial, sink_enabled = seeding in
-      seeded_apply ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial ~sink_enabled opt
+      seeded_apply ?on_choice ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial
+        ~sink_enabled opt
     in
+    (* Whether the applied seeded plan differs from the default pipeline, as [seeded_default] judges
+       it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a compilation
+       failure of it is the default's and is not retried. *)
+    let seeded_changed = ref false in
     let select (opt : LL.optimized) =
       try
         (* The incumbent -- the seeded plan where there is one, else the untuned default pipeline --
@@ -4883,7 +4888,16 @@ let model_default ?name ?report ctx comp bindings =
            [compile_advisory], which now receives its classified cause directly from codegen. *)
         match action with
         | `Default -> default_segs ()
-        | `Seeded seeding -> validate_segments_for_model ~limits (seeded_segs seeding opt)
+        | `Seeded seeding ->
+            seeded_changed := false;
+            validate_segments_for_model ~limits
+              (seeded_segs
+                 ~on_choice:(fun c ->
+                   seeded_changed :=
+                     not
+                       (List.is_empty c.sd_seeded && List.is_empty c.sd_split
+                      && List.is_empty c.sd_sunk))
+                 seeding opt)
         | `Whole p ->
             validate_segments_for_model ~limits
               [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
@@ -4909,7 +4923,10 @@ let model_default ?name ?report ctx comp bindings =
             (match model_s with Some s -> Printf.sprintf "%.6f ms" (s *. 1e3) | None -> "n/a")
             !n_scored !n_skipped !n_rejected;
           (applied_pick :=
-             match action with `Default -> false | `Seeded _ | `Whole _ | `Fiss _ -> true);
+             match action with
+             | `Default -> false
+             | `Seeded _ -> !seeded_changed
+             | `Whole _ | `Fiss _ -> true);
           segs
       | exception Outcome.Cause_at (_, cause) ->
           logf
@@ -5498,7 +5515,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
        It is the search's first candidate, and since its [auto] gate reads the device description's
        [Untimed] capacity and cache bandwidth, the RESOLVED plan -- its content digest, never the
        raw constants -- joins the trajectory identity: a crown searched under another seed is not an
-       equal-depth record for early stopping. Lazy: a warm hit whose entry carries no record never
+       equal-depth record for early stopping. An absent plan is named too ([seed=none]), so no
+       trajectory recorded before the seed joined the identity -- one whose first step may have been
+       a seed -- matches a search without one. Lazy: a warm hit whose entry carries no record never
        derives it. *)
     let seeded_plan_value =
       lazy
@@ -5513,7 +5532,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
     let search_shape =
       lazy
         (match Lazy.force seeded_plan_value with
-        | None -> search_shape_settings
+        | None -> search_shape_settings ^ "|seed=none"
         | Some plan -> search_shape_settings ^ "|seed=" ^ seeded_plan_digest plan)
     in
     (* A stored shape whose settings already differ is decided without deriving the plan. *)

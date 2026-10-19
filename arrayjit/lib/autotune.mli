@@ -1736,11 +1736,12 @@ val model_default :
     {!model_choice} then says ["default"]. On CUDA and HIP the model starts from the seeded untuned
     plan instead (gh-ocannl-1253, {!seeded_plan} under the configured gate, [auto] included): it is
     the incumbent every candidate must strictly beat and the pick when none does ([mc_label]
-    ["seeded"], even where no segment seeds and the plan is the default pipeline), and the sketch
-    candidates are restricted to the seeding's numerics-preserving forms — scalar block tiles at a
-    site accumulating at its storage precision — so the pick never changes a value the untuned
-    compile computes. Fatal failures propagate without retrying. Once the compile is on that
-    pipeline there is nothing left to fall back to, so its failures propagate as they would from
+    ["seeded"], even where no segment seeds and the plan is the default pipeline -- a plan the
+    compile then does not retry on a backend failure, as for the default), and the sketch candidates
+    are restricted to the seeding's numerics-preserving forms — scalar block tiles at a site
+    accumulating at its storage precision — so the pick never changes a value the untuned compile
+    computes. Fatal failures propagate without retrying. Once the compile is on that pipeline there
+    is nothing left to fall back to, so its failures propagate as they would from
     {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and no
     cache is involved — results depend only on the computation, backend, and envelope constants.
 

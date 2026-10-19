@@ -589,7 +589,7 @@ files.
   `default_ms` (not stored, so `None` on a cache hit), and `entry_version` 16 retired the crowns
   searched without this floor. `seeded_plan_digest` names the plan from its content alone (split
   sites by target name and extents, not by node id or symbol), and `tune` appends it to
-  `trajectory.search_shape` (`|seed=<digest>`, never the cache key) whenever a plan exists: the
+  `trajectory.search_shape` (`|seed=<digest>`, `|seed=none` without a plan, never the cache key): the
   plan reads `Untimed` fields under `auto`, so a crown searched under a different seed is a
   different trajectory and never stops this search early. Deriving it costs one detection pass over
   the pristine program, forced lazily (the search, or a trajectory-matched warm hit, forces it; the
