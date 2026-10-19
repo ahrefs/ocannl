@@ -113,7 +113,7 @@ type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
 
 let strict_failure_classification =
-  lazy (Utils.get_global_flag ~default:true ~arg_name:"strict_failure_classification")
+  lazy (Utils.registered_flag ~arg_name:"strict_failure_classification")
 
 let is_oom_or_interrupt = function Out_of_memory | Stdlib.Sys.Break -> true | _ -> false
 let is_assert_or_stack = function Assert_failure _ | Stack_overflow -> true | _ -> false

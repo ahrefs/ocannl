@@ -966,6 +966,59 @@ let label_uses content =
   iterator#structure (structure_of content);
   List.rev !uses
 
+type keyed_read = { read_key : string; reader : string list option; defaulted : bool; at : int }
+(** A configuration key named by a string literal, with what reads it (gh-ocannl-1332): at an
+    application site [~arg_name:"k"], [reader] is the applied function's path ([None] when it is no
+    plain identifier) and [defaulted] whether the same application passes [~default] or [?default];
+    as a parameter's default ([?(arg_name = "k")]), [reader] is [None] and [defaulted] is [true] --
+    a helper that reads [k] unless told otherwise. [at] is where the literal sits. *)
+
+let keyed_reads content =
+  let reads = ref [] in
+  let is_default = function
+    | Asttypes.Labelled "default" | Asttypes.Optional "default" -> true
+    | _ -> false
+  in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_apply (fn, args) ->
+            let defaulted = List.exists args ~f:(fun (lbl, _) -> is_default lbl) in
+            List.iter args ~f:(fun (lbl, arg) ->
+                if is_our_label lbl then
+                  Option.iter (string_literal arg) ~f:(fun read_key ->
+                      reads :=
+                        {
+                          read_key;
+                          reader = longident_of fn;
+                          defaulted;
+                          at = arg.pexp_loc.loc_start.pos_cnum;
+                        }
+                        :: !reads))
+        | Pexp_function (params, _, _) ->
+            List.iter params ~f:(fun param ->
+                match param.pparam_desc with
+                | Pparam_val (lbl, Some default, _) when is_our_label lbl ->
+                    Option.iter (string_literal default) ~f:(fun read_key ->
+                        reads :=
+                          {
+                            read_key;
+                            reader = None;
+                            defaulted = true;
+                            at = param.pparam_loc.loc_start.pos_cnum;
+                          }
+                          :: !reads)
+                | _ -> ())
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  iterator#structure (structure_of content);
+  List.rev !reads
+
 type definition = { start : int; stop : int; name : string option; top_level : bool }
 (** Every function in the file: the source range it covers, the name of the binding it is the body
     of (if any), and whether that binding is top-level.

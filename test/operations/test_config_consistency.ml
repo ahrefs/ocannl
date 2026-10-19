@@ -176,6 +176,18 @@ let () =
               "get_global_arg_with_source";
               "get_global_arg";
               "get_global_flag";
+              (* gh-ocannl-1332: the typed getters of the registered keys, the lookup they share,
+                 and the unchecked lookup under get_global_arg_with_source. Check 7 below holds
+                 every literal read of a registered key to its kind's getter. *)
+              "unchecked_global_arg_with_source";
+              "registered_canonical";
+              "registered_flag";
+              "registered_int";
+              "registered_float";
+              "registered_text";
+              "registered_positive_float_or_unset";
+              "registered_float_at_least";
+              "registered_keyword";
               (* gh-ocannl-719: resolves one key of a profile payload with its source, for
                  profile_payload_sources, whose key list is the payload's own. Top-level, because an
                  exemption does not reach a lambda nested in an exempted function. *)
@@ -293,6 +305,34 @@ let () =
          "exempted functions that no longer forward a config key -- drop them from the exemption \
           list: %s"
          (String.concat ~sep:", " @@ Set.to_list stale));
+  (* 7. gh-ocannl-1332: a key with a [Utils.config_key_defaults] row is read only through the typed
+     getter of its kind ([Utils.registered_getter_of_kind], the getters' own check), which takes the
+     default from that row and refuses a value the kind does not parse. A read anywhere else -- a
+     plain [get_global_arg ~default:…], a getter of another kind, a helper defaulting its
+     [?arg_name] to the key -- is the per-site fallback and duplicated literal the registry
+     replaced, so it fails here, in every scanned file, whether or not a test executes it. *)
+  let registered_reads =
+    List.concat_map source_files ~f:(fun fname ->
+        let base = Stdlib.Filename.basename fname in
+        let original = In_channel.read_all fname in
+        List.filter_map (Config_key_scan.keyed_reads original) ~f:(fun read ->
+            Option.map (Utils.registered_config_default read.Config_key_scan.read_key)
+              ~f:(fun (kind, _) -> (base, original, read, Utils.registered_getter_of_kind kind))))
+  in
+  let through_getter (_, _, read, getter) =
+    (not read.Config_key_scan.defaulted)
+    && Option.equal String.equal (Option.bind read.reader ~f:List.last) (Some getter)
+  in
+  (* A read elsewhere is named on stderr, with the getter it should go through. *)
+  p_all ~min:30
+    "every read of a key with a registered default goes through its kind's typed getter, with no \
+     ~default"
+    registered_reads ~f:(fun ((base, original, read, getter) as r) ->
+      let ok = through_getter r in
+      if not ok then
+        eprintf "%s reads the registered key %s other than through Utils.%s ~arg_name:%S: %s\n" base
+          read.Config_key_scan.read_key getter read.read_key (line_at original read.at);
+      ok);
   (* What the census covers, as a floor per scan root rather than as an exact count: the count was a
      tally of the repository, and every correct addition anywhere under the globbed directories owed
      a promote round for it (gh-ocannl-701). A floor keeps what the count was for -- a glob that
@@ -320,10 +360,11 @@ let () =
   if not (Verdict.any_failed ()) then (
     printf "OK: profile payloads, documented and quoted verbatim: %s.\n"
       (String.concat ~sep:", " @@ List.map payload_keys ~f:fst);
+    (* Which functions, not how many: the count is a tally every exemption added moves, which
+       census_total_ratchet refuses once it has two digits (gh-ocannl-1332 took it to 17). *)
     printf
-      "OK: every scanned file spells every config key as a string literal, outside %d forwarding \
-       functions: %s.\n"
-      (Set.length exempted_sites)
+      "OK: every scanned file spells every config key as a string literal, outside the forwarding \
+       functions %s.\n"
       (String.concat ~sep:", " @@ Set.to_list exempted_sites);
     (* Which directories the census came from, so that the globs' reach is reviewable rather than
        implicit -- by name, since how many files each holds is a tally of the repository rather than

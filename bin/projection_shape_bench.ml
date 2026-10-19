@@ -907,17 +907,12 @@ let () =
      profile's (the [approximate] payload's 4/4) -- read with [Autotune.tune]'s own defaults and
      passed explicitly, so the search a leg runs is the one a caller under the same configuration
      gets, and the header prints what was used rather than restating a constant. *)
-  let setting_int name v =
-    match Int.of_string_opt (String.strip v) with
-    | Some n when n >= 0 -> n
-    | _ -> invalid_arg (Printf.sprintf "%s=%S is not a nonnegative integer" name v)
+  let nonnegative name n =
+    if n >= 0 then n else invalid_arg (Printf.sprintf "%s=%d is not a nonnegative integer" name n)
   in
   let tn_beam =
-    max 1
-      (setting_int "autotune_beam_width"
-         (Utils.get_global_arg ~arg_name:"autotune_beam_width" ~default:"2"))
-  and tn_rounds =
-    setting_int "autotune_rounds" (Utils.get_global_arg ~arg_name:"autotune_rounds" ~default:"2")
+    max 1 (nonnegative "autotune_beam_width" (Utils.registered_int ~arg_name:"autotune_beam_width"))
+  and tn_rounds = nonnegative "autotune_rounds" (Utils.registered_int ~arg_name:"autotune_rounds")
   and tn_repeats = 3
   and tn_keep = 1.0
   and tn_split = 8 in
@@ -930,7 +925,7 @@ let () =
          candidates against -- so two identical invocations can publish differently pruned searches
          under one label. They cannot be pinned from here, so they are REPORTED, and a tune run is
          reproducible only against the line below. *)
-      let shown = function "" -> "(unset)" | v -> v in
+      let shown = Option.value_map ~default:"(unset)" ~f:Float.to_string in
       p
         "\n\
          -- searches: beam_width %d, rounds %d, repeats %d, keep_fraction %.2f, \
@@ -938,10 +933,10 @@ let () =
          -- ambient search gates: autotune_bound_pruning=%s autotune_timing=%s model_peak_flops=%s \
          model_peak_memory_bandwidth=%s\n"
         tn_beam tn_rounds tn_repeats tn_keep tn_split
-        (Utils.get_global_arg ~arg_name:"autotune_bound_pruning" ~default:"false")
+        (Bool.to_string (Utils.registered_flag ~arg_name:"autotune_bound_pruning"))
         (Utils.get_global_arg ~arg_name:"autotune_timing" ~default:"queued")
-        (shown (Utils.get_global_arg ~arg_name:"model_peak_flops" ~default:""))
-        (shown (Utils.get_global_arg ~arg_name:"model_peak_memory_bandwidth" ~default:""));
+        (shown (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_flops"))
+        (shown (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_memory_bandwidth"));
       List.filter_map prepared ~f:(fun ((s, _, _, _, _, _) as pr) ->
           let lbl = ref "" and ms = ref Float.nan and outcome = ref None and contended = ref 0 in
           let wall = ref Float.nan and counts = ref "" in

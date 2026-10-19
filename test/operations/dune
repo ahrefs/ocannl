@@ -6928,7 +6928,11 @@
  ; resolves against are synthetic records.
  (target config_class_fingerprint.actual)
  (package neural_nets_lib)
- (deps ocannl_config)
+ ; gh-ocannl-1332: the lane-mode read it refuses goes through Ir.Schedule.gpu_serial_lanes.
+ (deps
+  ocannl_config
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_PROFILE))
  (action
   (with-stdout-to
    %{target}

@@ -1536,9 +1536,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       match surface with
       | None -> ship ~what:winner_arm ~commit:commit_winner winner
       | Some surface ->
-          let bound_pruning =
-            Utils.get_global_flag ~default:false ~arg_name:"autotune_bound_pruning"
-          in
+          let bound_pruning = Utils.registered_flag ~arg_name:"autotune_bound_pruning" in
           (* gh-ocannl-1110: a flip is abandoned once its best after its first [beam_width] timed
              candidates trails the incumbent's best at the same depth by more than this ratio
              ({!Autotune.flip_abandon_ratio}). Read once, here, so a malformed margin fails the

@@ -72,7 +72,7 @@ let run () =
     p "the compiler command renames expf to the undefined symbol"
       (String.is_substring compiler_command ~substring:("-Dexpf=" ^ undefined_symbol));
   p "strict failure classification is off"
-    (not (Utils.get_global_flag ~default:true ~arg_name:"strict_failure_classification"));
+    (not (Utils.registered_flag ~arg_name:"strict_failure_classification"));
   let x = TDSL.range 16 in
   let%op y = exp (x /. 16.) in
   let comp = Train.forward y in

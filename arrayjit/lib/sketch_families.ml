@@ -687,14 +687,10 @@ let pad_waste_ratio axes =
       else acc *. Float.of_int (blocks_of extent block * block) /. Float.of_int extent)
 
 (* Read per call, like the family's other seeding gates, and through the registered value kind
-   ([Utils.Float_at_least]), which owns the clamp: a value below 1 means 1, a malformed or NaN one
-   the default, 2. So the search trajectory identity, which renders the key through the same
-   canonicalization, gives every spelling of one behaviour one fingerprint. *)
-let pad_waste_max () =
-  let raw = Utils.get_global_arg ~arg_name:"autotune_pad_waste_max" ~default:"2." in
-  match Utils.registered_config_default "autotune_pad_waste_max" with
-  | Some (kind, _) -> Float.of_string (Option.value_exn (Utils.canonical_config_value kind raw))
-  | None -> invalid_arg "Sketch_families.pad_waste_max: autotune_pad_waste_max is not registered"
+   ([Utils.Float_at_least]), which owns the clamp: a value below 1 means 1, and a malformed or NaN
+   one is refused (gh-ocannl-1332). So the search trajectory identity, which renders the key through
+   the same canonicalization, gives every spelling of one behaviour one fingerprint. *)
+let pad_waste_max () = Utils.registered_float_at_least ~arg_name:"autotune_pad_waste_max"
 
 (* Every pad-waste witness starts with this, which is how {!lift_pad_waste} recognizes the policy:
    the exclusion sits at a geometry decision, where the CPU packed menu's footprint economy excludes
@@ -3848,9 +3844,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option) ~is_gpu ~is_cpu
            duplicate would time it twice. Under [autotune_register_tile_rm_twin] the level also
            carries {!Ir.Register_tile.rm_twin}, the two-row twin gh-ocannl-947 gates behind a
            measured win: off by default, since each twin is one more candidate per leaf. *)
-        let rm_twin_seeded =
-          Utils.get_global_flag ~default:false ~arg_name:"autotune_register_tile_rm_twin"
-        in
+        let rm_twin_seeded = Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" in
         let leaf (p : sketch_params) =
           let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
           let n = if p.sk_bn = 0 then site.m_nj else p.sk_bn in

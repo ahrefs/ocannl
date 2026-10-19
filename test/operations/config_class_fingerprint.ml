@@ -13,10 +13,15 @@
    each stated off it renders, canonically spelled; - a default the device resolves ([auto] lane
    modes, the block-size clamp) is compared as resolved
    ([Ir.Schedule.resolve_search_shaping_value]), on synthetic limits on either side of the
-   economics; - a read site whose [~default:] disagrees with the registry is refused; - under a
-   commandline-picked profile (the second invocation in the dune rule), the profile's off-default
-   value renders as a statement of it would, and a statement restoring the built-in default renders
-   nothing. *)
+   economics; - a key the process does not read renders nothing, whatever it is set to
+   (gh-ocannl-1331); - under a commandline-picked profile (the second invocation in the dune rule),
+   the profile's off-default value renders as a statement of it would, and a statement restoring the
+   built-in default renders nothing.
+
+   And the typed getters the registered keys are read through (gh-ocannl-1332): each kind's getter
+   reads its keys, a value its kind does not parse is refused with [Utils.Invalid_config_value]
+   naming the key -- [autotune_rounds=two] and one example per kind that can refuse -- and a plain
+   read of a registered key, or a read through another kind's getter, is refused. *)
 
 open Base
 open Stdio
@@ -49,7 +54,8 @@ let with_stated stated f =
       in
       (took_effect, f ()))
 
-let fingerprint ?resolve () = Utils.config_class_fingerprint ?resolve Utils.Search_shaping
+let fingerprint ?resolve ?reads () =
+  Utils.config_class_fingerprint ?resolve ?reads Utils.Search_shaping
 
 (* Another spelling of the same value under [kind], and a value off it -- derived from the kind, so
    a key registered later is covered with no list to extend here. *)
@@ -70,11 +76,100 @@ let off_default (kind : Utils.config_value_kind) default =
   | Integer -> Int.to_string (Int.of_string default + 1)
   | Float_number -> Float.to_string (Float.of_string default /. 2.)
   (* Above the floor, so the clamp does not fold it back onto another value. *)
-  | Float_at_least { floor; _ } ->
+  | Float_at_least { floor } ->
       Float.to_string (Float.max (floor +. 1.) (Float.of_string default *. 2.))
   | Keyword -> default ^ "-other"
   | Text -> default ^ "elsewhere"
   | Positive_float_or_unset -> "1000."
+
+(* gh-ocannl-1332: the registered keys' only reads are the typed getters, which own the default and
+   refuse what their kind does not parse. *)
+
+(* Reads [key] through its kind's getter, as every read site does; the value is discarded, the point
+   being whether the read is served. *)
+let read_as (kind : Utils.config_value_kind) ~arg_name =
+  match kind with
+  | Flag -> ignore (Utils.registered_flag ~arg_name : bool)
+  | Integer -> ignore (Utils.registered_int ~arg_name : int)
+  | Float_number -> ignore (Utils.registered_float ~arg_name : float)
+  | Keyword ->
+      ignore (Utils.registered_keyword ~arg_name ~expected:"anything" ~parse:Option.some : string)
+  | Text -> ignore (Utils.registered_text ~arg_name : string)
+  | Positive_float_or_unset ->
+      ignore (Utils.registered_positive_float_or_unset ~arg_name : _ option)
+  | Float_at_least _ -> ignore (Utils.registered_float_at_least ~arg_name : float)
+
+(* Text no value of [kind] is spelled as, for the kinds that can refuse one: a keyword's modes are
+   its read site's, and any text is a [Text] value. *)
+let unparsable (kind : Utils.config_value_kind) =
+  match kind with
+  | Flag -> Some "maybe"
+  | Integer -> Some "two"
+  | Float_number | Float_at_least _ -> Some "nan"
+  | Positive_float_or_unset -> Some "fast"
+  | Keyword | Text -> None
+
+let refused_naming key f =
+  match f () with
+  | () -> false
+  | exception Utils.Invalid_config_value { key = named; _ } -> String.equal named key
+
+let typed_getters defaults =
+  p_all ~min:20 "every registered key is read through its kind's getter at its default" defaults
+    ~f:(fun (key, kind, default) ->
+      let took_effect, served =
+        with_stated
+          [ (key, default) ]
+          (fun () -> match read_as kind ~arg_name:key with () -> true | exception _ -> false)
+      in
+      took_effect && served);
+  let took_effect, refused =
+    with_stated
+      [ ("autotune_rounds", "two") ]
+      (fun () ->
+        refused_naming "autotune_rounds" (fun () -> read_as Integer ~arg_name:"autotune_rounds"))
+  in
+  p "autotune_rounds=two is refused, by an error naming the key" (took_effect && refused);
+  (* One key of every kind that can refuse a value, derived from the registry: a kind given to a key
+     later is covered with no list to extend here. *)
+  let examples =
+    List.filter_map defaults ~f:(fun (key, kind, _) ->
+        Option.map (unparsable kind) ~f:(fun spelling -> (key, kind, spelling)))
+    |> List.dedup_and_sort ~compare:(fun (_, a, _) (_, b, _) ->
+        String.compare (Utils.registered_getter_of_kind a) (Utils.registered_getter_of_kind b))
+  in
+  p_all ~min:5 "one key of each kind that can refuse, stated unparsable, is refused naming the key"
+    examples ~f:(fun (key, kind, spelling) ->
+      Option.is_none (Utils.canonical_config_value kind spelling)
+      &&
+      let took_effect, refused =
+        with_stated
+          [ (key, spelling) ]
+          (fun () -> refused_naming key (fun () -> read_as kind ~arg_name:key))
+      in
+      took_effect && refused);
+  (* A keyword's modes are its read site's [~parse]: the lane mode is read where the schedule reads
+     it. *)
+  let took_effect, refused =
+    with_stated
+      [ ("gpu_serial_lanes", "sideways") ]
+      (fun () ->
+        refused_naming "gpu_serial_lanes" (fun () ->
+            ignore (Ir.Schedule.gpu_serial_lanes () : Ir.Schedule.serial_lanes option)))
+  in
+  p "a keyword its read site has no mode for is refused, naming the key" (took_effect && refused);
+  p "a plain read of a registered key is refused, whatever default it passes"
+    (match Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"8" with
+    | _ -> false
+    | exception Invalid_argument _ -> true);
+  p "a read through another kind's getter is refused"
+    (match Utils.registered_flag ~arg_name:"autotune_split_reduce_max_sites" with
+    | _ -> false
+    | exception Invalid_argument _ -> true);
+  p "a getter refuses a key with no registered row"
+    (match Utils.registered_int ~arg_name:"model_default_placements" with
+    | _ -> false
+    | exception Invalid_argument _ -> true)
 
 let without_profile () =
   let registered =
@@ -111,34 +206,39 @@ let without_profile () =
       let took_effect, shape = with_stated [ (key, value) ] fingerprint in
       took_effect && String.equal shape expected);
   (* A clamped kind canonicalizes as its read site reads it (gh-ocannl-740): below the floor is the
-     floor, and an unparsable or NaN value is the fallback -- for [autotune_pad_waste_max], the
-     default, so stating it leaves the identity alone. Derived from the registry, so a key given the
-     kind later is covered too. *)
+     floor. Derived from the registry, so a key given the kind later is covered too. *)
   let clamped =
     List.filter_map defaults ~f:(fun (key, kind, default) ->
         match kind with
-        | Utils.Float_at_least { floor; fallback } ->
-            Some (key, Utils.canonical_config_value kind default, floor, fallback)
+        | Utils.Float_at_least { floor } ->
+            Some (key, Utils.canonical_config_value kind default, floor)
         | _ -> None)
   in
   (* What stating [value] renders: nothing when it canonicalizes onto the default. *)
   let renders key canonical_default value =
     if Option.equal String.equal (Some value) canonical_default then "" else key ^ "=" ^ value ^ ";"
   in
-  p_all "each clamped key stated unparsable or NaN renders as its fallback" clamped
-    ~f:(fun (key, canonical_default, _, fallback) ->
-      List.for_all [ "junk"; "nan" ] ~f:(fun spelling ->
-          let took_effect, shape = with_stated [ (key, spelling) ] fingerprint in
-          took_effect
-          && String.equal shape (renders key canonical_default (Float.to_string fallback))));
   p_all "each clamped key stated below its floor renders as the floor" clamped
-    ~f:(fun (key, canonical_default, floor, _) ->
+    ~f:(fun (key, canonical_default, floor) ->
       let took_effect, shape = with_stated [ (key, Float.to_string (floor /. 2.)) ] fingerprint in
       took_effect && String.equal shape (renders key canonical_default (Float.to_string floor)));
-  (* A value no kind parses has nothing to compare: it renders as stated. *)
+  (* A value no kind parses has nothing to compare: it renders as stated -- NaN too, for a float
+     kind, clamped or not (gh-ocannl-1332: no fallback stands in for it any more). *)
   let took_effect, shape = with_stated [ ("autotune_rounds", "two") ] fingerprint in
   p "an unparsable value renders as stated"
     (took_effect && String.equal shape "autotune_rounds=two;");
+  p_all "each clamped key stated unparsable or NaN renders as stated" clamped ~f:(fun (key, _, _) ->
+      List.for_all [ "junk"; "nan" ] ~f:(fun spelling ->
+          let took_effect, shape = with_stated [ (key, spelling) ] fingerprint in
+          took_effect && String.equal shape (key ^ "=" ^ spelling ^ ";")));
+  (* gh-ocannl-1331: a key the process never reads keys nothing, whatever it is set to. *)
+  let took_effect, shape =
+    with_stated
+      [ ("autotune_rounds", "two"); ("autotune_beam_width", "3") ]
+      (fingerprint ~reads:(fun key -> not (String.equal key "autotune_rounds")))
+  in
+  p "a key the process does not read renders nothing, unparsable or not, beside one it reads"
+    (took_effect && String.equal shape "autotune_beam_width=3;");
   (* The device-resolved defaults, on synthetic limits either side of the lane economics. *)
   let base = Ir.Backend_intf.no_hardware_limits in
   let cheap = { base with lane_scalar_recompute_cheap = true; lane_all_reduce_simdgroups = 2 } in
@@ -181,14 +281,7 @@ let without_profile () =
        with_stated [ ("gpu_lane_preamble_reduction", " Refused") ] (fingerprint ~resolve)
      in
      took_effect && String.equal shape "gpu_lane_preamble_reduction=refused;");
-  (* The read sites' defaults are held to the registry where both meet: the read itself. *)
-  p "a read whose default means the registered value is served, in any spelling"
-    (String.equal "08"
-       (Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"08"));
-  p "a read whose default means another value is refused"
-    (match Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"9" with
-    | _ -> false
-    | exception Invalid_argument _ -> true)
+  typed_getters defaults
 
 (* Run by the dune rule with --ocannl_profile=performance --ocannl_autotune_rounds=2. The payload
    sets autotune_search=true (the default), autotune_beam_width=4 and autotune_rounds=4. *)

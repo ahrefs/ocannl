@@ -291,6 +291,12 @@ let exempt_zero_reference_exports =
     "Utils.log_config_sourcing_resolution";
     "Utils.suppress_welcome_message_resolution";
     "Utils.profile_selection";
+    (* Not pre-existing (gh-ocannl-1332): the lookup the typed getters share and the unchecked one
+       beneath [Utils.get_global_arg_with_source]. Utils has no .mli; every read of a registered key
+       goes through a getter, and of any other key through [get_global_arg], so nothing outside
+       should call either. *)
+    "Utils.registered_canonical";
+    "Utils.unchecked_global_arg_with_source";
     (* Not pre-existing. The C stub behind [Utils.c_stderr_detached] (gh-ocannl-1031): the module
        calls it once at its own initialization, and what the rest of the tree reads is the resulting
        boolean, not the stub. Publishing the stub is still right -- a caller that has taken fd 2

@@ -61,9 +61,7 @@ let count_controls rows reports =
          not (row_count_matches_timing [ row; row; row ] report)))
 
 let () =
-  let file =
-    String.strip (Utils.get_global_arg ~arg_name:"autotune_calibration_file" ~default:"")
-  in
+  let file = Utils.registered_text ~arg_name:"autotune_calibration_file" in
   assert (not (String.is_empty file));
   if Stdlib.Sys.file_exists file then Stdlib.Sys.remove file;
   let ctx = Context.auto () in

@@ -35,9 +35,7 @@ let dim = 64
 let n = dim * dim
 
 let () =
-  let file =
-    String.strip (Utils.get_global_arg ~arg_name:"autotune_calibration_file" ~default:"")
-  in
+  let file = Utils.registered_text ~arg_name:"autotune_calibration_file" in
   assert (not (String.is_empty file));
   if Stdlib.Sys.file_exists file then Stdlib.Sys.remove file;
   let av = Array.init n ~f:(fun i -> Float.of_int (i % 13) *. 0.5) in

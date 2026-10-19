@@ -44,9 +44,7 @@ let () =
                  --ocannl-backend=..., --backend=..., ...) is its argument, not ours; anything else
                  is a probable typo. *)
               if not (Utils.cmdline_arg_is_config_key a) then usage ()));
-  let file =
-    String.strip (Utils.get_global_arg ~arg_name:"autotune_calibration_file" ~default:"")
-  in
+  let file = Utils.registered_text ~arg_name:"autotune_calibration_file" in
   if String.is_empty file then (
     Stdio.eprintf
       "calibrate_bandwidth: config autotune_calibration_file is not set — pass \

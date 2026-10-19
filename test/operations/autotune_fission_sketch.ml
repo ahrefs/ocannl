@@ -280,13 +280,9 @@ let () =
          must invalidate its timing too. Keep the real legacy spelling as the control. *)
       let stale_fingerprint =
         if Sched.backend_is_gpu (Context.backend_name bctx) then
-          let bs =
-            String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_block_size" ~default:"256")
-          in
-          let mp =
-            String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
-          in
-          Printf.sprintf "gpu:fission=%b:block_size=%s:min_parallel=%s"
+          let bs = Utils.registered_int ~arg_name:"gpu_schedule_block_size" in
+          let mp = Utils.registered_int ~arg_name:"gpu_schedule_min_parallel" in
+          Printf.sprintf "gpu:fission=%b:block_size=%d:min_parallel=%d"
             (Sched.default_pipeline_fissions ())
             bs mp
         else "a-different-config"
