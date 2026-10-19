@@ -245,6 +245,7 @@ type report = {
   split_reduce_timed : int;
   split_reduce_composite_eligible : bool;
   split_reduce_composite_timed : bool;
+  split_reduce_backdrop_fallbacks : int;
   mma_candidates : int;
       (** Candidates whose label promises a tensorized pipeline ([spec_expects_mma]) that the search
           put through candidate compile: whole-routine and per-fission-segment seeds, the
@@ -329,6 +330,7 @@ let no_search_report ~timing =
     split_reduce_timed = 0;
     split_reduce_composite_eligible = false;
     split_reduce_composite_timed = false;
+    split_reduce_backdrop_fallbacks = 0;
     mma_candidates = 0;
     fiss_mma_candidates = 0;
     mma_timed = 0;
@@ -5885,6 +5887,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     split_reduce_timed = 0;
                     split_reduce_composite_eligible = false;
                     split_reduce_composite_timed = false;
+                    split_reduce_backdrop_fallbacks = 0;
                     mma_candidates = 0;
                     fiss_mma_candidates = 0;
                     mma_timed = 0;
@@ -6234,6 +6237,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         (* gh-ocannl-1138: the staffed singles' windows, and the staffed singles retried bare. *)
         and n_staffed_timed = ref 0
         and n_backdrop_fallbacks = ref 0
+        and n_sr_backdrop_fallbacks = ref 0
         and n_sr_timed = ref 0
         and sr_composite_eligible = ref false
         and sr_composite_timed = ref false in
@@ -6387,6 +6391,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             split_reduce_timed = !n_sr_timed;
             split_reduce_composite_eligible = !sr_composite_eligible;
             split_reduce_composite_timed = !sr_composite_timed;
+            split_reduce_backdrop_fallbacks = !n_sr_backdrop_fallbacks;
             mma_candidates = !n_mma_proposed;
             fiss_mma_candidates = !n_fiss_mma_proposed;
             mma_timed = !n_mma_timed;
@@ -7103,7 +7108,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              ran against (for the playoff), and the sweep of one key, which returns that key's
              results in its own backdrop. [single key staff choice] is the candidate; [describe]
              names a choice for the log. Keys compare by [equal_key] and choices structurally. *)
-          let sweeper ~equal_key ~keys ~single ~describe =
+          let sweeper ~equal_key ~keys ~single ~describe ~fallbacks =
             let running = ref [] and running_ms = ref None and swept_against = ref [] in
             let without key choices =
               List.filter choices ~f:(fun (k, _) -> not (equal_key k key))
@@ -7148,7 +7153,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                                 staff_admitted := true;
                                 Some (p, ms)
                             | `Declined when (not (List.is_empty staff)) && not !staff_admitted ->
-                                Int.incr n_backdrop_fallbacks;
+                                Int.incr fallbacks;
                                 logf "%s: refused with its staff; retrying it bare"
                                   (spec_label (single key staff p));
                                 (match try_spec (single key [] p) with
@@ -7214,7 +7219,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              order, after the scored ones. *)
           let sketch_sweeper ~plan ~fine ~keys =
             let running, running_ms, swept_against, start, sweep_key =
-              sweeper ~equal_key:equal_seg_key ~keys
+              sweeper ~equal_key:equal_seg_key ~keys ~fallbacks:n_backdrop_fallbacks
                 ~single:(fun key staff p ->
                   Fiss (F_sketch { plan; entries = [ (key, p) ]; staff; fine }))
                 ~describe:(fun key p ->
@@ -7291,7 +7296,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              on the pristine lowering, would match the search's only by target and extents. *)
           let same_site a b = Idx.equal_symbol a.sr_axis b.sr_axis in
           let sr_running, sr_running_ms, _, _, sr_sweep_key =
-            sweeper ~equal_key:same_site ~keys:sr_sites
+            sweeper ~equal_key:same_site ~keys:sr_sites ~fallbacks:n_sr_backdrop_fallbacks
               ~single:(fun s staff b -> Fiss (F_split { sites = [ (s, b) ]; staff }))
               ~describe:(fun s b -> "split site " ^ split_site_label (s, b))
           in
@@ -7754,6 +7759,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               split_reduce_timed = !n_sr_timed;
               split_reduce_composite_eligible = !sr_composite_eligible;
               split_reduce_composite_timed = !sr_composite_timed;
+              split_reduce_backdrop_fallbacks = !n_sr_backdrop_fallbacks;
               mma_candidates = !n_mma_proposed;
               fiss_mma_candidates = !n_fiss_mma_proposed;
               mma_timed = !n_mma_timed;

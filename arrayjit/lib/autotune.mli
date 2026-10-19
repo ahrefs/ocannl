@@ -1080,6 +1080,9 @@ type report = {
           composite was ineligible, on cache replay, and on search-disabled calls. With staffed
           singles (gh-ocannl-1138) the composite is the running split composite, and its window the
           last accepted staffed split single's. *)
+  split_reduce_backdrop_fallbacks : int;
+      (** The split-reduce counterpart of [fiss_sketch_backdrop_fallbacks] (gh-ocannl-1138): staffed
+          split singles refused and retried with no other site split, under the same rule. *)
   mma_candidates : int;
       (** Candidates whose label promises a tensorized ([Schedule.Tensorize]) pipeline that the
           search put through candidate compile: whole-routine and per-fission-segment sketch seeds,

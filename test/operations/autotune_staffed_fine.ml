@@ -25,6 +25,9 @@ open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let is_gpu = Ir.Schedule.backend_is_gpu backend_name
+
+(* The backends with a seeded untuned plan, hence a seeded start: CUDA and HIP, not Metal. *)
+let seeds = Autotune.seeded_default_backend backend_name
 let staffed_key = "autotune_staffed_singles"
 
 (* A per-segment label's entries ([params @key]), its focus and its staff apart. *)
@@ -165,15 +168,15 @@ let () =
         "staffed fine (not part of the golden): %d coarse and %d fine singles, crown %s %.2f ms\n%!"
         (List.length coarse_singles) (List.length fine_singles) r.Autotune.best_label
         r.Autotune.best_ms);
-  (* The seeded plan's decision rule picks a sketch for the GEMMs, whose reductions reach
-     [gpu_default_sketch_min_reduction]: the coarse composite starts from it, and the first coarse
-     window carries it. *)
+  (* On CUDA and HIP the seeded plan's decision rule picks a sketch for the GEMMs, whose reductions
+     reach [gpu_default_sketch_min_reduction]: the coarse composite starts from it, and the first
+     coarse window carries it. Metal has no seeded plan, so no start. *)
   let first_window =
     Option.value_map (List.hd coarse_singles) ~default:[] ~f:(fun l ->
         let f, s = parts l in
         f @ s)
   in
-  gated_all ~when_:is_gpu ~on:backend_name
+  gated_all ~when_:seeds ~on:backend_name
     "fine: the coarse composite starts from the seeded rule's choices, and its first window \
      carries them"
     !start ~f:(fun e -> List.mem first_window e ~equal:String.equal);
