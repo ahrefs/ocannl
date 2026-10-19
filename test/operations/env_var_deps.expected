@@ -73,6 +73,8 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   log_config_sourcing
   log_level
   memory_budget
+  model_cache_bandwidth
+  model_cache_capacity
   model_default_schedule
   model_peak_flops
   model_peak_memory_bandwidth

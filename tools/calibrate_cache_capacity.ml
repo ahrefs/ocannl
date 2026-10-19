@@ -52,6 +52,9 @@ let () =
     (Context.backend_name ctx) (opt_int capacity) (opt_int resident);
   Stdio.printf "# %8s %14s %14s %12s %10s %12s %12s %10s %10s\n" "k" "working_set" "requested"
     "distinct" "ms" "req_GB/s" "dist_GB/s" "rank_ms" "bound_ms";
+  Option.iter (List.hd points) ~f:(fun p ->
+      Stdio.printf "# lowered loop order of the contraction (outermost first): [%s]\n"
+        (String.concat ~sep:"," (List.map p.Cal.wp_loops ~f:Int.to_string)));
   List.iter points ~f:(fun p ->
       let gbps bytes = Float.of_int bytes /. (p.Cal.wp_ms *. 1e-3) /. 1e9 in
       let ms = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.4f") in

@@ -9,7 +9,9 @@
    batch 256). BENCH_TUNE=1 times the tuned schedule (Autotune.tune, no disk cache) instead of the
    untuned default, which goes through Bench_harness.compile_default (Autotune.untuned_compile) and
    so honours the model_default_schedule and gpu_default_sketch_min_reduction settings.
-   BENCH_REPEATS is the number of timed runs, min taken (default 20).
+   BENCH_REPEATS is the number of timed runs, min taken (default 20). BENCH_WGRAD_REQUIRE_SEEDED=1
+   compiles the untuned arm through Autotune.seeded_default and exits 1, timing nothing, when it
+   seeds no segment or falls back to the default.
 
    Prints one [wgrad:] line -- the arm, the dims, the w.grad nest's lowered loop extents, the
    min-of-repeats synced time of the whole routine, and for a tuned arm the search's crowned label
@@ -42,6 +44,9 @@ let () =
     | _ -> failwith "BENCH_WGRAD_DIMS must be b,s,o,i"
   in
   let tune = Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_TUNE") (Some "1") in
+  let require_seeded =
+    Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_WGRAD_REQUIRE_SEEDED") (Some "1")
+  in
   let repeats =
     Option.value_map (Stdlib.Sys.getenv_opt "BENCH_REPEATS") ~default:20 ~f:Int.of_string
   in
@@ -141,6 +146,24 @@ let () =
       Autotune.tune ~search:true ~cache_dir:""
         ~report:(fun r -> report := Some r)
         ctx comp Ir.Indexing.Empty
+    else if require_seeded then (
+      (* The seeded arm of a calibration (benchmarks/gh1253_cells.sh): compile through the seeded
+         default itself and refuse to time a fallback under the seeded name -- the seeding is
+         advisory, and a declined or recompiled plan is the default's. *)
+      let choice = ref None in
+      let result =
+        Autotune.seeded_default ~report:(fun c -> choice := Some c) ctx comp Ir.Indexing.Empty
+      in
+      (match !choice with
+      | Some c when (not (List.is_empty c.Autotune.sd_seeded)) && not c.Autotune.sd_fell_back ->
+          Stdio.printf "wgrad: seeded %d segment(s)\n%!" (List.length c.Autotune.sd_seeded)
+      | _ ->
+          Stdio.eprintf
+            "wgrad: BENCH_WGRAD_REQUIRE_SEEDED=1 but the seeded default seeded nothing or fell \
+             back to the default; refusing to time it as the seeded plan\n\
+             %!";
+          Stdlib.exit 1);
+      result)
     else H.compile_default ctx comp Ir.Indexing.Empty
   in
   let compile_s = Unix.gettimeofday () -. t0 in

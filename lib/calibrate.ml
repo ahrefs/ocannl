@@ -97,6 +97,9 @@ let stream ?(elems = 1 lsl 26) ?repeats ctx =
 
 type ws_point = {
   wp_k : int;  (** The contraction's reduction extent. *)
+  wp_loops : int list;
+      (** The lowered loop extents of the nest writing the output, outermost first: [[k; m; n]] is
+          backprop's weight-gradient order. *)
   wp_working_set : int;
       (** The contraction kernel's working set under the default plan, in bytes
           ({!Ir.Cost_model.reuse_traffic}). *)
@@ -129,12 +132,29 @@ let working_set ?(m = 256) ?(n = 1024)
   in
   List.map ks ~f:(fun k ->
       let tag = Printf.sprintf "ws_k%d" k in
+      (* A forward-ordered contraction: its output's loops outermost, the reduction innermost
+         ([wp_loops] records it), where backprop lowers a weight gradient with the reduction loops
+         outside. The sweep is self-consistent either way -- the bytes it charges are read off the
+         very kernel it times -- and the fitted constants predicted the backprop-ordered
+         [bench_wgrad] kernel within 13% on both HIP boxes (ahrefs/ocannl#1253). *)
       let dy = NTDSL.ndarray (cyc (k * m) 7 0.25) ~label:[ tag ^ "_dy" ] ~output_dims:[ k; m ] () in
       let x = NTDSL.ndarray (cyc (k * n) 5 0.125) ~label:[ tag ^ "_x" ] ~output_dims:[ k; n ] () in
       let%op dw = dy +* "ko; ki => oi" x in
       Train.set_materialized dw.Tensor.value;
-      let segments = ref [] in
+      let segments = ref [] and loops = ref [] in
       let lowered_transform opt =
+        (let rec writes = function
+           | Ir.Low_level.For_loop { body; _ } | Ir.Low_level.If { body; _ } -> writes body
+           | Ir.Low_level.Seq (a, b) -> writes a || writes b
+           | Ir.Low_level.Set { tn; _ } -> Ir.Tnode.equal tn dw.Tensor.value
+           | _ -> false
+         in
+         let rec nest acc = function
+           | Ir.Low_level.For_loop { to_; body; _ } -> nest ((to_ + 1) :: acc) body
+           | _ -> List.rev acc
+         in
+         List.iter (Ir.Low_level.flat_lines [ opt.Ir.Low_level.llc ]) ~f:(fun stmt ->
+             if List.is_empty !loops && writes stmt then loops := nest [] stmt));
         let segs =
           Ir.Schedule.maybe_default_schedules ~backend_name ~limits ~static_indices:[] opt
         in
@@ -177,6 +197,7 @@ let working_set ?(m = 256) ?(n = 1024)
           done;
           {
             wp_k = k;
+            wp_loops = !loops;
             wp_working_set = r.Ir.Cost_model.ru_working_set_bytes;
             wp_requested = requested r;
             wp_distinct = distinct;

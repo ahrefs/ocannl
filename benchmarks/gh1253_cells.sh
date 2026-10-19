@@ -23,10 +23,12 @@
 #                      model_cache_bandwidth (the below-capacity plateau), passed to the wgrad
 #                      cells.
 #   wgrad_b<B>_untiled bench_wgrad at batch B in {8, 256} (gpt2_mini_train's l*_ffn_w2 gradient)
-#                      with seeding and the reduction sink off -- the plain default plan, whose
+#                      with seeding, the split and the reduction sink off -- the plain default
+#                      plan, whose
 #                      `wgrad-model: plan=default` rows predict it.
 #   wgrad_b<B>_seeded  the same with the seeded default at threshold 32 -- the seeded plan, whose
-#                      `wgrad-model: plan=seeded` rows predict it.
+#                      `wgrad-model: plan=seeded` rows predict it; the cell fails rather than
+#                      time a plan that seeded nothing or fell back (BENCH_WGRAD_REQUIRE_SEEDED).
 # Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
 # environment cannot swap the measured plans for tuned or model-picked ones.
 # The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
@@ -105,9 +107,10 @@ for batch in 8 256; do
   dims="$batch,128,256,1024"
   cell "wgrad_b${batch}_untiled" env BENCH_TUNE=0 BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
     "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
-    --ocannl_gpu_default_sketch_min_reduction=0 \
+    --ocannl_gpu_default_sketch_min_reduction=0 --ocannl_gpu_default_split_reduce_min_serial=0 \
     --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
-  cell "wgrad_b${batch}_seeded" env BENCH_TUNE=0 BENCH_WGRAD_DIMS="$dims" BENCH_REPEATS=20 "$wgrad" \
+  cell "wgrad_b${batch}_seeded" env BENCH_TUNE=0 BENCH_WGRAD_REQUIRE_SEEDED=1 BENCH_WGRAD_DIMS="$dims" \
+    BENCH_REPEATS=20 "$wgrad" \
     "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
     --ocannl_gpu_default_sketch_min_reduction=32 \
     ${model[@]+"${model[@]}"}

@@ -9131,6 +9131,10 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_MODEL_CACHE_CAPACITY)
+  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
  (modules capacity_calibration)
  (libraries base ocannl arrayjit.verdict))

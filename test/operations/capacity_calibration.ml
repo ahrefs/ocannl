@@ -15,6 +15,7 @@ let point ~ws ~rate =
   (* [rate] bytes per millisecond: a 1 ms point requesting [rate] bytes. *)
   {
     Cal.wp_k = 1;
+    wp_loops = [];
     wp_working_set = ws;
     wp_requested = rate;
     wp_distinct = 1;
