@@ -2594,8 +2594,8 @@ val install_timing_call_observer : (timing_call -> unit) -> unit
     CALLING DOMAIN, for the rest of the domain's life, after the observers already installed there.
     Trace-only (gh-ocannl-1263): observing changes nothing measured or ranked, and a search running
     in another domain neither reaches nor disturbs it — the treatment [autotune_log] got for
-    concurrent searches (see {!with_streams}). A newly spawned domain starts with none. How the
-    benchmarks' [BENCH_TIMING_TRACE] is installed. No configuration selects it. *)
+    searches in different domains (see {!with_streams}). A newly spawned domain starts with none.
+    How the benchmarks' [BENCH_TIMING_TRACE] is installed. No configuration selects it. *)
 
 val with_timing_call_observer : (timing_call -> unit) -> (unit -> 'a) -> 'a
 (** [with_timing_call_observer f body] runs [body] with [f] added as by
@@ -2732,12 +2732,12 @@ val retry_contended_window_for_backend : string -> bool
 module Seam : sig
   type 'a t
   (** A test seam of the search: one value PER DOMAIN (the treatment the timing-call observers got,
-      gh-ocannl-1263). A domain's searches call the value set in that domain; a search running in
-      another domain neither reaches nor disturbs it, so concurrent searches in different domains
-      can each be observed and injected into on their own. A newly spawned domain starts with the
-      seam's default. Unlike {!install_timing_call_observer}, setting a seam REPLACES its value
-      rather than chaining onto it: a caller that wants the enclosing value too reads it with {!get}
-      first and calls it. *)
+      gh-ocannl-1263). A domain's searches call the value set in that domain; a search in another
+      domain neither reaches nor disturbs it, so searches in different domains -- which take turns,
+      {!Concurrent_search} -- can each be observed and injected into on their own. A newly spawned
+      domain starts with the seam's default. Unlike {!install_timing_call_observer}, setting a seam
+      REPLACES its value rather than chaining onto it: a caller that wants the enclosing value too
+      reads it with {!get} first and calls it. *)
 
   val get : 'a t -> 'a
   (** The calling domain's current value. *)
@@ -2813,6 +2813,26 @@ val resolve_cache_dir : ?cache_dir:string -> search:bool -> unit -> string
     (gh-ocannl-559). {!tune} resolves its directory through this, and so does
     [Train.tune_placements] for the placement-decision store it keeps in the same directory
     (gh-ocannl-786), so the two open the same directory under the same rule. *)
+
+exception Concurrent_search of { holder : int; caller : int }
+(** Raised by {!tune} and [Train.tune_placements] when another domain's search is running
+    (gh-ocannl-1352): searches run one at a time per process. [holder] and [caller] are the two
+    domains' ids ([Domain.self ()]). The compile path a search drives keeps process-wide state that
+    was never made safe for two domains at once (tensor-node registries and uid counters, the
+    lowering's analysis cache, a device's constant buffer cache, Base hash tables throughout), so a
+    second search is refused before it does anything -- before it resolves a setting, compiles,
+    emits a report or calls a seam -- rather than left to race the first. Searches in different
+    domains taking TURNS are supported, and what the per-domain {!Seam}s, streams and observers are
+    for. *)
+
+val exclusive_search : (unit -> 'a) -> 'a
+(** [exclusive_search f] runs [f] as this process's one search: raises {!Concurrent_search} when
+    another domain is inside [exclusive_search], and otherwise holds the search for [f]'s duration,
+    releasing it on return or exception. Nested calls in the holding domain proceed, so a search
+    started inside a search of the same domain (the arms of [Train.tune_placements], a [?report]
+    callback that tunes) is not refused. {!tune} runs inside it; a caller wrapping several searches
+    that must not interleave with another domain's (as [Train.tune_placements] does) takes it for
+    the whole span. *)
 
 val tune :
   ?name:string ->

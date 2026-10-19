@@ -81,9 +81,8 @@ type timing_result = { ms : float; contended : bool; unbatched : bool; samples :
 (* A diagnostic stream's switch: a config flag read once per process, which one {!tune} or
    [Train.tune_placements] call can override for its own duration through its argument. The override
    is domain-local, like the phase a timing decision carries (gh-ocannl-1199): a per-call argument
-   must not switch the stream of a search running concurrently in another domain. A call that passes
-   nothing inherits the enclosing call's override, so a [tune_placements] argument reaches the
-   searches it runs. *)
+   must not switch the stream of a search in another domain. A call that passes nothing inherits the
+   enclosing call's override, so a [tune_placements] argument reaches the searches it runs. *)
 type stream_switch = { setting : bool Lazy.t; override : bool option Stdlib.Domain.DLS.key }
 
 let stream_switch setting = { setting; override = Stdlib.Domain.DLS.new_key (fun () -> None) }
@@ -982,6 +981,46 @@ module Seam = struct
     Exn.protect ~f:body ~finally:(fun () -> set seam previous)
 end
 
+(* gh-ocannl-1352: one search at a time, process-wide. The compile path a search drives was never
+   made safe for two domains at once -- [Tnode]'s uid counter, [Low_level]'s analysis cache and
+   pricing counter, [Context]'s print proxies, a device's constant buffer cache, Base hash tables
+   throughout (the codegen census counters alone are per domain) -- so a second domain's search is
+   refused, loudly and typed, rather than left to race them. The holder is a domain, and the nesting
+   depth is per domain, so a search nested in its own domain's search ([Train.tune_placements]'s
+   arms, a [?report] callback that tunes) proceeds, while one from any other domain is refused for
+   as long as the holder's outermost search runs. *)
+exception Concurrent_search of { holder : int; caller : int }
+
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Concurrent_search { holder; caller } ->
+        Some
+          (Printf.sprintf
+             "Autotune.Concurrent_search: domain %d started a search while domain %d's is running; \
+              searches run one at a time (gh-ocannl-1352)"
+             caller holder)
+    | _ -> None)
+
+let search_holder : int option Stdlib.Atomic.t = Stdlib.Atomic.make None
+let search_depth : int Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> 0)
+
+let exclusive_search f =
+  let depth = Stdlib.Domain.DLS.get search_depth in
+  (if depth = 0 then
+     let self = (Stdlib.Domain.self () :> int) in
+     let rec acquire () =
+       match Stdlib.Atomic.get search_holder with
+       | Some holder -> raise (Concurrent_search { holder; caller = self })
+       | None ->
+           (* [None] is an immediate, so the physical comparison is the value's. *)
+           if not (Stdlib.Atomic.compare_and_set search_holder None (Some self)) then acquire ()
+     in
+     acquire ());
+  Stdlib.Domain.DLS.set search_depth (depth + 1);
+  Exn.protect ~f ~finally:(fun () ->
+      Stdlib.Domain.DLS.set search_depth depth;
+      if depth = 0 then Stdlib.Atomic.set search_holder None)
+
 (* Sibling fault-injection seam to [on_candidate_attempt], at a timing run's pre-dispatch validation
    rather than at a candidate's compile (gh-ocannl-564). Default no-op, no config key selects it.
    Needed because the causes this phase contains — an unsatisfied dependency, an out-of-range
@@ -1119,7 +1158,7 @@ type timing_call = {
 }
 
 (* Trace-only observation of every timing call, per domain (gh-ocannl-1263) -- the treatment
-   [autotune_log] got for concurrent searches: a search running in another domain neither reaches
+   [autotune_log] got for searches in different domains: a search in another domain neither reaches
    nor disturbs this domain's observers. Observers compose, each installation calling the enclosing
    observer first. Observing changes nothing a search measures or ranks. Default a no-op; no
    configuration selects it. A search's own accounting goes through [time_routine]'s per-call
@@ -8405,6 +8444,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
 let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
     ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
     bindings =
+  exclusive_search @@ fun () ->
   with_streams ?log ?progress (fun () ->
       tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
         ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp
