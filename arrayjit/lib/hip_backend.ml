@@ -736,11 +736,13 @@ end = struct
        reaches this hook even where [hardware_limits.mma] is [None], so the capability check cannot
        live in [hardware_limits] alone. Verified on gfx1151 (Radeon 8060S, RDNA3.5) under hiprtc via
        schedule_mma_matmul: the f16 -> f16 combination compiles and executes and matches the serial
-       twin bitwise; the bf16 and f16 -> f32 combinations take the same rocWMMA template path,
-       differing only in fragment element type. rocWMMA (header-only) is cloned under
-       %LOCALAPPDATA%/rocwmma since it is not in the ROCm 7.1 Windows SDK. [hip_to_code] injects the
-       header and -std=c++17 only when a kernel actually uses it, so non-tensor-core kernels are
-       unaffected and do not require rocWMMA to be present. *)
+       twin bitwise (on same-sign products only: gfx11's WMMA instruction itself leaves a residue of
+       about 2^-24 where products cancel, so a signed exact-zero cell comes back as a subnormal,
+       gh-ocannl-1420, [tools/hip_wmma_sign_probe.hip]); the bf16 and f16 -> f32 combinations take
+       the same rocWMMA template path, differing only in fragment element type. rocWMMA
+       (header-only) is cloned under %LOCALAPPDATA%/rocwmma since it is not in the ROCm 7.1 Windows
+       SDK. [hip_to_code] injects the header and -std=c++17 only when a kernel actually uses it, so
+       non-tensor-core kernels are unaffected and do not require rocWMMA to be present. *)
     let mma_syntax =
       Some
         (fun ~d_prec
