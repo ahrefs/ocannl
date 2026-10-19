@@ -94,13 +94,15 @@ let run compile =
   Context.sync ctx;
   (Context.get_values ctx wgrad, Context.get_values ctx bgrad)
 
-let seeded ~min_reduction =
+let seeded_gated seed_gate =
   let report = ref None in
   let values =
     run (fun ctx comp bindings ->
-        Autotune.seeded_default ~min_reduction ~report:(fun r -> report := Some r) ctx comp bindings)
+        Autotune.seeded_default ~seed_gate ~report:(fun r -> report := Some r) ctx comp bindings)
   in
   (values, Option.value_exn ~here:[%here] !report)
+
+let seeded ~min_reduction = seeded_gated (Autotune.Min_reduction min_reduction)
 
 let () =
   let w_default, b_default = run Context.compile in
@@ -135,4 +137,67 @@ let () =
     (List.is_empty r_high.sd_seeded && r_high.sd_refined = 0);
   p_all2 "that routine computes the default pipeline's weight gradient" w_high w_default ~f:bitwise;
   let _, r_off = seeded ~min_reduction:0 in
-  p "a threshold of 0 disables the seeding" (List.is_empty r_off.sd_seeded)
+  p "a threshold of 0 disables the seeding" (List.is_empty r_off.sd_seeded);
+  (* gh-ocannl-1253, the [auto] gate: seed where the ranking score puts the sketch below the preset.
+     With a capacity every working set exceeds, the charge is on everywhere, and the gate must seed
+     exactly what threshold 32 seeds here (both matmul sites, refinement included); with a capacity
+     none reaches, the scores are distinct-cell rooflines and it must seed less. *)
+  let census r =
+    List.map r.Autotune.sd_seeded ~f:(fun (at, p) -> (at, Autotune.sketch_params_label p))
+  in
+  let _, r32 = seeded ~min_reduction:32 in
+  let (w_auto, b_auto), r_auto =
+    seeded_gated (Autotune.Ranked { capacity = Some 0; cache_rate = None })
+  in
+  let _, r_auto_cached =
+    seeded_gated (Autotune.Ranked { capacity = Some Int.max_value; cache_rate = None })
+  in
+  List.iter (census r_auto) ~f:(fun (at, label) ->
+      Stdio.eprintf "auto seeded: unit %d %s (not part of the golden)\n" at label);
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP, past capacity the auto gate seeds the census threshold 32 seeds"
+    ((not (List.is_empty (census r32)))
+    && List.equal (fun (a, l) (b, m) -> a = b && String.equal l m) (census r_auto) (census r32));
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP, below capacity the auto gate seeds fewer segments than threshold 32"
+    (List.length r_auto_cached.sd_seeded < List.length r32.sd_seeded);
+  p_all2 "the auto-gated weight gradient is bitwise the default pipeline's" w_auto w_default
+    ~f:bitwise;
+  p_all2 "the auto-gated bias gradient is bitwise the default pipeline's" b_auto b_default
+    ~f:bitwise
+
+(* gh-ocannl-1253: the analytic model starts from the seeded plan. On CUDA/HIP [model_default]'s
+   incumbent is the seeded untuned plan under the configured gate ([auto] unless the test config
+   says otherwise), and its sketch candidates are the seeding's numerics-preserving forms, so its
+   pick -- whichever it is -- computes both gradients bitwise as the default pipeline does, on the
+   same order-sensitive inputs. Elsewhere the model starts from the default pipeline, and its pick
+   may round differently (the C backends' packed mma sketches), so only the report is checked. *)
+let () =
+  let report = ref None in
+  let w_model, b_model =
+    run (fun ctx comp bindings ->
+        Autotune.model_default ~report:(fun r -> report := Some r) ctx comp bindings)
+  in
+  let w_default, b_default = run Context.compile in
+  let r = Option.value_exn ~here:[%here] !report in
+  Stdio.eprintf
+    "model_default picked: %s, %d candidates not numerics-preserving (not part of the golden)\n"
+    r.Autotune.mc_label r.Autotune.mc_excluded;
+  p "the model reports a pick" (not (String.is_empty r.Autotune.mc_label));
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model starts from the seeded plan: its pick is the seeded plan or beats it, \
+     never the plain default pipeline"
+    (not (String.equal r.Autotune.mc_label "default"));
+  Verdict.gated ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model's pick is no tensor-core or conv form"
+    (not
+       (String.is_substring r.Autotune.mc_label ~substring:"mma-"
+       || String.is_substring r.Autotune.mc_label ~substring:"conv-"));
+  Verdict.gated_all ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model's weight gradient is bitwise the default pipeline's"
+    (List.zip_exn (Array.to_list w_model) (Array.to_list w_default))
+    ~f:(fun (m, d) -> bitwise m d);
+  Verdict.gated_all ~when_:seeds_here ~on:backend_name
+    "on CUDA/HIP the model's bias gradient is bitwise the default pipeline's"
+    (List.zip_exn (Array.to_list b_model) (Array.to_list b_default))
+    ~f:(fun (m, d) -> bitwise m d)

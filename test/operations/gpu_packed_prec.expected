@@ -1,0 +1,74 @@
+half mul: the Serial twin is within the precision's rounding of the f64 reference: true
+half mul: the Vectorized loop equals its Serial twin bitwise: true
+half mul: the Serial twin renders no pack: true
+half mul: the Vectorized loop loads and stores whole half8_t packs: true
+bf16 mul: the Serial twin is within the precision's rounding of the f64 reference: true
+bf16 mul: the Vectorized loop equals its Serial twin bitwise: true
+bf16 mul: the Serial twin renders no pack: true
+bf16 mul: the Vectorized loop loads and stores whole bfloat16x8_t packs: true
+half fma: the Serial twin is within the precision's rounding of the f64 reference: true
+half fma: the Vectorized loop equals its Serial twin bitwise: true
+half fma: the Serial twin renders no pack: true
+half fma: the Vectorized loop loads and stores whole half8_t packs: true
+bf16 fma: the Serial twin is within the precision's rounding of the f64 reference: true
+bf16 fma: the Vectorized loop equals its Serial twin bitwise: true
+bf16 fma: the Serial twin renders no pack: true
+bf16 fma: the Vectorized loop loads and stores whole bfloat16x8_t packs: true
+f32 mul: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 mul: the Vectorized loop equals its Serial twin bitwise: true
+f32 mul: the Serial twin renders no pack: true
+f32 mul: the Vectorized loop loads and stores whole float4_t packs: true
+f32 exp: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 exp: the Vectorized loop equals its Serial twin bitwise: true
+f32 exp: the Serial twin renders no pack: true
+f32 exp: the Vectorized loop loads and stores whole float4_t packs: true
+half exp: the Serial twin is within the precision's rounding of the f64 reference: true
+half exp: the Vectorized loop equals its Serial twin bitwise: true
+half exp: the Serial twin renders no pack: true
+half exp: the Vectorized loop loads and stores whole half8_t packs: true
+every exp call in a packed half loop on Metal is the f32 builtin narrowed once: true
+f32 max: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 max: the Vectorized loop equals its Serial twin bitwise: true
+f32 max: the Serial twin renders no pack: true
+f32 max: the Vectorized loop loads and stores whole float4_t packs: true
+half max: the Serial twin is within the precision's rounding of the f64 reference: true
+half max: the Vectorized loop equals its Serial twin bitwise: true
+half max: the Serial twin renders no pack: true
+half max: the Vectorized loop loads and stores whole half8_t packs: true
+f32 pow: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 pow: the Vectorized loop equals its Serial twin bitwise: true
+f32 pow: the Serial twin renders no pack: true
+f32 pow: the Vectorized loop loads and stores whole float4_t packs: true
+half pow: the Serial twin is within the precision's rounding of the f64 reference: true
+half pow: the Vectorized loop equals its Serial twin bitwise: true
+half pow: the Serial twin renders no pack: true
+half pow: the Vectorized loop loads and stores whole half8_t packs: true
+f32 powi: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 powi: the Vectorized loop equals its Serial twin bitwise: true
+f32 powi: the Serial twin renders no pack: true
+f32 powi: the Vectorized loop loads and stores whole float4_t packs: true
+half powi: the Serial twin is within the precision's rounding of the f64 reference: true
+half powi: the Vectorized loop equals its Serial twin bitwise: true
+half powi: the Serial twin renders no pack: true
+half powi: the Vectorized loop loads and stores whole half8_t packs: true
+a constant integer power renders through the integer-power helper in the packed lanes, never through pow: true
+f32 where: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 where: the Vectorized loop equals its Serial twin bitwise: true
+f32 where: the Serial twin renders no pack: true
+f32 where: an operand evaluated only conditionally keeps the loop off the packed path: true
+half where: the Serial twin is within the precision's rounding of the f64 reference: true
+half where: the Vectorized loop equals its Serial twin bitwise: true
+half where: the Serial twin renders no pack: true
+half where: an operand evaluated only conditionally keeps the loop off the packed path: true
+f32 relu_gate: the Serial twin is within the precision's rounding of the f64 reference: true
+f32 relu_gate: the Vectorized loop equals its Serial twin bitwise: true
+f32 relu_gate: the Serial twin renders no pack: true
+f32 relu_gate: an operand evaluated only conditionally keeps the loop off the packed path: true
+half relu_gate: the Serial twin is within the precision's rounding of the f64 reference: true
+half relu_gate: the Vectorized loop equals its Serial twin bitwise: true
+half relu_gate: the Serial twin renders no pack: true
+half relu_gate: an operand evaluated only conditionally keeps the loop off the packed path: true
+fp8: the Serial twin is within e5m2 rounding of the f64 reference: true
+fp8: the Vectorized loop equals its Serial twin bitwise: true
+fp8: a store whose storage is not its compute precision renders no pack: true
+every type a pointer is cast to is declared 16-byte aligned in the same source: true

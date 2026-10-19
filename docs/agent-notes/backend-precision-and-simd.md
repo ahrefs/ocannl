@@ -1220,6 +1220,32 @@ files.
   `#elif` lines from the emitted `.c` instead, and keep a positive control: building
   `bin/narrow_gebp_bench` at 97e7d286 (gh-614's parent) still reproduces 12.57 GFLOP/s against
   HEAD's ~128, and its kernel censuses 199 / 52 / 6 at `-O3`.
+- **The GPU packed path (`Packed_struct`) has its own precision gate** (gh-ocannl-1295):
+  `C_syntax.packed_prec_ok`, not `vector_prec_ok`, which only the `Vec_extensions` renderings
+  consult. A packed loop moves whole 128-bit packs and computes each lane as a scalar, so it admits
+  half, bf16, f32 and f64 wherever `vec_typ_of_prec` has a full-width pack type, always at full
+  width (`packed_lanes`). It also requires that precision to be every store target's STORAGE
+  precision, as `lane_expr` requires of every load. Two traps sat behind the old SIMD gate. Metal
+  computes fp8 at f32 and stores it as a byte, and the old compute-precision check let
+  `fp8_out[i] = f32_in[i] * c` store `float4_t` packs into the byte buffer (confirmed on M4 Max:
+  wrong values). And the narrow pack types were not 16-byte aligned; they are now `__align__(16)`
+  on CUDA/HIP and `alignas(16)` on Metal, which MSL accepts. A `reinterpret_cast` to a 2-byte-aligned
+  struct compiles as a 2-byte-aligned access. `test/operations/gpu_packed_prec` pins both, the
+  alignment as a relationship over every cast in the emitted source.
+- **A packed lane renders as `pp_scalar` renders the same node** (gh-ocannl-1295): `lane_expr`
+  goes through `pp_scalar`'s own operator arms (`pp_scalar_op`), with pack lanes as the operands
+  that mention the loop. Every operator goes through the backend's syntax hooks, so lanes get
+  Metal's widened half math. A constant integer exponent takes `integer_power_doc`, as the serial
+  remainder does. Projections render their selected operand. No contraction happens here; an `FMA`
+  is one the lowering made under `fp_contract`. Two cases decline before reaching the shared arms.
+  Heterogeneous operators (`Where`'s condition, the uniform-lane extraction) keep operands at their
+  own precision. And an operand evaluated only conditionally (a `Where` arm, a `Gated_second` gated
+  operand) may not mention the loop: the pack load happens before the lane loop and would make a
+  guarded read unconditional. A lane renderer without the integer-power arm moved no value on M4
+  Max (Metal `pow` of a negative base at exponent 3 matched `ocannl_powi_f32`), so
+  `gpu_packed_prec` pins that arm by its text. Packed vs `Serial`-twin parity is bitwise there
+  because every leg's arithmetic is a single operation per lane. A parity leg over `a * b + c`
+  would need `fp_contract` on, because HIP's `-ffast-math` contracts per kernel.
 ## Assembly census and compiler differences
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG
@@ -1951,12 +1977,10 @@ files.
   on CUDA/HIP and Metal. That is an observation of results, not of the
   overload's internals, and says nothing about older Apple GPUs; the test enforces the relationship
   on every backend, so a toolchain or GPU where it fails goes red there. Its `Vectorized`-loop case
-  guards Metal's packed route, which no half pow reaches today (`vector_prec_ok` admits f32 only,
-  and `lane_expr` declines `ToPowOf`): whichever route the loop takes, every `pow(` in the kernel
-  must be the widened form, beside an f32 `Mul` twin of the same loop that does pack. Enabling half
-  packing with a per-lane `pow(` that skips `binop_syntax` fails it, and the values alone would not
-  (on M4 Max the half overload matches f32 `pow` narrowed bitwise); routing through
-  `binop_syntax` passes.
+  pins the packed route, which half pow takes on every GPU backend since gh-ocannl-1295: the loop
+  must render `half8_t` packs, and every `pow(` in the kernel must be the widened form. A per-lane
+  `pow(` that skips `binop_syntax` fails it (checked on M4 Max), and the values alone would not
+  catch that: the half overload matches f32 `pow` narrowed bitwise there.
 
 - Metal half `Exp`, `Log`, `Exp2`, `Log2`, `Sin`, `Cos` and `Sqrt` render as
   `(half)op((float)(x))` (gh-ocannl-1288), the same contract as half pow: **a half result is the f32

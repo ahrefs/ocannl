@@ -9,3 +9,12 @@ the seeded bias gradient is bitwise the default pipeline's: true
 a threshold above every reduction extent seeds nothing: true
 that routine computes the default pipeline's weight gradient: true
 a threshold of 0 disables the seeding: true
+on CUDA/HIP, past capacity the auto gate seeds the census threshold 32 seeds: true
+on CUDA/HIP, below capacity the auto gate seeds fewer segments than threshold 32: true
+the auto-gated weight gradient is bitwise the default pipeline's: true
+the auto-gated bias gradient is bitwise the default pipeline's: true
+the model reports a pick: true
+on CUDA/HIP the model starts from the seeded plan: its pick is the seeded plan or beats it, never the plain default pipeline: true
+on CUDA/HIP the model's pick is no tensor-core or conv form: true
+on CUDA/HIP the model's weight gradient is bitwise the default pipeline's: true
+on CUDA/HIP the model's bias gradient is bitwise the default pipeline's: true

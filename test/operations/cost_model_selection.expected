@@ -20,3 +20,6 @@ model_default reports a choice with its model score: true
 some candidates are excluded as unbuildable: true
 the surviving argmin is a schedule, not the default fallback: true
 the picked schedule computes correct values: true
+past capacity the weight gradient's pick is a sketch, not the default: true
+below capacity the weight gradient's pick stays the default: true
+the pick's rank is at least its bound: true

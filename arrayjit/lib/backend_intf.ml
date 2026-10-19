@@ -294,6 +294,30 @@ type hardware_limits = {
           trips the gh-514 agreement warning — while under [autotune_bound_pruning] an understated
           leg over-prunes. Overstatement only loosens an advisory bound; calibrated [model_peak_*]
           overrides beat these wherever fidelity matters. *)
+  cache_capacity_bytes : int option; [@sexp.option]
+      (** [Untimed] (see {!limits_key}): the cache capacity of the cost model's ranking score
+          (gh-ocannl-1253, {!Ir.Cost_model.ranking_seconds}) — once a kernel's working set,
+          per-block global read bytes times resident blocks, exceeds it, global reads are charged
+          per block rather than as distinct cells. A FITTED constant of that proxy, not the device's
+          L2 size: the working set sums per-block footprints that resident blocks share, so the
+          value that separates cache-resident from DRAM-bound kernels sits well above any physical
+          cache. Per-class advisories on CUDA and HIP, overridable by config [model_cache_capacity];
+          [None] elsewhere: no DRAM tier (see {!field-cache_bandwidth}). Read only by the untimed
+          choosers, never by schedule construction, codegen or timing — so it is not in the
+          schedule-cache key ({!limits_key}). *)
+  max_resident_threads : int option; [@sexp.option]
+      (** [Untimed]: how many threads the whole device keeps resident at once (multiprocessors times
+          threads per multiprocessor), which divided by a kernel's workgroup size is the ranking
+          score's resident-block count. [None] where unknown: every block then counts as resident.
+          Same readers and same cache identity as {!field-cache_capacity_bytes}. *)
+  cache_bandwidth : float option; [@sexp.option]
+      (** [Untimed]: the rate, in bytes/s, at which the cache serves re-reads within capacity — the
+          ranking score's second tier (gh-ocannl-1253): cross-block re-reads of a kernel whose
+          working set fits {!field-cache_capacity_bytes} are charged at this rate rather than for
+          free; it is the requested-rate plateau of the capacity sweep below the capacity
+          ([tools/calibrate_cache_capacity.exe]). Overridable by config [model_cache_bandwidth];
+          [None] where unmeasured, which leaves re-reads within capacity uncharged. Same readers and
+          same cache identity as {!field-cache_capacity_bytes}. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -563,6 +587,9 @@ let no_hardware_limits =
     simd_vector_registers = 0;
     peak_flops = None;
     peak_memory_bandwidth = None;
+    cache_capacity_bytes = None;
+    max_resident_threads = None;
+    cache_bandwidth = None;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -570,6 +597,118 @@ let no_hardware_limits =
     online_softmax_auto_block = 0;
     worker_pool_tag = None;
     codegen_tag = None;
+  }
+
+(** {2 Cache identity of the device description (gh-ocannl-1253)}
+
+    The schedule cache hashes the device description into its key ([Schedule_cache.codegen_tag]), so
+    that two devices of one backend that construct, render or time candidates differently never
+    share a winner. Not every field is such a fact: the ranking score's capacity and residency steer
+    only the untimed choosers, and a stored winner is a measured schedule whose compilation and
+    speed they do not change — keying on them would only force re-searches (gh-ocannl-572:
+    over-keying is a defect too). So every field has a class, the way configuration keys have
+    [Utils.config_key_classification]:
+
+    - [Key]: consulted by schedule construction, codegen or timing; it enters the cache key.
+    - [Untimed]: read only by the untimed choosers ([Autotune.model_default], the seeding gate,
+      {!Ir.Cost_model.ranking_seconds}); never by anything [Autotune.tune] reaches, and never by a
+      codegen-stage module. It enters neither the key nor the trajectory identity.
+
+    The classification IS {!limits_key}: it destructures the whole record with no [; _], so a new
+    field is a compile error (warning 9) until it is classified — projected into {!Limits_key.t} or
+    discarded as [Untimed]. [test/operations/limits_field_classes] holds the rest: toggling an
+    [Untimed] field leaves the key unchanged and toggling a [Key] field changes it, the projection
+    renders byte-identically to the full record with its [Untimed] fields absent (so no stored key
+    moved when they were added), and no [Untimed] field is read outside its readers. *)
+
+module Limits_key = struct
+  type t = {
+    max_bound_pools : int option;
+    max_threads_per_workgroup : int option;
+    max_workgroup_memory_bytes : int option;
+    max_thread_private_bytes : int option; [@sexp.option]
+    max_workgroup_dims : (int * int * int) option;
+    max_grid_yz : int option;
+    mma : mma_capability option;
+    simd_vector_bytes : int;
+    simd_vector_registers : int;
+    peak_flops : float option;
+    peak_memory_bandwidth : float option;
+    native_fp16_arithmetic : bool;
+    simdgroup_width : int option;
+    lane_scalar_recompute_cheap : bool;
+    lane_all_reduce_simdgroups : int;
+    online_softmax_auto_block : int;
+    worker_pool_tag : string option;
+    codegen_tag : string option;
+  }
+  [@@deriving sexp_of]
+  (** The [Key]-class projection of {!hardware_limits}: the same fields, in the same order, with the
+      same sexp attributes, so its sexp is the full record's with the [Untimed] fields (all
+      [[@sexp.option]]) absent. *)
+end
+
+(** The projection the schedule cache keys on, and the classification itself: every [Key] field is
+    copied, every [Untimed] field is bound to [_]. *)
+let limits_key
+    ({
+       max_bound_pools;
+       max_threads_per_workgroup;
+       max_workgroup_memory_bytes;
+       max_thread_private_bytes;
+       max_workgroup_dims;
+       max_grid_yz;
+       mma;
+       simd_vector_bytes;
+       simd_vector_registers;
+       peak_flops;
+       peak_memory_bandwidth;
+       cache_capacity_bytes = _;
+       max_resident_threads = _;
+       cache_bandwidth = _;
+       native_fp16_arithmetic;
+       simdgroup_width;
+       lane_scalar_recompute_cheap;
+       lane_all_reduce_simdgroups;
+       online_softmax_auto_block;
+       worker_pool_tag;
+       codegen_tag;
+     } :
+      hardware_limits) : Limits_key.t =
+  {
+    Limits_key.max_bound_pools;
+    max_threads_per_workgroup;
+    max_workgroup_memory_bytes;
+    max_thread_private_bytes;
+    max_workgroup_dims;
+    max_grid_yz;
+    mma;
+    simd_vector_bytes;
+    simd_vector_registers;
+    peak_flops;
+    peak_memory_bandwidth;
+    native_fp16_arithmetic;
+    simdgroup_width;
+    lane_scalar_recompute_cheap;
+    lane_all_reduce_simdgroups;
+    online_softmax_auto_block;
+    worker_pool_tag;
+    codegen_tag;
+  }
+
+type untimed_limits = {
+  cache_capacity : int option;
+  resident_threads : int option;
+  cache_rate : float option;
+}
+(** The [Untimed] fields' readings, the one accessor their readers go through
+    ([test/operations/limits_field_classes] refuses a direct read elsewhere). *)
+
+let untimed_limits (l : hardware_limits) : untimed_limits =
+  {
+    cache_capacity = l.cache_capacity_bytes;
+    resident_threads = l.max_resident_threads;
+    cache_rate = l.cache_bandwidth;
   }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to

@@ -38,8 +38,13 @@ type summary = {
    falls back to the whole node: it is a choice of segment, each adding its cumulative offset, so
    its extents ADD along the axis and no product of loop widths bounds them (segments of widths 1
    and 3 name 4 cells where the box holds 3). Guarded accesses are counted guards-taken. All biases
-   over-count. *)
-let access_cells (a : Tn.t Affine.access) : int * bool =
+   over-count.
+
+   [fixed] (default: none) names enclosing loops whose symbols stand still: the count is then the
+   cells ONE point of those loops touches — the box shrinks to the other loops, and a fixed symbol
+   in the map reads as a constant (range 1). The ranking score's per-block count (gh-ocannl-1253)
+   fixes the [Grid] loops. *)
+let access_cells ?(fixed = fun (_ : Idx.symbol) -> false) (a : Tn.t Affine.access) : int * bool =
   let node_cells = Tn.num_elems a.a_tn in
   let dims = Lazy.force a.a_tn.Tn.dims in
   (* Viewed without [~dyn_axis]: the placeholder reads as the fixed index it is spelled as, so only
@@ -53,7 +58,10 @@ let access_cells (a : Tn.t Affine.access) : int * bool =
   if a.a_whole then (node_cells, a.a_guarded)
   else if concat then (node_cells, true)
   else
-    let domain = List.map a.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
+    let domain =
+      List.filter_map a.a_loops ~f:(fun (s, (lo, hi)) ->
+          if fixed s then None else Some (s, hi - lo + 1))
+    in
     let box = List.fold domain ~init:1 ~f:(fun acc (_, w) -> acc * w) in
     let image, exact_image =
       match Affine.fiber_cardinality ~domain a.a_map with
@@ -579,6 +587,131 @@ let roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops ~bytes () : float
       ]
   in
   match legs with [] -> None | l -> Some (List.reduce_exn l ~f:Float.max)
+
+(* {2 The ranking score — gh-ocannl-1253}
+
+   [analyze] charges distinct cells under a perfect cache, which is what keeps it a lower bound —
+   and what makes every untiled contraction score at its roofline floor. The ranking score charges
+   what a plan requests once its reused data cannot stay cached: per block, the cells the block
+   touches (its [Grid] loops standing still), times the blocks. The reuse factor of a tiling falls
+   out of the per-block footprint; nothing here knows what a matmul is. *)
+
+type reuse = { ru_requested : (Tn.t * int) list; ru_working_set_bytes : int } [@@deriving sexp_of]
+
+let global_in (opt : Low_level.optimized) (tn : Tn.t) =
+  not
+    (Tn.Placements.is_local_peek opt.Low_level.optimize_ctx.Low_level.placements tn
+    || Set.mem opt.Low_level.workgroup_shared tn)
+
+(* Each loop symbol's hardware axis, from the statement-level loops. Symbols this walk does not
+   reach — the loops of an inlined [Local_scope] body, a [Scan_loop] index — read as serial: they
+   are iterated inside one work item. *)
+let loop_axes (code : Low_level.t) =
+  let tbl = Hashtbl.create (module Idx.Symbol) in
+  let rec walk (c : Low_level.t) =
+    match c with
+    | Low_level.Seq (a, b) ->
+        walk a;
+        walk b
+    | For_loop { index; axis; body; _ } ->
+        Hashtbl.set tbl ~key:index ~data:axis;
+        walk body
+    | Scan_loop { body; _ } | If { body; _ } -> walk body
+    | Tile_mma { fallback; _ } -> walk fallback
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+    | Set_local _ | Declare_local _ | Workgroup_barrier ->
+        ()
+  in
+  walk code;
+  fun s -> Hashtbl.find tbl s |> Option.value ~default:Low_level.Serial
+
+let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse =
+  let axis = loop_axes code in
+  let is_grid s = Low_level.equal_axis_type (axis s) Low_level.Grid in
+  let width (lo, hi) = max 0 (hi - lo + 1) in
+  (* Per node: requested cells (blocks × per-block cells, summed over its reads). Per launch nest —
+     the accesses under one sequence of [Grid] loops: per-block bytes and the blocks. The workgroup
+     is the kernel's one launch block ({!Low_level.launch_dims}, per-slot maxima over its nests),
+     not a nest's own loop product: a smaller sibling nest still launches the full block, so it
+     cannot have more blocks resident than the hardware runs. *)
+  let threads = max 1 (Array.fold (Low_level.launch_dims code).Low_level.block ~init:1 ~f:( * )) in
+  let requested = Hashtbl.create (module Tn) and order = ref [] in
+  let nests = Hashtbl.create (module String) in
+  List.iter (Low_level.affine_accesses code) ~f:(fun (a : Tn.t Affine.access) ->
+      if (not a.a_write) && is_global a.a_tn then (
+        let grid = List.filter a.a_loops ~f:(fun (s, _) -> is_grid s) in
+        let blocks = List.fold grid ~init:1 ~f:(fun acc (_, r) -> acc * width r) in
+        let per_block = min (Tn.num_elems a.a_tn) (fst (access_cells ~fixed:is_grid a)) in
+        let w = Ops.prec_in_bytes (Lazy.force a.a_tn.Tn.storage_prec) in
+        let cell =
+          Hashtbl.find_or_add requested a.a_tn ~default:(fun () ->
+              order := a.a_tn :: !order;
+              ref 0)
+        in
+        cell := !cell + (blocks * per_block * w);
+        let key = String.concat ~sep:"," (List.map grid ~f:(fun (s, _) -> Idx.symbol_ident s)) in
+        let bytes, nest_blocks = Hashtbl.find nests key |> Option.value ~default:(0, blocks) in
+        Hashtbl.set nests ~key ~data:(bytes + (per_block * w), max nest_blocks blocks)));
+  let working_set =
+    Hashtbl.fold nests ~init:0 ~f:(fun ~key:_ ~data:(bytes, blocks) acc ->
+        let resident =
+          match max_resident_threads with
+          | None -> blocks
+          | Some t -> min blocks (max 1 (t / threads))
+        in
+        max acc (bytes * resident))
+  in
+  {
+    ru_requested = List.rev_map !order ~f:(fun tn -> (tn, !(Hashtbl.find_exn requested tn)));
+    ru_working_set_bytes = working_set;
+  }
+
+let requested_bytes (s : summary) (r : reuse) =
+  (* Per node, the larger of the two charges: the score stays at or above [analyze]'s whatever the
+     two extractions' approximations do, which keeps every bound below it a bound. *)
+  let distinct tn =
+    List.Assoc.find s.per_node tn ~equal:Tn.equal
+    |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_read_bytes)
+  in
+  total_bytes s
+  + List.sum (module Int) r.ru_requested ~f:(fun (tn, req) -> max 0 (req - distinct tn))
+
+let spills ?cache_capacity_bytes (r : reuse) =
+  match cache_capacity_bytes with
+  | Some capacity -> r.ru_working_set_bytes > capacity
+  | None -> false
+
+let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    (s : summary) (r : reuse option) : float option =
+  let total = Float.of_int (total_bytes s) in
+  let memory =
+    Option.map peak_memory_bandwidth ~f:(fun dram ->
+        match r with
+        | None -> total /. dram
+        | Some r -> (
+            let requested = Float.of_int (requested_bytes s r) in
+            if spills ?cache_capacity_bytes r then requested /. dram
+            else
+              match cache_bandwidth with
+              | None -> total /. dram
+              | Some cache ->
+                  (* A cache slower than DRAM would make raising the capacity raise the score. *)
+                  Float.max (total /. dram) (requested /. Float.max cache dram)))
+  in
+  let legs =
+    List.filter_opt [ Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p); memory ]
+  in
+  match legs with [] -> None | l -> Some (List.reduce_exn l ~f:Float.max)
+
+let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    ?max_resident_threads ~is_global (code : Low_level.t) : float option =
+  let s = analyze code in
+  let r =
+    match (cache_capacity_bytes, cache_bandwidth) with
+    | None, None -> None
+    | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
+  in
+  ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 

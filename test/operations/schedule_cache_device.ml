@@ -50,6 +50,19 @@ let () =
     (Sexp.to_string_hum ([%sexp_of: BI.timing_identity option] identity));
   p "identity queries preserve conservative construction limits"
     (Sexp.equal construction (BI.sexp_of_hardware_limits (Context.hardware_limits ctx)));
+  (* gh-ocannl-1253: the cache key hashes the limits' Key-class projection, which on this backend's
+     real limits renders as the full record with its Untimed fields absent -- the rendering the key
+     had before they existed (limits_field_classes holds the field classes on synthetic records). *)
+  p "the cache key's limits projection renders as the record without its Untimed fields"
+    (Sexp.equal
+       (BI.Limits_key.sexp_of_t (BI.limits_key limits))
+       (BI.sexp_of_hardware_limits
+          {
+            limits with
+            cache_capacity_bytes = None;
+            max_resident_threads = None;
+            cache_bandwidth = None;
+          }));
   p "a concrete context's identity is stable"
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
   (match identity with

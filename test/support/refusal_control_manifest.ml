@@ -246,6 +246,25 @@ let raw_entries =
         "[scanner-refusal:1196acbcd8267dcdc62af2676f1a223e] named unmentioned-type exemptions";
         "[scanner-refusal:2bb5b26c546587c6cb8afce38d28f8b4] unmentioned-type exemption remains";
       ] );
+    ( "limits_field_classes.ml",
+      [
+        "[scanner-refusal:6dd30560f9e032ec9afc45a6fec9ce97] every field of";
+        "[scanner-refusal:280bb27b49e792a7b0d751509c083f70] every toggle here";
+        "[scanner-refusal:855cf33995fa59e0a4130e1a8303841b] score's capacity residency";
+        "[scanner-refusal:fdcb8ce65a493ff3ca298ab6cd096a0d] Untimed field leaves";
+        "[scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders";
+        "[scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern";
+        "[scanner-refusal:129a692bf5913667539ef35c0825728a] reaching the accessor";
+        "[scanner-refusal:5de8818597d1f7b0e33446b61b0cf363] backend_intf.ml";
+        "[scanner-refusal:8f9176198240323dbd1fb605e9c46ba6] backend_intf.ml";
+        "[scanner-refusal:ef99980e8fef8e93f88e9ada52db5875] autotune.ml";
+        "[scanner-refusal:190f5d5f9cf7b1a188c423cc9c9159e6] arrayjit/lib/autotune.ml";
+        "[scanner-refusal:887690bba79db7186f007c0ee3bc4d55] autotune.ml";
+        "[scanner-refusal:02907ae08467c5deca8ec391bc107c00] model_default";
+        "[scanner-refusal:fe049afe671ea46b4b4e1a97110057e0] autotune.ml";
+        "[scanner-refusal:075df5b39397048242655a826bb84004] definition tune reaches";
+        "[scanner-refusal:1e8a6f318af70258db127b25c3d92f71] Autotune.tune";
+      ] );
     ( "digest_completeness.ml",
       [
         "[scanner-refusal:7cab0a5763f4811f331a4aab327c6784] which the codegen-stage";
