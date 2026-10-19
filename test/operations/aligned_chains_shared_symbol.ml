@@ -16,7 +16,14 @@
    Every case asserts on [aligned_chains] itself, so a claim fails when the answer moves either way:
    the declined cases can only pass by declining, and the positive control — the same nests with the
    reader on its own thread's row — keeps them from passing because the analysis declines
-   everything. The fresh-symbol controls state the answer the shared symbol must not change. *)
+   everything. The fresh-symbol controls state the answer the shared symbol must not change.
+
+   Since gh-ocannl-1402, [Low_level.optimize] refuses a routine whose loops share a binder (the
+   loop-binder lint, pinned by [loop_binder_lint]), so the shared shape can no longer arrive through
+   it. It can still arrive past it -- a schedule rewrite or [?prelowered] IR is not linted -- and
+   [aligned_chains] must stay sound there. Every case therefore optimizes the fresh-symbol program
+   and, for the shared variants, renames the second binder onto the first in the OPTIMIZED code
+   ([share]): the same program the query used to be handed, built without lying to the lint. *)
 
 open Base
 module LL = Ir.Low_level
@@ -40,22 +47,59 @@ let reader a b ~s ~row =
 let other_row q = aff [ (-1, q) ] 1
 let own_row q = iter q
 
-let chains ~name stmts ~a ~b =
-  Sched.aligned_chains (optimize ~materialized:[ a; b ] ~name (LL.unflat_lines stmts))
+(* [share ~from ~into llc] renames every binder and occurrence of [from] to [into]: the
+   post-optimize route to a routine whose loops share a binder. Only the constructs these nests
+   optimize to are walked; anything else fails the case rather than pass through half-renamed. *)
+let share ~from ~into (llc : LL.t) : LL.t =
+  let sy s = if Idx.equal_symbol s from then into else s in
+  let idx : Idx.axis_index -> Idx.axis_index = function
+    | Iterator s -> Iterator (sy s)
+    | Affine { symbols; offset } ->
+        Idx.affine ~symbols:(List.map symbols ~f:(fun (c, s) -> (c, sy s))) ~offset
+    | (Fixed_idx _ | Sub_axis) as i -> i
+    | Concat _ -> failwith "share: a Concat index"
+  in
+  let rec scalar (sc : LL.scalar_t) : LL.scalar_t =
+    match sc with
+    | Get (tn, idcs) -> Get (tn, Array.map idcs ~f:idx)
+    | Embed_index i -> Embed_index (idx i)
+    | Binop (op, (a, pa), (b, pb)) -> Binop (op, (scalar a, pa), (scalar b, pb))
+    | Unop (op, (a, pa)) -> Unop (op, (scalar a, pa))
+    | (Constant _ | Constant_bits _) as c -> c
+    | _ -> failwith "share: an unexpected scalar construct"
+  in
+  let rec proc (c : LL.t) : LL.t =
+    match c with
+    | Seq (a, b) -> Seq (proc a, proc b)
+    | For_loop r -> For_loop { r with index = sy r.index; body = proc r.body }
+    | Set r -> Set { r with idcs = Array.map r.idcs ~f:idx; llsc = scalar r.llsc }
+    | (Noop | Comment _ | Zero_out _) as c -> c
+    | _ -> failwith "share: an unexpected statement construct"
+  in
+  proc llc
+
+(* Optimize the fresh-symbol program, then make [s'] share [s]'s binder unless [fresh]. *)
+let chains ~name ~fresh ~s ~s' stmts ~a ~b =
+  let o = optimize ~materialized:[ a; b ] ~name (LL.unflat_lines stmts) in
+  let o = if fresh then o else { o with LL.llc = share ~from:s' ~into:s o.LL.llc } in
+  let binds_s = function LL.For_loop { index; _ } -> Idx.equal_symbol index s | _ -> false in
+  p
+    (name ^ ": the queried routine binds s " ^ if fresh then "once" else "in two loops")
+    (count_stmt ~f:binds_s o.LL.llc = if fresh then 1 else 2);
+  Sched.aligned_chains o
 
 let cross_nest ~name ~order ~fresh ~row =
   let a = node "a" and b = node "b" in
-  let s = sym () in
-  let s' = if fresh then sym () else s in
+  let s = sym () and s' = sym () in
   let w = writer a ~s and r = reader a b ~s:s' ~row in
-  chains ~name ~a ~b (match order with `Writer_first -> [ w; r ] | `Reader_first -> [ r; w ])
+  chains ~name ~fresh ~s ~s' ~a ~b
+    (match order with `Writer_first -> [ w; r ] | `Reader_first -> [ r; w ])
 
 (* The same pair inside ONE nest: the parallel loop [p] encloses both sibling inner loops, so the
    per-nest hazard analysis meets both bindings of [s] in one loop environment. *)
 let within_nest ~name ~fresh ~row =
   let a = node "a" and b = node "b" in
-  let t = sym () and s = sym () in
-  let s' = if fresh then sym () else s in
+  let t = sym () and s = sym () and s' = sym () in
   let body =
     LL.unflat_lines
       [
@@ -63,7 +107,7 @@ let within_nest ~name ~fresh ~row =
         loop_n s' 4 (set b [| iter t; iter s' |] (get a [| row t; iter s' |]));
       ]
   in
-  chains ~name ~a ~b [ loop_n t 2 body ]
+  chains ~name ~fresh ~s ~s' ~a ~b [ loop_n t 2 body ]
 
 let declined name verdict = p (name ^ ": aligned_chains declines") (Option.is_none verdict)
 let aligned name verdict = p (name ^ ": aligned_chains accepts") (Option.is_some verdict)

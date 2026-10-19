@@ -877,6 +877,21 @@ val validate_scan_loops : Tnode.Placements.t -> t -> unit
     scan and the clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline:
     {!optimize} on the way in, backend codegen on the way out. *)
 
+val validate_loop_binders : Indexing.static_symbol list -> t -> unit
+(** gh-ocannl-1402: the loop-binder lint. Each loop symbol is bound by at most one loop ([For_loop]
+    or [Scan_loop]) in the whole routine -- sibling loops included, not only nested ones -- and
+    never by a loop when it is one of the routine's static indices; every symbol an index mentions
+    ([Iterator], [Affine], [Concat], [Embed_index], a [Local_scope]'s call-site indices, a
+    [Tile_mma]'s lane) is bound by an enclosing loop or is a static index. Raises [Invalid_argument]
+    naming the symbol and the loops involved. Every flat symbol-keyed consumer -- extent tables,
+    [Schedule.statement_mappings], the canonical render behind both digest caches -- relies on this,
+    and misreads a violation silently: concat segments (gh-ocannl-765) and padding-margin strips
+    (gh-ocannl-1384) each broke it once. Applied by {!optimize} on the way in, ahead of the analysis
+    cache, so lowering's generators are held to it; hand-built IR must mint a fresh symbol per loop
+    too. Entry-only by design, unlike {!validate_scope_bodies}: past [optimize], schedule rewrites
+    emit sibling nests that share symbols (the staging transfer nests), and the renderer and the
+    post-optimize analyses accept that shape. *)
+
 val validate_parallel :
   ?warp_size:int -> ?reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2); a no-op
