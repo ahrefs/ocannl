@@ -333,10 +333,20 @@ let () =
       let (w_fallback, b_fallback), _, windows, r, _, _ =
         scripted_search ~reading:(fun ~index:_ ~label:_ _ -> Float.nan)
       in
-      p_all "in the all-refused search, every window was refused" windows ~f:(fun (_, _, ms) ->
-          Float.is_nan ms);
-      p "so nothing was timed" (Float.is_inf r.Autotune.best_ms);
-      p_all2 label
-        (Array.append w_fallback b_fallback)
-        (Array.append w_untuned b_untuned)
-        ~f:bitwise)
+      (* One claim, so the golden reads the same on and off CUDA/HIP: its population is empty -- and
+         fails the non-emptiness floor -- unless the search refused every window and timed nothing,
+         the precondition the fallback claim is about. *)
+      let refused = List.count windows ~f:(fun (_, _, ms) -> Float.is_nan ms) in
+      Stdio.eprintf
+        "all-refused search (not part of the golden): %d of %d windows refused, best_ms %g\n%!"
+        refused (List.length windows) r.Autotune.best_ms;
+      let nothing_timed =
+        refused > 0 && refused = List.length windows && Float.is_inf r.Autotune.best_ms
+      in
+      p_all label
+        (if nothing_timed then
+           List.zip_exn
+             (Array.to_list (Array.append w_fallback b_fallback))
+             (Array.to_list (Array.append w_untuned b_untuned))
+         else [])
+        ~f:(fun (a, b) -> bitwise a b))
