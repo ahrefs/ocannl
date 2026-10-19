@@ -93,10 +93,16 @@ files.
   disqualifies). The renderer and `Schedule.workgroup_memory_bytes` (which counts the slots
   through the `lane_all_reduce_workgroup_bytes` capability) both read it. The same walk finds
   `try_warp_reduce`'s multi-warp tree into a cell, whose two barriers have NO barrier-free fallback
-  (gh-ocannl-1238): `Low_level.inserted_barriers ~warp_size` lists every statement whose rendering
-  inserts a barrier the IR lacks, `validate_parallel ~warp_size` refuses a non-uniform entry before
-  rendering (typed `Illegal_schedule`), and the renderer emits the tree only for a listed uniform
-  entry. Inserted barriers answer to uniformity, the IR's own to the stricter no-`If` rule. The schedule retypes at `k` simdgroups only up to
+  (gh-ocannl-1238): `Low_level.inserted_collectives ~warp_size` lists every statement whose
+  rendering inserts a lane collective the IR lacks, `validate_parallel ~warp_size` refuses a
+  non-uniform entry before rendering (typed `Illegal_schedule`), and the renderer emits the tree
+  only for a listed uniform entry. Inserted collectives answer to uniformity over the lanes they
+  span, the IR's own barriers to the stricter no-`If` rule. The single-warp forms insert no barrier
+  but still shuffle, and a lane missing from a shuffle is undefined on every GPU backend (gh-ocannl-1334):
+  they answer to WARP uniformity, where an enclosing workgroup loop (always above slot 0) and a
+  guard on its symbol are uniform, since both renderings span the whole `.x` dimension in whole
+  warps. The single-warp tree into a cell is refused under divergent control; the butterfly
+  declines to the serial loop. The schedule retypes at `k` simdgroups only up to
   `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`: 4 on
   Metal, where heads of 64 and 128 train 3-31% faster on it, and on CUDA (RTX, 16-63% faster,
   gh-ocannl-1256); 1 until a device measures the barriers paying, HIP included).
