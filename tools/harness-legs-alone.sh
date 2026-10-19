@@ -27,7 +27,8 @@
 # A selected run is a finding when it fails (ALONE FAIL), when its coverage
 # account does not say it ran exactly the legs meant -- or the selector, read
 # by harness_leg's own matcher, would not select exactly them (ALONE MISS) --
-# or when it skips a check the full run decided (ALONE SKIP). Each finding says
+# or when it skips a check the same leg decided in the full run (ALONE SKIP:
+# each skip is charged to the leg it came from, OCANNL_TOOL_HARNESS_SKIP_LEGS). Each finding says
 # whether the full run passed: "passes in the full run" names an
 # order-dependent leg; a red full run is reported first and on its own.
 #
@@ -74,7 +75,14 @@ else
     { echo "harness-legs-alone.sh: cannot create a log directory" >&2; exit 2; }
   keep=0
 fi
-unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD
+unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_SKIP_LEGS
+# The runs' own output may not land in the checkout they are checked against.
+case "$logs/" in
+  "$root/"*)
+    echo "harness-legs-alone.sh: the log directory $logs is inside the checkout, whose files every run must leave unchanged" >&2
+    [ "$keep" = 1 ] || rm -rf "$logs"
+    exit 2 ;;
+esac
 cd "$root" || exit 2
 
 # NAME as an extended regular expression matching exactly NAME.
@@ -111,12 +119,21 @@ trap 'stop 143' TERM
 # (ignored ones such as _build are out of reach). A run that leaves state
 # there could hand it to a later run of the same leg, which would then pass
 # alone on what an earlier run made, so it is a finding of its own.
-checkout_state() { git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null; }
+# Contents too, not only each path's status: a run that rewrites a file the
+# checkout already had modified, or an untracked one, changes no status line.
+checkout_state() {
+  git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null || return 0
+  git -C "$root" diff HEAD --binary 2>/dev/null | git hash-object --stdin
+  git -C "$root" ls-files -z --others --exclude-standard 2>/dev/null |
+    (cd "$root" && xargs -0 git hash-object -- 2>/dev/null)
+}
 member() { # LOG SCRIPT [ARG...] -- one run; rc in $rc
   local log=$1 script=$2 after
   shift 2
   rc=0 current_log=$log
-  OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" "$@" >"$log" 2>&1 </dev/null &
+  : >"$log.skips"
+  OCANNL_TOOL_HARNESS_NAME=$script OCANNL_TOOL_HARNESS_SKIP_LEGS=$log.skips \
+    "$root/$script" "$@" >"$log" 2>&1 </dev/null &
   child=$!
   wait "$child" || rc=$?
   child= current_log=
@@ -170,7 +187,9 @@ for script in "${harnesses[@]}"; do
   fi
   member "$logs/$slug/full" "$script"
   full=$rc
-  sed -n 's/^SKIP  //p' "$logs/$slug/full" | LC_ALL=C sort -u >"$logs/$slug/full.skips"
+  # Each skip as LEG<TAB>LABEL: a label one leg skips in the full run says
+  # nothing about another leg skipping it alone.
+  LC_ALL=C sort -u "$logs/$slug/full.skips" -o "$logs/$slug/full.skips"
   if [ "$full" = 0 ]; then
     printf '  full run: PASS (%s check(s) skipped)\n' "$(wc -l <"$logs/$slug/full.skips" | tr -d ' ')"
     verdict='passes in the full run'
@@ -209,7 +228,7 @@ for script in "${harnesses[@]}"; do
     log="$logs/$slug/alone-$n"
     member "$log" "$script" --only "$regex"
     ran=$(sed -n 's/^  RAN   //p' "$log")
-    new_skips=$(sed -n 's/^SKIP  //p' "$log" | LC_ALL=C sort -u | LC_ALL=C comm -23 - "$logs/$slug/full.skips")
+    new_skips=$(LC_ALL=C sort -u "$log.skips" | LC_ALL=C comm -23 - "$logs/$slug/full.skips")
     if [ "$rc" != 0 ]; then
       findings=$((findings + 1))
       printf '  ALONE FAIL  %s (exit %s; %s): %s\n' "$selection" "$rc" "$verdict" "$log"
@@ -221,7 +240,7 @@ for script in "${harnesses[@]}"; do
     elif [ -n "$new_skips" ]; then
       findings=$((findings + 1))
       printf '  ALONE SKIP  %s: skips alone what the full run decided: %s\n' "$selection" "$log"
-      printf '%s\n' "$new_skips" | sed 's/^/        SKIP  /'
+      printf '%s\n' "$new_skips" | awk -F '\t' '{ printf "        SKIP  %s  (in leg: %s)\n", $2, $1 }'
     else
       printf '  ALONE PASS  %s\n' "$selection"
     fi

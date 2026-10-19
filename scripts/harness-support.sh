@@ -5,7 +5,7 @@
 harness_args() {
   KEEP=0 failures=0 skipped=0 harness_finished=0
   harness_only= harness_only_set=0 legs_selected=0 legs_filtered=0
-  harness_ran=() harness_skips=() harness_leg_running=
+  harness_ran=() harness_skips=() harness_leg_running= harness_leg_current=
   harness_list=0 harness_listed=0 harness_leg_names=$'\n' harness_group_seen=$'\n'
   harness_number_keys=() harness_number_legs=()
   while [ $# -gt 0 ]; do
@@ -149,6 +149,10 @@ harness_header_unclaimed() { # finish: a number a declared group lists that no l
 # A NAME may end in a `#group` tag, which `--only '#group'` selects whole.
 # Under --list-legs every gate prints `LEG  NAME` and runs no body.
 harness_leg() { # NAME
+  # The leg a later skip is charged to (OCANNL_TOOL_HARNESS_SKIP_LEGS): the
+  # last gate reached, selected or not, so shared code between two gates is
+  # charged alike in a full run and a filtered one.
+  harness_leg_current=$1
   harness_leg_lint "$1"
   if [ "$harness_list" = 1 ]; then
     harness_listed=$((harness_listed + 1))
@@ -207,6 +211,10 @@ skip() { # LABEL REASON
   fi
   skipped=$((skipped + 1))
   harness_skips+=("$1 -- $2")
+  # tools/harness-legs-alone.sh compares each leg's skips alone with the
+  # same leg's in the full run, so it asks which leg each skip came from.
+  [ -z "${OCANNL_TOOL_HARNESS_SKIP_LEGS:-}" ] ||
+    printf '%s\t%s\n' "${harness_leg_current:-(before any gate)}" "$1" >>"$OCANNL_TOOL_HARNESS_SKIP_LEGS"
   printf 'SKIP  %s\n      %s%s\n' "$1" "$2" "$expected"
 }
 # Whether a strict run's list of expected platform skips names this skip.

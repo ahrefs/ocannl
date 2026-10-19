@@ -31,6 +31,7 @@ set -u
 harness_args "$@"
 harness_scratch gated
 leg_1() {
+  if [ "${SHAREDSKIP:-0}" = 1 ]; then skip 'shared label' 'one never decides it'; shared=made; fi
   if [ -n "${HOLD:-}" ]; then
     echo $$ >"$HOLD"
     while :; do sleep 0.2; done
@@ -40,7 +41,8 @@ leg_1() {
   [ "${SKIPLEAK:-0}" = 0 ] || touch "$TMP/from-one"
 }
 leg_2() {
-  if [ "${LEAK:-0}" = 1 ] && [ "${shared:-}" != made ]; then report 1 'two reads what one made'
+  if [ "${SHAREDSKIP:-0}" = 1 ] && [ "${shared:-}" != made ]; then skip 'shared label' 'two alone'
+  elif [ "${LEAK:-0}" = 1 ] && [ "${shared:-}" != made ]; then report 1 'two reads what one made'
   else report 0 'two'; fi
 }
 leg_3() {
@@ -49,6 +51,7 @@ leg_3() {
 }
 leg_4() {
   [ "${LITTER:-0}" = 0 ] || : >"$(dirname "$0")/../litter"
+  [ "${REWRITE:-0}" = 0 ] || echo rewritten >"$(dirname "$0")/../scribble"
   report "${RED:-0}" 'four'
 }
 dot() { report 0 "$1"; }
@@ -93,7 +96,8 @@ chmod +x "$fixture/tools/"*.sh "$fixture/fixtures/"*.sh
 git -C "$fixture" init -q && git -C "$fixture" add -A &&
   git -C "$fixture" -c user.name=t -c user.email=t@t commit -q -m fixture || exit 2
 subject="$fixture/tools/harness-legs-alone.sh"
-unset OCANNL_TOOL_HARNESS_STRICT LEAK SKIPLEAK RED DUP NEVER BROKEN HOLD LITTER DISCOVERY
+unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_SKIP_LEGS LEAK SKIPLEAK SHAREDSKIP RED DUP NEVER BROKEN HOLD \
+  LITTER REWRITE DISCOVERY
 run() { # [subject arguments] -- from an unrelated directory
   rc=0
   (cd "$TMP" && "${SUBJECT:-$subject}" "$@") >"$TMP/out" 2>&1 || rc=$?
@@ -128,10 +132,17 @@ else report 1 'a leg reading an earlier leg'"'"'s state fails alone and passes i
 
 SKIPLEAK=1 run
 if [ "$rc" = 1 ] && grep -q '^  ALONE SKIP  3: three \[z\]+ #b: skips alone what the full run decided: ' "$TMP/out" \
-   && grep -q '^  ALONE SKIP  #b: ' "$TMP/out" && has '        SKIP  three check' \
+   && grep -q '^  ALONE SKIP  #b: ' "$TMP/out" && has '        SKIP  three check  (in leg: 3: three [z]+ #b)' \
    && [ "$(grep -c '^  ALONE \(FAIL\|MISS\|SKIP\)' "$TMP/out")" = 2 ]; then
   report 0 'a check skipped alone that the full run decided is a finding'
 else report 1 'a check skipped alone that the full run decided is a finding' "exit $rc; $(cat "$TMP/out")"; fi
+
+SHAREDSKIP=1 run
+if [ "$rc" = 1 ] && grep -q '^  ALONE SKIP  2: two (x.y) reads them #a: ' "$TMP/out" \
+   && has '        SKIP  shared label  (in leg: 2: two (x.y) reads them #a)' \
+   && [ "$(grep -c '^  ALONE \(FAIL\|MISS\|SKIP\)' "$TMP/out")" = 1 ]; then
+  report 0 'a label one leg skips in the full run does not cover another leg skipping it alone'
+else report 1 'a label one leg skips in the full run does not cover another leg skipping it alone' "exit $rc; $(cat "$TMP/out")"; fi
 
 RED=1 run
 if [ "$rc" = 1 ] && grep -q '^  full run: FAIL (exit 1): ' "$TMP/out" \
@@ -160,6 +171,20 @@ if [ "$rc" = 1 ] && grep -q '^  CHECKOUT CHANGED  by fixtures/gated.sh : ' "$TMP
    && has 'harness-legs-alone: 1 harness(es) checked; 0 red full run(s), 0 failed listing(s), 1 finding(s) run alone'; then
   report 0 'a run that leaves a file in the checkout is a finding'
 else report 1 'a run that leaves a file in the checkout is a finding' "exit $rc; $(cat "$TMP/out")"; fi
+
+echo scribbled >"$fixture/scribble"
+REWRITE=1 run fixtures/gated.sh
+rm -f "$fixture/scribble"
+if [ "$rc" = 1 ] && [ "$(grep -c '^  CHECKOUT CHANGED  ' "$TMP/out")" = 1 ] \
+   && grep -q '^  CHECKOUT CHANGED  by fixtures/gated.sh : ' "$TMP/out"; then
+  report 0 'a run rewriting a file the checkout already had untracked is a finding'
+else report 1 'a run rewriting a file the checkout already had untracked is a finding' "exit $rc; $(cat "$TMP/out")"; fi
+
+run --logs "$fixture/logs" fixtures/gated.sh
+if [ "$rc" = 2 ] && grep -q 'is inside the checkout' "$TMP/out" && ! grep -q 'ALONE' "$TMP/out"; then
+  report 0 'a log directory inside the checkout is refused'
+else report 1 'a log directory inside the checkout is refused' "exit $rc; $(cat "$TMP/out")"; fi
+rm -rf "$fixture/logs"
 
 DISCOVERY=1 run
 if [ "$rc" = 0 ] && has 'HARNESS fixtures/continued.sh: 1 leg(s), 0 group(s)' && has '  ALONE PASS  only leg' \
