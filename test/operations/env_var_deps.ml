@@ -1447,8 +1447,11 @@ let main () =
                       (* Every atom of the field, so `(re_export x)` and a `(select …)`'s
                          alternatives are followed too; an atom naming no program-local library
                          matches nothing (Codex P2, round 3). *)
-                      Option.value_map (Scan.field stanza "libraries") ~default:[]
-                        ~f:(List.concat_map ~f:Scan.atoms) )
+                      (* And a virtual library's `default_implementation`, which dune links when
+                         nothing else is chosen (Codex P2, round 8). *)
+                      List.concat_map [ "libraries"; "default_implementation" ] ~f:(fun field ->
+                          Option.value_map (Scan.field stanza field) ~default:[]
+                            ~f:(List.concat_map ~f:Scan.atoms)) )
                   in
                   List.map (atoms "name" @ atoms "public_name") ~f:(fun name -> (name, entry))
               | _ -> []))
@@ -5498,6 +5501,20 @@ let width_control () =
     (Stdlib.Filename.concat root "test/wrap/dune")
     "(library\n (name wrapper)\n (modules wrapper)\n (libraries (re_export support)))\n";
   write_file (Stdlib.Filename.concat root "test/wrap/wrapper.ml") "let () = ()\n";
+  (* A virtual library whose default implementation reads the width. *)
+  write_file
+    (Stdlib.Filename.concat root "test/virt/dune")
+    "(library\n\
+    \ (name vlib)\n\
+    \ (modules vm)\n\
+    \ (virtual_modules vm)\n\
+    \ (default_implementation vimpl))\n";
+  write_file
+    (Stdlib.Filename.concat root "test/virt_impl/dune")
+    "(library\n (name vimpl)\n (implements vlib)\n (modules vm))\n";
+  write_file
+    (Stdlib.Filename.concat root "test/virt_impl/vm.ml")
+    "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n";
   (* A library whose directory the scan's globs do not reach: its source is never handed over. *)
   write_file
     (Stdlib.Filename.concat root "other/lib/dune")
@@ -5509,8 +5526,9 @@ let width_control () =
   let paths =
     "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
     :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
-    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: "other/lib/dune" :: backend_home
-    :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
+    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: "other/lib/dune" :: "test/virt/dune"
+    :: "test/virt_impl/dune" :: "test/virt_impl/vm.ml" :: backend_home :: width_limits_home
+    :: width_limits_type_home :: List.map context ~f:fst
   in
   let run ?(backend = Some width_backend_stub) ?(limits = width_limits_stub)
       ?(helper = "let () = ()\n") ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe
@@ -5641,6 +5659,22 @@ let width_control () =
   in
   let unseen_library = run ~links:" unseen" ~probe:"let () = ()\n" `Declares in
   let pinned_ambient_lower = run ~probe:projected `Pins_ambient_lower in
+  let via_nested_include =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  module Width = struct\n\
+           \    let registers () = Utils.get_global_arg ~default:\"-1\" \
+            ~arg_name:\"cc_vector_bytes\"\n\
+           \  end\n\
+            end\n\
+            include Public\n\
+            let vector_bytes_setting () = Width.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:"let () = ignore (Context.Cc_backend.Width.registers ())\n" `Neither
+  in
+  let via_default_impl = run ~links:" vlib" ~probe:"let () = ()\n" `Neither in
   let via_named_include =
     run
       ~backend:
@@ -5733,6 +5767,12 @@ let width_control () =
   in
   let via_include_ok = refused via_include && says "`Cc_backend.registers`" via_include in
   let pinned_ambient_lower_ok = refused pinned_ambient_lower in
+  let via_nested_include_ok =
+    refused via_nested_include && says "`Cc_backend.Width.registers`" via_nested_include
+  in
+  let via_default_impl_ok =
+    refused via_default_impl && says "library vimpl (vm.ml)" via_default_impl
+  in
   let via_named_include_ok =
     refused via_named_include && says "`Cc_backend.registers`" via_named_include
   in
@@ -5775,6 +5815,8 @@ let width_control () =
   if not via_include_ok then report "via-include" via_include;
   if not unseen_library_ok then report "unseen-library" unseen_library;
   if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
+  if not via_nested_include_ok then report "via-nested-include" via_nested_include;
+  if not via_default_impl_ok then report "via-default-impl" via_default_impl;
   if not via_named_include_ok then report "via-named-include" via_named_include;
   if not opened_bare_ok then report "opened-bare" opened_bare;
   if not interface_only_ok then report "interface-only" interface_only;
@@ -5874,6 +5916,11 @@ let width_control () =
     via_local_module_ok;
   Verdict.p "a width read inside a record under an unnamed `let ()` stays unplaced, and is refused"
     unplaced_record_ok;
+  Verdict.p "a nested submodule's value re-exported by a named `include` is a width value too"
+    via_nested_include_ok;
+  Verdict.p
+    "a virtual library's default implementation reading the width is the linking program's read"
+    via_default_impl_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)

@@ -1325,10 +1325,11 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                 | Some path ->
                     let prefix = dotted (scope @ path) ^ "." in
                     Map.fold env ~init:env ~f:(fun ~key ~data acc ->
+                        (* Every descendant, nested submodules' values included (Codex P2, round
+                           8). *)
                         match String.chop_prefix key ~prefix with
-                        | Some leaf when not (String.contains leaf '.') ->
-                            Map.set acc ~key:(dotted (scope @ [ leaf ])) ~data
-                        | _ -> acc)
+                        | Some rest -> Map.set acc ~key:(dotted (scope @ [ rest ])) ~data
+                        | None -> acc)
                 | None -> env)
             | _ -> env)
         | _ -> env)
