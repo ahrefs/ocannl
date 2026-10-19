@@ -403,6 +403,7 @@ static pthread_mutex_t ocannl_deadline_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ocannl_deadline_cond = PTHREAD_COND_INITIALIZER; /* wakes the watchdog */
 static pthread_cond_t ocannl_deadline_free = PTHREAD_COND_INITIALIZER; /* wakes waiting [arm]s */
 static int ocannl_deadline_thread_started; /* under the lock */
+static int ocannl_deadline_writer_started; /* under the lock */
 static int ocannl_deadline_armed;          /* under the lock */
 static int ocannl_deadline_dying;          /* under the lock: the watchdog committed to the death */
 static pthread_t ocannl_deadline_owner;    /* under the lock: the armed region's thread */
@@ -429,6 +430,7 @@ static void ocannl_deadline_atfork_child(void) {
   ocannl_deadline_cond = fresh_cond;
   ocannl_deadline_free = fresh_free;
   ocannl_deadline_thread_started = 0;
+  ocannl_deadline_writer_started = 0;
   ocannl_deadline_armed = 0;
   ocannl_deadline_dying = 0;
   {
@@ -557,9 +559,12 @@ static int ocannl_deadline_start_thread(void) {
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   /* The writer first: a watchdog without it would have nothing to write the diagnostic with. A
-     writer left behind by a failed watchdog creation waits harmlessly, and a retry starts another
-     one; at most one ever writes, since only one watchdog can commit to the death. */
-  rc = pthread_create(&thread, &attr, ocannl_deadline_writer, NULL);
+     writer whose watchdog could not be created is kept, and reused by the retry. */
+  rc = 0;
+  if (!ocannl_deadline_writer_started) {
+    rc = pthread_create(&thread, &attr, ocannl_deadline_writer, NULL);
+    if (rc == 0) ocannl_deadline_writer_started = 1;
+  }
   if (rc == 0) rc = pthread_create(&thread, &attr, ocannl_deadline_watchdog, NULL);
   pthread_attr_destroy(&attr);
   pthread_sigmask(SIG_SETMASK, &saved, NULL);
@@ -614,7 +619,12 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   else {
     while (ocannl_deadline_armed || ocannl_deadline_dying)
       pthread_cond_wait(&ocannl_deadline_free, &ocannl_deadline_lock);
-    if (ocannl_deadline_start_thread()) {
+    /* Checked again after the wait, right before committing: another thread may have installed
+       its own SIGALRM handler meanwhile, and a program with its own handler gets no deadline. */
+    if (sigaction(SIGALRM, NULL, &cur) != 0 || (cur.sa_flags & SA_SIGINFO) ||
+        cur.sa_handler != SIG_DFL)
+      armed = 0;
+    else if (ocannl_deadline_start_thread()) {
       int64_t now = ocannl_monotonic_ns();
       if (now >= 0) {
         memcpy(ocannl_deadline_msg, msg, len);
