@@ -369,31 +369,47 @@ files.
   `(Context.codegen_capabilities ctx).accum_prec`. `Autotune.sketch_schedule` and
   `extend_with_privatize` take `~accum_prec` as a REQUIRED argument, so no seeding site can default
   to storage. Like the backend's own residency, `acc_prec` applies only to what codegen widens,
-  and `apply_privatize` asks codegen's own question of the SOURCE-order nest: the privatized
-  loop's subtree minus schedule-provenance scratch (`Schedule.schedule_scratch`, identified
-  POSITIVELY: a `Stage` load, i.e. a plain copy into a `tile`-namespace node, and barriers) must be
-  ONE chain of loops and guards down to the single target update — any
-  other statement (another node's write, a `Declare_local`/`Set_local` computation, a second update)
-  breaks it exactly where the peel refuses siblings — and that chain minus the output loops (those
-  the cell mentions, which a schedule sinks inside) goes through `Low_level.peel_accum_nest`, whose
-  base `Low_level.accum_base_widens` judges (raw updates and scope-form bases alike; a widened
-  scope base, and only it, is re-keyed to the tile, since codegen types a scope local by its id's
-  node). A hardware-typed reduction level inside the privatized loop is refused outright, since
-  whether a backend serializes it is codegen's knowledge, not the transform's. Anything else
-  gets a storage tile, which codegen renders exactly as it would the target, so its narrowing
-  points do not move. Eight review rounds found the gate one member at a time (per-update declines,
-  sibling updates, non-target, scope-local, staged, prior-tile and partial-scatter siblings,
-  scope-form bases, hardware levels): re-deriving a subset of the peel, or classifying scratch by
-  exclusion, always leaves members out — so reconstruct the peel's input, identify schedule
-  scratch positively, and call the peel (Codex, rounds 1-8 of staging#880).
-  `Low_level.mentions_rng_conversion` moved there from `C_syntax` for that sharing. It escaped gh-664's sweep because `reduction_forms` filed
+  and since gh-ocannl-1151 the decision has ONE owner: `Low_level.decide_accum_width` (the peel plus
+  every decline: routine logging, a dead level, an RNG-bearing update), parameterized by the
+  serialized-slot predicate, which codegen calls with `C_syntax.serialized_hardware` at every level
+  that can localize, and which `apply_privatize` asks of the program `Schedule.apply` was HANDED
+  (`entry`, threaded through `apply_opt_op`), never of the nest earlier ops of the same schedule
+  left: `Low_level.serial_accum_widths` walks it top-down as `pp_ll` does and answers per
+  accumulating write of the target (`Low_level.accumulating_writes` order) with the level that
+  localizes it. The privatized subtree must hold ONE update of the target passing
+  `Low_level.accum_base_widens` (two sibling reductions narrow between each other serially; a
+  scope-form update is re-keyed to the tile, since codegen types a scope local by its id's node),
+  the entry write it descends from must widen — matched by position, as ops never reorder a node's
+  accumulating writes, else every entry write must, so an unrelated narrow recurrence of the same
+  node does not decide it — and where `over` is an entry loop it must be the localizing level, as
+  the tile narrows once per execution of `over` (all three from the local Codex review). Which hardware levels a backend serializes is
+  codegen's fact, so the walk is asked vouching for none and for every one, and the op is refused
+  where the answers differ — the pattern `Low_level.seed_first_write` already used. After all ops
+  `apply_typed` re-checks each wide tile (`Schedule.privatized_tile_widens`) and falls it back to
+  storage where a later op left an update the decision does not widen (`Schedule.privatize_fallbacks`
+  records it) — BEFORE `simplify_llc`, which visits every `Set` and so forces the tile's precision,
+  after which `Tn.update_prec` can no longer change it; the finalized program is judged again and a
+  failure there is refused. Hardware levels between
+  the privatized loop and the update are still refused outright, and an f32/f64 target never
+  reaches any of this. Do not reintroduce a schedule-side reconstruction of codegen's input: the
+  rebuilt peel nest this replaced disagreed with codegen one shape at a time through eight review
+  rounds (staging#880) and still did after them (a `k { i { acc[i] += .. } }` nest widened to 258
+  where the serial rendering narrows to 256; a `Stage` from an earlier `apply` was classified away),
+  because it leaned on "output loops outside reduction loops", a forward-lowering property only
+  (lowering-and-analysis.md). Letting codegen decide at render time was considered and not taken:
+  it needs provenance carried through fission, replay and the schedule cache plus a per-node width
+  override across every `storage_prec` read, while the one fact codegen holds that the schedule
+  lacks (whether the backend binds a `Workgroup_reduce` slot) is static. The storage-tile bug
+  escaped gh-664's sweep because `reduction_forms` filed
   `Privatize` out of scope as "a parallelism decision about a different node": an out-of-scope
   verdict is a claim too. Pinned by
   `accum_width`'s Privatize legs (the first unfused scalar seed against the serial rendering, and a
   storage-tile negative control that must diverge; the gate legs over a recurrence, a
   mixed-operator update, sibling updates, non-target, scope-local and staged siblings, a
   partials scatter, two accumulators privatized in turn, the hardware refusal; the two-axis leg
-  privatizing around a materialized scope) and `autotune_privatize`'s saved-form claims.
+  privatizing around a materialized scope; since gh-ocannl-1151 the inner-output nest, a `Stage`
+  applied by an earlier `apply` against the same ops in one, the RNG pin and the re-check) and
+  `autotune_privatize`'s saved-form claims.
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
   provoke: `debug_log_from_routines` (a `Local_scope` body renders with `log_set_locals:false`, so
   localizing would silence the per-iteration trace — the SIMD and tensorized renderings bail under
@@ -853,13 +869,33 @@ files.
   `ambient_ocannl_shadowed`, the inherited variables its own command line outranks
   (gh-ocannl-1273), and `--cell-flag KEY=VALUE` is the way to set a payload key per cell — the
   regime gate accepts it as a declared override, never as a leak.
-- **The development `simplify_fp_algebra` selector also acts after scheduling** (gh-ocannl-998):
-  `Schedule.apply` reruns `simplify_llc`, so a materializing unroll can expose constant algebra
-  absent from the pre-schedule code digest. Identical base digests can therefore produce different
-  scheduled kernels under different selections. It is `Keyed "numerics"`, not solely `Code_borne`;
-  `Schedule_cache.numerics_tag` carries non-default selections while retaining the existing `all`
-  tag. `simplify_fp_algebra` pins this with an equal-source/different-unrolled-code witness and a
-  cache-tag separation claim. Profiles remain unchanged during the measurement phase.
+- **The floating-point licences are three keys, applied once on the raw lowering** (gh-ocannl-998):
+  `fp_contract` (a float `a * b + c` into one `FMA`), `fp_reassociate` (constant reassociation,
+  subtraction re-parenthesizing, the multiplication/division interchanges, integer-power
+  unrolling) and `fp_finite_math` (the zero identities, which infinities, NaNs and the sign of
+  zero contradict), read as `Low_level.Fp_licence.of_config`. The arms live in one first-match
+  step function, `Low_level.fp_algebra_step`; the `Rewrites` tier member `Fp_algebra` applies it
+  bottom-up per assignment, after `Online_softmax` (contraction would hide `o := o + w * v` from
+  the hoist). `simplify_llc` -- after virtualization and again after scheduling -- is exact: it
+  keeps only IEEE identities (`x * 1`, `x - (+0)`, `x + (-0)`), constant folding and, for integer
+  precisions, the unlicensed reassociation the index canonicalizer needs. So OCANNL never
+  contracts an inlined producer with its consumer, and a placement flip cannot change a result at
+  uniform f32 -- with the C compiler's own contraction off; `fp_licence_values` executes that
+  claim (cc, `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 either way, `2^-24` fused). Backend
+  compilers keep their licences (`cc_backend_fp_contract`, NVRTC's `--use_fast_math` implies
+  `--fmad=true`), so production-wide neutrality would need backend enforcement too. The trade:
+  folds that existed only after inlining (a consumer contracting its producer's product, a scalar
+  constant node folding into a quotient, algebra a materializing unroll exposes) are gone. The keys
+  are `Code_borne` (the rewritten code carries them; no transform consults them), and the cache
+  regime was bumped for the identical digests whose scheduled kernels changed. A raw-tier pow
+  unroll must not take a base exact simplification folds to a constant (an `Identity`-wrapped
+  constant, a fixed embedded index): the folded product would be computed in double, not at the
+  target's multiplication rounding. All three are off by default (no family showed a measured
+  speed benefit), on under `approximate` -- `runtest-online_softmax_fp_licences` reruns the
+  online-softmax claims with them on -- and pinned off by `reproducible`. The
+  development selector `simplify_fp_algebra` (six arm families) is retired with no alias;
+  `benchmarks/gh998_cells.py` ablates the three keys, and a result line records each under
+  `fp_licences` with its source.
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
@@ -934,8 +970,8 @@ files.
   association — precisely the property gh-ocannl-682 exists to preserve. The lesson generalizes past
   RNG: **the shuffle may widen only where the serial path widens** — which gh-ocannl-754 then made
   structural (next bullet): the shuffle, the SIMD grid and the localizing serial form all consume
-  ONE width decision, and `C_syntax.accum_pinned_to_storage_prec` is one of that decision's
-  declines rather than a predicate each rendering remembers to consult. Tests:
+  ONE width decision, and the RNG pin (`Low_level.accum_skip`'s `Skip_accum_pinned`) is one of that
+  decision's declines rather than a predicate each rendering remembers to consult. Tests:
   `hardware_warp_shuffle.ml`'s bf16 legs — 32 lanes of `1 + (k mod 11)/128` separate the three
   candidate renderings as 33.25 / 33 / 32.75 (once-narrowed f32 tree, tree staged at bf16,
   per-step read-modify-write), and 128 lanes give 133 / 132 / 129 while also pinning the shared
@@ -957,9 +993,11 @@ files.
   gh-ocannl-639 (`Unrolled`) and gh-ocannl-682 (RNG bodies under the shuffle) were the same genre —
   two renderings of one body accumulating at different WIDTHS, so a retype changed the value in its
   low mantissa bits, invisibly at f32 storage. Now `pp_ll`'s `For_loop` arm asks once —
-  `decide_accum_width` (type `C_syntax.accum_width`): the peel over the level's body, then the
-  declines the serial form applies to the base it reaches (debug logging, dead level,
-  `accum_pinned_to_storage_prec`, in that order) — and every rendering consumes the answer.
+  `decide_accum_width` (type `C_syntax.accum_width`), a wrapper over `Low_level.decide_accum_width`
+  since gh-ocannl-1151 made that the decision's one owner, shared with `Schedule.Privatize`: the
+  peel over the level's body, then the declines the serial form applies to the base it reaches
+  (debug logging, dead level, an RNG-bearing update, in that order) — and every rendering consumes
+  the answer.
   `try_localize_serial_reduce` renders it and records it; `try_warp_reduce` and
   `try_vectorize_reduce` take the base only through `statement_accumulation` (a raw update at
   exactly this level, no level or guard between) and, where the decision PINNED it, hold the
@@ -1085,6 +1123,14 @@ files.
   (width 48 over 512, a 4-column tail) runs 1.15–1.29 ms against 1.40–1.53 ms for the tail-free
   `--rn=4`, i.e. ~20% — the gh-ocannl-620 reuse-only ranking is right here by well more than the
   bench's timing noise, and `--rn=6` is what `Register_tile.default` picks.
+- **`Tensorize` writes a floating fallback fused, whatever the contraction licence**
+  (gh-ocannl-998). The register tile renders only an `FMA`-form fallback, because a plain
+  `acc + a * b` is contracted or not at the C compiler's discretion and no vector twin could match
+  it bitwise. When the simplifier contracted every float `a * b + c`, every accumulation reached
+  `Tensorize` fused; with the licence off it arrives plain, and every cc register tile would have
+  declined silently. A tile multiply-accumulate is fused on every unit, so the fallback states that:
+  a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
+  the register-tiled census with the contraction licence off.
 ## SIMD operations and rounding
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
@@ -1664,9 +1710,12 @@ files.
   rendering test gets one more targeted run of the affected aliases at 32. Pinning a
   `hardware_limits` record in the test does not make it width-independent, as staging#1094 shows:
   codegen still reads the configured width. The stanza must DECLARE `(env_var OCANNL_CC_VECTOR_BYTES)`, or
-  dune serves the previous 16-byte result as a pass (AGENTS.md, *Testing*); most SIMD-sensitive
-  stanzas do not yet — `cpu_vectorized` and `schedule_mma_matmul` read the device's
-  `simd_vector_bytes` undeclared — so add the declaration in the same change.
+  dune serves the previous 16-byte result as a pass (AGENTS.md, *Testing*). `env_var_deps`
+  requires the declaration of every stanza whose program reads the width — projects a width field,
+  names a `Cc_backend` value reaching `cc_vector_bytes`, or leaves a width field to a device base in
+  a limits update (gh-ocannl-1320; the derivation: build-and-test.md). A test that only constructs
+  synthetic limits and leaves codegen to read the width is outside what it can see: declare it by
+  judgment when its golden depends on the rendering.
 - **A single width per machine would make a wider machine emit LESS vector code, and "the widest
   that fits" is still not enough.** Every explicit-SIMD rendering declines below one full vector,
   so at 64 bytes an f32 loop of extent 8..15 — and a `Tile_mma` column extent in that range — falls

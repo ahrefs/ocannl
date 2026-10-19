@@ -871,6 +871,23 @@ let inline_runner_runs ~libraries stanza =
           | _ -> None)
   | _ -> []
 
+(* The pins of each run, in [stanza], of [library]'s inline-test runner -- the counterpart of
+   [inline_runner_runs] that the width rule needs (gh-ocannl-1320), since a per-module rule answers
+   for a variable by its own deps or by pinning it around that run. *)
+let inline_runner_pins ~library stanza =
+  match Scan.head stanza with
+  | Some "rule" ->
+      List.filter_map (Scan.classified_command_sites_with_pins_preserving_multiplicity stanza)
+        ~f:(fun (cwd, pinned, site, command) ->
+          match (site, command) with
+          | Scan.Program _, ((Scan.Runs _ | Scan.Runs_dependency _) as command) ->
+              Option.bind (Scan.command_file_path ~cwd command) ~f:(fun path ->
+                  Option.some_if
+                    (String.equal (normalize_path path) (inline_runner_path library))
+                    pinned)
+          | _ -> None)
+  | _ -> []
+
 (* Whether a module's source holds inline tests: the extension points `ppx_inline_test` and
    `ppx_expect` register. A mention in a comment over-asks, which is the loud direction. *)
 let holds_inline_tests source =
@@ -946,6 +963,52 @@ let env_reader_home = "arrayjit/lib/utils.ml"
    read it needs the run to happen. *)
 let pipeline_home = "arrayjit/lib/schedule.ml"
 let pipeline_module = [ "Ir"; "Schedule" ]
+
+(* gh-ocannl-1320: the cc vector width, and the programs that read it.
+
+   An ARM box renders cc kernels at 16 bytes and the ubuntu leg at 32 or 64, so a claim that
+   silently depends on the width passes locally and fails in CI; the local proxy is a rerun at
+   `OCANNL_CC_VECTOR_BYTES=32` (backend-precision-and-simd.md). That rerun is a cached replay on
+   every stanza that does not declare the variable.
+
+   Who reads the width is derived, as the pipeline's keys are. The VALUES are those of `Cc_backend`
+   whose key reach ([Sources.top_level_key_reach], the module read the way the pipeline's sibling
+   modules are) includes [width_key]; the FIELDS are those of the cc device's limits record -- the
+   record expressions of [width_limits_home] -- whose initializer reaches it through a helper or
+   names one of those values by its last component, however qualified; the record's TYPE, in
+   [width_limits_type_home], gives the labels that mark a limits update. A program reads the width
+   when its own modules, or a program-local library it links, name such a value
+   (`Context.Cc_backend.vector_bytes_setting`, under an alias or an `open` too), project such a
+   field off a record (`limits.simd_vector_bytes`, or a record pattern), or update a limits record
+   leaving such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits
+   with simd_vector_bytes = 16 }` keeps the device's register count, which the width scales --
+   staging#1094's worked case). Every rule running it declares or pins [width_key]'s variable; a
+   library with inline tests answers for itself, through its `(inline_tests (deps …))` and each
+   per-module rule running its runner.
+
+   Asked for is the width key alone. The auto width also follows the SIMD and arch flags and the
+   compiler the probe runs through, but those reach it only through the auto probe, as they reach
+   everything a compiled program does -- gh-ocannl-1149's remainder -- while [width_key] is the knob
+   the notes tell a developer to turn. A program that only CONSTRUCTS limits (every width field
+   given, or `{ no_hardware_limits with … }`) and lets codegen read the configured width inside the
+   library is out of reach for the same reason: that is the route every compiled program takes.
+   Every library the scan sees is followed except those under [width_compiler_roots]: test support
+   and a `bin` or benchmark helper library are a program's own code by extension (Codex P2, round
+   5), while a library of the compiler or the framework naming the width is the compiler. *)
+let width_key = "cc_vector_bytes"
+let width_module = "Cc_backend"
+let width_limits_home = "arrayjit/lib/schedulers.ml"
+let width_limits_type_home = "arrayjit/lib/backend_intf.ml"
+
+(* The library's synthetic limits, by its home module and name. *)
+let width_constant_base = ([ "Ir"; "Backend_intf" ], "no_hardware_limits")
+let width_compiler_roots = [ "arrayjit/lib/"; "tensor/"; "lib/" ]
+
+(* The spellings a program names a `Cc_backend` value by: through the `Context` re-export, or
+   directly where the stanza links the backend library itself. *)
+let width_paths_of value =
+  let components = String.split value ~on:'.' in
+  [ "Context" :: width_module :: components; width_module :: components ]
 
 (* Dune resolves aliases, module defaults, and action paths within the directory a stanza is applied
    to. Keep that descent in one place: checks plug into [checks], and this iterator hands every one
@@ -1192,7 +1255,7 @@ let main () =
           Sources.top_level_key_reach ~external_keys ~settings_field_keys
             (In_channel.read_all on_disk)
         with
-        | { Sources.reach; unplaced } ->
+        | { Sources.reach; unplaced; _ } ->
             List.iter unplaced ~f:(fun key ->
                 fail
                   (Printf.sprintf
@@ -1235,6 +1298,226 @@ let main () =
       |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
   in
   let pipeline_table = ref [] in
+  (* gh-ocannl-1320: the width's values and fields, derived; and per source, how it reads them. *)
+  (* `Cc_backend` read directly rather than through the shared [module_reach] cache, with every name
+     a destructuring top-level `let` binds credited (Codex P2, round 10) -- an over-read kept to the
+     width module, where it can only add width values. *)
+  let width_backend_reach =
+    Option.map (List.Assoc.find library_modules width_module ~equal:String.equal) ~f:(fun on_disk ->
+        Sources.top_level_key_reach ~external_keys ~settings_field_keys ~all_pattern_names:true
+          (In_channel.read_all on_disk))
+  in
+  let width_values =
+    match width_backend_reach with
+    | None -> []
+    | Some { Sources.reach; _ } ->
+        List.filter_map reach ~f:(fun (name, keys) ->
+            Option.some_if (List.mem keys width_key ~equal:String.equal) name)
+  in
+  (* A width read the derivation cannot attribute retires the rule in silence -- no value, so no
+     field and no reader -- so it is refused rather than read as an absence of readers (Codex P2,
+     round 4): the key read outside every named top-level value of `Cc_backend`, or reached by none
+     of them at all. *)
+  (match width_backend_reach with
+  | None -> ()
+  | Some { Sources.unplaced; _ } ->
+      if List.mem unplaced width_key ~equal:String.equal then
+        fail
+          (Printf.sprintf
+             "%s reads the cc vector width key `%s` outside every named top-level value, so no \
+              value is credited with it and no width reader would be asked to declare `%s` -- move \
+              the read into a named top-level function"
+             width_module width_key (Utils.env_var_name width_key))
+      else if List.is_empty width_values then
+        fail
+          (Printf.sprintf
+             "no top-level value of %s reaches the cc vector width key `%s`, so the width rule \
+              derives no reader at all -- if the key moved, follow it in \
+              `width_module`/`width_key`; if it is gone, retire the rule rather than let it pass \
+              vacuously"
+             width_module width_key));
+  (* A field carries the width when its initializer reaches the key: through a top-level or
+     function-local helper, or by naming one of the width values -- matched by its last component,
+     so no alias, `open`, `let open` or local open of `Cc_backend` hides it (Codex P2, rounds 1-3).
+     A same-named value of another module over-reads, which costs declarations, not a stale pass. *)
+  let width_fields =
+    match List.Assoc.find source_files ~equal:String.equal width_limits_home with
+    | None -> []
+    | Some on_disk ->
+        (Sources.top_level_key_reach ~external_keys ~settings_field_keys
+           ~by_last_component:(fun name ->
+             if
+               List.exists width_values ~f:(fun value ->
+                   String.equal (List.last_exn (String.split value ~on:'.')) name)
+             then [ width_key ]
+             else [])
+           (In_channel.read_all on_disk))
+          .field_reach
+        |> List.filter_map ~f:(fun (field, keys) ->
+            Option.some_if (List.mem keys width_key ~equal:String.equal) field)
+        |> List.dedup_and_sort ~compare:String.compare
+  in
+  (* Every label of the record type the width fields belong to, which is what tells a limits update
+     from an update of some other record. *)
+  let width_record_types =
+    match List.Assoc.find source_files ~equal:String.equal width_limits_type_home with
+    | None -> []
+    | Some on_disk ->
+        Sources.record_type_labels (In_channel.read_all on_disk)
+        |> List.filter ~f:(fun (_, labels) ->
+            (* ANY width field, not every one: the last-component match can over-read a field of
+               another record into [width_fields], and that may only add types -- more labels mark
+               more updates -- never remove `hardware_limits` (Codex P2, round 5). *)
+            List.exists width_fields ~f:(fun field -> List.mem labels field ~equal:String.equal))
+  in
+  let width_record_fields =
+    List.concat_map width_record_types ~f:snd |> List.dedup_and_sort ~compare:String.compare
+  in
+  let width_reach =
+    let paths = List.concat_map width_values ~f:width_paths_of in
+    List.filter_map source_files ~f:(fun (path, on_disk) ->
+        let content = In_channel.read_all on_disk in
+        if
+          not
+            (String.is_substring content ~substring:width_module
+            || List.exists (width_fields @ width_record_fields) ~f:(fun field ->
+                String.is_substring content ~substring:field))
+        then None
+        else
+          (* One entry per value: `Context.Cc_backend.v` and, under a `module Cc_backend =
+             Context.Cc_backend` alias, `Cc_backend.v` are the same read. *)
+          let named =
+            if List.is_empty paths then []
+            else
+              List.filter_map (Sources.module_references_in_source content ~paths)
+                ~f:(fun spelling ->
+                  Option.map
+                    (String.substr_index spelling ~pattern:(width_module ^ "."))
+                    ~f:(fun at -> Printf.sprintf "`%s`" (String.drop_prefix spelling at)))
+              |> List.dedup_and_sort ~compare:String.compare
+          in
+          (* And any path ENDING in `Cc_backend.v`, whatever qualifies it -- `module C = Context`
+             then `C.Cc_backend.v` (Codex P2, round 12) -- an over-read of another module's
+             `Cc_backend` that costs a declaration. *)
+          let suffixed =
+            let tails =
+              List.map width_values ~f:(fun v -> width_module :: String.split v ~on:'.')
+            in
+            List.filter_map (Sources.value_paths_in_source content) ~f:(fun path ->
+                List.find tails ~f:(fun tail ->
+                    List.length path >= List.length tail
+                    && List.equal String.equal tail
+                         (List.drop path (List.length path - List.length tail))))
+            |> List.map ~f:(fun tail -> Printf.sprintf "`%s`" (String.concat ~sep:"." tail))
+          in
+          let named = List.dedup_and_sort (named @ suffixed) ~compare:String.compare in
+          match
+            named
+            @ Sources.field_reads_in_source content ~fields:width_fields
+                ~record_fields:width_record_fields ~constant_base:width_constant_base
+          with
+          | [] -> None
+          | spellings -> Some (String.lowercase path, spellings))
+    |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
+  in
+  (* The program-local libraries -- every one outside [width_compiler_roots] -- by every name a
+     `(libraries …)` field can give them, with the modules each owns and the libraries it links in
+     turn. *)
+  let width_libraries =
+    List.concat_map dune_files ~f:(fun (file, on_disk) ->
+        let dir = match Stdlib.Filename.dirname file with "." -> "" | dir -> dir in
+        if
+          List.exists width_compiler_roots ~f:(fun root ->
+              String.is_prefix (dir ^ "/") ~prefix:root)
+        then []
+        else
+          let walked =
+            Scan.walk dir (Scan.stanzas (In_channel.read_all on_disk)) ~f:(fun d s -> [ (d, s) ])
+          in
+          List.concat_map walked ~f:(fun (d, stanza) ->
+              match Scan.head stanza with
+              | Some "library" ->
+                  let group =
+                    List.filter_map walked ~f:(fun (d', s) -> Option.some_if (String.equal d d') s)
+                  in
+                  let directory = if String.is_empty d then "." else d in
+                  let directory_modules =
+                    List.filter_map source_files ~f:(fun (path, _) ->
+                        Option.some_if
+                          (String.equal (Stdlib.Filename.dirname path) directory)
+                          (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)))
+                  in
+                  let atoms field =
+                    Option.value_map (Scan.field stanza field) ~default:[] ~f:(fun args ->
+                        List.filter_map args ~f:(function Sexp.Atom a -> Some a | _ -> None))
+                  in
+                  let entry =
+                    ( List.hd (atoms "name") |> Option.value ~default:"<unnamed>",
+                      d,
+                      (* Less the modules dune is told have no implementation, which make no
+                         run-time read (Codex P2, round 7). *)
+                      (let interface_only =
+                         List.concat_map [ "modules_without_implementation"; "virtual_modules" ]
+                           ~f:(fun field -> List.map (atoms field) ~f:String.lowercase)
+                       in
+                       (* A default module set in a directory the globs never reach is every source
+                          there, none of which was handed over: stood for by one placeholder the
+                          unseen-source refusal reports (Codex P2, round 12). *)
+                       if
+                         Option.is_none (Scan.field stanza "modules")
+                         && not (Set.mem scanned_dirs directory)
+                       then [ "<every module of the directory>" ]
+                       else
+                         List.filter (Scan.modules_of ~directory_modules group stanza) ~f:(fun m ->
+                             not (List.mem interface_only (String.lowercase m) ~equal:String.equal))),
+                      (* Every atom of the field, so `(re_export x)` and a `(select …)`'s
+                         alternatives are followed too; an atom naming no program-local library
+                         matches nothing (Codex P2, round 3). *)
+                      (* And a virtual library's `default_implementation`, which dune links when
+                         nothing else is chosen (Codex P2, round 8). *)
+                      List.concat_map [ "libraries"; "default_implementation" ] ~f:(fun field ->
+                          Option.value_map (Scan.field stanza field) ~default:[]
+                            ~f:(List.concat_map ~f:Scan.atoms)) )
+                  in
+                  List.map (atoms "name" @ atoms "public_name") ~f:(fun name -> (name, entry))
+              | _ -> []))
+  in
+  (* What a program's linked program-local libraries read of the width, transitively, each read
+     attributed to the library and module it sits in. *)
+  let width_unseen_reported = Hashtbl.create (module String) in
+  let width_reads_linked stanza =
+    let rec close seen = function
+      | [] -> List.rev seen
+      | name :: rest -> (
+          match List.Assoc.find width_libraries name ~equal:String.equal with
+          | Some ((canonical, _, _, libraries) as entry)
+            when not (List.exists seen ~f:(fun (c, _, _, _) -> String.equal c canonical)) ->
+              close (entry :: seen) (libraries @ rest)
+          | _ -> close seen rest)
+    in
+    let direct =
+      Option.value_map (Scan.field stanza "libraries") ~default:[]
+        ~f:(List.concat_map ~f:Scan.atoms)
+    in
+    List.concat_map (close [] direct) ~f:(fun (library, d, modules, _) ->
+        List.filter_map modules ~f:(fun m ->
+            let key = String.lowercase (Scan.in_subdir d (m ^ ".ml")) in
+            (* A followed library module the scan was handed no source for is one whose reads it
+               cannot see, which looks exactly like one that makes none (Codex P2, round 6). *)
+            if Option.is_none (source_of ~dir:d m) && not (Hashtbl.mem width_unseen_reported key)
+            then (
+              Hashtbl.set width_unseen_reported ~key ~data:();
+              fail
+                (Printf.sprintf
+                   "library %s, which a program links, names the module `%s`, and this check was \
+                    handed no `%s` to read -- a width read there would be invisible to every \
+                    program linking it. Add the directory to the rule's globs"
+                   library m key));
+            Option.map (Map.find width_reach key) ~f:(fun spellings ->
+                Printf.sprintf "library %s (%s.ml) reads %s" library (String.lowercase m)
+                  (String.concat ~sep:", " spellings))))
+  in
+  let width_table = ref [] in
   (* Whether this run was handed the repository, established the way the sibling scans establish it:
      every scan root the globs are written for contributed its floor of sources. The relationship
      below is about whatever tree is in front of the scan and is checked either way; the CENSUS
@@ -1242,6 +1525,29 @@ let main () =
      a run was in goes into the golden, so a glob that breaks flips that line rather than quietly
      retiring the floor. *)
   let repository_census = List.is_empty (Sources.floor_violations (List.map source_files ~f:fst)) in
+  (* gh-ocannl-1320: the width derivation's anchors. A rename or a narrowed glob that loses one of
+     them would empty the derivation, and a promoted golden would then retire every requirement in
+     silence (Codex P2, round 5). So on the repository, and in any tree holding the limits record,
+     each anchor must be found and must yield something. *)
+  (if repository_census || List.Assoc.mem source_files ~equal:String.equal width_limits_home then
+     let missing =
+       List.filter_map
+         [
+           ( Option.is_none (List.Assoc.find library_modules width_module ~equal:String.equal),
+             Printf.sprintf "no `%s` module among arrayjit/lib's sources" width_module );
+           (List.is_empty width_fields, Printf.sprintf "no field of %s carries it" width_limits_home);
+           ( List.is_empty width_record_types,
+             Printf.sprintf "no record type of %s declares those fields" width_limits_type_home );
+         ]
+         ~f:(fun (absent, what) -> Option.some_if absent what)
+     in
+     if not (List.is_empty missing) then
+       fail
+         (Printf.sprintf
+            "the cc vector-width derivation lost an anchor: %s -- the rule would derive no reader \
+             and pass every stanza; follow the rename in `width_module`, `width_limits_home` or \
+             `width_limits_type_home`, or extend the rule's globs"
+            (String.concat ~sep:"; " missing)));
   let artifact_claimed = ref (Set.empty (module String)) in
   let artifact_violations = ref 0 in
   (* One line per subject for stderr, and per dune file for the golden: what the golden holds is
@@ -2507,6 +2813,53 @@ let main () =
                                         ". `%s` is no configuration key OCANNL reads, so it cannot \
                                          be declared -- pin it, or fix the spelling"
                                         key)));
+                      (* gh-ocannl-1320: the cc vector width, read by the program's own modules or a
+                         program-local library it links, asked of every run of it. A plain library
+                         is not asked -- its linkers are -- but one with inline tests is a program
+                         of its own: its generated runner runs under `(inline_tests (deps …))`, and
+                         each hand-written per-module rule running that runner under its own deps
+                         (Codex P2, round 1). *)
+                      (let width_runners, width_program =
+                         match kind with
+                         | "library" -> (
+                             match Scan.field stanza "inline_tests" with
+                             | None -> ([], program)
+                             | Some args ->
+                                 let library = named () in
+                                 ( (Scan.field_in args "deps", Set.empty (module String))
+                                   :: List.concat_map group ~f:(fun rule ->
+                                       List.map (inline_runner_pins ~library rule) ~f:(fun pins ->
+                                           (Scan.field rule "deps", pins))),
+                                   "its inline tests" ))
+                         | _ -> (runners, program)
+                       in
+                       let reads =
+                         List.filter_map own_modules ~f:(fun module_name ->
+                             Option.map
+                               (Map.find width_reach
+                                  (String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))))
+                               ~f:(fun spellings ->
+                                 Printf.sprintf "%s.ml reads %s" (String.lowercase module_name)
+                                   (String.concat ~sep:", " spellings)))
+                         @ width_reads_linked stanza
+                       in
+                       let var = Utils.env_var_name width_key in
+                       if not (List.is_empty width_runners || List.is_empty reads) then
+                         let via = String.concat ~sep:"; " reads in
+                         if
+                           List.for_all width_runners ~f:(fun (deps, pins) ->
+                               Scan.declares_env_var deps var || Set.mem pins var
+                               || Option.value_map deps ~default:false
+                                    ~f:(List.exists ~f:depends_on_universe))
+                         then width_table := (where, via) :: !width_table
+                         else
+                           fail
+                             (Printf.sprintf
+                                "%s reads the cc vector width (%s), and a rule running %s neither \
+                                 declares nor pins `%s` -- so a rerun at another width, the check \
+                                 an ARM box owes the ubuntu leg, replays the previous width's \
+                                 result as a pass. Add (env_var %s) to every rule that runs %s"
+                                where via width_program var var width_program));
                       (* gh-ocannl-1149: the keys the program reaches by naming the schedule
                          pipeline, asked of every run of it exactly as a guard's keys are. Not of a
                          library: one naming the pipeline is the route every compiled program takes,
@@ -2756,6 +3109,23 @@ let main () =
     (String.concat ~sep:", "
        (List.concat_map pipeline_entries ~f:snd |> List.dedup_and_sort ~compare:String.compare));
   List.sort !pipeline_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
+  printf
+    "\n\
+     Programs reading the cc vector width, every rule running which declares or pins `%s`\n\
+     (gh-ocannl-1320):\n"
+    (Utils.env_var_name width_key);
+  (* The derivation itself, so a value or field that starts or stops carrying the width is a
+     reviewable diff -- and a `cc_backend.ml` or `schedulers.ml` this run was not handed empties a
+     line rather than retiring the rule in silence. *)
+  printf "  (the `%s` values reaching `%s`: %s)\n" width_module width_key
+    (String.concat ~sep:", " width_values);
+  printf "  (the device-limits fields they fill in %s: %s)\n" width_limits_home
+    (String.concat ~sep:", " width_fields);
+  printf "  (the record type of those fields, whose every label marks a limits update, in %s: %s)\n"
+    width_limits_type_home
+    (String.concat ~sep:", " (List.map width_record_types ~f:fst));
+  List.sort !width_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
   |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
   let stale_gateless =
     List.concat_map gateless_dirs ~f:(fun (file, (aliases, _)) ->
@@ -5025,6 +5395,686 @@ let pipeline_control () =
     unplaced_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
+(* gh-ocannl-1320's control. Every width reader in the repository declares the variable once this
+   rule lands, so a control drawn from the corpus would pass whether the rule decides anything or
+   not; put to a tree of its own, one `(test)` is run under each way of reading the width and each
+   way of answering for it.
+
+   The stand-in `cc_backend.ml` reads the width key in one value, reaches it one call away in a
+   second, and reads another key in a third. The stand-in `schedulers.ml` fills three fields from
+   those three -- one under a `let open`, one through a helper the function declares locally,
+   calling through a module alias, one directly -- so the derivation has to see through the first
+   two and tell both from the third (Codex P2, rounds 1-3). The stand-in `backend_intf.ml` declares
+   the record type, whose other label marks an update that copies every width field. The tree sits
+   under `test/` so that a library beside the subject is one the rule follows. *)
+let width_backend_stub =
+  "let auto_vector_bytes () = 16\n\
+   let vector_bytes_setting () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+   let registers () = 2 * vector_bytes_setting ()\n\
+   let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n"
+
+let width_limits_stub =
+  "module CC = Cc_backend\n\
+   let cpu_mma_limits () =\n\
+  \  let helper () = CC.registers () in\n\
+  \  { no_hardware_limits with\n\
+  \    simd_vector_bytes = (let open Cc_backend in vector_bytes_setting ());\n\
+  \    simd_vector_registers = helper (); worker_pool_tag = Cc_backend.chunks () }\n"
+
+let width_type_stub =
+  "type hardware_limits = {\n\
+  \  simd_vector_bytes : int;\n\
+  \  simd_vector_registers : int;\n\
+  \  worker_pool_tag : int;\n\
+  \  native_fp16_arithmetic : bool;\n\
+   }\n"
+
+let width_subject ?(links = "") answer =
+  let var = Utils.env_var_name width_key in
+  let deps =
+    match answer with
+    | `Declares -> Printf.sprintf " (env_var %s)" var
+    | `Pins | `Pins_ambient | `Pins_ambient_lower | `Neither -> ""
+  in
+  let action =
+    match answer with
+    | `Pins -> Printf.sprintf "\n (action\n  (setenv %s 16\n   (run %%{test})))" var
+    | `Pins_ambient ->
+        Printf.sprintf "\n (action\n  (setenv %s %%{env:%s=-1}\n   (run %%{test})))" var var
+    | `Pins_ambient_lower ->
+        Printf.sprintf "\n (action\n  (setenv %s %%{env:%s=-1}\n   (run %%{test})))" var
+          (String.lowercase var)
+    | `Declares | `Neither -> ""
+  in
+  Printf.sprintf
+    "(test\n\
+    \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
+    \ (name probe)\n\
+    \ (modules probe)\n\
+    \ (deps ocannl_config%s)\n\
+    \ (libraries arrayjit.ir%s)%s)\n\n\
+     (rule\n\
+    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
+    \ (alias runtest)\n\
+    \ (deps ocannl_config (universe))\n\
+    \ (action\n\
+    \  (run %%{dep:ambient.exe})))\n\n\
+     (executable\n\
+    \ (name ambient)\n\
+    \ (modules ambient)\n\
+    \ (link_flags -linkall)\n\
+    \ (libraries arrayjit.utils))\n"
+    deps links action
+
+(* The library beside the subject: a plain one, or one with inline tests -- a program of its own --
+   whose `(inline_tests (deps …))` does or does not declare the variable. A directory with inline
+   tests carries its own ambient gate, as every directory with runtest actions does. *)
+let width_support_dune inline =
+  let gate =
+    "\n\
+     (rule\n\
+    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
+    \ (alias runtest)\n\
+    \ (deps ocannl_config (universe))\n\
+    \ (action\n\
+    \  (run %{dep:ambient.exe})))\n\n\
+     (executable\n\
+    \ (name ambient)\n\
+    \ (modules ambient)\n\
+    \ (link_flags -linkall)\n\
+    \ (libraries arrayjit.utils))\n"
+  in
+  match inline with
+  | `Plain -> "(library\n (name support)\n (modules support)\n (libraries arrayjit.ir))\n"
+  | `Plain_with_interface ->
+      "(library\n\
+      \ (name support)\n\
+      \ (modules support iface)\n\
+      \ (modules_without_implementation iface)\n\
+      \ (libraries arrayjit.ir))\n"
+  | (`Inline_undeclared | `Inline_declared) as inline ->
+      Printf.sprintf
+        "(library\n\
+        \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
+        \ (name support)\n\
+        \ (modules support)\n\
+        \ (inline_tests (deps ocannl_config%s))\n\
+        \ (libraries arrayjit.ir))\n\
+         %s"
+        (match inline with
+        | `Inline_declared -> " (env_var " ^ Utils.env_var_name width_key ^ ")"
+        | `Inline_undeclared -> "")
+        gate
+
+let width_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_width" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  let backend_home =
+    Stdlib.Filename.concat (Stdlib.Filename.dirname width_limits_home) "cc_backend.ml"
+  in
+  write_file (Stdlib.Filename.concat root width_limits_type_home) width_type_stub;
+  write_file (Stdlib.Filename.concat root "test/t/ambient.ml") "let () = ()\n";
+  write_file (Stdlib.Filename.concat root "test/lib/ambient.ml") "let () = ()\n";
+  (* A wrapper library re-exporting the reader: `(libraries (re_export support))` is a link too. *)
+  write_file
+    (Stdlib.Filename.concat root "test/wrap/dune")
+    "(library\n (name wrapper)\n (modules wrapper)\n (libraries (re_export support)))\n";
+  write_file (Stdlib.Filename.concat root "test/wrap/wrapper.ml") "let () = ()\n";
+  (* A virtual library whose default implementation reads the width. *)
+  write_file
+    (Stdlib.Filename.concat root "test/virt/dune")
+    "(library\n\
+    \ (name vlib)\n\
+    \ (modules vm)\n\
+    \ (virtual_modules vm)\n\
+    \ (default_implementation vimpl))\n";
+  write_file
+    (Stdlib.Filename.concat root "test/virt_impl/dune")
+    "(library\n (name vimpl)\n (implements vlib)\n (modules vm))\n";
+  write_file
+    (Stdlib.Filename.concat root "test/virt_impl/vm.ml")
+    "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n";
+  (* And one there with dune's default module set. *)
+  write_file (Stdlib.Filename.concat root "other/implicit/dune") "(library\n (name implicit_lib))\n";
+  (* A library whose directory the scan's globs do not reach: its source is never handed over. *)
+  write_file
+    (Stdlib.Filename.concat root "other/lib/dune")
+    "(library\n (name unseen)\n (modules unseen))\n";
+  (* A helper library outside the test roots, as a `bin` or benchmark one would be. *)
+  write_file
+    (Stdlib.Filename.concat root "tools/helper/dune")
+    "(library\n (name helper_lib)\n (modules helper_lib)\n (libraries arrayjit.ir))\n";
+  let paths =
+    "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
+    :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
+    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: "other/lib/dune"
+    :: "other/implicit/dune" :: "test/virt/dune" :: "test/virt_impl/dune" :: "test/virt_impl/vm.ml"
+    :: backend_home :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
+  in
+  let run ?(backend = Some width_backend_stub) ?(limits = width_limits_stub)
+      ?(helper = "let () = ()\n") ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe
+      answer =
+    let backend_file = Stdlib.Filename.concat root backend_home in
+    (match backend with
+    | Some backend -> write_file backend_file backend
+    | None -> ( try Stdlib.Sys.remove backend_file with Sys_error _ -> ()));
+    write_file (Stdlib.Filename.concat root width_limits_home) limits;
+    write_file (Stdlib.Filename.concat root "tools/helper/helper_lib.ml") helper;
+    write_file (Stdlib.Filename.concat root "test/lib/support.ml") support;
+    write_file (Stdlib.Filename.concat root "test/lib/dune") (width_support_dune inline);
+    write_file (Stdlib.Filename.concat root "test/t/probe.ml") probe;
+    write_file (Stdlib.Filename.concat root "test/t/dune") (width_subject ?links answer);
+    let paths =
+      if Option.is_some backend then paths
+      else List.filter paths ~f:(fun path -> not (String.equal path backend_home))
+    in
+    run_checker ~root ~exe ("." :: paths)
+  in
+  let projected = "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n" in
+  let aliased =
+    "module Cc_backend = Context.Cc_backend\nlet () = ignore (Cc_backend.registers ())\n"
+  in
+  let updated = "let pinned device = { device with Ir.Backend_intf.simd_vector_bytes = 16 }\n" in
+  let copied =
+    "let narrow device = { device with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+  in
+  let unrelated =
+    "let synthetic =\n\
+    \  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = \
+     16 }\n\
+     let other r = { r with some_other_field = 1 }\n\
+     let base = Ir.Backend_intf.no_hardware_limits\n\
+     let make w = { base with simd_vector_bytes = w }\n\
+     let derived = { (make 16) with worker_pool_tag = 0 }\n\
+     module BI = Ir.Backend_intf\n\
+     let aliased = { BI.no_hardware_limits with BI.native_fp16_arithmetic = false }\n\
+     let tag limits = limits.Ir.Backend_intf.worker_pool_tag\n\
+     let () = ignore (Context.Cc_backend.auto_vector_bytes ()); ignore (Context.Cc_backend.chunks \
+     ())\n"
+  in
+  let report label (status, text) =
+    eprintf "the width control's %s run %s. Its captured output:\n%s\n" label
+      (describe_status status) text
+  in
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let says substring (_, text) = String.is_substring text ~substring in
+  let diagnostic = "replays the previous width's result as a pass" in
+  let refused result = exited 1 result && says diagnostic result in
+  let passed result = exited 0 result && not (says diagnostic result) in
+  let undeclared = run ~probe:projected `Neither in
+  let declared = run ~probe:projected `Declares in
+  let pinned = run ~probe:projected `Pins in
+  let pinned_ambient = run ~probe:projected `Pins_ambient in
+  let via_alias = run ~probe:aliased `Neither in
+  let via_update = run ~probe:updated `Neither in
+  let via_copy = run ~probe:copied `Neither in
+  let via_library = run ~support:projected ~links:" support" ~probe:"let () = ()\n" `Neither in
+  let via_reexport = run ~support:projected ~links:" wrapper" ~probe:"let () = ()\n" `Neither in
+  let not_linked = run ~support:projected ~probe:"let () = ()\n" `Neither in
+  let inline_undeclared =
+    run ~support:projected ~inline:`Inline_undeclared ~probe:"let () = ()\n" `Neither
+  in
+  let inline_declared =
+    run ~support:projected ~inline:`Inline_declared ~probe:"let () = ()\n" `Neither
+  in
+  let constant = run ~probe:unrelated `Neither in
+  let shadowed =
+    run
+      ~probe:
+        "let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+         let narrow = { no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let unplaced_backend =
+    run
+      ~backend:
+        (Some
+           "let () = ignore (Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\")\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:projected `Declares
+  in
+  let unreached_backend =
+    run
+      ~backend:
+        (Some
+           "let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:projected `Declares
+  in
+  let lost_anchor = run ~backend:None ~probe:projected `Declares in
+  let over_read =
+    run
+      ~limits:(width_limits_stub ^ "let other () = { other_tag = Other.registers () }\n")
+      ~probe:copied `Neither
+  in
+  let local_qualified =
+    run
+      ~probe:
+        "module Local = struct\n\
+        \  let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+         end\n\
+         let narrow = { Local.no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = \
+         false }\n"
+      `Neither
+  in
+  let via_helper_lib = run ~helper:projected ~links:" helper_lib" ~probe:"let () = ()\n" `Neither in
+  let shadowed_home =
+    run
+      ~probe:
+        "module Ir = struct\n\
+        \  module Backend_intf = struct\n\
+        \    let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+        \  end\n\
+         end\n\
+         let narrow = { Ir.Backend_intf.no_hardware_limits with native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let via_include =
+    run
+      ~backend:
+        (Some
+           "let read_width () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            include struct let registers () = read_width () end\n\
+            let vector_bytes_setting () = read_width ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let unseen_library = run ~links:" unseen" ~probe:"let () = ()\n" `Declares in
+  let pinned_ambient_lower = run ~probe:projected `Pins_ambient_lower in
+  let via_nested_include =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  module Width = struct\n\
+           \    let registers () = Utils.get_global_arg ~default:\"-1\" \
+            ~arg_name:\"cc_vector_bytes\"\n\
+           \  end\n\
+            end\n\
+            include Public\n\
+            let vector_bytes_setting () = Width.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:"let () = ignore (Context.Cc_backend.Width.registers ())\n" `Neither
+  in
+  let via_default_impl = run ~links:" vlib" ~probe:"let () = ()\n" `Neither in
+  let opened_suffix =
+    run
+      ~probe:
+        "open Local\n\
+         let narrow = { Backend_intf.no_hardware_limits with \
+         Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let parent_alias =
+    run ~probe:"module C = Context\nlet () = ignore (C.Cc_backend.registers ())\n" `Neither
+  in
+  let implicit_library = run ~links:" implicit_lib" ~probe:"let () = ()\n" `Declares in
+  let via_multi_hop =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            end\n\
+            module W = Public\n\
+            module X = W\n\
+            include X\n\
+            let vector_bytes_setting () = Public.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let foreign_alias =
+    run
+      ~probe:
+        "module Local = struct\n\
+        \  module Backend_intf = struct\n\
+        \    let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
+        \  end\n\
+         end\n\
+         module BI = Local.Backend_intf\n\
+         let narrow = { BI.no_hardware_limits with BI.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let via_aliased_include =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            end\n\
+            module W = Public\n\
+            include W\n\
+            let vector_bytes_setting () = Public.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let via_destructuring =
+    run
+      ~backend:
+        (Some
+           "let read_width () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            let (registers, other) = (read_width, fun () -> 0)\n\
+            let vector_bytes_setting () = read_width ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let via_local_alias =
+    run
+      ~limits:
+        "module Widths = struct let registers () = Cc_backend.registers () end\n\
+         module W = Widths\n\
+         let cpu_mma_limits () =\n\
+        \  { no_hardware_limits with\n\
+        \    simd_vector_bytes = Cc_backend.vector_bytes_setting ();\n\
+        \    simd_vector_registers = W.registers (); worker_pool_tag = Cc_backend.chunks () }\n"
+      ~probe:updated `Neither
+  in
+  let via_named_include =
+    run
+      ~backend:
+        (Some
+           "module Public = struct\n\
+           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
+            end\n\
+            include Public\n\
+            let vector_bytes_setting () = Public.registers ()\n\
+            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
+      ~probe:aliased `Neither
+  in
+  let opened_bare =
+    run
+      ~probe:
+        "open Dynamic_limits\n\
+         let narrow = { no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
+      `Neither
+  in
+  let interface_only =
+    run ~inline:`Plain_with_interface ~links:" support" ~probe:"let () = ()\n" `Neither
+  in
+  let via_local_module =
+    run
+      ~limits:
+        "module CC = Cc_backend\n\
+         let cpu_mma_limits () =\n\
+        \  let module W = struct let get () = CC.registers () end in\n\
+        \  { no_hardware_limits with\n\
+        \    simd_vector_bytes = CC.vector_bytes_setting ();\n\
+        \    simd_vector_registers = W.get (); worker_pool_tag = Cc_backend.chunks () }\n"
+      ~probe:updated `Neither
+  in
+  let unplaced_record =
+    run
+      ~backend:
+        (Some
+           (width_backend_stub
+          ^ "let () = ignore { x = Utils.get_global_arg ~default:\"-1\" \
+             ~arg_name:\"cc_vector_bytes\" }\n"))
+      ~probe:projected `Declares
+  in
+  let undeclared_ok =
+    refused undeclared
+    && says (Utils.env_var_name width_key) undeclared
+    && says "`.simd_vector_bytes`" undeclared
+  in
+  let declared_ok = passed declared in
+  let pinned_ok = passed pinned in
+  let pinned_ambient_ok = refused pinned_ambient in
+  let via_alias_ok = refused via_alias && says "`Cc_backend.registers`" via_alias in
+  let via_update_ok =
+    refused via_update && says "leaving `simd_vector_registers` to its base" via_update
+  in
+  let via_copy_ok =
+    refused via_copy
+    && says "leaving `simd_vector_bytes` to its base" via_copy
+    && says "leaving `simd_vector_registers` to its base" via_copy
+  in
+  let via_library_ok = refused via_library && says "library support (support.ml)" via_library in
+  let not_linked_ok = passed not_linked in
+  let via_reexport_ok = refused via_reexport && says "library support (support.ml)" via_reexport in
+  let inline_undeclared_ok =
+    refused inline_undeclared && says "running its inline tests" inline_undeclared
+  in
+  let inline_declared_ok = passed inline_declared in
+  let constant_ok = passed constant in
+  let shadowed_ok = refused shadowed && says "leaving `simd_vector_bytes` to its base" shadowed in
+  let unplaced_backend_ok =
+    exited 1 unplaced_backend && says "outside every named top-level value, so no" unplaced_backend
+  in
+  let unreached_backend_ok =
+    exited 1 unreached_backend && says "derives no reader at all" unreached_backend
+  in
+  let lost_anchor_ok =
+    exited 1 lost_anchor && says "lost an anchor" lost_anchor
+    && says ("no `" ^ width_module ^ "` module") lost_anchor
+  in
+  let over_read_ok =
+    refused over_read && says "leaving `simd_vector_registers` to its base" over_read
+  in
+  let local_qualified_ok =
+    refused local_qualified && says "leaving `simd_vector_bytes` to its base" local_qualified
+  in
+  let via_helper_lib_ok =
+    refused via_helper_lib && says "library helper_lib (helper_lib.ml)" via_helper_lib
+  in
+  let shadowed_home_ok =
+    refused shadowed_home && says "leaving `simd_vector_bytes` to its base" shadowed_home
+  in
+  let via_include_ok = refused via_include && says "`Cc_backend.registers`" via_include in
+  let pinned_ambient_lower_ok = refused pinned_ambient_lower in
+  let via_nested_include_ok =
+    refused via_nested_include && says "`Cc_backend.Width.registers`" via_nested_include
+  in
+  let via_local_alias_ok =
+    refused via_local_alias && says "leaving `simd_vector_registers` to its base" via_local_alias
+  in
+  let via_aliased_include_ok =
+    refused via_aliased_include && says "`Cc_backend.registers`" via_aliased_include
+  in
+  let via_destructuring_ok =
+    refused via_destructuring && says "`Cc_backend.registers`" via_destructuring
+  in
+  let foreign_alias_ok =
+    refused foreign_alias && says "leaving `simd_vector_bytes` to its base" foreign_alias
+  in
+  let opened_suffix_ok =
+    refused opened_suffix && says "leaving `simd_vector_bytes` to its base" opened_suffix
+  in
+  let parent_alias_ok = refused parent_alias && says "`Cc_backend.registers`" parent_alias in
+  let implicit_library_ok =
+    exited 1 implicit_library && says "library implicit_lib, which a program links" implicit_library
+  in
+  let via_multi_hop_ok = refused via_multi_hop && says "`Cc_backend.registers`" via_multi_hop in
+  let via_default_impl_ok =
+    refused via_default_impl && says "library vimpl (vm.ml)" via_default_impl
+  in
+  let via_named_include_ok =
+    refused via_named_include && says "`Cc_backend.registers`" via_named_include
+  in
+  let opened_bare_ok =
+    refused opened_bare && says "leaving `simd_vector_bytes` to its base" opened_bare
+  in
+  let interface_only_ok =
+    exited 0 interface_only && not (says "which a program links" interface_only)
+  in
+  let via_local_module_ok =
+    refused via_local_module && says "leaving `simd_vector_registers` to its base" via_local_module
+  in
+  let unplaced_record_ok =
+    exited 1 unplaced_record && says "outside every named top-level value, so no" unplaced_record
+  in
+  let unseen_library_ok =
+    exited 1 unseen_library && says "library unseen, which a program links" unseen_library
+  in
+  if not undeclared_ok then report "undeclared" undeclared;
+  if not declared_ok then report "declared" declared;
+  if not pinned_ok then report "pinned" pinned;
+  if not pinned_ambient_ok then report "pinned-ambient" pinned_ambient;
+  if not via_alias_ok then report "via-alias" via_alias;
+  if not via_update_ok then report "via-update" via_update;
+  if not via_copy_ok then report "via-copy" via_copy;
+  if not via_library_ok then report "via-library" via_library;
+  if not not_linked_ok then report "not-linked" not_linked;
+  if not via_reexport_ok then report "via-reexport" via_reexport;
+  if not inline_undeclared_ok then report "inline-undeclared" inline_undeclared;
+  if not inline_declared_ok then report "inline-declared" inline_declared;
+  if not constant_ok then report "constant" constant;
+  if not shadowed_ok then report "shadowed" shadowed;
+  if not unplaced_backend_ok then report "unplaced-backend" unplaced_backend;
+  if not unreached_backend_ok then report "unreached-backend" unreached_backend;
+  if not lost_anchor_ok then report "lost-anchor" lost_anchor;
+  if not over_read_ok then report "over-read" over_read;
+  if not local_qualified_ok then report "local-qualified" local_qualified;
+  if not via_helper_lib_ok then report "via-helper-lib" via_helper_lib;
+  if not shadowed_home_ok then report "shadowed-home" shadowed_home;
+  if not via_include_ok then report "via-include" via_include;
+  if not unseen_library_ok then report "unseen-library" unseen_library;
+  if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
+  if not via_nested_include_ok then report "via-nested-include" via_nested_include;
+  if not via_default_impl_ok then report "via-default-impl" via_default_impl;
+  if not opened_suffix_ok then report "opened-suffix" opened_suffix;
+  if not parent_alias_ok then report "parent-alias" parent_alias;
+  if not implicit_library_ok then report "implicit-library" implicit_library;
+  if not via_multi_hop_ok then report "via-multi-hop" via_multi_hop;
+  if not foreign_alias_ok then report "foreign-alias" foreign_alias;
+  if not via_aliased_include_ok then report "via-aliased-include" via_aliased_include;
+  if not via_destructuring_ok then report "via-destructuring" via_destructuring;
+  if not via_local_alias_ok then report "via-local-alias" via_local_alias;
+  if not via_named_include_ok then report "via-named-include" via_named_include;
+  if not opened_bare_ok then report "opened-bare" opened_bare;
+  if not interface_only_ok then report "interface-only" interface_only;
+  if not via_local_module_ok then report "via-local-module" via_local_module;
+  if not unplaced_record_ok then report "unplaced-record" unplaced_record;
+  printf
+    "\n\
+     The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
+     library, over a stand-in `Cc_backend` reading `%s` in one value and one call away in\n\
+     another, and a stand-in limits record filling two fields from those --\n\
+     under a `let open` and through a function-local helper calling through an alias -- and a third\n\
+     from a value reading another key.\n\
+     The arms differ in how the module reads the width, whether the test links the library that\n\
+     reads it, whether that library has inline tests, and how the stanza answers for the variable.\n\n"
+    width_key;
+  Verdict.p
+    "a test projecting a width field off a limits record is reported, naming the variable and the \
+     read, when its stanza declares neither"
+    undeclared_ok;
+  Verdict.p "the same stanza declaring the variable passes" declared_ok;
+  Verdict.p "and so does the same stanza pinning it with `setenv` around its run" pinned_ok;
+  Verdict.p
+    "but a `setenv` whose value reads the same variable back through `%{env:…}` pins nothing, and \
+     is reported"
+    pinned_ambient_ok;
+  Verdict.p
+    "a `Cc_backend` value reaching the width one call away, named through a module alias of \
+     `Context.Cc_backend`, is a read"
+    via_alias_ok;
+  Verdict.p
+    "a limits update overwriting one width field leaves the other to a device base, and is a read"
+    via_update_ok;
+  Verdict.p
+    "a limits update overwriting only a label the width does not fill copies every width field, \
+     and is a read"
+    via_copy_ok;
+  Verdict.p "a read in a test-tree library the test links is the test's read" via_library_ok;
+  Verdict.p "and the same library, not linked, asks nothing of the test" not_linked_ok;
+  Verdict.p "a read reached through a library's `(re_export …)` dependency is the test's read too"
+    via_reexport_ok;
+  Verdict.p
+    "a read in a library with inline tests is asked of its `(inline_tests (deps …))` when nothing \
+     links it"
+    inline_undeclared_ok;
+  Verdict.p "and declaring the variable there answers for it" inline_declared_ok;
+  Verdict.p
+    "a fully synthetic limits record -- through an alias of the constant base and a function \
+     returning an update of it -- an update of another record, a field the width does not fill, \
+     and `Cc_backend` values not reaching the width ask for nothing"
+    constant_ok;
+  Verdict.p
+    "but a bare `no_hardware_limits` the test binds to a device's limits is that binding, and an \
+     update of it is a read"
+    shadowed_ok;
+  Verdict.p
+    "a `Cc_backend` reading the width key outside every named value is refused, not read as having \
+     no width readers"
+    unplaced_backend_ok;
+  Verdict.p
+    "and one whose values no longer reach the key at all is refused rather than passing vacuously"
+    unreached_backend_ok;
+  Verdict.p
+    "a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not passed \
+     with no readers"
+    lost_anchor_ok;
+  Verdict.p
+    "a field of another record over-read by name adds requirements and keeps the limits type's \
+     updates recognised"
+    over_read_ok;
+  Verdict.p
+    "a `no_hardware_limits` reached through a local module of the test is not the library's \
+     constant, and an update of it is a read"
+    local_qualified_ok;
+  Verdict.p "a read in a helper library outside the test roots is the linking program's read"
+    via_helper_lib_ok;
+  Verdict.p
+    "a canonical `Ir.Backend_intf.no_hardware_limits` under a file's own `module Ir` is that \
+     module's, and an update of it is a read"
+    shadowed_home_ok;
+  Verdict.p "a `Cc_backend` value exported through `include struct … end` is a width value too"
+    via_include_ok;
+  Verdict.p
+    "a linked library whose source the scan was never handed is refused, not read as making no \
+     reads"
+    unseen_library_ok;
+  Verdict.p "and the self-read is recognised case-insensitively, as Windows reads the variable"
+    pinned_ambient_lower_ok;
+  Verdict.p "a `Cc_backend` value re-exported by `include` of a named structure is a width value"
+    via_named_include_ok;
+  Verdict.p
+    "a bare `no_hardware_limits` the file does not bind came from an `open`, and an update of it \
+     is a read"
+    opened_bare_ok;
+  Verdict.p "a library's interface-only module has no source to hand over, and is not refused"
+    interface_only_ok;
+  Verdict.p "a field filled through a `let module` helper still carries the width"
+    via_local_module_ok;
+  Verdict.p "a width read inside a record under an unnamed `let ()` stays unplaced, and is refused"
+    unplaced_record_ok;
+  Verdict.p "a nested submodule's value re-exported by a named `include` is a width value too"
+    via_nested_include_ok;
+  Verdict.p
+    "a virtual library's default implementation reading the width is the linking program's read"
+    via_default_impl_ok;
+  Verdict.p
+    "a field filled through a top-level alias of a structure the limits file defines still carries \
+     the width"
+    via_local_alias_ok;
+  Verdict.p
+    "a `Cc_backend` value re-exported by `include` of an alias of a structure is a width value"
+    via_aliased_include_ok;
+  Verdict.p "and so is one bound by a destructuring top-level `let`" via_destructuring_ok;
+  Verdict.p
+    "an alias of some other module's `Backend_intf` does not name the library's synthetic limits, \
+     and an update through it is a read"
+    foreign_alias_ok;
+  Verdict.p
+    "and a bare `Backend_intf.no_hardware_limits` may come from any `open`, so an update of it is \
+     a read"
+    opened_suffix_ok;
+  Verdict.p "a `Cc_backend` value reached through an alias of its parent module is a read"
+    parent_alias_ok;
+  Verdict.p
+    "a linked library with dune's default module set in a directory the globs never reach is \
+     refused"
+    implicit_library_ok;
+  Verdict.p "a value re-exported by `include` through two module aliases is a width value"
+    via_multi_hop_ok;
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)
 let repository_inventory_control () =
   let exe =
@@ -5364,6 +6414,7 @@ let () =
       family_control ();
       inline_alias_control ();
       pipeline_control ();
+      width_control ();
       ambient_gate_control ();
       repository_inventory_control ();
       gateless_scope_control ();

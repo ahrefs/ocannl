@@ -208,13 +208,12 @@ let () =
         (is_str j "workload" protocol.H.workload);
       Verdict.p "variant names the self-test" (is_str j "variant" "self-test");
       Verdict.p "precision is f32" (is_str j "precision" "f32");
-      let algebra, source =
-        Utils.get_global_arg_with_source ~default:"all" ~arg_name:"simplify_fp_algebra"
-      in
-      let recorded_algebra = Option.value (field j "simplify_fp_algebra") ~default:`Null in
-      Verdict.p "float algebra metadata records the resolved selector and its source"
-        (is_str recorded_algebra "value" algebra
-        && is_str recorded_algebra "source" (Utils.config_source_label source));
+      let recorded_licences = Option.value (field j "fp_licences") ~default:`Null in
+      Verdict.p_all "float licence metadata records each resolved licence and its source"
+        (H.fp_licence_record ()) ~f:(fun (key, value, source) ->
+          let recorded = Option.value (field recorded_licences key) ~default:`Null in
+          (match field recorded "value" with Some (`Bool b) -> Bool.equal b value | _ -> false)
+          && is_str recorded "source" source);
       Verdict.p "compile_s is a non-negative number"
         (Option.value_map (number j "compile_s") ~default:false ~f:(fun s -> Float.(s >= 0.)));
       Verdict.p "searched is false in an untuned cell"

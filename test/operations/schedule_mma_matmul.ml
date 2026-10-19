@@ -1527,8 +1527,17 @@ let () =
      subscripted loop (~9x on this GEBP shape), while [a * b + dst] allocates well but is only MAYBE
      contracted. So this leg pins what the emission promises — a fused chain in serial k order,
      bitwise equal to the fallback — and the structural check pins that a whole-vector arm is on
-     offer at all, which is the part that only shows up as throughput. --- *)
+     offer at all, which is the part that only shows up as throughput.
+
+     The twin's chain is fused only under the contraction licence (gh-ocannl-998): off, as by
+     default, the serial update is a plain [acc + a * b] whose rounding is the C compiler's call,
+     while the tile -- and its fallback -- compute the fused chain whatever the licence. So the leg
+     compiles both routines under [fp_contract], which is what "the serial twin's fused chain"
+     means. --- *)
   if not on_gpu then (
+    let contract_var = "OCANNL_FP_CONTRACT" in
+    let previous_contract = Stdlib.Sys.getenv_opt contract_var in
+    Unix.putenv contract_var "true";
     let fi = 8 and fk = 32 and fj = 32 in
     (* Full-mantissa operands: each product needs more bits than f32 carries, so fma and mul-add
        differ, and both vary with both axes (69 and 53 are coprime to the strides). *)
@@ -1598,7 +1607,8 @@ let () =
          16), so the pin is that an x86 whole-vector arm exists at this width, not how its guard
          reads. *)
       && has "#elif "
-      && has "__builtin_ia32_vfmadd"))
+      && has "__builtin_ia32_vfmadd");
+    Unix.putenv contract_var (Option.value previous_contract ~default:""))
   else (
     skipped "full-mantissa products are inexact in f32";
     skipped "full-mantissa tensorized matmul matches the serial twin bitwise";

@@ -22,10 +22,7 @@ module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
-let accum_prec =
-  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
-  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
-
+let accum_prec = Ll_test.backend_accum_prec
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -147,11 +144,12 @@ let () =
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
     in
-    (* TM * TN fma statements from the materialized unrolls, two shared tiles, and only the two
-       thread-0 load guards survive. Metal spells single-precision FMA [fma(], CUDA [fmaf(]; the
-       patterns are disjoint so the counts add. *)
+    (* TM * TN accumulation statements from the materialized unrolls, two shared tiles, and only the
+       two thread-0 load guards survive. An update is the plain [acc + a * b] -- contraction is a
+       licence, off by default (gh-ocannl-998) -- or, with [fp_contract] on, an FMA: Metal spells it
+       [fma(], CUDA and HIP [fmaf(]. The three patterns are disjoint, so the counts add. *)
     p "unrolled register tile structure (GPU) or rejected (CPU)"
-      (count_sub "fma(" + count_sub "fmaf(" = tm * tn
+      (count_sub "(acc_mc1[" + count_sub "fma(" + count_sub "fmaf(" = tm * tn
       && count_sub "if (" = 2
       && String.is_substring src ~substring:"acc_mc1"
       &&

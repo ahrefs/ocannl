@@ -189,8 +189,11 @@ let known_config_keys =
       "narrow_compute_f32";
       "fp16_arithmetic";
       "bf16_arithmetic";
+      (* Licences of the floating-point algebra over lowered code (gh-ocannl-998) *)
+      "fp_contract";
+      "fp_reassociate";
+      "fp_finite_math";
       (* Algebraic rewrites over lowered code *)
-      "simplify_fp_algebra";
       "online_softmax";
       "online_softmax_backward";
       "online_softmax_block";
@@ -273,6 +276,11 @@ let config_key_classification : (config_key_class * string * string list) list =
         "online_softmax_block";
       ] );
     ( Code_borne,
+      "a licence of the floating-point algebra, applied once by the rewrite tier on the raw \
+       lowering (gh-ocannl-998): the rewritten code carries it, and the post-scheduling \
+       simplification is exact, so no transform consults it",
+      [ "fp_contract"; "fp_reassociate"; "fp_finite_math" ] );
+    ( Code_borne,
       "it changes the assignments the front end builds, hence the code they lower to",
       [ "default_prec"; "default_prng_variant"; "limit_constant_fill_size" ] );
     ( Code_borne,
@@ -286,10 +294,6 @@ let config_key_classification : (config_key_class * string * string list) list =
       "the numerics policy is consulted at codegen and by the autotune tile-shape choice, never in \
        the lowered code (gh-ocannl-568)",
       [ "tf32_matmuls"; "narrow_compute_f32"; "fp16_arithmetic"; "bf16_arithmetic" ] );
-    ( Keyed "numerics",
-      "simplification also runs after scheduling, where unrolling can expose algebra absent from \
-       the base code digest (gh-ocannl-998)",
-      [ "simplify_fp_algebra" ] );
     ( Keyed "pool",
       "it decides the worker pool timings execute on, and CPU crowns do not transfer across pools \
        (gh-ocannl-530)",
@@ -1323,6 +1327,14 @@ cc_backend_simd_flags=none
 # Contraction the codegen did not ask for (the explicit `fmaf` selections stay): whether a*b+c
 # becomes one fused op is compiler- and target-discretionary.
 cc_backend_fp_contract=off
+# The lowered code's own licences of the same kinds (gh-ocannl-998), pinned at their defaults: it
+# contracts no a*b+c into an fma, reassociates no constant, sum or product, and folds no zero
+# identity that infinities, NaNs or the sign of zero would contradict. What remains is the
+# arithmetic the program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized
+# accumulation's, stay).
+fp_contract=false
+fp_reassociate=false
+fp_finite_math=false
 cc_backend_fast_math=false
 # Explicit SIMD rendering reassociates strict-FP reductions into per-lane accumulator chains,
 # so the summation order would follow the probed vector width. 0 keeps the serial order.
@@ -1371,6 +1383,9 @@ cc_backend_simd_flags=auto
 # float, and on the GPU backends (whose f16 arithmetic and accumulators are native narrow
 # under this setting, same as under auto -- gh-ocannl-680).
 fp16_arithmetic=true
+
+# The floating-point licences (fp_contract, fp_reassociate, fp_finite_math; gh-ocannl-998) stay
+# at their defaults, off: they change results, which is the `approximate` profile's axis.
 |}
 
 let approximate_profile_payload =
@@ -1417,6 +1432,14 @@ online_softmax_block=auto
 # why `reproducible` pins them off and `performance` leaves them at their defaults.
 cc_backend_fast_math=true
 cc_backend_fp_contract=fast
+# The lowered code's own licences of the same kinds (gh-ocannl-998), on every backend: contract
+# a*b+c into an fma, reassociate constants, sums and products (and unroll known integer
+# powers), and fold the zero identities x+0 and 0*x as if no operand were infinite, NaN or a
+# negative zero. Each applies within one assignment of the raw lowering, never across an
+# inlining boundary.
+fp_contract=true
+fp_reassociate=true
+fp_finite_math=true
 # The greedy inlining refinement of Train.tune_placements is not numerics-neutral where storage
 # is narrower than compute (a materialized node rounds to its storage precision, an inlined one
 # does not), so `performance` leaves it alone. Two flips: each costs a full search, so this

@@ -22,9 +22,7 @@ module Asgns = Ir.Assignments
 open Verdict.Claims
 
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
-let accum_prec =
-  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
-  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+let accum_prec = Ll_test.backend_accum_prec
 
 (* The report's outcome as the questions this test asks of it (gh-ocannl-677): the outcome is a
    variant naming one of five mutually exclusive states, so a claim names the state it means. In

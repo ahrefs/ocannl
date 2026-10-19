@@ -43,9 +43,7 @@ module Asgns = Ir.Assignments
 module L = Ll_test
 
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
-let accum_prec =
-  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
-  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+let accum_prec = Ll_test.backend_accum_prec
 
 open Verdict.Claims
 

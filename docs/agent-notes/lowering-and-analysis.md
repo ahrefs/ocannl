@@ -393,6 +393,17 @@ files.
   maximum-one symbolic axis without an iterator, so runtime zero cannot escape the refusal through
   `Fixed_idx 0`. An unbound extent retains the standing maximum-shape semantics; padded-window
   clamping remains unreachable by construction.
+- **Output loops outside reduction loops is a FORWARD-lowering property only** (gh-ocannl-1151).
+  A forward contraction's product space lists the result's axes first, so its lowered nest opens
+  every loop the written cell mentions before any loop it does not: matmul, a transposed output, a
+  contraction axis in the middle of its operand, a two-axis reduction and a batched matmul all
+  lower that way, raw (`opt.source`) and optimized (`opt.llc`). Backprop does not: a gradient is
+  lowered over its FORWARD op's product space, so a weight gradient `dw[o,i] += dy[b,o] * x[b,i]`
+  iterates its batch reduction OUTERMOST, the shape `Autotune.detect_matmul_canonical`'s interchange
+  exists for (gh-ocannl-1183). Never rely on the order for an arbitrary accumulation; `Privatize`'s
+  tile width relied on it through a rebuilt peel input until gh-ocannl-1151 replaced that with the
+  shared decision (backend-precision-and-simd.md). `test/operations/lowered_nest_order` pins both
+  halves, roles read off each nest's accumulating write, with an interchanged negative control.
 - **A gh-490 extent guard is per-ITERATOR, so an axis with no product iterator gets none**, and
   `Accum_op` reaches that shape from ordinary `%op` code: a maximum-one symbolic axis has an empty
   product space, both sides indexed at `Fixed_idx 0`. Reducing over one bound to zero returned the
@@ -469,7 +480,8 @@ files.
   scatters against explicit neutral initialization.
 
 - **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
-  between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; first member `Online_softmax`):
+  between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; members `Online_softmax`, then
+  `Fp_algebra`, gh-ocannl-998 -- recognizers first, the normalizing algebra last):
   ahead of the analyses, so the traced store and the placements see the rewritten routine, and a
   member may REMOVE a node's definition (the online normalizer replaces a max- and a sum-reduction
   with one `Scan_loop`), which a post-analysis pass such as `rewrite_one_hot_reductions` may not.
@@ -492,9 +504,9 @@ files.
   anyway (a probe showed clang mis-evaluating `exp(-inf - floor)` at a peeled first iteration),
   so `cc_backend_fast_math` now takes `-ffinite-math-only` back, and the test is rerun under the
   flag (`runtest-online_softmax_fast_math`) with every claim asserted; (d) do not rely on an
-  exact identity such as `l + (m - m)` to inject a NaN -- `simplify_llc` reassociates it into
-  `(l + m) - m`, which cancels catastrophically (the generated C is the evidence; gh-ocannl-998
-  is the issue).
+  exact identity such as `l + (m - m)` to inject a NaN -- the `fp_reassociate` licence (then
+  ungated inside `simplify_llc`, now the `Fp_algebra` member) reassociates it into `(l + m) - m`,
+  which cancels catastrophically (the generated C was the evidence; gh-ocannl-998).
 - **`Online_softmax`'s third shape fuses the attention backward** (gh-ocannl-1002, gate
   `online_softmax_backward`; `find_backward`): it anchors on the normalizer found in the SAME pass
   (a backward lowered alone declines), so it cannot be a later fixpoint round. Traps: (a) the visit

@@ -1,0 +1,17 @@
+an unseeded segment is replaced by its pieces where one of them seeds: true
+a seeded segment is replaced by its pieces where more of them seed: true
+each of its pieces carries its seed: true
+a seeded segment whose pieces seed no more keeps its launch: true
+a block whose fine cuts move a boundary takes its fine segments: true
+the refined segmentation still covers every unit once, in order: true
+a block whose fine segments seed no more keeps its coarse segments: true
+a block both segmentations cut alike is the coarse segment, decided once: true
+a finer segmentation covering other units is ignored: true
+no finer segmentation leaves the coarse one: true
+on CUDA/HIP the score product is seeded, its segment moved off the maximum's initialization: true
+on CUDA/HIP the seeded routine compiles without falling back to the default: true
+off CUDA/HIP the seeded default seeds nothing: true
+the scores are not trivially zero: true
+the fixture is order-sensitive: a reversed f32 reduction differs from it in some cell: true
+the seeded scores are bitwise the default pipeline's: true
+the seeded row maxima are bitwise the default pipeline's: true
