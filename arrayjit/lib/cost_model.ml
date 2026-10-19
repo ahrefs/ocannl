@@ -821,12 +821,25 @@ let tile_mma_operand_loads ~operand_fragments ~operand_loads (opt : Low_level.op
   go ~scale:1 ~env:[] opt.Low_level.llc;
   List.rev !sites
 
+type load_count = No_tile_mma | Undescribed | Loads of int [@@deriving sexp_of, equal]
+
+let combine_load_counts counts =
+  if List.exists counts ~f:(equal_load_count Undescribed) then Undescribed
+  else
+    match
+      List.filter_map counts ~f:(function Loads n -> Some n | No_tile_mma | Undescribed -> None)
+    with
+    | [] -> No_tile_mma
+    | ns -> Loads (List.sum (module Int) ns ~f:Fn.id)
+
 let operand_load_count ~operand_fragments ~operand_loads opt =
-  match Option.all (tile_mma_operand_loads ~operand_fragments ~operand_loads opt) with
-  | None | Some [] -> None
-  | Some sites ->
-      Option.some
-      @@ List.sum
+  match tile_mma_operand_loads ~operand_fragments ~operand_loads opt with
+  | [] -> No_tile_mma
+  | sites when List.exists sites ~f:Option.is_none -> Undescribed
+  | sites ->
+      let sites = List.filter_opt sites in
+      Loads
+        (List.sum
            (module Int)
            sites
            ~f:(fun (executions, operands, lanes) ->
@@ -838,7 +851,7 @@ let operand_load_count ~operand_fragments ~operand_loads opt =
                    fragments
                    * operand_load_instructions ~lanes ~elements
                        ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
-                       cls))
+                       cls)))
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 

@@ -125,6 +125,17 @@ let () =
   p "under a keyless best leaf a subtree bounded at the threshold is fathomed unscored"
     (stats.Sspace.st_scored = 1 && stats.Sspace.st_fathomed = 1)
 
+(* A candidate's kernels combine into one count: an undescribed kernel makes the whole unknown (a
+   partial total would read as complete), kernels with no tile-MMA site add nothing. *)
+let () =
+  let combine = CM.combine_load_counts in
+  p "an undescribed kernel makes a candidate's count unknown"
+    (CM.equal_load_count (combine [ CM.Loads 3; CM.Undescribed; CM.No_tile_mma ]) CM.Undescribed);
+  p "kernels without tile-MMA sites add nothing to the counted ones"
+    (CM.equal_load_count (combine [ CM.No_tile_mma; CM.Loads 2; CM.Loads 5 ]) (CM.Loads 7));
+  p "a candidate with no tile-MMA site anywhere has nothing to count"
+    (CM.equal_load_count (combine [ CM.No_tile_mma; CM.No_tile_mma ]) CM.No_tile_mma)
+
 (* {1 The gh-ocannl-1190 twins} *)
 
 let nm = 8192
@@ -210,7 +221,11 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   let rule = capabilities in
   let no_ldmatrix = { capabilities with mma_operand_loads = no_ldmatrix_rule } in
   let label s = tag ^ ": " ^ s in
-  let loads capabilities o = Autotune.model_operand_loads ~capabilities o in
+  let loads capabilities o =
+    match Autotune.model_operand_loads ~capabilities o with
+    | CM.Loads n -> Some n
+    | CM.No_tile_mma | CM.Undescribed -> None
+  in
   let show_loads = Option.value_map ~default:"no tile-MMA" ~f:Int.to_string in
   let fewer a b = match (a, b) with Some a, Some b -> a < b | _ -> false in
   let claim s b =
@@ -406,7 +421,7 @@ let () =
          golden)\n"
         label (ms ex.Autotune.ex_floor_ms) (ms ex.ex_rank_ms) (ms ex.ex_compute_ms)
         (ms ex.ex_memory_ms) ex.ex_spilled
-        (Option.value_map ex.ex_operand_loads ~default:"none" ~f:Int.to_string));
+        (Sexp.to_string (CM.sexp_of_load_count ex.ex_operand_loads)));
   p "model_explain lists the default pipeline first"
     (match explained with (label, _) :: _ -> String.equal label "default" | [] -> false);
   p_pairwise_distinct "model_explain's labels are distinct" (List.map explained ~f:fst)
@@ -437,13 +452,19 @@ let () =
   in
   gated_all ~when_:(not describes) ~on:backend_name
     "where the backend describes no mma arm, no candidate gets an operand-load count" explained
-    ~f:(fun (_, ex) -> Option.is_none ex.Autotune.ex_operand_loads);
+    ~f:(fun (_, ex) ->
+      match ex.Autotune.ex_operand_loads with
+      | CM.Loads _ -> false
+      | CM.No_tile_mma | CM.Undescribed -> true);
   gated_exists ~when_:staged_fp8 ~on:backend_name
     "model_explain shows two candidates tied exactly on the ranking score with different operand \
      loads" (List.cartesian_product leaves leaves) ~f:(fun ((_, x), (_, y)) ->
       Option.equal Float.equal x.Autotune.ex_rank_ms y.Autotune.ex_rank_ms
       && Option.is_some x.ex_rank_ms
-      && match (x.ex_operand_loads, y.ex_operand_loads) with Some a, Some b -> a < b | _ -> false);
+      &&
+      match (x.ex_operand_loads, y.ex_operand_loads) with
+      | CM.Loads a, CM.Loads b -> a < b
+      | _ -> false);
   (* What [model_default] then ships at this shape, for the record. *)
   if staged_fp8 then
     let choice = ref None in

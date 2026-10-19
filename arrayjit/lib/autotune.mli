@@ -1747,11 +1747,13 @@ val model_default :
     {!Ir.Assignments.Block_comment} requires it. *)
 
 val model_operand_loads :
-  capabilities:Ir.Backend_intf.codegen_capabilities -> Ir.Low_level.optimized -> int option
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
+  Ir.Low_level.optimized ->
+  Ir.Cost_model.load_count
 (** {!Ir.Cost_model.operand_load_count} under [capabilities]' [mma_operand_loads] rule and
     [mma_operand_fragments] structure: the count {!model_family_search} breaks exact ties with and
-    {!model_explain} reports (gh-ocannl-1254). [None] where the backend describes no arm for some
-    statement (every backend but CUDA), or for code with no [Tile_mma]. *)
+    {!model_explain} reports (gh-ocannl-1254): [Undescribed] where the backend describes no arm for
+    some statement (every backend but CUDA). The walk keys only [Loads]. *)
 
 val model_family_search :
   ?on_rejected:(unit -> unit) ->
@@ -1788,10 +1790,11 @@ type explain = {
   ex_memory_ms : float option;
       (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
   ex_spilled : bool;  (** Some kernel's working set exceeds the cache capacity. *)
-  ex_operand_loads : int option;
-      (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}):
-          not a price, the count {!model_default}'s family search breaks exact score ties with
-          (gh-ocannl-1254). *)
+  ex_operand_loads : Ir.Cost_model.load_count;
+      (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
+          over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if
+          any kernel is): not a price, the count {!model_default}'s family search breaks exact score
+          ties with (gh-ocannl-1254). *)
 }
 (** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
 

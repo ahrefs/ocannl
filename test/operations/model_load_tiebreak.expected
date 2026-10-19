@@ -8,6 +8,9 @@ a keyless leaf listed later never displaces a keyed best: true
 without a tie-break a subtree bounded at the threshold is fathomed: true
 with a tie-break a subtree bounded at the threshold is entered, and its tie wins: true
 under a keyless best leaf a subtree bounded at the threshold is fathomed unscored: true
+an undescribed kernel makes a candidate's count unknown: true
+kernels without tile-MMA sites add nothing to the counted ones: true
+a candidate with no tile-MMA site anywhere has nothing to count: true
 stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
 stand-in: each pair has equal bytes: true
 stand-in: each pair has exactly equal ranking scores: true

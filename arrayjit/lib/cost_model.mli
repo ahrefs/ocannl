@@ -285,6 +285,20 @@ val operand_place : Low_level.optimized -> Tnode.t -> Backend_intf.mma_operand_p
     the schedule placed the node there, per-thread when its placement is [Local], device otherwise;
     [`Swizzled_b128] for a [Swizzle_b128] entry of [optimized.swizzled]. *)
 
+type load_count =
+  | No_tile_mma
+      (** The code has no [Tile_mma]: not zero loads — it loads its operands by paths this count
+          does not see — but nothing to count. *)
+  | Undescribed
+      (** Some statement the backend does not describe, or whose extents its arm's tile does not
+          divide: a partial count would order candidates by the part it sees. *)
+  | Loads of int
+[@@deriving sexp_of, equal]
+
+val combine_load_counts : load_count list -> load_count
+(** Several kernels' counts as one candidate's: [Undescribed] if any is, else the sum of the [Loads]
+    ([No_tile_mma] when there are none). *)
+
 val operand_load_count :
   operand_fragments:
     (a_prec:Ops.prec ->
@@ -303,14 +317,11 @@ val operand_load_count :
     b:Backend_intf.mma_operand_place ->
     bool * bool) ->
   Low_level.optimized ->
-  int option
+  load_count
 (** The per-lane load instructions of every [Tile_mma] operand, summed over the statements'
     executions (see the section contract), under a backend's load rule ([operand_loads], its
-    [mma_operand_loads]) and fragment structure ([operand_fragments], its [mma_operand_fragments]).
-    [None] — not applicable, rather than zero loads — for code with no [Tile_mma] (such code still
-    loads its operands, by paths this count does not see), and for code with a statement the backend
-    does not describe or whose extents its arm's tile does not divide: a partial count would order
-    candidates by the part it sees. *)
+    [mma_operand_loads]) and fragment structure ([operand_fragments], its [mma_operand_fragments]);
+    {!load_count} says when there is nothing, or nothing complete, to count. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 

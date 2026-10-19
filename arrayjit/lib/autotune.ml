@@ -4087,7 +4087,12 @@ let model_family_search ?(on_rejected = fun () -> ()) ~capabilities ~is_gpu ~is_
       (* Computed only for leaves that tie; a leaf that cannot be applied scored nothing, so never
          reaches a tie. *)
       let tie_break p =
-        match applied p with None -> None | Some post -> model_operand_loads ~capabilities post
+        match applied p with
+        | None -> None
+        | Some post -> (
+            match model_operand_loads ~capabilities post with
+            | CM.Loads n -> Some n
+            | CM.No_tile_mma | CM.Undescribed -> None)
       in
       let best, stats =
         Sspace.search
@@ -4539,7 +4544,7 @@ type explain = {
   ex_compute_ms : float option;
   ex_memory_ms : float option;
   ex_spilled : bool;
-  ex_operand_loads : int option;
+  ex_operand_loads : CM.load_count;
 }
 
 let model_explain ?name ctx comp bindings =
@@ -4554,9 +4559,7 @@ let model_explain ?name ctx comp bindings =
   let ms = Option.map ~f:(fun s -> s *. 1e3) in
   let explain segs =
     let ex_operand_loads =
-      match List.filter_map segs ~f:(model_operand_loads ~capabilities:caps) with
-      | [] -> None
-      | counts -> Some (List.sum (module Int) counts ~f:Fn.id)
+      CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
     in
     match segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs with
     | None ->
