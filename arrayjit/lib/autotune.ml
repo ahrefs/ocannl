@@ -474,13 +474,6 @@ let decline_summaries declines =
 let failed_count declines =
   Hashtbl.fold declines ~init:0 ~f:(fun ~key:_ ~data:acc count -> count + acc.da_count)
 
-(* These parse a setting the caller has already read, rather than reading it themselves: the key has
-   to be a string literal at the [Utils.get_global_arg] call site, because that literal is how the
-   consistency tests find a configuration read (test/support/config_key_scan.ml). A reader helper
-   taking the key as a parameter would hide every key routed through it. *)
-let int_setting ~default s = try Int.of_string (String.strip s) with _ -> default
-let float_setting ~default s = try Float.of_string (String.strip s) with _ -> default
-
 (* A candidate round-improvement below this fraction of the incumbent ends the search. *)
 let min_progress = 0.01
 
@@ -498,16 +491,11 @@ let min_progress = 0.01
    control. *)
 type round_expansion = Expand_differing | Expand_full | Expand_head
 
-let round_expansion_of_setting s =
-  match String.lowercase (String.strip s) with
-  | "differing" -> Expand_differing
-  | "full" -> Expand_full
-  | "head" -> Expand_head
-  | other ->
-      raise
-      @@ Utils.User_error
-           ("ocannl_autotune_round_expansion setting should be differing, full or head; found: "
-          ^ other)
+let round_expansion_of_setting = function
+  | "differing" -> Some Expand_differing
+  | "full" -> Some Expand_full
+  | "head" -> Some Expand_head
+  | _ -> None
 
 let round_expansion_name = function
   | Expand_differing -> "differing"
@@ -522,36 +510,27 @@ let round_expansion_name = function
    crowned [mma 32x32x0 bgrid], the other [mma 16x32x0 bgrid-in]). The playoff re-ranks those
    near-ties where the backdrop is small: inside the composite. A single within the playoff margin
    of its key's best single is close enough that the backdrop's noise could have inverted the order:
-   config [autotune_composite_playoff_margin], a fraction of that best, default
-   [default_playoff_margin]; a box whose backdrop is noisier inverts wider gaps, which only a wider
-   margin reaches. At most [playoff_width] of them per key go to the playoff, nearest first: config
-   [autotune_composite_playoff_width], default [default_playoff_width], and 0 turns the playoff off
-   (gh-ocannl-1259). Changing either default changes the default search menu, so bump
-   [Schedule_cache.entry_version]; a stated margin or width is [Search_shaping], like the beam
-   width, so a crown found under one setting replays under another. *)
-let default_playoff_margin = 0.005
-let default_playoff_width = 2
+   config [autotune_composite_playoff_margin], a fraction of that best, default 0.005; a box whose
+   backdrop is noisier inverts wider gaps, which only a wider margin reaches. At most
+   [playoff_width] of them per key go to the playoff, nearest first: config
+   [autotune_composite_playoff_width], default 2, and 0 turns the playoff off (gh-ocannl-1259). Both
+   defaults are their keys' [Utils.config_key_defaults] rows (gh-ocannl-1332). Changing either
+   default changes the default search menu, so bump [Schedule_cache.entry_version]; a stated margin
+   or width is [Search_shaping], like the beam width, so a crown found under one setting replays
+   under another. *)
 
 (* gh-ocannl-1138, config [autotune_staffed_singles]: whether the per-segment singles are timed
    against the running composite (see [tune]'s staffed sweep) rather than against every other
-   segment's preset. Changing the default bumps [Schedule_cache.entry_version]: the search then
-   times candidates the other one never did. *)
-let default_staffed_singles = false
-
-let staffed_singles_setting () =
-  Utils.get_global_flag ~default:default_staffed_singles ~arg_name:"autotune_staffed_singles"
+   segment's preset. The default is the key's [Utils.config_key_defaults] row; changing it bumps
+   [Schedule_cache.entry_version]: the search then times candidates the other one never did. *)
+let staffed_singles_setting () = Utils.registered_flag ~arg_name:"autotune_staffed_singles"
 
 (* gh-ocannl-1409: the wall-clock budget of one search, in seconds, or [None] for none. Read per
    call, like the other search settings, so a test can state it for one search. Only a positive
    number sets it ([Utils.Positive_float_or_unset], which is how the trajectory identity spells it):
-   empty, zero, negative and unparsable text all mean no budget. *)
-let budget_setting () =
-  match
-    Float.of_string_opt
-      (String.strip (Utils.get_global_arg ~arg_name:"autotune_budget_seconds" ~default:""))
-  with
-  | Some b when Float.(b > 0.) -> Some b
-  | Some _ | None -> None
+   empty, zero and negative mean no budget, and text that is no number is refused
+   (gh-ocannl-1332). *)
+let budget_setting () = Utils.registered_positive_float_or_unset ~arg_name:"autotune_budget_seconds"
 
 (* gh-ocannl-1409: whether a search its budget cut must ship the untuned default rather than its
    crown. A cut search crowns nothing slower than the untuned default because it measured that
@@ -2250,25 +2229,14 @@ let fission_exposes_sites ~static_indices (opt : LL.optimized) tuples =
 
 (* Per-machine calibrated envelope constants from the config beat the backend's class-level advisory
    constants ([Backend_intf.hardware_limits]'s [peak_flops] / [peak_memory_bandwidth]) — fitting
-   them from [autotune_calibration_file] data is the intended workflow. *)
-(* Takes the read as a thunk, both to keep it lazy and to keep the key a literal at its call
-   site -- see [int_setting]. *)
-
-let peak_override read =
-  lazy
-    (let s = String.strip (read ()) in
-     if String.is_empty s then None
-     else
-       match Float.of_string s with
-       | f when Float.(f > 0.) -> Some f
-       | _ -> None
-       | exception _ -> None)
-
+   them from [autotune_calibration_file] data is the intended workflow. Empty and non-positive
+   values leave the advisory in place; text that is no number is refused
+   ([Utils.Positive_float_or_unset]). *)
 let peak_flops_override =
-  peak_override (fun () -> Utils.get_global_arg ~arg_name:"model_peak_flops" ~default:"")
+  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_flops")
 
 let peak_bandwidth_override =
-  peak_override (fun () -> Utils.get_global_arg ~arg_name:"model_peak_memory_bandwidth" ~default:"")
+  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_memory_bandwidth")
 
 let envelope_legs ~(limits : Ir.Backend_intf.hardware_limits) =
   let leg override advisory =
@@ -2697,8 +2665,7 @@ let units_differing (a : compiled) (b : compiled) =
    analysis therefore also runs whenever envelope constants are present, even with logging and the
    calibration file off — one [CM.analyze] per compiled segment, trivial next to the compile and
    timing runs the candidate already paid for. *)
-let calibration_file =
-  lazy (String.strip (Utils.get_global_arg ~arg_name:"autotune_calibration_file" ~default:""))
+let calibration_file = lazy (Utils.registered_text ~arg_name:"autotune_calibration_file")
 
 (* The same candidate can be timed repeatedly within a process (a test tuning the same preset in two
    arms, a re-tune after a cache miss). A repeat violation restates the first one — the implied
@@ -2733,14 +2700,7 @@ let claim_bound_violation_warning key =
    understated envelope over-prunes, so the gate is explicit. Only the enumerative sketch flavors
    are prunable: presets, saved schedules and the baseline keep their reporting and cache-replay
    roles regardless of winnability, mirroring the keep-fraction pre-filter's exemptions. *)
-let bound_pruning_enabled =
-  lazy
-    (match
-       String.lowercase
-         (String.strip (Utils.get_global_arg ~arg_name:"autotune_bound_pruning" ~default:"false"))
-     with
-    | "true" | "1" -> true
-    | _ -> false)
+let bound_pruning_enabled = lazy (Utils.registered_flag ~arg_name:"autotune_bound_pruning")
 
 let bound_prunable = function
   | Whole (W_sketch _) | Fiss (F_sketch _) | Fiss (F_split _) -> true
@@ -4302,17 +4262,11 @@ let seed_gate_fallback = 32
 
 (* The configured gate, unresolved: [`Auto] or a threshold. *)
 let seed_gate_setting () =
-  let raw =
-    String.strip (Utils.get_global_arg ~arg_name:"gpu_default_sketch_min_reduction" ~default:"auto")
-  in
-  match (String.lowercase raw, Int.of_string_opt raw) with
-  | "auto", _ -> `Auto
-  | _, Some n when n >= 0 -> `Threshold n
-  | _ ->
-      raise
-      @@ Utils.User_error
-           ("Autotune: ocannl_gpu_default_sketch_min_reduction should be auto or a non-negative \
-             integer (0 disables the seeded default); found: " ^ raw)
+  Utils.registered_keyword ~arg_name:"gpu_default_sketch_min_reduction"
+    ~expected:"auto or a non-negative integer (0 disables the seeded default)" ~parse:(function
+    | "auto" -> Some `Auto
+    | raw -> (
+        match Int.of_string_opt raw with Some n when n >= 0 -> Some (`Threshold n) | _ -> None))
 
 let seeded_default_gate ~limits =
   match seed_gate_setting () with
@@ -4336,8 +4290,7 @@ let seeded_default_gate ~limits =
    HIP parts — so a small output does not leave most of the device idle behind a few large tiles. *)
 (* gh-ocannl-1348: whether the untuned compile sinks the reduction loops of the segments it does not
    seed below their write loops ({!reduction_sink}). *)
-let reduction_sink_enabled () =
-  Utils.get_global_flag ~default:true ~arg_name:"gpu_default_reduction_sink"
+let reduction_sink_enabled () = Utils.registered_flag ~arg_name:"gpu_default_reduction_sink"
 
 let seeded_geometries =
   [ (64, 64, 8, 4, 4); (32, 32, 8, 4, 4); (32, 32, 16, 2, 2); (16, 16, 8, 2, 2); (16, 16, 8, 4, 4) ]
@@ -4448,18 +4401,38 @@ let seeded_params ~limits ~accum_prec ~min_reduction seg =
    unified memory where CUDA's caches absorbed the scattered loads. *)
 let seeded_split_backend backend = seeded_default_backend backend
 
+(* gh-ocannl-1331: whether a search on [backend] can read the [Search_shaping] key [key]: the seeded
+   plan's keys where {!seeded_settings} resolves them (its backend tests come first, so another
+   backend never reads them), the register-tile twin gate where the matmul family's CPU branch reads
+   it ([matmul_flavor_tree]'s [is_cpu] arm, the register-tiled rendering), the default pipeline's
+   per {!Sched.search_shaping_key_read}. The other [autotune_*] keys are read on every backend: the
+   search's own knobs, and [autotune_pad_waste_max] in the GPU and CPU menus alike. *)
+let search_shaping_key_read ~backend key =
+  match key with
+  | "autotune_register_tile_rm_twin" -> Sched.backend_is_cpu backend
+  | "gpu_default_sketch_min_reduction" | "gpu_default_reduction_sink" ->
+      seeded_default_backend backend
+  | "gpu_default_split_reduce_min_serial" ->
+      seeded_default_backend backend && seeded_split_backend backend
+  | _ -> Sched.search_shaping_key_read ~backend_name:backend key
+
+let search_shaping_identity ~backend ~limits =
+  Utils.config_class_fingerprint
+    ~reads:(search_shaping_key_read ~backend)
+    ~resolve:(Sched.resolve_search_shaping_value limits)
+    Utils.Search_shaping
+
 let seeded_split_min_serial () =
-  let raw =
-    String.strip
-      (Utils.get_global_arg ~arg_name:"gpu_default_split_reduce_min_serial" ~default:"1024")
-  in
-  match Int.of_string_opt raw with
-  | Some n when n >= 0 -> n
-  | _ ->
+  match Utils.registered_int ~arg_name:"gpu_default_split_reduce_min_serial" with
+  | n when n >= 0 -> n
+  | n ->
       raise
-      @@ Utils.User_error
-           ("Autotune: ocannl_gpu_default_split_reduce_min_serial should be a non-negative integer \
-             (0 disables the untuned split); found: " ^ raw)
+        (Utils.Invalid_config_value
+           {
+             key = "gpu_default_split_reduce_min_serial";
+             value = Int.to_string n;
+             expected = "a non-negative integer (0 disables the untuned split)";
+           })
 
 (* The first pass's thread count a split aims for: every output cell gets [num_blocks] partial sums
    computed in parallel. About two waves of the RTX 5070 Ti's 70 multiprocessors at 256 threads
@@ -5624,7 +5597,7 @@ let on_staffed_start :
     Seam.t =
   Seam.make (fun ~menu:_ start -> start)
 
-let search_setting () = Utils.get_global_flag ~arg_name:"autotune_search" ~default:true
+let search_setting () = Utils.registered_flag ~arg_name:"autotune_search"
 
 (* The schedule cache directory a tuning call uses, or [""] for none. Whether the directory was
    CHOSEN, as opposed to being the built-in default -- passed by the caller, or set at some config
@@ -5660,26 +5633,22 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
   let search = Option.value_or_thunk search ~default:search_setting in
   let beam_width =
     max 1
-      (Option.value beam_width
-         ~default:
-           (int_setting ~default:2
-           @@ Utils.get_global_arg ~arg_name:"autotune_beam_width" ~default:"2"))
+      (Option.value_or_thunk beam_width ~default:(fun () ->
+           Utils.registered_int ~arg_name:"autotune_beam_width"))
   in
   let rounds =
-    Option.value rounds
-      ~default:
-        (int_setting ~default:2 @@ Utils.get_global_arg ~arg_name:"autotune_rounds" ~default:"2")
+    Option.value_or_thunk rounds ~default:(fun () ->
+        Utils.registered_int ~arg_name:"autotune_rounds")
   in
   let repeats =
-    Option.value repeats
-      ~default:
-        (int_setting ~default:3 @@ Utils.get_global_arg ~arg_name:"autotune_repeats" ~default:"3")
+    Option.value_or_thunk repeats ~default:(fun () ->
+        Utils.registered_int ~arg_name:"autotune_repeats")
   in
   (* Not [Option.value ~default:…] (Codex P2 on PR #512): that evaluates the default eagerly, so an
      unparsable ambient [autotune_timing] would be rejected even for a caller that passed its own
-     mode — and for a [~search:false] call, which times nothing at all. The other settings escape
-     this only because [int_setting] swallows a bad value; this one is meant to refuse it, so the
-     read has to be in the branch that needs it. *)
+     mode — and for a [~search:false] call, which times nothing at all. The settings above read in
+     [Option.value_or_thunk] for the same reason: each refuses a value that does not parse
+     (gh-ocannl-1332), so the read has to be in the branch that needs it. *)
   let timing =
     match timing with
     | Some t -> t
@@ -5694,46 +5663,31 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
   let base_report = { (no_search_report ~timing) with beam_width } in
   let max_split_reduce_sites =
     max 0
-      (Option.value max_split_reduce_sites
-         ~default:
-           (int_setting ~default:8
-           @@ Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"8"))
+      (Option.value_or_thunk max_split_reduce_sites ~default:(fun () ->
+           Utils.registered_int ~arg_name:"autotune_split_reduce_max_sites"))
   in
   let staffed_singles = staffed_singles_setting () in
   let budget = budget_setting () in
-  let playoff_width =
-    max 0
-      (int_setting ~default:default_playoff_width
-      @@ Utils.get_global_arg ~arg_name:"autotune_composite_playoff_width"
-           ~default:(Int.to_string default_playoff_width))
-  in
+  let playoff_width = max 0 (Utils.registered_int ~arg_name:"autotune_composite_playoff_width") in
   (* A negative margin admits no single and so means what width 0 says; it is floored at 0 (exact
-     ties only) rather than given a second spelling of off. A malformed value, NaN included, is the
-     default, as a malformed width is. *)
+     ties only) rather than given a second spelling of off. A malformed value, NaN included, is
+     refused (gh-ocannl-1332). *)
   let playoff_margin =
-    match
-      float_setting ~default:default_playoff_margin
-      @@ Utils.get_global_arg ~arg_name:"autotune_composite_playoff_margin"
-           ~default:(Float.to_string default_playoff_margin)
-    with
-    | m when Float.is_nan m -> default_playoff_margin
-    | m -> Float.max 0. m
+    Float.max 0. (Utils.registered_float ~arg_name:"autotune_composite_playoff_margin")
   in
   (* Read only where a round can run, so a malformed value refuses the searches it would shape and
      no other call (like [autotune_timing] above). *)
   let round_expansion =
     if search && rounds > 0 then
-      round_expansion_of_setting
-        (Utils.get_global_arg ~arg_name:"autotune_round_expansion" ~default:"differing")
+      Utils.registered_keyword ~arg_name:"autotune_round_expansion"
+        ~expected:"differing, full or head" ~parse:round_expansion_of_setting
     else Expand_differing
   in
   let seed_block_sizes = Option.value seed_block_sizes ~default:[ 64; 128; 256; 512 ] in
   let cache_dir = resolve_cache_dir ?cache_dir ~search () in
   let keep_fraction =
-    Option.value keep_fraction
-      ~default:
-        (float_setting ~default:1.
-        @@ Utils.get_global_arg ~arg_name:"autotune_keep_fraction" ~default:"1.")
+    Option.value_or_thunk keep_fraction ~default:(fun () ->
+        Utils.registered_float ~arg_name:"autotune_keep_fraction")
   in
   let static_indices = Idx.bound_symbols bindings in
   let backend = Context.backend_name ctx in
@@ -5955,9 +5909,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
       Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
         search beam_width rounds repeats keep_fraction max_split_reduce_sites
         (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
-        (Utils.config_class_fingerprint
-           ~resolve:(Sched.resolve_search_shaping_value limits)
-           Utils.Search_shaping)
+        (search_shaping_identity ~backend ~limits)
     in
     (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution the
        backend's code generation widens the serial rendering by (gh-ocannl-1116). *)
@@ -7917,13 +7869,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           if eligible_now then
             if staffed && Option.is_some !sr_running_ms then sr_composite_timed := true
             else Option.iter (try_spec (Fiss (F_split { sites = recombined; staff = [] }))) ~f:admit;
-          (* The composite playoff (gh-ocannl-1166; see [default_playoff_margin]), after every
-             recombination composite so the [playoff] progress phase holds only its windows:
-             starting from the faster timed composite, each key in turn tries its near-tie singles
-             in the composite's place, and a faster alternate becomes the incumbent the later keys
-             build on. Coordinate descent over the keys, at most [playoff_width] alternates each, so
-             the cost is linear in the keyed segments rather than the cartesian product the
-             recombination avoids. *)
+          (* The composite playoff (gh-ocannl-1166), after every recombination composite so the
+             [playoff] progress phase holds only its windows: starting from the faster timed
+             composite, each key in turn tries its near-tie singles in the composite's place, and a
+             faster alternate becomes the incumbent the later keys build on. Coordinate descent over
+             the keys, at most [playoff_width] alternates each, so the cost is linear in the keyed
+             segments rather than the cartesian product the recombination avoids. *)
           let playoff_contenders ~fine_ok ~current key =
             let singles =
               List.filter_map !fiss_single_results ~f:(fun (k, fine, (p, ms)) ->

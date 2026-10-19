@@ -115,7 +115,7 @@ type provenance = Candidate | Cache_replay | Advisory | User_schedule
 [@@deriving sexp_of, compare, equal]
 
 let strict_failure_classification =
-  lazy (Utils.get_global_flag ~default:true ~arg_name:"strict_failure_classification")
+  lazy (Utils.registered_flag ~arg_name:"strict_failure_classification")
 
 let is_oom_or_interrupt = function Out_of_memory | Stdlib.Sys.Break -> true | _ -> false
 let is_assert_or_stack = function Assert_failure _ | Stack_overflow -> true | _ -> false
@@ -146,6 +146,11 @@ let classify_raw ~strict ~classify_backend ~provenance ~phase ~candidate exn bac
   let fatal () = Fatal { exn; backtrace; phase; candidate; cause = None } in
   match exn with
   | _ when is_oom_or_interrupt exn -> fatal ()
+  (* gh-ocannl-1332: a malformed registered setting is the configuration's failure, whatever
+     candidate first read it and in whatever phase: contained as a decline -- the permissive
+     compile-side branch below would -- the search runs on, crowning candidates that never read the
+     key, as though the setting had been honored. *)
+  | Utils.Invalid_config_value _ -> fatal ()
   (* gh-ocannl-1326: typed at the allocator, so no backend classifier is consulted (HIP has none),
      and an allocation the device refused precedes any dispatch whatever the phase. *)
   | Device_memory_exhausted { requested; free; _ } ->

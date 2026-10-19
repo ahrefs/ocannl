@@ -55,7 +55,7 @@ let () =
    contained the untyped exception too. *)
 let () =
   p "strict failure classification is on"
-    (Utils.get_global_flag ~default:true ~arg_name:"strict_failure_classification")
+    (Utils.registered_flag ~arg_name:"strict_failure_classification")
 
 let n = 8
 let k = 4

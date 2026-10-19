@@ -627,15 +627,15 @@ val geometry_lattice_witness : string
 
 val pad_waste_max : unit -> float
 (** The pad-waste threshold of the matmul family's geometry menus (gh-ocannl-740), as this process
-    resolves config [autotune_pad_waste_max] (at least 1; a malformed value is the default, 2). A
-    geometry's pad-waste ratio is its padded work over the site's: the product, over the axes it
-    pads to its block sizes, of padded over real extent. A geometry whose ratio is at least this
-    many times that of the least-padded geometry its own menu proposes is
-    {!Ir.Schedule_space.child.Excluded} with a witness naming both ratios: valid, never proposed by
-    default, re-proposed exactly by {!Ir.Schedule_space.lift_excluded}. The least-padded geometry is
-    never excluded, and legality refutations take precedence. Judged in the GPU blocktile menu, the
-    GPU tensorized curated menu and the CPU packed menu of each packing shape. Exposed so a test
-    judges the tree against the threshold the tree was built with. *)
+    resolves config [autotune_pad_waste_max] (at least 1; a malformed or NaN value raises
+    [Utils.Invalid_config_value], gh-ocannl-1332). A geometry's pad-waste ratio is its padded work
+    over the site's: the product, over the axes it pads to its block sizes, of padded over real
+    extent. A geometry whose ratio is at least this many times that of the least-padded geometry its
+    own menu proposes is {!Ir.Schedule_space.child.Excluded} with a witness naming both ratios:
+    valid, never proposed by default, re-proposed exactly by {!Ir.Schedule_space.lift_excluded}. The
+    least-padded geometry is never excluded, and legality refutations take precedence. Judged in the
+    GPU blocktile menu, the GPU tensorized curated menu and the CPU packed menu of each packing
+    shape. Exposed so a test judges the tree against the threshold the tree was built with. *)
 
 val lift_pad_waste :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
@@ -1999,6 +1999,21 @@ val seeded_split_backend : string -> bool
     HIP (see {!seeded_split_sites}). A test states what each backend promises through these, never a
     restated list. *)
 
+val search_shaping_key_read : backend:string -> string -> bool
+(** Whether a search on [backend] can read the [Utils.Search_shaping] configuration key [key]
+    (gh-ocannl-1331): the seeded plan's [gpu_default_*] keys where {!seeded_default_backend} (and,
+    for the split threshold, {!seeded_split_backend}) holds, [autotune_register_tile_rm_twin] where
+    [Ir.Schedule.backend_is_cpu] does (only the CPU register-tiled rendering reads it), the default
+    pipeline's keys per {!Ir.Schedule.search_shaping_key_read}, and every other key everywhere. A
+    key a backend's search cannot read keys nothing in its trajectory identity
+    ({!search_shaping_identity}). *)
+
+val search_shaping_identity : backend:string -> limits:Ir.Backend_intf.hardware_limits -> string
+(** The [Search_shaping] part of {!tune}'s search-trajectory identity on [backend] at [limits]:
+    [Utils.config_class_fingerprint] of the class, over the keys {!search_shaping_key_read} says the
+    backend reads, with defaults resolved per device ({!Ir.Schedule.resolve_search_shaping_value}).
+*)
+
 val seeded_split_sites :
   backend:string ->
   min_serial:int ->
@@ -2037,7 +2052,7 @@ val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
     the threshold's measured default — where nothing calibrates either tier: no advisory (Metal, the
     C backends) and no [model_cache_capacity] / [model_cache_bandwidth] override. An explicit [none]
     override is a calibration and keeps [Ranked], even with both tiers off. Raises
-    {!Utils.User_error} on anything else. *)
+    [Utils.Invalid_config_value] naming the key on anything else (gh-ocannl-1332). *)
 
 (** What the seeded plan does with one segment (gh-ocannl-1388). *)
 type seeded_segment =
@@ -2877,7 +2892,8 @@ val tune :
 
 val budget_setting : unit -> float option
 (** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
-    the setting is a positive number, [None] (no budget) otherwise. *)
+    the setting is a positive number, [None] (no budget) when it is empty, zero or negative; text
+    that is no number raises [Utils.Invalid_config_value] (gh-ocannl-1332). *)
 
 val budget_floor_unmeasured :
   budget_cut:bool -> auto_sched:bool -> baseline_dispatched:bool -> floor_measured:bool -> bool

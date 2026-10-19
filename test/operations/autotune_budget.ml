@@ -140,8 +140,13 @@ let () =
   in
   p "setting: a positive number of seconds is a budget"
     (Option.equal Float.equal (parse "2.5") (Some 2.5));
-  p_all "setting: empty, zero, negative and unparsable text mean no budget"
-    [ ""; "0"; "-3"; "soon" ] ~f:(fun v -> Option.is_none (parse v))
+  p_all "setting: empty, zero and negative mean no budget" [ ""; "0"; "-3" ] ~f:(fun v ->
+      Option.is_none (parse v));
+  (* gh-ocannl-1332: a registered key's unparsable value is refused, naming the key. *)
+  p "setting: unparsable text is refused, naming the key"
+    (match parse "soon" with
+    | _ -> false
+    | exception Utils.Invalid_config_value { key; _ } -> String.equal key budget_key)
 
 (* --- the unmeasured-floor rule, case by case (the executed case is autotune_budget_unfloored)
    --- *)

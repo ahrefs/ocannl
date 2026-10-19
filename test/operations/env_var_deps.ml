@@ -1248,45 +1248,7 @@ let main () =
   (* A field of `Utils.settings` is answered for by every key its `restore_settings` assignment
      reads, so a compatibility alias (`big_models` for `large_models`) is asked for beside the
      key. *)
-  let settings_initializers =
-    match List.Assoc.find library_modules "Utils" ~equal:String.equal with
-    | Some on_disk -> Sources.settings_field_initializers (In_channel.read_all on_disk)
-    | None -> []
-  in
-  let settings_field_keys field =
-    match List.Assoc.find settings_initializers field ~equal:String.equal with
-    | Some (_ :: _ as keys) -> keys
-    | Some [] | None -> [ field ]
-  in
-  let module_reaches = Hashtbl.create (module String) in
-  let rec external_keys path =
-    match Sources.settings_predicate_keys path with
-    | Some keys when match path with [ "Utils"; _ ] -> true | _ -> false -> keys
-    | _ -> (
-        match path with
-        | module_name :: (_ :: _ as value) -> (
-            match module_reach module_name with
-            | Some reach ->
-                Option.value
-                  (List.Assoc.find reach (String.concat ~sep:"." value) ~equal:String.equal)
-                  ~default:[]
-            | None -> [])
-        | _ -> [])
-  and module_reach module_name =
-    match Hashtbl.find module_reaches module_name with
-    | Some reach -> reach
-    | None ->
-        Option.map (List.Assoc.find library_modules module_name ~equal:String.equal)
-          ~f:(fun on_disk ->
-            Hashtbl.set module_reaches ~key:module_name ~data:(Some []);
-            let reach =
-              (Sources.top_level_key_reach ~external_keys ~settings_field_keys
-                 (In_channel.read_all on_disk))
-                .reach
-            in
-            Hashtbl.set module_reaches ~key:module_name ~data:(Some reach);
-            reach)
-  in
+  let { Sources.external_keys; settings_field_keys } = Sources.library_reach ~library_modules () in
   let pipeline_entries =
     match List.Assoc.find source_files ~equal:String.equal pipeline_home with
     | None -> []
