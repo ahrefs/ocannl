@@ -106,7 +106,9 @@
   compiler_options
   c_syntax
   cuda_like_config
-  cuda_mma)
+  cuda_mma
+  metal_mma
+  hip_mma)
  (modes best))
 
 (library

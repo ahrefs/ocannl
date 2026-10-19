@@ -1,0 +1,14 @@
+cuda: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
+cuda: some storage triple has an arm: true
+cuda: some storage triple has no arm: true
+cuda: every advertised format triple is reached by a storage triple with an arm: true
+cuda: every staged layout's format triple has a format tile: true
+metal: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
+metal: some storage triple has an arm: true
+metal: some storage triple has no arm: true
+metal: every advertised format triple is reached by a storage triple with an arm: true
+hip: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true
+hip: some storage triple has an arm: true
+hip: some storage triple has no arm: true
+hip: every advertised format triple is reached by a storage triple with an arm: true
+cc: the descriptor admits a storage triple, scope and policy exactly where the arm table has an arm: true

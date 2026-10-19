@@ -836,7 +836,14 @@ files.
   `Backend_intf.advertises_mma_format_in_scope`, a pure descriptor judgment with explicit policy
   and accumulator scope; tile divisibility is asserted separately. Missing MMA capability skips
   this both-sides census leg, including HIP's device/header conjunction. `mma_format_scope` covers
-  absent wide scopes and policy combinations a concrete GPU cannot vary. The arch-floor axis no
+  absent wide scopes and policy combinations a concrete GPU cannot vary. The descriptor's
+  correspondence with the arm table, for every backend, needs no device at all:
+  `mma_format_arm_tables` (gh-ocannl-1246) sweeps `Numerics.all` x emission scopes x storage
+  triples through `Autotune.mma_tile_for_precisions_in_scope` against each backend's `mma_arm`,
+  plus reachability of every advertised key, over CUDA's `Ir.Cuda_mma`, Metal's `Ir.Metal_mma`,
+  HIP's `Ir.Hip_mma` (the device-free tables each backend installs once its device set qualifies)
+  and cc's live tables. Put a new backend's mma tables in such a module and add a row; what the
+  census leg alone still pins is that the hooks render the arm the table names. The arch-floor axis no
   fleet GPU can vary either (every box sits above CUDA's 70/80/89 cutoffs) is `cuda_mma_cutoffs`'s
   (gh-ocannl-1214): CUDA's descriptor and arm resolver live in `Ir.Cuda_mma`, outside the
   cudajit-gated backend, as functions of the compute capability, and the test evaluates both just

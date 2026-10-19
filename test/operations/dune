@@ -9517,6 +9517,25 @@
  (modules cuda_mma_arms)
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
+; gh-ocannl-1246: every backend's advertised tensor-core formats against its arm table, as pure
+; functions of the numerics policy -- CUDA's, Metal's and HIP's device-free tables, cc's live ones --
+; so a dropped triple, arm or wide scope fails on a runner with no GPU.
+
+(test
+ ; ocannl-backend: cc -- Context.cpu () for cc's own tables; CUDA's, Metal's and HIP's are the pure
+ ; Ir.Cuda_mma, Ir.Metal_mma and Ir.Hip_mma, evaluated with no device.
+ (name mma_format_arm_tables)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules mma_format_arm_tables)
+ (libraries
+  base
+  stdio
+  arrayjit.ir
+  arrayjit.context
+  arrayjit.autotune
+  arrayjit.verdict))
+
 ; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter and
 ; every split-reduce site field reaches its label, each beam-round candidate names its parent,
 ; segment and move, and a winner replayed into the caller's context keeps the label it was timed
