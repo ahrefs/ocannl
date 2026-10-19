@@ -2,6 +2,9 @@
 # Sweep comparison cursor, sourced by tools/sweep.sh and direct fixtures.
 # The caller owns UNIT_STATES, TARGET, SLOW, REF, MAIN and full_sha, and provides
 # say and die. Only sweep_state_update publishes state; sourcing does no I/O.
+# sweep_state_update leaves SWEEP_STATE_PASSED_AT: the commit of the previous
+# verdict when this one is a red that follows a green on the same scope -- the
+# known-green end of a bisect (gh-ocannl-1375) -- and empty otherwise.
 
 # The history remains the append-only coverage record. This smaller state is
 # the comparison cursor for one exact unit scope: its immediately previous
@@ -58,6 +61,7 @@ sweep_state_update() { # machine backend outcome [fingerprint] [log]
   local label state stage previous_verdict previous_failure_ref
   local previous_fp current_goldens golden_paths path commit old_commit short old_short
   label=$machine/$backend
+  SWEEP_STATE_PASSED_AT=
   # skip/gate/error/timeout are recorded outcomes but not verdicts: they judged no
   # test result. Letting one replace a prior green would hide the next red's
   # regression transition merely because a machine slept or a run timed out.
@@ -90,6 +94,7 @@ sweep_state_update() { # machine backend outcome [fingerprint] [log]
     case $previous_verdict in
       pass | incremental-pass | legacy-pass)
         say "  $label: REGRESSION OR FIX DID NOT TAKE -- previous verdict was $previous_verdict"
+        SWEEP_STATE_PASSED_AT=$(sweep_state_field "$state" last_ref)
         ;;
     esac
 

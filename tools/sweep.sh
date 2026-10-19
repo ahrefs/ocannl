@@ -1780,6 +1780,78 @@ rerun_aliases() { # log
   '
 }
 
+# The targets of a regression's bisect (gh-ocannl-1375), one per line as `target <alias>`, each
+# once, or `unmapped <site>` for a failing site no stanza is found for. The stanzas rerun_aliases
+# maps (a dune-file site, or an inline expectation's directory `runtest`), plus a `(test)` stanza's
+# golden diff, which names only its `.expected` file -- the per-test alias is in its resolved
+# `diff --git` header instead, whose second operand `<dir>/<name>.exe.output` is the run of the
+# stanza `@<dir>/runtest-<name>` names (dune >= 3.20, the project's floor). An explicit rule's
+# `.expected` site stays unmapped here even where its dune-file site is mapped: nothing in the log
+# pairs the two, so the line says only what it can prove.
+bisect_targets() { # log
+  rerun_aliases "$1" | awk -v log_file="$1" '
+    BEGIN {
+      while ((getline raw < log_file) > 0) {
+        if (raw !~ /^diff --git a\/_build\/default\/[A-Za-z0-9_.\/-]+\.expected b\/_build\/default\/[A-Za-z0-9_.\/-]+\.exe\.output$/)
+          continue
+        split(raw, parts, / /)
+        golden = parts[3]; output = parts[4]
+        sub(/^a\/_build\/default\//, "", golden)
+        sub(/^b\/_build\/default\//, "", output)
+        sub(/\.exe\.output$/, "", output)
+        dir = golden
+        sub(/[^\/]+$/, "", dir)
+        name = substr(output, length(dir) + 1)
+        if (substr(output, 1, length(dir)) == dir && name != "" && name !~ /\//)
+          stanza[golden] = "@" dir "runtest-" name
+      }
+      close(log_file)
+    }
+    {
+      line = ""
+      if ($0 ~ /^alias /) line = "target " substr($0, 7)
+      else if ($0 ~ /^inline /) { line = substr($0, 8); sub(/\t.*/, "", line); line = "target " line }
+      else if ($0 ~ /^unmapped /) {
+        line = $0
+        path = $0
+        if (sub(/^unmapped File "/, "", path) && sub(/", lines? .*$/, "", path) && (path in stanza))
+          line = "target " stanza[path]
+      }
+      if (line != "" && !(line in seen)) { seen[line] = 1; print line }
+    }'
+}
+
+# The ready bisect of a unit red on this commit whose previous verdict on the same scope was green
+# (sweep_state_update's SWEEP_STATE_PASSED_AT, gh-ocannl-1375): `tools/test-run.sh bisect` with the
+# green commit, this one and the failing stanzas (bisect_targets), on the summary beside the
+# REGRESSION line, for the box the unit ran on -- a bisect runs where it is invoked. The command is
+# printed, never run: a bisect is hours of the box, and it first checks both ends hold there.
+say_bisect() { # label where backend good log
+  local label=$1 where=$2 backend=$3 good=$4 log=$5 line shown more
+  local targets=() unmapped=()
+  if [ "$good" = "$full_sha" ]; then
+    say "  $label: bisect: none -- the previous pass was at this same commit, so the test or its environment changed, not the code"
+    return 0
+  fi
+  while IFS= read -r line; do
+    case $line in
+      "target "*) targets+=("${line#target }") ;;
+      "unmapped "*) unmapped+=("${line#unmapped }") ;;
+    esac
+  done < <(bisect_targets "$log")
+  if [ ${#targets[@]} -gt 0 ]; then
+    say "  $label: bisect on $where: OCANNL_BACKEND=$backend tools/test-run.sh bisect $good $full_sha ${targets[*]}"
+  else
+    say "  $label: bisect: no command -- no failing site names a stanza"
+  fi
+  if [ ${#unmapped[@]} -gt 0 ]; then
+    shown=$(printf ' [%s]' "${unmapped[@]:0:5}")
+    more=
+    [ ${#unmapped[@]} -le 5 ] || more=" and $(( ${#unmapped[@]} - 5 )) more"
+    say "  $label: bisect: left out, no stanza found for:$shown$more"
+  fi
+}
+
 # The rerun as shell text for the machine that owns the worktree, one dune call
 # per stanza so each has its own status: a single call over all of them would
 # report one verdict for the set. The markers are what serial_rerun reads back.
@@ -2420,6 +2492,8 @@ run_unit() { # machine backend host
     fail | timeout | error) sweep_fingerprint_write "$log" "$machine/$backend" ;;
   esac
   sweep_state_update "$machine" "$backend" "$outcome" "${WRITTEN_FINGERPRINT:-}" "$log"
+  [ -z "${SWEEP_STATE_PASSED_AT:-}" ] ||
+    say_bisect "$machine/$backend" "${host:-$machine}" "$backend" "$SWEEP_STATE_PASSED_AT" "$log"
   # After the LAST guarded leg (the RTC context and the serial rerun append to the log too), so a
   # guard refused to any of them is reported, not only one refused to the suite.
   say_unguarded "$log" "$machine/$backend"

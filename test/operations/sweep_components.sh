@@ -313,14 +313,18 @@ state_fixture() {
   equal 'state: failure replaces the verdict' "$(sweep_state_field "$state" last_verdict)" fail
   equal 'state: failure keeps the tested golden commit' "$(awk -F '\t' '$1 == "golden" {print $2 ":" $3}' "$state")" "$full_sha:test.expected"
   grep -q 'previous verdict was pass' "$TMP/messages"; report "$?" 'state: green to red is reported'
+  equal "state: green to red leaves the green's commit for a bisect" "${SWEEP_STATE_PASSED_AT:-}" "$full_sha"
   cp "$state" "$TMP/before"
   for outcome in skip gate error timeout; do sweep_state_update box cc "$outcome"; done
   cmp -s "$state" "$TMP/before"; report "$?" 'state: unjudged outcomes preserve the cursor'
+  equal 'state: an unjudged outcome names no green to bisect from' "${SWEEP_STATE_PASSED_AT-unset}" ''
   sweep_state_update box cc pass
   equal 'state: green preserves the last failing fingerprint' "$(awk -F '\t' '$1 == "fingerprint" {print $2}' "$state")" 'failure one'
   printf 'failure two\n' >"$TMP/failure.fp"
   sweep_state_update box cc fail "$TMP/failure.fp" "$TMP/failure.log"
   grep -q 'fingerprint moved' "$TMP/messages"; report "$?" 'state: movement compares against the last failure'
+  sweep_state_update box cc fail "$TMP/failure.fp" "$TMP/failure.log"
+  equal 'state: red after red names no green to bisect from' "${SWEEP_STATE_PASSED_AT-unset}" ''
   equal 'state: publication removes its scratch files' "$(find "$UNIT_STATES" -type f | wc -l | tr -d ' ')" 1
 }
 

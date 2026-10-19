@@ -986,6 +986,11 @@ state_regression=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
 grep -q 'm4-max/cc: REGRESSION OR FIX DID NOT TAKE -- previous verdict was incremental-pass' \
   <<<"$state_regression"
 absent 'fingerprint moved since the previous failure' <<<"$state_regression"
+# The green was at this very commit, so there is no range to bisect (gh-ocannl-1375), and the line
+# says so rather than print a bisect of one commit against itself.
+grep -qx '  m4-max/cc: bisect: none -- the previous pass was at this same commit, so the test or its environment changed, not the code' \
+  <<<"$state_regression"
+absent 'tools/test-run.sh bisect' <<<"$state_regression"
 
 # Land the exact kind of attempted fix #897 was about. The next sweep resolves
 # the new origin/master, finds that the currently failing golden's last-touch
@@ -1014,6 +1019,32 @@ unit_state=$(grep -l "$(printf '^last_verdict\tfail$')" \
 [ -f "$unit_state" ]
 grep -q '^last_verdict.fail$' "$unit_state"
 grep -q "^golden.$fix_sha.test/unit.cc_expected.ml$" "$unit_state"
+
+# A red after a green at an EARLIER commit prints the ready bisect (gh-ocannl-1375): the green's
+# commit, this one, and the failing stanzas -- an explicit rule's dune-file site, and a `(test)`
+# stanza's golden diff, which names only its `.expected` and maps through its `.exe.output`
+# operand. A site no stanza is found for is named as left out. Its own target scope, so the
+# cursor above is not this case's predecessor.
+bisect_green=$(run_sweep_args --target bisect-probe)
+grep -q 'm4-max/cc: incremental-pass' <<<"$bisect_green"
+bisect_good=$(git -C "$main" rev-parse HEAD)
+printf 'after the green\n' >"$main/test/bisect_range.txt"
+git -C "$main" add test/bisect_range.txt
+git -C "$main" commit -qm 'a commit inside the bisect range'
+git -C "$main" push -q origin master
+bisect_bad=$(git -C "$main" rev-parse HEAD)
+bisect_failure="$state_failure
+File \"test/bisect_probe.expected\", line 1, characters 0-0:
+diff --git a/_build/default/test/bisect_probe.expected b/_build/default/test/bisect_probe.exe.output
+File \"test/bisect_elsewhere.ml\", line 3, characters 0-5:
+Error: a site no stanza names"
+bisect_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$bisect_failure \
+  run_sweep_args --target bisect-probe)
+grep -q 'm4-max/cc: REGRESSION OR FIX DID NOT TAKE -- previous verdict was incremental-pass' <<<"$bisect_red"
+grep -qxF "  m4-max/cc: bisect on m4-max: OCANNL_BACKEND=cc tools/test-run.sh bisect $bisect_good $bisect_bad @test/runtest-bisect_probe @test/runtest-state-probe" \
+  <<<"$bisect_red"
+grep -qxF '  m4-max/cc: bisect: left out, no stanza found for: [File "test/bisect_elsewhere.ml", line 3]' \
+  <<<"$bisect_red"
 
 # Two complete forced units expose only the INTERSECTION of their skip sets.
 # The three absent backends keep this a potential finding rather than a failure:

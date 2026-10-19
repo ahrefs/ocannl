@@ -3943,7 +3943,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   fingerprint across intervening greens, plus each failing golden's last-touch commit. A new red
   after green, or after one of those golden commits moves, is labeled `REGRESSION OR FIX DID NOT
   TAKE`; a changed fingerprint is reported against the previous failure rather than merely the
-  previous run. Standing identical reds stay quiet, which is the signal-to-noise property the
+  previous run. A red after a green also gets the ready bisect on the line after it
+  (gh-ocannl-1375): `<box>/<backend>: bisect on <host>: OCANNL_BACKEND=<backend> tools/test-run.sh
+  bisect <green sha> <this sha> <aliases>`, the aliases being the failing stanzas the serial rerun
+  maps plus each `(test)` golden diff's `@<dir>/runtest-<name>` (from its `.exe.output` operand;
+  the site itself names only the `.expected`), with any site no stanza is found for listed as left
+  out. A green at the same commit prints `bisect: none` instead: nothing in the code moved. Standing identical reds stay quiet, which is the signal-to-noise property the
   cursor exists to preserve. The cursor key includes the requested logical ref, so an exploratory
   branch or historical run cannot become `origin/master`'s predecessor. Golden paths come from the
   full log: ordinary test diffs name their `.expected` file directly, while an explicit rule's
@@ -3961,7 +3966,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 When a sweep unit (or any run) goes red and an earlier run of the same targets on the same box was
 green, the two commits bound a bisect: `tools/test-run.sh bisect GOOD BAD <targets…>`
-(gh-ocannl-1225), for example `OCANNL_BACKEND=cuda tools/test-run.sh bisect --build
+(gh-ocannl-1225; a sweep unit's summary prints it ready to paste, gh-ocannl-1375), for example `OCANNL_BACKEND=cuda tools/test-run.sh bisect --build
 ./test/operations/test_vec_simple.exe <good-sha> <bad-sha> @test/operations/runtest-test_vec_simple`.
 Finding gh-ocannl-1222's cause took a hand-rolled `git bisect run` on tuf, and its step script had
 three easy ways to lie; the verb encodes each once (tools/bisect-steps.sh says how):
