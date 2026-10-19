@@ -2782,13 +2782,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   whole `dune runtest` step was ~8min, most of it this chain; taking it off the per-PR path took
   ubuntu CI from ~31min to ~15 and macOS from ~16 to ~10). The daily sweep's full-suite units
   build `@runtest @train` together, so every backend still executes them daily, and per-PR CI
-  runs the tier as a macOS-ONLY shard: measured with the compile cached, `@train` is ~4.7min on
-  an M4 Max but ~10min on a 24-thread Linux box, so a ubuntu shard (slower still on the 4-vCPU
-  runner) would replace the ~15min main job as the matrix's latency ceiling while the macOS shard
-  fits under it. A change to training dynamics, `Train.*` plumbing or the autotuner's fission
-  path is still worth a local `dune build @train` (or the affected
-  `@test/training/train-<name>`) before pushing, since ubuntu-specific breakage there surfaces
-  only in the sweep. `@slow` keeps the
+  runs the tier as two ubuntu shards (gh-ocannl-1422; the schedule adds a macOS `train` job). It
+  used to be one macOS job, because one ubuntu job would have set the matrix's latency (the chain
+  is ~10min on a 24-thread Linux box with the compile cached, slower on the 4-vCPU runner); but
+  a second macOS job per PR doubled each PR's claim on the scarce macOS runners, and in a ~20-PR
+  wave macOS jobs queued ~2h. `tools/ci-shard.sh targets K/N train` deals the `train` aggregate's
+  members by `TRAIN_WEIGHTS` -- WALL seconds, since the members serialize on the lock and each
+  saturates the cores, so a shard's time is the sum of its members' -- re-measured with
+  `tools/test-run.sh fresh @test/training/train-<name>...` on a Linux box, which prints each
+  member's wall time. A change to training dynamics, `Train.*` plumbing or the autotuner's
+  fission path is still worth a local `dune build @train` (or the affected
+  `@test/training/train-<name>`) before pushing, since macOS-specific breakage there surfaces
+  only in the schedule and the sweep. `@slow` keeps the
   genuinely long real-dataset runs (`mnist_conv`, `cifar_conv`, `gpt2_dry_run`). CI also runs its
   one dune walk as `dune build "@default" "@runtest"` — two separate commands would hold the
   serialized lock chain (what remains of it) against an otherwise idle runner after every file
@@ -2796,7 +2801,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `@` tokens to nothing.
 - Per-PR ubuntu runs that suite as N jobs (`shard: K/N` in `ci.yml`'s matrix), macOS as one: as a
   single job ubuntu had grown back to 18-32min, three quarters of its dune step executing
-  `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` names
+  `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` (suite
+  `main`, the default; `train` above is the other) names
   a shard's targets: each `runtest-<name>` alias of `test/operations` (built `@@`, non-recursive)
   is a unit, and one `@rest` unit is every suite alias, non-recursively, of every OTHER directory
   holding a tracked dune file. **`@@dir/default` is not non-recursive**: no dune file here defines
@@ -2815,8 +2821,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the script reads, prints on STDERR and exits 0 for a directory it does not know (and `dune
   rules` prints nothing for an action-only alias, so it cannot answer coverage questions either):
   the script validates the listing and refuses (exit 2) rather than shard a partial one.
-  `test/operations/ci_matrix.sh` holds the matrix to exactly `1/N..N/N` and the unsharded legs'
-  alias list to the script's; `tools/test-ci-shard.sh` is the hermetic harness.
+  The `train` suite needs no dune: its units are read from the tracked dune files' `(alias (name
+  train) (deps ...))` aggregates as S-expressions, and the reader refuses whatever would make its
+  member list differ from what `@train` builds (a dep that is not `(alias train-<name>)` defined
+  beside it, an extra aggregate field, a rule on `train` itself, an `include`).
+  `test/operations/ci_matrix.sh` holds the matrix to exactly `1/N..N/N` for each sharded suite, the
+  unsharded legs' alias list to the script's and the sharded step to passing its suite, and runs
+  the train shards for the matrix's N against its own reading of the aggregates (they must
+  partition it); `tools/test-ci-shard.sh` is the hermetic harness.
 
 ### opam and caches in CI
 

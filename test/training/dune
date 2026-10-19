@@ -95,9 +95,10 @@
 ; -- as small as a run that still exercises real training dynamics can be -- not slow tests, but
 ; they serialize on the `ocannl_training_test` lock, so as `runtest` members they set the
 ; wall-clock tail of every full run on every substrate (each is tens to hundreds of seconds; more
-; cores cannot help a serialized chain). On their own alias they run as a macOS-only CI shard
-; (`ci.yml` says why not ubuntu), in the daily sweep beside `@runtest` (`tools/sweep.sh`), as a
-; whole -- `dune build @train` -- and targeted:
+; cores cannot help a serialized chain). On their own alias they run as two ubuntu CI shards
+; (`tools/ci-shard.sh` deals this list's members by measured time; `ci.yml` says why not macOS), in
+; the daily sweep beside `@runtest` (`tools/sweep.sh`), as a whole -- `dune build @train` -- and
+; targeted:
 ; `OCANNL_BACKEND=cc dune build @test/training/train-mlp_names` reruns one of them, gate first. A
 ; `train-<name>` rule missing from this list is one `dune build @train` silently skips, which
 ; `test/operations/env_var_deps` checks -- the same check it makes of `runtest` and `slow`.
