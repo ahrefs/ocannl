@@ -77,11 +77,14 @@ cell() {
     --ocannl_model_default_schedule=false --ocannl_autotune_log=true \
     "--ocannl_gpu_default_sketch_min_reduction=$gate" \
     >"$out/$name.out" 2>"$out/$name.err"; then
-    census=$(grep -o 'seeded_default: [0-9]* of [0-9]* segments seeded.*' "$out/$name.err" | tail -1)
+    # Each field is optional (a cell may seed nothing, or log no derivation): a missing one reads
+    # `none logged`/`?` in the summary instead of ending the driver under `set -e -o pipefail`.
+    census=$({ grep -o 'seeded_default: [0-9]* of [0-9]* segments seeded.*' "$out/$name.err" ||
+      true; } | tail -1)
     # The runner's step_ms is a percentile object; the summary carries its median.
-    ms=$(grep -o '"step_ms":{[^}]*}' "$out/$name.out" | tail -1 | grep -o '"p50":[0-9.e+-]*' |
-      cut -d: -f2)
-    derive=$(grep -o 'seeded_default: plan derived in [0-9.]* s' "$out/$name.err" |
+    ms=$({ grep -o '"step_ms":{[^}]*}' "$out/$name.out" || true; } | tail -1 |
+      { grep -o '"p50":[0-9.e+-]*' || true; } | cut -d: -f2)
+    derive=$({ grep -o 'seeded_default: plan derived in [0-9.]* s' "$out/$name.err" || true; } |
       sed 's/.* in //' | paste -sd, -)
     echo "$fixture gate=$gate pass=$pass step_p50_ms=${ms:-?} plan_derivation=[${derive:-none logged}] census=[${census:-none logged}]" |
       tee -a "$out/summary.txt"

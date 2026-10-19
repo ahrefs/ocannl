@@ -4642,11 +4642,13 @@ let model_default ?name ?report ctx comp bindings =
           Int.incr n_rejected;
           None
     in
-    (* gh-ocannl-1253: on a GPU backend the family is restricted to the numerics-preserving
-       candidate set the seeding uses ({!scalar_blocktile}, at a site accumulating at its storage
-       precision), so a model pick never changes a result the seeded plan would not: tensorized
-       forms reround, the conv and coalesced families reorder the reduction. Other leaves score as
-       uncovered (kept out of the ranking, never an error). *)
+    (* gh-ocannl-1253: on CUDA and HIP, where the model starts from the seeded plan, the family is
+       restricted to the numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at
+       a site accumulating at its storage precision), so a model pick never changes a result the
+       seeded plan would not: tensorized forms reround, the conv and coalesced families reorder the
+       reduction. Other leaves are kept out of the ranking, counted as not numerics-preserving
+       ([n_excluded]), never an error. Metal and the CPU backends keep the whole family. *)
+    let restricts_numerics = seeded_default_backend backend in
     let preserving_site base_opt =
       lazy
         (match detect_matmul_canonical base_opt with
@@ -4655,7 +4657,7 @@ let model_default ?name ?report ctx comp bindings =
     in
     let score_sketch ?preserving base_opt p =
       if
-        is_gpu
+        restricts_numerics
         && not
              (scalar_blocktile p
              && Lazy.force (Option.value preserving ~default:(preserving_site base_opt)))
@@ -4772,6 +4774,14 @@ let model_default ?name ?report ctx comp bindings =
        it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a compilation
        failure of it is the default's and is not retried. *)
     let seeded_changed = ref false in
+    (* The seeded plan's split prelude (CUDA, gh-ocannl-1325) on a hermetic copy; the program itself
+       where the model does not start from the seeded plan. *)
+    let prelude (opt : LL.optimized) =
+      match Lazy.force seeding_here with
+      | Some (_, min_serial, _) ->
+          fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
+      | None -> opt
+    in
     let select (opt : LL.optimized) =
       try
         (* The incumbent -- the seeded plan where there is one, else the untuned default pipeline --
@@ -4786,6 +4796,9 @@ let model_default ?name ?report ctx comp bindings =
                   (scratch_of opt) )
         in
         let default_score = score incumbent_scratch in
+        (* The candidates compete on the program the seeded plan starts from, its split prelude
+           included, so a winner keeps the reductions the untuned compile splits. *)
+        let base = prelude opt in
         match default_score with
         | None ->
             (* No coverage of the incumbent itself: nothing to honestly compare against. *)
@@ -4794,14 +4807,14 @@ let model_default ?name ?report ctx comp bindings =
             (* Whole-routine sketch candidates. A candidate without coverage is skipped — it is
                never picked over the default without a measured run ({!tune} covers that). *)
             let whole_best =
-              match tree_search ~incumbent:ds opt with
+              match tree_search ~incumbent:ds base with
               | Some tree_best ->
                   (* Matmul site: the tree's leaves, twins included, searched with the default as
                      incumbent. *)
                   tree_best
               | None ->
                   (* No matmul site: the flat path covers the conv family. *)
-                  best_flat ~threshold:ds opt (sketch_seed_params ~is_gpu ~is_cpu ~limits opt)
+                  best_flat ~threshold:ds base (sketch_seed_params ~is_gpu ~is_cpu ~limits base)
             in
             let contenders =
               match whole_best with
@@ -4816,12 +4829,12 @@ let model_default ?name ?report ctx comp bindings =
               match
                 Sched.fission_segmented ~promote_locals:is_gpu ~fold_zeros:true
                   ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                  ~preset ~zero_sched ~static_indices (scratch_of opt)
+                  ~preset ~zero_sched ~static_indices (scratch_of base)
               with
               | exception Outcome.Cause_at _ ->
                   Int.incr n_rejected;
                   None
-              | _, tuples when not (fission_exposes_sites ~static_indices opt tuples) -> None
+              | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
               | plan, tuples -> (
                   let entries =
                     List.filter_map (keyed_segments ~static_indices plan tuples)
@@ -4845,7 +4858,7 @@ let model_default ?name ?report ctx comp bindings =
                   else
                     (* Score the substituted pipeline whole, so it competes on the same footing as
                        the other candidates. *)
-                    match apply_fiss ~plan ~entries (scratch_of opt) with
+                    match apply_fiss ~plan ~entries (scratch_of base) with
                     | exception Outcome.Cause_at _ ->
                         Int.incr n_rejected;
                         None
@@ -4907,9 +4920,11 @@ let model_default ?name ?report ctx comp bindings =
                       && List.is_empty c.sd_sunk))
                  seeding opt)
         | `Whole p ->
+            let opt = prelude opt in
             validate_segments_for_model ~limits
               [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
         | `Fiss (plan, entries) ->
+            let opt = prelude opt in
             validate_segments_for_model ~limits (apply_fiss ~plan ~entries opt)
       in
       match apply_action () with
