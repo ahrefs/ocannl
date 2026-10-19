@@ -1780,6 +1780,12 @@ files.
   difference. Keep readbacks outside the timed region; the `cc` scheduler is synchronous, so no
   separate await is needed.
 ## Fast math and device finiteness
+- **HIP's `-ffast-math` keeps `-fno-signed-zeros`, so the sign of an exact zero is HIP's call**
+  (gh-ocannl-998 follow-up). With OCANNL's own zero identities a licence (`fp_finite_math`, off), an
+  elided gradient accumulation opens as `__hadd(0, x * g)`, which clang folds to `x * g`: `-0` for
+  `x < 0, g = +0` where IEEE gives `+0`. NVRTC's `--use_fast_math` carries no signed-zero switch,
+  and Metal did not fold it. A backend-uniform golden whose subject is not the sign prints zeros
+  normalized (`half_ops`); enforcing the backends' own licences is a separate question.
 
 - **CUDA and HIP compile with fast-math umbrellas; Metal pins safe arithmetic while retaining fast
   math functions**: CUDA passes `--use_fast_math`, HIP `-ffast-math`, and Metal selects
