@@ -4888,6 +4888,7 @@
   (alias slow-env_spelling_gate)
   autotune_fission_sketch.expected
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -6565,6 +6566,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
@@ -8479,6 +8481,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_AUTOTUNE_LOG)
   (env_var OCANNL_AUTOTUNE_PROGRESS)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
@@ -8490,9 +8493,53 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_composite_playoff)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1138: staffed singles (autotune_staffed_singles), the running composite a per-segment
+; single is timed against. Scripted timings, pinned to cc, on Fissioned_chain's small menu, so the
+; model pre-filter's keys and the cc vector width it pins are declared beside the rule's own.
+
+(test
+ (name autotune_staffed_singles)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_AUTOTUNE_LOG)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_CC_VECTOR_REGISTERS)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (modules autotune_staffed_singles)
+ (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1138: the fine segmentation's staffed sweep. The finer segmentation is GPU-only, so
+; the search runs on a GPU backend and every claim is skipped elsewhere.
+
+(test
+ (name autotune_staffed_fine)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
+  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION))
+ (modules autotune_staffed_fine)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
 
 ; gh-ocannl-1229: which units of each beam entry a round expands (autotune_round_expansion).
 ; Scripted timings, pinned to cc; its searches run on Fissioned_chain's small menu, so the model
@@ -8505,6 +8552,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
   (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION)
@@ -9139,6 +9187,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_BIG_MODELS)
