@@ -11,12 +11,14 @@ every executor form makes an item executing: true
 a module alias of Ll_test is followed: true
 an open of Ll_test brings its executors and judgments into scope: true
 a source's own binding shadowing an opened judgment is not the judgment: true
+a module the source defines under a library's name is the source's, not the library's: true
 an item that executes nothing is not read: true
 a tensorized claim that asserts no parity is not read: true
 a parity claim whose label names no tensorization is not read: true
 the mma word reads in Tile_mma, sk_mma, wmma and a tag: true
 the mma word does not read inside another word: true
 a label's fragments are followed through let-bound names: true
+a name the label binds itself shadows the outer binding of that name: true
 a pf format is the label, and pf_all2 and gated forms are claims: true
 skipped, fail and a source's own p are not claims this reader reads: true
 boundary: a tensorization word arriving through a parameter is not read: true

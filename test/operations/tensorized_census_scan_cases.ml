@@ -117,6 +117,15 @@ let () =
        \  Verdict.p \"tensorized matmul matches the serial twin\" (Poly.equal got want);\n\
        \  Verdict.p \"rendered\" (rendered_tensorized census)\n"
     = 1);
+  p "a module the source defines under a library's name is the source's, not the library's"
+    (refused
+       ("module Ll_test = struct let rendered_tensorized _ = true end\n"
+       ^ with_judgment "Ll_test.rendered_tensorized census")
+     = 1
+    && refused
+         ("module C_syntax = struct type t = Tensorized end\n"
+         ^ with_judgment "Poly.equal x C_syntax.Tensorized")
+       = 1);
   (* Which claims are read. *)
   p "an item that executes nothing is not read"
     (read "let () = Verdict.p \"tensorized matmul matches the serial twin\" (Poly.equal got want)\n"
@@ -152,6 +161,18 @@ let () =
        \  ignore (Context.run ctx routine);\n\
        \  Verdict.p label ok\n"
     = 1);
+  p "a name the label binds itself shadows the outer binding of that name"
+    (read
+       "let () =\n\
+       \  let tag = \"tensorized\" in\n\
+       \  ignore (Context.run ctx routine);\n\
+       \  Verdict.p (let tag = \"scalar\" in tag ^ \" matmul matches the reference\") ok\n"
+     = 0
+    && read
+         "let () =\n\
+         \  ignore (Context.run ctx routine);\n\
+         \  Verdict.p (let tag = \"tensorized\" in tag ^ \" matmul matches the reference\") ok\n"
+       = 1);
   p "a pf format is the label, and pf_all2 and gated forms are claims"
     (refused
        "let () =\n\

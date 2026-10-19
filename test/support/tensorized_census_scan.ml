@@ -54,7 +54,10 @@
     ([Ir.C_syntax], [Test_utils.Ll_test]), or what a local [module L = Ll_test] alias denotes; an
     [open] (structure-level or local) of one of the modules above brings that module's forms into
     unqualified scope. Names are resolved lexically ({!Lexical_scope}): a parameter or local binding
-    shadowing a form, or a top-level name, is that binding instead.
+    shadowing a form, or a top-level name, is that binding instead, and a module the source binds to
+    a structure (or a functor parameter, an unpack) under a library's name is the source's own. A
+    label's fragments are resolved the same way: a name the label expression binds itself shadows
+    the outer one.
 
     {1 What it deliberately does not read}
 
@@ -232,11 +235,28 @@ let rec peel expr =
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
   | _ -> expr
 
-(* The canonical module a path names: what an alias in scope denotes, else its last component. *)
-let canonical modules = function
+(* What a module name denotes once the source binds it to anything but a path -- a structure, a
+   functor parameter, an unpack: the source's own module, never a library's of the same name. *)
+let source_module = "<source>"
+
+(* The canonical module a path names: what an alias in scope denotes, else its last component -- or
+   the source's own module when the path starts at a name the source rebound. *)
+let canonical modules path =
+  let rebound = function Some m -> String.equal m source_module | None -> false in
+  match path with
   | Longident.Lident m -> Some (Option.value (Map.find modules m) ~default:m)
-  | Ldot (_, last) -> Some last
+  | Ldot (_, last) ->
+      if rebound (Map.find modules (Lexical_scope.head path)) then Some source_module else Some last
   | Lapply _ -> None
+
+(* Whether a constructor or field path is unqualified, or qualified by a module among [allowed]. *)
+let qualified_by modules allowed = function
+  | Longident.Lident _ -> true
+  | Ldot (prefix, _) -> (
+      match canonical modules prefix with
+      | Some m -> List.mem allowed m ~equal:String.equal
+      | None -> false)
+  | Lapply _ -> false
 
 let read content =
   let ast = Read.structure_of content in
@@ -258,22 +278,62 @@ let read content =
   in
   let lookup env name = Lexical_scope.lookup env name in
   (* The string fragments an expression carries: its literals, and those of the names it references
-     (attributes, function bodies and the bindings a name reaches are not walked again). *)
+     (attributes, function bodies and the bindings a name reaches are not walked again). A name the
+     expression binds itself -- a [let] inside it, a match case -- is resolved there, shadowing
+     [env]: its fragments are its right-hand side's, a pattern variable's none. *)
   let fragments_of env expr =
     let found = ref [] in
     let collector =
-      object
+      object (self)
         inherit Ast_traverse.iter as super
+        val mutable scope : string list Map.M(String).t list = []
         method! attribute _ = ()
+
+        method private fragments e =
+          let saved = !found in
+          found := [];
+          self#expression e;
+          let mine = !found in
+          found := saved;
+          mine
+
+        method private within frame f =
+          scope <- frame :: scope;
+          Exn.protect ~f ~finally:(fun () -> scope <- List.tl_exn scope)
 
         method! expression e =
           match e.pexp_desc with
           | Pexp_constant (Pconst_string (s, _, _)) -> found := s :: !found
           | Pexp_ident { txt = Lident name; _ } -> (
-              match lookup env name with
-              | Some (Binding { fragments; _ }) -> found := fragments @ !found
-              | _ -> ())
+              match List.find_map scope ~f:(fun frame -> Map.find frame name) with
+              | Some fragments -> found := fragments @ !found
+              | None -> (
+                  match lookup env name with
+                  | Some (Binding { fragments; _ }) -> found := fragments @ !found
+                  | _ -> ()))
           | Pexp_function _ -> ()
+          | Pexp_let (_, bindings, body) ->
+              let frame =
+                List.concat_map bindings ~f:(fun b ->
+                    let rhs = peel b.pvb_expr in
+                    let fragments =
+                      match rhs.pexp_desc with Pexp_function _ -> [] | _ -> self#fragments rhs
+                    in
+                    List.map (Lexical_scope.pattern_vars [ b.pvb_pat ]) ~f:(fun v -> (v, fragments)))
+                |> Map.of_alist_reduce (module String) ~f:(fun _ later -> later)
+              in
+              self#within frame (fun () -> self#expression body)
+          | Pexp_match (scrutinee, cases) | Pexp_try (scrutinee, cases) ->
+              self#expression scrutinee;
+              List.iter cases ~f:(fun c ->
+                  let frame =
+                    Lexical_scope.pattern_vars [ c.pc_lhs ]
+                    |> List.map ~f:(fun v -> (v, []))
+                    |> Map.of_alist_reduce (module String) ~f:(fun _ later -> later)
+                  in
+                  self#within frame (fun () ->
+                      Option.iter c.pc_guard ~f:self#expression;
+                      self#expression c.pc_rhs))
           | _ -> super#expression e
       end
     in
@@ -285,6 +345,7 @@ let read content =
     object (self)
       inherit [value, string] Lexical_scope.scoped as super
       method local = Binding { fragments = []; top = None }
+      method! shadowed = Some source_module
       method module_path env path = canonical env.Lexical_scope.modules path
       method! attribute _ attr = attr
 
@@ -350,31 +411,24 @@ let read content =
         | Lapply _ -> ()
 
       method! pattern env p =
-        (match p.ppat_desc with Ppat_construct ({ txt; _ }, _) -> self#constructor txt | _ -> ());
+        (match p.ppat_desc with
+        | Ppat_construct ({ txt; _ }, _) -> self#constructor env txt
+        | _ -> ());
         super#pattern env p
 
-      method constructor txt =
-        let qualifier_ok =
-          match txt with
-          | Longident.Lident _ -> true
-          | Ldot (Ldot (_, m), _) | Ldot (Lident m, _) -> String.equal m "C_syntax"
-          | _ -> false
-        in
-        if qualifier_ok && List.mem census_constructors (Longident.last_exn txt) ~equal:String.equal
+      method constructor env txt =
+        if
+          qualified_by env.Lexical_scope.modules [ "C_syntax" ] txt
+          && List.mem census_constructors (Longident.last_exn txt) ~equal:String.equal
         then record_form Judgment
 
       method! expression env expr =
         (match expr.pexp_desc with
-        | Pexp_construct ({ txt; _ }, _) -> self#constructor txt
+        | Pexp_construct ({ txt; _ }, _) -> self#constructor env txt
         | Pexp_field (_, { txt; _ }) ->
-            let qualifier_ok =
-              match txt with
-              | Longident.Lident _ -> true
-              | Ldot (Ldot (_, m), _) | Ldot (Lident m, _) ->
-                  List.mem [ "C_syntax"; "Autotune" ] m ~equal:String.equal
-              | _ -> false
-            in
-            if qualifier_ok && List.mem census_fields (Longident.last_exn txt) ~equal:String.equal
+            if
+              qualified_by env.modules [ "C_syntax"; "Autotune" ] txt
+              && List.mem census_fields (Longident.last_exn txt) ~equal:String.equal
             then record_form Judgment
         | Pexp_apply (callee, arguments) -> (
             let callee = peel callee in
