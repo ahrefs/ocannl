@@ -1934,6 +1934,9 @@ files.
   table is its own dependency-free library, `arrayjit.builtins_cc` (re-exported as
   `Context.Builtins_cc`), so the `arrayjit/lib/gen_builtins` generator links it without `context`
   (ir's stubs need the header first) and emits the header included by `builtins.c`; the `OCANNL_` SIMD namespace and platform includes remain cc-only.
+  The CUDA and HIP tables are stdlib-only libraries beside it (`arrayjit.builtins_cuda`,
+  `arrayjit.builtins_hip`, gh-ocannl-1353), not modules of the optional backend libraries, so
+  `dune build @check` compiles them on every PR although no CI job installs cudajit or hipjit.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.

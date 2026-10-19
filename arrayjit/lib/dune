@@ -115,8 +115,15 @@
  (optional)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_CUDA_BACKEND))
- (modules cuda_backend builtins_cuda)
- (libraries base cudajit.cuda cudajit.nvrtc utils ir builtins_cc)
+ (modules cuda_backend)
+ (libraries
+  base
+  cudajit.cuda
+  cudajit.nvrtc
+  utils
+  ir
+  builtins_cc
+  builtins_cuda)
  (preprocess
   (pps
    ppx_compare
@@ -133,8 +140,8 @@
  (optional)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_HIP_BACKEND))
- (modules hip_backend builtins_hip)
- (libraries base hipjit.hip hipjit.hiprtc utils ir builtins_cc)
+ (modules hip_backend)
+ (libraries base hipjit.hip hipjit.hiprtc utils ir builtins_cc builtins_hip)
  (preprocess
   (pps
    ppx_compare
@@ -178,6 +185,22 @@
  (name builtins_cc)
  (public_name arrayjit.builtins_cc)
  (modules builtins_cc))
+
+; The CUDA and HIP definition tables are strings too, so they are stdlib-only libraries beside it
+; rather than modules of the optional backend libraries (gh-ocannl-1353): every `dune build @check`
+; compiles them, on machines with neither cudajit nor hipjit -- per-PR CI among them.
+
+(library
+ (name builtins_cuda)
+ (public_name arrayjit.builtins_cuda)
+ (modules builtins_cuda)
+ (libraries builtins_cc))
+
+(library
+ (name builtins_hip)
+ (public_name arrayjit.builtins_hip)
+ (modules builtins_hip)
+ (libraries builtins_cc))
 
 (library
  (name context)
