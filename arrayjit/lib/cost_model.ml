@@ -630,20 +630,17 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
   let is_grid s = Low_level.equal_axis_type (axis s) Low_level.Grid in
   let width (lo, hi) = max 0 (hi - lo + 1) in
   (* Per node: requested cells (blocks × per-block cells, summed over its reads). Per launch nest —
-     the accesses under one sequence of [Grid] loops: per-block bytes, the blocks, and the largest
-     workgroup an access sits in. *)
+     the accesses under one sequence of [Grid] loops: per-block bytes and the blocks. The workgroup
+     is the kernel's one launch block ({!Low_level.launch_dims}, per-slot maxima over its nests),
+     not a nest's own loop product: a smaller sibling nest still launches the full block, so it
+     cannot have more blocks resident than the hardware runs. *)
+  let threads = max 1 (Array.fold (Low_level.launch_dims code).Low_level.block ~init:1 ~f:( * )) in
   let requested = Hashtbl.create (module Tn) and order = ref [] in
   let nests = Hashtbl.create (module String) in
   List.iter (Low_level.affine_accesses code) ~f:(fun (a : Tn.t Affine.access) ->
       if (not a.a_write) && is_global a.a_tn then (
         let grid = List.filter a.a_loops ~f:(fun (s, _) -> is_grid s) in
         let blocks = List.fold grid ~init:1 ~f:(fun acc (_, r) -> acc * width r) in
-        let threads =
-          List.fold a.a_loops ~init:1 ~f:(fun acc (s, r) ->
-              match axis s with
-              | Low_level.Workgroup | Workgroup_reduce -> acc * width r
-              | Serial | Grid | Unrolled | Vectorized -> acc)
-        in
         let per_block = min (Tn.num_elems a.a_tn) (fst (access_cells ~fixed:is_grid a)) in
         let w = Ops.prec_in_bytes (Lazy.force a.a_tn.Tn.storage_prec) in
         let cell =
@@ -653,17 +650,14 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
         in
         cell := !cell + (blocks * per_block * w);
         let key = String.concat ~sep:"," (List.map grid ~f:(fun (s, _) -> Idx.symbol_ident s)) in
-        let bytes, nest_blocks, nest_threads =
-          Hashtbl.find nests key |> Option.value ~default:(0, blocks, 1)
-        in
-        Hashtbl.set nests ~key
-          ~data:(bytes + (per_block * w), max nest_blocks blocks, max nest_threads threads)));
+        let bytes, nest_blocks = Hashtbl.find nests key |> Option.value ~default:(0, blocks) in
+        Hashtbl.set nests ~key ~data:(bytes + (per_block * w), max nest_blocks blocks)));
   let working_set =
-    Hashtbl.fold nests ~init:0 ~f:(fun ~key:_ ~data:(bytes, blocks, threads) acc ->
+    Hashtbl.fold nests ~init:0 ~f:(fun ~key:_ ~data:(bytes, blocks) acc ->
         let resident =
           match max_resident_threads with
           | None -> blocks
-          | Some t -> min blocks (max 1 (t / max 1 threads))
+          | Some t -> min blocks (max 1 (t / threads))
         in
         max acc (bytes * resident))
   in

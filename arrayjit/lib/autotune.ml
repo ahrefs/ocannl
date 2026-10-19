@@ -4241,8 +4241,15 @@ let seeded_default_gate ~limits =
   in
   match (String.lowercase raw, Int.of_string_opt raw) with
   | "auto", _ -> (
+      (* The fallback is for a device nothing has calibrated -- no advisory and no override. An
+         explicit [none] override is a calibration too (no DRAM tier, or uncharged re-reads): its
+         ranking stands, even when both tiers resolve to [None]. *)
+      let stated = function `Advisory -> false | `Off | `Value _ -> true in
+      let explicit =
+        stated (Lazy.force cache_capacity_override) || stated (Lazy.force cache_bandwidth_override)
+      in
       match (fst (ranking_capacity ~limits), ranking_cache_bandwidth ~limits) with
-      | None, None -> Min_reduction seed_gate_fallback
+      | None, None when not explicit -> Min_reduction seed_gate_fallback
       | capacity, cache_rate -> Ranked { capacity; cache_rate })
   | _, Some n when n >= 0 -> Min_reduction n
   | _ ->

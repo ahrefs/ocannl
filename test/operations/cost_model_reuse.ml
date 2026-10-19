@@ -226,3 +226,36 @@ let () =
     (match (within ~cb:1. untiled, within ~cb:peak_memory_bandwidth untiled) with
     | Some a, Some b -> Float.equal a b
     | _ -> false)
+
+let () =
+  (* Residency comes from the kernel's ONE launch block, not a nest's own workgroup: a kernel of a
+     256-thread nest and a 32-thread sibling launches 256-thread blocks for both, so the sibling has
+     [resident / 256] blocks resident, not [resident / 32]. Hand-annotated, nothing scheduled. *)
+  let z = node ~dims:[| 256 |] "cmr_z" and w = node ~dims:[| 256 |] "cmr_w" in
+  let dwb = node ~dims:[| 128; 32 |] "cmr_dwb" in
+  List.iter [ z; w; dwb ] ~f:Ll_test.materialize;
+  let g = Ll_test.sym () and t = Ll_test.sym () and g' = Ll_test.sym () and t' = Ll_test.sym () in
+  let k = Ll_test.sym () in
+  let wide =
+    Ll_test.loop_n ~axis:LL.Grid g' 1
+      (Ll_test.loop_n ~axis:LL.Workgroup t' 256
+         (Ll_test.set z [| it t' |] (Ll_test.get w [| it t' |])))
+  in
+  let narrow =
+    Ll_test.loop_n ~axis:LL.Grid g 128
+      (Ll_test.loop_n ~axis:LL.Workgroup t 32
+         (Ll_test.loop_n k nk
+            (Ll_test.set dwb
+               [| it g; it t |]
+               (Ll_test.add (Ll_test.get dwb [| it g; it t |]) (Ll_test.get x [| it k; it t |])))))
+  in
+  let ws code =
+    (CM.reuse_traffic ~max_resident_threads:resident ~is_global:(fun _ -> true) code)
+      .CM.ru_working_set_bytes
+  in
+  (* Per narrow block: x's 32 columns over the k rows, and the block's 32 accumulator cells. *)
+  let per_block = ((nk * 32) + 32) * elt in
+  p "a 32-thread nest launched alone keeps resident / 32 of its blocks"
+    (ws narrow = per_block * min 128 (resident / 32));
+  p "beside a 256-thread sibling, it keeps only resident / 256 (the launch block's)"
+    (ws (Ll_test.seq wide narrow) = per_block * min 128 (resident / 256))

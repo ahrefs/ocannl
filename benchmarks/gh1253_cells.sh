@@ -4,7 +4,8 @@
 #
 # Usage (from the checkout under test): benchmarks/gh1253_cells.sh BACKEND OUT [CAP]
 #
-#   BACKEND  cuda | hip -- pinned on every command line (no ambient configuration is trusted).
+#   BACKEND  cuda | hip -- pinned on every command line; no ambient OCANNL_* variable or config
+#            file reaches a cell (see below).
 #   OUT      results directory, created, and refused unless empty: OUT/driver.log records what this
 #            script prints, each cell writes OUT/<cell>.out and OUT/<cell>.err.
 #   CAP      wall cap in seconds per cell (default 900); a capped cell counts as failed.
@@ -52,6 +53,12 @@ if [[ -e "$out" ]] && [[ -n "$(ls -A "$out" 2>/dev/null)" ]]; then
 fi
 mkdir -p "$out"
 exec > >(tee -a "$out/driver.log") 2>&1
+
+# No ambient configuration reaches a cell: every OCANNL_* variable is dropped and the checkout's
+# config file is not read, so each cell runs the defaults plus exactly the flags written below
+# (an inherited OCANNL_SCHEDULE_FISSION=false, say, would make the seeded arm decline silently).
+while IFS= read -r var; do unset "$var"; done < <(compgen -e | grep '^OCANNL_' || true)
+export OCANNL_NO_CONFIG_FILE=true
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"

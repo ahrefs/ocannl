@@ -170,13 +170,14 @@ val roofline_seconds :
       distinct read bytes.
     - Two tiers (the wave decision of 2026-10-18 on the measured HIP boxes, where cache-served
       re-reads ran at 1.5–2.8 TB/s against 235–261 GB/s from DRAM). Past capacity — the working set,
-      per-block bytes times the blocks resident at once ([max_resident_threads] over the workgroup
-      size, at most the blocks; all blocks when no residency is given), the largest over the
-      kernel's launch nests, exceeding [cache_capacity_bytes] — the requested bytes are charged at
-      the DRAM bandwidth ([peak_memory_bandwidth]). Within it (or with no capacity), they are
-      charged at [cache_bandwidth] beside the distinct bytes at DRAM bandwidth, whichever leg is
-      longer; with no cache bandwidth either, the memory leg is {!analyze}'s distinct bytes at DRAM
-      bandwidth, exactly the roofline. A cache bandwidth below the DRAM one is read as the DRAM one.
+      per-block bytes times the blocks resident at once ([max_resident_threads] over the kernel's
+      launch block, {!Low_level.launch_dims}, at most the blocks; all blocks when no residency is
+      given), the largest over the kernel's launch nests, exceeding [cache_capacity_bytes] — the
+      requested bytes are charged at the DRAM bandwidth ([peak_memory_bandwidth]). Within it (or
+      with no capacity), they are charged at [cache_bandwidth] beside the distinct bytes at DRAM
+      bandwidth, whichever leg is longer; with no cache bandwidth either, the memory leg is
+      {!analyze}'s distinct bytes at DRAM bandwidth, exactly the roofline. A cache bandwidth below
+      the DRAM one is read as the DRAM one.
     - Never below the bound: every memory leg is at least the distinct bytes at DRAM bandwidth, so
       {!ranking_seconds} is at least {!roofline_seconds} over {!analyze}'s counts — and therefore at
       least any roofline over {!completion_floor}. Monotone: raising the capacity or the cache

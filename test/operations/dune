@@ -6275,7 +6275,8 @@
     "--ocannl_backend=cc"
     "--ocannl_model_peak_flops=1e12"
     "--ocannl_model_peak_memory_bandwidth=1e6"
-    "--ocannl_model_cache_capacity=1048576"))))
+    "--ocannl_model_cache_capacity=1048576"
+    "--ocannl_model_cache_bandwidth=none"))))
 
 (rule
  (alias runtest-cost_model_selection)
