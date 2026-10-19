@@ -558,6 +558,7 @@ let raw_entries =
         "[scanner-refusal:25394c54f621666e9eb6b4419cee87fd] closure the initializer";
         "[scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before";
         "[scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu";
+        "[scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which";
         "[scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";

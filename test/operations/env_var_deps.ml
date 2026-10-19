@@ -1782,10 +1782,15 @@ let main () =
             in
             resolved > 0 && resolved >= List.count all_paths ~f:(List.equal String.equal spelled)
           in
+          (* Qualified only: a bare `small_menu ()` under `open Fissioned_chain` could name a value
+             a later binding shadows, which the module-level resolver does not track (Codex P2,
+             round 6), while a module path cannot be rebound by a value. *)
           let helper_of spelled =
             List.find_map sites ~f:(fun (components, helper) ->
                 Option.some_if
-                  (resolves spelled && List.equal String.equal components spelled)
+                  (List.length spelled >= 2
+                  && resolves spelled
+                  && List.equal String.equal components spelled)
                   helper)
           in
           let search_sites = Sources.module_reference_sites content ~paths:search_paths in
@@ -7240,6 +7245,13 @@ let search_control () =
                    width_key
                ^ tune)
              ()) );
+      (* Round 6: a bare call under an `open` is not credited, since a value binding could shadow
+         it. *)
+      ( "opened",
+        refused
+          (run
+             ~probe:("open Fissioned_chain\nlet small_menu () = ()\nlet () = small_menu ()\n" ^ tune)
+             ()) );
       ( "conditional",
         passed (run ~probe:("let () = if is_cpu then Fissioned_chain.small_menu ()\n" ^ tune) ()) );
       ("support_search", refused (run ~probe:"let () = Fissioned_chain.search ()\n" ()));
@@ -7316,6 +7328,9 @@ let search_control () =
     (ok "closure");
   Verdict.p "nor does one whose key a later item spells again before the first search" (ok "reset");
   Verdict.p "while a call under a condition, the `if is_cpu` shape, does" (ok "conditional");
+  Verdict.p
+    "a bare call under an `open` of the helper's module, which a value can shadow, pins nothing"
+    (ok "opened");
   Verdict.p
     "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
      are both refused"

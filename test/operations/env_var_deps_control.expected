@@ -242,6 +242,7 @@ a command-line setting in another spelling the runtime reads unpins too: true
 a helper in a closure the initializer builds but never calls pins nothing: true
 nor does one whose key a later item spells again before the first search: true
 while a call under a condition, the `if is_cpu` shape, does: true
+a bare call under an `open` of the helper's module, which a value can shadow, pins nothing: true
 a blessed helper that stops stating a key, and a support value stating every key unblessed, are both refused: true
 
 Synthetic controls: ambient gates derive identity from the program actually run.
@@ -512,6 +513,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:25394c54f621666e9eb6b4419cee87fd] closure the initializer
   [scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before
   [scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu
+  [scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which
   [scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating
   [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks
   [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused
