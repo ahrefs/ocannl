@@ -28,7 +28,11 @@
 #   - `dune describe external-lib-deps`: every stanza with the project
 #     libraries it names, ppx rewriters included (`tests` ones and those this
 #     build does not compile too, such as an optional backend library; their
-#     modules stay unknown). Its edges are added to the first answer's.
+#     modules stay unknown). Its edges are added to the first answer's. A
+#     library it names that neither answer lists is skipped when the stanza
+#     naming it is one this build does not compile either (the listing gives
+#     public names only, and such a stanza may use a local one); from any other
+#     stanza it stops the run.
 #   - `dune show aliases DIR...` and `dune show targets DIR...`: the aliases
 #     and the targets of every directory holding a `dune` file. A `NAME.exe`
 #     target no stanza there names is a `tests` stanza naming no library,
@@ -46,7 +50,9 @@
 #     own text. A compiled artifact a rule reads
 #     (a stanza's `.NAME.objs` files, an installed library's) makes that
 #     stanza one of the rule's owners, like an executable the rule runs; an
-#     alias a rule needs (`(deps (alias ...))`) is recorded as well.
+#     alias a rule needs (`(deps (alias ...))`) is recorded as well. Only its
+#     stdout is read: printing a rule can build what its dependencies are
+#     computed from, and those actions' output goes to dune's stderr.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped:
@@ -315,14 +321,20 @@ for my $e (@$entries) {
   }
   push @edges, [$i, field($v, "internal_deps")];
 }
-my %skipped_optional;
+my (%skipped_optional, %skipped_off_build);
 for my $edge (@edges) {
   my ($i, $deps) = @$edge;
   for my $d (items($deps)) {
     my ($n, $k) = pair($d, "internal_deps");
     if (defined $lib_by_name{$n}) { push @{$st[$i]{to}}, $lib_by_name{$n} }
     elsif ($k eq "optional") { $skipped_optional{$n} = 1 }
-    else { fail("$st[$i]{kind} @{$st[$i]{names}} ($st[$i]{dir}) uses project library $n, which dune does not describe") }
+    # A stanza this build does not compile (an optional backend library whose
+    # platform package is absent) may name another such library by its local
+    # name, which this listing does not give -- only the public one: on Linux,
+    # `metal_backend` requires `metal_math_api_runtime` (gh-ocannl-1389). No
+    # stanza this build compiles links either one, so the edge carries no reach.
+    elsif ($st[$i]{undescribed}) { $skipped_off_build{"$n (required by " . label($i) . ")"} = 1 }
+    else { fail(label($i) . " uses project library $n, which dune does not describe") }
   }
 }
 
@@ -446,10 +458,18 @@ sub dune_rules {
   while (@todo) {
     my ($len, @batch) = (0);
     while (@todo && (!@batch || $len + length($todo[0]) + 3 < $arg_budget)) { $len += length($todo[0]) + 3; push @batch, shift @todo }
+    # Only stdout is the answer. To print a rule, dune builds what the rule's
+    # dependencies are computed from (a `%{read:...}` file, say), and what those
+    # actions print reaches dune's stderr: on a cold build directory that was
+    # `Wrote value of 'backend_extension' to ocannl_backend_extension.txt` in the
+    # middle of the sexps (gh-ocannl-1389). stderr is kept for the failure message.
     my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
-    if (!$pid) { open STDERR, ">&", \*STDOUT; exec "dune", "rules", "--root", ".", @batch; exit 127 }
+    if (!$pid) {
+      open STDERR, ">", "$tmp/rules-err" or exit 126;
+      exec "dune", "rules", "--root", ".", @batch; exit 127;
+    }
     my $text = do { local $/; <$fh> };
-    close $fh or fail("dune rules failed:\n$text");
+    close $fh or fail("dune rules failed:\n" . slurp("$tmp/rules-err") . $text);
     push @rules, @{parse_sexp($text, "dune rules")};
   }
   return @rules;
@@ -481,7 +501,7 @@ while (@queue) {
   $queried{$_} = 1 for @queue;
   my %next;
   for my $rule (dune_rules(@queue)) {
-    ref $rule or fail("unexpected atom in dune rules output");
+    ref $rule or fail("unexpected atom in dune rules output: $rule");
     my $tg = field($rule, "targets");
     my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
     my (%r, %p, @g, %v, %ad);
@@ -725,6 +745,7 @@ printf STDERR "affected: %s: %d reached executable stanza(s) no per-test alias r
 # Only worth saying when a changed module has no stanza here: it may belong to one of these.
 if (@unmapped) {
   print STDERR "affected: optional library $_ is not in this build; edges to it skipped\n" for sort keys %skipped_optional;
+  print STDERR "affected: library $_ is not in this build, nor is the stanza requiring it; edge skipped\n" for sort keys %skipped_off_build;
 }
 print STDERR "affected: listed as unattributed: $_ (no stanza of its directory has that name, no targets of its own; its directory is touched)\n" for sort keys %unattributed;
 printf STDERR "affected: %s: %d per-test alias(es) whose actions dune does not dump, listed for the changed paths there\n", $_, $opaque_hit{$_} for sort keys %opaque_hit;

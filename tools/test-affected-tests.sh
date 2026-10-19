@@ -24,7 +24,8 @@ unset DUNE_BUILD_DIR DUNE_ROOT
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=$TMP/runs
 
 repo=$TMP/proj
-mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/t5" "$repo/cfg" "$repo/docs" || exit 2
+mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/t5" "$repo/t6" \
+  "$repo/opt" "$repo/cfg" "$repo/docs" || exit 2
 cp "$HERE/affected-tests.sh" "$HERE/test-run.sh" "$repo/tools/" || exit 2
 # Whatever test-run.sh sources, derived from it rather than listed here.
 staged=0
@@ -34,6 +35,21 @@ while IFS= read -r rel; do
 done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$HERE/test-run.sh")
 [ "$staged" -ge 3 ] || exit 2
 printf '(lang dune 3.20)\n' >"$repo/dune-project"
+: >"$repo/fx.opam"
+# Two libraries this build does not compile, one requiring the other by its
+# local name while dune lists it by its public one: the Linux shape of
+# arrayjit's metal_backend and metal_math_api_runtime (gh-ocannl-1389).
+cat >"$repo/opt/dune" <<'DUNE'
+(library (name offa) (public_name fx.offa) (optional) (modules offa) (libraries not_installed_anywhere))
+(library (name offb) (public_name fx.offb) (optional) (modules offb) (libraries offa))
+DUNE
+# A rule whose action reads a generated file: `dune rules` builds that file to
+# print the rule, and what its action prints reaches dune's stderr.
+cat >"$repo/t6/dune" <<'DUNE'
+(rule (target word.txt) (action (progn (system "echo noise-from-an-action >&2") (with-stdout-to %{target} (echo dyn)))))
+(rule (target dyn.actual) (action (with-stdout-to %{target} (echo %{read:word.txt}))))
+(rule (alias runtest-dyn) (action (diff dyn.expected dyn.actual)))
+DUNE
 cat >"$repo/lib/dune" <<'DUNE'
 (library (name core) (modules core helper lx))
 (ocamllex lx)
@@ -120,10 +136,10 @@ cat >"$repo/t5/dune" <<'DUNE'
  (foreign_stubs (language c) (names usesh_c) (extra_deps gen.h)))
 (rule (alias slow-usesh) (action (run %{exe:usesh.exe})))
 DUNE
-for f in t5/genh.ml t5/usesh.ml; do printf 'let () = ()\n' >"$repo/$f"; done
+for f in t5/genh.ml t5/usesh.ml opt/offa.ml opt/offb.ml; do printf 'let () = ()\n' >"$repo/$f"; done
 : >"$repo/t5/usesh_c.c"
 for f in t4/inert.ml t4/t_gate.ml t4/sub/t_sub.ml t4/pre.ml t4/t_gate_expected.ml; do printf 'let () = ()\n' >"$repo/$f"; done
-for f in t4/objs.expected t4/gated.expected t4/gate.cfg; do : >"$repo/$f"; done
+for f in t4/objs.expected t4/gated.expected t4/gate.cfg t6/dyn.expected; do : >"$repo/$f"; done
 for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/stubbed.ml \
   t3/t_plain.ml t3/t_stub.ml t3/cexe.ml t3/lister.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
   t1/t_core.ml t1/t_leaf.ml t1/ta.ml t1/tb.ml t1/shared.ml t1/m_one.ml t1/m_two.ml \
@@ -159,6 +175,33 @@ reached_by_core='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/ru
 opaque_all='@t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
   @t2/runtest-orphan @t2/slow-gen @t3/runtest-t_plain @t3/runtest-t_stub
   @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub @t5/slow-usesh'
+
+if harness_leg 'cold build'; then
+  # On a build directory that has never built t6/word.txt, `dune rules` builds
+  # it to print dyn.actual's rule, and its action's stderr line must not be
+  # read as part of the answer (gh-ocannl-1389: "unexpected atom").
+  rm -rf "$repo/_build"
+  rc=0
+  (cd "$TMP" && DUNE_CACHE=disabled "$repo/tools/affected-tests.sh" --files t6/dyn.expected) >"$out" 2>"$err" || rc=$?
+  # shellcheck disable=SC2086
+  expect 'a cold build directory: what an action prints while dune rules builds an input is not read as rules' 0 \
+    @t6/runtest-dyn $opaque_all
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM='open STDERR, ">", "$tmp/rules-err" or exit 126;' TO='open STDERR, ">&", \*STDOUT;' \
+      perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    rm -rf "$repo/_build"
+    rc=0
+    (cd "$TMP" && DUNE_CACHE=disabled bash "$mutant" --files t6/dyn.expected) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 2 ] && grep -q 'unexpected atom in dune rules output' "$err"; then
+      report 0 'negative control: reading dune rules'"'"' stderr as its answer fails on the cold build'
+    else report 1 'negative control: reading dune rules'"'"' stderr as its answer fails on the cold build' "exit $rc; $(cat "$err")"; fi
+  else
+    report 1 'negative control: reading dune rules'"'"' stderr as its answer fails on the cold build' \
+      "the mutation anchor does not occur exactly once"
+  fi
+  rm -f "$mutant"
+fi
 
 if harness_leg 'library chain'; then
   affected --files lib/helper.ml
@@ -218,7 +261,7 @@ if harness_leg 'dune-project'; then
     @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
     @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
-    @t4/sub/runtest-t_sub @t5/slow-usesh
+    @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn
 fi
 
 if harness_leg 'dune file elsewhere'; then
@@ -326,6 +369,16 @@ if harness_leg 'undescribed stanza'; then
      grep -q 'does not build: library optlib (lib)' "$err" && [ "$(cat "$out")" = @t2/runtest-scan ]; then
     report 0 'a module of a library this build does not compile is UNMAPPED, exit 3, its rule readers still listed'
   else report 1 'a module of a library this build does not compile is UNMAPPED, exit 3, its rule readers still listed' "exit $rc; $(cat "$out" "$err")"; fi
+fi
+
+if harness_leg 'off-build library edge'; then
+  # offb requires offa by its local name; external-lib-deps names offa by its
+  # public one, and neither is compiled here, so the edge is skipped, not fatal.
+  affected --files opt/offa.ml
+  if [ "$rc" = 3 ] && grep -q 'UNMAPPED: opt/offa.ml' "$err" &&
+     grep -q 'library offa (required by library fx.offb (opt)) is not in this build, nor is the stanza requiring it; edge skipped' "$err"; then
+    report 0 'a library a stanza this build does not compile requires by its local name is skipped and said so'
+  else report 1 'a library a stanza this build does not compile requires by its local name is skipped and said so' "exit $rc; $(cat "$out" "$err")"; fi
 fi
 
 if harness_leg 'dune file'; then
@@ -527,6 +580,10 @@ if harness_leg 'negative controls'; then
   control 'the alias fixpoint is what lists an alias needing a listed one' \
     'next unless grep { my $t = $_; grep { $out{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};' 'next;' \
     --files t4/gate.cfg -- $opaque_all
+  # shellcheck disable=SC2086
+  control 'skipping an off-build stanza'"'"'s unresolved edge is what lets the run finish' \
+    'elsif ($st[$i]{undescribed}) {' 'elsif (0) {' \
+    --files lib/helper.ml -- $reached_by_core
   control 'an executable target is what finds a test stanza naming no library' \
     'push @st, { kind => "tests", dir => $d, names => [$x]' 'next; push @st, { kind => "tests", dir => $d, names => [$x]' \
     --files t3/t_plain.ml -- @t3/runtest-t_plain
