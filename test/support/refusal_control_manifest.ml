@@ -20,6 +20,11 @@ let raw_entries =
     ("ll_test_ratchet.ml", []);
     ("refused_action_streams.ml", []);
     ("operand_key_ratchet.ml", []);
+    ( "tensorized_census_ratchet.ml",
+      [
+        "[scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity";
+        "[scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run";
+      ] );
     ("provenance_tag_inventory.ml", []);
     ( "render_decline_inventory.ml",
       [
