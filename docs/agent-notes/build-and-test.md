@@ -10,8 +10,9 @@ that they earn a lookup rather than always-loaded space. The file is far too lon
 it is sectioned by topic: `grep -n '^##'` lists the sections with their line numbers, and AGENTS.md
 points into them by anchor, as `build-and-test.md#<heading-slug>`. Append a new bullet at the end
 of the section it belongs to rather than at the end of the file, and open a section when none fits.
-A renamed heading breaks every pointer to it; `agent_notes_structure` reports the ones in AGENTS.md
-and in the `tools/*.sh` scripts (gh-ocannl-1111).
+A renamed heading breaks every pointer to it; `agent_notes_structure` reports the ones in AGENTS.md,
+in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the OCaml sources under
+`test/`, where scanners print them in their refusals (gh-ocannl-1358).
 
 ## Repository scans
 
@@ -72,7 +73,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   bullet, keep one nesting level, keep every index row on one physical line, and give a new file its
   index row the day it appears. It also reads AGENTS.md for its pointers into these files: every
   `<note>.md#<anchor>` there must name a notes file and a heading that file has, since a rule whose
-  pointer lands nowhere has lost its mechanism (gh-ocannl-1044).
+  pointer lands nowhere has lost its mechanism (gh-ocannl-1044). The same holds of the `tools/*.sh`
+  scripts and of every string literal of an OCaml source under `test/`, read as the compiler
+  decodes it, so a refusal continued across source lines is read whole (gh-ocannl-1358). Comments
+  and docstrings there are not read; the scan's own case file is exempt by name, and the exemption
+  goes stale the day that file stops yielding a finding. A scanner that prints a pointer therefore
+  needs no claim of its own resolving it.
 - A scan over a tree that is USUALLY CLEAN needs synthetic negative controls more than one over a
   tree full of findings does, because green-because-intact and green-because-blind are the same
   output. So the rules live in `test/support/agent_notes_scan.ml` as pure functions over strings and

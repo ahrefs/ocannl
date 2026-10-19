@@ -872,33 +872,7 @@ let attribute formats message =
   | [ format ] -> Some format
   | _ -> None
 
-(* Every agent-note pointer a refusal format carries, as [(note basename, anchor)]. *)
-let note_pointers format =
-  let marker = "docs/agent-notes/" in
-  let rec from pos found =
-    match String.substr_index format ~pos ~pattern:marker with
-    | None -> List.rev found
-    | Some start ->
-        let path_start = start + String.length marker in
-        let stop = ref path_start in
-        while
-          !stop < String.length format
-          && (Char.is_alphanum format.[!stop]
-             || List.mem [ '-'; '_'; '.'; '#' ] format.[!stop] ~equal:Char.equal)
-        do
-          Int.incr stop
-        done;
-        let pointer = String.sub format ~pos:path_start ~len:(!stop - path_start) in
-        let found =
-          match String.lsplit2 pointer ~on:'#' with
-          | Some (note, anchor) -> (note, anchor) :: found
-          | None -> found
-        in
-        from !stop found
-  in
-  from 0 []
-
-let refusal_control grammar_fixture notes_dir =
+let refusal_control grammar_fixture =
   let source = "test/operations/config_usage_scan.ml" in
   let direct_refusal_formats = direct_refusal_formats source in
   let observed = Hash_set.create (module String) in
@@ -1070,14 +1044,8 @@ let refusal_control grammar_fixture notes_dir =
         (attribute (List.rev direct_refusal_formats) message));
   Verdict.p_empty "the config-usage refusal control emits no unexpected diagnostic"
     ~over:(Hash_set.to_list observed) !unexpected;
-  (* The pointer is in the refusal text itself, so it is derived from the formats and resolved
-     against the note's rendered heading ids: a renamed heading fails here, not in a reader's
-     hands. *)
-  Verdict.p_all ~min:2 "every agent-note pointer in a config-usage refusal names a heading it has"
-    (List.concat_map direct_refusal_formats ~f:note_pointers) ~f:(fun (note, anchor) ->
-      let path = Stdlib.Filename.concat notes_dir note in
-      Stdlib.Sys.file_exists path
-      && List.mem (Markdown.heading_ids (In_channel.read_all path)) anchor ~equal:String.equal);
+  (* The agent-note pointers these refusals print are resolved by agent_notes_structure's
+     guide-anchors rule, which reads every test source's string literals (gh-ocannl-1358). *)
   Refusal_manifest.print source
 
 let file_kind path =
@@ -1242,8 +1210,7 @@ let live workspace_root generated =
 
 let () =
   match Array.to_list argv with
-  | _ :: [ "--refusal-control"; grammar_fixture; notes_dir ] ->
-      refusal_control grammar_fixture notes_dir
+  | _ :: [ "--refusal-control"; grammar_fixture ] -> refusal_control grammar_fixture
   | _ :: "--source-fixtures" :: (_ :: _ as paths) -> source_fixtures paths
   | _ :: [ "--fixture"; path; config_path; multiline_path ] ->
       fixture path config_path multiline_path
@@ -1253,6 +1220,6 @@ let () =
       eprintf
         "Usage: %s <workspace_root> <generated sandbox paths...> | %s --fixture <file> \
          <config-file> <multiline-markdown-file> | %s --source-fixtures <name>.fixture... | %s \
-         --refusal-control <grammar-fixture> <agent-notes-dir>\n"
+         --refusal-control <grammar-fixture>\n"
         (List.hd_exn argv) (List.hd_exn argv) (List.hd_exn argv) (List.hd_exn argv);
       Stdlib.exit 1

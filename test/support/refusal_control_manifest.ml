@@ -62,10 +62,12 @@ let raw_entries =
         "[scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes";
         "[scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets";
         "[scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers";
+        "[scanner-refusal:94abf9ad59c6aa58e4608e31b0c1481a] sources' string literals";
         "[scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported";
         "[scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries";
         "[scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet";
         "[scanner-refusal:ec62d0a7d728c7ab15a2c9b8608c6404] every exemption still";
+        "[scanner-refusal:91d29d400185d4fe574f5deb83d48157] every pointer-fixture exemption";
       ] );
     ( "changelog_unreleased_scan.ml",
       [
@@ -239,7 +241,6 @@ let raw_entries =
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
         "[scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";
-        "[scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names";
         "[scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies";
         "[scanner-refusal:98de32226b019b81ff6e88bf4e44c14b] supplies OCaml implementation";
         "[scanner-refusal:05a2eb509694607c615f131c6949c1f1] inventory supplies Markdown";

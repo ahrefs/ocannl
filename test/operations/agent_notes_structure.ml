@@ -37,6 +37,18 @@ module Notes = Test_utils.Agent_notes_scan
 *)
 let unterminated_bullets : (string * string) list = []
 
+(** Test sources whose string literals are NOT pointer sources (gh-ocannl-1358), each with its
+    reason. The scan's own negative controls point at headings their synthetic notes lack on
+    purpose, so read as live pointers they are findings by design. An entry has to keep earning its
+    place: a source listed here that no longer yields a finding when read is reported stale, so the
+    list cannot quietly shelter a real pointer in a file that has lost its fixtures. *)
+let pointer_fixture_sources : (string * string) list =
+  [
+    ( "test/operations/agent_notes_scan_cases.ml",
+      "the agent-notes scan's own controls: their fixture guides and scripts point at headings the \
+       synthetic notes lack, which is what the cases exist to flag" );
+  ]
+
 let read path = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all
 
 (** The path a source outside [docs/] is known by, relative to the repository root: dune hands over
@@ -60,7 +72,22 @@ let docs_relative path =
   | None -> path
 
 let () =
-  let args = Array.to_list Stdlib.Sys.argv |> List.tl_exn in
+  (* The test sources take the argument list past Windows' command-line cap, so the rule hands it
+     over as a response file (`test/support/scan_argv.ml`). *)
+  let workspace_root, args =
+    match Test_utils.Scan_argv.expand Stdlib.Sys.argv |> Array.to_list with
+    | _ :: workspace_root :: args -> (workspace_root, args)
+    | _ ->
+        eprintf
+          "FAILED: usage: agent_notes_structure <workspace_root> <file or @response-file>...\n";
+        Stdlib.exit 1
+  in
+  (* A test source under the rule's own directory arrives as a bare name, so a source's path is
+     resolved from where the rule runs rather than by stripping a prefix. *)
+  let source_name =
+    let module Dune_scan = Test_utils.Dune_stanza_scan in
+    Dune_scan.repo_relative (Dune_scan.base_dir workspace_root)
+  in
   let md = List.filter args ~f:(String.is_suffix ~suffix:".md") in
   (* The scripts under tools/ are read for their pointers into the notes too (rule 7,
      gh-ocannl-1111): their comments and the messages they print point at the note sections that
@@ -69,6 +96,18 @@ let () =
     List.filter args ~f:(String.is_suffix ~suffix:".sh")
     |> List.map ~f:(fun p -> (repo_relative p, read p))
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  in
+  (* The OCaml sources under test/ are read for the pointers in their string literals (rule 7,
+     gh-ocannl-1358): the scanners there print agent-note pointers in their refusals. The set is the
+     rule's recursive glob, less dune's preprocessed twin of a source already in it. *)
+  let sources =
+    Test_utils.Config_key_scan.sources_among args
+    |> List.map ~f:(fun p -> (source_name p, read p))
+    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  in
+  let fixture_sources, sources =
+    List.partition_tf sources ~f:(fun (name, _) ->
+        List.Assoc.mem pointer_fixture_sources name ~equal:String.equal)
   in
   (* The agent guide is read for its pointers into the notes (rule 7), and is not a note itself. *)
   let guide_paths, md =
@@ -103,18 +142,24 @@ let () =
   let bullets, findings =
     Notes.check_all
       ~guides:(("AGENTS.md", guide_contents) :: scripts)
-      ~index_file ~index_contents ~files ()
+      ~sources ~index_file ~index_contents ~files ()
   in
   let pointers_in contents =
     List.filter (Notes.guide_pointers contents) ~f:(fun p -> Option.is_some (Notes.pointer_scope p))
   in
   let pointers = pointers_in guide_contents in
   let script_pointers = List.concat_map scripts ~f:(fun (_, c) -> pointers_in c) in
+  let source_pointers =
+    List.concat_map sources ~f:(fun (_, c) ->
+        List.filter
+          (try Notes.source_pointers c with _ -> [])
+          ~f:(fun p -> Option.is_some (Notes.pointer_scope p)))
+  in
   eprintf
     "Scanned %d notes files plus the index, %d bullets, %d AGENTS.md pointers, %d pointers from %d \
-     tools scripts, %d findings.\n"
+     tools scripts, %d pointers from the string literals of %d test sources, %d findings.\n"
     (List.length files) (List.length bullets) (List.length pointers) (List.length script_pointers)
-    (List.length scripts) (List.length findings);
+    (List.length scripts) (List.length source_pointers) (List.length sources) (List.length findings);
   (* The floors. None moves when a note is edited, a bullet added or a file split; each fails the
      moment the scan is handed nothing, which is the one way its silence would be a lie. *)
   Verdict.claim "the scan was handed the notes files" (List.length files >= 10);
@@ -123,6 +168,10 @@ let () =
      (lukstafi/ocannl-staging#849); fewer than five means the glob or the reader lost them. *)
   Verdict.claim "the scan read the tools scripts' pointers into the notes"
     (List.length script_pointers >= 5);
+  (* gh-ocannl-1358: config_usage_scan's two refusals and the refusal manifest's two markers that
+     quote them point at build-and-test.md; under two, the glob or the literal reader lost them. *)
+  Verdict.claim "the scan read the test sources' string literals and their pointers into the notes"
+    (List.length sources >= 100 && List.length source_pointers >= 2);
   print_endline
     "Structure of docs/agent-notes.md and docs/agent-notes/, over the live tree. The rules are\n\
      stated in test/support/agent_notes_scan.ml; the counts scanned go to stderr, since a tally in\n\
@@ -166,7 +215,8 @@ let () =
      empty finding list over nothing would pass by default. The scripts' pointers have their floor
      above. *)
   report_over ~min:5 ~over:pointers Notes.rule_guide_anchors
-    "every note anchor AGENTS.md or a tools script points at is a heading its note has";
+    "every note anchor AGENTS.md, a tools script or a test source's literal points at is a heading \
+     its note has";
   (* The relationship the seven calls above rest on, and nothing used to state (gh-ocannl-706): a
      rule this file does not report is a rule whose findings the live tree never shows, and the
      omission is silent -- the scan computes them, [of_rule] is never asked for them, and the golden
@@ -216,4 +266,20 @@ let () =
   List.iter stale ~f:(fun (key, reason) ->
       eprintf "  stale exemption for %s (%s): no bullet is flagged for it any more\n" key reason);
   Verdict.p "every exemption still names a bullet that needs one" (List.is_empty stale);
+  (* The fixture exemptions, held to the reason they give: each names a source handed over, whose
+     literals the rule would flag. *)
+  let stale_fixtures =
+    List.filter pointer_fixture_sources ~f:(fun (name, _) ->
+        match List.Assoc.find fixture_sources name ~equal:String.equal with
+        | None -> true
+        | Some contents ->
+            List.is_empty
+              (Notes.check_source ~source_file:name ~source_contents:contents ~index_file
+                 ~index_contents ~files))
+  in
+  List.iter stale_fixtures ~f:(fun (name, _) ->
+      eprintf "  stale pointer-fixture exemption: %s was not handed over or yields no finding\n"
+        name);
+  Verdict.p_empty "every pointer-fixture exemption names a source the rule would flag"
+    ~over:pointer_fixture_sources stale_fixtures;
   Test_utils.Refusal_control_manifest.print "agent_notes_structure.ml"

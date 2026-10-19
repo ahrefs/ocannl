@@ -7606,8 +7606,10 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
- ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md and the tools scripts as text and links no backend.
- (target agent_notes_structure.actual)
+ ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md, the tools scripts and the test sources as text and links no backend.
+ ; The test sources are read for the agent-note pointers their string literals print (gh-ocannl-1358);
+ ; with them the argument list outgrows Windows' command line, so it goes over as a response file.
+ (targets agent_notes_structure.actual agent_notes_structure.filelist)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
@@ -7615,11 +7617,19 @@
   ../../AGENTS.md
   ../../docs/agent-notes.md
   (glob_files_rec ../../docs/agent-notes/*.md)
-  (glob_files ../../tools/*.sh))
+  (glob_files ../../tools/*.sh)
+  (glob_files_rec ../../test/*.ml))
  (action
-  (with-stdout-to
-   %{target}
-   (run %{dep:agent_notes_structure.exe} %{deps}))))
+  (progn
+   (with-stdout-to
+    agent_notes_structure.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    agent_notes_structure.actual
+    (run
+     %{dep:agent_notes_structure.exe}
+     %{workspace_root}
+     @agent_notes_structure.filelist)))))
 
 (rule
  (alias runtest-agent_notes_structure)
@@ -8294,24 +8304,22 @@
   (diff config_usage_scan_control.expected config_usage_scan_control.actual)))
 
 (rule
- ; ocannl-backend: none -- drives every direct config-usage refusal through injected state, and
- ; resolves the agent-note pointers those refusals print against the notes' headings.
+ ; ocannl-backend: none -- drives every direct config-usage refusal through injected state.
+ ; The agent-note pointers those refusals print are resolved by agent_notes_structure (gh-ocannl-1358).
  (target config_usage_scan_refusal_control.actual)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
   config_usage_scan.ml
-  config_usage_scan_token_grammar.fixture
-  (glob_files ../../docs/agent-notes/*.md))
+  config_usage_scan_token_grammar.fixture)
  (action
   (with-stdout-to
    %{target}
    (run
     %{dep:config_usage_scan.exe}
     --refusal-control
-    %{dep:config_usage_scan_token_grammar.fixture}
-    ../../docs/agent-notes))))
+    %{dep:config_usage_scan_token_grammar.fixture}))))
 
 ; A tool-invented name in a *.sh or *.py source is refused with a hint naming the fix; the same
 ; names in an OCaml source keep the general message. Each <name>.fixture is scanned as <name>.
