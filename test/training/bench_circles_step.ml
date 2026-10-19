@@ -13,7 +13,7 @@ module Asgns = Ir.Assignments
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
 
-let lenet = Nn_blocks.lenet
+let lenet = Demo_models.lenet
 let softmax = Nn_blocks.softmax
 
 let () =
