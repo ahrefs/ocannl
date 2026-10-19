@@ -1,0 +1,6 @@
+the exact run computes the IEEE values: true
+each licence changes its own witnesses and leaves the others' values: true
+the inlined leg's producer is virtual: true
+an inlined and a materialized producer agree bitwise under the contraction licence: true
+contracting after virtualization, the old order, would fuse the inlined read: true
+fusion is detectable: the single-assignment control rounds once: true

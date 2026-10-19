@@ -223,6 +223,7 @@
   (alias runtest-kernel_attribution)
   (alias runtest-gh1002_kernels)
   (alias runtest-online_softmax_fast_math)
+  (alias runtest-online_softmax_fp_licences)
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-qkv_zero_init-approximate)
   (alias runtest-fast_math_libmvec)
@@ -473,7 +474,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -661,6 +661,36 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff online_softmax_fast_math.expected online_softmax_fast_math.actual)))
+
+; The same executable with the floating-point licences on (gh-ocannl-998), as the `approximate`
+; profile has them: their tier member runs after this rewrite, and contraction would otherwise hide
+; the value reduction from the probability hoist. The same claims, masked prefixes and the
+; lowest-finite scores included; the golden differs in its regime lines only.
+
+(rule
+ ; ocannl-backend: cc -- the licences are backend-independent; the command line pins cc beside them.
+ (target online_softmax_fp_licences.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:online_softmax.exe}
+    --ocannl_backend=cc
+    --ocannl_fp_contract=true
+    --ocannl_fp_reassociate=true
+    --ocannl_fp_finite_math=true))))
+
+(rule
+ (alias runtest-online_softmax_fp_licences)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   online_softmax_fp_licences.expected
+   online_softmax_fp_licences.actual)))
 
 ; gh-ocannl-1045: a fast-math cc kernel whose `expf` loop vectorizes into libmvec must load and run.
 ; The compiler command adds `-D__FAST_MATH__`, which `cc_backend_fast_math`'s
@@ -1994,8 +2024,7 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_PROFILE))
  (modules schedule_refusal_classification)
  (libraries base ll_test arrayjit.verdict))
 
@@ -2203,7 +2232,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -4182,7 +4210,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -4218,7 +4245,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -4249,7 +4275,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -4278,7 +4303,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
@@ -4360,7 +4384,6 @@
   ; What the two children declare, less the backend and the vector width (forced) and the build-files
   ; prefix (removed).
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -4375,7 +4398,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -4398,7 +4420,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -4423,7 +4444,6 @@
  (package neural_nets_lib)
  (locks ocannl_training_test)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -4457,7 +4477,6 @@
  (name gpu_small_leading_axis)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -4486,7 +4505,6 @@
  (package neural_nets_lib)
  (locks ocannl_training_test)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The GPU pipeline reads every default-schedule key and, through Schedule.fission_keep_mapping,
@@ -4515,7 +4533,6 @@
  (name gpu_parallel_prefix)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -4540,7 +4557,6 @@
  (name schedule_ops)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -4569,7 +4585,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -4598,7 +4613,6 @@
  (name autotune_serial_baseline)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -4709,7 +4723,6 @@
  (name fission_equivalence)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; Its default-pipeline mirror reads every default-schedule key and the fission merge gate.
@@ -4752,7 +4765,6 @@
  (name autotune_privatize)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -4813,7 +4825,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -4858,7 +4869,6 @@
  (package neural_nets_lib)
  (locks ocannl_training_test)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (alias slow-env_spelling_gate)
   autotune_fission_sketch.expected
   ocannl_config
@@ -4906,7 +4916,6 @@
  (locks ocannl_training_test)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (alias slow-env_spelling_gate)
   autotune_mma_companion.expected
   ocannl_config
@@ -4940,7 +4949,6 @@
  (package neural_nets_lib)
  (locks ocannl_training_test)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (alias slow-env_spelling_gate)
   autotune_batched_companion.expected
   ocannl_config
@@ -4995,7 +5003,6 @@
  (name fission_schedule)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5028,7 +5035,6 @@
  (name op_legality)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5048,7 +5054,6 @@
  (name aligned_chains_shared_symbol)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5095,7 +5100,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5115,7 +5119,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5136,7 +5139,6 @@
  (name launch_predicate_parity)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5167,7 +5169,6 @@
  (name launch_dim_gate)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
@@ -5195,7 +5196,6 @@
  (deps
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_BUILD_FILES_PREFIX)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
@@ -5222,7 +5222,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5244,7 +5243,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5294,7 +5292,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
@@ -5328,6 +5325,7 @@
   base
   ocannl
   stdio
+  unix
   arrayjit.verdict
   test_utils
   ll_test
@@ -5384,7 +5382,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5405,7 +5402,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5425,7 +5421,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5445,7 +5440,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5465,7 +5459,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5485,7 +5478,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5505,7 +5497,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5525,7 +5516,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5556,7 +5546,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5575,7 +5564,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5605,7 +5593,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5623,6 +5610,7 @@
   ocannl
   arrayjit.autotune
   stdio
+  unix
   arrayjit.verdict
   test_utils
   ll_test)
@@ -5634,7 +5622,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5754,7 +5741,6 @@
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; Its explicit leg runs the default pipeline, which reads every default-schedule key.
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -5813,7 +5799,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5833,7 +5818,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5852,7 +5836,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5873,7 +5856,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -5891,7 +5873,6 @@
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -5920,7 +5901,6 @@
  (name schedule_strided_1x1)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   ; The census claims are gated on the tensorized capability (Ll_test.tensorized_capability): on a
   ; GPU the ADVERTISED tile-MMA formats, so the rocWMMA-header probe's three variables are inputs to
@@ -5980,7 +5960,6 @@
  (name conv_detection_boundary)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -6515,7 +6494,6 @@
  (name schedule_split_reduce)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -6543,7 +6521,6 @@
  (name autotune_split_reduce)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
@@ -6604,7 +6581,6 @@
  (name epilogue_fusion_mma_seeds)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -7259,7 +7235,6 @@
  (name reduction_forms)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -7288,7 +7263,6 @@
  (name schedule_contraction_nest)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -7323,7 +7297,6 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_TF32_MATMULS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules matmul_interchange)
@@ -7345,7 +7318,6 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_TF32_MATMULS))
  (modules seeded_default)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -7364,10 +7336,43 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_TF32_MATMULS))
  (modules seeded_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1414: a reduction over two loops neither of which splits alone -- a batch-8 parameter
+; gradient, a small-output contraction over two axes -- is split with the pair coalesced, or
+; interchanged where an operand read along one loop declines the coalescing. Detection, executed
+; parity on dyadic inputs (bitwise the default and the exact sum on every backend), the saved-form
+; round trip, and the untuned CUDA split at an explicit threshold; backend-uniform.
+
+(test
+ (name split_reduce_pair)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_TF32_MATMULS)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules split_reduce_pair)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -7386,7 +7391,6 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_TF32_MATMULS))
  (modules reduction_sink)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -7423,8 +7427,7 @@
  (locks ocannl_training_test)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_BACKEND))
  (modules bench_self_test)
  (libraries
   base
@@ -7450,8 +7453,7 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_PROFILE))
  (modules bench_mma_writes)
  (libraries base stdio bench_harness ocannl arrayjit.verdict ll_test)
  (preprocess
@@ -8435,7 +8437,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
@@ -8487,7 +8488,6 @@
  (name online_softmax_block_mma)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BUILD_FILES_PREFIX)
   (env_var OCANNL_BACKEND)
@@ -8521,7 +8521,6 @@
  (name gpu_lane_reduction)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
@@ -8625,7 +8624,6 @@
  (name qkv_zero_init)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -8659,7 +8657,6 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
@@ -8690,19 +8687,30 @@
 
 (test
  ; ocannl-backend: none -- inspects simplification directly, executes no backend.
- (name simplify_fp_algebra)
+ (name fp_licences)
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_FP_CONTRACT)
+  (env_var OCANNL_FP_FINITE_MATH)
+  (env_var OCANNL_FP_REASSOCIATE)
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE))
- (modules simplify_fp_algebra)
+ (modules fp_licences)
  (libraries base ocannl unix arrayjit.verdict ll_test))
+
+(test
+ (name fp_licence_values)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules fp_licence_values)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test))
 
 (test
  ; ocannl-backend: none -- exercises Utils configuration readers without a backend.
@@ -8739,8 +8747,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_BUILD_FILES_PREFIX))
  (libraries
   base
   ocannl
@@ -8759,8 +8766,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_BUILD_FILES_PREFIX))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; gh-ocannl-1288: Metal half unary math builtins are the f32 builtin narrowed once.
@@ -8866,7 +8872,6 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
@@ -8896,8 +8901,7 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_PROFILE))
  (modules metal_threadgroup_overflow)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -8907,7 +8911,6 @@
  (name fission_replay_segmentation)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_BUILD_FILES_PREFIX)
@@ -9037,7 +9040,6 @@
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
   ; The small menu's keys, which the test states on CPU backends (Fissioned_chain.small_menu).
   (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
@@ -9075,7 +9077,6 @@
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules cost_model_reuse)
  (libraries base stdio ocannl arrayjit.verdict ll_test))

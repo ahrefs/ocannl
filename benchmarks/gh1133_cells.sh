@@ -73,6 +73,10 @@
 #             is the one-simdgroup rule, so a head wider than the simdgroup keeps the plain plan;
 #             2 gives a head of 64 lanes, 4 a head of 128) -- meaningful with a d1 <T> on a
 #             fixture whose head is wider than 32
+#   sr<N>     this checkout's runner, --ocannl_gpu_default_split_reduce_min_serial=<N>, N a
+#             non-negative count: the serial chain per output cell from which the untuned CUDA plan
+#             splits a reduction (gh-ocannl-1325; 0 splits nothing) -- the same-binary threshold
+#             A/B of gh-ocannl-1414, whose two-loop batch reductions chain 1024 rows at batch 8
 #   fold<T>   treatment <T> plus --ocannl_online_softmax_block=16 (the single-pass block fold of
 #             gh-ocannl-1003, the `approximate` profile's setting; meaningful with a d1 <T>)
 #   b<T>      treatment <T> run by BASE's runner, for a same-flags A/B across revisions
@@ -177,6 +181,9 @@ flags_of() {
     ar[1-9]*)
       case ${1#ar} in *[!0-9]*) echo "gh1133: unknown treatment $1" >&2; return 1 ;; esac
       echo "--ocannl_online_softmax=false --ocannl_gpu_lane_all_reduce_simdgroups=${1#ar}" ;;
+    sr[0-9]*)
+      case ${1#sr} in *[!0-9]*) echo "gh1133: unknown treatment $1" >&2; return 1 ;; esac
+      echo "--ocannl_online_softmax=false --ocannl_gpu_default_split_reduce_min_serial=${1#sr}" ;;
     fold*)
       local inner
       inner=$(flags_of "${1#fold}") || return 1

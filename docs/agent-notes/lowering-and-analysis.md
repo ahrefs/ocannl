@@ -479,7 +479,8 @@ files.
   scatters against explicit neutral initialization.
 
 - **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
-  between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; first member `Online_softmax`):
+  between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; members `Online_softmax`, then
+  `Fp_algebra`, gh-ocannl-998 -- recognizers first, the normalizing algebra last):
   ahead of the analyses, so the traced store and the placements see the rewritten routine, and a
   member may REMOVE a node's definition (the online normalizer replaces a max- and a sum-reduction
   with one `Scan_loop`), which a post-analysis pass such as `rewrite_one_hot_reductions` may not.
@@ -502,9 +503,9 @@ files.
   anyway (a probe showed clang mis-evaluating `exp(-inf - floor)` at a peeled first iteration),
   so `cc_backend_fast_math` now takes `-ffinite-math-only` back, and the test is rerun under the
   flag (`runtest-online_softmax_fast_math`) with every claim asserted; (d) do not rely on an
-  exact identity such as `l + (m - m)` to inject a NaN -- `simplify_llc` reassociates it into
-  `(l + m) - m`, which cancels catastrophically (the generated C is the evidence; gh-ocannl-998
-  is the issue).
+  exact identity such as `l + (m - m)` to inject a NaN -- the `fp_reassociate` licence (then
+  ungated inside `simplify_llc`, now the `Fp_algebra` member) reassociates it into `(l + m) - m`,
+  which cancels catastrophically (the generated C was the evidence; gh-ocannl-998).
 - **`Online_softmax`'s third shape fuses the attention backward** (gh-ocannl-1002, gate
   `online_softmax_backward`; `find_backward`): it anchors on the normalizer found in the SAME pass
   (a backward lowered alone declines), so it cannot be a later fixpoint round. Traps: (a) the visit

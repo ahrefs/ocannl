@@ -357,18 +357,21 @@ let profile_value = function Some p -> Printf.sprintf {|"%s"|} (string p) | None
     [dominant_kernel] is the already-built {!dominant_kernel_object}, or [None] — [null] on the wire
     — for a cell that did not run the instrument, which the report prints as a dash. *)
 let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~compile_s ~searched
-    ?tokens_per_step ?tune ?shipped_mma ?simplify_fp_algebra ~p10 ~p50 ~p90 ~queued_ms ~timed_steps
+    ?tokens_per_step ?tune ?shipped_mma ?fp_licences ~p10 ~p50 ~p90 ~queued_ms ~timed_steps
     ~peak_memory ?dominant_kernel ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
   let tune_field = match tune with Some j -> Printf.sprintf {|"tune":%s,|} j | None -> "" in
   let algebra_field =
-    match simplify_fp_algebra with
+    match fp_licences with
     | None -> ""
-    | Some (value, source) ->
-        Printf.sprintf {|"simplify_fp_algebra":{"value":"%s","source":"%s"},|} (string value)
-          (string source)
+    | Some licences ->
+        Printf.sprintf {|"fp_licences":{%s},|}
+          (String.concat ~sep:","
+             (List.map licences ~f:(fun (key, value, source) ->
+                  Printf.sprintf {|"%s":{"value":%b,"source":"%s"}|} (string key) value
+                    (string source))))
   in
   let peak_bytes_field, peak_counter_field, peak_source_field =
     match peak_memory with

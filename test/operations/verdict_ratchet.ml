@@ -334,6 +334,10 @@ let exempt_quantified_helpers =
     ( "test/operations/seeded_split_reduce.ml:a threshold of 0 disables the split",
       "a threshold of 0 is the documented off switch, so an empty split list is the claim; the \
        claims above pin a non-empty one at a positive threshold on the backends that split" );
+    ( "test/operations/split_reduce_pair.ml:off CUDA the untuned plan splits nothing",
+      "the untuned split is CUDA-only by design, so off CUDA an empty split list is the claim; it \
+       is gated there, and on CUDA the claim beside it requires the bias gradient in the list from \
+       the same fixture" );
     ( "test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds",
       "the variance-style self-product is deliberately not recognized as a matmul or conv site, so \
        the sketch seeder yields no seeds of any kind and there is no seed population to quantify \

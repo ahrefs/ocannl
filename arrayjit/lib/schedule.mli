@@ -518,6 +518,15 @@ val split_reduce :
     ([op, block, inner, combine]) so subsequent ops can annotate the pass-1 block loop and the
     combine nest's loops. *)
 
+val fused_accumulation :
+  d:Tnode.t -> di:Indexing.axis_index array -> Low_level.scalar_t -> Low_level.scalar_t option
+(** gh-ocannl-998: the accumulation into [d[di]] as a [Tile_mma] fallback states it -- fused, since
+    a tile multiply-accumulate is fused on every tensor unit and in the cc register tile. An [FMA]
+    accumulating into [d[di]] is returned as is and a floating plain add of a product is returned as
+    the [FMA] (a schedule decision, not the contraction licence); [None] for an integer accumulation
+    (gh-ocannl-824) or no product accumulated into [d[di]]. [Tensorize] writes its fallback through
+    it, and the sketch seeding asks it whether the register tile can render a site. *)
+
 val tensorize :
   ?tile:Register_tile.t ->
   i:Indexing.symbol ->
@@ -648,6 +657,10 @@ val pipeline_violation_cause : site:string -> pipeline_violation -> Schedule_out
     {!pipeline_violation_message}. [C_syntax] builds both of its pipelined-tile declines through it,
     so the oracle and the renderer state each fact in one wording; [pipelined_move_legality] pins
     that, on the same IR, they reach the same violation. *)
+
+val written_nodes : Low_level.t -> Set.M(Tnode).t
+(** The nodes the code writes: [Set]-family and [Zero_out] statements, [Tile_mma] accumulators, and
+    the statements inside [Local_scope] bodies and scan-loop inits. *)
 
 val op_legality : Low_level.optimized -> optop -> op_verdict
 (** gh-494 waypoint 3: the op-legality oracle. A schedule op is a thread-pairing transform over the

@@ -173,6 +173,7 @@ let site_lo : Autotune.sr_site =
     sr_cost = 1024;
     sr_dynamic = false;
     sr_swaps = [ (sym 2, sym 1) ];
+    sr_coalesce = None;
   }
 
 let site_hi : Autotune.sr_site =
@@ -184,6 +185,7 @@ let site_hi : Autotune.sr_site =
     sr_cost = 4096;
     sr_dynamic = true;
     sr_swaps = [ (sym 4, sym 3) ];
+    sr_coalesce = Some (sym 5, sym 6);
   }
 
 (* The fields as the type's derived s-expression lists them, in declaration order. *)
@@ -208,6 +210,7 @@ let site_updates : (string * (donor:Autotune.sr_site -> Autotune.sr_site -> Auto
     ("sr_cost", fun ~donor s -> { s with sr_cost = donor.sr_cost });
     ("sr_dynamic", fun ~donor s -> { s with sr_dynamic = donor.sr_dynamic });
     ("sr_swaps", fun ~donor s -> { s with sr_swaps = donor.sr_swaps });
+    ("sr_coalesce", fun ~donor s -> { s with sr_coalesce = donor.sr_coalesce });
   ]
 
 let () =
