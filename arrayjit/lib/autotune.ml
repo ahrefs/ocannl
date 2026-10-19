@@ -4032,10 +4032,9 @@ let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp 
    fragment of the tile the device's descriptor advertises for each statement's storage triple. *)
 let model_operand_loads ~(limits : Ir.Backend_intf.hardware_limits)
     ~(capabilities : Ir.Backend_intf.codegen_capabilities) (opt : LL.optimized) =
-  let intrinsic_tile ~a_prec ~b_prec ~d_prec =
+  let intrinsic_tile ~a_prec ~b_prec ~d_prec ~scope =
     Option.bind limits.Ir.Backend_intf.mma ~f:(fun mma ->
-        mma_tile_for_precisions_in_scope mma ~scope:Ir.Backend_intf.Mma_per_statement ~a_prec
-          ~b_prec ~d_prec)
+        mma_tile_for_precisions_in_scope mma ~scope ~a_prec ~b_prec ~d_prec)
   in
   CM.operand_load_count ~intrinsic_tile ~operand_reloads:capabilities.mma_operand_reloads
     ~operand_loads:capabilities.mma_operand_loads opt

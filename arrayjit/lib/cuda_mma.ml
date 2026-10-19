@@ -162,11 +162,10 @@ let ldmatrix_eligible : Backend_intf.mma_operand_place -> bool = function
   | `Shared, `Swizzled_b128 -> true
   | (`Shared | `Device | `Thread), (`Plain | `Swizzled_b128) -> false
 
-(* The census and the cost model see no destination, so they read the per-statement arm. An accepted
-   update-only call whose fragment-scope arm differs (wide uniform f16's wmma) has plain operands,
-   wmma declining swizzled ones, so that arm's [(false, false)] is what this answers for it too. *)
-let operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a ~b =
-  match resolve_arm ~a_prec ~b_prec ~d_prec ~scope:Backend_intf.Mma_per_statement with
+(* The emission scope's arm: the census reads it off the statement's destination, the cost model off
+   the schedule's simdgroup fragments. *)
+let operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
+  match resolve_arm ~a_prec ~b_prec ~d_prec ~scope with
   | None -> (false, false)
   | Some arm -> arm_ldmatrix_operands arm ~ta ~tb ~a:(ldmatrix_eligible a) ~b:(ldmatrix_eligible b)
 
@@ -177,9 +176,9 @@ let operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a ~b =
    [k_loop_lines]). *)
 let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
 
-let operand_reloads ~a_prec ~b_prec ~d_prec =
+let operand_reloads ~a_prec ~b_prec ~d_prec ~scope =
   Option.value_map ~default:false ~f:arm_reloads_operands
-    (resolve_arm ~a_prec ~b_prec ~d_prec ~scope:Backend_intf.Mma_per_statement)
+    (resolve_arm ~a_prec ~b_prec ~d_prec ~scope)
 
 let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->

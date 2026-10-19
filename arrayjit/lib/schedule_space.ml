@@ -85,20 +85,30 @@ let no_search_stats =
 let search ?bound ?incumbent ?tie_break ~score tree =
   let stats = ref no_search_stats in
   let best = ref None in
-  (* The running best leaf's tie-break key, computed on the first tie it meets. *)
   let best_key = ref None in
   let threshold = ref (Option.value incumbent ~default:Float.infinity) in
+  (* The running best leaf's key, computed once per best leaf, when first needed. *)
+  let best_key_of key b =
+    match !best_key with
+    | Some kb -> kb
+    | None ->
+        let kb = key b in
+        best_key := Some kb;
+        kb
+  in
   let fathoms rev_path sub =
     (* An optimistic bound at or above the threshold refutes strict improvement for every completion
-       below — equality fathoms because displacing the incumbent needs [<]. Once a leaf holds the
-       threshold under a tie-break, a completion AT it can still displace that leaf, so only a bound
-       strictly above it fathoms; the incumbent itself is never displaced by a tie. *)
+       below — equality fathoms because displacing the incumbent needs [<]. Once a leaf with a key
+       holds the threshold under a tie-break, a completion AT it can still displace that leaf, so a
+       bound equal to it does not fathom; a keyless best leaf, like the incumbent, is never
+       displaced by a tie, and equality fathoms as before. *)
     match Option.bind bound ~f:(fun b -> b ~path:(List.rev rev_path) sub) with
-    | Some b -> (
+    | Some b when Float.(b > !threshold) -> true
+    | Some b when Float.(b = !threshold) -> (
         match (tie_break, !best) with
-        | Some _, Some _ -> Float.(b > !threshold)
-        | _ -> Float.(b >= !threshold))
-    | None -> false
+        | Some key, Some (lb, _) -> Option.is_none (best_key_of key lb)
+        | _ -> true)
+    | Some _ | None -> false
   in
   let rec leaf_or_choice rev_path t =
     match t with
@@ -114,14 +124,7 @@ let search ?bound ?incumbent ?tie_break ~score tree =
               Option.iter tie_break ~f:(fun key ->
                   match !best with
                   | Some (b, bs) when Float.(s = bs) -> (
-                      let kb =
-                        match !best_key with
-                        | Some kb -> kb
-                        | None ->
-                            let kb = key b in
-                            best_key := Some kb;
-                            kb
-                      in
+                      let kb = best_key_of key b in
                       (* A leaf without a key is not comparable: it neither displaces nor is
                          displaced by a tie. *)
                       match (key a, kb) with

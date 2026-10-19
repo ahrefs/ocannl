@@ -483,26 +483,28 @@ type codegen_capabilities = {
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->
     d_prec:Ops.prec ->
+    scope:mma_emission_scope ->
     ta:bool ->
     tb:bool ->
     a:mma_operand_place ->
     b:mma_operand_place ->
     bool * bool;
-      (** Which of the [a] and [b] operands the backend's per-statement mma arm for these storage
-          precisions loads with a warp-cooperative matrix load ([ldmatrix] on CUDA) rather than
-          per-lane gathers, given each operand's place and whether it is stored transposed
+      (** Which of the [a] and [b] operands the backend's mma arm for these storage precisions, in
+          this emission scope, loads with a warp-cooperative matrix load ([ldmatrix] on CUDA) rather
+          than per-lane gathers, given each operand's place and whether it is stored transposed
           (gh-ocannl-1254). The very rule the emission and its rendering census apply (CUDA:
           [Cuda_mma.operand_loads] over [Cuda_mma.arm_ldmatrix_operands]), so a cost model reading
           it reads the decision the kernel makes. Like {!field-mma_arm}, only the arm- and
           operand-level choice: a call the hook declines on extents or the device renders the scalar
           fallback whatever this says. [(false, false)] on a backend without such a load. *)
-  mma_operand_reloads : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool;
-      (** Whether the backend's per-statement mma arm for these storage precisions reloads each
-          operand's intrinsic fragment for every tile of the other operand's free axis ([true]:
-          CUDA's inline-PTX arms, which load both fragments inside their [m x n x k] tile loops)
-          rather than loading each fragment once per reduction step and reusing it across that axis
-          ([false]: CUDA's wmma arms, and the default). How the cost model's operand-load count
-          multiplies a statement's fragments (gh-ocannl-1254). *)
+  mma_operand_reloads :
+    a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> scope:mma_emission_scope -> bool;
+      (** Whether the backend's mma arm for these storage precisions, in this emission scope,
+          reloads each operand's intrinsic fragment for every tile of the other operand's free axis
+          ([true]: CUDA's inline-PTX arms, which load both fragments inside their [m x n x k] tile
+          loops) rather than loading each fragment once per reduction step and reusing it across
+          that axis ([false]: CUDA's wmma arms, and the default). How the cost model's operand-load
+          count multiplies a statement's fragments (gh-ocannl-1254). *)
   mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
           tiles, for a [(d, a, b)] storage triple: the backend's
@@ -532,8 +534,9 @@ let no_codegen_capabilities =
     accum_prec = Fn.id;
     asynchronous_staging_copy = false;
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
-    mma_operand_loads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
-    mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ -> false);
+    mma_operand_loads =
+      (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
+    mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> false);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }

@@ -94,12 +94,13 @@ val operand_loads :
   a_prec:Ops.prec ->
   b_prec:Ops.prec ->
   d_prec:Ops.prec ->
+  scope:Backend_intf.mma_emission_scope ->
   ta:bool ->
   tb:bool ->
   a:Backend_intf.mma_operand_place ->
   b:Backend_intf.mma_operand_place ->
   bool * bool
-(** {!arm_ldmatrix_operands} of the per-statement arm ({!resolve_arm}) over each operand's
+(** {!arm_ldmatrix_operands} of the scope's arm ({!resolve_arm}) over each operand's
     {!ldmatrix_eligible}: which operands an accepted call loads with [ldmatrix]. The backend's
     [C_syntax_config.mma_operand_loads], so the rendering census and
     {!Backend_intf.codegen_capabilities.mma_operand_loads} — what the cost model's load tie-break
@@ -111,8 +112,13 @@ val arm_reloads_operands : arm -> bool
     operand's free axis: the inline-PTX bodies load both fragments inside their [m x n x k] tile
     loops, wmma loads each fragment once per reduction step and reuses it. *)
 
-val operand_reloads : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool
-(** {!arm_reloads_operands} of the per-statement arm ([false] with no arm): the backend's
+val operand_reloads :
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  d_prec:Ops.prec ->
+  scope:Backend_intf.mma_emission_scope ->
+  bool
+(** {!arm_reloads_operands} of the scope's arm ([false] with no arm): the backend's
     [C_syntax_config.mma_operand_reloads], published as
     {!Backend_intf.codegen_capabilities.mma_operand_reloads} for the cost model's operand-load count
     (gh-ocannl-1254). *)

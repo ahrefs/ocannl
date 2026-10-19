@@ -152,9 +152,11 @@ val search :
     smaller; a leaf the key does not apply to ([None]) neither displaces nor is displaced by a tie.
     Ties keep going to the first leaf among equal keys, and never to a leaf against the [incumbent],
     which is no leaf and is displaced only by strict improvement. Keys are computed only for leaves
-    that tie, each best leaf's at most once. While a leaf holds the threshold, a subtree whose bound
-    equals it is entered rather than fathomed: a completion at the bound could win the tie. Without
-    [tie_break] the search is exactly the first-strict-improvement walk above. *)
+    that tie and for a best leaf a subtree's bound equals, each at most once. While a leaf with a
+    key holds the threshold, a subtree whose bound equals it is entered rather than fathomed: a
+    completion at the bound could win the tie. Under a keyless best leaf, as under the incumbent,
+    equality fathoms. Without [tie_break] the search is exactly the first-strict-improvement walk
+    above. *)
 
 val lift_excluded : ('l, 'a) child -> ('l, 'a) child
 (** The policy-lift operation: [Excluded (_, payload)] becomes the forced payload — the same

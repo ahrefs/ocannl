@@ -927,6 +927,7 @@ module type C_syntax_config = sig
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->
     d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
     ta:bool ->
     tb:bool ->
     a:Backend_intf.mma_operand_place ->
@@ -940,11 +941,17 @@ module type C_syntax_config = sig
       {!Backend_intf.codegen_capabilities.mma_operand_loads}, by the cost model's load tie-break
       (gh-ocannl-1254). Backends without that instruction inherit [(false, false)]. *)
 
-  val mma_operand_reloads : a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool
-  (** Whether an accepted {!mma_syntax} call for these storage precisions reloads each operand's
-      intrinsic fragment for every tile of the other operand's free axis, rather than reusing it
-      across that axis; published as {!Backend_intf.codegen_capabilities.mma_operand_reloads}
-      (gh-ocannl-1254). State it beside the loops the hook emits. Default [false]. *)
+  val mma_operand_reloads :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    bool
+  (** Whether an accepted call for these storage precisions, in this emission scope, reloads each
+      operand's intrinsic fragment for every tile of the other operand's free axis, rather than
+      reusing it across that axis; published as
+      {!Backend_intf.codegen_capabilities.mma_operand_reloads} (gh-ocannl-1254). State it beside the
+      loops the hook emits. Default [false]. *)
 
   val mma_arm :
     a_prec:Ops.prec ->
@@ -2109,8 +2116,8 @@ struct
   (* No tile-MMA units on plain C backends: [Tile_mma] renders its scalar fallback under the [lane
      == 0] guard. *)
   let mma_syntax = None
-  let mma_operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
-  let mma_operand_reloads ~a_prec:_ ~b_prec:_ ~d_prec:_ = false
+  let mma_operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
+  let mma_operand_reloads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = false
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
   let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0
@@ -5799,7 +5806,13 @@ module C_syntax (B : C_syntax_config) = struct
                       match (place a_src, place b_src) with
                       | Some a, Some b ->
                           let a_ldm, b_ldm =
-                            B.mma_operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a ~b
+                            B.mma_operand_loads ~a_prec ~b_prec ~d_prec
+                              ~scope:
+                                (match d_op with
+                                | _, _, `Fragment _, _ -> Backend_intf.Mma_fragment_scope
+                                | _, _, (`Device | `Shared | `Thread), _ ->
+                                    Backend_intf.Mma_per_statement)
+                              ~ta ~tb ~a ~b
                           in
                           a_ldm || b_ldm
                       | _ -> false

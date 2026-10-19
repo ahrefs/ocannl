@@ -258,15 +258,17 @@ val ranking_seconds :
     operand tile into registers, which the backend's load rule decides
     ({!Backend_intf.codegen_capabilities.mma_operand_loads}, the rule its emission applies).
 
-    Each [Tile_mma] operand is classified from its place — workgroup-shared, per-thread ([Local]) or
-    device, and its [optimized.swizzled] layout — by that rule. The count, per execution of the
-    statement (the enclosing loop extents over its lane extent), is per lane: an [ldmatrix] operand
-    costs one instruction per [lane_bytes] it delivers to each lane — 16 for [a], CUDA's emitted
-    [.x4] form, and 8 for [b], its [.x2] form — a gathered one one load per element (fp8 gathers
-    bytes, the 16-bit arms 16-bit halves, f32 32-bit words) — counted per intrinsic fragment, with
-    the reloads the emission's loop nest repeats, where the backend's intrinsic tile is given and
-    divides the statement, since ties fall between geometries too. A statement the backend then
-    declines (extents, the device's floor) renders scalar code whatever the class says. *)
+    Each [Tile_mma] operand is classified, in the statement's emission scope (the persistent
+    fragment scope where the schedule marked its accumulator in [optimized.simdgroup_fragments], per
+    statement otherwise), from its place — workgroup-shared, per-thread ([Local]) or device, and its
+    [optimized.swizzled] layout — by that rule. The count, per execution of the statement (the
+    enclosing loop extents over its lane extent), is per lane: an [ldmatrix] operand costs one
+    instruction per [lane_bytes] it delivers to each lane — 16 for [a], CUDA's emitted [.x4] form,
+    and 8 for [b], its [.x2] form — a gathered one one load per element (fp8 gathers bytes, the
+    16-bit arms 16-bit halves, f32 32-bit words) — counted per intrinsic fragment, with the reloads
+    the emission's loop nest repeats, where the backend's intrinsic tile is given and divides the
+    statement, since ties fall between geometries too. A statement the backend then declines
+    (extents, the device's floor) renders scalar code whatever the class says. *)
 
 type operand_load =
   | Ldmatrix of { lane_bytes : int }
@@ -282,12 +284,22 @@ val operand_place : Low_level.optimized -> Tnode.t -> Backend_intf.mma_operand_p
 
 val operand_load_count :
   ?intrinsic_tile:
-    (a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> (int * int * int) option) ->
-  ?operand_reloads:(a_prec:Ops.prec -> b_prec:Ops.prec -> d_prec:Ops.prec -> bool) ->
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    (int * int * int) option) ->
+  ?operand_reloads:
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    bool) ->
   operand_loads:
     (a_prec:Ops.prec ->
     b_prec:Ops.prec ->
     d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
     ta:bool ->
     tb:bool ->
     a:Backend_intf.mma_operand_place ->

@@ -110,7 +110,7 @@ let leg ~tag ~a ~b ~d_prec ?(bm = 16) ?(bk = 16) ?(ta = false) ?(tb = false) ~sw
   let a_prec = Lazy.force a.Tensor.value.Tn.storage_prec
   and b_prec = Lazy.force b.Tensor.value.Tn.storage_prec in
   let promised =
-    caps.BI.mma_operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb
+    caps.BI.mma_operand_loads ~a_prec ~b_prec ~d_prec ~scope:BI.Mma_per_statement ~ta ~tb
       ~a:(`Shared, layout swz_a)
       ~b:(`Shared, layout swz_b)
   in
@@ -208,18 +208,22 @@ let () =
       gated_exists ~when_:on_cuda ~on:backend_name
         (Printf.sprintf "on CUDA some leg's capability answers (%b, %b)" (fst want) (snd want))
         answers ~f:(Poly.equal want));
-  (* The capability over every storage triple, orientation and operand place: an operand that is not
-     a swizzled shared tile never loads through ldmatrix on any backend, and off CUDA none does. *)
+  (* The capability over every storage triple, emission scope, orientation and operand place: an
+     operand that is not a swizzled shared tile never loads through ldmatrix on any backend, and off
+     CUDA none does. *)
   let places = List.cartesian_product [ `Device; `Shared; `Thread ] [ `Plain; `Swizzled_b128 ] in
   let bools = [ false; true ] in
   let all_cases =
     List.concat_map Ir.Ops.all_precs ~f:(fun a_prec ->
         List.concat_map Ir.Ops.all_precs ~f:(fun b_prec ->
             List.concat_map Ir.Ops.all_precs ~f:(fun d_prec ->
-                List.concat_map (List.cartesian_product bools bools) ~f:(fun (ta, tb) ->
-                    List.concat_map places ~f:(fun a ->
-                        List.map places ~f:(fun b ->
-                            ((a, b), caps.BI.mma_operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a ~b)))))))
+                List.concat_map BI.all_of_mma_emission_scope ~f:(fun scope ->
+                    List.concat_map (List.cartesian_product bools bools) ~f:(fun (ta, tb) ->
+                        List.concat_map places ~f:(fun a ->
+                            List.map places ~f:(fun b ->
+                                ( (a, b),
+                                  caps.BI.mma_operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb
+                                    ~a ~b ))))))))
   in
   let eligible (place : BI.mma_operand_place) = Poly.equal place (`Shared, `Swizzled_b128) in
   p_all "only a swizzled shared operand is ever loaded through ldmatrix" all_cases

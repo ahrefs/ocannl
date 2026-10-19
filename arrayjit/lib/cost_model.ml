@@ -752,7 +752,7 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
   | Gather _ -> (elements + lanes - 1) / lanes
 
 let tile_mma_operand_loads ?intrinsic_tile
-    ?(operand_reloads = fun ~a_prec:_ ~b_prec:_ ~d_prec:_ -> false) ~operand_loads
+    ?(operand_reloads = fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> false) ~operand_loads
     (opt : Low_level.optimized) =
   let prec tn = Lazy.force tn.Tn.storage_prec in
   let sites = ref [] in
@@ -770,8 +770,14 @@ let tile_mma_operand_loads ?intrinsic_tile
           max 1 (List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1)
         in
         let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
+        (* The emission scope, as the renderer picks it: a schedule-marked fragment accumulator
+           renders in its persistent fragment scope, every other statement on its own. *)
+        let scope =
+          if Set.mem opt.Low_level.simdgroup_fragments d_tn then Backend_intf.Mma_fragment_scope
+          else Backend_intf.Mma_per_statement
+        in
         let a_ldm, b_ldm =
-          operand_loads ~a_prec ~b_prec ~d_prec ~ta ~tb ~a:(operand_place opt a_tn)
+          operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:(operand_place opt a_tn)
             ~b:(operand_place opt b_tn)
         in
         (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
@@ -785,11 +791,11 @@ let tile_mma_operand_loads ?intrinsic_tile
            or — where the arm reloads ([operand_reloads]) — for every tile of that axis too. Without
            a tile that divides the statement, each operand tile counts once. *)
         let (a_frags, a_elems), (b_frags, b_elems) =
-          match Option.bind intrinsic_tile ~f:(fun f -> f ~a_prec ~b_prec ~d_prec) with
+          match Option.bind intrinsic_tile ~f:(fun f -> f ~a_prec ~b_prec ~d_prec ~scope) with
           | Some (tm, tn, tk)
             when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
               let mt = m / tm and nt = n / tn and kt = k / tk in
-              if operand_reloads ~a_prec ~b_prec ~d_prec then
+              if operand_reloads ~a_prec ~b_prec ~d_prec ~scope then
                 ((mt * nt * kt, tm * tk), (mt * nt * kt, tk * tn))
               else ((mt * kt, tm * tk), (nt * kt, tk * tn))
           | Some _ | None -> ((1, m * k), (1, k * n))

@@ -1753,8 +1753,8 @@ val model_operand_loads :
   int option
 (** {!Ir.Cost_model.operand_load_count} under [capabilities]' [mma_operand_loads] rule and
     [mma_operand_reloads] multiplicity, with the intrinsic tile [limits]' tile-MMA descriptor
-    advertises per storage triple ({!mma_tile_for_precisions_in_scope}, per-statement scope): the
-    count {!model_family_search} breaks exact ties with and {!model_explain} reports
+    advertises per storage triple ({!mma_tile_for_precisions_in_scope}, in each statement's emission
+    scope): the count {!model_family_search} breaks exact ties with and {!model_explain} reports
     (gh-ocannl-1254); [None] for code with no [Tile_mma]. *)
 
 val model_family_search :

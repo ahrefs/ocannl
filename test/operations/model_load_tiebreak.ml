@@ -118,7 +118,12 @@ let () =
   p "without a tie-break a subtree bounded at the threshold is fathomed"
     (Option.equal String.equal (pick2 ()) (Some "x"));
   p "with a tie-break a subtree bounded at the threshold is entered, and its tie wins"
-    (Option.equal String.equal (pick2 ~tie_break:key2 ()) (Some "y"))
+    (Option.equal String.equal (pick2 ~tie_break:key2 ()) (Some "y"));
+  (* A keyless best leaf can lose no tie, so the subtree bounded at its score is fathomed unscored,
+     as under the strict rule. *)
+  let _, stats = Sspace.search ~bound ~tie_break:(fun _ -> None) ~score:score2 nested in
+  p "under a keyless best leaf a subtree bounded at the threshold is fathomed unscored"
+    (stats.Sspace.st_scored = 1 && stats.Sspace.st_fathomed = 1)
 
 (* {1 The gh-ocannl-1190 twins} *)
 
@@ -187,7 +192,7 @@ let rank (limits : BI.hardware_limits) (o : LL.optimized) =
 let score limits segs =
   List.fold segs ~init:(Some 0.) ~f:(fun acc o -> Option.map2 acc (rank limits o) ~f:Float.( + ))
 
-let no_ldmatrix_rule ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
+let no_ldmatrix_rule ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
 
 let schedule p =
   Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p (hermetic base)) (hermetic base)
@@ -247,10 +252,33 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
      every tile of the other's free axis, so on a statement spanning several intrinsic tiles a
      reloading arm issues more loads than one reusing its fragments, as wmma does. *)
   let reusing =
-    { capabilities with mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ -> false) }
+    {
+      capabilities with
+      mma_operand_reloads = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> false);
+    }
   in
   all "the arm's reloads count: a reusing arm issues fewer loads than the record's own"
     (fun (_, plain, _) -> fewer (loads reusing plain) (loads rule plain));
+  (* The count asks in each statement's emission scope: a staged twin's accumulator is a persistent
+     fragment (gh-ocannl-1063), counted in the fragment scope, and the same statement with the
+     marking dropped is counted per statement. A rule reloading only per statement tells the two
+     apart. *)
+  let per_statement_reloads =
+    {
+      capabilities with
+      mma_operand_reloads =
+        (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope ->
+          BI.equal_mma_emission_scope scope BI.Mma_per_statement);
+    }
+  in
+  let per_statement (o : LL.optimized) =
+    { o with LL.simdgroup_fragments = Set.empty (module Ir.Tnode) }
+  in
+  all "the count reads each statement's emission scope" (fun (_, plain, _) ->
+      (not (Set.is_empty plain.LL.simdgroup_fragments))
+      && fewer
+           (loads per_statement_reloads plain)
+           (loads per_statement_reloads (per_statement plain)));
   (* The family search over the site, under each rule. Every leaf it could score, scored the way it
      scores them, is the population its pick is checked against. *)
   let scored =
