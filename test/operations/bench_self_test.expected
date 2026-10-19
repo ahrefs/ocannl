@@ -5,6 +5,7 @@ its last checkpoint says every measured stage completed and the probe was runnin
 and it is marked unaccepted: true
 the kill kept one loss per parity step: true
 every loss the kill kept is finite: true
+its checkpoint records where each inherited key resolved: profile, argument, environment: true
 training segment census includes the forward loss: true
 training segment census includes every parameter gradient and optimizer write: true
 every tiny training segment executes with a positive standalone time: true
