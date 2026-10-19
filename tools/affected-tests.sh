@@ -5,13 +5,18 @@
 # and then runs this script. It prints aliases and runs none of them.
 #
 # Usage:
+#   tools/test-run.sh affected --since BASE [-- PATHSPEC...]
 #   tools/test-run.sh affected REV | REV..REV | REV...REV [-- PATHSPEC...]
 #   tools/test-run.sh affected --files PATH...
 #
 # The changed paths come from `git diff --name-only` with the given revision
 # argument, in git's own forms: one REV compares it with the working tree, so
 # uncommitted edits count, and files git does not track yet are added to that
-# form. There is no default base: remote names are not the contract here.
+# form. `--since BASE` is that form with REV the merge-base of HEAD and BASE
+# (the base branch, e.g. the staging remote's `master`): a branch's own
+# changes, whatever BASE gained since it forked. A REV that is not an ancestor
+# of HEAD draws a warning, since its own later commits then count as changes.
+# There is no default base: remote names are not the contract here.
 # `--files` names repository-relative paths directly, without git.
 #
 # stdout: one alias per line, `@DIR/FAMILY-NAME[-VARIANT]`, sorted, ready for
@@ -124,10 +129,11 @@ command -v perl >/dev/null 2>&1 || die "perl not found"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
 trap 'rm -rf "${tmp:?}"' EXIT
 
-usage="usage: affected REV | REV..REV | REV...REV [-- PATHSPEC...] | affected --files PATH..."
+usage="usage: affected --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected --files PATH..."
 mode=git
 revs=()
 paths=()
+since=
 if [ "${1:-}" = --files ]; then
   shift
   [ $# -ge 1 ] || die "--files needs at least one path ($usage)"
@@ -137,10 +143,16 @@ else
   while [ $# -gt 0 ]; do
     case $1 in
       --) shift; paths=("$@"); break ;;
+      --since)
+        [ $# -ge 2 ] || die "--since needs the base branch, e.g. --since <remote>/master ($usage)"
+        [ -z "$since" ] || die "--since given twice ($usage)"
+        since=$2; shift 2 ;;
+      --since=*) [ -z "$since" ] || die "--since given twice ($usage)"; since=${1#--since=}; shift ;;
       -*) die "unknown option: $1 ($usage)" ;;
       *) revs+=("$1"); shift ;;
     esac
   done
+  [ -z "$since" ] || [ ${#revs[@]} -eq 0 ] || die "--since BASE and a revision argument are exclusive ($usage)"
   [ ${#revs[@]} -le 1 ] || die "one revision argument at most, got ${#revs[@]} ($usage)"
 fi
 
@@ -152,11 +164,22 @@ else
   [ "$in_git" = 1 ] || die "not a git checkout; use --files"
   # No default base: which remote carries the base branch is the checkout's
   # business (AGENTS.md: remote names are not the contract), so it is named.
+  if [ -n "$since" ]; then
+    # The branch's own changes: from where it left BASE, not from BASE's tip,
+    # which would also count every commit BASE gained since (gh-ocannl-1379).
+    git rev-parse --verify -q "${since}^{commit}" >/dev/null || die "not a revision: $since"
+    base=$(git merge-base HEAD "$since") || die "HEAD and $since share no history"
+    echo "affected: --since $since: comparing with the merge-base ${base}" >&2
+    revs=("$base")
+  fi
   [ ${#revs[@]} -eq 1 ] ||
-    die "name the base: affected REV (the branch's base, e.g. \$(git merge-base HEAD <base-branch>)), REV..REV, or --files PATH... ($usage)"
+    die "name the base: affected --since <base-branch>, REV, REV..REV, or --files PATH... ($usage)"
   case ${revs[0]} in
     *..*) ;;
-    *) git rev-parse --verify -q "${revs[0]}^{commit}" >/dev/null || die "not a revision: ${revs[0]}" ;;
+    *)
+      git rev-parse --verify -q "${revs[0]}^{commit}" >/dev/null || die "not a revision: ${revs[0]}"
+      git merge-base --is-ancestor "${revs[0]}" HEAD ||
+        echo "affected: warning: ${revs[0]} is not an ancestor of HEAD, so its own later commits count as changes too; --since ${revs[0]} compares with the merge-base instead" >&2 ;;
   esac
   git diff --name-only --no-renames "${revs[0]}" -- ${paths[@]+"${paths[@]}"} >"$tmp/changed" ||
     die "git diff ${revs[0]} failed"

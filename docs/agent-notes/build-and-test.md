@@ -2270,14 +2270,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   disambiguates longer identifiers). Budget the resulting promote as expected work, in its own
   commit, after diff-confirming the delta is rename-only.
 - **Which per-test aliases a change reaches is dune's answer, not a guess**:
-  `tools/test-run.sh affected REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`) prints them,
-  one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh run build`
-  or `fresh`; stderr says what each changed path reached and gives per-directory counts. Run it
-  before the pre-push batch with the merge-base as REV, `$(git merge-base HEAD <base>)`, where
-  `<base>` is the remote-tracking `master` of `lukstafi/ocannl-staging` (`git remote -v` names
-  it: remote names are not the contract). The base branch itself would also count every commit
-  it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases for a
-  69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
+  `tools/test-run.sh affected --since BASE | REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`)
+  prints them, one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh
+  run build` or `fresh`; stderr says what each changed path reached and gives per-directory counts.
+  Run it before the pre-push batch as `--since <base>`, where `<base>` is the remote-tracking
+  `master` of `lukstafi/ocannl-staging` (`git remote -v` names it: remote names are not the
+  contract): it compares the worktree with `git merge-base HEAD <base>` (gh-ocannl-1379). A bare REV
+  that is not an ancestor of HEAD is warned about, since the base branch's tip would also count
+  every commit it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases
+  for a 69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
   workspace` (modules and library edges), `dune describe external-lib-deps` (the ppx-rewriter
   edges and the `tests` stanzas the first omits), `dune show aliases`/`targets`, and `dune
   rules` for each alias's own targets and each generated module file. Those dependencies are how

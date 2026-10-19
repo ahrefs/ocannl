@@ -429,6 +429,28 @@ if harness_leg 'git forms'; then
   if [ "$rc" = 2 ] && grep -q 'one revision argument at most' "$err"; then
     report 0 'two revision arguments are refused'
   else report 1 'two revision arguments are refused' "exit $rc; $(cat "$err")"; fi
+  # A branch whose base moved on (gh-ocannl-1379): the base gains a core edit
+  # after the branch forks, and the branch commits a leaf edit.
+  trunk=$(git_q rev-parse --abbrev-ref HEAD) || exit 2
+  git_q checkout -qb side || exit 2
+  printf 'let z = 3\n' >"$repo/lib/leaf.ml"
+  git_q commit -qam side-leaf || exit 2
+  git_q checkout -q "$trunk" || exit 2
+  printf 'let y = 2\n' >"$repo/lib/core.ml"
+  git_q commit -qam trunk-core || exit 2
+  git_q checkout -q side || exit 2
+  affected --since "$trunk"
+  expect '--since compares with the merge-base: the branch'"'"'s own change, not what its base gained since' 0 \
+    @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t2/runtest-scan
+  affected "$trunk"
+  if [ "$rc" = 0 ] && grep -q 'is not an ancestor of HEAD' "$err" && grep -qx @t1/runtest-t_core "$out"; then
+    report 0 'a REV that is not an ancestor of HEAD is warned about (and its later commits count)'
+  else report 1 'a REV that is not an ancestor of HEAD is warned about (and its later commits count)' "exit $rc; $(cat "$out" "$err")"; fi
+  affected --since "$trunk" HEAD
+  if [ "$rc" = 2 ] && grep -q 'exclusive' "$err"; then
+    report 0 '--since and a revision argument are refused together'
+  else report 1 '--since and a revision argument are refused together' "exit $rc; $(cat "$err")"; fi
+  git_q checkout -q "$trunk" || exit 2
 fi
 
 # A dune whose answer has a form the reader does not accept stops the run: the
@@ -584,6 +606,14 @@ if harness_leg 'negative controls'; then
   control 'skipping an off-build stanza'"'"'s unresolved edge is what lets the run finish' \
     'elsif ($st[$i]{undescribed}) {' 'elsif (0) {' \
     --files lib/helper.ml -- $reached_by_core
+  # The git-forms leg left the trunk checked out, one core edit past the fork
+  # point of its `side` branch, whose own commit edits leaf.
+  if git_q rev-parse -q --verify side >/dev/null; then
+    # shellcheck disable=SC2086
+    control 'the merge-base is what --since compares with' \
+      'revs=("$base")' 'revs=("$since")' \
+      --since side -- $reached_by_core
+  fi
   control 'an executable target is what finds a test stanza naming no library' \
     'push @st, { kind => "tests", dir => $d, names => [$x]' 'next; push @st, { kind => "tests", dir => $d, names => [$x]' \
     --files t3/t_plain.ml -- @t3/runtest-t_plain
