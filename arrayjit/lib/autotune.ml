@@ -7999,8 +7999,23 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              nothing to cache: a stored entry would pin future processes to a never-timed
              schedule. *)
           let nothing_timed = Float.is_inf best_ms in
+          (* gh-ocannl-1409: a cut search crowns nothing slower than the untuned default because it
+             measured that default -- the floors are exempt from the budget. Where no candidate
+             reproduces the default (automatic scheduling with [schedule_fission=false] and no
+             seeded plan: [default_seed_label] is [None]), or the floor's windows were refused, the
+             cut crown has no such reference, and the serial baseline can be all it timed. Such a
+             search ships the untuned default and stores nothing, as one that timed nothing does. *)
+          let floor_unmeasured =
+            !budget_cut && auto_sched
+            && Option.is_none (default_ms ())
+            && Option.is_none (seeded_ms ())
+          in
           (if use_cache then
-             if
+             if floor_unmeasured then
+               logf
+                 "the budget cut the search before it measured the untuned default: storing no \
+                  cache entry (gh-ocannl-1409)"
+             else if
                not
                  (search_measurements_cacheable ~nothing_timed
                     ~timings_contended:!n_timings_contended)
@@ -8130,7 +8145,13 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             }
           in
           let result =
-            if nothing_timed then (
+            if floor_unmeasured && not nothing_timed then (
+              logf
+                "the budget cut the search before it measured the untuned default: shipping the \
+                 untuned default compile (gh-ocannl-1409)";
+              release_all_candidates ();
+              untuned_default_or_raise ())
+            else if nothing_timed then (
               (* Returning the incumbent here would hand the caller the very serial routine this
                  search refused to dispatch (gh-ocannl-532) — slower than not tuning at all, and on
                  GPU unbounded. The untuned compile is the honest fallback: the same code the caller

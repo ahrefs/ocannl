@@ -1884,7 +1884,9 @@ files.
 - **A budget-cut crown is stored, but only a budgeted call replays it** (gh-ocannl-1409). With
   `autotune_budget_seconds`, `Autotune.tune` checks the budget as each attempt and each beam round
   starts (`budget_allows`), skips everything later except the untuned floors (the seeded plan and
-  the default seed), and crowns its incumbent. The crown is stored with `Schedule_cache.entry`'s
+  the default seed), and crowns its incumbent -- unless no floor was measured (no candidate
+  reproduces the default under `schedule_fission=false`), when it ships the untuned default and
+  stores nothing. The crown is stored with `Schedule_cache.entry`'s
   `budget_cut`, and a call without a budget declines it and searches in full, the way a contended
   search is kept out of the cache entirely (`search_measurements_cacheable`): an incomplete
   measurement set must not answer every later call. The placement store refuses cut evidence for

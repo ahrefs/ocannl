@@ -2757,7 +2757,10 @@ val tune :
     checked as each attempt and each beam round starts, so the candidate in flight completes -- and
     crowns its incumbent as a completed search does; the untuned floors (the seeded untuned plan and
     the default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
-    slower than what the caller ships untuned. The report's [budget_cut] says the budget stopped
+    slower than what the caller ships untuned. Where the cut left the untuned default unmeasured --
+    no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no seeded
+    plan), or its windows were refused -- the call ships the untuned default compile and stores
+    nothing, as a search that timed nothing does. The report's [budget_cut] says the budget stopped
     something. A cut search with clean timings stores its crown marked as cut
     ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with a budget replays it, and one
     without a budget searches in full and overwrites it. The budget's value is part of the search

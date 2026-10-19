@@ -755,7 +755,10 @@
 # seed pass, the composites, the playoff and the beam rounds are skipped -- and the search crowns
 # its incumbent, then compiles and ships it as a completed search would. The untuned floors are
 # exempt, so a cut search still measures what the caller would get without tuning and crowns
-# nothing slower: the seeded untuned plan (CUDA/HIP) and the default-pipeline seed. The budget
+# nothing slower: the seeded untuned plan (CUDA/HIP) and the default-pipeline seed. Where no
+# candidate reproduces the untuned default (automatic scheduling with schedule_fission=false and
+# no seeded plan), or the floor's windows were refused, a cut search ships the untuned default
+# and stores nothing instead of crowning what it reached. The budget
 # bounds when the last attempt STARTS, so a search can overrun it by the candidate in flight, the
 # exempt floors and the winner's compile; the base compile before the first check is not bounded
 # either. Each search has its own budget: `Train.tune_placements` runs one per placement arm
