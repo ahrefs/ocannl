@@ -688,6 +688,37 @@ val pipeline_violation_cause : site:string -> pipeline_violation -> Schedule_out
     so the oracle and the renderer state each fact in one wording; [pipelined_move_legality] pins
     that, on the same IR, they reach the same violation. *)
 
+type fragment_transfer = {
+  ft_lane : Indexing.symbol;
+  ft_width : int;
+  ft_fragment : Tn.t;
+  ft_target : Tn.t;
+  ft_target_idcs : Indexing.axis_index array;
+  ft_syms : Indexing.symbol list;
+}
+(** gh-ocannl-1342: the simdgroup fragment scope. {!optop.Tensorize}'s accumulator contraction marks
+    a fragment ([Low_level.optimized.simdgroup_fragments]) and brackets the contracted loop chain
+    with a lane-0 load of the fragment from its target and a lane-0 store-back. One side of such a
+    bracket: the lane loop, its width, the fragment, the target with the transfer's index vector
+    over it, and the transfer's copy symbols (innermost first). *)
+
+type fragment_scope = {
+  fs_init : Low_level.t;  (** The fragment load. *)
+  fs_reduction : Low_level.t;
+  fs_store : Low_level.t;  (** The store-back. *)
+  fs_rest : Low_level.t list;
+      (** The statements after the store-back in the same sequence (e.g. a fused epilogue). *)
+  fs_load : fragment_transfer;
+  fs_tile : Low_level.t;  (** The one [Tile_mma] into the fragment, inside [fs_reduction]. *)
+}
+
+val recognize_fragment_scope : fragments:Set.M(Tn).t -> Low_level.t -> fragment_scope option
+(** [recognize_fragment_scope ~fragments c]: [c]'s flattened statements (comments and no-ops
+    dropped) are a load of a fragment in [fragments], one reduction statement holding exactly one
+    [Tile_mma] into it, and the matching store-back (same fragment, target, target indices, lane and
+    width), followed by anything. The structural half of [C_syntax]'s fragment-scope rendering,
+    which calls this; the backend hooks judge the rest. *)
+
 val written_nodes : Low_level.t -> Set.M(Tnode).t
 (** The nodes the code writes: [Set]-family and [Zero_out] statements, [Tile_mma] accumulators, and
     the statements inside [Local_scope] bodies and scan-loop inits. *)
