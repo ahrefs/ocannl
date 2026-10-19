@@ -4092,12 +4092,17 @@ box.
   measurement set complete — because a refused digest is dropped from `seen` so an equivalent seed
   can retry it: on an idle cuda box `autotune_fission_sketch`'s chain search refuses 4 windows over
   0 distinct candidates, so a claim that added the counter into a candidate population credited four
-  candidates that were the same one, four times. Two report fields carry the narrower facts
+  candidates that were the same one, four times. Three report fields carry the narrower facts
   (gh-ocannl-892 follow-up): `candidates_contended`, the distinct digests refused that no later seed
   timed — the term that composes with `candidates_timed` and the `Not_dispatched_key` declines into
-  "how many distinct candidates did this search reach" — and `default_refused`, which separates a
+  "how many distinct candidates did this search reach" — `default_refused`, which separates a
   contention-refused untuned-default reference from the gh-ocannl-552 regression of never proposing
-  or attributing that seed. A per-arm or per-report scoping is the same rule one level up: a union
+  or attributing that seed, and `baseline_refused` (gh-ocannl-1423), the baseline's own window.
+  `autotune_replay_refusal`'s "the re-search times the baseline the replay released" gates on that
+  one, after re-running the re-search up to three times: a `timings_contended` gate would let any
+  candidate's refusal excuse it, and a `baseline_ms` gate reads the value under test, so a baseline
+  never relinked would skip instead of failing. Its leg 4 refuses the window through
+  `on_candidate_measured` and pins the record, the shape for a new gate of this kind. A per-arm or per-report scoping is the same rule one level up: a union
   over two arms lets partial contention in one excuse the other, and `autotune_arm_containment`'s
   injected-failure scenario is waived only by arm B stopping short of the injection threshold
   (`candidates_timed < 2` for `~after_arm_timed:2`), never by arm A's refusals.
