@@ -1644,7 +1644,18 @@ type folded_census = {
 }
 
 let configuration_readers =
-  [ "get_global_arg"; "get_global_flag"; "getenv"; "getenv_opt"; "backend_name"; "hardware_limits" ]
+  [
+    "get_global_arg";
+    "get_global_flag";
+    "getenv";
+    "getenv_opt";
+    (* What [Context] reports of the device and backend a context runs on. *)
+    "backend_name";
+    "hardware_limits";
+    "codegen_capabilities";
+    "static_properties";
+    "timing_identity";
+  ]
 
 type value_slot =
   | Positional of int  (** The [n]th positional argument, from zero. *)
@@ -1773,6 +1784,36 @@ let folded_gate_census content =
             && List.mem names name ~equal:String.equal
         | _ -> false
 
+      (* A binding's constancy, by its identity, wherever it is reached from: its right-hand side's,
+         and for a cell the source assigns into, its writes' too. *)
+      method bound_constancy identity rhs rhs_env =
+        match Hashtbl.find constancy identity with
+        | Some known -> known
+        | None ->
+            (* A cycle is the test's own computation. *)
+            Hashtbl.set constancy ~key:identity ~data:Varying;
+            let known =
+              match Hashtbl.find_multi writes identity with
+              | [] -> self#constancy rhs_env rhs
+              | written ->
+                  (* A cell the source assigns into holds, somewhere, each value it is given: one
+                     run-constant value makes it a gate wherever it is read -- the order of reads
+                     and writes is not followed, in the loud direction. *)
+                  let held =
+                    self#constancy rhs_env rhs
+                    :: List.map written ~f:(fun (value, env) -> self#constancy env value)
+                  in
+                  if List.mem held Run_constant ~equal:Poly.equal then Run_constant
+                  else
+                    List.fold held ~init:Constant ~f:(fun acc c ->
+                        match (acc, c) with
+                        | Varying, _ | _, Varying -> Varying
+                        | Run_constant, _ | _, Run_constant -> Run_constant
+                        | Constant, Constant -> Constant)
+            in
+            Hashtbl.set constancy ~key:identity ~data:known;
+            known
+
       method constancy env expr =
         let join parts =
           if List.mem parts Varying ~equal:Poly.equal then Varying
@@ -1792,29 +1833,8 @@ let folded_gate_census content =
             self#constancy env inner
         | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
             match Lexical_scope.lookup env name with
-            | Some { identity; definition = Some (rhs, rhs_env) } -> (
-                match Hashtbl.find constancy identity with
-                | Some known -> known
-                | None ->
-                    (* A cycle is the test's own computation. *)
-                    Hashtbl.set constancy ~key:identity ~data:Varying;
-                    let known =
-                      match Hashtbl.find_multi writes identity with
-                      | [] -> self#constancy rhs_env rhs
-                      | written ->
-                          (* A cell the source assigns into holds, somewhere, each value it is
-                             given: one run-constant value makes it a gate wherever it is read --
-                             the order of reads and writes is not followed, in the loud
-                             direction. *)
-                          let held =
-                            self#constancy rhs_env rhs
-                            :: List.map written ~f:(fun (value, env) -> self#constancy env value)
-                          in
-                          if List.mem held Run_constant ~equal:Poly.equal then Run_constant
-                          else join held
-                    in
-                    Hashtbl.set constancy ~key:identity ~data:known;
-                    known)
+            | Some { identity; definition = Some (rhs, rhs_env) } ->
+                self#bound_constancy identity rhs rhs_env
             | Some _ -> Varying
             | None -> Constant)
         | Pexp_field (record, { txt = field; _ }) -> (
@@ -1848,14 +1868,8 @@ let folded_gate_census content =
                   self#constancy (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs))
         | Pexp_ident _ when Option.is_some (self#source_member expr) -> (
             match self#source_member expr with
-            | Some { identity; definition = Some (rhs, rhs_env) } -> (
-                match Hashtbl.find constancy identity with
-                | Some known -> known
-                | None ->
-                    Hashtbl.set constancy ~key:identity ~data:Varying;
-                    let known = self#constancy rhs_env rhs in
-                    Hashtbl.set constancy ~key:identity ~data:known;
-                    known)
+            | Some { identity; definition = Some (rhs, rhs_env) } ->
+                self#bound_constancy identity rhs rhs_env
             | _ -> Varying)
         | Pexp_ident _ -> (
             match Option.map (path_of expr) ~f:List.rev with
@@ -1936,6 +1950,11 @@ let folded_gate_census content =
             (condition, env, false) :: again env polarity yes
         | Pexp_ifthenelse (condition, yes, Some no) when is_bool yes polarity ->
             (condition, env, true) :: again env polarity no
+        | Pexp_try (body, cases) ->
+            (* The protected value, or a handler's: either can be what passes. *)
+            again env polarity body
+            @ List.concat_map cases ~f:(fun case ->
+                again (self#bind_patterns env [ case.pc_lhs ]) polarity case.pc_rhs)
         | Pexp_match (scrutinee, cases)
           when List.exists cases ~f:(fun case -> is_bool case.pc_rhs polarity) ->
             (* [match s with A -> x | _ -> true]: [s] reaching a passing case, or a computed branch.

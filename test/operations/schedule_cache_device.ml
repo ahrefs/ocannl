@@ -199,9 +199,15 @@ let () =
   let replayed =
     match second_report.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
   in
-  p "runtime replay requires a concrete device identity" ((not replayed) || Option.is_some identity);
-  p "unavailable identity leaves the runtime store absent"
-    (Option.is_some identity || not (Stdlib.Sys.file_exists cache_dir));
+  (* Both are claims about a device with no timing identity; one that has it checks nothing here,
+     and says so (gh-ocannl-1310). *)
+  gated ~aggregation:`Environment ~when_:(Option.is_none identity)
+    ~on:(backend ^ " with a device timing identity")
+    "runtime replay requires a concrete device identity" (not replayed);
+  gated ~aggregation:`Environment ~when_:(Option.is_none identity)
+    ~on:(backend ^ " with a device timing identity")
+    "unavailable identity leaves the runtime store absent"
+    (not (Stdlib.Sys.file_exists cache_dir));
   p "the identity is stable across allocation, execution and replay"
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
   if Option.is_some identity && first_report.Autotune.timings_contended > 0 then

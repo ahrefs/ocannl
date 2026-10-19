@@ -4323,6 +4323,23 @@ let () = p "the census renders tiled" ((not cc_requested) || census_ok (Context.
   let state = { gate = on_cpu; observation = probe (Context.auto ()) } in
   p "the probe passes or the census renders" (state.observation || census_ok (Context.auto ()))|ocaml},
         [] );
+      ( "refuses a fold inside a protected expression",
+        {ocaml|let () =
+  p "the census renders tiled"
+    (try (not on_cpu) || census_ok (Context.auto ()) with _ -> fallback (Context.auto ()))|ocaml},
+        [ "on_cpu" ] );
+      ( "refuses a gate a module of the source writes into its cell",
+        {ocaml|module Gates = struct
+  let gate = ref false
+  let () = gate := Sys.win32
+end
+
+let () = p "the path is portable" (!Gates.gate || portable (Context.auto ()))|ocaml},
+        [ "not (!Gates.gate)" ] );
+      ( "refuses a gate read off the backend's codegen capabilities",
+        {ocaml|let supports_f64 = (Context.codegen_capabilities (Context.auto ())).supports_f64
+let () = p "doubles round-trip" ((not supports_f64) || round_trips (Context.auto ()))|ocaml},
+        [ "supports_f64" ] );
       ( "accepts a ref the test alone writes",
         {ocaml|let () =
   let ready = ref false in

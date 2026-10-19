@@ -306,7 +306,9 @@ let () =
         | Some r -> replayed r && Option.is_none r.Autotune.default_ms
         | None -> false)
   | None ->
-      p "a stored stale default fingerprint drops the reference but not the hit (gh-ocannl-552)"
+      (* Nothing is committed without a timing identity, so there this checks nothing. *)
+      gated ~aggregation:`Environment ~when_:cache_available ~on:"a device with no timing identity"
+        "a stored stale default fingerprint drops the reference but not the hit (gh-ocannl-552)"
         (not chain_cache_committed));
   (* gh-ocannl-543: [candidates_timed >= 2] is a cc-shaped assertion. This chain's candidate space
      is the same on every backend, but most of it is serial forms — the whole-routine presets dedup

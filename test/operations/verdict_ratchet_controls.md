@@ -645,7 +645,7 @@ fails; the narrower ambiguity mutation in its row replaced them.
 The folded-gate reader (`Verdict_scan.folded_gate_census`) refuses a `Verdict` claim whose value has
 a run-constant disjunct -- a value the configuration fixes, such as `on_cpu` -- beside one the test
 computed. Every run used tools/mutation-run.sh on the named module and the focused verdict_ratchet
-alias, on the reader as first pushed (the rows marked review round 1 to 4, and the Sys row's rerun, on
+alias, on the reader as first pushed (the rows marked review round 1 to 5, and the Sys row's rerun, on
 that round's reader), exited 1 on exactly the listed false claims, and restored the
 source byte-for-byte with cmp; the baseline run `20261019T172927Z-24672` exited 0. "The name-gated
 refusals" are the thirteen refusals whose gate is a name (all but the two if refusals and the
@@ -676,6 +676,9 @@ lazy-probe, host and settings ones).
 | A qualified path into a module of the source is that module's binding (review round 4) | `verdict_scan.ml`: such a path read as a library value | Failed: `refuses a gate a module of the source binds`; `accepts a value of a module the source names Sys` | `20261019T184759Z-25577` |
 | A try is its body's and its handlers' (review round 4) | `verdict_scan.ml`: every try computed | Failed: `refuses a gate a try computes from the configuration` | `20261019T184818Z-33931` |
 | A field of a record the source writes out is that field's value (review round 4) | `verdict_scan.ml`: a field read as its whole record | Failed: `refuses a gate read off a field of a record that also holds the test's data` | `20261019T184838Z-42320` |
+| A try's body and handlers are disjuncts of the claim (review round 5) | `verdict_scan.ml`: a try left whole | Failed: `refuses a fold inside a protected expression` | `20261019T185957Z-49678` |
+| A module member is classified as its binding is, writes included (review round 5) | `verdict_scan.ml`: a member's writes not joined | Failed: `refuses a gate a module of the source writes into its cell` | `20261019T190027Z-64569` |
+| Context's device and backend reports are configuration readers (review round 5) | `verdict_scan.ml`: `codegen_capabilities` not a reader | Failed: `refuses a gate read off the backend's codegen capabilities` | `20261019T190047Z-73130` |
 | A gated claim's gate makes a copy of its own negation unreachable (review round 1) | `verdict_scan.ml`: the gate's disjuncts not discounted | Failed: `accepts a gated claim whose value repeats its own gate`; `accepts a gated_all whose predicate repeats a conjunct of its gate` | `20261019T180056Z-65750` |
 | A Sys host value is run-constant | `verdict_scan.ml`: no value of Sys (rerun on the round-1 reader) | Failed: `refuses a host gate folded into a claim's value`, and the any-value and ref-write refusals | `20261019T175949Z-31538` |
 | A library call over run-constant and constant arguments is run-constant | `verdict_scan.ml`: every library call computed | Failed: every refusal but the host and settings ones, and the planted-refusal control | `20261019T173400Z-33261` |
