@@ -1687,6 +1687,11 @@ type model_choice = {
           {!Ir.Low_level.validate_parallel}: the model cannot see that a schedule will not compile,
           and rates the tensorized families best, so on a backend where those are unbuildable it
           used to crown one and then degrade to the default (gh-ocannl-522). *)
+  mc_excluded : int;
+      (** Sketch candidates kept out of the ranking on CUDA and HIP because they are not
+          numerics-preserving (gh-ocannl-1253: tensorized, conv, coalesced and the other forms
+          {!model_default}'s restriction leaves out, or any sketch at a site accumulating wider than
+          its storage); never scored, so neither in [mc_skipped] nor in [mc_rejected]. *)
 }
 
 val model_default_enabled : bool Lazy.t
@@ -1947,7 +1952,8 @@ val seeded_default :
     moved boundary). Such a replacement can change the launch count; every segment outside those
     runs is exactly the default's. On CUDA and HIP only, with automatic scheduling active and
     fission on; [seed_gate] (default: {!seeded_default_gate}, config
-    [gpu_default_sketch_min_reduction], 32) decides which segments seed, and [min_reduction] is
+    [gpu_default_sketch_min_reduction], [auto]: the ranked gate, or 32 on a device publishing no
+    cache constants) decides which segments seed, and [min_reduction] is
     [~seed_gate:(Min_reduction n)] (passing both is an [Invalid_argument]). Every seeded segment is
     probed alone first (the sketch must apply and pass {!Ir.Low_level.validate_parallel}); a segment
     that fails keeps the preset, and a classified failure of the whole seeded compile recompiles the

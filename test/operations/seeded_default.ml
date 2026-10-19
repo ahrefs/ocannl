@@ -180,7 +180,9 @@ let () =
   in
   let w_default, b_default = run Context.compile in
   let r = Option.value_exn ~here:[%here] !report in
-  Stdio.eprintf "model_default picked: %s (not part of the golden)\n" r.Autotune.mc_label;
+  Stdio.eprintf
+    "model_default picked: %s, %d candidates not numerics-preserving (not part of the golden)\n"
+    r.Autotune.mc_label r.Autotune.mc_excluded;
   p "the model reports a pick" (not (String.is_empty r.Autotune.mc_label));
   Verdict.gated ~when_:seeds_here ~on:backend_name
     "on CUDA/HIP the model starts from the seeded plan: its pick is the seeded plan or beats it, \

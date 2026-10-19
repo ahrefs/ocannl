@@ -555,11 +555,13 @@ keyed by a structural digest of the optimized code, and `Train.tune_placements`'
 decisions persisted beside them, keyed by the raw program's — gh-786) or — for `Train`'s convenience wrappers,
 when `model_default_schedule=true` (off by default; plain `Context.compile` never does
 this) — as a model-ranked pick among the default-schedule flavors with zero timing runs.
-With the model off, those wrappers still tile on CUDA and HIP: each contraction segment with a
-reduction extent of at least `gpu_default_sketch_min_reduction` gets the matmul family's
-register-blocktiled sketch, untimed and with results unchanged (`Autotune.seeded_default`,
-gh-ocannl-1324), and every other segment has its batch reductions' loops sunk below their write
-loops, so their accumulators stay in registers (gh-ocannl-1348).
+With the model off, those wrappers still tile on CUDA and HIP: each contraction segment the
+seeding gate admits (`gpu_default_sketch_min_reduction`: by default `auto`, where the ranking
+score puts the sketch below the preset; an integer is a minimum reduction extent) gets the matmul
+family's register-blocktiled sketch, untimed and with results unchanged
+(`Autotune.seeded_default`, gh-ocannl-1324, gh-ocannl-1253), and every other segment has its batch
+reductions' loops sunk below their write loops, so their accumulators stay in registers
+(gh-ocannl-1348). With the model on, the model starts from that same seeded plan.
 Transform *application* is strict: an invalid composition (a missing loop symbol, a
 non-positive split factor, an illegal interchange) fails loudly at apply time rather than
 falling back. Rendering an applied schedule then never produces *wrong* code, and for the

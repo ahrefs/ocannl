@@ -3975,6 +3975,9 @@ type model_choice = {
   mc_rejected : int;
       (** Candidates excluded from the ranking because their scheduled form fails
           {!Ir.Low_level.validate_parallel} — it could not have compiled (gh-ocannl-522). *)
+  mc_excluded : int;
+      (** Sketch candidates kept out of the ranking on a GPU backend as not numerics-preserving
+          (gh-ocannl-1253). *)
 }
 
 let model_default_enabled =
@@ -4596,6 +4599,7 @@ let model_default ?name ?report ctx comp bindings =
       mc_scored = 0;
       mc_skipped = 0;
       mc_rejected = 0;
+      mc_excluded = 0;
     }
   in
   if
@@ -4613,7 +4617,7 @@ let model_default ?name ?report ctx comp bindings =
     (* Counters and scoring helpers at [model_default] scope rather than per-compile: the placement
        pre-search (config [model_default_placements]) scores hermetic lowerings before any compile
        runs, and its work accumulates into the same reported totals as the in-compile selection. *)
-    let n_scored = ref 0 and n_skipped = ref 0 and n_rejected = ref 0 in
+    let n_scored = ref 0 and n_skipped = ref 0 and n_rejected = ref 0 and n_excluded = ref 0 in
     (* Candidates rank by the ranking score (gh-ocannl-1253), which charges operand re-reads once
        the working set leaves the cache — under [analyze]'s distinct-cell roofline an untiled
        contraction scores at the family's floor and no sketch can win. The family search's bound
@@ -4655,7 +4659,9 @@ let model_default ?name ?report ctx comp bindings =
         && not
              (scalar_blocktile p
              && Lazy.force (Option.value preserving ~default:(preserving_site base_opt)))
-      then None
+      then (
+        Int.incr n_excluded;
+        None)
       else
         match
           Sched.apply_classified ~static_indices
@@ -4700,7 +4706,7 @@ let model_default ?name ?report ctx comp bindings =
           (* Snapshot the caller-side counters so the log can split the driver's unscored leaves
              into compiler rejections vs genuine no-coverage — st_unscored alone would misclassify
              rejections as cost-model gaps in the phase-6 ledger. *)
-          let r0 = !n_rejected and k0 = !n_skipped in
+          let r0 = !n_rejected and k0 = !n_skipped and e0 = !n_excluded in
           let preserving = preserving_site base_opt in
           let best, stats =
             Sspace.search
@@ -4711,9 +4717,10 @@ let model_default ?name ?report ctx comp bindings =
           in
           logf
             "model_default: family search: %d expanded, %d scored, %d unscored (%d rejected, %d \
-             without coverage), %d fathomed (bound %s), %d refuted, %d excluded"
+             without coverage, %d not numerics-preserving), %d fathomed (bound %s), %d refuted, %d \
+             excluded"
             stats.Sspace.st_expanded stats.Sspace.st_scored stats.Sspace.st_unscored
-            (!n_rejected - r0) (!n_skipped - k0) stats.Sspace.st_fathomed
+            (!n_rejected - r0) (!n_skipped - k0) (!n_excluded - e0) stats.Sspace.st_fathomed
             (match fb with Some b -> Printf.sprintf "%.6f ms" (b *. 1e3) | None -> "n/a")
             stats.Sspace.st_refuted stats.Sspace.st_excluded;
           Some best
@@ -4882,6 +4889,7 @@ let model_default ?name ?report ctx comp bindings =
           mc_scored = !n_scored;
           mc_skipped = !n_skipped;
           mc_rejected = !n_rejected;
+          mc_excluded = !n_excluded;
         };
       let apply_action () =
         (* Schedule application uses the typed seam. Backend validation is deliberately left to
@@ -4918,10 +4926,12 @@ let model_default ?name ?report ctx comp bindings =
                  mc_model_ms = Option.map bound ~f:(fun s -> s *. 1e3);
                  mc_rank_ms = Option.bind bound ~f:(fun _ -> !choice.mc_rank_ms);
                });
-          logf "model_default: chose %s (rank %s; %d scored, %d without coverage, %d unbuildable)"
+          logf
+            "model_default: chose %s (rank %s; %d scored, %d without coverage, %d unbuildable, %d \
+             not numerics-preserving)"
             label
             (match model_s with Some s -> Printf.sprintf "%.6f ms" (s *. 1e3) | None -> "n/a")
-            !n_scored !n_skipped !n_rejected;
+            !n_scored !n_skipped !n_rejected !n_excluded;
           (applied_pick :=
              match action with
              | `Default -> false
@@ -4938,6 +4948,7 @@ let model_default ?name ?report ctx comp bindings =
               mc_scored = !n_scored;
               mc_skipped = !n_skipped;
               mc_rejected = !n_rejected;
+              mc_excluded = !n_excluded;
             };
           applied_pick := false;
           default_segs ()
