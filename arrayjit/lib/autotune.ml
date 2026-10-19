@@ -8629,6 +8629,7 @@ let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block
     ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
     bindings =
   let substituted = ref false in
+  exclusive_search @@ fun () ->
   with_streams ?log ?progress (fun () ->
       {
         substituted;
@@ -8638,5 +8639,7 @@ let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block
             ?abandon ?report ctx comp bindings;
       })
 
-let compile_deferred d = d.compile ()
+(* The deferred compile is the search's own compile, so it holds the search like the search did
+   (gh-ocannl-1352); nested inside [Train.tune_placements]' hold, it is a nesting. *)
+let compile_deferred d = exclusive_search d.compile
 let shipped_substitute d = !(d.substituted)

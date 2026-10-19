@@ -5,3 +5,6 @@ the refused search called no seam: true
 the refused search delivered no report: true
 the spawned domain's later turn is admitted: true
 the spawned domain's later search completed: true
+a deferred search started during this domain's is refused too: true
+so is the compile of a deferred search finished before it: true
+that compile is admitted on the later turn: true
