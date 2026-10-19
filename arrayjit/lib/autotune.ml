@@ -4050,9 +4050,10 @@ let model_operand_loads ~(limits : Ir.Backend_intf.hardware_limits) ~operand_loa
    and at the threshold those tightened to, with the same bound and on the same stats ledger. Leaves
    whose scores tie exactly are ordered by their tile-MMA operand loads under [operand_loads]
    (gh-ocannl-1254, {!model_operand_loads}): fewer load instructions win, so a staged twin that
-   brings its operands in through [ldmatrix] beats its gathering twin of equal flops and bytes; the
-   incumbent still wins every tie. [None] = no matmul site: the caller keeps the flat path (conv
-   seeds, which factor as a follow-up). *)
+   brings its operands in through [ldmatrix] beats its gathering twin of equal flops and bytes; a
+   leaf with no tile-MMA site has no count and stays out of the comparison (its operands load by
+   paths the count does not see), and the incumbent still wins every tie. [None] = no matmul site:
+   the caller keeps the flat path (conv seeds, which factor as a follow-up). *)
 let model_family_search ?(on_rejected = fun () -> ()) ~operand_loads ~is_gpu ~is_cpu ~limits
     ~accum_prec ~static_indices ~peak_flops ~peak_memory_bandwidth ~score ~incumbent
     (base_opt : LL.optimized) =
@@ -4091,7 +4092,7 @@ let model_family_search ?(on_rejected = fun () -> ()) ~operand_loads ~is_gpu ~is
          reaches a tie. *)
       let tie_break p =
         match applied p with
-        | None -> Int.max_value
+        | None -> None
         | Some post -> model_operand_loads ~limits ~operand_loads post
       in
       let best, stats =
@@ -4544,7 +4545,7 @@ type explain = {
   ex_compute_ms : float option;
   ex_memory_ms : float option;
   ex_spilled : bool;
-  ex_operand_loads : int;
+  ex_operand_loads : int option;
 }
 
 let model_explain ?name ctx comp bindings =
@@ -4560,7 +4561,9 @@ let model_explain ?name ctx comp bindings =
   let ms = Option.map ~f:(fun s -> s *. 1e3) in
   let explain segs =
     let ex_operand_loads =
-      List.sum (module Int) segs ~f:(fun o -> model_operand_loads ~limits ~operand_loads o)
+      match List.filter_map segs ~f:(model_operand_loads ~limits ~operand_loads) with
+      | [] -> None
+      | counts -> Some (List.sum (module Int) counts ~f:Fn.id)
     in
     match segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs with
     | None ->

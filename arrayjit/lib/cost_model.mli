@@ -293,13 +293,15 @@ val operand_load_count :
     b:Backend_intf.mma_operand_place ->
     bool * bool) ->
   Low_level.optimized ->
-  int
+  int option
 (** The per-lane load instructions of every [Tile_mma] operand, summed over the statements'
-    executions (see the section contract); [0] for code with no [Tile_mma]. [intrinsic_tile] is the
-    backend's tile [(tm, tn, tk)] for a storage triple ([Autotune.model_operand_loads] reads it from
-    the device's tile-MMA descriptor): where it divides a statement, each operand is counted per
-    intrinsic fragment, reloaded for every tile of the other operand's free axis, as the inline-PTX
-    arms emit them. Elsewhere each operand tile counts once per statement. *)
+    executions (see the section contract); [None] for code with no [Tile_mma] — not applicable,
+    rather than zero loads: such code still loads its operands, by paths this count does not see.
+    [intrinsic_tile] is the backend's tile [(tm, tn, tk)] for a storage triple
+    ([Autotune.model_operand_loads] reads it from the device's tile-MMA descriptor): where it
+    divides a statement, each operand is counted per intrinsic fragment, reloaded for every tile of
+    the other operand's free axis, as the inline-PTX arms emit them. Elsewhere each operand tile
+    counts once per statement. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 

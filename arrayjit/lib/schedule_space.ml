@@ -113,7 +113,7 @@ let search ?bound ?incumbent ?tie_break ~score tree =
             else
               Option.iter tie_break ~f:(fun key ->
                   match !best with
-                  | Some (b, bs) when Float.(s = bs) ->
+                  | Some (b, bs) when Float.(s = bs) -> (
                       let kb =
                         match !best_key with
                         | Some kb -> kb
@@ -122,10 +122,13 @@ let search ?bound ?incumbent ?tie_break ~score tree =
                             best_key := Some kb;
                             kb
                       in
-                      let ka = key a in
-                      if ka < kb then (
-                        best := Some (a, s);
-                        best_key := Some ka)
+                      (* A leaf without a key is not comparable: it neither displaces nor is
+                         displaced by a tie. *)
+                      match (key a, kb) with
+                      | Some ka, Some kb when ka < kb ->
+                          best := Some (a, s);
+                          best_key := Some (Some ka)
+                      | _ -> ())
                   | Some _ | None -> ())
         | None -> stats := { !stats with st_unscored = !stats.st_unscored + 1 })
     | Choice { level; children } ->

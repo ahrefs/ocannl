@@ -3,6 +3,8 @@ with a tie-break the tied leaf with the smallest key wins, the first among equal
 a tie never displaces the incumbent: true
 keys are computed only for leaves that tie: true
 each best leaf's key is computed once: true
+a keyless leaf listed first keeps a tie against keyed leaves: true
+a keyless leaf listed later never displaces a keyed best: true
 without a tie-break a subtree bounded at the threshold is fathomed: true
 with a tie-break a subtree bounded at the threshold is entered, and its tie wins: true
 stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true

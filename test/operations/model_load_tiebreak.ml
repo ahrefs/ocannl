@@ -55,7 +55,7 @@ let () =
     let tie_break =
       Option.map tie_break ~f:(fun () name ->
           keys_asked := name :: !keys_asked;
-          (fun (_, _, k) -> k) (find name))
+          (fun (_, _, k) -> Some k) (find name))
     in
     Option.map (fst (Sspace.search ?incumbent ?tie_break ~score (leaf_tree leaves))) ~f:fst
   in
@@ -73,6 +73,26 @@ let () =
   ignore (pick ~tie_break:() [ ("a", 2., 5); ("b", 2., 3); ("c", 2., 4) ] : string option);
   p "each best leaf's key is computed once"
     (List.equal String.equal (List.sort !keys_asked ~compare:String.compare) [ "a"; "b"; "c" ]);
+  (* A leaf the key does not apply to (a candidate with no tile-MMA site: its operands load by paths
+     the count does not see) is no zero: it neither displaces a tied leaf nor is displaced. *)
+  let partial = [ ("s", 2., None); ("t", 2., Some 3); ("u", 2., Some 1) ] in
+  let pick_partial order =
+    let leaves =
+      List.map order ~f:(fun n -> List.find_exn partial ~f:(fun (m, _, _) -> String.equal n m))
+    in
+    let find name = List.find_exn leaves ~f:(fun (n, _, _) -> String.equal n name) in
+    Option.map
+      (fst
+         (Sspace.search
+            ~tie_break:(fun name -> (fun (_, _, k) -> k) (find name))
+            ~score:(fun name -> (fun (_, s, _) -> Some s) (find name))
+            (leaf_tree leaves)))
+      ~f:fst
+  in
+  p "a keyless leaf listed first keeps a tie against keyed leaves"
+    (Option.equal String.equal (pick_partial [ "s"; "t"; "u" ]) (Some "s"));
+  p "a keyless leaf listed later never displaces a keyed best"
+    (Option.equal String.equal (pick_partial [ "t"; "s"; "u" ]) (Some "u"));
   (* A subtree bounded exactly at the threshold: fathomed by the strict rule, entered under a
      tie-break once a leaf holds the threshold, since a completion at the bound could win the
      tie. *)
@@ -88,7 +108,7 @@ let () =
       }
   in
   let score2 = function "x" | "y" -> Some 2. | _ -> None in
-  let key2 = function "x" -> 5 | _ -> 1 in
+  let key2 = function "x" -> Some 5 | _ -> Some 1 in
   let bound ~path _ =
     match List.last path with Some (_, "y") -> Some 2. | Some _ | None -> None
   in
@@ -183,6 +203,8 @@ let swizzled_twin (p : Autotune.sketch_params) =
 let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
   let label s = tag ^ ": " ^ s in
   let loads rule o = Autotune.model_operand_loads ~limits ~operand_loads:rule o in
+  let show_loads = Option.value_map ~default:"no tile-MMA" ~f:Int.to_string in
+  let fewer a b = match (a, b) with Some a, Some b -> a < b | _ -> false in
   let claim s b =
     if evaluated then p (label s) (Lazy.force b) else skipped ~backend:backend_name (label s)
   in
@@ -199,10 +221,11 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
   in
   List.iter twins ~f:(fun (p, plain, swz) ->
       Stdio.eprintf
-        "%s: twin %s: rank %.17g, loads %d plain vs %d swizzled (not part of the golden)\n" tag
+        "%s: twin %s: rank %.17g, loads %s plain vs %s swizzled (not part of the golden)\n" tag
         (Autotune.sketch_params_label p)
         (Option.value (rank limits plain) ~default:Float.nan)
-        (loads rule plain) (loads rule swz));
+        (show_loads (loads rule plain))
+        (show_loads (loads rule swz)));
   let all s f = claim s (lazy ((not (List.is_empty twins)) && List.for_all twins ~f)) in
   let same f (_, plain, swz) = f plain = f swz in
   all "the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops"
@@ -213,9 +236,10 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
       | Some a, Some b -> Float.equal a b
       | _ -> false);
   all "under CUDA's load rule each swizzled twin issues fewer operand loads" (fun (_, plain, swz) ->
-      loads rule swz < loads rule plain);
+      fewer (loads rule swz) (loads rule plain));
   all "under a rule without ldmatrix each pair issues equal operand loads" (fun (_, plain, swz) ->
-      loads no_ldmatrix swz = loads no_ldmatrix plain);
+      Option.is_some (loads no_ldmatrix swz)
+      && Option.equal Int.equal (loads no_ldmatrix swz) (loads no_ldmatrix plain));
   (* The family search over the site, under each rule. Every leaf it could score, scored the way it
      scores them, is the population its pick is checked against. *)
   let scored =
@@ -239,7 +263,8 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
   let cuda_pick = pick rule and plain_pick = pick no_ldmatrix in
   let show = function
     | Some (p, o, s) ->
-        Printf.sprintf "%s @ %.17g, %d loads" (Autotune.sketch_params_label p) s (loads rule o)
+        Printf.sprintf "%s @ %.17g, %s loads" (Autotune.sketch_params_label p) s
+          (show_loads (loads rule o))
     | None -> "none"
   in
   if evaluated then
@@ -250,7 +275,9 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~rule ~evaluated =
     match pick with
     | None -> false
     | Some ((_, o, _) as pk) ->
-        List.for_all (tied_with pk) ~f:(fun (_, o', _) -> loads rule o <= loads rule o')
+        (* Leaves without a count are outside the comparison, as in the walk. *)
+        List.for_all (tied_with pk) ~f:(fun (_, o', _) ->
+            not (fewer (loads rule o') (loads rule o)))
   in
   claim "under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it"
     (lazy (minimizes rule cuda_pick));
@@ -320,10 +347,11 @@ let () =
   List.iter explained ~f:(fun (label, ex) ->
       let ms = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.9f") in
       Stdio.eprintf
-        "explain %s: floor %s rank %s compute %s memory %s spilled %b loads %d (not part of the \
+        "explain %s: floor %s rank %s compute %s memory %s spilled %b loads %s (not part of the \
          golden)\n"
         label (ms ex.Autotune.ex_floor_ms) (ms ex.ex_rank_ms) (ms ex.ex_compute_ms)
-        (ms ex.ex_memory_ms) ex.ex_spilled ex.ex_operand_loads);
+        (ms ex.ex_memory_ms) ex.ex_spilled
+        (Option.value_map ex.ex_operand_loads ~default:"none" ~f:Int.to_string));
   p "model_explain lists the default pipeline first"
     (match explained with (label, _) :: _ -> String.equal label "default" | [] -> false);
   p_pairwise_distinct "model_explain's labels are distinct" (List.map explained ~f:fst)
@@ -347,7 +375,7 @@ let () =
      loads" (List.cartesian_product leaves leaves) ~f:(fun ((_, x), (_, y)) ->
       Option.equal Float.equal x.Autotune.ex_rank_ms y.Autotune.ex_rank_ms
       && Option.is_some x.ex_rank_ms
-      && x.ex_operand_loads < y.ex_operand_loads);
+      && match (x.ex_operand_loads, y.ex_operand_loads) with Some a, Some b -> a < b | _ -> false);
   (* What [model_default] then ships at this shape, for the record. *)
   if staged_fp8 then
     let choice = ref None in

@@ -1758,11 +1758,11 @@ val model_operand_loads :
     b:Ir.Backend_intf.mma_operand_place ->
     bool * bool) ->
   Ir.Low_level.optimized ->
-  int
+  int option
 (** {!Ir.Cost_model.operand_load_count} with the intrinsic tile [limits]' tile-MMA descriptor
     advertises per storage triple ({!mma_tile_for_precisions_in_scope}, per-statement scope): the
     count {!model_family_search} breaks exact ties with and {!model_explain} reports
-    (gh-ocannl-1254). *)
+    (gh-ocannl-1254); [None] for code with no [Tile_mma]. *)
 
 val model_family_search :
   ?on_rejected:(unit -> unit) ->
@@ -1790,9 +1790,9 @@ val model_family_search :
     of one lowering: [(best, stats, bound)], where [best] is the first leaf whose [score] (of its
     scheduled form) is strictly below [incumbent], the threshold tightening as leaves improve on it,
     and [bound] the family's schedule-invariant roofline floor under the envelope. Exact ties
-    between leaves go to fewer tile-MMA operand load instructions
-    ({!Ir.Cost_model.operand_load_count} under [operand_loads] — {!model_default} passes the
-    backend's [mma_operand_loads] capability; gh-ocannl-1254), then to the first; a tie never
+    between leaves go to fewer tile-MMA operand load instructions ({!model_operand_loads} under
+    [operand_loads] — {!model_default} passes the backend's [mma_operand_loads] capability;
+    gh-ocannl-1254) between leaves that both have tile-MMA sites, then to the first; a tie never
     displaces [incumbent]. [on_rejected] is called for each leaf whose schedule fails to apply.
     [None] for a lowering with no matmul site. Exposed so a test can drive the walk with stand-in
     limits and load rules on any backend. *)
@@ -1808,7 +1808,7 @@ type explain = {
   ex_memory_ms : float option;
       (** The two-tier memory leg ({!Ir.Cost_model.ranking_legs_of}), summed over the kernels. *)
   ex_spilled : bool;  (** Some kernel's working set exceeds the cache capacity. *)
-  ex_operand_loads : int;
+  ex_operand_loads : int option;
       (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}):
           not a price, the count {!model_default}'s family search breaks exact score ties with
           (gh-ocannl-1254). *)

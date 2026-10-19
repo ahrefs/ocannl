@@ -115,7 +115,7 @@ val no_search_stats : search_stats
 val search :
   ?bound:(path:(string * 'l) list -> ('l, 'a) tree -> float option) ->
   ?incumbent:float ->
-  ?tie_break:('a -> int) ->
+  ?tie_break:('a -> int option) ->
   score:('a -> float option) ->
   ('l, 'a) tree ->
   ('a * float) option * search_stats
@@ -148,11 +148,12 @@ val search :
     the measured regime handles no-coverage candidates outside the bound-driven walk.
 
     [tie_break] (gh-ocannl-1254) orders leaves whose scores are {e exactly} equal: a leaf scoring
-    the running best's score displaces that best leaf when its key is strictly smaller. Ties keep
-    going to the first leaf among equal keys, and never to a leaf against the [incumbent], which is
-    no leaf and is displaced only by strict improvement. Keys are computed only for leaves that tie,
-    each best leaf's at most once. While a leaf holds the threshold, a subtree whose bound equals it
-    is entered rather than fathomed: a completion at the bound could win the tie. Without
+    the running best's score displaces that best leaf when both have a key and its key is strictly
+    smaller; a leaf the key does not apply to ([None]) neither displaces nor is displaced by a tie.
+    Ties keep going to the first leaf among equal keys, and never to a leaf against the [incumbent],
+    which is no leaf and is displaced only by strict improvement. Keys are computed only for leaves
+    that tie, each best leaf's at most once. While a leaf holds the threshold, a subtree whose bound
+    equals it is entered rather than fathomed: a completion at the bound could win the tie. Without
     [tie_break] the search is exactly the first-strict-improvement walk above. *)
 
 val lift_excluded : ('l, 'a) child -> ('l, 'a) child

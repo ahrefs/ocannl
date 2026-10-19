@@ -805,19 +805,23 @@ let tile_mma_operand_loads ?intrinsic_tile ~operand_loads (opt : Low_level.optim
   List.rev !sites
 
 let operand_load_count ?intrinsic_tile ~operand_loads opt =
-  List.sum
-    (module Int)
-    (tile_mma_operand_loads ?intrinsic_tile ~operand_loads opt)
-    ~f:(fun (executions, operands, lanes) ->
-      executions
-      * List.sum
-          (module Int)
-          operands
-          ~f:(fun (tn, elements, fragments, cls) ->
-            fragments
-            * operand_load_instructions ~lanes ~elements
-                ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
-                cls))
+  match tile_mma_operand_loads ?intrinsic_tile ~operand_loads opt with
+  | [] -> None
+  | sites ->
+      Option.some
+      @@ List.sum
+           (module Int)
+           sites
+           ~f:(fun (executions, operands, lanes) ->
+             executions
+             * List.sum
+                 (module Int)
+                 operands
+                 ~f:(fun (tn, elements, fragments, cls) ->
+                   fragments
+                   * operand_load_instructions ~lanes ~elements
+                       ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
+                       cls))
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 
