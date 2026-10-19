@@ -1,9 +1,22 @@
-(* gh-ocannl-1329: a context [Context.release] freed is a dead handle. Compile, run (on the released
+(* Two refusals at the Context API's entry points.
+
+   gh-ocannl-1329: a context [Context.release] freed is a dead handle. Compile, run (on the released
    value, or on a live value with a routine compiled into the released one), sync, the transfers and
    the decision recorders all refuse it with a typed [Utils.User_error] naming the release, rather
    than reaching a freed pool. The release flag is shared exactly by the values that share pools: an
    earlier value of the same linear upload chain is refused too, while a compile sibling and the
-   parent keep working. *)
+   parent keep working.
+
+   gh-ocannl-1339: [Context.run] refuses a READ-BEFORE-WRITE input that nothing ever wrote. The
+   issue's case is a counter a routine reads and then overwrites, run with the counter never seeded:
+   before, the input check accepted any node that merely had a buffer, so the routine read
+   allocation-time zeros. It now has to have been written in the lineage -- by a run, an upload or a
+   device copy -- and a caller that dropped the context [run] returned keeps that fact. A READ-ONLY
+   input stays accepted once allocated (zero is the right entry value of a read-only accumulator);
+   that asymmetry is pinned below so a later tightening is a deliberate change. (The tensor-level
+   form of the mistake -- an SGD step, which reads each parameter before writing it, compiled
+   without [Train.init_params] -- never gets this far: linking already refuses a parameter the prior
+   context lacks.) *)
 
 open Base
 open Verdict.Claims
@@ -40,6 +53,7 @@ let link_shift ?lctx ~ctx ~name ~src ~dst () =
 let seed = [| 10.; 20.; 30.; 40. |]
 let shifted = [| 11.; 22.; 33.; 44. |]
 
+(* gh-ocannl-1329. *)
 let () =
   Verdict.case "chr_released" @@ fun () ->
   let base = Context.auto () in
@@ -85,3 +99,65 @@ let () =
     (Poly.equal (Context.get_values c_c out_c) shifted);
   Context.release c_b;
   Context.release c_c
+
+(* [ctr[i] := ctr[i] + 1 + i]: the counter is read before it is written. *)
+let bump ctr = shift ~src:ctr ~dst:ctr
+
+(* [ctr[i] := 1 + i]: writes the counter without reading it. *)
+let fill ctr =
+  let i = Ll_test.sym () in
+  Ll_test.loop_n i 4 (Ll_test.set ctr [| Ll_test.iter i |] (Ll_test.tick i))
+
+(* gh-ocannl-1339. *)
+let () =
+  Verdict.case "chr_unseeded" @@ fun () ->
+  let base = Context.auto () in
+  let ctr = node "chr_ctr" in
+  Ll_test.materialize ctr;
+  let o = Ll_test.optimize ~materialized:[ ctr ] ~name:"chr_bump" (bump ctr) in
+  pf "chr_unseeded: the counter is read before written" (Ll_test.read_before_write o ctr);
+  let c, r = Ll_test.link ~ctx:base ~name:"chr_bump" o in
+  pf "chr_unseeded: the counter is both an input and an output of the routine"
+    (Set.mem r.Context.inputs ctr && Set.mem r.Context.outputs ctr);
+  pf "chr_unseeded: the counter has a buffer, which is not a value"
+    (Context.mem c ctr && not (Context.is_initialized c ctr));
+  pf "chr_unseeded: running it never seeded is refused, naming the counter as read before written"
+    (refused ~needle:"chr_ctr (read before written)" (fun () -> Context.run c r));
+  let c = Context.run (Context.set_values c ctr seed) r in
+  pf "chr_unseeded: seeded, it runs from the seed" (Poly.equal (Context.get_values c ctr) shifted);
+  Context.release c
+
+let () =
+  Verdict.case "chr_written_elsewhere" @@ fun () ->
+  let base = Context.auto () in
+  let ctr = node "chr_ctr_w" in
+  Ll_test.materialize ctr;
+  let lctx = LL.empty_optimize_ctx () in
+  let o_fill = Ll_test.optimize_in lctx ~materialized:[ ctr ] ~name:"chr_fill" (fill ctr) in
+  let c_fill, r_fill = Ll_test.link ~ctx:base ~name:"chr_fill" o_fill in
+  pf "chr_written_elsewhere: the filler does not read the counter"
+    (not (Set.mem r_fill.Context.inputs ctr));
+  let o_bump = Ll_test.optimize_in lctx ~materialized:[ ctr ] ~name:"chr_bump_w" (bump ctr) in
+  let c_bump, r_bump = Ll_test.link ~ctx:c_fill ~name:"chr_bump_w" o_bump in
+  (* The filler's returned context is dropped: [c_bump] never learns from it that the counter was
+     written, so only the lineage's record of the write can admit the run. *)
+  ignore (Context.run c_fill r_fill : Context.t);
+  pf "chr_written_elsewhere: the value it runs in has not tracked the write"
+    (not (Context.is_initialized c_bump ctr));
+  let c_bump = Context.run c_bump r_bump in
+  pf "chr_written_elsewhere: written by another routine of the lineage, it runs from that write"
+    (Poly.equal (Context.get_values c_bump ctr) [| 2.; 4.; 6.; 8. |]);
+  Context.release c_bump
+
+let () =
+  Verdict.case "chr_read_only" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_ro_x" and out = node "chr_ro_out" in
+  let c, r = link_shift ~ctx:base ~name:"chr_ro" ~src:x ~dst:out () in
+  pf "chr_read_only: the source is a read-only input"
+    (Set.mem r.Context.inputs x && not (Set.mem r.Context.outputs x));
+  (* Deliberate: a read-only input is accepted on its allocation-time zeros. *)
+  let c = Context.run c r in
+  pf "chr_read_only: an allocated, never-written read-only input runs from zero"
+    (Poly.equal (Context.get_values c out) [| 1.; 2.; 3.; 4. |]);
+  Context.release c

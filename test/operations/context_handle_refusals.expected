@@ -16,3 +16,13 @@ chr_released: decide_footprint is refused: true
 chr_released: the refusal names the entry point and the backend: true
 chr_released: the compile sibling still runs and reads back: true
 chr_released: the live parent still compiles and runs: true
+chr_unseeded: the counter is read before written: true
+chr_unseeded: the counter is both an input and an output of the routine: true
+chr_unseeded: the counter has a buffer, which is not a value: true
+chr_unseeded: running it never seeded is refused, naming the counter as read before written: true
+chr_unseeded: seeded, it runs from the seed: true
+chr_written_elsewhere: the filler does not read the counter: true
+chr_written_elsewhere: the value it runs in has not tracked the write: true
+chr_written_elsewhere: written by another routine of the lineage, it runs from that write: true
+chr_read_only: the source is a read-only input: true
+chr_read_only: an allocated, never-written read-only input runs from zero: true

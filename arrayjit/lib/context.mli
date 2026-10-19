@@ -227,7 +227,13 @@ val decision_surface :
 val run : t -> routine -> t
 (** Execute a compiled routine. Mutates buffers in-place. Returns updated context with newly
     initialized nodes tracked. Raises [Failure] if execution dependencies are not satisfied, and
-    {!Ir.Utils.User_error} if [t] or the routine's compile context was {!release}d.
+    {!Ir.Utils.User_error} if [t] or the routine's compile context was {!release}d, or if a required
+    input was never initialized. A {e read-before-write} input — one the routine reads and then
+    writes, such as a counter or a running statistic — must have been written by something in this
+    lineage (a run, an upload, a device copy): its allocation-time zeros do not count
+    (gh-ocannl-1339). State meant to start from zero declares that in its own computation (an inline
+    declaration, embedded in the routine) or is seeded with {!set_values}. A read-only input is
+    accepted once it is allocated, since zero is the right initial value of a read-only accumulator.
 
     The routine's static-index bindings are read HERE, not when the device gets to the work: the
     dispatch carries the values they hold at this call, so a caller may rebind them for the next run

@@ -64,6 +64,14 @@ type execution_ledger = {
           unusable: every entrypoint re-raises the stored failure, naming the routine. Scratch
           lineages ([timing_ctx]) are separate, so poisoning one does not condemn the caller's
           context. *)
+  mutable written_buffers : Set.M(Buffer_key).t;
+      (** Every concrete ordinary buffer of this lineage that something has written: a {!run} (its
+          outputs), a host upload or a device copy. Only grows. Unlike [current_writers] it survives
+          external writes and [rollback_execution], because it answers a different question — not
+          "which routine must this one wait for" but "has this buffer ever held a value anyone put
+          there", which is what [check_lineage_runnable] asks of a read-before-write input
+          (gh-ocannl-1339). Ledger-wide and keyed by buffer rather than by the immutable context
+          value, so a caller that discarded the context [run] returned does not lose the fact. *)
 }
 (** Shared mutable state for execution tracking, allocated once per root context. Shared by
     reference across all contexts derived from the same root. *)
@@ -85,6 +93,7 @@ let create_ledger () =
     merge_buffer_readers = Hashtbl.create (module Int);
     current_merge_buffer_writer = None;
     poisoned = None;
+    written_buffers = Set.empty (module Buffer_key);
   }
 
 type t = {
@@ -486,26 +495,50 @@ let check_lineage_runnable ctx routine =
   check_live ~fn:"run" ctx;
   check_live ~fn:"run (the routine's compile context)" routine.context;
   check_not_poisoned ctx;
-  (* Check that all required inputs are initialized. A node counts as initialized if it was produced
-     by a prior routine ([initialized_nodes]) or is already allocated in the running context's
-     device buffers ([in_backend]): such inputs are either user-set via [set_values]/[from_host]
-     (which write the allocated buffer in place) or zero-initialized at allocation, which is the
-     correct identity for read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not
-     distinguish a forgotten non-zero data input from a zero-valid accumulator — both are read-only
-     buffers allocated with [~zero_init:true] — so a forgotten data input reads zeros rather than
-     failing. Catching that precisely needs per-node "needs-nonzero-init" metadata OCANNL does not
-     currently carry; a stricter check produces false positives on read-only accumulator gradients
-     (zero2hero_1of7, primitive_ops). *)
+  (* Check that all required inputs are initialized, in two classes.
+
+     A READ-BEFORE-WRITE input (the routine both reads it first and writes it: a counter, a running
+     statistic, a recurrent state) must have held a value someone put there: produced by a prior
+     routine or a transfer into this context value ([initialized_nodes]), or written, in this
+     lineage, by any run, upload or device copy ([written_buffers], which does not depend on the
+     caller threading [run]'s returned context). Its allocation-time zeros do not count
+     (gh-ocannl-1339): an uninitialized read of state the routine then overwrites is a user bug the
+     context can see. State a routine is meant to start from zero carries that in its own
+     computation -- an inline declaration is an embedded node, excluded from [inputs] at compile
+     ([Train.sgd_one]'s momentum is the pattern) -- or is seeded explicitly.
+
+     A READ-ONLY input is accepted once it is allocated in the running context's device buffers
+     ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which write the
+     allocated buffer in place) or zero-initialized at allocation, which is the correct identity for
+     read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not distinguish a forgotten
+     non-zero data input from a zero-valid accumulator — both are read-only buffers allocated with
+     [~zero_init:true] — so a forgotten data input reads zeros rather than failing. Catching that
+     precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently carry; a
+     stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
+     primitive_ops). *)
   let ctx_buffers = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.ctx_buffers) } in
   let in_backend tn = Map.mem ctx_buffers tn in
+  let written tn =
+    Option.exists (buffer_key routine.context tn) ~f:(Set.mem ctx.ledger.written_buffers)
+  in
   let missing_inputs =
-    Set.filter routine.inputs ~f:(fun tn -> not (Set.mem ctx.initialized_nodes tn || in_backend tn))
+    Set.filter routine.inputs ~f:(fun tn ->
+        (not (Set.mem ctx.initialized_nodes tn))
+        && if Set.mem routine.outputs tn then not (written tn) else not (in_backend tn))
   in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
-       Set.to_list missing_inputs |> List.map ~f:Tn.debug_name |> String.concat ~sep:", "
+       Set.to_list missing_inputs
+       |> List.map ~f:(fun tn ->
+           Tn.debug_name tn ^ if Set.mem routine.outputs tn then " (read before written)" else "")
+       |> String.concat ~sep:", "
      in
-     failwith (Printf.sprintf "Context.run: required input nodes not initialized: %s" missing_names));
+     raise
+     @@ Utils.User_error
+          (Printf.sprintf
+             "Context.run: routine %s: required input nodes not initialized: %s. Seed them (e.g. \
+              Context.set_values, or a routine writing them run first) before running."
+             routine.name missing_names));
 
   (* Check execution dependencies *)
   let missing_deps = Set.diff routine.execution_deps ctx.ledger.executed in
@@ -546,10 +579,11 @@ let run ctx routine =
 
   (* Mark executed in shared ledger *)
   ctx.ledger.executed <- Set.add ctx.ledger.executed routine.routine_id;
-  ctx.ledger.current_writers <-
-    Set.fold routine.outputs ~init:ctx.ledger.current_writers ~f:(fun writers tn ->
-        Option.value_map (buffer_key routine.context tn) ~default:writers ~f:(fun key ->
-            Map.set writers ~key ~data:routine.routine_id));
+  Set.iter routine.outputs ~f:(fun tn ->
+      Option.iter (buffer_key routine.context tn) ~f:(fun key ->
+          ctx.ledger.current_writers <-
+            Map.set ctx.ledger.current_writers ~key ~data:routine.routine_id;
+          ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key));
 
   (* Mark outputs as initialized and return updated context *)
   let initialized_nodes = Set.union ctx.initialized_nodes routine.outputs in
@@ -595,9 +629,10 @@ let mark_initialized ctx nodes =
    unexecuted reader cannot impose a WAR edge on a write that already happened. The merge-buffer
    frontier is separate storage and is deliberately unaffected. *)
 let record_external_writes ctx nodes =
-  ctx.ledger.current_writers <-
-    Set.fold nodes ~init:ctx.ledger.current_writers ~f:(fun writers tn ->
-        Option.value_map (buffer_key ctx tn) ~default:writers ~f:(Map.remove writers));
+  Set.iter nodes ~f:(fun tn ->
+      Option.iter (buffer_key ctx tn) ~f:(fun key ->
+          ctx.ledger.current_writers <- Map.remove ctx.ledger.current_writers key;
+          ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key));
   let frontier =
     Set.fold nodes ~init:ctx.frontier ~f:(fun frontier tn ->
         {

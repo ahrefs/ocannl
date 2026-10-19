@@ -100,7 +100,10 @@ let test_wrong_order_raises () =
   let is_enforcement =
     match Context.run ctx sgd_routine with
     | _ -> false
-    | exception Failure msg -> String.is_substring msg ~substring:"Context.run:"
+    (* Running in [ctx], which lacks the gradients' buffers, the uninitialized-input refusal (a
+       typed [User_error], gh-ocannl-1339) fires before the dependency check's [Failure]. *)
+    | exception (Failure msg | Utils.User_error msg) ->
+        String.is_substring msg ~substring:"Context.run:"
   in
   Verdict.p "Wrong order raises Failure from Context.run" is_enforcement
 

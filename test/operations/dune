@@ -2325,7 +2325,8 @@
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-1329: every Context entry point that touches buffers refuses a released context, while a
-; compile sibling and the parent keep working.
+; compile sibling and the parent keep working. gh-ocannl-1339: Context.run refuses a read-before-write
+; input nothing in the lineage ever wrote (the issue's never-seeded counter).
 
 (test
  (name context_handle_refusals)

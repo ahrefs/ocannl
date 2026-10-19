@@ -223,7 +223,10 @@ let compile_and_run ~name shape =
           prog.bindings)
   in
   prog.bind routine.Context.bindings;
-  let ctx = List.fold prog.seed ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) in
+  (* Every shape accumulates into [out] read-before-write, from zero: seeded, since allocation-time
+     zeros do not count as a value (gh-ocannl-1339). [want] has [out]'s length. *)
+  let seed = (prog.out, Array.create ~len:(Array.length prog.want) 0.0) :: prog.seed in
+  let ctx = List.fold seed ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) in
   let ctx = Context.run ctx routine in
   {
     summary = routine.Context.peel;
