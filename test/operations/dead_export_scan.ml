@@ -361,7 +361,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.batch_norm_state";
     "Nn_blocks.box_muller";
     "Nn_blocks.cross_attention";
-    "Nn_blocks.decoder_only_block";
     "Nn_blocks.dropout";
     "Nn_blocks.kaiming";
     "Nn_blocks.kaiming_at";

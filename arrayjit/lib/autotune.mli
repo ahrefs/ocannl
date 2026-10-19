@@ -294,6 +294,7 @@ type conv_site = {
   c_red : Ir.Indexing.symbol;
   c_nred : int;
   c_d : Ir.Tnode.t;
+  c_d_syms : Ir.Indexing.symbol list;
   c_a : Ir.Tnode.t;
   c_b : Ir.Tnode.t;
   c_zeroed : bool;
@@ -708,6 +709,24 @@ val extend_with_privatize :
     against a hermetic copy of the segment (proposals violating the op's preconditions are dropped),
     so the result always applies cleanly where the input schedule does. Exposed for tests. *)
 
+type privatize_drop = {
+  pd_target : Ir.Tnode.t;  (** The accumulator the proposal would privatize. *)
+  pd_over : Ir.Indexing.symbol;  (** The serial loop it would privatize over. *)
+  pd_cause : Ir.Schedule_outcome.cause;  (** The refusal that dropped it. *)
+}
+(** A {!extend_with_privatize} proposal the op refused. *)
+
+val privatize_extension :
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Schedule.schedule ->
+  Ir.Low_level.optimized ->
+  Ir.Schedule.schedule * privatize_drop list
+(** {!extend_with_privatize} beside the proposals it dropped, in detection order. The drops never
+    reach a search report, so this is where a census of [Privatize]'s refusals on real segments
+    reads them (gh-ocannl-1395: [test/operations/privatize_census]). Empty when the input schedule
+    itself does not apply. *)
+
 type sr_site = {
   sr_axis : Ir.Indexing.symbol;  (** The reduction loop to split. *)
   sr_target : Ir.Tnode.t;  (** The accumulated node. *)
@@ -1016,6 +1035,49 @@ val batch_settle_name : batch_settle -> string
 val batch_admission_name : batch_admission -> string
 (** Likewise: [admitted], [refused_unbatched], [refused_contended], [refused_unreadable]. *)
 
+type round_unit_moves = {
+  unit_segment : int option;
+      (** [Some i]: the entry's [i]th fission segment, the [i] a round candidate's label names as
+          [+seg<i>]; [None]: a whole-routine entry's one unit. A fissioned entry's zero-fill and
+          solo segments are not units: no move extends them, and they are not listed. *)
+  unit_expanded : bool;
+      (** Whether the rule offered this unit to the action menu. An unexpanded unit cost no legality
+          check and has [unit_moves = 0]; an expanded one with [unit_moves = 0] is a unit whose menu
+          had nothing to propose -- a tensorized or fully register-tiled geometry, say. *)
+  unit_moves : int;
+      (** The round candidates this unit's moves became, each of which the round attempts (one
+          {!on_candidate_attempt} call apiece, whose label names the entry as [from <tag>] and, on a
+          fissioned entry, the unit as [+seg<i>]) unless the search stops first. An attempt can
+          still end before a timing window: bound-pruned, declined, deduplicated by digest. *)
+}
+(** One unit of a beam entry in a beam-expansion round (gh-ocannl-1360): what the round's expansion
+    rule (config [autotune_round_expansion]) did with it. *)
+
+type round_entry_moves = {
+  entry_digest_tag : string;
+      (** {!digest_tag} of the entry's digest: the tag its round candidates' labels name as their
+          parent ([from <tag>]), and the tag of the digest {!on_candidate_measured} saw when the
+          entry was timed. *)
+  entry_ms : float;  (** The time that ranked it into the beam. *)
+  entry_segments_differing : int list option;
+      (** The entry's segments whose schedule differs from the round's head (the first entry), in
+          [unit_segment]'s indexing: [Some []] for the head itself and for an entry identical to it
+          segment by segment; [None] when the two do not segment alike or are whole-routine
+          programs. *)
+  entry_units : round_unit_moves list;  (** Every unit of the entry, in segment order. *)
+}
+(** One beam entry as a round found it. *)
+
+type round_moves = {
+  round_index : int;  (** 1 for the first round, as in [rounds_run]. *)
+  round_expansion_rule : string;  (** [differing], [full] or [head]. *)
+  round_entries : round_entry_moves list;  (** The beam, fastest first: the head, then the rest. *)
+}
+(** One beam-expansion round (gh-ocannl-1360): the per-entry, per-unit move counts the round's
+    [autotune_log] line [round N: ...] summarizes, recorded before the round attempts any of them. A
+    test reads them to choose a beam entry with the moves it needs instead of discovering their
+    absence by failing a claim. *)
+
 type report = {
   outcome : outcome;
       (** What this call did about searching. The counters below say how much work that state got
@@ -1111,6 +1173,11 @@ type report = {
           refusal: it ends the call as a [Pre_search_failure] under strict failure classification.
       *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
+  round_moves : round_moves list;
+      (** Every round this call's search started, in order (gh-ocannl-1360): one record per round
+          counted in [rounds_run], including a round a fatal failure or an abandonment interrupted,
+          whose report carries the record of the round in flight. Empty on cache replay and
+          search-disabled calls, and for [~rounds:0]. *)
   budget_cut : bool;
       (** The crown comes from a search that stopped proposing candidates because its wall-clock
           budget (config [autotune_budget_seconds], gh-ocannl-1409) ran out: this call's own search,
@@ -2546,8 +2613,8 @@ val install_timing_call_observer : (timing_call -> unit) -> unit
     CALLING DOMAIN, for the rest of the domain's life, after the observers already installed there.
     Trace-only (gh-ocannl-1263): observing changes nothing measured or ranked, and a search running
     in another domain neither reaches nor disturbs it — the treatment [autotune_log] got for
-    concurrent searches (see {!with_streams}). A newly spawned domain starts with none. How the
-    benchmarks' [BENCH_TIMING_TRACE] is installed. No configuration selects it. *)
+    searches in different domains (see {!with_streams}). A newly spawned domain starts with none.
+    How the benchmarks' [BENCH_TIMING_TRACE] is installed. No configuration selects it. *)
 
 val with_timing_call_observer : (timing_call -> unit) -> (unit -> 'a) -> 'a
 (** [with_timing_call_observer f body] runs [body] with [f] added as by
@@ -2684,12 +2751,12 @@ val retry_contended_window_for_backend : string -> bool
 module Seam : sig
   type 'a t
   (** A test seam of the search: one value PER DOMAIN (the treatment the timing-call observers got,
-      gh-ocannl-1263). A domain's searches call the value set in that domain; a search running in
-      another domain neither reaches nor disturbs it, so concurrent searches in different domains
-      can each be observed and injected into on their own. A newly spawned domain starts with the
-      seam's default. Unlike {!install_timing_call_observer}, setting a seam REPLACES its value
-      rather than chaining onto it: a caller that wants the enclosing value too reads it with {!get}
-      first and calls it. *)
+      gh-ocannl-1263). A domain's searches call the value set in that domain; a search in another
+      domain neither reaches nor disturbs it, so searches in different domains -- which take turns,
+      {!Concurrent_search} -- can each be observed and injected into on their own. A newly spawned
+      domain starts with the seam's default. Unlike {!install_timing_call_observer}, setting a seam
+      REPLACES its value rather than chaining onto it: a caller that wants the enclosing value too
+      reads it with {!get} first and calls it. *)
 
   val get : 'a t -> 'a
   (** The calling domain's current value. *)
@@ -2765,6 +2832,26 @@ val resolve_cache_dir : ?cache_dir:string -> search:bool -> unit -> string
     (gh-ocannl-559). {!tune} resolves its directory through this, and so does
     [Train.tune_placements] for the placement-decision store it keeps in the same directory
     (gh-ocannl-786), so the two open the same directory under the same rule. *)
+
+exception Concurrent_search of { holder : int; caller : int }
+(** Raised by {!tune} and [Train.tune_placements] when another domain's search is running
+    (gh-ocannl-1352): searches run one at a time per process. [holder] and [caller] are the two
+    domains' ids ([Domain.self ()]). The compile path a search drives keeps process-wide state that
+    was never made safe for two domains at once (tensor-node registries and uid counters, the
+    lowering's analysis cache, a device's constant buffer cache, Base hash tables throughout), so a
+    second search is refused before it does anything -- before it resolves a setting, compiles,
+    emits a report or calls a seam -- rather than left to race the first. Searches in different
+    domains taking TURNS are supported, and what the per-domain {!Seam}s, streams and observers are
+    for. *)
+
+val exclusive_search : (unit -> 'a) -> 'a
+(** [exclusive_search f] runs [f] as this process's one search: raises {!Concurrent_search} when
+    another domain is inside [exclusive_search], and otherwise holds the search for [f]'s duration,
+    releasing it on return or exception. Nested calls in the holding domain proceed, so a search
+    started inside a search of the same domain (the arms of [Train.tune_placements], a [?report]
+    callback that tunes) is not refused. {!tune} runs inside it; a caller wrapping several searches
+    that must not interleave with another domain's (as [Train.tune_placements] does) takes it for
+    the whole span. *)
 
 val tune :
   ?name:string ->

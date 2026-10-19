@@ -156,7 +156,8 @@
   (alias runtest-provenance_tag_inventory)
   (alias runtest-provenance_tag_scan_cases)
   (alias runtest-slot_kind_cases)
-  (alias runtest-slot_kind_live)))
+  (alias runtest-slot_kind_live)
+  (alias runtest-render_decline_inventory)))
 
 ; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
@@ -270,6 +271,7 @@
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
   (alias runtest-test_config_consistency)
+  (alias runtest-render_decline_inventory)
   (alias runtest-digest_completeness)
   (alias runtest-env_var_deps)
   (alias runtest-env_var_deps_control)
@@ -2192,6 +2194,41 @@
  (modules schedule_refusal_scan)
  (libraries base stdio ppxlib test_utils arrayjit.verdict))
 
+; gh-ocannl-1351: every render-time typed decline (a `Cause_at` at `Backend_codegen`) has an entry in
+; the agent note's inventory, classified paired-with-the-oracle or render-only by how its site
+; builds it. Its corpus is every checked-in arrayjit/lib source, from Source_inventory over the
+; sandboxed source tree, so a decline added in any arrayjit module is seen.
+
+(executable
+ (name render_decline_inventory)
+ (modules render_decline_inventory)
+ (libraries base stdio ppxlib test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses the arrayjit sources and one agent note as text; links no backend.
+ (target render_decline_inventory.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:render_decline_inventory.exe}
+    %{workspace_root}
+    %{dep:render_decline_inventory.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-render_decline_inventory)
+ (package neural_nets_lib)
+ (action
+  (diff render_decline_inventory.expected render_decline_inventory.actual)))
+
 ; gh-ocannl-817: real-graph reachability probe plus the explicit Set_vec_unop lowering boundary.
 
 (test
@@ -3409,6 +3446,8 @@
   provenance_tag_inventory.ml
   provenance_tag_inventory.expected
   provenance_tag_scan_cases.expected
+  render_decline_inventory.ml
+  render_decline_inventory.expected
   ocamlformat_ignore_scan.ml
   ocamlformat_ignore_scan.expected
   optional_arg_inventory.ml
@@ -3466,6 +3505,8 @@
    operand_key_ratchet.expected,operand_key_scan_cases.expected
    provenance_tag_inventory.ml
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
+   render_decline_inventory.ml
+   render_decline_inventory.expected
    ocamlformat_ignore_scan.ml
    ocamlformat_ignore_scan.expected
    optional_arg_inventory.ml
@@ -4994,6 +5035,34 @@
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules autotune_privatize)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name privatize_census)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules privatize_census)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -8785,6 +8854,20 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules autotune_seam_domains)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1352: searches run one at a time per process -- a search started in a second domain
+; while the first domain's runs raises Autotune.Concurrent_search before doing anything, and the
+; second domain's later turn is admitted.
+
+(test
+ ; ocannl-backend: cc -- both searches run on an explicit Context.cpu (); the property is the search entry's, not a backend's.
+ (name autotune_concurrent_refusal)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_concurrent_refusal)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

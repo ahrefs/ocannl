@@ -468,7 +468,8 @@ val tune_placements :
     searches). [name] included (gh-ocannl-669): it names both arms' compiles and the flip
     refinement's decision-surface lowerings, and is what lets a comp carrying no
     {!Ir.Assignments.Block_comment} — one {!Context.compile} would name at the call site — be tuned
-    here at all.
+    here at all. The whole call is one search ({!Autotune.exclusive_search}, gh-ocannl-1352): made
+    while another domain searches, it raises {!Autotune.Concurrent_search} before doing anything.
 
     An arm that fails is a {e losing} arm, not a failed run (gh-ocannl-550): a search that
     terminates on a fatal failure ranks at [infinity], the other arm's completed winner ships and
