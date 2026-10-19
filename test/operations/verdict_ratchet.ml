@@ -4170,6 +4170,14 @@ let () =
   push sample;
   Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
       [ "unlisted Queue.enqueue (partially applied)" ] );
+    ( "names a writer bound to a name after some of its arguments",
+      {ocaml|open Base
+let () =
+  let rows = Array.create ~len:3 0 in
+  let put = Array.set rows 0 in
+  put sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Array.to_list rows) ~f:positive|ocaml},
+      [ "unlisted Array.set (partially applied)" ] );
     ( "follows a quantifier of a gated boolean through a value alias",
       {ocaml|open Base
 let () =

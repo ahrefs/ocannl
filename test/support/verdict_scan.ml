@@ -648,12 +648,14 @@ let line_break_census content =
       [Hashtbl.filter_keys_inplace x ~f], ...) is handed with [x], where [x] is the first positional
       argument in [Base]'s order and any of them in [Stdlib]'s. A function of a mutable collection
       module the table does not list, handed [x], may write into it: a claim that reaches [x] is
-      reported as unlisted. So is a writer handed [x] alone ([let push = Queue.enqueue x]): a
-      partial application whose later call this reader does not follow. A field write [x.f <- e]
-      reaches [x] whole, and the [f] a pattern takes apart from [x]'s literal, not its other fields.
-      [x] is a name the source binds; a container only an [open] brought in is not tracked. Only a
-      write that may run before the claim counts ({!precedes}): one placed after it, in code that
-      cannot run again before it, is not followed.
+      reported as unlisted. So is a writer handed [x] alone ([Queue.enqueue x]) or whose value a
+      [let] binds to a name ([let put = Array.set x 0]): a possible partial application whose later
+      call this reader does not follow. A partial writer that escapes otherwise (returned, or handed
+      to another function) is not followed. A field write [x.f <- e] reaches [x] whole, and the [f]
+      a pattern takes apart from [x]'s literal, not its other fields. [x] is a name the source
+      binds; a container only an [open] brought in is not tracked. Only a write that may run before
+      the claim counts ({!precedes}): one placed after it, in code that cannot run again before it,
+      is not followed.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -1271,12 +1273,20 @@ let gate_census content =
     Hash_set.add bound (position expr);
     match expr.pexp_desc with Pexp_constraint (inner, _) -> bind inner | _ -> ()
   in
+  (* The right-hand sides of [let]s that bind a name, under any type constraint: a writer whose
+     value is bound to a name ([let put = Array.set rows 0]) may be partially applied. *)
+  let named = Hash_set.create (module Int) in
+  let rec name_bound expr =
+    Hash_set.add named (position expr);
+    match expr.pexp_desc with Pexp_constraint (inner, _) -> name_bound inner | _ -> ()
+  in
   let binder =
     object
       inherit Ast_traverse.iter as super
 
       method! value_binding binding =
         bind binding.pvb_expr;
+        if Option.is_some (Read.pattern_name binding.pvb_pat) then name_bound binding.pvb_expr;
         super#value_binding binding
 
       (* A structure's [let ... and ...] evaluates its right-hand sides in an unspecified order, as
@@ -2052,11 +2062,12 @@ let gate_census content =
                                 not (phys_equal other container))
                             @ labeled "src" @ labeled "f" @ data
                           with
-                          | [] ->
-                              (* A writer handed its container alone is partially applied ([let push
-                                 = Queue.enqueue queue]): what it writes arrives at a call this
-                                 reader does not follow, so a claim reaching the container is
-                                 refused. *)
+                          | written when List.is_empty written || Hash_set.mem named (position expr)
+                            ->
+                              (* A writer handed its container alone ([Queue.enqueue queue]), or
+                                 whose value is bound to a name ([let put = Array.set rows 0]), may
+                                 be partially applied: what it writes arrives at a call this reader
+                                 does not follow, so a claim reaching the container is refused. *)
                               Hashtbl.add_multi unlisted_writes ~key:identity
                                 ~data:
                                   ( ( String.concat ~sep:"."

@@ -611,6 +611,7 @@ refuses a gate read off the key removed from the hash table the population reads
 refuses a gate read off the value a mutable field of a matched record is set to: true
 accepts a gate read off a value written into another field of the matched record: true
 names a writer partially applied to the container the population reads: true
+names a writer bound to a name after some of its arguments: true
 follows a quantifier of a gated boolean through a value alias: true
 refuses a gate read off a value pushed through a writer's value alias: true
 follows a Verdict alias a local module exports through an open of it: true
