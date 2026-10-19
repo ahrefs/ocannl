@@ -333,7 +333,7 @@ let () =
             sk_depth = 1;
             sk_batch_grid = false;
             sk_batch_inner = false;
-            sk_coalesce = false;
+            sk_coalesce = None;
             sk_pack_prec = None;
             sk_tile = None;
           }

@@ -19,7 +19,12 @@
    sequence (the shape of a split's first pass) instead of raising. - The untuned CUDA plan splits
    the batch-8 bias gradient at a threshold its 1024-row chain meets, into 32 blocks (not 512: the
    block count stays within the square root of the chain), and the seeded routine keeps the exact
-   sums; off CUDA it splits nothing. *)
+   sums; off CUDA it splits nothing. - The contraction composition (gh-ocannl-1279): the
+   contraction-coalesced sketches' prefix coalesces exactly the [(h, e)] pair the split site
+   records; on the code that prefix prepares, the merged k is a single uncoalesced site whose
+   prelude, behind the prefix, gives the same exact sums; the split and the serial-K tiles label
+   apart; and the production out projection, far above [sr_out_max], is no site, though the split of
+   its merged k is a legal op and the contraction branch tiles that k 256 deep. *)
 
 open Base
 open Ocannl
@@ -81,12 +86,12 @@ let run_default comp tn =
   Context.sync ctx;
   Context.get_values ctx tn
 
-let run_split comp tn ~sites =
+let run_split ?(prefix = []) comp tn ~sites =
   let applied = ref false in
   let ctx, routine =
     Context.compile
       ~lowered_transform:(fun opt ->
-        let opt = Sched.apply (Autotune.split_reduce_prelude sites) opt in
+        let opt = Sched.apply (prefix @ Autotune.split_reduce_prelude sites) opt in
         applied := reads_partials opt.LL.llc;
         let _, tuples = Sched.fission_segmented ~preset ~zero_sched ~static_indices:[] opt in
         List.map tuples ~f:(fun (_, _, _, post) -> post))
@@ -148,9 +153,9 @@ let bias_grad ~label ~table =
   in
   (named label (Train.grad_update loss), g, exact)
 
-let parity ~what ~comp ~tn ~exact ~site =
+let parity ?prefix ~what ~comp ~tn ~exact ~site () =
   let default = run_default comp tn in
-  let split, applied = run_split comp tn ~sites:[ (site, 32) ] in
+  let split, applied = run_split ?prefix comp tn ~sites:[ (site, 32) ] in
   p (what ^ ": the split prelude applied (the compiled code reads its partials)") applied;
   p_exists (what ^ ": the exact result is not trivially zero") (Array.to_list exact) ~f:(fun v ->
       Float.(abs v >= 1.));
@@ -181,7 +186,7 @@ let () =
         (List.exists
            (Autotune.seeded_split_sites ~backend:"cuda" ~min_serial:1 ~static_indices:[] opt)
            ~f:(fun (s, b) -> Ir.Tnode.equal s.Autotune.sr_target g && b = 32));
-      parity ~what:"coalesced (b, s)" ~comp ~tn:g ~exact ~site;
+      parity ~what:"coalesced (b, s)" ~comp ~tn:g ~exact ~site ();
       (* The prelude the search stores and a later process replays. *)
       let canon = SC.canonicalize opt in
       let prelude = Autotune.split_reduce_prelude [ (site, 32) ] in
@@ -210,7 +215,7 @@ let () =
       p "the table's reads decline the coalescing, so its site is the interchanged pair"
         (Option.is_none site.sr_coalesce && site.sr_red = ns
         && Option.equal Int.equal (extent opt site.sr_axis) (Some ns));
-      parity ~what:"interchanged (b, s)" ~comp ~tn:g ~exact ~site
+      parity ~what:"interchanged (b, s)" ~comp ~tn:g ~exact ~site ()
 
 (* --- A small-output contraction over two axes: [d[b,s,j] += w[j,h,e] * a[b,s,h,e]]. --- *)
 
@@ -256,7 +261,86 @@ let () =
         (Autotune.split_reduce_sites opt) ~f:(fun s ->
           List.exists split ~f:(fun (s', _) ->
               Ir.Tnode.equal s'.Autotune.sr_target s.Autotune.sr_target));
-      parity ~what:"coalesced (h, e)" ~comp ~tn:d.Tensor.value ~exact ~site
+      parity ~what:"coalesced (h, e)" ~comp ~tn:d.Tensor.value ~exact ~site ();
+      (* gh-ocannl-1279: the split and the contraction-coalesced sketches prepare one pair. The
+         contraction layout's prefix coalesces exactly the pair this site records; and on the code
+         that prefix prepares, the merged k is an ordinary loop of the lowering, found as a single
+         uncoalesced site whose prelude, behind the prefix, computes the same exact sums. *)
+      let prefix = Autotune.coalesce_prefix ~layout:Coalesce_contraction opt in
+      p "the contraction layout's prefix coalesces the pair the split site records"
+        (match (prefix, site.sr_coalesce) with
+        | Some [ Sched.Coalesce { outer; inner; _ } ], Some (o, i) ->
+            Ir.Indexing.equal_symbol outer o && Ir.Indexing.equal_symbol inner i
+        | _ -> false);
+      (match prefix with
+      | Some ([ Sched.Coalesce { merged; _ } ] as prefix) -> (
+          let prepared = Sched.apply prefix opt in
+          match site_of (Autotune.split_reduce_sites prepared) d.Tensor.value with
+          | None -> p "on the prepared contraction the merged k is a single split site" false
+          | Some on_prepared ->
+              p "on the prepared contraction the merged k is a single split site"
+                (Option.is_none on_prepared.sr_coalesce
+                && Ir.Indexing.equal_symbol on_prepared.sr_axis merged
+                && on_prepared.sr_red = ch * ce);
+              parity ~prefix ~what:"prepared (h, e)" ~comp ~tn:d.Tensor.value ~exact
+                ~site:on_prepared ())
+      | _ -> p "on the prepared contraction the merged k is a single split site" false);
+      (* The two candidate kinds a search may try for this site print apart in its diagnostics: the
+         serial-K tiles of the contraction branch, and the split. *)
+      let tiles =
+        Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false
+          ~limits:Ir.Backend_intf.no_hardware_limits opt
+        |> List.filter ~f:(fun q ->
+            Poly.equal q.Autotune.sk_coalesce (Some Autotune.Coalesce_contraction))
+      in
+      let split_label = Autotune.split_sites_label [ (site, 32) ] in
+      p "the split candidate's label names the split and its coalesced pair"
+        (String.is_prefix split_label ~prefix:"F_split["
+        && String.is_substring split_label ~substring:" coalesce:");
+      p_all "every contraction-coalesced tile's label names its layout, never a split" tiles
+        ~f:(fun q ->
+          let l = Autotune.sketch_params_label q in
+          String.is_substring l ~substring:" coal-k"
+          && not (String.is_substring l ~substring:"split"))
+
+(* --- The production out projection: [b = 8, s = 128, j = 256, h = 8, e = 32]. --- *)
+
+(* Its 262144 output cells are far above [sr_out_max], so it is no split-reduce site: the split
+   stays seeded only where output parallelism is scarce (gh-ocannl-1279 leaves the threshold
+   unchanged). The split of its merged k is nevertheless a legal op, and the contraction branch
+   tiles that k 256 deep. Structure only: nothing here is compiled for timing or executed. *)
+let () =
+  let pb = 8 and ps = 128 and pj = 256 and ph = 8 and pe = 32 in
+  let w =
+    NTDSL.ndarray
+      (dyadic ~n:(pj * ph * pe) ~stride:3)
+      ~label:[ "srq_w_o" ] ~output_dims:[ pj; ph; pe ] ()
+  in
+  let a =
+    NTDSL.ndarray
+      (dyadic ~n:(pb * ps * ph * pe) ~stride:11)
+      ~label:[ "srq_attn" ] ~output_dims:[ pb; ps; ph; pe ] ()
+  in
+  let%op d = w +* "jhe;bshe=>bsj" a in
+  Train.set_materialized d.Tensor.value;
+  let opt = capture (named "srq_he" (Train.forward d)) in
+  let sites = Autotune.split_reduce_sites opt in
+  p "the production out projection is no split-reduce site (output above sr_out_max)"
+    (Option.is_none (site_of sites d.Tensor.value));
+  match Autotune.coalesce_prefix ~layout:Coalesce_contraction opt with
+  | Some ([ Sched.Coalesce { merged; _ } ] as prefix) ->
+      let prepared = Sched.apply prefix opt in
+      let op, _, _, _ = Sched.split_reduce ~axis:merged ~target:d.Tensor.value ~num_blocks:8 in
+      p "the split of the production out projection's merged k is Op_legal"
+        (Sched.equal_op_verdict (Sched.op_legality prepared op) Sched.Op_legal);
+      p_exists "the contraction branch tiles the production out projection's k 256 deep"
+        (Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false
+           ~limits:Ir.Backend_intf.no_hardware_limits opt) ~f:(fun q ->
+          Poly.equal q.Autotune.sk_coalesce (Some Autotune.Coalesce_contraction)
+          && q.Autotune.sk_bk = ph * pe)
+  | _ ->
+      p "the split of the production out projection's merged k is Op_legal" false;
+      p "the contraction branch tiles the production out projection's k 256 deep" false
 
 (* --- A reduction one loop already splits keeps that split. --- *)
 

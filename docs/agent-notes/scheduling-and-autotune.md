@@ -1224,11 +1224,10 @@ files.
   a matmul — `ic` as `k`, the `oy + ky` window axis as `i` — and since `sketch_seed_params` tries
   the matmul family FIRST, the conv family silently stops being seeded; `schedule_conv_gemm` is the
   test that catches it (11 claims), so run it whenever the matmul classifier is relaxed.
-  Two things the generalization does NOT do: it does not coalesce the nest into one loop
-  (`Sched.Coalesce` could: every mention of the out projection's `(h, e)` contraction pair is an
-  adjacent plain pair, but no family seeds it), so a tile's k-extent is judged against the
-  innermost contraction extent alone and `bk` values above it are refuted by the ordinary
-  divisibility gates; and the whole-`m_k` forms (the unstaged `bk = 0` tensorize, the CPU
+  Two things the generalization does NOT do: the family does not coalesce the nest into one loop,
+  so within it a tile's k-extent is judged against the innermost contraction extent alone (the
+  coalesced branch's contraction layout merges the pair instead, gh-ocannl-1279, below); and the
+  whole-`m_k` forms (the unstaged `bk = 0` tensorize, the CPU
   whole-triple) keep the outer contraction loops above the block statement. Accumulator contraction
   then promotes one logical fragment around that whole loop chain, so this shape is
   **fragment-scoped for capability purposes**: a wide-f16 backend that advertises only
@@ -1300,6 +1299,36 @@ files.
   prefix a schedule carries keeps its own. `test/operations/schedule_coalesce`; the scalar
   pipeline's flattened operands are why `Stage`/`Privatize` read `Affine.axis_extents`
   (lowering-and-analysis.md).
+- **The branch has two layouts, named by `sk_coalesce : coalesce_layout option`** (gh-ocannl-1279):
+  `Coalesce_columns` above (label `coal-n`), and `Coalesce_contraction` (label `coal-k`) for the
+  attention out projection `d[b,s,j] += w[j,h,e] * x[b,s,h,e]`, whose contraction nest
+  (`m_ko = [h]`, `m_k = e`) capped the k-tile at one head. Its prefix is `Coalesce (last m_ko, m_k)`
+  alone, prepared by `coalesce_reduction_pair` (moved into `Sketch_families`, the one preparation
+  gh-ocannl-1414's split-reduce pair sites use too); output coordinates are untouched, so the zeroing is not
+  coalesced and stays an ordinary companion. The prepared code is RE-DETECTED and the prefix kept
+  only when the new site is the expected one (the merged loop as `m_k` over `h*e`, the pair gone from
+  `m_ko`, output roles unchanged): a weight stored `w[h, j, e]`, a per-head-only operand or a padded
+  inner axis declines at the op. The contraction layout enumerates its own bounded K menu
+  (`blocktile_geometries`): depths 256/128/64/32 over two 64-thread shapes (16x16 of 2x2, 32x32 of
+  4x4), never the family's 8/16 (those are the uncoalesced site's own tiles); a depth whose half
+  already covers K is refuted (`k_menu_gate`: only pads). Mind the memory floor: 16x16x256 f32 is
+  exactly Metal's 32 KiB and is admitted (executed bitwise there); 32x32x256 is 64 KiB and refuted on
+  every current GPU, so a test executing seeds must enumerate them under the device's limits, not
+  no-limits. `Stage`, `Privatize` and `Split_reduce` needed no change for the
+  merged k (the flattened arm of gh-ocannl-1148/gh-ocannl-1147 already covered it); `schedule_coalesce`'s hand-built
+  contraction legs pin that before any seed relies on it. The k-split of the merged loop is not a sketch twin: it stays
+  gh-ocannl-1414's `F_split` candidate (`sr_coalesce = Some (h, e)`, label `coalesce:h*e`), seeded only
+  below `sr_out_max = 4096` output cells, so the production out projection (262144 cells) gets
+  serial-K tiles and no split, while its merged-k `Split_reduce` is still `Op_legal`. Both routes
+  are pinned in `split_reduce_pair`: the split site records exactly the pair the contraction prefix
+  coalesces, and on the prefix-prepared code the merged k is an ordinary uncoalesced site whose
+  prelude, behind the prefix, gives the same exact sums. Measured (`benchmarks/gh1279_cells.sh`, isolated out projection,
+  j = 256, (h, e) = (8, 32); best coal-k finalist against best uncoalesced one, fwd/rev legs):
+  HIP gfx1151 1.23x on both production sites with depth 32, the search crowning a coal-k seed;
+  CUDA RTX 5070 Ti 0.90x there, because the uncoalesced winner is a 64x64 block (256 threads)
+  the K menu does not offer, and the search crowns uncoalesced refinements; Metal neutral within
+  its desktop co-tenant noise. Depth 256 won only on CUDA's 16-row small-output site (1.43x), where
+  the search's crown was the split of the merged k (partials plus combine, 0.0096 ms) instead.
 ## Timing objectives and calibration
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
