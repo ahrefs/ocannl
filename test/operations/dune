@@ -9011,6 +9011,8 @@
 ; second domain's later turn is admitted.
 
 (test
+ ; cc-vector-width: independent -- its claims are which search is admitted or refused; completion
+ ; needs one timed candidate of a matmul, which every width's menu has.
  ; ocannl-backend: cc -- both searches run on an explicit Context.cpu (); the property is the search entry's, not a backend's.
  (name autotune_concurrent_refusal)
  (package neural_nets_lib)
