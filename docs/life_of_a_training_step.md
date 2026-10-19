@@ -735,7 +735,7 @@ line.
 | understand why a node materialized | `Tnode.debug_memory_mode`, provenance codes in [lowering_and_inlining.md](lowering_and_inlining.md) |
 | see the kernel source | `.c`/`.cu`/`.hip`/`.metal` artifacts (config `output_debug_files_in_build_directory=true`) |
 | see what a kernel computed at runtime | config `debug_log_from_routines=true` (see the debug-tracing skill / docs) |
-| trace scheduling decisions | `schedule_log_declines`, `schedule_log_launches`; `routine.mma` |
+| trace scheduling decisions | `schedule_log_declines`, `schedule_log_launches`, `autotune_log_seeding`; `routine.mma` |
 | understand compile failures by phase | `Schedule_outcome` classification (`Transform` / `Hardware_limits` / `Backend_codegen` / `Backend_compile` / `Backend_link`, plus `Launch` / `Sync` at run time) |
 
 And the one-sentence summary of the whole pipeline: **tensors carry `%cd` code; `Train`

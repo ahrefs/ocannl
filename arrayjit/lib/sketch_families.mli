@@ -369,6 +369,75 @@ val sketch_seed_params :
 (** The composed seed list: matmul tree leaves when a matmul is detected, otherwise convolution
     seeds followed by their eligible epilogue-fusion twins. Empty when neither site is detected. *)
 
+(** {2 The seeding census (gh-ocannl-1407)} *)
+
+type conv_leg = {
+  leg_seeds : sketch_params list;
+  leg_refusal : string option;
+      (** The failing gates, every one named, exactly when the leg proposes no seed. *)
+  leg_notes : string list;  (** Flavors a seeding leg withheld, each with its reason. *)
+}
+(** One leg (CPU or GPU) of the conv family's verdict on a site, decided by the gates the seeds come
+    from. *)
+
+type conv_judgment = {
+  cj_site : conv_site;
+  cj_real_stmts : int;
+      (** The lowering's real top-level statements besides the site's own covering zero
+          ([conv_real_stmts]) — the count the companion caps judge. *)
+  cj_cpu : conv_leg;
+  cj_gpu : conv_leg;
+}
+
+type family_seeding =
+  | Seeding_matmul of {
+      site : matmul_site;
+      tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
+    }  (** The matmul family claimed the lowering; its refusals are the tree's refutations. *)
+  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool }
+      (** No matmul site, a conv site: both legs' verdicts, and whether its seeds got
+          epilogue-fusion twins. *)
+  | Seeding_none  (** Neither family detects a site. *)
+
+val family_seeding :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  family_seeding * sketch_params list
+(** {!sketch_seed_params} with the judgment its seeds came from: the seed list is the second
+    component. *)
+
+type seeding_census = {
+  sc_stmts : int;  (** Top-level statements, glue excluded. *)
+  sc_whole_zeros : int;  (** Of those, whole-node [Zero_out]s. *)
+  sc_conv_nests : (Ir.Tnode.t * bool) list;
+      (** Every top-level statement {!detect_conv} recognizes, with whether its output is zeroed
+          whole-node in this lowering — listed whatever family claims the lowering. *)
+  sc_family : family_seeding;
+  sc_seeds : sketch_params list;  (** Exactly {!sketch_seed_params}' list. *)
+}
+(** What seeding makes of one lowering, refusals included: the evidence a decline report cannot
+    hold, since a refused seed never becomes a candidate. *)
+
+val seeding_census :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  seeding_census
+(** Hermetic: the symbols any probe mints are rewound. *)
+
+val seeding_census_prefix : string
+(** ["autotune-seeding:"], the prefix every census line carries. *)
+
+val seeding_census_lines : where:string -> seeding_census -> string list
+(** The census rendered for stderr: a head line
+    [where="…" stmts=N whole_zeros=N family=matmul|conv|none [site=…] seeds=N [refuted=N
+     excluded=N]], then indented detail lines — the matmul tree's refutations grouped by witness
+    with the first refuted path, or the conv site and each leg's seed count or refusal and withheld
+    flavors — and the lowering's conv nests. *)
+
 val coalesce_reduction_pair :
   ?static_indices:Ir.Indexing.static_symbol list ->
   Ir.Low_level.optimized ->

@@ -2792,8 +2792,30 @@ let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
    intrinsic-tile divisibility of the micro-kernel extents (like the mma matmul seeds) and the
    shared-tile footprint against the workgroup-memory limit. Strided rows (stride-2 stems and
    downsample blocks) are seeded on both legs since the compacting [Stage] (gh-ocannl-502). *)
-let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : (sketch_params list * Ir.Tnode.t) option =
+(* gh-ocannl-1407: each leg's verdict is kept beside its seeds, so the seeding census
+   ({!seeding_census}) names the gate that refused from the gate itself rather than from a
+   restatement of it. [leg_refusal] is set exactly when the leg proposes no seed; [leg_notes] name
+   flavors a seeding leg withheld. *)
+type conv_leg = {
+  leg_seeds : sketch_params list;
+  leg_refusal : string option;
+  leg_notes : string list;
+}
+
+type conv_judgment = {
+  cj_site : conv_site;
+  cj_real_stmts : int;
+  cj_cpu : conv_leg;
+  cj_gpu : conv_leg;
+}
+
+let conv_leg_refused why = { leg_seeds = []; leg_refusal = Some why; leg_notes = [] }
+
+let conv_offset_witness =
+  "a conv axis carries a nonzero padding offset, at which the packing anchor would mispack"
+
+let conv_seed_judgment ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : conv_judgment option =
   match detect_conv opt.LL.llc with
   | None -> None
   | Some site ->
@@ -2816,6 +2838,7 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
          the GPU pipeline packs through the same [Stage] decomposition. *)
       let offset_free = List.for_all site.c_axes ~f:(fun cx -> cx.cx_offset = 0) in
       let real_stmts = conv_real_stmts site opt in
+      let n_real = List.length real_stmts in
       let base =
         {
           sk_gpu = false;
@@ -2840,8 +2863,8 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
           sk_tile = None;
         }
       in
-      let cpu_seeds =
-        if not is_cpu then []
+      let cpu =
+        if not is_cpu then conv_leg_refused "not a CPU target"
         else
           (* Compute-precision uniformity and vector-capability, resolved through the same
              [Numerics.cpu_compute_prec] the emission asks (gh-ocannl-575) — see the matmul family's
@@ -2872,74 +2895,133 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
               ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes cprec))
               ~extent:site.c_noc
           in
-          if
-            not
-              (limits.Ir.Backend_intf.simd_vector_bytes >= 8
-              && Option.is_some lanes && uniform_vec_capable && site.c_fma && offset_free)
-          then []
-          else
-            (* Grid flavors need every materialized write in the routine covered by the Grid axis
-               ([validate_parallel]), and the conv pipeline's own [Retype] only annotates the conv
-               nest: seed them when the conv statement is alone — or has exactly one companion
-               statement, the would-be epilogue tail, whose fused twin ([sk_grid] with
-               [sk_epilogue]) relocates the tail write under the Grid loop (the unfused [sk_grid]
-               candidate then fails validation and is skipped; the twin carries the Grid flavor —
-               multi-window convs included, since the whole-window contraction, gh-ocannl-501, lands
-               the store-back after the full kernel window). Segments with more companions (an
-               aligned-merged segment, e.g. lenet's conv+bias/relu+pooling) are seeded when the
-               default preset's aligned cross-nest analysis Grid-annotates the whole segment
-               ([conv_aligned_grid]) — the pipeline then adopts that whole-segment geometry. The
-               fused twin of an aligned-grid seed omits the preset [Retype] on the tail nest the
-               fusion consumes (fuse-before-annotate, gh-ocannl-501; see [conv_tail_loop_syms]), so
-               the twin compiles on merged segments too. *)
-            let base =
+          (* The seeding precondition, every failing conjunct named. *)
+          let failing =
+            List.filter_map
+              [
+                ( limits.Ir.Backend_intf.simd_vector_bytes >= 8,
+                  lazy
+                    (Printf.sprintf "the %d-byte vector file is under 8 bytes"
+                       limits.Ir.Backend_intf.simd_vector_bytes) );
+                ( Option.is_some lanes,
+                  lazy
+                    (Printf.sprintf "no SIMD lane count fits the out-channel extent %d at %s"
+                       site.c_noc (Ir.Ops.prec_string cprec)) );
+                ( uniform_vec_capable,
+                  lazy
+                    "the operands' and the accumulator's compute precisions are not one \
+                     vector-capable precision" );
+                (site.c_fma, lazy "the accumulation is not a fused multiply-add");
+                (offset_free, lazy conv_offset_witness);
+              ]
+              ~f:(fun (holds, why) -> if holds then None else Some (Lazy.force why))
+          in
+          match failing with
+          | _ :: _ -> conv_leg_refused (String.concat ~sep:"; " failing)
+          | [] ->
+              (* Grid flavors need every materialized write in the routine covered by the Grid axis
+                 ([validate_parallel]), and the conv pipeline's own [Retype] only annotates the conv
+                 nest: seed them when the conv statement is alone — or has exactly one companion
+                 statement, the would-be epilogue tail, whose fused twin ([sk_grid] with
+                 [sk_epilogue]) relocates the tail write under the Grid loop (the unfused [sk_grid]
+                 candidate then fails validation and is skipped; the twin carries the Grid flavor —
+                 multi-window convs included, since the whole-window contraction, gh-ocannl-501,
+                 lands the store-back after the full kernel window). Segments with more companions
+                 (an aligned-merged segment, e.g. lenet's conv+bias/relu+pooling) are seeded when
+                 the default preset's aligned cross-nest analysis Grid-annotates the whole segment
+                 ([conv_aligned_grid]) — the pipeline then adopts that whole-segment geometry. The
+                 fused twin of an aligned-grid seed omits the preset [Retype] on the tail nest the
+                 fusion consumes (fuse-before-annotate, gh-ocannl-501; see [conv_tail_loop_syms]),
+                 so the twin compiles on merged segments too. *)
+              let base =
+                {
+                  base with
+                  sk_pack_prec =
+                    (if
+                       Ir.Ops.equal_prec cprec (Lazy.force site.c_a.Ir.Tnode.storage_prec)
+                       && Ir.Ops.equal_prec cprec (Lazy.force site.c_b.Ir.Tnode.storage_prec)
+                     then None
+                     else Some cprec);
+                }
+              in
+              let outer_ok = match site.c_outer with (_, n) :: _ -> n >= 2 | [] -> false in
+              let grid_ok =
+                outer_ok && (n_real <= 2 || Option.is_some (conv_aligned_grid site opt))
+              in
+              (* Cache-blocked row-panel flavors (gh-ocannl-500): split the GEMM row into panels of
+                 [sk_bm] rows ([cpu_conv_sketch_schedule]'s [sk_bm] leg). Dividing blocks only — the
+                 split must stay guard-free so the reorder's [Swap]s are well-formed — and at least
+                 two panels. Proposed on any unzeroed segment: a conv-alone segment
+                 [Grid]-parallelizes the panel loop, an aligned-merged segment adopts the
+                 whole-segment [Grid] geometry ([conv_aligned_grid]) and blocks the row serially for
+                 cache residency. The whole-routine zeroed graph keeps the serial/aligned flavors
+                 above (its [Zero_out] is in the routine, so the aligned analysis bails and the
+                 block flavor is not seeded). *)
+              let block_ok =
+                (not site.c_zeroed) && (n_real <= 1 || Option.is_some (conv_aligned_grid site opt))
+              in
+              let row_blocks =
+                if not block_ok then []
+                else
+                  (* Non-dividing blocks pad the row (gh-ocannl-485, the builder emits the [Pad]);
+                     require at least two (possibly padded) panels. *)
+                  List.filter_map [ 8; 16; 32 ] ~f:(fun bm ->
+                      if blocks_of site.c_nrow bm >= 2 then Some { base with sk_bm = bm } else None)
+              in
+              (* The withheld flavors' reasons, read off the gates' own conjuncts: a failing
+                 conjunct after a passing count test is the aligned-grid analysis. *)
+              let no_alignment =
+                Printf.sprintf
+                  "%d real statements and the default preset's aligned analysis gives no \
+                   whole-segment Grid"
+                  n_real
+              in
+              let notes =
+                (if grid_ok then []
+                 else if not outer_ok then
+                   [ "Grid flavor withheld: no outer output loop of extent at least 2" ]
+                 else [ "Grid flavor withheld: " ^ no_alignment ])
+                @
+                if site.c_zeroed then
+                  [
+                    "row-block flavors withheld: the conv output's whole-node Zero_out is in this \
+                     lowering (c_zeroed)";
+                  ]
+                else if not block_ok then [ "row-block flavors withheld: " ^ no_alignment ]
+                else if List.is_empty row_blocks then
+                  [ "row-block flavors withheld: no panel of 8, 16 or 32 rows gives two panels" ]
+                else []
+              in
               {
-                base with
-                sk_pack_prec =
-                  (if
-                     Ir.Ops.equal_prec cprec (Lazy.force site.c_a.Ir.Tnode.storage_prec)
-                     && Ir.Ops.equal_prec cprec (Lazy.force site.c_b.Ir.Tnode.storage_prec)
-                   then None
-                   else Some cprec);
+                leg_seeds =
+                  (base :: (if grid_ok then [ { base with sk_grid = true } ] else [])) @ row_blocks;
+                leg_refusal = None;
+                leg_notes = notes;
               }
-            in
-            let grid_ok =
-              (match site.c_outer with (_, n) :: _ -> n >= 2 | [] -> false)
-              && (List.length real_stmts <= 2 || Option.is_some (conv_aligned_grid site opt))
-            in
-            (* Cache-blocked row-panel flavors (gh-ocannl-500): split the GEMM row into panels of
-               [sk_bm] rows ([cpu_conv_sketch_schedule]'s [sk_bm] leg). Dividing blocks only — the
-               split must stay guard-free so the reorder's [Swap]s are well-formed — and at least
-               two panels. Proposed on any unzeroed segment: a conv-alone segment
-               [Grid]-parallelizes the panel loop, an aligned-merged segment adopts the
-               whole-segment [Grid] geometry ([conv_aligned_grid]) and blocks the row serially for
-               cache residency. The whole-routine zeroed graph keeps the serial/aligned flavors
-               above (its [Zero_out] is in the routine, so the aligned analysis bails and the block
-               flavor is not seeded). *)
-            let block_ok =
-              (not site.c_zeroed)
-              && (List.length real_stmts <= 1 || Option.is_some (conv_aligned_grid site opt))
-            in
-            let row_blocks =
-              if not block_ok then []
-              else
-                (* Non-dividing blocks pad the row (gh-ocannl-485, the builder emits the [Pad]);
-                   require at least two (possibly padded) panels. *)
-                List.filter_map [ 8; 16; 32 ] ~f:(fun bm ->
-                    if blocks_of site.c_nrow bm >= 2 then Some { base with sk_bm = bm } else None)
-            in
-            (base :: (if grid_ok then [ { base with sk_grid = true } ] else [])) @ row_blocks
       in
-      let gpu_seeds =
+      let gpu =
         match (is_gpu, limits.Ir.Backend_intf.mma) with
+        | false, _ -> conv_leg_refused "not a GPU target"
+        | true, None -> conv_leg_refused "the backend advertises no mma capability"
         | true, Some ({ Ir.Backend_intf.mma_simd_width = w; _ } as mma) -> (
-            match
-              mma_tile_for_precisions_in_scope mma ~scope:(conv_mma_scope site)
-                ~a_prec:(Lazy.force site.c_a.Ir.Tnode.storage_prec)
-                ~b_prec:(Lazy.force site.c_b.Ir.Tnode.storage_prec)
-                ~d_prec:(Lazy.force site.c_d.Ir.Tnode.storage_prec)
-            with
-            | None -> []
+            let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
+            and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec
+            and d_prec = Lazy.force site.c_d.Ir.Tnode.storage_prec in
+            let scope = conv_mma_scope site in
+            match mma_tile_for_precisions_in_scope mma ~scope ~a_prec ~b_prec ~d_prec with
+            | None ->
+                conv_leg_refused
+                  (match wide_acc_withholding mma ~scope ~d_prec with
+                  | Some policy ->
+                      policy
+                      ^ " accumulator in the conv's emission scope, which the backend does not \
+                         advertise"
+                  | None ->
+                      Printf.sprintf
+                        "the backend advertises no mma tile for operands (%s, %s) with accumulator \
+                         %s"
+                        (Ir.Ops.prec_string a_prec) (Ir.Ops.prec_string b_prec)
+                        (Ir.Ops.prec_string d_prec))
             | Some (tm_t, tn_t, tk_t) ->
                 (* Whole-node [Zero_out] sites are gated off. Eligible GPU fission zeros are
                    per-cell companions; [conv_real_stmts] excludes the site's covering zero,
@@ -2972,8 +3054,26 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
                   | Some cap -> copies * shared_bytes rows <= cap
                   | None -> true
                 in
-                let base_ok = offset_free && (not site.c_zeroed) && List.length real_stmts <= 2 in
-                if not base_ok then []
+                (* Every failing conjunct named, for the census: on a whole-routine lowering the
+                   zeroed output and the companion count usually fail together. *)
+                let failing =
+                  List.filter_map
+                    [
+                      (offset_free, lazy conv_offset_witness);
+                      ( not site.c_zeroed,
+                        lazy "the conv output's whole-node Zero_out is in this lowering (c_zeroed)"
+                      );
+                      ( n_real <= 2,
+                        lazy
+                          (Printf.sprintf
+                             "companion cap: %d real statements besides the site's own zero, at \
+                              most 2 seed"
+                             n_real) );
+                    ]
+                    ~f:(fun (holds, why) -> if holds then None else Some (Lazy.force why))
+                in
+                if not (List.is_empty failing) then
+                  conv_leg_refused (String.concat ~sep:"; " failing)
                 else
                   let rows_p = blocks_of site.c_nrow tm_t * tm_t in
                   let whole =
@@ -3034,26 +3134,55 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
                               if shared_fits ~copies:d rows then Some { p0 with sk_depth = d }
                               else None))
                   in
-                  whole @ blocked @ depth_twins)
-        | _ -> []
+                  let flavors = whole @ blocked @ depth_twins in
+                  (* Refuse launch geometries the device gate would reject before paying for a
+                     candidate compile (gh-ocannl-739). The shared predicate is the one authority
+                     for the caps; this family contributes only its lower-bound prediction. *)
+                  let excess p =
+                    Sched.launch_geometry_excess ~limits:(seeding_limits limits)
+                      (conv_launch_geometry site p)
+                  in
+                  let fitting, exceeding =
+                    List.partition_tf flavors ~f:(fun p -> Option.is_none (excess p))
+                  in
+                  let launch_witness =
+                    lazy
+                      (match List.find_map exceeding ~f:excess with
+                      | Some e -> e.Sched.lx_phrase
+                      | None -> "")
+                  in
+                  if List.is_empty flavors then
+                    conv_leg_refused
+                      (Printf.sprintf
+                         "workgroup memory: no flavor's staged tiles fit the %d-byte cap"
+                         (Option.value ~default:0 limits.Ir.Backend_intf.max_workgroup_memory_bytes))
+                  else if List.is_empty fitting then
+                    conv_leg_refused
+                      (Printf.sprintf "launch caps: all %d flavors refused, the first %s"
+                         (List.length exceeding) (Lazy.force launch_witness))
+                  else
+                    {
+                      leg_seeds = fitting;
+                      leg_refusal = None;
+                      leg_notes =
+                        (if List.is_empty exceeding then []
+                         else
+                           [
+                             Printf.sprintf "%d of %d flavors refused by launch caps, the first %s"
+                               (List.length exceeding) (List.length flavors)
+                               (Lazy.force launch_witness);
+                           ]);
+                    })
       in
-      (* Refuse launch geometries the device gate would reject before paying for a candidate compile
-         (gh-ocannl-739). The shared predicate is the one authority for the caps; this family
-         contributes only its lower-bound prediction. *)
-      let gpu_seeds =
-        List.filter gpu_seeds ~f:(fun p ->
-            Option.is_none
-              (Sched.launch_geometry_excess ~limits:(seeding_limits limits)
-                 (conv_launch_geometry site p)))
-      in
-      let seeds = cpu_seeds @ gpu_seeds in
-      if List.is_empty seeds then None
-      else
-        (* Fused-epilogue twins are proposed for every conv seed (gh-ocannl-501):
-           [contract_tensorized_accumulator] contracts across the whole kernel-window chain, so the
-           fragment store-back lands after the full window unconditionally and [Fuse_epilogue]'s
-           exactly-once check passes by construction — multi-window (2-D) convs included. *)
-        Some (seeds, site.c_d)
+      Some { cj_site = site; cj_real_stmts = n_real; cj_cpu = cpu; cj_gpu = gpu }
+
+(* The conv family's seeds, CPU leg first (gh-ocannl-493): [None] when no site is detected or
+   neither leg seeds. Fused-epilogue twins are proposed for every conv seed (gh-ocannl-501), by
+   {!sketch_seed_params}: [contract_tensorized_accumulator] contracts across the whole kernel-window
+   chain, so the fragment store-back lands after the full window unconditionally and
+   [Fuse_epilogue]'s exactly-once check passes by construction — multi-window (2-D) convs
+   included. *)
+let conv_judgment_seeds (j : conv_judgment) = j.cj_cpu.leg_seeds @ j.cj_gpu.leg_seeds
 
 (** {2 The matmul family tree's decisions}
 
@@ -4285,10 +4414,18 @@ let matmul_seed_params ?coalesced ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.har
 
 (** {2 The composed seed list} *)
 
+(* What one lowering's family seeding found (gh-ocannl-1407): the family that claimed it, with the
+   verdicts its seeds came from. *)
+type family_seeding =
+  | Seeding_matmul of { site : matmul_site; tree : family_tree }
+  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool }
+  | Seeding_none
+
 (* The families composed into the seed list the search enumerates: the matmul family when a matmul
-   site is detected, else the convolution family, each with its epilogue-fusion twins. *)
-let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : sketch_params list =
+   site is detected, else the convolution family, each with its epilogue-fusion twins. Returned
+   beside the seeds, so the seeding census reports the judgment the seeds came from. *)
+let family_seeding ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized)
+    : family_seeding * sketch_params list =
   (* Fused-epilogue variants (gh-ocannl-486): when the site's output feeds an eligible elementwise
      tail, every seed gets a fused twin — the tuner measures fused (one kernel) vs. unfused (the
      fissioned two-kernel form). The check runs on the base code where the plain accumulation-nest
@@ -4297,14 +4434,122 @@ let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
      level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
      preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
   match detect_matmul_canonical opt with
-  | Some (site, _, opt) -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
+  | Some (site, _, opt) ->
+      let tree = matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site in
+      (Seeding_matmul { site; tree }, Sspace.leaves tree)
   | None -> (
-      match conv_seed_params ~is_gpu ~is_cpu ~limits opt with
-      | None -> []
-      | Some (seeds, d) ->
-          if (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:d opt then
-            seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
-          else seeds)
+      match conv_seed_judgment ~is_gpu ~is_cpu ~limits opt with
+      | None -> (Seeding_none, [])
+      | Some judgment ->
+          let seeds = conv_judgment_seeds judgment in
+          let fused_twins =
+            (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:judgment.cj_site.c_d opt
+          in
+          ( Seeding_conv { judgment; fused_twins },
+            if fused_twins then seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
+            else seeds ))
+
+let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : sketch_params list =
+  snd (family_seeding ~is_gpu ~is_cpu ~limits opt)
+
+(** {2 The seeding census (gh-ocannl-1407)}
+
+    Seeding refusals are decided before any candidate exists, so neither the decline report nor
+    [schedule_log_declines] (render and compile declines) can see them. The census reads them off
+    the judgment the seeds came from: per lowering, the statements and whole-node zeros it holds,
+    every top-level conv nest, the family that claimed it, and that family's refusing gates. *)
+
+type seeding_census = {
+  sc_stmts : int;
+  sc_whole_zeros : int;
+  sc_conv_nests : (Ir.Tnode.t * bool) list;
+  sc_family : family_seeding;
+  sc_seeds : sketch_params list;
+}
+
+let seeding_census ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized)
+    : seeding_census =
+  (* A dry run: the symbols any probe mints are rewound, so taking a census never shifts the names
+     later compiles mint. *)
+  Idx.discarding_symbols (fun () ->
+      let sc_family, sc_seeds = family_seeding ~is_gpu ~is_cpu ~limits opt in
+      let stmts = strip_stmts (LL.flat_lines [ opt.LL.llc ]) in
+      let zeroed = List.filter_map stmts ~f:(function LL.Zero_out tn -> Some tn | _ -> None) in
+      let sc_conv_nests =
+        List.filter_map stmts ~f:(fun stmt ->
+            Option.map (detect_conv stmt) ~f:(fun site ->
+                (site.c_d, List.exists zeroed ~f:(Ir.Tnode.equal site.c_d))))
+      in
+      {
+        sc_stmts = List.length stmts;
+        sc_whole_zeros = List.length zeroed;
+        sc_conv_nests;
+        sc_family;
+        sc_seeds;
+      })
+
+let seeding_census_prefix = "autotune-seeding:"
+
+let seeding_census_lines ~where (c : seeding_census) : string list =
+  let line fmt = Printf.ksprintf (fun s -> seeding_census_prefix ^ " " ^ s) fmt in
+  let detail fmt = Printf.ksprintf (fun s -> seeding_census_prefix ^ "   " ^ s) fmt in
+  let family, site, verdicts =
+    match c.sc_family with
+    | Seeding_none -> ("none", "", "")
+    | Seeding_matmul { site; tree } ->
+        ( "matmul",
+          " site=" ^ Ir.Tnode.debug_name site.m_d,
+          Printf.sprintf " refuted=%d excluded=%d"
+            (List.length (Sspace.refutations tree))
+            (List.length (Sspace.exclusions tree)) )
+    | Seeding_conv { judgment; _ } ->
+        ("conv", " site=" ^ Ir.Tnode.debug_name judgment.cj_site.c_d, "")
+  in
+  let head =
+    line "where=%S stmts=%d whole_zeros=%d family=%s%s seeds=%d%s" where c.sc_stmts c.sc_whole_zeros
+      family site (List.length c.sc_seeds) verdicts
+  in
+  let family_details =
+    match c.sc_family with
+    | Seeding_none -> []
+    | Seeding_matmul { tree; _ } ->
+        (* One line per distinct witness, in traversal order, with its multiplicity and the first
+           refuted commitment's path. *)
+        let counts = Hashtbl.create (module String) in
+        let firsts =
+          List.filter (Sspace.refutations tree) ~f:(fun (_, witness) ->
+              let seen = Hashtbl.mem counts witness in
+              Hashtbl.incr counts witness;
+              not seen)
+        in
+        List.map firsts ~f:(fun (path, witness) ->
+            detail "refuted x%d at %s: %s" (Hashtbl.find_exn counts witness)
+              (Sspace.render_path ~label:Family_decision.to_label path)
+              witness)
+    | Seeding_conv { judgment = j; fused_twins } ->
+        let leg name (l : conv_leg) =
+          (match l.leg_refusal with
+          | Some why -> detail "%s leg: refused: %s" name why
+          | None -> detail "%s leg: %d seeds" name (List.length l.leg_seeds))
+          :: List.map l.leg_notes ~f:(fun note -> detail "%s leg: %s" name note)
+        in
+        detail "conv site %s: zeroed=%b real_stmts=%d epilogue_twins=%b"
+          (Ir.Tnode.debug_name j.cj_site.c_d)
+          j.cj_site.c_zeroed j.cj_real_stmts fused_twins
+        :: (leg "cpu" j.cj_cpu @ leg "gpu" j.cj_gpu)
+  in
+  let nests =
+    match c.sc_conv_nests with
+    | [] -> []
+    | nests ->
+        [
+          detail "conv nests ([Z] = zeroed in this lowering): %s"
+            (String.concat ~sep:" "
+               (List.map nests ~f:(fun (tn, z) -> Ir.Tnode.debug_name tn ^ if z then "[Z]" else "")));
+        ]
+  in
+  (head :: family_details) @ nests
 
 (* The coalesced branch's seeds (gh-ocannl-1165, gh-ocannl-1279): per layout, the matmul family
    enumerated over the prepared coalesced code ([coalesced]), so every refutation — launch caps,

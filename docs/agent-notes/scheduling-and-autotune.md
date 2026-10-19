@@ -486,7 +486,8 @@ files.
   same launch count). So every other kernel is byte-identical to the default's, and a routine with
   no seed IS the default compile. **A site census is not a seed census**: `bench_gpt_diag
   BENCH_SITE_CENSUS=1` lists each segment's product accumulations, its site, and the search's
-  seed count, and its seeded-default line counts the sketches actually taken. gh-1413 was filed
+  seed count, and its seeded-default line counts the sketches actually taken; config
+  `autotune_log_seeding` names, per segment, why a seed was refused (gh-ocannl-1407). gh-1413 was filed
   from the site column alone ("only the first product site is seeded") while both pipelines already
   seeded every one of those products through the refinement; 17 of the step's 116 products are not
   matmuls even alone (row sums, the attention row max, loss terms). Two traps that cost measurable time on
@@ -1860,6 +1861,20 @@ files.
   turns either stream on for one call with `~log`/`~progress` on `Autotune.tune` or
   `Train.tune_placements` (domain-local, inherited by nested searches, restored on return) and
   reads it from captured stderr; `autotune_composite_playoff` claims both.
+- **Seeding refusals are invisible to the decline census; `autotune_log_seeding=true` shows them**
+  (gh-ocannl-1407). A refused seed never becomes a candidate, so neither the search report's
+  `declines` nor `schedule_log_declines` (render and compile declines) can hold it. The census
+  (`autotune-seeding:` lines on stderr, `Autotune.seeding_census` for a test) is printed for every
+  lowering `tune` and `model_default` seed — the whole routine and each coarse and fine fission
+  segment — and once per distinct segment of the CUDA/HIP seeded default. Each line names the
+  family that claimed the lowering, its site and seed count, then its refusals: the matmul tree's
+  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (`c_zeroed`,
+  the companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
+  lowering's conv nests whatever family claimed it. The conv gates record their own reasons
+  (`Sketch_families.conv_seed_judgment`), so the census cannot drift from the seeder. Use it
+  before citing a seeding gate as evidence: gh-503's trigger ("the decline census shows conv
+  seeds declining on `c_zeroed`") named a stream that could never show it, and its census run
+  found the binding gates were the matmul family claiming the routine first and the companion cap.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

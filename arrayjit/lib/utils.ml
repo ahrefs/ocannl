@@ -169,6 +169,7 @@ let known_config_keys =
       "autotune_round_expansion";
       "autotune_log";
       "autotune_progress";
+      "autotune_log_seeding";
       "tune_inline_flips";
       "tune_flip_ordering";
       "tune_flip_profit_margin";
@@ -470,6 +471,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_cache_dir";
         "autotune_log";
         "autotune_progress";
+        "autotune_log_seeding";
         "log_buffer_aliasing";
         "log_memory_budget";
         "schedule_log_launches";

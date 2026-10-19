@@ -362,7 +362,10 @@ the retained procedural analyses alongside the affine engine and raises on diver
   `C_syntax.mma_census` distinguishes "the tensorized candidate lost" from "it never ran
   tensorized", and its per-routine summary (`Context.routine.mma`, surfaced as
   `Autotune.report.best_tensorization` and in every reported timing) is what keeps a tensorized
-  label from standing over a scalar measurement; `schedule_log_launches` prints each compiled segment's launch geometry.
+  label from standing over a scalar measurement; `schedule_log_launches` prints each compiled segment's launch geometry;
+  `autotune_log_seeding` prints the seeding census — per lowering the tuner seeds, the family
+  that claimed it and every gate that refused its seeds, which no decline report can hold
+  because a refused seed never becomes a candidate.
 
 ## Design position
 
