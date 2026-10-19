@@ -1233,18 +1233,19 @@ files.
   struct compiles as a 2-byte-aligned access. `test/operations/gpu_packed_prec` pins both, the
   alignment as a relationship over every cast in the emitted source.
 - **A packed lane renders as `pp_scalar` renders the same node** (gh-ocannl-1295): `lane_expr`
-  mirrors it arm by arm. Every operator goes through the backend's syntax hooks, so lanes get
+  goes through `pp_scalar`'s own operator arms (`pp_scalar_op`), with pack lanes as the operands
+  that mention the loop. Every operator goes through the backend's syntax hooks, so lanes get
   Metal's widened half math. A constant integer exponent takes `integer_power_doc`, as the serial
   remainder does. Projections render their selected operand. No contraction happens here; an `FMA`
-  is one the lowering made under `fp_contract`. It declines two cases. Heterogeneous operators
-  (`Where`'s condition, the uniform-lane extraction) keep operands at their own precision. And an
-  operand evaluated only conditionally (a `Where` arm, a `Gated_second` gated operand) may not
-  mention the loop: the pack load happens before the lane loop and would make a guarded read
-  unconditional. Dropping the integer-power arm moved no value on M4 Max (Metal `pow` of a negative
-  base at exponent 3 matched `ocannl_powi_f32`), so `gpu_packed_prec` pins that arm by its text.
-  Packed vs `Serial`-twin parity is bitwise there because every leg's arithmetic is a single
-  operation per lane. A parity leg over `a * b + c` would need `fp_contract` on, because HIP's
-  `-ffast-math` contracts per kernel.
+  is one the lowering made under `fp_contract`. Two cases decline before reaching the shared arms.
+  Heterogeneous operators (`Where`'s condition, the uniform-lane extraction) keep operands at their
+  own precision. And an operand evaluated only conditionally (a `Where` arm, a `Gated_second` gated
+  operand) may not mention the loop: the pack load happens before the lane loop and would make a
+  guarded read unconditional. A lane renderer without the integer-power arm moved no value on M4
+  Max (Metal `pow` of a negative base at exponent 3 matched `ocannl_powi_f32`), so
+  `gpu_packed_prec` pins that arm by its text. Packed vs `Serial`-twin parity is bitwise there
+  because every leg's arithmetic is a single operation per lane. A parity leg over `a * b + c`
+  would need `fp_contract` on, because HIP's `-ffast-math` contracts per kernel.
 ## Assembly census and compiler differences
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG

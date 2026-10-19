@@ -2419,6 +2419,104 @@ module C_syntax (B : C_syntax_config) = struct
     let prefix, suffix = B.convert_precision ~from:pow_prec ~to_:prec in
     group (string prefix ^^ call ^^ string suffix)
 
+  (* The operator arms of [pp_scalar], shared with the packed path's per-lane renderer
+     ([try_vectorize]'s [lane_expr], gh-ocannl-1295) so that a packed lane cannot render an operator
+     differently from the serial loop around it: [operand p v] renders an operand [v] at precision
+     [p], returning its local definitions with its value expression. [pp_scalar] passes itself;
+     [lane_expr] passes a renderer of pack lanes, after declining the operators whose operands it
+     cannot render per lane. *)
+  let pp_scalar_op ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+      (int * PPrint.document) list * PPrint.document =
+    let open PPrint in
+    match vcomp with
+    | Ternop (Ops.FMA, _, _, _) when not (Ops.is_float prec) ->
+        (* gh-ocannl-873: hand-built low-level IR can bypass the simplifier's float-only FMA rewrite
+           guard. Reject it at the shared C-family scalar-emission seam before a backend's syntax
+           table can turn integer arithmetic into [fma]/[fmaf]. The explicit SIMD and MMA renderings
+           are already gated by [vector_prec_ok], and the packed lanes rendered through here by
+           [packed_prec_ok], both of which admit only float-capable compute precisions. *)
+        invalid_arg
+          (Printf.sprintf "C_syntax.pp_scalar: FMA requires floating-point precision, got %s"
+             (Ops.prec_string prec))
+    | Ternop (op, (v1, v1_prec), (v2, v2_prec), (v3, v3_prec)) ->
+        (* A heterogeneous argument keeps its own precision, which -- like every precision reaching
+           here from [Low_level] -- is a storage precision; the rendering takes [comp_prec] of
+           it. *)
+        let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
+        let v3_prec = comp_prec v3_prec in
+        let d1, e1, d2, e2, d3, e3 =
+          if Ops.is_homogeneous_prec_ternop op then
+            (* Homogeneous: all arguments use result precision *)
+            let d1, e1 = operand prec v1 in
+            let d2, e2 = operand prec v2 in
+            let d3, e3 = operand prec v3 in
+            (d1, e1, d2, e2, d3, e3)
+          else
+            (* Heterogeneous: arguments keep their natural precision *)
+            match op with
+            | Ops.Where ->
+                (* For Where: condition keeps its precision, then/else use result precision *)
+                (* Note: we evaluate condition without precision conversion, but then/else
+                   need to match the result precision for the final assignment *)
+                let d1, e1 = operand v1_prec v1 in
+                (* condition: no conversion *)
+                let d2, e2 = operand prec v2 in
+                (* then: result precision *)
+                let d3, e3 = operand prec v3 in
+                (* else: result precision *)
+                (d1, e1, d2, e2, d3, e3)
+            | _ ->
+                (* Other heterogeneous ternary ops would go here *)
+                let d1, e1 = operand v1_prec v1 in
+                let d2, e2 = operand v2_prec v2 in
+                let d3, e3 = operand v3_prec v3 in
+                (d1, e1, d2, e2, d3, e3)
+        in
+        let defs = List.concat [ d1; d2; d3 ] in
+        let expr = group (B.ternop_syntax prec op e1 e2 e3) in
+        (defs, expr)
+    | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
+      when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
+        let defs, base_doc = operand prec base in
+        (defs, integer_power_doc ~prec base_doc exponent)
+    | Binop (op, (v1, v1_prec), (v2, v2_prec)) -> (
+        match Ops.binop_conditionality op with
+        (* A projection emits its selected operand alone: the operator has no spelling of its own
+           (every backend's [binop_syntax] rejects one), and the discarded operand is not rendered
+           at all -- which is what lets [Low_level.affine_accesses] and [Cost_model] drop it. *)
+        | Ops.Only_first -> operand prec v1
+        | Ops.Only_second -> operand prec v2
+        | Ops.Both_operands | Ops.Gated_second ->
+            let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
+            let d1, e1, d2, e2 =
+              if Ops.is_homogeneous_prec_binop op then
+                (* Homogeneous: both arguments use result precision *)
+                let d1, e1 = operand prec v1 in
+                let d2, e2 = operand prec v2 in
+                (d1, e1, d2, e2)
+              else
+                (* Heterogeneous: arguments keep their natural precision *)
+                (* Currently all binops are homogeneous, but this is here for future extension *)
+                let d1, e1 = operand v1_prec v1 in
+                let d2, e2 = operand v2_prec v2 in
+                (d1, e1, d2, e2)
+            in
+            let defs = List.concat [ d1; d2 ] in
+            let expr = group (B.binop_syntax prec op e1 e2) in
+            (defs, expr))
+    | Unop (op, (v, v_prec)) ->
+        let arg_prec =
+          if Ops.is_homogeneous_prec_unop op then prec
+            (* Homogeneous: argument uses result precision *)
+          else comp_prec v_prec
+        in
+        let defs, expr_v = operand arg_prec v in
+        let expr = group (B.unop_syntax prec op expr_v) in
+        (defs, expr)
+    | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get _ | Get_dynamic _ | Constant _
+    | Constant_bits _ | Embed_index _ ->
+        invalid_arg "C_syntax.pp_scalar_op: not an operator node"
+
   (* The signature's coupling contract: an accumulator resides at least as wide as the arithmetic
      that feeds it. The failure mode this catches is an [include]-time stale pairing — a backend
      overriding [compute_prec] without restating [accum_prec] keeps the default bound to the
@@ -6310,13 +6408,14 @@ module C_syntax (B : C_syntax_config) = struct
               name
             in
             let lane_var = "ocannl_l__" in
-            (* One lane of the loop body, rendered as [pp_scalar] renders the same node at [prec],
-               arm by arm (gh-ocannl-1295): the same syntax hooks with the backend's widening
-               (Metal's half [pow] and [exp]), the same integer-power helper (a [powi] in the packed
-               main loop against a [pow] in the serial remainder would differ), projections showing
-               their selected operand alone, and no contraction the serial path does not make (an
-               [FMA] here is one the lowering synthesized under [fp_contract]). So packing cannot
-               change a value. Two departures, both declines: a heterogeneous operator (a [Where]'s
+            (* One lane of the loop body, rendered by [pp_scalar]'s own operator arms
+               ([pp_scalar_op], gh-ocannl-1295) with pack lanes as the operands that mention the
+               loop: the same syntax hooks with the backend's widening (Metal's half [pow] and
+               [exp]), the same integer-power helper (a [powi] in the packed main loop against a
+               [pow] in the serial remainder would differ), projections showing their selected
+               operand alone, and no contraction the serial path does not make (an [FMA] here is one
+               the lowering synthesized under [fp_contract]). So packing cannot change a value. Two
+               cases decline before reaching the shared arms: a heterogeneous operator (a [Where]'s
                condition, the uniform-lane extraction) keeps its operands at their own precision,
                which a pack of [prec] lanes cannot hold; and a pack load reads the whole pack before
                the lane loop, so an operand evaluated only conditionally -- a [Where] arm, the gated
@@ -6324,41 +6423,42 @@ module C_syntax (B : C_syntax_config) = struct
                (possibly out of bounds, the guard's whole point) would become unconditional.
                Loop-free subexpressions keep rendering inline, gates and all, through
                [uniform_scalar]. *)
-            let rec lane_expr (llsc : Low_level.scalar_t) (p : Ops.prec) : PPrint.document =
+            let rec lane_expr (llsc : Low_level.scalar_t) : PPrint.document =
               if not ((scalar_mentions loop) llsc) then (uniform_scalar ctx) ~written prec llsc
-              else if not (Ops.equal_prec p prec) then raise Vectorization_declined
               else
                 match llsc with
                 | Low_level.Get (tn, idcs) ->
                     if not (Ops.equal_prec (Lazy.force tn.Tn.storage_prec) prec) then
                       raise Vectorization_declined;
                     string (vload tn idcs ^ ".v[" ^ lane_var ^ "]")
-                | Binop (Ops.ToPowOf, (base, pbase), (Constant exponent, _))
-                  when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
-                    integer_power_doc ~prec (lane_expr base pbase) exponent
-                | Binop (op, (a, pa), (b, pb)) -> (
-                    match Ops.binop_conditionality op with
-                    | Ops.Only_first -> lane_expr a pa
-                    | Ops.Only_second -> lane_expr b pb
-                    | Ops.Gated_second when (scalar_mentions loop) b -> raise Vectorization_declined
-                    | Ops.Both_operands | Ops.Gated_second ->
-                        if not (Ops.is_homogeneous_prec_binop op) then raise Vectorization_declined;
-                        group (B.binop_syntax prec op (lane_expr a pa) (lane_expr b pb)))
-                | Ternop (((Ops.FMA | Ops.Mul3) as op), (a, pa), (b, pb), (c, pc)) ->
-                    group
-                      (B.ternop_syntax prec op (lane_expr a pa) (lane_expr b pb) (lane_expr c pc))
-                | Unop (op, (a, pa)) ->
-                    if not (Ops.is_homogeneous_prec_unop op) then raise Vectorization_declined;
-                    group (B.unop_syntax prec op (lane_expr a pa))
-                | Ternop (Ops.Where, _, _, _)
+                | Binop (op, _, (b, _))
+                  when (match Ops.binop_conditionality op with
+                         | Ops.Gated_second -> true
+                         | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false)
+                       && (scalar_mentions loop) b ->
+                    raise Vectorization_declined
+                | Binop (op, _, _) when not (Ops.is_homogeneous_prec_binop op) ->
+                    raise Vectorization_declined
+                | Unop (op, _) when not (Ops.is_homogeneous_prec_unop op) ->
+                    raise Vectorization_declined
+                | Ternop (op, _, _, _) when not (Ops.is_homogeneous_prec_ternop op) ->
+                    raise Vectorization_declined
+                | Binop _ | Unop _ | Ternop _ ->
+                    let _no_defs, doc = pp_scalar_op ~operand:lane_operand prec llsc in
+                    doc
                 | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get_dynamic _ | Embed_index _
                 | Constant _ | Constant_bits _ ->
                     (* [Embed_index] of the loop would need the lane's own index, not the pack's. *)
                     raise Vectorization_declined
+            and lane_operand p llsc =
+              (* Every operator reaching [pp_scalar_op] here is homogeneous, so it asks for its
+                 operands at [prec]: anything else would be a pack of the wrong width. *)
+              if not (Ops.equal_prec p prec) then raise Vectorization_declined;
+              ([], lane_expr llsc)
             in
             List.iter sets ~f:(fun (tn, idcs, llsc) ->
                 if not (eligible tn idcs) then raise Vectorization_declined;
-                let rhs = lane_expr llsc prec in
+                let rhs = lane_expr llsc in
                 let vname = fresh "vset" in
                 emit (string (vtyp ^ " " ^ vname ^ ";"));
                 emit
@@ -7337,90 +7437,7 @@ module C_syntax (B : C_syntax_config) = struct
         let idx_doc = if affine_needs_parens idx then parens idx_doc else idx_doc in
         let expr = string prefix ^^ idx_doc ^^ string postfix in
         ([], expr)
-    | Ternop (Ops.FMA, _, _, _) when not (Ops.is_float prec) ->
-        (* gh-ocannl-873: hand-built low-level IR can bypass the simplifier's float-only FMA rewrite
-           guard. Reject it at the shared C-family scalar-emission seam before a backend's syntax
-           table can turn integer arithmetic into [fma]/[fmaf]. The explicit SIMD and MMA renderings
-           are already gated by [vector_prec_ok], which admits only float-capable compute
-           precisions. *)
-        invalid_arg
-          (Printf.sprintf "C_syntax.pp_scalar: FMA requires floating-point precision, got %s"
-             (Ops.prec_string prec))
-    | Ternop (op, (v1, v1_prec), (v2, v2_prec), (v3, v3_prec)) ->
-        (* A heterogeneous argument keeps its own precision, which -- like every precision reaching
-           here from [Low_level] -- is a storage precision; the rendering takes [comp_prec] of
-           it. *)
-        let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
-        let v3_prec = comp_prec v3_prec in
-        let d1, e1, d2, e2, d3, e3 =
-          if Ops.is_homogeneous_prec_ternop op then
-            (* Homogeneous: all arguments use result precision *)
-            let d1, e1 = (pp_scalar ctx) prec v1 in
-            let d2, e2 = (pp_scalar ctx) prec v2 in
-            let d3, e3 = (pp_scalar ctx) prec v3 in
-            (d1, e1, d2, e2, d3, e3)
-          else
-            (* Heterogeneous: arguments keep their natural precision *)
-            match op with
-            | Ops.Where ->
-                (* For Where: condition keeps its precision, then/else use result precision *)
-                (* Note: we evaluate condition without precision conversion, but then/else
-                   need to match the result precision for the final assignment *)
-                let d1, e1 = (pp_scalar ctx) v1_prec v1 in
-                (* condition: no conversion *)
-                let d2, e2 = (pp_scalar ctx) prec v2 in
-                (* then: result precision *)
-                let d3, e3 = (pp_scalar ctx) prec v3 in
-                (* else: result precision *)
-                (d1, e1, d2, e2, d3, e3)
-            | _ ->
-                (* Other heterogeneous ternary ops would go here *)
-                let d1, e1 = (pp_scalar ctx) v1_prec v1 in
-                let d2, e2 = (pp_scalar ctx) v2_prec v2 in
-                let d3, e3 = (pp_scalar ctx) v3_prec v3 in
-                (d1, e1, d2, e2, d3, e3)
-        in
-        let defs = List.concat [ d1; d2; d3 ] in
-        let expr = group (B.ternop_syntax prec op e1 e2 e3) in
-        (defs, expr)
-    | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
-      when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
-        let defs, base_doc = (pp_scalar ctx) prec base in
-        (defs, integer_power_doc ~prec base_doc exponent)
-    | Binop (op, (v1, v1_prec), (v2, v2_prec)) -> (
-        match Ops.binop_conditionality op with
-        (* A projection emits its selected operand alone: the operator has no spelling of its own
-           (every backend's [binop_syntax] rejects one), and the discarded operand is not rendered
-           at all -- which is what lets [Low_level.affine_accesses] and [Cost_model] drop it. *)
-        | Ops.Only_first -> (pp_scalar ctx) prec v1
-        | Ops.Only_second -> (pp_scalar ctx) prec v2
-        | Ops.Both_operands | Ops.Gated_second ->
-            let v1_prec = comp_prec v1_prec and v2_prec = comp_prec v2_prec in
-            let d1, e1, d2, e2 =
-              if Ops.is_homogeneous_prec_binop op then
-                (* Homogeneous: both arguments use result precision *)
-                let d1, e1 = (pp_scalar ctx) prec v1 in
-                let d2, e2 = (pp_scalar ctx) prec v2 in
-                (d1, e1, d2, e2)
-              else
-                (* Heterogeneous: arguments keep their natural precision *)
-                (* Currently all binops are homogeneous, but this is here for future extension *)
-                let d1, e1 = (pp_scalar ctx) v1_prec v1 in
-                let d2, e2 = (pp_scalar ctx) v2_prec v2 in
-                (d1, e1, d2, e2)
-            in
-            let defs = List.concat [ d1; d2 ] in
-            let expr = group (B.binop_syntax prec op e1 e2) in
-            (defs, expr))
-    | Unop (op, (v, v_prec)) ->
-        let arg_prec =
-          if Ops.is_homogeneous_prec_unop op then prec
-            (* Homogeneous: argument uses result precision *)
-          else comp_prec v_prec
-        in
-        let defs, expr_v = (pp_scalar ctx) arg_prec v in
-        let expr = group (B.unop_syntax prec op expr_v) in
-        (defs, expr)
+    | Ternop _ | Binop _ | Unop _ -> pp_scalar_op ~operand:(pp_scalar ctx) prec vcomp
 
   and debug_float ctx ?guard (prec : Ops.prec) (value : Low_level.scalar_t) :
       PPrint.document * [ `Accessor of PPrint.document | `Value of PPrint.document ] list =
