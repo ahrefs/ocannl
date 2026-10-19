@@ -830,10 +830,12 @@ val lane_all_reduce_simdgroups_for : Backend_intf.hardware_limits -> int
 (** How {!default_gpu} weighs its lane geometry (gh-ocannl-1167). Every lane recomputes its nest's
     per-pair scalar preamble, which the plain plan pays once per thread. [Lanes_cut]: taken wherever
     a kernel admits it, and {!fission_keep_mapping} cuts a kernel rather than merge a lane nest out
-    of its lanes. [Lanes_admitted]: taken wherever a kernel admits it, but merges are judged on the
-    plain plans, so a merge costing a nest nothing but its lanes is taken. [Lanes_off]: never taken,
-    so the preamble-reduction treatment has nothing to apply to. Config [gpu_serial_lanes], whose
-    [auto] default resolves per device ({!serial_lanes_for}). *)
+    of its lanes. [Lanes_admitted]: taken wherever a kernel admits it, but merges between nests with
+    a lane path are judged on the plain plans, so such a merge costing a nest nothing but its lanes
+    is taken; a neighbour with no lane path is still cut off rather than cost a nest its lanes
+    (gh-ocannl-1239, {!mapping_probe}). [Lanes_off]: never taken, so the preamble-reduction
+    treatment has nothing to apply to. Config [gpu_serial_lanes], whose [auto] default resolves per
+    device ({!serial_lanes_for}). *)
 type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
 
 val gpu_serial_lanes : unit -> serial_lanes option
@@ -1013,20 +1015,39 @@ val statement_mappings : Low_level.t -> schedule -> (int * int) list
     geometry's cooperative preamble reduction, gh-ocannl-1124), adding threads only past its width.
 *)
 
+type mapping_probe = {
+  mp_kernel : Low_level.optimized -> schedule;
+  mp_lane_trade : (Low_level.optimized -> schedule) option Lazy.t;
+}
+(** The probes of schedule-aware fission's merge rule (gh-ocannl-1126): [mp_kernel], the schedule a
+    merged kernel will receive, against which a merge is refused when it gives some statement fewer
+    groups or active threads of its own loops than it gets alone; and, where lanes are only
+    [Lanes_admitted] (gh-ocannl-1167), [mp_lane_trade], the same schedule without the lane geometry,
+    on which a merge is judged instead -- unless the merged kernel would hold a loop nest with no
+    lane path beside one with a lane path, which must pass on both (gh-ocannl-1239: such a kernel
+    declines the lanes for a neighbour that could never take them). *)
+
+val mapping_probe :
+  ?lane_trade:(Low_level.optimized -> schedule) ->
+  (Low_level.optimized -> schedule) ->
+  mapping_probe
+(** [mapping_probe ?lane_trade kernel]: the probes, no lane trade unless given. *)
+
 val fission_keep_mapping :
-  is_gpu:bool -> limits:Backend_intf.hardware_limits -> (Low_level.optimized -> schedule) option
-(** The [keep_mapping] schedule {!maybe_default_schedules} passes to {!fission_scheduled}:
+  is_gpu:bool -> limits:Backend_intf.hardware_limits -> mapping_probe option
+(** The [keep_mapping] probes {!maybe_default_schedules} passes to {!fission_scheduled}:
     {!default_gpu} at [limits] on a GPU backend while config [gpu_fission_keep_mapping] is on (the
-    default), [None] otherwise -- without its lane geometry unless {!serial_lanes_for} is
-    [Lanes_cut], so a merge costing a nest only its lanes is taken. A caller replicating the default
-    segmentation (the autotuner's fissioned candidates) passes the same, so its segments are the
-    untuned pipeline's. *)
+    default), [None] otherwise -- with its lane geometry unless {!serial_lanes_for} is [Lanes_off],
+    and under [Lanes_admitted] with the lane-free {!default_gpu} as the lane trade, so a merge
+    costing a nest only its lanes is taken where every nest of the kernel has a lane path. A caller
+    replicating the default segmentation (the autotuner's fissioned candidates) passes the same, so
+    its segments are the untuned pipeline's. *)
 
 val fission_scheduled :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
-  ?keep_mapping:(Low_level.optimized -> schedule) ->
+  ?keep_mapping:mapping_probe ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
   static_indices:Indexing.static_symbol list ->
@@ -1072,9 +1093,10 @@ val fission_scheduled :
     times it), never the default.
 
     [keep_mapping] (gh-ocannl-1126): the default GPU schedule, as {!fission_keep_mapping} probes it
-    -- the schedule each candidate kernel would actually receive, except that where lanes are not
-    [Lanes_cut] the probe leaves out the lane geometry, so no boundary is kept for lanes. A merge
-    the rules above admit -- an aligned dependent merge, and a conflict-free one, which they admit
+    -- the schedule each candidate kernel would actually receive, except that where lanes are
+    [Lanes_admitted] a merge between nests with a lane path is judged without the lane geometry, so
+    no boundary is kept for lanes between them ({!mapping_probe}, gh-ocannl-1239). A merge the rules
+    above admit -- an aligned dependent merge, and a conflict-free one, which they admit
     unconditionally -- is still refused when some statement of the merged kernel gets fewer [Grid]
     groups or fewer active threads of its OWN loops under [keep_mapping] than it gets in a kernel of
     its own: the kernel boundary is kept rather than a nest's mapping lost. Only the refused merges
@@ -1110,7 +1132,7 @@ val fission_segmented :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
-  ?keep_mapping:(Low_level.optimized -> schedule) ->
+  ?keep_mapping:mapping_probe ->
   ?replay:segmentation * (int -> Low_level.optimized -> schedule option) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->

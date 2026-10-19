@@ -828,7 +828,8 @@ let () =
   in
   let limits = Ir.Backend_intf.no_hardware_limits in
   let segments =
-    Sched.fission_scheduled ~fold_zeros:true ~keep_mapping:(Sched.default_gpu ~limits)
+    Sched.fission_scheduled ~fold_zeros:true
+      ~keep_mapping:(Sched.mapping_probe (Sched.default_gpu ~limits))
       ~preset:(Sched.default_gpu ~limits) ~zero_sched:(Sched.zero_expansion ~limits)
       ~static_indices:[]
       {
