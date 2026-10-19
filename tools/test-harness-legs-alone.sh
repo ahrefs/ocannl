@@ -52,6 +52,7 @@ leg_3() {
 leg_4() {
   [ "${LITTER:-0}" = 0 ] || : >"$(dirname "$0")/../litter"
   [ "${REWRITE:-0}" = 0 ] || echo rewritten >"$(dirname "$0")/../scribble"
+  [ "${EMPTYDIR:-0}" = 0 ] || mkdir -p "$(dirname "$0")/../hollow"
   report "${RED:-0}" 'four'
 }
 dot() { report 0 "$1"; }
@@ -97,7 +98,7 @@ git -C "$fixture" init -q && git -C "$fixture" add -A &&
   git -C "$fixture" -c user.name=t -c user.email=t@t commit -q -m fixture || exit 2
 subject="$fixture/tools/harness-legs-alone.sh"
 unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_SKIP_LEGS LEAK SKIPLEAK SHAREDSKIP RED DUP NEVER BROKEN HOLD \
-  LITTER REWRITE DISCOVERY
+  LITTER REWRITE EMPTYDIR DISCOVERY
 run() { # [subject arguments] -- from an unrelated directory
   rc=0
   (cd "$TMP" && "${SUBJECT:-$subject}" "$@") >"$TMP/out" 2>&1 || rc=$?
@@ -180,11 +181,24 @@ if [ "$rc" = 1 ] && [ "$(grep -c '^  CHECKOUT CHANGED  ' "$TMP/out")" = 1 ] \
   report 0 'a run rewriting a file the checkout already had untracked is a finding'
 else report 1 'a run rewriting a file the checkout already had untracked is a finding' "exit $rc; $(cat "$TMP/out")"; fi
 
+EMPTYDIR=1 run fixtures/gated.sh
+rmdir "$fixture/hollow" 2>/dev/null
+if [ "$rc" = 1 ] && [ "$(grep -c '^  CHECKOUT CHANGED  ' "$TMP/out")" = 1 ] && has '        hollow/'; then
+  report 0 'a run leaving an empty directory in the checkout is a finding'
+else report 1 'a run leaving an empty directory in the checkout is a finding' "exit $rc; $(cat "$TMP/out")"; fi
+
 run --logs "$fixture/logs" fixtures/gated.sh
 if [ "$rc" = 2 ] && grep -q 'is inside the checkout' "$TMP/out" && ! grep -q 'ALONE' "$TMP/out"; then
   report 0 'a log directory inside the checkout is refused'
 else report 1 'a log directory inside the checkout is refused' "exit $rc; $(cat "$TMP/out")"; fi
 rm -rf "$fixture/logs"
+mkdir -p "$fixture/logs"
+ln -s "$fixture/logs" "$TMP/logs-link"
+run --logs "$TMP/logs-link" fixtures/gated.sh
+if [ "$rc" = 2 ] && grep -q 'is inside the checkout' "$TMP/out" && ! grep -q 'ALONE' "$TMP/out"; then
+  report 0 'a log directory reached through a symbolic link into the checkout is refused'
+else report 1 'a log directory reached through a symbolic link into the checkout is refused' "exit $rc; $(cat "$TMP/out")"; fi
+rm -rf "$fixture/logs" "$TMP/logs-link"
 
 DISCOVERY=1 run
 if [ "$rc" = 0 ] && has 'HARNESS fixtures/continued.sh: 1 leg(s), 0 group(s)' && has '  ALONE PASS  only leg' \
@@ -215,7 +229,7 @@ else
   report 1 'TERM to the check stops the running harness first and keeps its status' "the held leg never started: $(cat "$TMP/out")"
 fi
 
-kept="$(cd "$TMP" && pwd)/kept"
+kept="$(cd "$TMP" && pwd -P)/kept"
 run --logs "$kept" fixtures/gated.sh
 if [ "$rc" = 0 ] && has "logs: $kept" && [ -s "$kept/fixtures_gated.sh/full" ] \
    && ! grep -q 'ungated' "$TMP/out"; then

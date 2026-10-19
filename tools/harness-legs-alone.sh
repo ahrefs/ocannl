@@ -41,7 +41,7 @@
 # 2 a usage error, or a HARNESS named that lists no leg. HUP, INT and TERM
 # stop the check and keep their status (129, 130, 143).
 set -u
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 2
 logs= harnesses=()
 while [ $# -gt 0 ]; do
   case $1 in
@@ -67,16 +67,17 @@ if [ "$named" -eq 0 ]; then
   [ ${#harnesses[@]} -gt 0 ] || { echo "harness-legs-alone.sh: no member of tools/test-harnesses.sh gates a leg" >&2; exit 2; }
 fi
 if [ -n "$logs" ]; then
-  mkdir -p "$logs" && logs=$(CDPATH= cd -- "$logs" && pwd) ||
+  mkdir -p "$logs" && logs=$(CDPATH= cd -- "$logs" && pwd -P) ||
     { echo "harness-legs-alone.sh: cannot use $logs" >&2; exit 2; }
   keep=1
 else
-  logs=$(mktemp -d "${TMPDIR:-/tmp}/harness-legs-alone.XXXXXX") ||
+  logs=$(mktemp -d "${TMPDIR:-/tmp}/harness-legs-alone.XXXXXX") && logs=$(CDPATH= cd -- "$logs" && pwd -P) ||
     { echo "harness-legs-alone.sh: cannot create a log directory" >&2; exit 2; }
   keep=0
 fi
 unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_SKIP_LEGS
-# The runs' own output may not land in the checkout they are checked against.
+# The runs' own output may not land in the checkout they are checked against
+# (both paths resolved physically, so a symbolic link cannot hide it).
 case "$logs/" in
   "$root/"*)
     echo "harness-legs-alone.sh: the log directory $logs is inside the checkout, whose files every run must leave unchanged" >&2
@@ -121,8 +122,10 @@ trap 'stop 143' TERM
 # alone on what an earlier run made, so it is a finding of its own.
 # Contents too, not only each path's status: a run that rewrites a file the
 # checkout already had modified, or an untracked one, changes no status line.
+# And untracked directories, an empty one included, which name no file.
 checkout_state() {
   git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null || return 0
+  git -C "$root" ls-files --others --directory --exclude-standard 2>/dev/null
   git -C "$root" diff HEAD --binary 2>/dev/null | git hash-object --stdin
   git -C "$root" ls-files -z --others --exclude-standard 2>/dev/null |
     (cd "$root" && xargs -0 git hash-object -- 2>/dev/null)
