@@ -77,6 +77,12 @@ the shipped routine computes the plain compile's values: true
 the search-shaping keys are stated at their defaults for the warm chain: true
 stating them at their defaults leaves the search-trajectory identity unchanged: true
 under them the warm flip chain still replays both arms and the abandonment, and ships the same winner: true
+every gpu_ search-shaping key is one a cc search does not read: true
+each key a cc search does not read has an off-default value to state: true
+the shipped routine computes the plain compile's values: true
+the keys a cc search does not read are stated off their defaults for the warm chain: true
+stating them leaves the cc search-trajectory identity unchanged: true
+under them the warm flip chain still replays both arms and the abandonment, and ships the same winner: true
 the shipped routine computes the plain compile's values: true
 the control key is stated off its default for the warm chain: true
 stating a key the search reads off its default changes the search-trajectory identity: true

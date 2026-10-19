@@ -8415,6 +8415,22 @@ let backend_is_gpu name =
   || String.is_substring name ~substring:"metal"
 
 let backend_is_cpu name = String.is_substring name ~substring:"cc"
+
+(* gh-ocannl-1331: the default pipeline's [Search_shaping] keys that only one kind of backend reads
+   -- the GPU presets, lane geometry and fission mapping, and the CPU preset's threshold -- each
+   through the predicate its read sites are gated on ([backend_is_gpu] / [backend_is_cpu], or the
+   [is_gpu] / [is_cpu] the tuner derives from them). Any other key is read wherever a search runs:
+   an omission over-keys, which costs a warm cache its records but never replays one across
+   regimes. *)
+let search_shaping_key_read ~backend_name key =
+  match key with
+  | "automatic_gpu_schedule" | "gpu_fission_keep_mapping" | "gpu_schedule_block_size"
+  | "gpu_schedule_min_parallel" | "gpu_schedule_workgroup_fill" | "gpu_lane_preamble_reduction"
+  | "gpu_lane_all_reduce_simdgroups" | "gpu_serial_lanes" ->
+      backend_is_gpu backend_name
+  | "automatic_cpu_schedule" | "cpu_schedule_min_parallel" -> backend_is_cpu backend_name
+  | _ -> true
+
 let schedule_fission = lazy (Utils.registered_flag ~arg_name:"schedule_fission")
 
 (* Per-compile launch-geometry trace on stderr; consumed by backend [compile]. *)

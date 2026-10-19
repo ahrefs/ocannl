@@ -274,6 +274,9 @@ let raw_entries =
         "[scanner-refusal:14b02d2180d3814d6746acd827aecbc3] classifications claim cache-key";
         "[scanner-refusal:8109160f59717560ff5e6f7251a6a2b2] cache-key components no";
         "[scanner-refusal:1825a277ba0eda3313fbe079e465c15d] but classified code-borne";
+        "[scanner-refusal:3a04e06161978f8255007c739f6806a5] Autotune.tune's";
+        "[scanner-refusal:d011313dec8b9e6e53f58ce97ef08a66] Autotune.tune's";
+        "[scanner-refusal:12aa84c890c2e9d7e1f3bdca30397d4e] placement-shaping or untimed-model";
         "[scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count";
         "[scanner-refusal:a9c0305e1a7d7817b8ba147ce52e8f90] classified exactly once";
         "[scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is classified code-borne";

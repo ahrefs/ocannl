@@ -1812,6 +1812,19 @@ val seeded_split_backend : string -> bool
     {!seeded_split_sites}). A test states what each backend promises through these, never a restated
     list. *)
 
+val search_shaping_key_read : backend:string -> string -> bool
+(** Whether a search on [backend] can read the [Utils.Search_shaping] configuration key [key]
+    (gh-ocannl-1331): the seeded plan's [gpu_default_*] keys where {!seeded_default_backend} (and,
+    for the split threshold, {!seeded_split_backend}) holds, the default pipeline's keys per
+    {!Ir.Schedule.search_shaping_key_read}, and every other key everywhere. A key a backend's search
+    cannot read keys nothing in its trajectory identity ({!search_shaping_identity}). *)
+
+val search_shaping_identity : backend:string -> limits:Ir.Backend_intf.hardware_limits -> string
+(** The [Search_shaping] part of {!tune}'s search-trajectory identity on [backend] at [limits]:
+    [Utils.config_class_fingerprint] of the class, over the keys {!search_shaping_key_read} says the
+    backend reads, with defaults resolved per device ({!Ir.Schedule.resolve_search_shaping_value}).
+*)
+
 val seeded_split_sites :
   backend:string ->
   min_serial:int ->

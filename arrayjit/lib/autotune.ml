@@ -4122,6 +4122,23 @@ let seeded_params ~limits ~accum_prec ~min_reduction (seg : LL.optimized) : sket
    pass is a follow-up; until then HIP keeps the unsplit plan. *)
 let seeded_split_backend backend = String.is_substring backend ~substring:"cuda"
 
+(* gh-ocannl-1331: whether a search on [backend] can read the [Search_shaping] key [key]: the seeded
+   plan's keys where {!seeded_settings} resolves them (its backend tests come first, so another
+   backend never reads them), the default pipeline's per {!Sched.search_shaping_key_read}. *)
+let search_shaping_key_read ~backend key =
+  match key with
+  | "gpu_default_sketch_min_reduction" | "gpu_default_reduction_sink" ->
+      seeded_default_backend backend
+  | "gpu_default_split_reduce_min_serial" ->
+      seeded_default_backend backend && seeded_split_backend backend
+  | _ -> Sched.search_shaping_key_read ~backend_name:backend key
+
+let search_shaping_identity ~backend ~limits =
+  Utils.config_class_fingerprint
+    ~reads:(search_shaping_key_read ~backend)
+    ~resolve:(Sched.resolve_search_shaping_value limits)
+    Utils.Search_shaping
+
 let seeded_split_min_serial () =
   match Utils.registered_int ~arg_name:"gpu_default_split_reduce_min_serial" with
   | n when n >= 0 -> n
@@ -5408,9 +5425,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
       Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
         search beam_width rounds repeats keep_fraction max_split_reduce_sites
         (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
-        (Utils.config_class_fingerprint
-           ~resolve:(Sched.resolve_search_shaping_value limits)
-           Utils.Search_shaping)
+        (search_shaping_identity ~backend ~limits)
     in
     (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution the
        backend's code generation widens the serial rendering by (gh-ocannl-1116). *)

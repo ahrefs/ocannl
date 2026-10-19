@@ -1,3 +1,6 @@
+every search-shaping key is read within Autotune.tune's reach: true
+no placement-shaping or untimed-model key outside the exemptions is read within Autotune.tune's reach: true
+each exempted placement-shaping or untimed-model key is still within tune's reach: true
 Sources scanned: arrayjit/lib, benchmarks/runners/ocannl, bin, lib, tensor, tools
 Cache-key components (Schedule_cache.key_components): digest, backend, numerics, codegen, pool, device, timing
 Keys read at codegen (c_syntax.ml, cc_backend.ml, cuda_backend.ml, cuda_like_config.ml, cuda_mma.ml, hip_backend.ml, metal_backend.ml, schedule_cache.ml): tagged [read at codegen] below
@@ -206,6 +209,9 @@ every known config key is classified exactly once, and every classified key is k
 no config key read at codegen is classified code-borne: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:3a04e06161978f8255007c739f6806a5] Autotune.tune's
+  [scanner-refusal:d011313dec8b9e6e53f58ce97ef08a66] Autotune.tune's
+  [scanner-refusal:12aa84c890c2e9d7e1f3bdca30397d4e] placement-shaping or untimed-model
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count
   [scanner-refusal:a9c0305e1a7d7817b8ba147ce52e8f90] classified exactly once
   [scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is classified code-borne

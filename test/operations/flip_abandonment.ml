@@ -20,8 +20,9 @@
    record, and the A/B winner ships; a flip that becomes profitable is searched in full and ships;
    and a warm chain replays its abandonment even with every placement-level key stated
    (gh-ocannl-1192), every key of the untuned regime's model pick (gh-ocannl-1241), or keys the
-   search reads stated at their defaults in other spellings (gh-ocannl-1272), while a key the search
-   reads, stated off its default, still loses the abandonment record. *)
+   search reads stated at their defaults in other spellings (gh-ocannl-1272), or every key a cc
+   search never reads stated off its default (gh-ocannl-1331), while a key the search reads, stated
+   off its default, still loses the abandonment record. *)
 
 open Base
 open Ocannl
@@ -577,8 +578,14 @@ let () =
   in
   (* Runs the warm chain with [keys] stated in the configuration file, returning whether each took
      effect, whether the search-trajectory identity stayed what it was, and the chain's outcome. *)
+  (* The search-trajectory identity's configuration part, as [Autotune.tune] computes it for this
+     chain's backend and device. *)
+  let identity () =
+    Autotune.search_shaping_identity ~backend:(Context.backend_name chain_ctx)
+      ~limits:(Context.hardware_limits chain_ctx)
+  in
   let warm_chain_with_stated keys =
-    let shape_before = Utils.config_class_fingerprint Utils.Search_shaping in
+    let shape_before = identity () in
     List.iter keys ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
     Exn.protect
       ~finally:(fun () ->
@@ -591,7 +598,7 @@ let () =
                 (Some data))
         in
         ( stated,
-          String.equal shape_before (Utils.config_class_fingerprint Utils.Search_shaping),
+          String.equal shape_before (identity ()),
           executed_chain ~cache_dir:chain_cache_dir chain_comp chain_t chain_expected
             ~flip_script:(fun _ -> 100.0) ))
   in
@@ -660,6 +667,53 @@ let () =
   let stated, shape_unchanged, chain = warm_chain_with_stated default_keys in
   p "the search-shaping keys are stated at their defaults for the warm chain" stated;
   p "stating them at their defaults leaves the search-trajectory identity unchanged" shape_unchanged;
+  p
+    "under them the warm flip chain still replays both arms and the abandonment, and ships the \
+     same winner"
+    (replays_abandonment chain);
+  (* gh-ocannl-1331: the search-shaping keys a cc search never reads -- the GPU presets, lane modes
+     and fission mapping, and the seeded plan's [gpu_default_*] -- stated OFF their defaults. They
+     used to change the cc identity, so stating one cost a warm chain its records; now the identity
+     leaves them out ([Autotune.search_shaping_key_read]). Valid values, not unparsable text: the
+     placement level above the search does read two of them on cc ([Autotune.placement_surface]
+     segments for the cc mma descriptor as the GPU seeders do), and refusing there skips the flips
+     this leg replays. A keyword's off-default mode is named below, its modes being its read
+     site's. *)
+  let backend = Context.backend_name chain_ctx in
+  let search_keys = class_keys Utils.Search_shaping in
+  let unread =
+    List.filter search_keys ~f:(fun key -> not (Autotune.search_shaping_key_read ~backend key))
+  in
+  p_all ~min:8 "every gpu_ search-shaping key is one a cc search does not read"
+    (List.filter search_keys ~f:(String.is_prefix ~prefix:"gpu_"))
+    ~f:(List.mem unread ~equal:String.equal);
+  let keyword_modes =
+    [
+      ("gpu_lane_preamble_reduction", "duplicated");
+      ("gpu_lane_all_reduce_simdgroups", "2");
+      ("gpu_serial_lanes", "admitted");
+      ("gpu_default_sketch_min_reduction", "64");
+    ]
+  in
+  let off_default key =
+    match Utils.registered_config_default key with
+    | Some (Utils.Flag, default) ->
+        Some (if String.equal (String.lowercase default) "true" then "false" else "true")
+    | Some (Utils.Integer, default) -> Some (Int.to_string (Int.of_string default + 1))
+    | Some (Utils.Keyword, default) ->
+        Option.filter (List.Assoc.find keyword_modes key ~equal:String.equal) ~f:(fun mode ->
+            not (String.equal mode default))
+    | _ -> None
+  in
+  let off = List.map unread ~f:(fun key -> (key, off_default key)) in
+  p_all ~min:8 "each key a cc search does not read has an off-default value to state" off
+    ~f:(fun (_, value) -> Option.is_some value);
+  let stated, shape_unchanged, chain =
+    warm_chain_with_stated
+      (List.filter_map off ~f:(fun (key, v) -> Option.map v ~f:(fun v -> (key, v))))
+  in
+  p "the keys a cc search does not read are stated off their defaults for the warm chain" stated;
+  p "stating them leaves the cc search-trajectory identity unchanged" shape_unchanged;
   p
     "under them the warm flip chain still replays both arms and the abandonment, and ships the \
      same winner"

@@ -922,6 +922,13 @@ val backend_is_cpu : string -> bool
 (** Whether the named backend renders [Grid] loops on the CPU pool (currently: name contains
     ["cc"]). *)
 
+val search_shaping_key_read : backend_name:string -> string -> bool
+(** Whether a search on [backend_name] can read the default pipeline's configuration key [key]
+    (gh-ocannl-1331): the GPU-only keys ([automatic_gpu_schedule], [gpu_schedule_*], the lane modes,
+    [gpu_fission_keep_mapping]) exactly where {!backend_is_gpu} holds, the CPU-only ones
+    ([automatic_cpu_schedule], [cpu_schedule_min_parallel]) where {!backend_is_cpu} does, and any
+    other key everywhere. [Autotune.search_shaping_key_read] adds the seeded plan's keys. *)
+
 val automatic_schedule_active : backend_name:string -> bool
 (** Whether {!maybe_default_schedule} (and {!maybe_default_schedules}) would apply a default preset
     on this backend rather than the identity: the backend binds Grid loops, the corresponding config
