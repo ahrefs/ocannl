@@ -444,6 +444,49 @@ and misrouted projections manifest as wrong values, not as inference failures â€
 tests (materialized-vs-virtual parity, distinct-value counts) are the effective guard, not
 structural checks.
 
+### Symbolic extents: cells past a bound extent
+
+A symbolic dimension (`Row.Sym`, set with `Shape.set_sym_dim`; design record
+`docs/proposals/gh-ocannl-490.md`) is materialized at its declared maximum: `Tnode.dims`, buffers,
+product spaces and loops all span the maximum. When the extent's symbol is among a routine's
+bindings it is a launch parameter, and lowering guards the body of every loop over a symbolic axis
+with `iterator < extent` (`extent_guard` in `Assignments.to_low_level`). An extent left unbound keeps
+the maximum-shape semantics: the program is the one the maximum, written as a concrete dimension,
+would give. For a run with the extent bound to `e`, a cell is *past the extent* when its index along
+a symbolic axis is at least `e`, and the contract about those cells is (gh-ocannl-928):
+
+- **Reads.** No in-extent result depends on a cell past the extent: a reduction over the symbolic
+  axis accumulates its first `e` rows, and every other accumulation over it computes in-extent cells
+  only, so what an operand holds past the extent cannot reach an in-extent result.
+- **A non-initializing accumulation leaves the cells past the extent untouched.** An accumulation that
+  reads its target's prior content (`=+`, `=-`, ...: every backprop contribution, an optimizer's
+  `p =- lr * delta`) writes in-extent cells only. This is what makes state carried across runs at
+  DIFFERENT extents well defined: a parameter does not move where its rows were out of extent, and
+  a gradient accumulated over micro-steps (`Train.grad_update ~accum_steps`) holds in each row
+  exactly the micro-steps that row was in extent for.
+- **An initializing accumulation leaves them unspecified.** An initializing accumulation (`=:`,
+  `=:+`, ...) never reads its target's prior content, so whatever it leaves past the extent cannot
+  reach an in-extent result of this run, and a later run re-initializes before it reads. Today
+  those cells hold the accumulation's neutral element when lowering emits an initialization pass
+  (the target is not covered one-to-one, e.g. a reduction onto the symbolic axis), because that
+  pass fills the whole materialized buffer, and are untouched otherwise. Neither is promised:
+  guarding the initialization pass, or lowering to symbolic loop bounds, may change it. Read the
+  valid prefix on the host.
+- **A fill covers the materialized buffer.** A `Fetch` (constant fills, the `zero_grads` of every
+  gradient, ranges) carries no projections and so no extent: it writes every cell up to the
+  maximum. This half IS promised, because the second rule relies on it: `zero_grads` clears every
+  gradient row, including the rows a later, larger extent brings into scope.
+- **A maximum-one axis cannot be guarded, so it is refused.** The guard is per iterator, and a
+  dimension-1 axis has none (it is indexed at `Fixed_idx 0`, see above), so lowering refuses a bound
+  maximum-one extent in both of `Accum_op`'s roles â€” the ordinary one and the `Rev_sides` scatter
+  that a concatenation's gradient lowers to (gh-ocannl-878). A packed vector store (`Set_vec_unop`)
+  refuses any bound extent (gh-ocannl-817).
+
+`test/operations/symbolic_extent_contract.ml` pins the first three rules on executed values, for
+both flavours of one accumulation record, with an unguarded control; `symbolic_extent_backward.ml`
+pins the gradient side through `Train.grad_update`, `Train.sgd_update`, accumulation across two
+extents and the `Rev_sides` scatter, executed where it is guarded and refused where it is not.
+
 ### Convolutions
 
 There is an important and intentional difference between `dims` in the `arrayjit` part of the project: tensor nodes, `Ndarray` buffers, code generation -- they include padding in the dimension sizes; and on the other hand shape types, shape inference and tensors exclude padding from the dimension sizes. There is a tension: once the delayed computations of padding, projections and dims (dimension sizes) are forced for a particular node, the padding can no longer be updated (the underlying `Ndarray` buffer might already be created). Since during inference we update the padding incrementally without variables standing in for insufficient information, this unfortunately causes observability of the during-inference and post-inference distinction for the padding of a tensor node.

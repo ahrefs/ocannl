@@ -1319,11 +1319,20 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
           Option.map resolution ~f:(fun (value, source) ->
               (value, Utils.config_source_label source)) ))
   in
+  (* The same record for every key the process inherited from its environment (gh-ocannl-1337): the
+     observation the driver's [ambient_ocannl_shadowed] stamp is checked against. *)
+  let ambient_resolved =
+    List.map (Utils.inherited_env_key_sources ()) ~f:(fun (var, key, resolution) ->
+        ( var,
+          key,
+          Option.map resolution ~f:(fun (value, source) ->
+              (value, Utils.config_source_label source)) ))
+  in
   let checkpoint ~completed_steps at losses =
     Stdio.Out_channel.output_string checkpoint_out
       (Bench_json.checkpoint_prefix
-      ^ Bench_json.checkpoint_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload
-          ~fixture ~executable:Stdlib.Sys.executable_name ~parity_steps
+      ^ Bench_json.checkpoint_line ~backend ~variant ~precision ~profile ~regime_knobs
+          ~ambient_resolved ~workload ~fixture ~executable:Stdlib.Sys.executable_name ~parity_steps
           ~dominant_kernel:(Option.is_some dominant_kernel) ~completed_steps ~at ~losses
       ^ "\n");
     (* Flushed at once: a kill does not unwind, so a checkpoint still in this process's buffer is
@@ -1384,7 +1393,7 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
   let dominant_kernel = Option.map dominant_kernel ~f:(fun measure -> measure ()) in
   Array.sort synced ~compare:Float.compare;
   let line =
-    Bench_json.result_line ~backend ~variant ~precision ~profile ~regime_knobs
+    Bench_json.result_line ~backend ~variant ~precision ~profile ~regime_knobs ~ambient_resolved
       ~fp_licences:(fp_licence_record ()) ~workload ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
       ~shipped_mma:(mma_wire (step_census routines))

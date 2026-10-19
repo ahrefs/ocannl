@@ -1,0 +1,54 @@
+control: a literal site with its render-only entry finds []: true
+control: an oracle site with its paired entry finds []: true
+control: a literal site with no entry finds [unclassified]: true
+control: an oracle site marked render-only finds [disagrees]: true
+control: a literal site marked paired finds [disagrees]: true
+control: an oracle site paired with another constructor finds [disagrees]: true
+control: an oracle site whose constructor op_legality only matches, built where it does not reach finds [unconsulted]: true
+control: an entry no site raises finds [stale]: true
+control: an entry with neither label finds [unlabelled]: true
+control: an empty render-only reason finds [unlabelled]: true
+control: two entries for one decline finds [duplicate]: true
+control: a cause with a computed check finds [unreadable]: true
+control: a resource named by its constructor finds []: true
+control: a cause held in a variable finds [unreadable]: true
+control: an unqualified cause function finds [unreadable]: true
+control: another phase outside the renderer finds []: true
+control: another phase in the renderer finds [off-phase]: true
+control: a phase held in a variable in the renderer finds [opaque-phase]: true
+control: a phase held in a variable outside the renderer finds [opaque-phase]: true
+control: a constrained phase outside the renderer finds [opaque-phase]: true
+control: Cause_at rebound under another name, at top level finds [rebinds-cause-at]: true
+control: Cause_at rebound under another name, as a let exception finds [rebinds-cause-at]: true
+control: a local module shadowing the oracle finds [shadows-oracle]: true
+control: the oracle's name bound by let module, a functor, a declaration and an unpacked module finds [shadows-oracle; shadows-oracle; shadows-oracle; shadows-oracle]: true
+control: an aliased oracle module finds [unreadable]: true
+control: a pattern naming the phase finds []: true
+control: a comment and a string naming a site finds []: true
+control: a classification in the bullet's second paragraph finds []: true
+control: the section under an indented heading with a closing run of hashes finds []: true
+control: a bullet under an indented next heading, which is outside the section finds []: true
+control: unindented prose after the bullet, which is not part of it finds [unlabelled]: true
+control: a source that does not parse finds [unparsed]: true
+control: a note without the section finds [no-section]: true
+the agent note has the render-time typed declines section: true
+every arrayjit/lib source parses, and the scan reads it without raising: true
+the scan finds render-time typed declines, and every one has an entry classifying it: true
+every entry's classification is how its site builds the decline: paired iff oracle-built: true
+every entry names a decline some site raises, once, as paired or render-only: true
+every Backend_codegen cause is readable, and the renderer raises typed declines only there: true
+every Cause_at spells its phase out under its own name, and no source rebinds the oracle's module name: true
+every paired decline's constructor is one op_legality still produces: true
+some decline is paired with an oracle constructor: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control
+  [scanner-refusal:93267baf53efdf52a09d9a689b122ee2] render-time typed declines
+  [scanner-refusal:a981180a06d8df6fd4de07659591ded7] arrayjit/lib source parses
+  [scanner-refusal:088c4ae45b34730d522c2b57bb9d8963] render-time typed declines
+  [scanner-refusal:dd8e45f07b3a48f23ebf2b744ace13cf] every entry's classification
+  [scanner-refusal:820965bd005837e9b9226c12de25898a] paired or render-only
+  [scanner-refusal:d5a3d0a93c03dd4c310fea6768cacf86] Backend_codegen
+  [scanner-refusal:4f88c489b62274a26eeacde0d502244e] Cause_at
+  [scanner-refusal:15a7945bea16c6bb1aa0978c1e19745c] op_legality
+  [scanner-refusal:b8d04b43e856d40dadc6df2ae5eb1951] an oracle constructor

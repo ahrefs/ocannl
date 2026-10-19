@@ -120,3 +120,14 @@ lred_multi128: 16 bytes of partials, admitted at that limit and refused one byte
 lred_guard_uniform64: 8 bytes of partials, admitted at that limit and refused one byte below it: true
 lred_coop32: 0 bytes of partials, admitted at that limit: true
 lred_guard_flag64: 0 bytes of partials, admitted at that limit: true
+--- leg 12: the butterfly only under warp-uniform control ---
+lred_guard_uniform32: the validator's notion lists the butterfly at 32-lane shuffles, uniform, and admits it: true
+lred_guard_uniform32: every cell of K holds the serial reference's exact value: true
+lred_guard_uniform32: the emitted kernel spells the all-reduce: true
+lred_guard_flag32: the reduction is a lane all-reduce site: true
+lred_guard_flag32: the validator's notion lists no lane collective for the site at 32-lane shuffles: true
+lred_guard_flag32: the validator admits the serial fallback at 32-lane shuffles: true
+lred_guard_flag32: the operands tell the lanes that sum from the lanes that do not: true
+lred_guard_flag32: every cell of K holds the per-lane reference's exact value: true
+lred_guard_flag32: the emitted kernel does not spell the all-reduce: true
+lred_guard_flag32: the emitted kernel loops the reduction in every lane: true

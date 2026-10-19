@@ -769,7 +769,8 @@ let placement_evidence_clean (r : Autotune.report) =
     searches). [name] included (gh-ocannl-669): it names both arms' compiles and the flip
     refinement's decision-surface lowerings, and is what lets a comp carrying no
     {!Ir.Assignments.Block_comment} — one {!Context.compile} would name at the call site — be tuned
-    here at all.
+    here at all. The whole call is one search ({!Autotune.exclusive_search}, gh-ocannl-1352): made
+    while another domain searches, it raises {!Autotune.Concurrent_search} before doing anything.
 
     An arm that fails is a {e losing} arm, not a failed run (gh-ocannl-550): a search that
     terminates on a fatal failure ranks at [infinity], the other arm's completed winner ships and
@@ -907,7 +908,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     ?inline_flips ?ship_arm ?placement_store ?log ?progress ?on_ship ctx loss comp bindings =
   (* [?log] and [?progress] scope the two streams over the whole call: the arm lines below and every
      nested {!Autotune.tune} read them through {!Autotune.log_enabled} and
-     {!Autotune.progress_enabled}. *)
+     {!Autotune.progress_enabled}. One search at a time (gh-ocannl-1352): the whole call is one
+     search, so another domain's [tune] cannot slip in between two arms, and a call made while
+     another domain searches raises {!Autotune.Concurrent_search} before it does anything. *)
+  Autotune.exclusive_search @@ fun () ->
   Autotune.with_streams ?log ?progress @@ fun () ->
   (* Arm attribution on the same stderr trace as Autotune's [autotune: ] lines — winner-arm
      ambiguity misdirected the CUDA benchmark debugging on PR #140. *)

@@ -2371,6 +2371,10 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     precision, and every step of the privatized reduction narrowed where the serial and scope
     renderings did not — a seeded [Privatize] silently changed a tuned reduction's width. *)
 
+let privatize_index_vectors_refusal target =
+  "Schedule.Privatize: v1 requires all accesses of " ^ Tn.debug_name target
+  ^ " under the loop to use identical index vectors"
+
 let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.optimized) :
     Low_level.optimized =
   let open Low_level in
@@ -2550,9 +2554,7 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
         refuse ("Schedule.Privatize: " ^ Tn.debug_name target ^ " is not written (no accumulation)");
       List.iter !accesses ~f:(fun (idcs, _, _) ->
           if not (Array.equal Indexing.equal_axis_index idcs idcs0) then
-            refuse
-              ("Schedule.Privatize: v1 requires all accesses of " ^ Tn.debug_name target
-             ^ " under the loop to use identical index vectors"));
+            refuse (privatize_index_vectors_refusal target));
       (* Per axis, the extent its component ranges over — a component flattened over a [Sub_axis]
          run (gh-ocannl-1165) addresses the run's whole extent product — for the transfers' edge
          guards and the output-mask bound below. *)
