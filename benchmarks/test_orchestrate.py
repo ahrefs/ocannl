@@ -264,6 +264,85 @@ class StrictJsonTest(unittest.TestCase):
         self.assertFalse(refuses_every_non_finite_line(json.loads))
 
 
+class ResultFieldReaderTest(unittest.TestCase):
+    """strict_json's `last_result`/`field` and the `field` command a shell driver asks instead of
+    grepping a result line's text (gh-ocannl-1355; gh-ocannl-1253's driver read `step_ms` as a
+    number where the runner prints a `{p10,p50,p90}` object)."""
+
+    LINES = ('noise\n{"step_ms":{"p10":9,"p50":9,"p90":9}}\n'
+             '{"step_ms":{"p10":1,"p50":2.5,"p90":3},"tune":{"shipped":"A","searches":1}}\n'
+             'trailing noise\n')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def ask(self, text, key):
+        path = self.dir / "cell.out"
+        path.write_text(text)
+        return subprocess.run([sys.executable, str(HERE / "strict_json.py"), "field", str(path), key],
+                              text=True, capture_output=True, timeout=60)
+
+    def test_the_last_result_line_and_its_nested_fields(self):
+        record = strict_json.last_result(self.LINES)
+        self.assertEqual(strict_json.field(record, "step_ms.p50"), 2.5)
+        self.assertEqual(strict_json.field(record, "tune.shipped"), "A")
+        self.assertIsNone(strict_json.last_result("no record here\n"))
+        for key in ("nope", "step_ms.p50.x", "tune.arms"):
+            with self.subTest(key=key):
+                with self.assertRaises(KeyError) as caught:
+                    strict_json.field(record, key)
+                self.assertIn("the result line has no", caught.exception.args[0])
+
+    def test_the_command_prints_a_field_or_names_why_not(self):
+        for key, shown in (("step_ms.p50", "2.5"), ("tune.shipped", "A"),
+                           ("step_ms", '{"p10": 1, "p50": 2.5, "p90": 3}')):
+            with self.subTest(key=key):
+                proc = self.ask(self.LINES, key)
+                self.assertEqual((proc.returncode, proc.stdout), (0, shown + "\n"), proc.stderr)
+        for text, key, why in ((self.LINES, "step_ms.p99", "has no step_ms.p99"),
+                               ("noise\n", "step_ms.p50", "no result line"),
+                               ('{"step_ms":{"p50":NaN}}\n', "step_ms.p50", "NaN"),
+                               ('{"step_ms":{"p50":1e999}}\n', "step_ms.p50", "overflows")):
+            with self.subTest(why=why):
+                proc = self.ask(text, key)
+                self.assertEqual((proc.returncode, proc.stdout), (1, ""), proc.stderr)
+                self.assertIn(why, proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
+
+
+# A shell driver line that greps a quoted JSON key out of a file: a hand parse of a result line.
+SHELL_JSON_KEY_GREP = re.compile(r'\bgrep\b.*"[A-Za-z_][A-Za-z0-9_]*":')
+
+
+class ShellFieldGrepInventoryTest(unittest.TestCase):
+    """No shell driver reads a result-line field with a text pattern (gh-ocannl-1355): it asks
+    `strict_json.py field` for it, which parses the line."""
+
+    def test_no_driver_greps_a_json_field(self):
+        sources = ResultLineReaderInventoryTest.shipped_sources()
+        self.assertIn("gh1253_flip_cells.sh", sources)
+        found = [(name, line.strip()) for name, text in sorted(sources.items())
+                 if name.endswith(".sh") for line in text.splitlines()
+                 if SHELL_JSON_KEY_GREP.search(line)]
+        self.assertEqual(found, [], "read the field with `python3 strict_json.py field FILE KEY`")
+
+    def test_the_scan_finds_the_shapes_it_replaced(self):
+        for planted in (
+            """ms=$({ grep -o '"step_ms":{[^}]*}' "$out/$name.out" || true; } | tail -1)""",
+            """shipped=$(grep -ho '"shipped":"[AB]"' "$out/search.out" | head -1)""",
+            'grep -ho \'"p50":[0-9.]*\' "$out/replay2.out"',
+        ):
+            with self.subTest(planted=planted):
+                self.assertTrue(SHELL_JSON_KEY_GREP.search(planted))
+        # A presence check of a key, and a key in a source file's text, are not field reads.
+        for clean in ("""elif ! grep -q '"step_ms"' "$f"; then""",
+                      'grep -q \'"tune_ship_arm"\' "$t/arrayjit/lib/utils.ml"'):
+            with self.subTest(clean=clean):
+                self.assertFalse(SHELL_JSON_KEY_GREP.search(clean))
+
+
 class NonFiniteResultLineReadersTest(unittest.TestCase):
     """Each reader of a runner's result line refuses one that spells a non-finite number, as
     `strict_json` does, instead of taking it as a measurement."""

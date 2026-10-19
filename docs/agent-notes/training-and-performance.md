@@ -337,7 +337,11 @@ files.
   any other `json.loads` in the drivers that is not exempted with a reason.
 - A shell driver reads that line by PARSING it (stdlib `python3`), never with a `sed`/`grep`
   pattern over its text: a scan from `"arm":"A"` to the first `}` read a nested object placed
-  before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it.
+  before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it --
+  and `step_ms` is a `{p10,p50,p90}` object, not a number. For one field,
+  `python3 benchmarks/strict_json.py field CELL.out step_ms.p50` (or `tune.shipped`) prints it off
+  the parsed last result line and exits 1 naming why there is none; `ShellFieldGrepInventoryTest`
+  fails a driver line that greps a quoted JSON key (gh-ocannl-1355). For a whole verdict,
   `benchmarks/gh834_session.py` is the shape; its harness `benchmarks/test-gh834-cells.sh` renders
   `Bench_json`'s own templates, so a renamed field fails there rather than in a box's session.
   A driver's summary matrix lives in a module the driver runs by path, not in an inline heredoc

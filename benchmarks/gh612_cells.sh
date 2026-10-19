@@ -393,13 +393,13 @@ cmd_profile() { (
   # `profile` always measures the saved ARM A source, but the step p50 belongs to whichever arm the
   # search SHIPPED. Pairing them is only valid where arm A shipped; elsewhere the sum and the step
   # describe different routines and printing them together would invite exactly the wrong inference.
-  local shipped; shipped=$(grep -ho '"shipped":"[AB]"' "$out/search.out" 2>/dev/null | head -1 | grep -o '[AB]')
+  local shipped; shipped=$(python3 "$HERE/strict_json.py" field "$out/search.out" tune.shipped 2>/dev/null)
   if [ "${shipped:-}" = "A" ]; then
     # ONLY the pass-2 replay. search.out's p50 is a pass-1 timing carrying search-process residue,
     # which the protocol rejects -- printing it here would re-offer it as valid paired evidence.
     if [ -s "$out/replay2.out" ]; then
       echo "  paired step p50 (pass-2 replay2.out; this cell shipped arm A, so the pairing is valid):"
-      grep -ho '"p50":[0-9.]*' "$out/replay2.out" 2>/dev/null
+      python3 "$HERE/strict_json.py" field "$out/replay2.out" step_ms.p50
     else
       echo "  NO paired step p50 yet: run \`replay\` (pass 2) for this cell. The pass-1 p50 in"
       echo "  search.out is not a valid comparand -- it carries the search process's own overhead."
@@ -726,7 +726,7 @@ cmd_replay() { (
     > "$out/replay2.tmp" 2> "$out/replay2.err"
   local st=$?
   echo -n "$label r$rep pass-2 replay: exit $st  "
-  local timing; timing=$(grep -h '^{' "$out/replay2.tmp" 2>/dev/null | tail -1 | grep -o '"step_ms":{[^}]*}')
+  local timing; timing=$(python3 "$HERE/strict_json.py" field "$out/replay2.tmp" step_ms 2>/dev/null)
   echo "${timing:-<no step_ms record>}"
   # Producing the timing IS this subcommand's purpose: a zero exit with no record would let the
   # pass-2 loop look successful while yielding nothing for the cell.
