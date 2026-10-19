@@ -719,9 +719,11 @@
 # last, and a single's backdrop is the composite it would join (on gpt2_mini/CUDA the preset
 # backdrop was about ten times the composite's time). Times are compared only within one segment's
 # sweep, where the backdrop is the same; a staffed single that is refused is retried once without
-# its staff. It shapes what a search times, not what a crowned schedule means, so a warm schedule
+# its staff. The split-reduce sites are swept the same way, each site's split staffed with the
+# others'. `false` restores the search that timed every single against presets and recombined the
+# bests last. It shapes what a search times, not what a crowned schedule means, so a warm schedule
 # cache replays its winner whatever the setting. No profile sets it.
-#autotune_staffed_singles=false
+#autotune_staffed_singles=true
 
 # Which units of each beam entry a beam-expansion round of `Autotune.tune` expands
 # (gh-ocannl-1229): `differing`, `full` or `head`. A fissioned routine's time is the sum of its

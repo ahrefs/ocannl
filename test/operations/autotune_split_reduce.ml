@@ -316,16 +316,17 @@ let () =
   (match !report with
   | Some r ->
       (* CPU sweep {8, 32, 128}: site 1 (red 128) admits {8, 32}, site 2 (red 256) admits {8, 32,
-         128} — five singles; the composite recombines the two sites' best-timed singles. Every
-         single must reach a timing window. With no contention the composite is exactly one extra
-         timing; a contention-refused single cannot staff it (gh-ocannl-855). *)
+         128} — five singles; the composite holds the two sites' best-timed singles. Every single
+         must reach a timing window. The singles are staffed (gh-ocannl-1138): the second site's are
+         timed with the first site's best already split, so the composite's window is the second
+         site's winning single and takes no timing of its own; a contention-refused single cannot
+         join it (gh-ocannl-855). *)
       p "multi-site split-reduce singles seeded"
         (if is_cpu then r.Autotune.split_reduce_candidates = 5
          else r.Autotune.split_reduce_candidates >= 2);
       p "best-timed singles recombined into a composite"
         (if is_cpu then
-           (r.Autotune.split_reduce_timed - if r.Autotune.split_reduce_composite_timed then 1 else 0)
-           = r.Autotune.split_reduce_candidates
+           r.Autotune.split_reduce_timed = r.Autotune.split_reduce_candidates
            && Bool.equal r.Autotune.split_reduce_composite_timed
                 r.Autotune.split_reduce_composite_eligible
          else r.Autotune.split_reduce_timed > 0)
@@ -338,55 +339,64 @@ let () =
      failures are fatal. Every observed family preflight therefore completes a window before the
      admitted hook or normal return, including refused windows. Compile declines and dedups never
      reach this observer. Thus the exact counter relationship survives arbitrary timing refusals. *)
+  (* The composite leg cuts the search at the recombined composite's own window, so it runs the bare
+     search, where the composite is timed after every single ([autotune_staffed_singles=false],
+     gh-ocannl-1138): a staffed search has no such window, its composite being the last accepted
+     staffed single's. *)
   List.iter [ false; true ] ~f:(fun composite ->
-      let partial = ref None and injected = ref false and selected = ref false in
-      let split_attempt = ref false and windows = ref 0 in
-      let old_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
-      let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
-      let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
-      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
-        split_attempt := String.is_prefix label ~prefix:"F_split[";
-        selected := !split_attempt && Bool.equal composite (String.mem label ',') );
-      ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun _ ->
-        if !split_attempt then Int.incr windows );
-      ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
-        if !selected then (
-          injected := true;
-          raise Stdlib.Exit) );
+      if composite then
+        Hashtbl.set Utils.config_file_args ~key:"autotune_staffed_singles" ~data:"false";
       Exn.protect
-        ~finally:(fun () ->
-          Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
-          Autotune.Seam.set Autotune.on_candidate_preflight old_preflight;
-          Autotune.Seam.set Autotune.on_candidate_timed old_timed)
+        ~finally:(fun () -> Hashtbl.remove Utils.config_file_args "autotune_staffed_singles")
         ~f:(fun () ->
-          match
-            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
-              ~report:(fun r -> partial := Some r)
-              (Context.cpu ())
-              (named "asr_ms_partial" (Train.forward (make_pair "partial")))
-              Ir.Indexing.Empty
-          with
-          | ctx, _ -> Context.release ctx
-          | exception Stdlib.Exit when !injected -> ());
-      let claim =
-        if composite then "partial report retains admitted split-reduce composite"
-        else "partial report retains admitted split-reduce single"
-      in
-      match !partial with
-      | Some r when !injected ->
-          p claim
-            (!windows > 0
-            && r.Autotune.split_reduce_timed = !windows
-            && ((not composite)
-               || r.Autotune.split_reduce_composite_timed
-                  && r.Autotune.split_reduce_composite_eligible)
-            && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
-      | Some r
-        when !windows > 0
-             && r.Autotune.split_reduce_timed = !windows
-             && r.Autotune.timings_contended > 0 ->
-          skipped ~aggregation:`Environment ~backend:"cc" claim
-      | _ -> fail "expected an admitted split-reduce failure injection")
+          let partial = ref None and injected = ref false and selected = ref false in
+          let split_attempt = ref false and windows = ref 0 in
+          let old_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
+          let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+          let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
+          ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+            split_attempt := String.is_prefix label ~prefix:"F_split[";
+            selected := !split_attempt && Bool.equal composite (String.mem label ',') );
+          ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun _ ->
+            if !split_attempt then Int.incr windows );
+          ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
+            if !selected then (
+              injected := true;
+              raise Stdlib.Exit) );
+          Exn.protect
+            ~finally:(fun () ->
+              Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+              Autotune.Seam.set Autotune.on_candidate_preflight old_preflight;
+              Autotune.Seam.set Autotune.on_candidate_timed old_timed)
+            ~f:(fun () ->
+              match
+                Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+                  ~report:(fun r -> partial := Some r)
+                  (Context.cpu ())
+                  (named "asr_ms_partial" (Train.forward (make_pair "partial")))
+                  Ir.Indexing.Empty
+              with
+              | ctx, _ -> Context.release ctx
+              | exception Stdlib.Exit when !injected -> ());
+          let claim =
+            if composite then "partial report retains admitted split-reduce composite"
+            else "partial report retains admitted split-reduce single"
+          in
+          match !partial with
+          | Some r when !injected ->
+              p claim
+                (!windows > 0
+                && r.Autotune.split_reduce_timed = !windows
+                && ((not composite)
+                   || r.Autotune.split_reduce_composite_timed
+                      && r.Autotune.split_reduce_composite_eligible)
+                && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+          | Some r
+            when !windows > 0
+                 && r.Autotune.split_reduce_timed = !windows
+                 && r.Autotune.timings_contended > 0 ->
+              skipped ~aggregation:`Environment ~backend:"cc" claim
+          | _ -> fail "expected an admitted split-reduce failure injection"))
 
 (* === Leg 6: the conv-gradient shape — the enabling interchange (gh-ocannl-537). ===
 
@@ -488,18 +498,19 @@ let () =
   (match !report with
   | Some r ->
       (* Two sites — the bias gradient (interchanged) and the loss reduction (splittable as lowered)
-         — over the [2*b <= extent] slice of each sweep: 4 singles on CPU, 2 on GPU. *)
+         — over the [2*b <= extent] slice of each sweep: 4 singles on CPU, 2 on GPU, staffed
+         (gh-ocannl-1138) so that the composite is the last accepted single's window. *)
       p "conv-gradient split-reduce candidates seeded"
         (if is_cpu then r.Autotune.split_reduce_candidates = 4
          else r.Autotune.split_reduce_candidates >= 2);
       (* The gh-537 assertion: TIMED, not merely seeded — seeded-but-never-timed is exactly the
-         failure mode gh-476 paid a sweep to discover. Every single must reach a timing window. With
-         no contention, [candidates + 1] additionally pins the composite, which is only proposed
-         when EACH site contributed a usable best-timed single. Under contention a refused single
-         cannot staff that composite, but still counts as reaching the timing window. *)
+         failure mode gh-476 paid a sweep to discover. Every single must reach a timing window, and
+         the composite, which is only eligible when EACH site contributed a usable best-timed
+         single, is the last accepted single's window, not one of its own. Under contention a
+         refused single cannot join that composite, but still counts as reaching the timing
+         window. *)
       p "the interchanged bias-gradient candidate reaches timing"
-        ((r.Autotune.split_reduce_timed - if r.Autotune.split_reduce_composite_timed then 1 else 0)
-         = r.Autotune.split_reduce_candidates
+        (r.Autotune.split_reduce_timed = r.Autotune.split_reduce_candidates
         && Bool.equal r.Autotune.split_reduce_composite_timed
              r.Autotune.split_reduce_composite_eligible)
   | None ->

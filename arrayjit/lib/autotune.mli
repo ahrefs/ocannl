@@ -1030,7 +1030,10 @@ type report = {
           window and no admitted single. [`Proposed] means at least two usable singles staffed a
           proposal, but it did not complete a timing window; [`Refused] and [`Timed] record that
           proposal's refused or admitted window. Window outcomes are published before post-admission
-          callbacks can raise, including in partial reports. *)
+          callbacks can raise, including in partial reports. With staffed singles (config
+          [autotune_staffed_singles], gh-ocannl-1138) the coarse composite is the running composite,
+          which its last accepted staffed window already timed: [`Timed] then records that window,
+          and only a composite no window timed is proposed and timed apart. *)
   fiss_sketch_playoff_timed : int;
       (** The composite playoff's windows (gh-ocannl-1166), counted here and NOT in
           [fiss_sketch_timed]. A per-segment single is timed against every other segment's untuned
@@ -1047,7 +1050,8 @@ type report = {
   fiss_sketch_staffed_timed : int;
       (** Of [fiss_sketch_timed], the staffed singles' windows (gh-ocannl-1138, config
           [autotune_staffed_singles]): singles timed with the other keyed segments on the running
-          composite's choices rather than on their presets. [0] with the setting off. *)
+          composite's choices rather than on their presets. On by default; [0] with the setting off.
+      *)
   fiss_sketch_backdrop_fallbacks : int;
       (** Staffed singles that were refused (a compile or run decline, not a contended window) and
           retried once without their staff (gh-ocannl-1138), so one invalid choice in the running
@@ -1072,7 +1076,9 @@ type report = {
       (** Whether the eligible multi-site split-reduce composite compiled and reached a timing
           window. A completed window refused as unusable still counts: the field pins candidate
           reachability, independently of whether its timing verdict was usable. False when the
-          composite was ineligible, on cache replay, and on search-disabled calls. *)
+          composite was ineligible, on cache replay, and on search-disabled calls. With staffed
+          singles (gh-ocannl-1138) the composite is the running split composite, and its window the
+          last accepted staffed split single's. *)
   mma_candidates : int;
       (** Candidates whose label promises a tensorized ([Schedule.Tensorize]) pipeline that the
           search put through candidate compile: whole-routine and per-fission-segment sketch seeds,

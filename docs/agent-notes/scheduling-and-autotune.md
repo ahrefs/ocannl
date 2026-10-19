@@ -1116,7 +1116,9 @@ files.
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
 - **Staffed singles time a key's sketches inside the running composite** (gh-ocannl-1138, config
-  `autotune_staffed_singles`): the coarse keys are swept one at a time, each single's `staff` holding
+  `autotune_staffed_singles`, on by default since `entry_version` 18; `false` is the bare search the
+  playoff, round-expansion and sketch-placement tests still pin, since their claims read its
+  recombination window or a single's lone-segment digest): the coarse keys are swept one at a time, each single's `staff` holding
   the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
   before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its
   sweep, heaviest key first (segment count times its best sketch's roofline score, logged as
@@ -1131,10 +1133,10 @@ files.
   unchanged IS the coarse key and carries the coarse choice, a new one starts from the seeded plan's,
   and only the new keys are swept (`test/operations/autotune_staffed_fine`, skipped off GPU).
   The split-reduce sites keep one more (`F_split`'s `staff`, the other sites' block counts, starting
-  from the seeded plan's split matched by target and extents): staffing a site's prelude with the
-  others' splits forms the multi-site composite during the seeds, but every segment of a split
-  candidate still runs its preset, so the split singles' backdrop does not shrink the way a sketch
-  single's does.
+  empty): staffing a site's prelude with the others' splits forms the multi-site composite during
+  the seeds, but every segment of a split candidate still runs its preset, so the split singles'
+  backdrop does not shrink the way a sketch single's does, and the seeded plan's split is no start
+  worth its approximate site matching.
   `test/operations/autotune_staffed_singles` scripts an additive landscape and seeds the start through
   the `Autotune.on_staffed_start` seam, which only a seeded plan fills in production.
 - **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**

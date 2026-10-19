@@ -511,7 +511,7 @@ let default_playoff_width = 2
    against the running composite (see [tune]'s staffed sweep) rather than against every other
    segment's preset. Changing the default bumps [Schedule_cache.entry_version]: the search then
    times candidates the other one never did. *)
-let default_staffed_singles = false
+let default_staffed_singles = true
 
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
    winner tests first ([nothing_timed]). *)
@@ -6886,11 +6886,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 fine_new_entries)
           else List.iter coarse_single_specs ~f:run_seed;
           List.iter post_sweep_specs ~f:run_seed;
-          if staffed && not (List.is_empty sr_specs) then (
+          if staffed && not (List.is_empty sr_specs) then
             List.iter sr_sites ~f:(fun s ->
                 match List.filter sr_num_blocks ~f:(fun b -> 2 * b <= s.sr_red) with
                 | [] -> ()
-                | blocks -> ignore (sr_sweep_key (s, blocks) : (int * float) list)));
+                | blocks -> ignore (sr_sweep_key (s, blocks) : (int * float) list));
           (* gh-ocannl-1388: a refused window drops its digest from [seen] so that an equivalent
              later seed can measure it, but no later seed reproduces the seeded plan, so its floor
              would be lost to one contended window. Retried once here, after the seed pass. Still
