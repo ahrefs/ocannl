@@ -144,6 +144,11 @@ let classify_raw ~strict ~classify_backend ~provenance ~phase ~candidate exn bac
   let fatal () = Fatal { exn; backtrace; phase; candidate; cause = None } in
   match exn with
   | _ when is_oom_or_interrupt exn -> fatal ()
+  (* gh-ocannl-1332: a malformed registered setting is the configuration's failure, whatever
+     candidate first read it and in whatever phase: contained as a decline -- the permissive
+     compile-side branch below would -- the search runs on, crowning candidates that never read the
+     key, as though the setting had been honored. *)
+  | Utils.Invalid_config_value _ -> fatal ()
   (* gh-ocannl-1326: typed at the allocator, so no backend classifier is consulted (HIP has none),
      and an allocation the device refused precedes any dispatch whatever the phase. *)
   | Device_memory_exhausted { requested; free; _ } ->

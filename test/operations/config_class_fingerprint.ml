@@ -166,6 +166,27 @@ let typed_getters defaults =
     (match Utils.registered_flag ~arg_name:"autotune_split_reduce_max_sites" with
     | _ -> false
     | exception Invalid_argument _ -> true);
+  (* A refusal a search meets inside a candidate is the configuration's, not the candidate's: even
+     the permissive compile-side containment, which declines an unknown exception (the control),
+     makes it fatal. *)
+  let contained exn =
+    match
+      Ir.Schedule_outcome.protect ~strict:false
+        ~classify_backend:(fun _ _ -> None)
+        ~provenance:Ir.Schedule_outcome.Candidate ~phase:Ir.Schedule_outcome.Transform
+        (fun () -> raise exn)
+    with
+    | Error (Ir.Schedule_outcome.Classified _) -> `Declined
+    | Error (Ir.Schedule_outcome.Fatal _) -> `Fatal
+    | Ok () -> `Ran
+  in
+  p "a malformed setting met in a candidate is fatal where an unknown failure is a decline"
+    (Poly.equal
+       (contained
+          (Utils.Invalid_config_value
+             { key = "gpu_schedule_block_size"; value = "wide"; expected = "an integer" }))
+       `Fatal
+    && Poly.equal (contained (Invalid_argument "a candidate's own failure")) `Declined);
   p "a getter refuses a key with no registered row"
     (match Utils.registered_int ~arg_name:"model_default_placements" with
     | _ -> false
