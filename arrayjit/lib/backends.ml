@@ -215,9 +215,11 @@ let maybe_elide_zeros ~backend_name (segments : Low_level.optimized list) : Low_
                    harmless inside the routine's batch, whose other kernels still touch them, and a
                    compile error for the segment compiled on its own. *)
                 let traced_store =
-                  Hashtbl.filteri seg.Low_level.traced_store ~f:(fun ~key ~data:_ ->
-                      Low_level.code_touches_tn key llc
-                      || not (Low_level.code_touches_tn key seg.Low_level.llc))
+                  if Low_level.has_staged_compilation llc then seg.Low_level.traced_store
+                  else
+                    Hashtbl.filteri seg.Low_level.traced_store ~f:(fun ~key ~data:_ ->
+                        Low_level.code_touches_tn key llc
+                        || not (Low_level.code_touches_tn key seg.Low_level.llc))
                 in
                 { seg with Low_level.llc; traced_store }))
     in

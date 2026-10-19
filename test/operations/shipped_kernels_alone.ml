@@ -55,5 +55,23 @@ let () =
     H.time_shipped_kernels ~out:Stdio.stderr ~repeats:1 ~ctx:!ctx_ref ~bindings
       (H.step_routines routines)
   in
-  p_all ~min:2 "the step ships several kernels, and every one compiles and runs on its own" kernels
-    ~f:(fun (_, _, result) -> Result.is_ok result)
+  p_all "every kernel the step ships compiles and runs on its own" kernels ~f:(fun (_, _, result) ->
+      Result.is_ok result)
+
+(* The parameter rule's one blind spot, kept open on purpose: a [Staged_compilation] callback's
+   accesses are invisible to [Low_level.code_touches_tn], so a kernel holding one keeps every stored
+   entry. Here the record's store is built by a raw twin that writes the node, and the shipped body
+   is only a staged statement writing it, so dropping the untouched entry would emit a reference to
+   an undeclared pointer. *)
+let () =
+  let tn = (Ll_test.node_factory ~first_id:9950 ~dims:[| 1 |] ()) "sk_staged" in
+  Ll_test.materialize tn;
+  let cell = [| Ll_test.fixed 0 |] in
+  let o =
+    Ll_test.optimize_scoped ~materialized:[ tn ] ~name:"sk_staged"
+      ~raw:(Ll_test.set tn cell (Ir.Low_level.Constant 9.0))
+      (Ir.Low_level.Staged_compilation (fun () -> PPrint.string "sk_staged[0] = 2.0f;"))
+  in
+  let got = Ll_test.execute ~name:"sk_staged" o ~seed:[ (tn, [| -1.0 |]) ] ~read:[ tn ] in
+  p "a kernel whose only access to a node is staged code still declares it, and the write lands"
+    (Ll_test.close (List.hd_exn got) [| 2.0 |])

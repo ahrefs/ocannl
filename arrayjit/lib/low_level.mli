@@ -404,7 +404,13 @@ val scalar_touches_tn : Tnode.t -> scalar_t -> bool
     memory across the reduction. *)
 
 val code_touches_tn : Tnode.t -> t -> bool
-(** The statement-body counterpart of {!scalar_touches_tn}: any read or write of the node. *)
+(** The statement-body counterpart of {!scalar_touches_tn}: any read or write of the node. Blind to
+    a [Staged_compilation] callback's accesses: pair it with {!has_staged_compilation} wherever a
+    "no" has to mean "never accessed". *)
+
+val has_staged_compilation : t -> bool
+(** Whether the code holds a [Staged_compilation] anywhere, scalar positions included: a callback
+    whose emitted code no analysis can inspect, so it may access any node. *)
 
 val accum_update_parts :
   tn:Tnode.t -> idcs:Indexing.axis_index array -> scalar_t -> (Ops.binop * scalar_t) option

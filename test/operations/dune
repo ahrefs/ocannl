@@ -7414,7 +7414,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules shipped_kernels_alone)
- (libraries base stdio bench_harness ocannl arrayjit.verdict)
+ (libraries base stdio pprint bench_harness ocannl arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

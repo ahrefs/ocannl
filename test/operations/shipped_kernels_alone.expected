@@ -1,1 +1,2 @@
-the step ships several kernels, and every one compiles and runs on its own: true
+every kernel the step ships compiles and runs on its own: true
+a kernel whose only access to a node is staged code still declares it, and the write lands: true
