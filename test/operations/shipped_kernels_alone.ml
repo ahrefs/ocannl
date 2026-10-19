@@ -7,12 +7,14 @@
    The model is two transformer encoder blocks, so their layer norms' and attention's internal nodes
    ([mean], [sqrt_std_dev], ...) share labels across layers. On a GPU backend the step's gradient
    zeros fold into one zero segment, and [gpu_elide_covered_zeros] drops the zeros an accumulation
-   covers. Before gh-ocannl-1391 the dropped nodes stayed in that segment's store, hence among its
-   kernel parameters, while parameter names are disambiguated over the code alone: two same-labelled
-   dropped nodes became two parameters named alike, which the shipped batch tolerates (its other
-   kernels touch them) and a compile of the segment alone does not (CUDA: "duplicate parameter
-   name", on kernel 44 of 92 on rog). A CPU backend keeps its zero segments, so there the claim
-   holds without exercising that path. *)
+   covers. Before gh-ocannl-1391 the dropped nodes stayed in that segment's store, and every
+   materialized store entry was a kernel parameter, while parameter names are disambiguated over the
+   code alone: two same-labelled dropped nodes became two parameters named alike, which the shipped
+   batch tolerates (its other kernels touch them) and a compile of the segment alone does not (CUDA:
+   "duplicate parameter name", on kernel 44 of 92 on rog; ahrefs/ocannl#1387 on HIP and Metal too).
+   Both halves changed: the elision prunes what it left untouched from the store, and a kernel
+   declares only the store entries its code touches. A CPU backend keeps its zero segments, so there
+   the claim holds without exercising the elision path. *)
 
 open Base
 open Ocannl
