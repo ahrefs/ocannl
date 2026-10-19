@@ -770,7 +770,7 @@ files.
   on gfx1151 and ~6.6% on gfx1102, intrinsic to the f32 arm (a before/after split showed at most ~5
   points on one cell attributable to the gh-ocannl-1064 table boundary), while the serial legs run
   5-21% faster wide. The maintainer took the accuracy. HIP's resolution lives in
-  `Hip_backend.bf16_accum_wide`, the one predicate behind its `accum_prec` and `mma_combo`;
+  `Ir.Hip_mma.bf16_accum_wide`, the one predicate behind its `accum_prec` and `mma_combo`;
   `Numerics.bf16_accum_wide` still answers only "is the mode `Bf16_wide`", which
   is all the seeding gate needs since HIP advertises both wide scopes. Cache identity follows the
   resolution by derivation (the next bullet); the flip first shipped with a hand-added
