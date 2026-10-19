@@ -46,9 +46,18 @@
       one, fails the replay into a re-search. One seed uses the config-default thresholds,
       reproducing the untuned default pipeline exactly — so the winner is never worse than not
       tuning, even on launch-overhead-bound workloads where every aggressive preset loses to it; its
-      measured time is surfaced as the report's [default_ms] reference (gh-ocannl-552). Each preset
-      is additionally seeded in a {e privatized} variant ({!extend_with_privatize}): per segment,
-      every materialized read-modify-write accumulator is contracted into a per-thread register tile
+      measured time is surfaced as the report's [default_ms] reference (gh-ocannl-552). On CUDA and
+      HIP, where the recipes' untuned compile ships the seeded plan ({!seeded_default}) rather than
+      that pipeline, the plan is seeded too, as the very FIRST candidate ({!seeded_plan},
+      gh-ocannl-1388; its time is [seeded_ms]): a search that stops after its first timing, or whose
+      every later window is refused, crowns the step that ships untuned; a refused window of the
+      plan's own is retried once after the seed pass. Under config [model_default_schedule=true]
+      (the [performance] and [approximate] profiles) the recipes' untuned compile is
+      {!model_default}'s pick instead, which no candidate reproduces (its placement pre-search
+      changes the program), so there the floor is the seeded plan, not the step that ships untuned,
+      until gh-ocannl-1253 starts the model's pick from this plan. Each preset is additionally
+      seeded in a {e privatized} variant ({!extend_with_privatize}): per segment, every materialized
+      read-modify-write accumulator is contracted into a per-thread register tile
       ({!Ir.Schedule.optop.Privatize}) over its serial reduction loop where the op's preconditions
       permit — a routine-local accumulator beats a device-memory RMW, and on Metal it sidesteps the
       volatile scalar-RMW workaround.
@@ -1102,7 +1111,17 @@ type report = {
           [None] when the seed failed to compile, was refused as unparallelized on GPU
           (gh-ocannl-532), or on a cache hit whose entry predates this field or was written under a
           config that shaped a different default pipeline
-          ({!Ir.Schedule.default_schedule_fingerprint} mismatch). *)
+          ({!Ir.Schedule.default_schedule_fingerprint} mismatch). On CUDA and HIP the recipes'
+          untuned compile ships the seeded plan instead ({!seeded_default}), whose time is
+          [seeded_ms]. *)
+  seeded_ms : float option;
+      (** The seeded untuned plan's measured time (gh-ocannl-1388): the step {!seeded_default} ships
+          on CUDA and HIP, which the search seeds FIRST, so on a completed search with
+          [seeded_ms = Some s], [best_ms <= s] by construction, and a search that timed only its
+          first candidate crowned it. Attributed by digest, like [default_ms]. [None] where no plan
+          was seeded (another backend, or a plan that is the default pipeline, whose time is
+          [default_ms]), when its seed failed to compile or both its window and its one retry were
+          refused, and on a cache hit (not stored). *)
   best_ms : float;
       (** The winner's measured time, or [infinity] when nothing was timed at all — every candidate
           failed and the baseline was not dispatched (or was declined). In that case no cache entry
@@ -1756,6 +1775,54 @@ val seeded_split_sites :
     {!Context.backend_name}): on HIP the split measured 1.42x SLOWER on gpt2_mini_train b256 (885 to
     1256 ms, gfx1151 unified memory) where CUDA gained 1.39x (543 to 391 ms), so HIP keeps the
     unsplit plan; elsewhere the result is empty. Exposed for tests. *)
+
+(** What the seeded plan does with one segment (gh-ocannl-1388). *)
+type seeded_segment =
+  | Seeded_preset  (** The default preset, as the default pipeline schedules the segment. *)
+  | Seeded_sketch of { digest : string; params : sketch_params }
+      (** The scalar blocktile sketch [params] ({!seeded_params}), for the segment whose structural
+          digest ([Schedule_cache.canonicalize ~with_placements:false]) is [digest]. *)
+  | Seeded_sunk of { digest : string; swaps : int }
+      (** {!reduction_sink}'s [swaps] interchanges, then the default preset, likewise matched. *)
+
+type seeded_plan = {
+  sp_split : (sr_site * int) list;
+      (** The reductions split whole-routine before segmenting ({!seeded_split_sites}). *)
+  sp_segments : (Ir.Schedule.segmentation * seeded_segment list) option;
+      (** The segmentation of the split routine and one decision per segment, by position; [None]:
+          the default pipeline's own segments. *)
+  sp_refined : int;
+      (** Default segments replaced by their finer [arity_cuts] pieces ({!refine_segments}: a block
+          takes its pieces where more of them seed). *)
+}
+(** The seeded untuned plan as a replayable value (gh-ocannl-1388): what {!seeded_default} decides
+    for one lowering. {!tune} derives it on its base lowering and seeds it as its FIRST candidate,
+    replayed the way the untuned compile replays it, so the step the recipes ship untuned is the
+    search's floor by construction (where {!untuned_compile} is {!seeded_default}, i.e. without
+    [model_default_schedule=true]); gh-ocannl-1138 extends it from there. *)
+
+val seeded_plan :
+  ?min_reduction:int ->
+  ?min_serial:int ->
+  ?reduction_sink:bool ->
+  backend:string ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Low_level.optimized ->
+  seeded_plan option
+(** The plan {!seeded_default} would compile [opt] under, derived on a hermetic copy; [None] where
+    that is the plain default pipeline (another backend, scheduling or fission off, the thresholds
+    at 0, or nothing to split, seed or sink). The optional arguments are {!seeded_default}'s. *)
+
+val seeded_plan_digest : seeded_plan -> string
+(** The plan's identity from its content (split sites by target name, extents and block count; the
+    segmentation; each segment's decision and the structural digest it was decided on), alike in
+    every process deriving it from the same lowering under the same settings. *)
+
+val seeded_plan_label : seeded_plan -> string
+(** The search's label for the plan's seed:
+    [F_seeded[<n> segs, <k> seeded, <s> sunk, <p> split, plan <digest prefix>]]. *)
 
 val refine_segments :
   coarse:(int * 'k * int * 'p) list ->

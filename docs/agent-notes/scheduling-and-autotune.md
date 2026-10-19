@@ -558,8 +558,38 @@ files.
   narrow-storage cell the backend widens is skipped, as for seeding. Its machine-level effect is
   HIP's alone (see the backend-precision note on reading the PTX/ISA first): the layer-norm
   gamma/beta nests stop round-tripping their cells, while NVRTC had already promoted every one.
-  Not in `maybe_default_schedules`: the tuner's presets, the fission probes and the schedule cache
-  are unchanged (`gpu_default_reduction_sink`, `Untimed_model`).
+  Not in `maybe_default_schedules`: the tuner's presets and the fission probes are unchanged; the
+  search meets the sink only through the seeded plan's seed (next bullet;
+  `gpu_default_reduction_sink`, `Search_shaping` since then).
+- **The search seeds the seeded untuned plan FIRST** (gh-ocannl-1388, `Autotune.seeded_plan`,
+  flavor `F_seeded`). Before it, a GPU search's pool started from the plain default pipeline, so a
+  search that timed only its first candidate, or refused every later window, crowned a step the
+  untuned compile had already beaten (gpt2_mini_train b256 on rog: 1720 ms against 563 ms). The plan
+  is a value (`seeded_plan`: the split sites, then the segmentation and one `seeded_segment` per
+  segment -- preset, sketch or sunk -- with the structural digest it was decided on), decided once on
+  the base lowering and replayed in the candidate compile through `seeded_replay`, the same function
+  the untuned compile replays through, so the candidate's code is the shipped step's digest for
+  digest (`test/operations/autotune_seeded_seed` holds that, the crown of a search cut to its first
+  candidate, and bitwise gradients). Two traps. The plan must be derived from the base lowering AS
+  THE TRANSFORM SAW IT: codegen later forces the undecided placements into the table the captured
+  `base_opt` references, and the decisions key on placement-sensitive digests, so `tune` keeps a
+  pristine `scratch_of` copy taken inside the base compile's transform (GPU only). And a split
+  needs a long OUTERMOST reduction loop: a fixture with `b = 4` outermost proposes no split at all
+  (the b8 case above), so `autotune_seeded_seed` lays out 1024 x 4 rows. A plan equal to the default
+  pipeline (another backend, nothing seeds, splits or sinks) is not seeded, so CPU searches and
+  unseeded GPU ones keep their candidate order. The floor is the step the untuned compile ships
+  only where that compile IS `seeded_default`: under `model_default_schedule=true` (the
+  `performance` and `approximate` profiles) it is `model_default`'s pick, whose placement pre-search
+  changes the program, so no candidate reproduces it (gh-ocannl-1253's defaults flip starts the
+  model from this plan). A refused window does not lose the floor: a contended digest leaves
+  `seen` for an equivalent later seed to measure, and since no later seed reproduces the plan, the
+  seed pass ends with one retry of it. `placement_entry_version` 2 retired the recorded arm
+  decisions that compared searches without the floor. The three `gpu_default_*` keys are `Search_shaping`
+  (registered defaults 32, 1024, true), the report's `seeded_ms` is the seed's time beside
+  `default_ms` (not stored, so `None` on a cache hit), and `entry_version` 16 retired the crowns
+  searched without this floor. `seeded_plan_digest` names the plan from its content alone (split
+  sites by target name and extents, not by node id or symbol), for the trajectory identity
+  gh-ocannl-1253 adds once an untimed input steers the plan.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only

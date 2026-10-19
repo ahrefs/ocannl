@@ -59,6 +59,9 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   fp_contract
   fp_finite_math
   fp_reassociate
+  gpu_default_reduction_sink
+  gpu_default_sketch_min_reduction
+  gpu_default_split_reduce_min_serial
   gpu_fission_keep_mapping
   gpu_lane_all_reduce_simdgroups
   gpu_lane_preamble_reduction

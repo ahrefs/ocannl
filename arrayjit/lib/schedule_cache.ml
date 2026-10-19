@@ -755,8 +755,9 @@ type entry = {
    13: gh-ocannl-1165 -- the coalesced layout's seeds, a search branch beside the sketch families
    14: gh-ocannl-1325 -- wte.grad / v.grad become matmul sites; the scalar blocktile ep twins compile
    15: gh-ocannl-1414 -- two-loop reduction bands become split-reduce sites, coalesced or interchanged
+   16: gh-ocannl-1388 -- the seeded untuned plan seeds the search first, a floor older crowns lack
 *)
-let entry_version = 15
+let entry_version = 16
 
 let sanitize name =
   String.map name ~f:(fun c ->
@@ -1131,8 +1132,9 @@ type placement_entry = {
 (* Versions [placement_entry] payloads the way [entry_version] versions schedule entries. *)
 (*= placement_entry_version history -- one line per value, oldest first; a bump appends one:
    1: gh-ocannl-786 -- the placement decision and the arm timings that chose it
+   2: gh-ocannl-1388 -- decisions compared arm searches that lacked the seeded untuned floor
 *)
-let placement_entry_version = 1
+let placement_entry_version = 2
 
 let placement_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend =
   Option.map (cache_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend)

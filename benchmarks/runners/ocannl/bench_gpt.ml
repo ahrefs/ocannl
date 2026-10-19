@@ -26,6 +26,7 @@ let () =
   let splice = Bench_splice.from_env ~tune in
   let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   H.install_timing_trace ();
+  H.install_search_cut ();
   let materialize = H.env_flag "BENCH_MATERIALIZE" in
   let debug = H.env_flag "BENCH_DEBUG" in
   let st = St.read fixture in
