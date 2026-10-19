@@ -1593,3 +1593,22 @@ val to_doc_cstyle :
 val to_doc :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
 (** Adheres to the %cd syntax. *)
+
+val fragment_transfer :
+  into_fragment:bool ->
+  t ->
+  (Indexing.symbol * int * Tnode.t * Tnode.t * Indexing.axis_index array * Indexing.symbol list)
+  option
+(** One of the accumulator transfers [Schedule.contract_tensorized_accumulator] synthesizes around a
+    persistent fragment's reduction —
+    [lane { if lane == 0 { serial copy loops { fragment <- target } } }] for [into_fragment], the
+    store back otherwise — as
+    [(lane, lane width, fragment, target, target indices, copy symbols innermost-first)]. The
+    renderer's fragment-scope recognition and the cost model's operand-load count (gh-ocannl-1254)
+    both read regions through it. *)
+
+val fragment_target_ld :
+  row_sym:Indexing.symbol option -> Tnode.t * Indexing.axis_index array -> int
+(** The transfer target's leading-dimension stride in elements: the stride of the axis carrying the
+    row copy symbol (the outermost of {!fragment_transfer}'s copy symbols), the minor dim without
+    one. *)

@@ -10357,3 +10357,49 @@ let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
         unflat_lines [ left_loop; middle_loop; right_loop ]
   in
   build_loops ~any_padding_so_far:false 0 []
+
+(* The accumulator transfers [Schedule.contract_tensorized_accumulator] synthesizes around a
+   persistent fragment's reduction: lane { if lane==0 { fragment <- target } } (the init) and lane {
+   if lane==0 { target <- fragment } } (the store). Shared by the renderer's fragment-scope
+   recognition ([C_syntax]) and the cost model's operand-load count, so both read the region the
+   same way. *)
+let is_lane0_guard lane = function
+  | Binop (Ops.Cmpeq, (Embed_index (Indexing.Iterator guard_lane), _), (Constant zero, _))
+  | Binop (Ops.Cmpeq, (Constant zero, _), (Embed_index (Indexing.Iterator guard_lane), _)) ->
+      Indexing.equal_symbol lane guard_lane && Float.equal zero 0.
+  | _ -> false
+
+let fragment_transfer ~into_fragment = function
+  | For_loop
+      { index = lane; from_ = 0; to_; axis = Workgroup; body = If { cond = cond, _; body }; _ }
+    when is_lane0_guard lane cond ->
+      let rec descend syms = function
+        | For_loop { index; axis = Serial; body; _ } -> descend (index :: syms) body
+        | Set { tn = fragment; llsc = Get (target, target_idcs); _ } when into_fragment ->
+            Some (lane, to_ + 1, fragment, target, target_idcs, syms)
+        | Set { tn = target; llsc = Get (fragment, _); idcs = target_idcs; _ }
+          when not into_fragment ->
+            Some (lane, to_ + 1, fragment, target, target_idcs, syms)
+        | _ -> None
+      in
+      descend [] body
+  | _ -> None
+
+(* The target's leading-dimension stride: the stride of the axis carrying the transfer nest's
+   outermost (row) copy symbol — the minor dim in the plain case, larger when interior batch axes
+   sit between the tile roles (gh-ocannl-528). *)
+let fragment_target_ld ~(row_sym : Indexing.symbol option) ((tn : Tnode.t), idcs) =
+  let dims = Lazy.force tn.Tnode.dims in
+  let rank = Array.length dims in
+  let default = if rank >= 1 then dims.(rank - 1) else 1 in
+  match row_sym with
+  | None -> default
+  | Some s -> (
+      match Array.findi idcs ~f:(fun _ idx -> Indexing.axis_index_mentions_symbol s idx) with
+      | Some (p, _) ->
+          let ld = ref 1 in
+          for x = p + 1 to rank - 1 do
+            ld := !ld * dims.(x)
+          done;
+          !ld
+      | None -> default)

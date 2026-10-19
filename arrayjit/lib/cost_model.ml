@@ -754,6 +754,27 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
 let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
     (opt : Low_level.optimized) =
   let prec tn = Lazy.force tn.Tn.storage_prec in
+  (* Each persistent fragment's backing target, read off its init transfer the way the renderer
+     reads it ([Low_level.fragment_transfer], [Low_level.fragment_target_ld]). *)
+  let targets = Hashtbl.create (module Tn) in
+  let rec find_targets (c : Low_level.t) =
+    match Low_level.fragment_transfer ~into_fragment:true c with
+    | Some (_, _, fragment, target, idcs, syms) ->
+        Hashtbl.set targets ~key:fragment
+          ~data:
+            ( Low_level.fragment_target_ld ~row_sym:(List.last syms) (target, idcs),
+              operand_place opt target )
+    | None -> (
+        match c with
+        | Low_level.Seq (c1, c2) ->
+            find_targets c1;
+            find_targets c2
+        | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> find_targets body
+        | Tile_mma _ | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
+        | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier ->
+            ())
+  in
+  find_targets opt.Low_level.llc;
   let sites = ref [] in
   let rec go ~scale ~env (c : Low_level.t) =
     match c with
@@ -775,17 +796,26 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
            unmarked statement — on its own, if the hook accepts it with its destination's real
            place. A statement it declines both ways renders scalar or register-tiled code: nothing
            the arm description says applies to it. *)
-        let accepts ~fragment =
-          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~fragment
-            ~d:(ldd, operand_place opt d_tn)
+        let accepts ~fragment_target ~d =
+          operand_accepts ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~fragment_target ~d
             ~a:(lda, operand_place opt a_tn)
             ~b:(ldb, operand_place opt b_tn)
         in
+        let own = (ldd, operand_place opt d_tn) in
         let scope =
-          if Set.mem opt.Low_level.simdgroup_fragments d_tn && accepts ~fragment:true then
-            Some Backend_intf.Mma_fragment_scope
-          else if accepts ~fragment:false then Some Backend_intf.Mma_per_statement
-          else None
+          if not (Set.mem opt.Low_level.simdgroup_fragments d_tn) then
+            Option.some_if (accepts ~fragment_target:None ~d:own) Backend_intf.Mma_per_statement
+          else
+            (* A marked accumulator renders through its region: the fragment scope over the backing
+               target when the hook accepts it there, else statements against the target itself. A
+               marked statement whose region is not recognized has no count. *)
+            Option.bind (Hashtbl.find targets d_tn) ~f:(fun target ->
+                if accepts ~fragment_target:(Some target) ~d:own then
+                  Some Backend_intf.Mma_fragment_scope
+                else
+                  Option.some_if
+                    (accepts ~fragment_target:None ~d:target)
+                    Backend_intf.Mma_per_statement)
         in
         let description =
           Option.map scope ~f:(fun scope ->

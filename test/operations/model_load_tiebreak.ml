@@ -305,19 +305,30 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
           ~m:_
           ~n:_
           ~k:_
-          ~fragment:asks_fragment
+          ~fragment_target
           ~d:_
           ~a:_
           ~b:_
-        -> (not asks_fragment) || fragment);
+        -> Option.is_none fragment_target || fragment);
     }
   in
   let declining =
     {
       capabilities with
       mma_accepts =
-        (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ ~ta:_ ~tb:_ ~m:_ ~n:_ ~k:_ ~fragment:_ ~d:_ ~a:_ ~b:_ ->
-          false);
+        (fun ~d_prec:_
+          ~a_prec:_
+          ~b_prec:_
+          ~ta:_
+          ~tb:_
+          ~m:_
+          ~n:_
+          ~k:_
+          ~fragment_target:_
+          ~d:_
+          ~a:_
+          ~b:_
+        -> false);
     }
   in
   all "a statement the hook declines has no count" (fun (_, plain, swz) ->
@@ -432,7 +443,7 @@ let () =
             ~m:_
             ~n:_
             ~k:_
-            ~fragment:_
+            ~fragment_target:_
             ~d:_
             ~a:_
             ~b:_

@@ -1047,32 +1047,34 @@ let codegen_capabilities (module Config : C_syntax_config) =
         ~m
         ~n
         ~k
-        ~fragment
+        ~fragment_target
         ~d:(ldd, (d_space, d_layout))
         ~a:(lda, (a_space, a_layout))
         ~b:(ldb, (b_space, b_layout))
       ->
-        let target : mma_operand = (PPrint.empty, ldd, (d_space :> mma_space), d_layout) in
         let a_src : mma_source = (lda, (a_space :> mma_space), a_layout)
         and b_src : mma_source = (ldb, (b_space :> mma_space), b_layout) in
-        let statement d =
+        let statement (d : mma_operand) =
           match Config.mma_syntax with
           | None -> false
           | Some emit ->
               Option.is_some (emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d ~a:a_src ~b:b_src)
         in
-        if not fragment then statement target
-        else
-          (* The renderer's order: the enclosing scope accepts the backing target and operands, then
-             renders the update-only statement against its fragment array. *)
-          let fragment_name = "__mma_probe" in
-          (match Config.mma_fragment_syntax with
-            | None -> false
-            | Some scope ->
-                Option.is_some
-                  (scope ~d_prec ~a_prec ~b_prec ~m ~n ~k ~fragment:fragment_name ~target ~a:a_src
-                     ~b:b_src ~body:(fun () -> PPrint.empty)))
-          && statement (PPrint.empty, ldd, `Fragment fragment_name, d_layout));
+        match fragment_target with
+        | None -> statement (PPrint.empty, ldd, (d_space :> mma_space), d_layout)
+        | Some (t_ld, (t_space, t_layout)) ->
+            (* The renderer's order: the enclosing scope accepts the backing target and operands,
+               then renders the update-only statement against its fragment array. *)
+            let fragment_name = "__mma_probe" in
+            (match Config.mma_fragment_syntax with
+              | None -> false
+              | Some scope ->
+                  Option.is_some
+                    (scope ~d_prec ~a_prec ~b_prec ~m ~n ~k ~fragment:fragment_name
+                       ~target:(PPrint.empty, t_ld, (t_space :> mma_space), t_layout)
+                       ~a:a_src ~b:b_src
+                       ~body:(fun () -> PPrint.empty)))
+            && statement (PPrint.empty, ldd, `Fragment fragment_name, d_layout));
     mma_operand_fragments = Config.mma_operand_fragments;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
@@ -4467,28 +4469,7 @@ module C_syntax (B : C_syntax_config) = struct
     let nonempty =
       List.filter (flat_lines [ c ]) ~f:(function Noop | Comment _ -> false | _ -> true)
     in
-    let is_lane0_guard lane = function
-      | Binop (Ops.Cmpeq, (Embed_index (Indexing.Iterator guard_lane), _), (Constant zero, _))
-      | Binop (Ops.Cmpeq, (Constant zero, _), (Embed_index (Indexing.Iterator guard_lane), _)) ->
-          Indexing.equal_symbol lane guard_lane && Float.equal zero 0.
-      | _ -> false
-    in
-    let unwrap_transfer ~into_fragment = function
-      | For_loop
-          { index = lane; from_ = 0; to_; axis = Workgroup; body = If { cond = cond, _; body }; _ }
-        when is_lane0_guard lane cond ->
-          let rec descend syms = function
-            | For_loop { index; axis = Serial; body; _ } -> descend (index :: syms) body
-            | Set { tn = fragment; llsc = Get (target, target_idcs); _ } when into_fragment ->
-                Some (lane, to_ + 1, fragment, target, target_idcs, syms)
-            | Set { tn = target; llsc = Get (fragment, _); idcs = target_idcs; _ }
-              when not into_fragment ->
-                Some (lane, to_ + 1, fragment, target, target_idcs, syms)
-            | _ -> None
-          in
-          descend [] body
-      | _ -> None
-    in
+    let unwrap_transfer = fragment_transfer in
     let rec collect_fragment_tiles fragment acc = function
       | Tile_mma { d = d, _; _ } as tm when Tn.equal d fragment -> tm :: acc
       | Seq (a, b) -> collect_fragment_tiles fragment (collect_fragment_tiles fragment acc a) b
@@ -4521,27 +4502,10 @@ module C_syntax (B : C_syntax_config) = struct
       let ptr = parens (string (get_ident tn) ^^ string " + " ^^ pp_array_offset (idcs, dims)) in
       (prec, (ptr, ld, operand_space tn, (operand_layout ctx) tn ~ld ~idcs ~dims))
     in
-    (* The target's leading-dimension stride: the stride of the axis carrying the transfer nest's
-       outermost (row) copy symbol — the minor dim in the plain case, larger when interior batch
-       axes sit between the tile roles (gh-ocannl-528). The transfer nests are synthesized by
-       [Schedule.contract_tensorized_accumulator], so the outermost serial copy loop is the
-       fragment's row by construction. *)
-    let target_ld_of ~(row_sym : Indexing.symbol option) (tn, idcs) =
-      let dims = Lazy.force tn.Tn.dims in
-      let rank = Array.length dims in
-      let default = if rank >= 1 then dims.(rank - 1) else 1 in
-      match row_sym with
-      | None -> default
-      | Some s -> (
-          match Array.findi idcs ~f:(fun _ idx -> Indexing.axis_index_mentions_symbol s idx) with
-          | Some (p, _) ->
-              let ld = ref 1 in
-              for x = p + 1 to rank - 1 do
-                ld := !ld * dims.(x)
-              done;
-              !ld
-          | None -> default)
-    in
+    (* The target's leading-dimension stride ([Low_level.fragment_target_ld]). The transfer nests
+       are synthesized by [Schedule.contract_tensorized_accumulator], so the outermost serial copy
+       loop is the fragment's row by construction. *)
+    let target_ld_of = fragment_target_ld in
     match nonempty with
     | init :: reduction :: store :: rest -> (
         (* [rest] is any statements following the marked region in the same body — in particular the

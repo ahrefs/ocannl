@@ -130,8 +130,10 @@ files.
   tile, not the descriptor's, and whether its loop nest reloads each operand per tile of the
   other's free axis: inline-PTX yes, wmma no), both per emission scope; and `mma_accepts`, the
   backend's own `mma_syntax` hook probed without addresses, decides both whether a statement counts
-  at all and in which scope (a fragment-marked statement where the hook accepts its update-only
-  call, else per statement with the destination's real place, as the renderer falls back). A
+  at all and in which scope, in the renderer's order: a fragment-marked statement through its
+  region (`Low_level.fragment_transfer` finds the backing target, as the renderer does), in the
+  fragment scope where `mma_fragment_syntax` accepts the target and the update-only call, else as
+  statements against the target; an unmarked one per statement. A
   backend that describes no arm (CPU register tiles, Metal, HIP) gets `Undescribed`, code with no
   `Tile_mma` `No_tile_mma` (`Cost_model.load_count`), and a keyless leaf neither wins nor loses a tie: each review round of staging#1216 that restated an
   emission detail in the cost model found the next arm it got wrong. `Schedule_space.search
