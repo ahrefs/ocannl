@@ -4668,7 +4668,8 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules schedule_cache_device)
  (libraries base ocannl stdio arrayjit.verdict test_utils)
  (preprocess
@@ -9122,6 +9123,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_BUFFER_ALIASING)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)

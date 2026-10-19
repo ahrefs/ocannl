@@ -245,12 +245,14 @@ Programs reading the cc vector width, every rule running which declares or pins 
   bin/dune, executable narrow_gebp_bench: narrow_gebp_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
   bin/dune, executable schedule_bench: schedule_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
   test/operations/dune, executable autotune_fission_sketch: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
+  test/operations/dune, executable limits_field_classes: limits_field_classes.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
   test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
   test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector_bytes`
   test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
+  test/operations/dune, test schedule_cache_device: schedule_cache_device.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
   test/operations/dune, test schedule_conv_gemm: schedule_conv_gemm.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
   test/operations/dune, test schedule_mma_matmul: schedule_mma_matmul.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
   test/operations/dune, test schedule_strided_1x1: schedule_strided_1x1.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
