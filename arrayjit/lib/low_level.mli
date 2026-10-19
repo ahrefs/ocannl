@@ -352,10 +352,12 @@ module Canonical_render : sig
   type policy = {
     emit_tn : Tnode.t -> unit;  (** Render a tensor node reference. *)
     emit_free_sym : Indexing.symbol -> unit;
-        (** Render a symbol that neither an enclosing loop binder nor {!initial_tokens} bound. *)
+        (** Render a symbol that is in the scope of neither an enclosing loop binder nor
+            {!initial_tokens} — including a reference after its loop exited (gh-ocannl-1403). *)
     on_bind_loop : Indexing.symbol -> id:int -> shadowed:bool -> unit;
-        (** Called when a [For_loop] binder mints the token ["b<id>"]. [shadowed] iff the symbol
-            already had a token: a duplicated binder makes symbol references ambiguous. *)
+        (** Called when a [For_loop] / [Scan_loop] binder mints the token ["b<id>"]. [shadowed] iff
+            the symbol was bound before in this walk — by an enclosing binder, an exited one, or
+            {!initial_tokens}: a duplicated binder makes symbol references ambiguous. *)
     mark_incomplete : unit -> unit;
         (** Called when an opaque construct makes the rendering an unfaithful summary of the code.
         *)

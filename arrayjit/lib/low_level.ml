@@ -445,10 +445,12 @@ module Canonical_render = struct
   type policy = {
     emit_tn : Tn.t -> unit;  (** Render a tensor node reference. *)
     emit_free_sym : Indexing.symbol -> unit;
-        (** Render a symbol that neither an enclosing loop binder nor {!initial_tokens} bound. *)
+        (** Render a symbol that is in the scope of neither an enclosing loop binder nor
+            {!initial_tokens} — including a reference after its loop exited (gh-ocannl-1403). *)
     on_bind_loop : Indexing.symbol -> id:int -> shadowed:bool -> unit;
-        (** Called when a [For_loop] binder mints the token ["b<id>"]. [shadowed] iff the symbol
-            already had a token: a duplicated binder makes symbol references ambiguous. *)
+        (** Called when a [For_loop] / [Scan_loop] binder mints the token ["b<id>"]. [shadowed] iff
+            the symbol was bound before in this walk — by an enclosing binder, an exited one, or
+            {!initial_tokens}: a duplicated binder makes symbol references ambiguous. *)
     mark_incomplete : unit -> unit;
         (** Called when an opaque construct makes the rendering an unfaithful summary of the code.
         *)
@@ -462,17 +464,30 @@ module Canonical_render = struct
       caller digests [buf] (usually after its own preamble and companion sections). *)
   let emit ~(buf : Buffer.t) (p : policy) (llc : t) : unit =
     let add = Buffer.add_string buf in
-    (* The in-scope rendering token per symbol (shadow-aware: inner binders overwrite). *)
+    (* The in-scope rendering token per symbol (shadow-aware: inner binders overwrite, and a loop's
+       exit restores what its binder overwrote — gh-ocannl-1403 — so a reference after the loop
+       reaches [emit_free_sym] rather than rendering as the exited binder's token). *)
     let tokens = Hashtbl.create (module Indexing.Symbol) in
     List.iter p.initial_tokens ~f:(fun (key, data) -> Hashtbl.set tokens ~key ~data);
+    (* Every symbol ever bound in this walk, in scope or not: a binder re-binding one is [shadowed]
+       even after the earlier binder exited, since a consumer's symbol resolution (the schedule
+       cache's first-binding map) is ambiguous either way. *)
+    let ever_bound = Hash_set.create (module Indexing.Symbol) in
+    List.iter p.initial_tokens ~f:(fun (key, _) -> Hash_set.add ever_bound key);
     let base_count = ref 0 in
-    let bind_loop s =
+    (* Binds [s] for the extent of [in_scope ()], then restores the token it overwrote. *)
+    let with_loop_binder s ~in_scope =
       let id = !base_count in
       Int.incr base_count;
-      p.on_bind_loop s ~id ~shadowed:(Hashtbl.mem tokens s);
+      p.on_bind_loop s ~id ~shadowed:(Hash_set.mem ever_bound s);
+      Hash_set.add ever_bound s;
+      let outer = Hashtbl.find tokens s in
       let tok = "b" ^ Int.to_string id in
       Hashtbl.set tokens ~key:s ~data:tok;
-      tok
+      in_scope tok;
+      match outer with
+      | Some data -> Hashtbl.set tokens ~key:s ~data
+      | None -> Hashtbl.remove tokens s
     in
     let emit_sym s =
       match Hashtbl.find tokens s with Some tok -> add tok | None -> p.emit_free_sym s
@@ -585,12 +600,12 @@ module Canonical_render = struct
           emit a;
           emit b
       | For_loop { index; from_; to_; body; axis } ->
-          let tok = bind_loop index in
-          add
-            (Printf.sprintf "for %s=%d..%d@%s{" tok from_ to_
-               (Sexp.to_string (sexp_of_axis_type axis)));
-          emit body;
-          add "}"
+          with_loop_binder index ~in_scope:(fun tok ->
+              add
+                (Printf.sprintf "for %s=%d..%d@%s{" tok from_ to_
+                   (Sexp.to_string (sexp_of_axis_type axis)));
+              emit body;
+              add "}")
       | Scan_loop { index; from_; to_; direction; carried; body } ->
           (* gh-ocannl-696: the inits render before the binder, in the order they evaluate; a
              carried pair renders as [prev<-next], so swapping the two ids changes the digest. *)
@@ -602,12 +617,12 @@ module Canonical_render = struct
               add ":=";
               emit_scalar init;
               add ";");
-          let tok = bind_loop index in
-          add
-            (Printf.sprintf "scan %s=%d..%d@%s{" tok from_ to_
-               (Sexp.to_string (sexp_of_scan_direction direction)));
-          emit body;
-          add "}"
+          with_loop_binder index ~in_scope:(fun tok ->
+              add
+                (Printf.sprintf "scan %s=%d..%d@%s{" tok from_ to_
+                   (Sexp.to_string (sexp_of_scan_direction direction)));
+              emit body;
+              add "}")
       | Zero_out tn ->
           add "zero ";
           emit_tn tn;

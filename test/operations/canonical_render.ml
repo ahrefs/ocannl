@@ -159,6 +159,48 @@ let part1 () =
      choice is the policy's, not the walk's. *)
   p "tensor-node identity is entirely the policy's" (String.equal text text3)
 
+(* gh-ocannl-1403: a binder's token is in scope for its loop body only. A reference after the loop
+   exits reaches the free-symbol hook (the schedule cache's "unresolvable", so the rendering is not
+   a disk-cache key) instead of rendering as the exited binder's token, and an exit restores what
+   the binder overwrote. Being bound before stays [shadowed] even once the earlier binder exited:
+   the schedule cache resolves a symbol to ONE binder. *)
+let part2_scoping ~d =
+  let s = sym () in
+  let id = Idx.symbol_ident s in
+  let set_s = Ll_test.set_at d (Ll_test.iter s) (Ll_test.c 0.) in
+  let for_ body = Ll_test.loop ~upto:2 s body in
+  let scan body = Ll_test.scan ~upto:2 s ~carried:[] body in
+  let after_exit kind loop =
+    let text, log = render (Ll_test.seq (loop set_s) set_s) in
+    p
+      (kind ^ ": a reference after the loop exits reaches the free-symbol hook")
+      (List.equal String.equal log [ "bind:" ^ id ^ "=b0"; "free:" ^ id ]);
+    p
+      (kind ^ ": inside the loop it renders as the binder's token, after it as free")
+      (String.is_substring text ~substring:"[b0,]:=0.;}"
+      && String.is_substring text ~substring:"}set <cr_d>[?,]")
+  in
+  after_exit "For_loop" for_;
+  after_exit "Scan_loop" scan;
+  let text, log = render (for_ (Ll_test.seq (for_ LL.Noop) set_s)) in
+  p "an inner binder's exit restores the outer binder's token"
+    (String.is_substring text ~substring:"}set <cr_d>[b0,]"
+    && List.equal String.equal log [ "bind:" ^ id ^ "=b0"; "bind:" ^ id ^ "=b1:shadowed" ]);
+  let text, log = render ~initial_tokens:[ (s, "s0") ] (Ll_test.seq (for_ LL.Noop) set_s) in
+  p "a binder's exit restores an initial token"
+    (String.is_substring text ~substring:"}set <cr_d>[s0,]"
+    && List.equal String.equal log [ "bind:" ^ id ^ "=b0:shadowed" ]);
+  let _, log = render (Ll_test.seq (for_ LL.Noop) (for_ LL.Noop)) in
+  p "a sibling binder re-binding an exited symbol is still reported shadowed"
+    (List.equal String.equal log [ "bind:" ^ id ^ "=b0"; "bind:" ^ id ^ "=b1:shadowed" ]);
+  (* Through the schedule cache, the consumer the stale token misled: the use-after-exit form is no
+     longer a complete (disk-cacheable) identity, while the in-scope form still is. *)
+  let canon code = Ir.Schedule_cache.canonicalize_code ~node_tag:(fun _ -> "") code in
+  p "schedule cache: the in-scope form is complete"
+    (Ir.Schedule_cache.complete (canon (for_ set_s)));
+  p "schedule cache: a use after the loop exits is incomplete"
+    (not (Ir.Schedule_cache.complete (canon (Ll_test.seq (for_ set_s) set_s))))
+
 let part2 () =
   let a = mk "cr_a" and b = mk "cr_b" and d = mk "cr_d" in
   (* Opaque constructs delegate to [mark_incomplete]; the placeholder keeps the rendering
@@ -185,6 +227,7 @@ let part2 () =
   p_empty "initial_tokens pre-bind it instead" ~over:initial_tokens log';
   p "and it then renders positionally"
     (String.is_substring text ~substring:"?" && String.is_substring text' ~substring:"s0");
+  part2_scoping ~d;
   (* gh-ocannl-687: which pass minted a [Local_scope] is part of a program's identity — it decides
      which loops the action menu may target — so the walk must distinguish the two mints. Only the
      newer, schedule-minted form takes a distinguishing token, which is why part1's golden (an
