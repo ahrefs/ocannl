@@ -639,9 +639,10 @@ let line_break_census content =
       arguments, its predicate's body included (a quantifier nested there ranges over a population
       of its own, the predicate's parameters none); a quantifier is a collection-module function
       {!collection_functions} marks [quantifies] ([for_all], [exists], [is_empty], [mem] and their
-      indexed and pairwise forms), whose collection is its first positional argument in [Base]'s
-      order (the first two for a pairwise one) and every positional argument in [Stdlib]'s; a
-      collection-module function the table does not list is reported here too;
+      indexed and pairwise forms, and the predicates of a collection's elements as a whole:
+      [contains], [is_sorted], [is_some], ...), whose collection is its first positional argument in
+      [Base]'s order (the first two for a pairwise one) and every positional argument in [Stdlib]'s;
+      a collection-module function the table does not list is reported here too;
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
       a [let alias = name] renaming: the right-hand side of [x := e] and of [x.field <- e], and what
       a function of a mutable collection module ({!mutable_modules}) that {!collection_functions}
@@ -701,11 +702,15 @@ type gate_module =
   | Standard_library of { stdlib : bool }
       (** [Base] or [Core] ([stdlib = false]), [Stdlib] or [Caml] ([true]): an [open] of one rebinds
           the collection modules to its own. *)
-  | Local_structure of (string * gate_denotation) list
+  | Local_structure of {
+      values : (string * gate_denotation) list;
+      modules : (string * gate_module) list;
+    }
       (** A [struct ... end] of this source, with the value names it exports and what each denotes,
-          its definition included (resolved in the structure's own scope): an [open] of it brings
-          them into scope as this source's own, so a [let gated_all = Verdict.gated_all] exported
-          from it is still followed to [Verdict]'s (gh-ocannl-1303). *)
+          its definition included (resolved in the structure's own scope), and the modules it
+          exports and what each denotes: an [open] of it brings them into scope as this source's
+          own, so a [let gated_all = Verdict.gated_all] exported from it is still followed to
+          [Verdict]'s, and a [module Rows = List] is still [List] (gh-ocannl-1303). *)
   | Other_module
 
 and gate_denotation = {
@@ -907,33 +912,40 @@ let collection_functions =
             partition3_map split_while split_on_chars split_on_char split_lines group groupi
             sort_and_group of_list of_list_rev of_list_map of_list_mapi of_array of_seq of_char
             of_char_list of_string to_list to_array to_seq to_seq_keys to_seq_values to_sequence
-            of_sequence to_alist of_alist of_alist_exn of_alist_multi of_alist_reduce
-            of_alist_fold of_alist_or_error of_increasing_sequence of_sorted_array
-            of_sorted_array_unchecked of_list_with_key of_list_with_key_exn of_list_with_key_multi
-            data keys key_set of_key_set elements singleton return cons empty transpose
-            transpose_exn intersperse cartesian_product fold foldi fold_left fold_right fold_left2
-            fold_right2 fold2_exn fold_until fold_result fold_map folding_map folding_mapi reduce
-            reduce_exn reduce_balanced reduce_balanced_exn sum count counti length min_elt max_elt
-            min_elt_exn max_elt_exn last last_exn hd hd_exn tl tl_exn value value_exn value_map
-            value_or_thunk bind join both first_some some some_if merge merge_skewed union
-            union_list inter diff symmetric_diff copy map_keys map_keys_exn filter_keys map_error
-            ok ok_exn ok_or_failwith error get_ok get_error to_option of_option all all_unit
-            try_with call iter iteri iter2 iter2_exn iter_keys equal compare hash is_sorted
-            is_sorted_strictly is_subset subset contains_dup find_a_dup find_all_dups is_some
-            is_none is_ok is_error to_string escaped lowercase uppercase capitalize uncapitalize
-            strip lstrip rstrip trim tr is_prefix is_suffix is_substring starts_with ends_with
-            prefix suffix chop_prefix chop_prefix_exn chop_prefix_if_exists chop_suffix
-            chop_suffix_exn chop_suffix_if_exists drop_prefix drop_suffix substr_index
-            substr_index_exn substr_index_all substr_replace_first substr_replace_all lsplit2
-            lsplit2_exn rsplit2 rsplit2_exn index index_exn index_from rindex rindex_exn lfindi
-            rfindi contains is_valid_utf_8 assoc assoc_opt inverse sexp_of_t t_of_sexp
-            sexp_of_m__t m__t_of_sexp
+            of_sequence to_alist of_alist of_alist_exn of_alist_multi of_alist_reduce of_alist_fold
+            of_alist_or_error of_increasing_sequence of_sorted_array of_sorted_array_unchecked
+            of_list_with_key of_list_with_key_exn of_list_with_key_multi data keys key_set
+            of_key_set elements singleton return cons empty transpose transpose_exn intersperse
+            cartesian_product fold foldi fold_left fold_right fold_left2 fold_right2 fold2_exn
+            fold_until fold_result fold_map folding_map folding_mapi reduce reduce_exn
+            reduce_balanced reduce_balanced_exn sum count counti length min_elt max_elt min_elt_exn
+            max_elt_exn last last_exn hd hd_exn tl tl_exn value value_exn value_map value_or_thunk
+            bind join both first_some some some_if merge merge_skewed union union_list inter diff
+            symmetric_diff copy map_keys map_keys_exn filter_keys map_error ok ok_exn ok_or_failwith
+            error get_ok get_error to_option of_option all all_unit try_with call iter iteri iter2
+            iter2_exn iter_keys equal compare hash find_a_dup find_all_dups to_string escaped
+            lowercase uppercase capitalize uncapitalize strip lstrip rstrip trim tr prefix suffix
+            chop_prefix chop_prefix_exn chop_prefix_if_exists chop_suffix chop_suffix_exn
+            chop_suffix_if_exists drop_prefix drop_suffix substr_index substr_index_exn
+            substr_index_all substr_replace_first substr_replace_all lsplit2 lsplit2_exn rsplit2
+            rsplit2_exn index index_exn index_from rindex rindex_exn lfindi rfindi assoc assoc_opt
+            inverse sexp_of_t t_of_sexp sexp_of_m__t m__t_of_sexp
           |};
-         (* Quantifiers. *)
+         (* Quantifiers, and the predicates true or false of a collection's elements as a whole
+            (membership, order, presence): a gate closing on the collection hides a false one.
+            [equal] and [compare] are not among them: in [Base]'s order their first positional
+            argument is the element comparison, not a collection. Nor are a string's pattern tests
+            ([is_substring], [is_prefix], ...), which test the text against a pattern argument:
+            [foreign_c_stderr] gates on one control marker's presence and claims another's, by
+            observation of the same capture, a design this reader leaves to its follow-up. *)
          group Every_argument ~quantifies:true
            {|
             for_all for_alli for_all2 for_all2_exn exists existsi exists2 exists2_exn is_empty
+            contains is_sorted is_sorted_strictly is_subset subset contains_dup is_some is_none
+            is_ok is_error
           |};
+         group Every_argument
+           {| is_prefix is_suffix is_substring starts_with ends_with is_valid_utf_8 |};
          (* Selectors. *)
          group Collection
            {|
@@ -1418,6 +1430,23 @@ let gate_census content =
                      List.mem collection_modules c ~equal:String.equal) ->
               (* [List.Assoc] under an [open Base]. *)
               collection
+          | Some (Local_structure _ as structure) ->
+              (* [Collections.Rows] for [module Collections = struct module Rows = List end]. *)
+              let rec descend denotes = function
+                | [] -> denotes
+                | component :: rest -> (
+                    match denotes with
+                    | Local_structure { modules; _ } -> (
+                        match List.Assoc.find modules component ~equal:String.equal with
+                        | Some inner -> descend inner rest
+                        | None -> Other_module)
+                    | Collection_module _
+                      when List.for_all (component :: rest) ~f:(fun c ->
+                               List.mem collection_modules c ~equal:String.equal) ->
+                        denotes
+                    | _ -> Other_module)
+              in
+              descend structure (List.tl_exn components)
           | Some (Standard_library { stdlib })
             when List.for_all (List.tl_exn components) ~f:(fun c ->
                      List.mem collection_modules c ~equal:String.equal) ->
@@ -1471,6 +1500,15 @@ let gate_census content =
                     Option.value_or_thunk (Lexical_scope.lookup env name) ~default:(fun () ->
                         self#local) ))
             in
+            let module_exports = ref [] in
+            let declared_modules env names =
+              module_exports :=
+                !module_exports
+                @ List.map names ~f:(fun name ->
+                    ( name,
+                      Option.value (Map.find env.Lexical_scope.modules name) ~default:Other_module
+                    ))
+            in
             let _, exports =
               List.fold items ~init:(env, []) ~f:(fun (env, exports) item ->
                   match item.pstr_desc with
@@ -1487,10 +1525,14 @@ let gate_census content =
                       let env = Lexical_scope.bind_values env [ txt ] self#local in
                       (env, exports @ declared env [ txt ])
                   | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
-                      (self#bind_module env name pmb_expr, exports)
+                      let env = self#bind_module env name pmb_expr in
+                      declared_modules env [ name ];
+                      (env, exports)
                   | Pstr_recmodule declarations ->
-                      ( self#forget env (List.filter_map declarations ~f:(fun d -> d.pmb_name.txt)),
-                        exports )
+                      let names = List.filter_map declarations ~f:(fun d -> d.pmb_name.txt) in
+                      let env = self#forget env names in
+                      declared_modules env names;
+                      (env, exports)
                   | Pstr_open { popen_expr; _ } ->
                       ( self#opened ~top:false ~include_:false env (self#module_of env popen_expr),
                         exports )
@@ -1498,14 +1540,16 @@ let gate_census content =
                       let denotes = self#module_of env pincl_mod in
                       ( self#opened ~top:false ~include_:true env denotes,
                         match denotes with
-                        | Some (Local_structure included) -> exports @ included
+                        | Some (Local_structure { values; modules }) ->
+                            module_exports := !module_exports @ modules;
+                            exports @ values
                         | _ -> exports ))
                   | _ -> (env, exports))
             in
-            Some
-              (Local_structure
-                 (Map.to_alist
-                    (Map.of_alist_reduce (module String) exports ~f:(fun _ later -> later))))
+            let latest pairs =
+              Map.to_alist (Map.of_alist_reduce (module String) pairs ~f:(fun _ later -> later))
+            in
+            Some (Local_structure { values = latest exports; modules = latest !module_exports })
         | _ -> super#module_of env module_expr
 
       (* An [open Base] rebinds every collection module to [Base]'s, and an [open Stdlib] back to
@@ -1526,11 +1570,19 @@ let gate_census content =
                              family = name;
                            }));
             }
-        | Some (Local_structure exports) ->
+        | Some (Local_structure { values; modules }) ->
             (* Its names shadow whatever they denoted, a [gated_all] of its own included, and denote
-               what the structure defines them as. *)
+               what the structure defines them as; so do its modules. *)
+            let env =
+              {
+                env with
+                Lexical_scope.modules =
+                  List.fold modules ~init:env.Lexical_scope.modules ~f:(fun known (name, denotes) ->
+                      Map.set known ~key:name ~data:denotes);
+              }
+            in
             Lexical_scope.push_frame env
-              (Map.of_alist_reduce (module String) exports ~f:(fun _ later -> later))
+              (Map.of_alist_reduce (module String) values ~f:(fun _ later -> later))
         | Some (Collection_module _ as collection) ->
             (* [let open List in map raw ~f], [List.(map raw ~f)]: a marker frame, under which an
                unqualified callee {!collection_functions} lists and nothing inside the open binds is

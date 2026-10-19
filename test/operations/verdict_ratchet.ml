@@ -4108,6 +4108,31 @@ let () =
   Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" "the sample is present"
     (List.mem rows sample ~equal:Int.equal)|ocaml},
       [ "rows" ] );
+    ( "refuses a gate that closes on the string a gated containment claim reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (String.is_empty rows)) ~on:"cc" "the sample is present"
+    (String.contains rows sample)|ocaml},
+      [ "rows" ] );
+    ( "follows a collection module a local module exports through an open of it",
+      {ocaml|open Base
+module Collections = struct
+  module Rows = List
+end
+open Collections
+let () =
+  let rows = Rows.map raw ~f:Fn.id in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a collection module a local module exports through a path into it",
+      {ocaml|open Base
+module Collections = struct
+  module Rows = List
+end
+let () =
+  let rows = Collections.Rows.map raw ~f:Fn.id in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
     ( "follows a collection function through a value alias",
       {ocaml|open Base
 let () =
