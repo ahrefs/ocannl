@@ -779,6 +779,26 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
   with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
   over the selected run and count its `FAIL  ` lines.
+- **Every gated leg must pass run alone** (gh-ocannl-1367). A leg that reads what an EARLIER
+  leg's body made (a variable, a file, a lock, an exported mode) passes in every full run and fails
+  only under `--only`, as two did when `tools/test-test-run.sh` was first gated (`LAB_MAP`,
+  `slot_dirs`). Build what a leg needs inside it (a module, a probe mode, a lock it reads), or as a
+  shared fixture outside every gate, and define a helper two legs call outside both. `tools/harness-legs-alone.sh [HARNESS...]` runs each
+  harness once in full, then every leg and every `#group` alone, reporting `ALONE FAIL` (with
+  whether the full run passed), `ALONE SKIP` (a check skipped alone that the full run decided) and
+  `ALONE MISS` (the selection did not run exactly the legs meant); with no argument it takes every
+  member of `tools/test-harnesses.sh` whose gates list a leg. CI runs it on the daily schedule and
+  on a dispatch (job `harness-legs-alone`), since it costs a run per leg; run it locally, slot-wrapped,
+  on a harness whose legs you restructured. `HARNESS --list-legs` prints each gate (`LEG  NAME`)
+  without running a leg body. Every gate also checks its leg's NAME, in every run: a name selects
+  one leg; a leading leg number (`80:`, `2-3:`, `59-63, 66:`) numbers one leg, a further leg beside
+  it taking a suffix letter (`80b:`, `40-47b:`); and where the harness header declares its groups
+  as `#NAME (LEGS)` (`tools/test-test-run.sh`), each leg closes with a declared group that lists
+  its numbers, and each listed number is carried by a leg of that group. A naming defect is an
+  ordinary `FAIL  leg naming: ...`. Gated and alone-clean so far: `tools/test-test-run.sh`,
+  `tools/test-mutation-run.sh`, `tools/test-promote.sh`, `tools/test-machine-verify.sh`,
+  `scripts/test-setup-ocaml-env.sh`, `tools/test-merge-build-check.sh`,
+  `tools/test-affected-tests.sh` and the two `benchmarks/test-*box*.sh`.
 - **A leg that cannot go on ends itself, never the harness** (gh-ocannl-1374). Each leg of
   `tools/test-test-run.sh` is a function run by `harness_leg_run 'NAME' leg_N`; a check it cannot
   get past (an extraction or mutant that matched nothing, a fixture repository that will not

@@ -553,6 +553,7 @@ tools/fleet-registry.sh parses: true
 tools/fleet-worker-candidates.sh parses: true
 tools/fmt-check.sh parses: true
 tools/gpu-tokens.sh parses: true
+tools/harness-legs-alone.sh parses: true
 tools/kernel-window.sh parses: true
 tools/lab-map.sh parses: true
 tools/machine-verify-far.sh parses: true
@@ -580,6 +581,8 @@ tools/test-ci-times.sh uses the shared harness contract: true
 tools/test-ci-times.sh parses: true
 tools/test-fmt-check.sh uses the shared harness contract: true
 tools/test-fmt-check.sh parses: true
+tools/test-harness-legs-alone.sh uses the shared harness contract: true
+tools/test-harness-legs-alone.sh parses: true
 tools/test-harnesses.sh parses: true
 tools/test-machine-verify.sh uses the shared harness contract: true
 tools/test-machine-verify.sh parses: true

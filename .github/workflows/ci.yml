@@ -781,6 +781,37 @@ jobs:
     - name: Test shell harnesses
       run: tools/test-harnesses.sh --shell --expected-skips tools/harness-skips-ci-shell.txt
 
+  # Every gated leg of the hand-run harnesses, and every group of legs, run
+  # alone (gh-ocannl-1367). A leg that needs what an EARLIER leg's body made
+  # passes in every full run, so the job above never sees it; it fails only
+  # when someone iterates on that leg with --only. tools/harness-legs-alone.sh
+  # reruns each gated harness once per leg and per group (about 20 minutes on a
+  # fast Mac), so it rides the daily schedule, and a deliberate dispatch, rather
+  # than every PR. Dune is installed so that the harnesses reading Dune's own
+  # output (promotion, affected tests) are checked alone too; no strict mode,
+  # since the check compares each leg's skips with its harness's full run.
+  # A guard opening with the schedule marks a scheduled side job, which
+  # test/operations/ci_matrix.sh holds to the ordinary side jobs' selection
+  # narrowed to the schedule and dispatches.
+  harness-legs-alone:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
+    name: Shell harness legs, each alone
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.expected_sha }}
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.5.x
+        allow-prerelease-opam: false
+        opam-pin: false
+    - name: Install Dune
+      run: opam install dune
+    - name: Run every gated leg and group alone
+      run: tools/harness-legs-alone.sh
+
   # The benchmark tests WITH torch. The main legs run benchmarks/test_orchestrate.py
   # through dune on a runner without torch, so its legs that drive the real torch
   # runner (gh-ocannl-1208's end-to-end precision read-back, on a tiny CPU
@@ -845,7 +876,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: [run, fmt, promotion-floor, harnesses, torch-runner]
+    needs: [run, fmt, promotion-floor, harnesses, harness-legs-alone, torch-runner]
     if: >-
       failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
       && !(github.event_name == 'workflow_dispatch' && inputs.expected_sha)

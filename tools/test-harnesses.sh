@@ -48,6 +48,7 @@ manifest() {
   cat <<'HARNESS_LIST'
 shell scripts/test-harness-support.sh
 shell tools/test-test-harnesses.sh
+shell tools/test-harness-legs-alone.sh
 shell tools/test-pin-revisions.sh
 shell tools/test-test-run.sh
 shell tools/test-mutation-run.sh
