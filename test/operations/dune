@@ -243,6 +243,7 @@
   (alias runtest-cc_temp_ownership-compiler_debug)
   (alias runtest-cc_temp_ownership-compiler_dll)
   (alias runtest-cc_kept_library)
+  (alias runtest-cc_kept_library-debug)
   (alias runtest-cc_temp_library_sweep)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
@@ -1160,9 +1161,11 @@
    cc_temp_ownership-compiler_dll.expected
    cc_temp_ownership-compiler_dll.actual)))
 
-; gh-ocannl-1247: library output keeps each cc library in build_files/<exe>/ under a name unique per
-; process and per compile; a concurrent child process of the same executable keeps its own. Read
-; through Test_utils.Generated.kept_libraries.
+; gh-ocannl-1247, gh-ocannl-1335: library output, and debug files alone, keep each cc library in
+; build_files/<exe>/ under a name unique per process and per compile, however long the routine's
+; name; a concurrent child process of the same executable keeps its own, and its startup cleanup
+; spares this process's artifacts while removing a finished process's. Read through
+; Test_utils.Generated.kept_libraries.
 
 (executable
  (name cc_kept_library)
@@ -1178,6 +1181,9 @@
  (deps
   ocannl_config
   (env_var OCANNL_BUILD_FILES_PREFIX))
+ ; One executable, one build_files/ subdirectory: the two rules' runs would empty and sweep each
+ ; other's, and each run needs to know when no other process of the executable is running.
+ (locks cc_kept_library)
  (action
   (with-stdout-to
    %{target}
@@ -1196,6 +1202,35 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff cc_kept_library.expected cc_kept_library.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the kept library is the cc compile's; the command line pins the backend.
+ (target cc_kept_library-debug.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BUILD_FILES_PREFIX))
+ ; One executable, one build_files/ subdirectory: the two rules' runs would empty and sweep each
+ ; other's, and each run needs to know when no other process of the executable is running.
+ (locks cc_kept_library)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_kept_library.exe}
+    parent
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_kept_library-debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_kept_library-debug.expected cc_kept_library-debug.actual)))
 
 ; gh-ocannl-1268: a process's startup removes the temporary cc libraries of processes that are gone
 ; (Windows keeps a loaded DLL past its routine's exit) and keeps those of running processes. Two

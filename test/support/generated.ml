@@ -257,12 +257,14 @@ let read ?ext routine =
       src
 
 (** [kept_libraries ?owner routine] lists the paths of the libraries kept for [routine] under
-    [output_dlls_in_build_directory] (gh-ocannl-1247), in owner then compile order: those of this
-    process ([`This_process], the default), of the process with OS id [p] ([`Pid p]), or of every
-    process ([`Any]). Names are read with the backend's own {!Utils.parse_kept_library_name}, so a
-    renaming cannot leave this listing looking for the wrong ones. A child process of this
-    executable writes into the same directory, which is how a test sees another process's libraries;
-    it must not call {!init} itself, or it would sweep the parent's.
+    [output_dlls_in_build_directory] (gh-ocannl-1247) or [output_debug_files_in_build_directory]
+    (gh-ocannl-1335), in owner then compile order: those of this process ([`This_process], the
+    default), of the process with OS id [p] ([`Pid p]), or of every process ([`Any]). Names are read
+    with the backend's own {!Utils.parse_kept_library_name}, and the kernel name they carry is
+    {!Utils.library_kernel_name}'s, so neither a renaming nor a routine name too long to carry whole
+    can leave this listing looking for the wrong ones. A child process of this executable writes
+    into the same directory, which is how a test sees another process's libraries; it must not call
+    {!init} itself, or it would sweep the parent's.
 
     Like {!read}, it answers from this run only: {!init} emptied the directory first. An empty list
     is an answer here, not a failure, so a caller states the count it expects. *)
@@ -285,7 +287,7 @@ let kept_libraries ?(owner = `This_process) routine =
     |> List.filter_map ~f:(fun entry ->
         match Utils.parse_kept_library_name entry with
         | Some ({ kernel_name; owner_pid; library_run_id; _ } as kept)
-          when String.equal kernel_name (Utils.clean_filename routine) && wanted kept ->
+          when String.equal kernel_name (Utils.library_kernel_name routine) && wanted kept ->
             Some ((owner_pid, library_run_id), Stdlib.Filename.concat dir entry)
         | Some _ | None -> None)
     |> List.sort ~compare:(fun ((p1, r1), _) ((p2, r2), _) ->

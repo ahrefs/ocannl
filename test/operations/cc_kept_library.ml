@@ -1,21 +1,34 @@
-(* gh-ocannl-1247: under [output_dlls_in_build_directory=true] the cc backend keeps each compiled
-   library in [build_files/<exe>/], beside the kernel's debug source, under a name unique to the
-   process and the compile. The compiler reads a private temporary copy of the source (even under
-   debug files), so a library named after that path landed in the system temp directory instead.
+(* gh-ocannl-1247, gh-ocannl-1335: the cc backend keeps each compiled library in
+   [build_files/<exe>/], beside the kernel's debug source, under a name unique to the process and
+   the compile, whenever a library is asked for: under [output_dlls_in_build_directory=true] (the
+   [cc_kept_library] rule) and under [output_debug_files_in_build_directory=true] alone (the
+   [cc_kept_library-debug] rule), which used to leave it in the system temp directory for good. The
+   compiler reads a private copy of the source, so a library named after that path landed in the
+   system temp directory instead.
 
-   Processes of one executable share that directory. The test relaunches itself as a child, which
-   compiles the same routine name while the parent is still running and holds its own library; the
-   child keeps a library of its own, under a name apart from the parent's. The child also runs the
-   startup cleanup ([clean_up_build_files_on_startup], on by default, off in the test config), which
-   empties the shared directory: it must spare the library of the running parent -- which could be
-   between linking that library and loading it -- and still remove the library of a process that is
-   gone (a fixture with an OS id no process has).
+   A routine's name has no length limit and a file name has one, so the name carries at most
+   [Utils.library_kernel_name_limit] bytes of it, cut at a character boundary: the test compiles a
+   routine whose name alone nearly fills a file-name component, and reads a cut through two-byte
+   characters off the naming function itself.
+
+   Processes of one executable share that directory, and each one's startup empties it
+   ([clean_up_build_files_on_startup] and [clean_up_log_files_on_startup], on by default, off in the
+   test config, on in the children here). A running process holds a lock that tells a starting one
+   it is there; the starting one then removes only the artifacts whose names record an owner that is
+   gone. So the test first runs two children while it holds nothing: one compiles under debug files
+   and exits, and the next one's startup removes the debug source it left. Then the test compiles
+   (taking the lock), writes a log, plants the library of a process that is gone (an OS id no
+   process has), and relaunches itself as a child that compiles the same routine name. The child
+   keeps a library of its own, under a name apart from this process's; its startup spares this
+   process's library, log and (under debug files) debug source -- this process could be between
+   linking that library and loading it, or still writing to that log -- and still removes the
+   library of the process that is gone.
 
    The libraries are read through [Test_utils.Generated.kept_libraries], which parses names with the
    backend's own [Utils.parse_kept_library_name], after [Generated.init] emptied this executable's
-   directory, so a library found there was kept by this run. The child runs no [Generated.init],
-   which would sweep the parent's directory; its verdict output goes to stderr and its judgment
-   reaches the parent as its exit status. *)
+   directory, so a library found there was kept by this run. The children run no [Generated.init],
+   which would sweep the parent's directory; their verdict output goes to stderr and their judgment
+   reaches the parent as their exit status. *)
 
 open Base
 open Ocannl
@@ -24,14 +37,18 @@ open Verdict.Claims
 module Generated = Test_utils.Generated
 
 let routine = "gh1247_kept"
+let stale_routine = "gh1335_stale"
 
-let child_mode =
-  match Stdlib.Sys.argv.(1) with
-  | "child" -> true
-  | "parent" -> false
-  | mode -> invalid_arg ("cc_kept_library: unknown mode " ^ mode)
+(* Nearly a file-name component on its own: on top of it, the owner and compile fields of an uncut
+   kept library's name would pass 255 bytes. *)
+let long_routine = "gh1335_" ^ String.make 233 'k'
+let mode = Stdlib.Sys.argv.(1)
 
-let compile_and_run () =
+let () =
+  if not (List.mem [ "parent"; "child"; "stale"; "sweep" ] mode ~equal:String.equal) then
+    invalid_arg ("cc_kept_library: unknown mode " ^ mode)
+
+let compile_and_run routine =
   let ctx = Context.auto () in
   let x = TDSL.range 16 in
   let%op y = (3. *. x) + 1. in
@@ -48,49 +65,111 @@ let computes_3x_plus_1 claim values =
 (* No process has this OS id: past every POSIX [pid_max], and odd, which a Windows process id never
    is. *)
 let departed_pid = 2147483647
+let debug = Utils.settings.output_debug_files_in_build_directory
+
+(* The child's flags: the parent's own configuration (which follows its mode argument), less the
+   settings a child mode sets for itself. *)
+let run_child child_mode settings =
+  let exe = Stdlib.Sys.executable_name in
+  let overridden arg =
+    List.exists settings ~f:(fun setting ->
+        String.is_prefix arg ~prefix:(String.lsplit2_exn setting ~on:'=' |> fst))
+  in
+  let args =
+    Array.concat
+      [
+        [| exe; child_mode |];
+        Array.filter
+          (Array.sub Stdlib.Sys.argv ~pos:2 ~len:(Array.length Stdlib.Sys.argv - 2))
+          ~f:(fun arg -> not (overridden arg));
+        Array.of_list settings;
+      ]
+  in
+  (* Flushed before the spawn, so the child cannot inherit and repeat buffered output. *)
+  Stdio.Out_channel.flush Stdio.stdout;
+  let child = Unix.create_process exe args Unix.stdin Unix.stderr Unix.stderr in
+  match Unix.waitpid [] child with _, Unix.WEXITED 0 -> true | _ -> false
+
+let clean_up_on_startup =
+  [ "--ocannl_clean_up_build_files_on_startup=true"; "--ocannl_clean_up_log_files_on_startup=true" ]
+
+let parent () =
+  (* 1. Nothing of this process is in the directory yet, and it holds no lock there: a finished
+     process's ownerless debug source is stale, and a starting process removes it. *)
+  p "a finished process of this executable left a debug source"
+    (run_child "stale"
+       [
+         "--ocannl_output_debug_files_in_build_directory=true";
+         "--ocannl_clean_up_build_files_on_startup=false";
+       ]);
+  p "a process starting while no other runs ran" (run_child "sweep" clean_up_on_startup);
+  p "its startup removed the ownerless debug source the finished process left"
+    (not (Stdlib.Sys.file_exists (Generated.path ~ext:".c" stale_routine)));
+  (* 2. The kept libraries. *)
+  Generated.init ~backend_name:"cc";
+  let backend, values = compile_and_run routine in
+  Stdio.printf "backend: %s\n" backend;
+  computes_3x_plus_1 "the routine computes 3x + 1 from its kept library" values;
+  let _backend, long_values = compile_and_run long_routine in
+  computes_3x_plus_1 "a routine with a 240-byte name computes 3x + 1 from its kept library"
+    long_values;
+  let long_kept = Generated.kept_libraries long_routine in
+  p "the long-named routine's library is kept, under its cut name" (List.length long_kept = 1);
+  p_all "the long-named routine's library name fits a file-name component" long_kept ~f:(fun path ->
+      String.length (Stdlib.Filename.basename path) <= 255);
+  (* The cut never splits a character: a name of two-byte characters, placed so that the limit falls
+     inside one. *)
+  let wide_routine = "kernel_" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
+  let wide_name =
+    Utils.kept_library_name ~pid:departed_pid ~nonce:"0badf00d" ~run_id:1 wide_routine
+  in
+  p "a kept library's name carries a whole-character prefix within the kernel-name limit"
+    (Option.exists (Utils.parse_kept_library_name wide_name) ~f:(fun { Utils.kernel_name; _ } ->
+         String.length kernel_name <= Utils.library_kernel_name_limit
+         && String.length kernel_name > Utils.library_kernel_name_limit - 2
+         && String.is_prefix wide_routine ~prefix:kernel_name
+         && Stdlib.String.is_valid_utf_8 kernel_name));
+  (* 3. This process's ownerless artifacts: a log, and under debug files the long-named routine's
+     debug source, which no child writes. *)
+  let log = Utils.diagn_log_file "gh1335_parent.log" in
+  Stdio.Out_channel.write_all log ~data:"written by the parent\n";
+  if debug then
+    p "this process wrote the long-named routine's debug source"
+      (Stdlib.Sys.file_exists (Generated.path long_routine));
+  (* A library left by a process that is gone, for the child's startup cleanup to find. *)
+  Generated.plant_kept_library ~pid:departed_pid routine;
+  p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
+  p "the stale library's process is seen as gone" (not (Utils.process_alive departed_pid));
+  p "the child process compiled and ran the same routine name"
+    (run_child "child" clean_up_on_startup);
+  let own = Generated.kept_libraries routine in
+  let every = Generated.kept_libraries ~owner:`Any routine in
+  let others = List.filter every ~f:(fun f -> not (List.mem own f ~equal:String.equal)) in
+  Stdio.eprintf "kept libraries (not part of the golden): %s\n%!" (String.concat ~sep:" " every);
+  p "this process's library stays in build_files through the child's startup cleanup"
+    (List.length own = 1);
+  p "the child kept its own library, under a name apart from this process's" (List.length others = 1);
+  p_empty "the child's startup cleanup removed the library of a process no longer running"
+    ~over:every
+    (Generated.kept_libraries ~owner:(`Pid departed_pid) routine);
+  p_all "each kept library holds the routine's symbol" every ~min:2 ~f:(fun path ->
+      String.is_substring (Stdio.In_channel.read_all path) ~substring:routine);
+  p "this process's log stays through the child's startup cleanup" (Stdlib.Sys.file_exists log);
+  if debug then
+    p "this process's debug source stays through the child's startup cleanup"
+      (Stdlib.Sys.file_exists (Generated.path long_routine))
 
 let () =
-  p "library output is requested"
-    (Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory");
-  if child_mode then
-    let _backend, values = compile_and_run () in
-    computes_3x_plus_1 "the child's routine computes 3x + 1 from its kept library" values
-  else (
-    Generated.init ~backend_name:"cc";
-    let backend, values = compile_and_run () in
-    Stdio.printf "backend: %s\n" backend;
-    computes_3x_plus_1 "the routine computes 3x + 1 from its kept library" values;
-    (* A library left by a process that is gone, for the child's startup cleanup to find. *)
-    Generated.plant_kept_library ~pid:departed_pid routine;
-    p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
-    p "the stale library's process is seen as gone" (not (Utils.process_alive departed_pid));
-    let exe = Stdlib.Sys.executable_name in
-    (* The parent's own configuration flags follow its mode argument; the child gets the same, and
-       its startup cleanup on. *)
-    let args =
-      Array.concat
-        [
-          [| exe; "child" |];
-          Array.sub Stdlib.Sys.argv ~pos:2 ~len:(Array.length Stdlib.Sys.argv - 2);
-          [| "--ocannl_clean_up_build_files_on_startup=true" |];
-        ]
-    in
-    (* Flushed before the spawn, so the child cannot inherit and repeat buffered output. *)
-    Stdio.Out_channel.flush Stdio.stdout;
-    let child = Unix.create_process exe args Unix.stdin Unix.stderr Unix.stderr in
-    let _, status = Unix.waitpid [] child in
-    p "the child process compiled and ran the same routine name"
-      (match status with Unix.WEXITED 0 -> true | _ -> false);
-    let own = Generated.kept_libraries routine in
-    let every = Generated.kept_libraries ~owner:`Any routine in
-    let others = List.filter every ~f:(fun f -> not (List.mem own f ~equal:String.equal)) in
-    Stdio.eprintf "kept libraries (not part of the golden): %s\n%!" (String.concat ~sep:" " every);
-    p "this process's library stays in build_files through the child's startup cleanup"
-      (List.length own = 1);
-    p "the child kept its own library, under a name apart from this process's"
-      (List.length others = 1);
-    p_empty "the child's startup cleanup removed the library of a process no longer running"
-      ~over:every
-      (Generated.kept_libraries ~owner:(`Pid departed_pid) routine);
-    p_all "each kept library holds the routine's symbol" every ~min:2 ~f:(fun path ->
-        String.is_substring (Stdio.In_channel.read_all path) ~substring:routine))
+  p "a library is kept: library output or debug files are requested"
+    (debug || Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory");
+  match mode with
+  | "child" ->
+      let _backend, values = compile_and_run routine in
+      computes_3x_plus_1 "the child's routine computes 3x + 1 from its kept library" values
+  | "stale" ->
+      let _backend, values = compile_and_run stale_routine in
+      computes_3x_plus_1 "the stale child's routine computes 3x + 1" values;
+      p "the stale child's debug source is in place"
+        (Stdlib.Sys.file_exists (Generated.path ~ext:".c" stale_routine))
+  | "sweep" -> ()
+  | _ -> parent ()

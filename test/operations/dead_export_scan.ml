@@ -331,6 +331,13 @@ let exempt_zero_reference_exports =
     "Utils.settings_of_sexp";
     "Utils.split_with_seps";
     "Utils.str_nonempty";
+    (* Not pre-existing (gh-ocannl-1335). The artifact-naming layer's internals, consumed inside
+       Utils by the artifact paths and the startup cleanup: the tree outside names artifacts through
+       [build_file], [kept_library_name], [library_kernel_name] and the parsers of the two library
+       shapes. Utils has no .mli to hide them in. *)
+    "Utils.clean_filename";
+    "Utils.owned_artifact_name";
+    "Utils.parse_owned_artifact_name";
     (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library, where these
        implicit exports have no caller in the tree. Unlike the entries above, most are not helpers
        leaked by a missing interface: [Nn_blocks]' architectures and initializers and [Train]'s

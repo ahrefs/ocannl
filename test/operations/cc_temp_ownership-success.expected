@@ -5,8 +5,8 @@ backend: cc
 the compile succeeded: true
 the routine computes 2x + 1 from its unlinked library: true
 the compiler log is removed: true
-the source is retained exactly when debug files are requested: true
-the temp directory retains the library exactly when debug files alone request it: true
+the temp directory gains no source: true
+the temp directory gains no library: true
 nothing else is added: true
 no file present before the compile is removed: true
 every unrelated sentinel keeps its content: true

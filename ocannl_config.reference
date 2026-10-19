@@ -183,12 +183,16 @@
 
 # If true, the build_files/<prefix>/ subdirectory of this process (see build_files_prefix)
 # is emptied on startup; the whole build_files/ directory when the prefix is ".". The
-# directory itself stays, as do libraries kept under output_dlls_in_build_directory by
-# another process that is still running.
+# directory itself stays, as do the artifacts whose names record a process that is still
+# running (kept libraries, `<kernel>_pid<P>_...`). While another process that writes there
+# is running (it holds the lock file build_files/<prefix>.ocannl-lock), everything else
+# stays too, its debug sources included; only artifacts recording a process that is gone
+# are removed.
 #clean_up_build_files_on_startup=true
 
 # If true, the log_files/<prefix>/ subdirectory of this process (see build_files_prefix)
-# is deleted on startup; the whole log_files/ directory when the prefix is ".".
+# is emptied on startup; the whole log_files/ directory when the prefix is ".". As for
+# clean_up_build_files_on_startup, the logs stay while another process writing there runs.
 #clean_up_log_files_on_startup=true
 
 # Other configurations:
@@ -1260,11 +1264,12 @@
 # the kernel's debug source, named `<kernel>_pid<P>_n<nonce>_run<N>`: the process id and a
 # random per-process nonce keep apart the processes sharing the directory (including other
 # PID namespaces), the run id the compiles of one process; another process's startup
-# cleanup spares them while process P runs. If false (the
-# default), each library is a temporary file removed once it is loaded, unless
-# `output_debug_files_in_build_directory` retains it in the system temp directory. Windows
-# refuses to delete a loaded library: there it is removed only after its routine is collected
-# and unloaded, so libraries of routines alive at exit (and of every OpenMP kernel) stay until
+# cleanup spares them while process P runs. The kernel name is cut short there (to
+# `Utils.library_kernel_name_limit` bytes), so the name fits a file-name component.
+# `output_debug_files_in_build_directory` keeps the libraries there too. If false (the
+# default) and debug files are off, each library is a temporary file removed once it is
+# loaded. Windows refuses to delete a loaded library: there it is removed only after its
+# routine is collected and unloaded, so libraries of routines alive at exit (and of every OpenMP kernel) stay until
 # the startup of a later OCANNL process removes them, once their process is gone and they are
 # over an hour old: such a temporary library is named
 # `ocannl_cc_<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`.
