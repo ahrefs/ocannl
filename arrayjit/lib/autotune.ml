@@ -1861,13 +1861,17 @@ let privatize_proposals (post : LL.optimized) : (Ir.Tnode.t * Idx.symbol) list =
   walk [] post.LL.llc;
   List.rev !proposals
 
-(** The preset schedule extended with a [Privatize] per detected accumulator. Proposals are detected
-    on the preset-scheduled segment and validated one at a time by re-applying the growing schedule;
-    a proposal violating an op precondition is dropped. The exploratory applies run against a
-    hermetic copy of the segment: [Privatize] registers its (fresh) tile in the traced store and
-    placements, and abandoned tiles would otherwise be emitted as dead local declarations when the
-    caller applies the returned schedule to the real segment. *)
-let extend_with_privatize ~accum_prec ~static_indices sched (seg : LL.optimized) : Sched.schedule =
+type privatize_drop = { pd_target : Ir.Tnode.t; pd_over : Idx.symbol; pd_cause : Outcome.cause }
+
+(** The preset schedule extended with a [Privatize] per detected accumulator, beside the proposals
+    it dropped. Proposals are detected on the preset-scheduled segment and validated one at a time
+    by re-applying the growing schedule; a proposal violating an op precondition is dropped, with
+    the refusal that dropped it. The exploratory applies run against a hermetic copy of the segment:
+    [Privatize] registers its (fresh) tile in the traced store and placements, and abandoned tiles
+    would otherwise be emitted as dead local declarations when the caller applies the returned
+    schedule to the real segment. *)
+let privatize_extension ~accum_prec ~static_indices sched (seg : LL.optimized) :
+    Sched.schedule * privatize_drop list =
   let scratch () =
     {
       seg with
@@ -1876,13 +1880,21 @@ let extend_with_privatize ~accum_prec ~static_indices sched (seg : LL.optimized)
     }
   in
   match Sched.apply_classified ~static_indices sched (scratch ()) with
-  | exception Outcome.Cause_at _ -> sched
+  | exception Outcome.Cause_at _ -> (sched, [])
   | post ->
-      List.fold (privatize_proposals post) ~init:sched ~f:(fun acc (target, over) ->
-          let acc' = acc @ [ Sched.privatize ~accum_prec ~target ~over ] in
-          match Sched.apply_classified ~static_indices acc' (scratch ()) with
-          | (_ : LL.optimized) -> acc'
-          | exception Outcome.Cause_at _ -> acc)
+      let sched, drops =
+        List.fold (privatize_proposals post) ~init:(sched, [])
+          ~f:(fun (acc, drops) (target, over) ->
+            let acc' = acc @ [ Sched.privatize ~accum_prec ~target ~over ] in
+            match Sched.apply_classified ~static_indices acc' (scratch ()) with
+            | (_ : LL.optimized) -> (acc', drops)
+            | exception Outcome.Cause_at (_, cause) ->
+                (acc, { pd_target = target; pd_over = over; pd_cause = cause } :: drops))
+      in
+      (sched, List.rev drops)
+
+let extend_with_privatize ~accum_prec ~static_indices sched seg =
+  fst (privatize_extension ~accum_prec ~static_indices sched seg)
 
 (** {2 Split-reduce site detection (gh-ocannl-484 task 3)}
 
