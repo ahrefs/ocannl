@@ -196,6 +196,10 @@ let settings_flips =
    keyword the read site's [~parse] rejects is fine: a key read while the cache key is computed is
    the finding, whether it raises or not. *)
 let off_default (kind : Utils.config_value_kind) default =
+  (* The default itself as well: where a source already states the off-default value, the default is
+     the candidate that flips it. *)
+  (fun off -> off @ [ default ])
+  @@
   match kind with
   | Flag -> if String.equal default "true" then [ "false" ] else [ "true" ]
   | Integer -> [ Int.to_string (Int.of_string default + 1) ]
@@ -352,14 +356,28 @@ let resync = function
   | Numerics_policy -> Ir.Numerics.set_policy (Ir.Numerics.default ())
   | Log_level_field -> ()
 
-(* [f] under [key] stated as [value]; [None] when a commandline or environment statement outranks
-   the config file, so the flip cannot take effect in this process. *)
+(* Whether stating [value] would change nothing: the key already resolves to it, from whatever
+   source (Codex P2, round 5) -- a candidate equal to its baseline is no flip, and a claim that
+   nothing moved under it would be vacuous. A key no source states resolves to its read site's
+   default, which this cannot see; every table therefore carries a candidate off that default. *)
+let same_as_baseline key value =
+  let norm v = String.lowercase (String.strip v) in
+  match Utils.profile_key_source key with
+  | Some (current, _) -> String.equal (norm current) (norm value)
+  | None -> false
+
+(* [f] under [key] stated as [value]; [None] when the flip cannot take effect in this process: a
+   commandline or environment statement outranks the config file, or the key already resolves to
+   [value]. *)
 let with_stated key value resolver f =
   match resolver with
   | Log_level_field ->
       let level0 = Utils.settings.log_level in
-      Utils.settings.log_level <- Int.of_string value;
-      Some (Exn.protect ~f ~finally:(fun () -> Utils.settings.log_level <- level0))
+      if Int.of_string value = level0 then None
+      else (
+        Utils.settings.log_level <- Int.of_string value;
+        Some (Exn.protect ~f ~finally:(fun () -> Utils.settings.log_level <- level0)))
+  | _ when same_as_baseline key value -> None
   | _ ->
       let previous = Hashtbl.find Utils.config_file_args key in
       Hashtbl.set Utils.config_file_args ~key ~data:value;
@@ -410,7 +428,7 @@ let () =
     Verdict.skipped ~aggregation:`Environment ~backend:(Context.backend_name ctx)
       (Printf.sprintf
          "%s of %s: the key, or the regime it is flipped in, is stated on the commandline or in \
-          the environment"
+          the environment, or already resolves to every candidate value"
          what key)
   in
   let backend = Context.backend_name ctx in
@@ -598,7 +616,12 @@ let () =
   let grid = "--ocannl_cc_parallel_grid=openmp" in
   let cpu = not (Ir.Schedule.backend_is_gpu backend) in
   let cap_flip =
-    match (child [ grid ], child [ grid; "--ocannl_cc_grid_private_bytes_cap=1024" ]) with
+    (* Both values stated, so neither child resolves the cap from an ambient source that might equal
+       the other's (Codex P2, round 5). *)
+    match
+      ( child [ grid; "--ocannl_cc_grid_private_bytes_cap=4096" ],
+        child [ grid; "--ocannl_cc_grid_private_bytes_cap=1024" ] )
+    with
     | Some (before, _), Some (after, _) -> Some (moved before after)
     | _ -> None
   in
