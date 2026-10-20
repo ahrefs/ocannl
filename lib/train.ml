@@ -489,21 +489,20 @@ let placement_problem ?name ?timing_ctx ctx loss comp bindings =
         let tlowered = Context.lowered_for_decisions ?name tctx comp bindings in
         ( Context.placements tctx,
           tlowered.Ir.Low_level.optimize_ctx,
-          (* gh-ocannl-1421: how each lineage's lowered program accesses the node, which the tags
-             above do not pin (an inherited computation changes the program, not a placement tag).
-             Whether a search is [Lineage_refused] is a function of the two, so a decision recorded
-             beside such a search applies only where they are the same; per node, so the
-             canonicalizer numbers the nodes and the key does not depend on process-local ids. *)
-          Autotune.lineage_accesses tlowered,
-          Autotune.lineage_accesses lowered ))
+          (* gh-ocannl-1421: both lineages' lowered programs, which the tags above do not pin (an
+             inherited computation changes the program, not a placement tag). Whether a search is
+             [Lineage_refused] is a function of the two, so a decision recorded beside such a search
+             applies only where they are the same. Canonical digests, free of process-local ids. *)
+          ";ts="
+          ^ Autotune.lineage_identity ~static_indices tlowered
+          ^ ";cs="
+          ^ Autotune.lineage_identity ~static_indices lowered ))
   in
   Ir.Schedule_cache.canonicalize_source ~static_indices
     ~node_tag:(fun tn ->
       (if Set.mem embedded tn then ";e" else "")
-      ^ Option.value_map timing ~default:"" ~f:(fun (plc, octx, t_access, c_access) ->
-          ";t"
-          ^ Ir.Schedule_cache.lineage_tag plc octx tn
-          ^ ";ta=" ^ t_access tn ^ ";ca=" ^ c_access tn))
+      ^ Option.value_map timing ~default:"" ~f:(fun (plc, octx, programs) ->
+          ";t" ^ Ir.Schedule_cache.lineage_tag plc octx tn ^ programs))
     ~lineage:(Context.placements ctx) lowered
 
 (** A recorded placement decision as the three lists the context API takes — materialized, inlined,

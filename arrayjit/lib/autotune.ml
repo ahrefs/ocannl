@@ -3189,9 +3189,9 @@ let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimiz
    caller's, after a search on a [timing_ctx] -- can lower to another program: a node the timing
    lineage materialized and the caller's leaves virtual is inlined there, so the base's code reads a
    buffer the caller's placements never allocate. [tune] refuses that case up front
-   ([Lineage_refused]), comparing the nodes the two lineages' lowerings access ([lineage_identity]),
-   which the drift does not change; a structural comparison here could not tell drift from a lineage
-   difference. *)
+   ([Lineage_refused]), comparing the two lineages' lowerings taken together, so both see the same
+   value bounds ([lineage_identity]); a comparison here, with a lowering taken after the timing
+   runs, could not tell drift from a lineage difference. *)
 let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
     ~provenance ctx comp bindings spec : compiled Outcome.outcome =
   let candidate = match label with Some l -> l | None -> spec_label spec in
@@ -5729,32 +5729,15 @@ let resolve_cache_dir ?cache_dir ~search () =
   (* A search-less [tune] replays only a cache someone asked for. *)
   if search || cache_dir_chosen then cache_dir else ""
 
-(* gh-ocannl-1421: what a lowering of the routine must share with the base lowering for a schedule
-   tuned on the one to apply to the other -- the tensor nodes its code reads and writes. A node one
-   lineage materializes (or keeps [Local]) and the other inlines is accessed in the one and not the
-   other, and a node one computes and the other only reads changes from written to read, so either
-   shows here. What drifts between lowerings of the SAME lineage does not: the structural code does
-   (a gather's guard folds once the base compile has settled its index tensor's bounds, so the
-   caller's later lowering folds it and the base did not -- seen on gpt2_mini_train, where a
-   structural comparison refused every timing context), but folding a guard removes no node the code
-   accesses, and that drift is exactly what [compile_candidate]'s rebase is for. *)
-let lineage_accesses (opt : LL.optimized) =
-  let table = Hashtbl.create (module Ir.Tnode) in
-  List.iter (LL.affine_accesses opt.LL.llc) ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
-      Hashtbl.update table a.a_tn ~f:(fun prev ->
-          let r, w = Option.value prev ~default:(false, false) in
-          if a.a_write then (r, true) else (true, w)));
-  fun tn ->
-    match Hashtbl.find table tn with
-    | None -> "-"
-    | Some (r, w) -> (if r then "r" else "") ^ if w then "w" else ""
-
-let lineage_identity (opt : LL.optimized) =
-  LL.affine_accesses opt.LL.llc
-  |> List.map ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
-      Printf.sprintf "%s%c" (Ir.Tnode.id a.a_tn) (if a.a_write then 'w' else 'r'))
-  |> List.dedup_and_sort ~compare:String.compare
-  |> String.concat ~sep:"," |> Stdlib.Digest.string |> Stdlib.Digest.to_hex
+(* gh-ocannl-1421: the lineage-independent identity of a lowering of the routine -- its structural
+   digest ([with_placements:false], canonically numbered, so free of process-local ids). Two
+   lineages are compared by lowering BOTH at the same moment: the structural code drifts between
+   lowerings of one lineage taken at different times (a gather guard folds once a compile has
+   settled its index tensor's bounds, so a lowering taken after the base compile folds what the base
+   kept), but two lowerings taken together see the same bounds, and differ only where the lineages
+   do -- an inlined or materialized node, an inherited computation, whatever its accesses. *)
+let lineage_identity ~static_indices (opt : LL.optimized) =
+  SC.digest (SC.canonicalize ~static_indices ~with_placements:false opt)
 
 (* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk is
    already forced (it returns the routine [tune] compiled before reporting); with it
@@ -6130,7 +6113,6 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        later forces the undecided placements into the table the captured [opt] references, and the
        plan's decisions key on placement-sensitive digests. GPU only: the plan is CUDA/HIP's. *)
     let base_pristine = ref None in
-    let base_structural = ref None in
     progress_stage "base_compile";
     let base_outcome =
       Context.compile_outcome ?name
@@ -6141,10 +6123,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              break the exactly-once contract for direct [tune] callers. *)
           Seam.get on_candidate_attempt "baseline";
           base_capture := Some (opt, SC.canonicalize ~static_indices opt);
-          (* gh-ocannl-1421: the base lowering's structural identity, which the caller's own
-             lowering must share for a schedule tuned here to apply to it ([Lineage_refused]). Only
-             with a [timing_ctx]: without one the base was lowered in the caller's lineage. *)
-          if Option.is_some timing_ctx then base_structural := Some (lineage_identity opt);
+
           if is_gpu then base_pristine := Some (scratch_of opt);
           [ opt ])
         ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
@@ -6329,14 +6308,26 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        before the device-memory refusal below: that is the TIMING lineage's base refused, which says
        nothing about the caller's untuned routine, the one thing a refused lineage ships. *)
     let lineage_refusal =
-      Option.bind !base_structural ~f:(fun timing_digest ->
-          match lineage_identity (Context.lowered_for_decisions ?name ctx comp bindings) with
-          | caller_digest when String.equal caller_digest timing_digest -> None
-          | caller_digest -> Some (caller_digest, timing_digest)
+      Option.bind timing_ctx ~f:(fun tctx ->
+          let identity c =
+            lineage_identity ~static_indices (Context.lowered_for_decisions ?name c comp bindings)
+          in
+          match (identity ctx, identity tctx) with
+          | caller_digest, timing_digest when String.equal caller_digest timing_digest -> None
+          | caller_digest, timing_digest -> Some (caller_digest, timing_digest)
           | exception exn when not (process_fatal_exn exn) ->
-              logf "the caller's analysis-only lowering failed (%s); not compared up front"
-                (Exn.to_string exn);
-              None)
+              (* A lineage that cannot lower the routine fails the winner's and the untuned
+                 fallback's compiles alike: said now, not after a search that cannot ship. *)
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              raise_pre_search ~base:(census ())
+                (Outcome.Fatal
+                   {
+                     exn;
+                     backtrace;
+                     phase = Outcome.Transform;
+                     candidate = Some "lineage comparison";
+                     cause = None;
+                   }))
     in
     if Option.is_none lineage_refusal then refuse_if_device_memory baseline_decline;
     let cached =
@@ -6567,8 +6558,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     | Some (caller_digest, timing_digest), _, _ ->
         Stdio.eprintf
           "autotune: WARNING: routine %S: the caller's context lowers it differently from the \
-           timing context (accessed-node digest %s vs %s), so no schedule tuned there can ship \
-           into it: not searching, compiling the untuned default (gh-ocannl-1421)\n\
+           timing context (structural digest %s vs %s), so no schedule tuned there can ship into \
+           it: not searching, compiling the untuned default (gh-ocannl-1421)\n\
            %!"
           (Lazy.force routine_name) caller_digest timing_digest;
         release_baseline ();

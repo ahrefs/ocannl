@@ -805,17 +805,17 @@ let () =
      Its own directory, and fissioned candidates ranked FIRST (gh-ocannl-1421). Every schedule these
      searches crown is tuned on the timing lineage's lowering, where the intermediate is
      materialized; in the caller's lineage it is virtual, so no arm-A schedule applies there, and
-     [Autotune.tune] refuses arm A up front ([Lineage_refused], the nodes their lowerings access
-     differ): it searches nothing, ships the untuned default and ranks last, while arm B, which
-     materializes the intermediate in both lineages, searches and ships its own crown. A fissioned
-     winner used to die instead, promoting the virtual intermediate to a device buffer -- fatal
-     under strict classification, so the replayed search failed and the warm run went back to the
-     arms (gh-ocannl-1386's flake, whenever the timing noise crowned a fissioned schedule; on Metal
-     a whole-routine winner's compile failure was fatal too). Ranking fissioned candidates first
-     makes that winner deterministic, and the claim that no compared search failed -- which no
-     environment waives -- fails on the old behavior every time. The materialize-all lineage of run
-     1's arm B lowers to the same program as this timing lineage, so a shared directory would hand
-     these searches run 1's unranked winner as a schedule-cache hit. --- *)
+     [Autotune.tune] refuses arm A up front ([Lineage_refused], their lowerings differ): it
+     searches nothing, ships the untuned default and ranks last, while arm B, which materializes the
+     intermediate in both lineages, searches and ships its own crown. A fissioned winner used to die
+     instead, promoting the virtual intermediate to a device buffer -- fatal under strict
+     classification, so the replayed search failed and the warm run went back to the arms
+     (gh-ocannl-1386's flake, whenever the timing noise crowned a fissioned schedule; on Metal a
+     whole-routine winner's compile failure was fatal too). Ranking fissioned candidates first makes
+     that winner deterministic, and the claim that no compared search failed -- which no environment
+     waives -- fails on the old behavior every time. The materialize-all lineage of run 1's arm B
+     lowers to the same program as this timing lineage, so a shared directory would hand these
+     searches run 1's unranked winner as a schedule-cache hit. --- *)
   let timing_ctx () = Context.decide_materialized (Context.auto ()) [ mc.Tensor.value ] in
   p "the caller's and the timing lineage lower the default placements differently"
     (not
