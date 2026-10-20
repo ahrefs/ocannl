@@ -3992,7 +3992,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (signal masks, pending and external signals, async-signal safety, a shared timer) before the
   thread removed the whole class. Under dune that death is a red action whose signal the default
   display does not name, so the digest reads the line itself, at a line's start, in the whole log,
-  as `WEDGED DEVICE` (leg 84). A program with its own SIGALRM handler gets no deadline, and none
+  as `WEDGED DEVICE` (leg 87). A program with its own SIGALRM handler gets no deadline, and none
   exists on Windows; `test/operations/device_init_deadline` pins all of it through a test stall
   hook. "Its own handler" is read from the handler slot alone, never `sa_flags`: macOS keeps a
   caught signal's `SA_SIGINFO` across `exec`, so under GitHub's macOS runner agent every

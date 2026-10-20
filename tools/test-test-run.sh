@@ -14,7 +14,7 @@
 # below and closed by the one group it belongs to (gh-ocannl-1202):
 # #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-85),
 # #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36,
-# 68-69, 71-73, 80), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
+# 68-69, 71-73, 80, 87), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
 # #source (59-63, 66), #slot (53-58, 78), #device (75-77), #credentials (79),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
@@ -3716,13 +3716,13 @@ fi
 }
 harness_leg_run '36: a red run still digests as FAIL #digest' leg_36
 
-# Leg 84 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
+# Leg 87 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
 # line a GPU backend's device-init deadline writes before its process dies by
 # SIGALRM is WEDGED DEVICE, keeping dune's 1 and quoting the line -- also when
 # 11MB of output follows it, past the digest's 10MB tail; the same
 # line indented (a test quoting a child's stderr) leaves the run an ordinary
 # FAIL.
-if harness_leg '84: a device-init deadline death is WEDGED DEVICE #digest'; then
+if harness_leg '87: a device-init deadline death is WEDGED DEVICE #digest'; then
 wedged_label="a red run carrying the device-init deadline's line is WEDGED DEVICE (exit 1), an indented one is FAIL"
 wedged_detail=
 argv_mode=wedged_init argv_probe wedged-init run build @cheap
@@ -3751,7 +3751,7 @@ if [ -z "$wedged_detail" ]; then
 else
   report 1 "$wedged_label" "$wedged_detail"
 fi
-fi # leg 84
+fi # leg 87
 
 # Legs 68-69 (gh-ocannl-1055): promotion is offered only on a diff dune printed.
 # A rule whose action failed names its `.corrected` file in the quoted stanza,
