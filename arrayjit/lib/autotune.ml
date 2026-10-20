@@ -5745,25 +5745,17 @@ let lineage_accesses (opt : LL.optimized) =
     | Some (r, w) -> (if r then "r" else "") ^ if w then "w" else ""
 
 (* gh-ocannl-1421: the identity two lowerings of the routine, from two lineages, must share for a
-   schedule tuned on the one to apply to the other: the canonical structural digest -- the code,
-   arithmetic included -- AND the actual tensor nodes it reads and writes, since the canonical form
-   alpha-renames nodes, and two isomorphic programs reading different buffers ([u := x] against [u
-   := y]) would otherwise compare equal. Process-local (node ids): for comparing two lowerings in
-   one call, never for a persisted key. The two are lowered together, at the same moment: the
-   structural code drifts between lowerings of one lineage taken at different times (a gather guard
-   folds once a compile has settled its index tensor's bounds, so a lowering taken after the base
-   compile folds what the base kept), but two lowerings taken together see the same bounds. *)
+   schedule tuned on the one to apply to the other: the code, with loop binders canonically numbered
+   and every tensor node anchored to its actual identity -- the canonical form alone alpha-renames
+   nodes, so [u := x] against [u := y], or [u := x - y] against [u := y - x], would compare equal
+   (review rounds 6-7). Process-local (node ids): for comparing two lowerings in one call, never for
+   a persisted key. The two are lowered together, at the same moment: the code drifts between
+   lowerings of one lineage taken at different times (a gather guard folds once a compile has
+   settled its index tensor's bounds, so a lowering taken after the base compile folds what the base
+   kept), but two lowerings taken together see the same bounds. *)
 let lineage_identity ~static_indices (opt : LL.optimized) =
-  let nodes =
-    LL.affine_accesses opt.LL.llc
-    |> List.map ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
-        Ir.Tnode.id a.a_tn ^ if a.a_write then "w" else "r")
-    |> List.dedup_and_sort ~compare:String.compare
-    |> String.concat ~sep:","
-  in
-  SC.digest (SC.canonicalize ~static_indices ~with_placements:false opt)
-  ^ "/"
-  ^ Stdlib.Digest.to_hex (Stdlib.Digest.string nodes)
+  SC.digest
+    (SC.canonicalize_code ~static_indices ~node_tag:(fun tn -> "#" ^ Ir.Tnode.id tn) opt.LL.llc)
 
 (* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk is
    already forced (it returns the routine [tune] compiled before reporting); with it

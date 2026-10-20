@@ -986,7 +986,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      shipping the next completed result: [fallbacks], in order, each shipped under its own name and
      never recorded -- the evidence the recording would rest on includes a placement that did not
      compile. A forced arm passes none, so its failure propagates. *)
-  let rec ship ?(fallbacks = []) ?last_resort ~what ~commit = function
+  let rec ship ?(fallbacks = []) ?(last_resort = false) ~what ~commit = function
     | Ok deferred -> (
         (* A later arm can poison the lineage after this one succeeded. With a [timing_ctx] that is
            the scratch lineage and the winner — compiled from [ctx] — is unaffected. WITHOUT one the
@@ -1002,16 +1002,16 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         | None -> (
             match Autotune.compile_deferred deferred with
             | exception exn
-              when (not (must_propagate exn))
-                   && List.is_empty fallbacks && Option.is_some last_resort ->
+              when (not (must_propagate exn)) && List.is_empty fallbacks && last_resort ->
                 (* Every completed result failed to compile after an earlier one shipped a
-                   substitute and was released for them: that substitute -- the caller's untuned
-                   default -- is compiled again rather than failing a call that had a usable
-                   routine. *)
-                let resort_what = Option.value_exn last_resort in
-                logf "%s's compile failed (%s): shipping %s's untuned default after all, unrecorded"
-                  what (Exn.to_string exn) resort_what;
-                deliver ~what:resort_what
+                   substitute and was released for them. Rather than failing a call that had a
+                   usable routine, the caller's own untuned compile ships: from [ctx], the default
+                   placements, so it ships as arm A whichever placement the substitute was. *)
+                logf
+                  "%s's compile failed (%s): shipping the untuned default of the default \
+                   placements (arm A) after all, unrecorded"
+                  what (Exn.to_string exn);
+                deliver ~what:"A"
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, no measured placement compiled")
                   (Autotune.untuned_compile ?name ctx comp bindings)
@@ -1019,7 +1019,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 let fallback_what, fallback = List.hd_exn fallbacks in
                 logf "%s's compile failed (%s): shipping %s instead, unrecorded" what
                   (Exn.to_string exn) fallback_what;
-                ship ~fallbacks:(List.tl_exn fallbacks) ?last_resort ~what:fallback_what
+                ship ~fallbacks:(List.tl_exn fallbacks) ~last_resort ~what:fallback_what
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, the measured winner did not compile")
                   fallback
@@ -1035,9 +1035,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   "%s's compile shipped the untuned default in place of its measured schedule: \
                    shipping %s instead, unrecorded"
                   what fallback_what;
-                ship ~fallbacks:(List.tl_exn fallbacks)
-                  ~last_resort:(Option.value last_resort ~default:what)
-                  ~what:fallback_what
+                ship ~fallbacks:(List.tl_exn fallbacks) ~last_resort:true ~what:fallback_what
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, the measured winner did not compile")
                   fallback

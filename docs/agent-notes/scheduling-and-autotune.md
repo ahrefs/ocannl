@@ -2051,10 +2051,11 @@ files.
   on cc, an unclassified `Failure` on Metal) and a fissioned one raised
   `promote_local_to_device: … is virtual`, fatal under strict classification. Before the cache and
   the search, `tune` lowers the routine analysis-only (`Context.lowered_for_decisions`) in BOTH the
-  caller's and the timing context and compares their `Autotune.lineage_identity`: the canonical
-  structural digest AND the actual nodes read and written (the canonical form alpha-renames nodes,
-  so `u := x` and `u := y` would otherwise match; an access set alone misses `x + y` against
-  `x - y` -- review rounds 5-6). A mismatch reports `Lineage_refused`, searches nothing, warns on
+  caller's and the timing context and compares their `Autotune.lineage_identity`: the code with
+  loop binders canonically numbered and every tensor node anchored to its actual id
+  (`Schedule_cache.canonicalize_code` with an id `node_tag`). The canonical form alone
+  alpha-renames nodes (`u := x` against `u := y`, `x - y` against `y - x`), and an access set
+  misses `x + y` against `x - y` (review rounds 5-7). A mismatch reports `Lineage_refused`, searches nothing, warns on
   stderr unconditionally and ships the untuned default at `best_ms = infinity`; a lowering that
   fails is a pre-search failure. Together, because lowering is stateful in compile order: the base
   compile settles an index tensor's value bounds, so a lowering taken after it folds a gather guard
