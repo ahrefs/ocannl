@@ -6,6 +6,12 @@ every Keyed key outside the running backend's scope moves nothing when flipped: 
 no key outside the Keyed class is read while the cache key is computed: true
 the key computation reads its Keyed keys per lookup, so the trace sees reads: true
 no unflippable Keyed key is read per lookup by the key computation: true
+the backend name moves its own component: true
+and only components it reaches: true
+cc_grid_private_bytes_cap, stated in a child, moves the codegen component alone on a CPU backend, and nothing on a GPU one: true
+every child run of the pool-class flips completed: true
+no pool-class flip moves a component other than the pool: true
+the pool component separates exactly the pool decisions that differ: true
 each settings-borne key outside Keyed is flipped by restore_settings: true
 and moves no component of the cache key: true
 no registered non-Keyed key moves the cache key when flipped off its default: true
@@ -14,9 +20,9 @@ every key a compile reads whose class promises an unchanged kernel has oracle va
 no such key changes the emitted kernel while leaving the cache key unchanged: true
 
 Keyed keys this sweep cannot flip in-process:
-  backend -- a parameter, not a lookup: backends are process-wide singletons, and the component is the backend name the caller passes
-  cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes
-  cc_grid_private_bytes_cap -- resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; the codegen tag hashes that resolved value
+  backend -- a parameter, not a lookup: backends are process-wide singletons, and the component is the backend name the caller passes -- varied through that argument
+  cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes -- varied in child processes, and held to separating every two pools of different widths
+  cc_grid_private_bytes_cap -- resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; the codegen tag hashes that resolved value -- varied in child processes
 
 Keys a compile reads that the codegen-diff oracle does not flip:
   ll_ident_style -- identifier spelling: the canonical rendering alpha-renames identifiers away, and code that differs only in their names compiles to the same kernel -- a changed text is what the key is right to ignore

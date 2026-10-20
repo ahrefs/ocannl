@@ -5163,7 +5163,7 @@
  (modules cache_key_agreement)
  (action
   (run %{test} %{dep:../../arrayjit/lib/utils.ml}))
- (libraries base ocannl stdio test_utils arrayjit.verdict)
+ (libraries base ocannl stdio unix fresh_process test_utils arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

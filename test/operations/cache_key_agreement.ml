@@ -31,9 +31,11 @@
    compile reads is flipped, the probe recompiled, and a changed kernel under an unchanged key is
    reported by name.
 
-   A [Keyed] key the sweep cannot flip in-process says why ([unflippable]), and the reason stays
-   true: such a key must not be read per lookup by the key computation, or it could have been
-   flipped. That table and the oracle's exemptions are the reviewable artifacts, printed below. *)
+   A [Keyed] key the sweep cannot flip in-process says why ([unflippable]), is varied another way --
+   the backend name through [cache_key_components]' argument, the two lazily resolved cc settings in
+   child processes -- and the reason stays true: such a key must not be read per lookup by the key
+   computation, or it could have been flipped. That table and the oracle's exemptions are the
+   reviewable artifacts, printed below. *)
 
 open Base
 open Stdio
@@ -152,18 +154,32 @@ let keyed_flips =
    classified component alone. *)
 let derived_components = [ ("numerics", [ "codegen" ]) ]
 
+(* The [Keyed] keys no in-process flip reaches, each with how it is varied instead (Codex P2, round
+   4): the backend name through [cache_key_components]' own argument, and the two lazily resolved cc
+   settings in child processes of this executable ([child_flag]), each stating its value on the
+   commandline before anything forces the lazy. *)
 let unflippable =
   [
     ( "backend",
       "a parameter, not a lookup: backends are process-wide singletons, and the component is the \
-       backend name the caller passes" );
+       backend name the caller passes -- varied through that argument" );
     ( "cc_pool_core_class",
       "resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool \
-       tag it decides is what the component hashes" );
+       tag it decides is what the component hashes -- varied in child processes, and held to \
+       separating every two pools of different widths" );
     ( "cc_grid_private_bytes_cap",
       "resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; \
-       the codegen tag hashes that resolved value" );
+       the codegen tag hashes that resolved value -- varied in child processes" );
   ]
+
+(* What the backend name reaches besides its own component: the codegen tag gates on
+   [Schedule.backend_is_gpu] of it, and the timing component spells the CUDA/HIP queued policy's
+   generation from it. *)
+let backend_derived_components = [ "codegen"; "timing" ]
+
+(* Run as a child with this flag, the executable prints its cache-key components (and, on a CPU
+   backend, the pool width the cc backend decided) instead of sweeping. *)
+let child_flag = "--components"
 
 (* The keys resolved into [Utils.settings] but classified other than [Keyed]: flipped the same way,
    and held to moving nothing. With [keyed_flips]' [Settings] entries they must cover exactly what
@@ -276,19 +292,26 @@ let alpha_normalized text =
   scan 0;
   Buffer.contents out
 
-let canonical_of ctx =
+(* [~lower_only] stops the compile once the lowered code is canonicalized, before anything is
+   rendered or handed to a compiler. *)
+exception Lowered
+
+let canonical_of ?(lower_only = false) ctx =
   let a =
     TDSL.ndarray [| 1.; 2.; 3.; 4.; 5.; 6.; 7.; 8. |] ~label:[ "cka_a" ] ~output_dims:[ 8 ] ()
   in
   let c = TDSL.O.(relu a + a) in
   let canon = ref None in
-  let _ctx, _routine =
-    Context.compile
-      ~lowered_transform:(fun opt ->
-        canon := Some (SC.canonicalize ~static_indices:[] opt);
-        [ opt ])
-      ctx (Train.forward c) Ir.Indexing.Empty
-  in
+  (try
+     ignore
+       (Context.compile
+          ~lowered_transform:(fun opt ->
+            canon := Some (SC.canonicalize ~static_indices:[] opt);
+            if lower_only then raise Lowered;
+            [ opt ])
+          ctx (Train.forward c) Ir.Indexing.Empty
+         : Context.t * Context.routine)
+   with exn when lower_only && Option.is_some !canon -> ignore (exn : exn));
   Option.value_exn ~here:[%here] !canon
 
 (* Whether the config file is where [key] now resolves from, stating [value]: a commandline or
@@ -357,6 +380,27 @@ let with_stated key value resolver f =
                f ())
              ~finally:restore)
 
+let components_of ctx canon ~backend =
+  Option.value_exn ~here:[%here]
+    (SC.cache_key_components ~timing_identity ~limits:(Context.hardware_limits ctx)
+       ~capabilities:(Context.codegen_capabilities ctx)
+       canon ~backend)
+
+let () =
+  if Array.mem Stdlib.Sys.argv child_flag ~equal:String.equal then (
+    let ctx = Context.auto () in
+    let backend = Context.backend_name ctx in
+    (* Lowered and canonicalized, never compiled: a child states a cc grid mode the host's compiler
+       may lack (clang without libomp), and the components need no kernel -- the codegen and pool
+       tags force the two lazies themselves. *)
+    let canon = canonical_of ~lower_only:true ctx in
+    List.iter (components_of ctx canon ~backend) ~f:(fun (name, value) ->
+        printf "component\t%s\t%s\n" name value);
+    if not (Ir.Schedule.backend_is_gpu backend) then
+      printf "pool-tag\t%s\n" (Context.Cc_backend.pool_tag ());
+    Out_channel.flush stdout;
+    Stdlib.exit 0)
+
 let () =
   let ctx = Context.auto () in
   (* A flip a commandline or environment statement outranks is not made, and says so as a skip
@@ -377,12 +421,7 @@ let () =
      symlink refusals ran (Codex P1, round 1). *)
   Test_utils.Generated.init ~backend_name:backend;
   let canon = canonical_of ctx in
-  let components () =
-    Option.value_exn ~here:[%here]
-      (SC.cache_key_components ~timing_identity ~limits:(Context.hardware_limits ctx)
-         ~capabilities:(Context.codegen_capabilities ctx)
-         canon ~backend)
-  in
+  let components () = components_of ctx canon ~backend in
   let moved before after =
     List.filter_map (List.zip_exn before after) ~f:(fun ((name, a), (_, b)) ->
         Option.some_if (not (String.equal a b)) name)
@@ -531,6 +570,65 @@ let () =
       let found = Set.mem read key in
       if found then eprintf "%s is unflippable, yet read per lookup -- flip it instead\n" key;
       found);
+  (* 4b. Varying what no in-process flip reaches. The backend name, through the argument: it must
+     move its own component, and nothing it does not reach. *)
+  (let before = components () in
+   let after = components_of ctx canon ~backend:(backend ^ "_flipped") in
+   let moved = moved before after in
+   p "the backend name moves its own component" (List.mem moved "backend" ~equal:String.equal);
+   p_all ~min:1 "and only components it reaches" moved ~f:(fun c ->
+       String.equal c "backend" || List.mem backend_derived_components c ~equal:String.equal));
+  (* The two lazily resolved cc settings, in children that state them on the commandline (which
+     outranks every other source) before anything forces the lazy. A child reports its components
+     and the pool the cc backend decided. *)
+  let child args =
+    let ((status, out, _) as run) = Fresh_process.run (child_flag :: args) in
+    match status with
+    | Unix.WEXITED 0 ->
+        let lines = List.map (String.split_lines out) ~f:(String.split ~on:'\t') in
+        Some
+          ( List.filter_map lines ~f:(function
+              | [ "component"; name; value ] -> Some (name, value)
+              | _ -> None),
+            List.find_map lines ~f:(function [ "pool-tag"; tag ] -> Some tag | _ -> None) )
+    | _ ->
+        Fresh_process.report ~label:"cache_key_agreement child" run;
+        None
+  in
+  let grid = "--ocannl_cc_parallel_grid=openmp" in
+  let cpu = not (Ir.Schedule.backend_is_gpu backend) in
+  let cap_flip =
+    match (child [ grid ], child [ grid; "--ocannl_cc_grid_private_bytes_cap=1024" ]) with
+    | Some (before, _), Some (after, _) -> Some (moved before after)
+    | _ -> None
+  in
+  p
+    "cc_grid_private_bytes_cap, stated in a child, moves the codegen component alone on a CPU \
+     backend, and nothing on a GPU one"
+    (Option.value_map cap_flip ~default:false ~f:(fun moved ->
+         if cpu then List.equal String.equal moved [ "codegen" ] else List.is_empty moved));
+  let pools =
+    List.filter_map [ "all"; "performance"; "efficiency" ] ~f:(fun cls ->
+        Option.map
+          (child [ grid; "--ocannl_cc_pool_core_class=" ^ cls ])
+          ~f:(fun (components, width) -> (cls, components, width)))
+  in
+  p "every child run of the pool-class flips completed" (List.length pools = 3);
+  let pairs =
+    List.concat_mapi pools ~f:(fun i a ->
+        List.filteri pools ~f:(fun j _ -> j > i) |> List.map ~f:(fun b -> (a, b)))
+  in
+  p_all "no pool-class flip moves a component other than the pool" pairs
+    ~f:(fun ((_, ca, _), (_, cb, _)) -> List.for_all (moved ca cb) ~f:(String.equal "pool"));
+  (* The pool component separates exactly the pools the cc backend decided apart: two classes whose
+     decisions ([Cc_backend.pool_tag], what the restriction settled on) differ get different pool
+     components, and two whose decisions agree share one. Which classes the host can tell apart is
+     its own business -- a host without core classes to restrict to decides one pool for all three
+     -- so the claim is over the pairs, whatever they decided. A GPU backend has no pool. *)
+  p_all ~min:3 "the pool component separates exactly the pool decisions that differ" pairs
+    ~f:(fun ((_, ca, ta), (_, cb, tb)) ->
+      Bool.equal (Option.equal String.equal ta tb)
+        (not (List.mem (moved ca cb) "pool" ~equal:String.equal)));
   (* 5. The keys a trace cannot see -- resolved once into [Utils.settings] -- flipped through their
      resolver: each flip must change the settings record (or the flip proves nothing) and move no
      component. *)
