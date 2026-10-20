@@ -312,13 +312,15 @@ let read ?(source = "") content =
                 (bases, exports, values) )
           | Pstr_value (_, bindings) ->
               (* A binding that only names another value ([let save = store]) is an alias, which
-                 keeps whatever the name means through the bases: only a computed value shadows
-                 (review round 7). *)
+                 keeps whatever the name means through the bases (review round 7) -- but only an
+                 unqualified name the structure did not bind itself, which can be inherited; an
+                 alias of a qualified or local value shadows like a computed one (review round
+                 8). *)
               let bound =
                 Lexical_scope.pattern_vars
                   (List.filter_map bindings ~f:(fun vb ->
                        match vb.pvb_expr.pexp_desc with
-                       | Pexp_ident _ -> None
+                       | Pexp_ident { txt = Lident name; _ } when not (Set.mem values name) -> None
                        | _ -> Some vb.pvb_pat))
               in
               (env, (bases, exports, Set.union values (Set.of_list (module String) bound)))

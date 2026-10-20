@@ -280,6 +280,21 @@ let () = M.store ~dir:"scratch" key value|ocaml},
 end
 let () = M.save ~dir:"autotune_cache_alias" key value|ocaml},
       [ "~dir names autotune_cache_alias" ] );
+    ( "but an alias of another module's value shadows",
+      {ocaml|module M = struct
+  include Ir.Schedule_cache
+  let save = Other.store
+end
+let () = M.save ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "and so does an alias of the structure's own value",
+      {ocaml|module M = struct
+  include Ir.Schedule_cache
+  let store ~dir _ _ = ignore (dir : string)
+  let save = store
+end
+let () = M.save ~dir:"scratch" key value|ocaml},
+      [] );
     ( "and a later include of the cache takes the name back",
       {ocaml|module M = struct
   let store ~dir _ _ = ignore (dir : string)
