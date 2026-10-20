@@ -243,6 +243,7 @@ a helper in a closure the initializer builds but never calls pins nothing: true
 nor does one whose key a later item spells again before the first search: true
 while a call under a condition, the `if is_cpu` shape, does: true
 a bare call under an `open` of the helper's module, which a value can shadow, pins nothing: true
+a `setenv` of `-1` around one of a run's invocations undoes the helper's pin: true
 a blessed helper that stops stating a key, and a support value stating every key unblessed, are both refused: true
 
 Synthetic controls: ambient gates derive identity from the program actually run.
@@ -337,7 +338,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width
   [scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than
   [scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file
-  [scanner-refusal:b75b8032e8725b0889bfea3840ce0f16] starts a search
+  [scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search
   [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
@@ -514,6 +515,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before
   [scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu
   [scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which
+  [scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes
   [scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating
   [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks
   [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused

@@ -3379,9 +3379,13 @@ let main () =
                            List.concat_map vector_file_keys ~f:(fun (key, _) ->
                                let var = Utils.env_var_name key in
                                List.map cc_runs ~f:(fun (r, pins) ->
-                                   if on_command_line r ~key then None
+                                   (* A `setenv` of the key anywhere in the stanza that sets no
+                                      pinning value leaves this run unpinned, even one wrapping only
+                                      some of its invocations: the pin set it is read from
+                                      intersects them (Codex P2, round 7). *)
+                                   if on_command_line r ~key || not (sets_a_value r ~key) then None
                                    else if Set.mem pins var then
-                                     Option.some_if (sets_a_value r ~key)
+                                     Some
                                        (Printf.sprintf "every run that can select cc pins `%s`" var)
                                    else init))
                          in
@@ -3444,11 +3448,12 @@ let main () =
                                            32 or 64 on the x86 runners CI draws at random, with a \
                                            register count that differs again -- so a claim on what \
                                            the search seeds or keeps passes on one host and fails \
-                                           on the next. Pin the vector file (%s) at initialization \
-                                           (`Fissioned_chain.small_menu`, or a statement of each \
-                                           key) or with `(setenv …)` of each on every such run, or \
-                                           add `; %s %s -- <why its claims hold at every width>` \
-                                           inside the stanza"
+                                           on the next. Pin the vector file (%s) by calling \
+                                           `Fissioned_chain.small_menu` or `small_menu_envelope` \
+                                           in a top-level item before the first search, or with \
+                                           `(setenv …)` of each on every such run, or add `; %s %s \
+                                           -- <why its claims hold at every width>` inside the \
+                                           stanza"
                                           subject via
                                           (String.concat ~sep:", "
                                              (List.map vector_file_keys ~f:(fun (key, _) ->
@@ -7252,6 +7257,14 @@ let search_control () =
           (run
              ~probe:("open Fissioned_chain\nlet small_menu () = ()\nlet () = small_menu ()\n" ^ tune)
              ()) );
+      (* Round 7: a non-pinning `setenv` around one invocation of several unpins the run. *)
+      ( "setenv_partial",
+        refused
+          (run
+             ~action:
+               (Printf.sprintf "\n (action (progn (run %%{test}) (setenv %s -1 (run %%{test}))))"
+                  var)
+             ~probe:helper ()) );
       ( "conditional",
         passed (run ~probe:("let () = if is_cpu then Fissioned_chain.small_menu ()\n" ^ tune) ()) );
       ("support_search", refused (run ~probe:"let () = Fissioned_chain.search ()\n" ()));
@@ -7331,6 +7344,8 @@ let search_control () =
   Verdict.p
     "a bare call under an `open` of the helper's module, which a value can shadow, pins nothing"
     (ok "opened");
+  Verdict.p "a `setenv` of `-1` around one of a run's invocations undoes the helper's pin"
+    (ok "setenv_partial");
   Verdict.p
     "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
      are both refused"
