@@ -296,11 +296,16 @@ if harness_leg 'usage errors exit 2 #usage'; then
 fi
 
 # This repository's own definitions parse: a format change at either definition site that the
-# reader no longer follows fails here, not in the next replay someone runs. An empty revision range
-# reads no history.
+# reader no longer follows fails here, not in the next replay someone runs. Copied into a fresh
+# one-commit repository, since the checkout itself may be shallow (CI's is, and the replay refuses
+# one); an empty revision range reads no history.
 if harness_leg "this repository's built-in sets parse #definitions"; then
+  O=$TMP/own
+  rm -rf "$O" && mkdir -p "$O/.github" "$O/tools" &&
+    cp "$HERE/../.github/ship-pr-merge-build" "$O/.github/" && cp "$HERE/merge-build-check.sh" "$O/tools/" &&
+    git -C "$O" init -q && git -C "$O" add -A && git -C "$O" commit -q -m own
   rc=0
-  python3 "$SRC" --repo "$HERE/.." HEAD..HEAD >"$out" 2>&1 || rc=$?
+  python3 "$SRC" --repo "$O" HEAD..HEAD >"$out" 2>&1 || rc=$?
   if [ "$rc" = 0 ] && has 'merge-build-replay: 0 first-parent merge(s) of HEAD..HEAD, 0 replayed' &&
      grep -q '^set config: .*(.github/ship-pr-merge-build)$' "$out" &&
      grep -q '^set shell-tier: .*(tools/merge-build-check.sh)$' "$out"; then
