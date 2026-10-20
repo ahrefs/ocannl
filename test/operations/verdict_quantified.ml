@@ -128,6 +128,14 @@ let () =
      worst cell's reference. *)
   | "close_nan_worst" ->
       p_close "the claim" [| 1.0; Float.nan; 10.0 |] [| 1.0; 2.0; 3.0 |] ~tol:(fun w -> 0.5 *. w)
+  (* An infinite distance before a NaN: the NaN is still the worst. *)
+  | "close_nan_after_infinity" ->
+      p_close "the claim" [| Float.infinity; Float.nan |] [| 1.0; 2.0 |] ~tol:(fun _ -> 0.5)
+  (* An infinite reference under a relative tolerance: the tolerance is infinite there, and still
+     admits neither a finite value nor the opposite infinity. *)
+  | "close_infinite_reference" ->
+      p_close "the claim" [| 1.0; Float.neg_infinity |] [| Float.infinity; Float.infinity |]
+        ~tol:(fun w -> 1e-5 *. Float.abs w)
   | "shape_p_pairwise_distinct" ->
       p_pairwise_distinct "the claim" distinct ~equal:Int.equal ~to_string:Int.to_string
   | "shape_p_false" -> Verdict.p "the claim" false
@@ -412,6 +420,16 @@ let () =
       Verdict.p "a NaN cell ranks as the worst, ahead of any finite distance"
         (String.is_substring nan_stderr
            ~substring:"the claim: 2 of 3 cells differ beyond tolerance; first at 1, worst at 1:");
+      let _, _, nan_after_inf_stderr = run_child "close_nan_after_infinity" in
+      Verdict.p "a NaN cell ranks as the worst, ahead of an infinite distance before it"
+        (String.is_substring nan_after_inf_stderr
+           ~substring:"the claim: 2 of 2 cells differ beyond tolerance; first at 0, worst at 1:");
+      let infinite_status, _, infinite_stderr = run_child "close_infinite_reference" in
+      Verdict.p
+        "an infinite reference admits neither a finite value nor the opposite infinity under an \
+         infinite relative tolerance"
+        (Poly.equal infinite_status (Unix.WEXITED 1)
+        && String.is_substring infinite_stderr ~substring:"the claim: 2 of 2 cells differ");
       (* At the default floor there is no shortfall to name, so an unwitnessed existential prints
          the bare line too -- the `(…)` detail is reserved for what the claim could not express. *)
       let _, plain_none, _ = run_child "exists_none" in

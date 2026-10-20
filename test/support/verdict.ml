@@ -297,20 +297,30 @@ let close_outcome ?(min = 1) ~tol got want =
   if n_got <> n_want then Close_short (Printf.sprintf "length %d vs %d" n_got n_want)
   else if if min <= 1 then n_got > 0 else n_got >= min then (
     let differing = ref 0 and first = ref (-1) and worst = ref (-1) and magnitude = ref 0. in
-    (* How far a failing cell is from its reference, for ranking: a NaN outranks every number. *)
-    let distance i =
+    (* How far a failing cell is from its reference, for ranking: a NaN is a tier of its own above
+       every distance, the infinite ones included, so a NaN cell is the worst whatever precedes
+       it. *)
+    let rank i =
       let d = Float.abs (got.(i) -. want.(i)) in
-      if Float.is_nan d then Float.infinity else d
+      if Float.is_nan d then (1, 0.) else (0, d)
+    in
+    let further a b =
+      let (tier_a, d_a), (tier_b, d_b) = (rank a, rank b) in
+      tier_a > tier_b || (tier_a = tier_b && Float.(d_a > d_b))
     in
     Array.iteri got ~f:(fun i g ->
         let w = want.(i) in
         if not (Float.is_nan w) then magnitude := Float.max !magnitude (Float.abs w);
-        if not (Float.equal g w || Float.(abs (g - w) <= tol w)) then (
+        (* Only equal values pass without a finite difference: a finite value against an infinite
+           reference, or opposite infinities, differ by an infinite amount, which no tolerance -- an
+           infinite relative one included -- admits. *)
+        let d = Float.abs (g -. w) in
+        if not (Float.equal g w || (Float.is_finite d && Float.(d <= tol w))) then (
           if !differing = 0 then first := i;
           Int.incr differing;
           (* Strictly further: among equals the earliest stands, and an earlier NaN is not displaced
              by a later one. *)
-          if !worst < 0 || Float.(distance i > distance !worst) then worst := i));
+          if !worst < 0 || further i !worst then worst := i));
     Close_holds
       {
         differing = !differing;
