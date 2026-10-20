@@ -3333,3 +3333,16 @@ let macos_timing_environment =
          ~f:(fun registry ->
            Option.map (macos_platform_uuid registry) ~f:(fun host ->
                (host, query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |]))))
+
+(** gh-ocannl-1038: a found directory as a host-capability record states it -- the path a probe
+    answered, followed by [=>] and where it resolves when that differs. A toolkit or SDK reached
+    through a version-neutral symlink ([/usr/local/cuda], [/opt/rocm]) is upgraded by moving the
+    link, which leaves the path itself unchanged; the resolution is what moves. [none] when the
+    probe found nothing. *)
+let capability_dir = function
+  | None -> "none"
+  | Some dir -> (
+      match Unix.realpath dir with
+      | resolved when not (String.equal resolved dir) -> dir ^ "=>" ^ resolved
+      | _ -> dir
+      | exception (Unix.Unix_error _ | Stdlib.Sys_error _) -> dir)

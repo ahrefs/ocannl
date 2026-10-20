@@ -7,3 +7,9 @@ val cuda_include_options : unit -> string list
     the compile path so that other nvrtc callers agree with it rather than reimplementing a subset —
     tools/fp8_soak.ml is one, and a subset that knew only /usr/local/cuda would fail to compile its
     kernel wherever the toolkit lives elsewhere. *)
+
+val host_capabilities : unit -> (string * string) list
+(** What this backend probes on the host without opening a device (gh-ocannl-1038): the toolkit
+    include tree {!cuda_include_options} found ([cuda_include]: [none], the directory, or the
+    directory [=>] where it resolves, which is what moves when [/usr/local/cuda] is repointed at a
+    new toolkit). {!Context.host_capabilities} collects it. *)

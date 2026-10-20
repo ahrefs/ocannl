@@ -8,6 +8,14 @@ module Backends = Backends
 module Cc_backend = Cc_backend
 module Builtins_cc = Builtins_cc
 
+(* gh-ocannl-1038: every backend's host-side probes, in one record. Device-free by construction:
+   each arm is a function its backend exposes for exactly this, and none of them opens a driver. *)
+let host_capabilities () =
+  Cc_backend.host_capabilities ()
+  @ Cuda_backend_impl.host_capabilities ()
+  @ Hip_backend_impl.host_capabilities ()
+  @ Metal_backend_impl.host_capabilities ()
+
 module Buffer_key = struct
   module T = struct
     type t = int * BI.buffer_loc [@@deriving compare, sexp]

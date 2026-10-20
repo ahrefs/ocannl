@@ -26,6 +26,22 @@ module Builtins_cc = Builtins_cc
     copy asserting that it still says what it says. Each entry is a (key, definition, dependency
     keys) triple. *)
 
+val host_capabilities : unit -> (string * string) list
+(** What this host offers the backends, as their own probes found it, without opening any device
+    (gh-ocannl-1038): {!Cc_backend.host_capabilities} (CPU, ISA, vector width, fp16 support, the
+    parallel-Grid runtime, the compiler and its flags), then the host-side probes of each GPU
+    backend whose library is linked -- the CUDA toolkit include tree, the HIP SDK and rocWMMA header
+    trees and the hiprtc version, the Metal math API the runtime accepts. Key/value pairs, in a
+    fixed order.
+
+    [tools/host_caps.exe] prints it as the host line of every CI build job, and test/config/dune
+    records it beside the ambient environment in [ocannl_ambient], which every test's configuration
+    carries: a capability that moves -- a header tree appearing at a path already searched, an
+    OpenMP runtime installed, a toolkit symlink repointed -- reruns every test, rather than leaving
+    dune to serve a verdict computed on the host as it was. Device properties (compute capability,
+    device limits, the GPU's architecture) are not here: reading them opens the device, which a
+    probe run on every dune invocation must not do. *)
+
 type t [@@deriving sexp_of]
 (** Execution context managing device, compilation, and buffers *)
 

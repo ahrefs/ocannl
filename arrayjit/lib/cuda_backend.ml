@@ -2031,3 +2031,13 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     Sexp.message "cuda_stream_debug"
       [ ("total_events", i2s tot); ("unreleased_events", i2s unr); ("unfinished_events", i2s unf) ]
 end
+
+(* gh-ocannl-1038: what this backend probes on the host without opening a device, in the form
+   {!Context.host_capabilities} records. Only the toolkit include tree: everything else this backend
+   decides on -- compute capability, the device limits -- is a device query. *)
+let host_capabilities () =
+  [
+    ( "cuda_include",
+      Utils.capability_dir
+        (List.find_map (cuda_include_options ()) ~f:(String.chop_prefix ~prefix:"-I")) );
+  ]

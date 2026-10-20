@@ -25,3 +25,9 @@ val fp8_guard_source : unit -> string
     transcription of them — the same discipline as the host side of tools/fp8_soak.ml, which reaches
     [builtins.c]'s codec by [extern] instead of restating it. Raises [Utils.User_error] if either
     helper is renamed out from under it, so the verification cannot quietly become vacuous. *)
+
+val host_capabilities : unit -> (string * string) list
+(** What this backend probes on the host without opening a device (gh-ocannl-1038): the HIP SDK
+    include tree ([hip_include]), the complete rocWMMA header tree tile-MMA support requires
+    ([rocwmma_include]) -- each [none], the directory, or the directory [=>] where it resolves --
+    and the hiprtc library's version. {!Context.host_capabilities} collects it. *)
