@@ -50,6 +50,7 @@ leg_3() {
   else report 0 'three'; fi
 }
 leg_4() {
+  [ "${SELFTERM:-0}" = 0 ] || exit 143
   [ "${LITTER:-0}" = 0 ] || : >"$(dirname "$0")/../litter"
   [ "${REWRITE:-0}" = 0 ] || echo rewritten >"$(dirname "$0")/../scribble"
   [ "${EMPTYDIR:-0}" = 0 ] || mkdir -p "$(dirname "$0")/../hollow"
@@ -98,7 +99,7 @@ git -C "$fixture" init -q && git -C "$fixture" add -A &&
   git -C "$fixture" -c user.name=t -c user.email=t@t commit -q -m fixture || exit 2
 subject="$fixture/tools/harness-legs-alone.sh"
 unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_SKIP_LEGS LEAK SKIPLEAK SHAREDSKIP RED DUP NEVER BROKEN HOLD \
-  LITTER REWRITE EMPTYDIR DISCOVERY
+  LITTER REWRITE EMPTYDIR SELFTERM DISCOVERY
 run() { # [subject arguments] -- from an unrelated directory
   rc=0
   (cd "$TMP" && "${SUBJECT:-$subject}" "$@") >"$TMP/out" 2>&1 || rc=$?
@@ -180,6 +181,24 @@ if [ "$rc" = 1 ] && [ "$(grep -c '^  CHECKOUT CHANGED  ' "$TMP/out")" = 1 ] \
    && grep -q '^  CHECKOUT CHANGED  by fixtures/gated.sh : ' "$TMP/out"; then
   report 0 'a run rewriting a file the checkout already had untracked is a finding'
 else report 1 'a run rewriting a file the checkout already had untracked is a finding' "exit $rc; $(cat "$TMP/out")"; fi
+
+# Git lists no FIFO, but it does list a symbolic link, and hashing one opens
+# its target: a link to a FIFO is recorded by its target, never opened.
+mkfifo "$TMP/pipe"
+ln -s "$TMP/pipe" "$fixture/pipe-link"
+rc=0
+(cd "$TMP" && perl -e 'alarm 60; exec @ARGV' "$subject" fixtures/gated.sh) >"$TMP/out" 2>&1 || rc=$?
+rm -f "$fixture/pipe-link" "$TMP/pipe"
+if [ "$rc" = 0 ] && has 'harness-legs-alone: 1 harness(es) checked; 0 red full run(s), 0 failed listing(s), 0 finding(s) run alone'; then
+  report 0 'an untracked link to a FIFO is recorded without being opened'
+else report 1 'an untracked link to a FIFO is recorded without being opened' "exit $rc; $(cat "$TMP/out")"; fi
+
+SELFTERM=1 run fixtures/gated.sh
+if [ "$rc" = 1 ] && grep -q '^  full run: FAIL (exit 143): ' "$TMP/out" \
+   && grep -q '^  ALONE FAIL  4: four #b (exit 143; ' "$TMP/out" && ! grep -q 'interrupted' "$TMP/out" \
+   && grep -q '^harness-legs-alone: 1 harness(es) checked; 1 red full run(s)' "$TMP/out"; then
+  report 0 'a harness exiting 143 on its own is a red run, not an interrupt of the check'
+else report 1 'a harness exiting 143 on its own is a red run, not an interrupt of the check' "exit $rc; $(cat "$TMP/out")"; fi
 
 EMPTYDIR=1 run fixtures/gated.sh
 rmdir "$fixture/hollow" 2>/dev/null

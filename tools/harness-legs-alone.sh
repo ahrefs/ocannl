@@ -127,8 +127,15 @@ checkout_state() {
   git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null || return 0
   git -C "$root" ls-files --others --directory --exclude-standard 2>/dev/null
   git -C "$root" diff HEAD --binary 2>/dev/null | git hash-object --stdin
+  # Only a regular file is opened to hash it: a FIFO would block the read.
+  # Anything else is recorded by its kind (and a link by its target).
   git -C "$root" ls-files -z --others --exclude-standard 2>/dev/null |
-    (cd "$root" && xargs -0 git hash-object -- 2>/dev/null)
+    (cd "$root" && while IFS= read -r -d '' path; do
+      if [ -L "$path" ]; then printf 'link %s -> %s\n' "$path" "$(readlink "$path")"
+      elif [ -f "$path" ]; then printf '%s %s\n' "$(git hash-object -- "$path" 2>/dev/null)" "$path"
+      else printf 'special %s\n' "$path"
+      fi
+    done)
 }
 member() { # LOG SCRIPT [ARG...] -- one run; rc in $rc
   local log=$1 script=$2 after
@@ -138,11 +145,10 @@ member() { # LOG SCRIPT [ARG...] -- one run; rc in $rc
   OCANNL_TOOL_HARNESS_NAME=$script OCANNL_TOOL_HARNESS_SKIP_LEGS=$log.skips \
     "$root/$script" "$@" >"$log" 2>&1 </dev/null &
   child=$!
+  # A signal to this check runs stop(); the member's own status, 143
+  # included, is the member's verdict.
   wait "$child" || rc=$?
   child= current_log=
-  case $rc in
-    129|130|143) printf 'harness-legs-alone: interrupted (exit %s) in %s\n' "$rc" "$log" >&2; exit "$rc" ;;
-  esac
   after=$(checkout_state)
   if [ "$after" != "$baseline" ]; then
     findings=$((findings + 1))
