@@ -40,13 +40,24 @@
 
    Written to the file [record] names, never to stdout: `Utils`' own initialization may print to
    stdout under an ambient tracing setting (`OCANNL_LOG_LEVEL_UTILS` and friends), and that must not
-   become part of every test's configuration. *)
+   become part of every test's configuration.
+
+   gh-ocannl-1038: the host is the other half of the ambient world a verdict can depend on and dune
+   cannot see -- a rocWMMA tree appearing at a path the HIP backend already searches, an OpenMP
+   runtime installed under an unchanged compiler. `--host-record=PATH` names the record
+   `tools/host_caps.exe --record` wrote under its own `(universe)` rule, and it is appended after
+   the environment, so `ocannl_ambient` -- the one file every test's configuration already carries
+   or lists -- changes when either does. Its lines must all be comments: anything else would be a
+   setting smuggled into every test's configuration, so one that is not is refused. *)
 
 open Base
 
 let record = "ocannl_ambient"
 
 let () =
+  let host_record =
+    Array.find_map Stdlib.Sys.argv ~f:(fun arg -> String.chop_prefix arg ~prefix:"--host-record=")
+  in
   let tracked =
     Unix.environment () |> Array.to_list
     |> List.filter_map ~f:(fun binding ->
@@ -70,4 +81,14 @@ let () =
          this\n\
          # file. Comments only: the run still reads the values from the environment.\n";
       List.iter tracked ~f:(fun (name, value) ->
-          Stdio.Out_channel.fprintf out "# %s=%s\n" name (String.escaped value)))
+          Stdio.Out_channel.fprintf out "# %s=%s\n" name (String.escaped value));
+      Option.iter host_record ~f:(fun path ->
+          let lines = Stdio.In_channel.read_lines path in
+          List.iter lines ~f:(fun line ->
+              if not (String.is_prefix line ~prefix:"#") then
+                failwith
+                  (Printf.sprintf
+                     "ocannl_ambient_env: %s holds a line that is not a comment, which would \
+                      become a setting of every test's configuration: %S"
+                     path line);
+              Stdio.Out_channel.output_string out (line ^ "\n"))))

@@ -197,6 +197,7 @@ let raw_entries =
       [
         "[scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] arguments the rule's";
         "[scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient";
+        "[scanner-refusal:86529712a3b8e4b7a66a3adcb8134331] the ambient environment";
         "[scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads";
         "[scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan";
         "[scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics";
@@ -769,6 +770,12 @@ let raw_direct_evidence =
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:cb948484fece727200c2dc74529ab671",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
+    ( "config_dep_completeness.ml:86529712a3b8e4b7a66a3adcb8134331",
+      "config_dep_completeness refuses an ambient record that leaves out the host, exiting 1: true"
+    );
+    ( "config_dep_completeness.ml:86529712a3b8e4b7a66a3adcb8134331",
+      "config_dep_completeness refuses an ambient record whose producer depends on the host record \
+       and never reads it, exiting 1: true" );
     ( "digest_completeness.ml:7cab0a5763f4811f331a4aab327c6784",
       "digest_completeness refuses the malformed tree, exiting 1: true" );
     ( "digest_completeness.ml:1825a277ba0eda3313fbe079e465c15d",

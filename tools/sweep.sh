@@ -1091,6 +1091,9 @@ test_cmd() { # backend wt [jobs [host]]
     watched=
   fi
   if [ -z "$TARGET" ]; then
+    # The host-capability record goes first, so the copy below (gh-ocannl-1038) can only find one
+    # this invocation produced: a build that fails before reaching its producer leaves none.
+    printf 'rm -f _build/default/test/config/ocannl_host_capabilities; '
     printf 'OCANNL_BACKEND=%s %s build %s%s @runtest @train; rc1=$?; ' \
       "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
   else
@@ -1103,6 +1106,15 @@ test_cmd() { # backend wt [jobs [host]]
       "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
   else
     printf 'rc2=0; '
+  fi
+  # The host-capability record the suite just ran under (gh-ocannl-1038): every test's
+  # configuration carries it, so the full suite rebuilds it on THIS box, and copying it into the
+  # log is what lets sweep_state_update say when a box lost a capability between two sweeps. The
+  # suite's call above removed any older copy first, so a record found here is this invocation's.
+  # Not for a --target run, whose build need not reach it. Its status is dropped: a missing record
+  # is no verdict.
+  if [ -z "$TARGET" ]; then
+    printf 'sed "s/^/host-capability: /" _build/default/test/config/ocannl_host_capabilities 2>/dev/null; '
   fi
   printf 'for r in $rc1 $rc2; do case $r in 124|137|142) exit $r ;; esac; done; '
   printf 'exit $(( rc1 != 0 ? rc1 : rc2 ))'

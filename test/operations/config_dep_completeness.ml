@@ -110,6 +110,10 @@ let repo_relative = Scan.repo_relative
 let ambient_home = "test/config"
 let ambient_subdir = "ambient"
 
+(* gh-ocannl-1038: the host half of the ambient record -- what the backends' own probes found,
+   written under `(universe)` by tools/host_caps.exe and appended to `ocannl_ambient`. *)
+let host_record_file = "ocannl_host_capabilities"
+
 let () =
   if Array.length Stdlib.Sys.argv < 2 then (
     eprintf "Usage: %s <workspace_root> <dune file or ocannl_config...>\n" Stdlib.Sys.argv.(0);
@@ -211,13 +215,38 @@ let () =
            (Scan.declared_config_paths ~name:Scan.ambient_file deps)
            ("../" ^ Scan.ambient_file) ~equal:String.equal)
    in
+   (* The host half (gh-ocannl-1038): its own `(universe)` rule, and the record's producer naming it
+      IN ITS ACTION. Asked only of a producer that passed the check above, so a tree lacking both
+      reports the environment's refusal alone. A dependency alone is not enough: it reruns the
+      producer when the host moves, but an action that never reads the host record writes the same
+      bytes, and dune's early cutoff then serves every test's cached verdict. *)
+   let rec mentions sexp =
+     match sexp with
+     | Sexp.Atom atom -> String.is_substring atom ~substring:host_record_file
+     | Sexp.List items -> List.exists items ~f:mentions
+   in
+   let host_ok =
+     produces ~subdir:"" ~target:host_record_file ~deps_ok:Scan.depends_on_universe
+     && List.exists rules ~f:(fun (at, stanza) ->
+         String.is_empty at
+         && Option.equal String.equal (target_of stanza) (Some Scan.ambient_file)
+         && Option.exists (Scan.field stanza "action") ~f:(List.exists ~f:mentions))
+   in
    if not (record_ok && config_ok) then
      fail
        (Printf.sprintf
           "%s/dune no longer produces the ambient record its tests depend on: it needs a rule \
            targeting `%s` that depends on `(universe)`, and one in `(subdir %s …)` targeting `%s` \
            that depends on `../%s` (gh-ocannl-1149)"
-          ambient_home Scan.ambient_file ambient_subdir Scan.config_file Scan.ambient_file));
+          ambient_home Scan.ambient_file ambient_subdir Scan.config_file Scan.ambient_file)
+   else if not host_ok then
+     fail
+       (Printf.sprintf
+          "%s/dune records the ambient environment but not the host: it needs a rule targeting \
+           `%s` that depends on `(universe)`, and the rule producing `%s` must read it, or a \
+           capability a backend probes on the host can move without rerunning a test \
+           (gh-ocannl-1038)"
+          ambient_home host_record_file Scan.ambient_file));
   let exemptions = Map.of_alist_exn (module String) exempt_sites in
   let exemptions_used = ref (Set.empty (module String)) in
   let counts = Hashtbl.create (module String) in

@@ -174,6 +174,7 @@ codegen_text_inventory.ml: [scanner-refusal:7b848f96a84cc15bb6e1027465d08502] Te
 config_dep_completeness.ml has exactly the explicitly assigned refusal controls: true
 config_dep_completeness.ml: [scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] arguments the rule's (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
+config_dep_completeness.ml: [scanner-refusal:86529712a3b8e4b7a66a3adcb8134331] the ambient environment (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true

@@ -3333,3 +3333,51 @@ let macos_timing_environment =
          ~f:(fun registry ->
            Option.map (macos_platform_uuid registry) ~f:(fun host ->
                (host, query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |]))))
+
+(** gh-ocannl-1038: the headers a C or C++ text includes by [#include <...>], in order -- the files
+    {!capability_dir} fingerprints, read off the prelude a backend compiles with. *)
+let included_headers text =
+  String.split_lines text
+  |> List.filter_map ~f:(fun line ->
+      match String.chop_prefix (String.strip line) ~prefix:"#include" with
+      | None -> None
+      | Some rest -> (
+          match String.lsplit2 (String.strip rest) ~on:'>' with
+          | Some (spec, _) -> String.chop_prefix spec ~prefix:"<"
+          | None -> None))
+
+(** gh-ocannl-1038: a found directory as a host-capability record states it. Three things can move
+    while the path a probe answered stays the same, and each must move the record:
+
+    - where it resolves, appended after [=>] when that differs: a toolkit or SDK reached through a
+      version-neutral symlink ([/usr/local/cuda], [/opt/rocm]) is upgraded by repointing the link;
+    - whether the headers the backend compiles against are there at all, since some probes answer a
+      configured path without looking inside it ([CUDA_PATH]): [(missing:<file>,...)] names the
+      absent ones;
+    - which headers they are, when all are present: a [#] and a digest of each one's size and
+      modification time, since a distro package upgrades its headers in place under [/usr].
+
+    [none] when the probe found nothing. *)
+let capability_dir ~requires = function
+  | None -> "none"
+  | Some dir -> (
+      let located =
+        match Unix.realpath dir with
+        | resolved when not (String.equal resolved dir) -> dir ^ "=>" ^ resolved
+        | _ -> dir
+        | exception (Unix.Unix_error _ | Stdlib.Sys_error _) -> dir
+      in
+      let stat file =
+        try
+          let st = Unix.stat (Stdlib.Filename.concat dir file) in
+          Some (Printf.sprintf "%s:%d:%.0f" file st.Unix.st_size st.Unix.st_mtime)
+        with Unix.Unix_error _ | Stdlib.Sys_error _ -> None
+      in
+      match List.filter requires ~f:(fun file -> Option.is_none (stat file)) with
+      | [] ->
+          let stamps = List.filter_map requires ~f:stat in
+          located ^ "#"
+          ^ String.prefix
+              (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\n" stamps)))
+              8
+      | missing -> located ^ "(missing:" ^ String.concat ~sep:"," missing ^ ")")

@@ -1931,3 +1931,15 @@ using namespace metal;|}
                    Me.CommandBuffer.commit command_buffer));
          })
 end
+
+(* gh-ocannl-1038: the one capability this backend probes on the host rather than on a device --
+   which math API the running Objective-C runtime's compile options accept, the query [Impl]'s
+   [runtime_math_api] makes before every compile. It moves with an OS update, and it decides the
+   option sequence every Metal compile uses. *)
+let host_capabilities () =
+  [
+    ( "metal_math_api",
+      match Metal_math_api_runtime.get () with
+      | Compiler_options.Modern_split -> "modern_split"
+      | Compiler_options.Legacy -> "legacy" );
+  ]

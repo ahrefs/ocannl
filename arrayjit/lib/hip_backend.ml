@@ -175,6 +175,81 @@ let fp8_guard_source () =
    [Hip_mma] beside them (gh-ocannl-1246). *)
 let bf16_accum_wide = Hip_mma.bf16_accum_wide
 
+(* A directory containing a COMPLETE rocWMMA header tree, if any: [ROCWMMA_PATH] variants, a clone
+   under [%LOCALAPPDATA%/rocwmma], or the HIP include tree (rocWMMA installs there on Linux).
+   rocWMMA is header-only and is NOT in the ROCm Windows SDK, hence the extra search paths.
+
+   "Complete" is load-bearing, not pedantry (gh-ocannl-1032): Ubuntu 26.04's librocwmma-dev 7.1.0
+   installs the five umbrella headers into /usr/include/rocwmma WITHOUT the rocwmma/internal/
+   directory that rocwmma.hpp's very first include needs, and that is the tree an [apt install
+   rocwmma] leaves behind on the distro ROCm stack. Probing rocwmma.hpp alone accepts it, and then
+   every tensorized kernel fails at hiprtc with "'internal/accessors.hpp' file not found" -- turning
+   a clean capability decline into a compile error on the one path that is supposed to be
+   unreachable when the headers are absent. So require an internal header too; [types.hpp] is one
+   rocwmma.hpp pulls in unconditionally. *)
+let rocwmma_include_dir =
+  lazy
+    (let candidates =
+       (match Sys.getenv "ROCWMMA_PATH" with
+         | Some p -> [ p; p ^ "/include"; p ^ "/library/include" ]
+         | None -> [])
+       @ (match Sys.getenv "LOCALAPPDATA" with
+         | Some l -> [ l ^ "/rocwmma/library/include" ]
+         | None -> [])
+       @ match Lazy.force hip_sdk_include_dir with Some d -> [ d ] | None -> []
+     in
+     List.find candidates ~f:(fun p ->
+         Stdlib.Sys.file_exists (p ^ "/rocwmma/rocwmma.hpp")
+         && Stdlib.Sys.file_exists (p ^ "/rocwmma/internal/types.hpp"))
+     |> Option.map ~f:(String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c)))
+
+(* hiprtc ships built-in HIP headers, and device-side printf needs no declaration on ROCm. Top level
+   rather than in [Impl] so [host_capabilities] fingerprints exactly the headers it names. *)
+let hip_includes =
+  {|#include <hip/hip_fp16.h>
+#include <hip/hip_bf16.h>
+/* hip_fp8.h ships with ROCm >= 6.2 (hiprtc is clang, so __has_include is available); guarding
+   keeps non-fp8 kernels compiling on older SDKs, where fp8 kernels still fail with unknown type
+   __hip_fp8_e5m2. */
+#if __has_include(<hip/hip_fp8.h>)
+#include <hip/hip_fp8.h>
+#endif
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __builtin_huge_valf()
+#endif
+#ifndef NAN
+#define NAN __builtin_nanf("")
+#endif|}
+
+(* gh-ocannl-1038: what this backend probes on the host without opening a device -- the SDK include
+   tree hiprtc compiles against, the rocWMMA header tree [Impl.mma_supported] requires, and the
+   hiprtc library's version -- in the form {!Context.host_capabilities} records, so a tree appearing
+   at an already-searched path reruns the tests whose verdicts read it. *)
+let host_capabilities () =
+  [
+    (* The headers fingerprinted are the ones kernels include, read off the text that includes them,
+       so a header added to the prelude is tracked without a second list to keep in step. *)
+    ( "hip_include",
+      Utils.capability_dir
+        ~requires:(Utils.included_headers hip_includes)
+        (Lazy.force hip_sdk_include_dir) );
+    ( "rocwmma_include",
+      Utils.capability_dir
+        ~requires:
+          (List.concat_map Cuda_like_config.Hip.conditional_includes ~f:(fun (_, directive) ->
+               Utils.included_headers directive)
+          (* The completeness half of [rocwmma_include_dir]'s own probe. *)
+          @ [ "rocwmma/internal/types.hpp" ])
+        (Lazy.force rocwmma_include_dir) );
+    ( "hiprtc",
+      try
+        let major, minor = Hiprtc.version () in
+        Printf.sprintf "%d.%d" major minor
+      with _ -> "unavailable" );
+  ]
+
 (* [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
 let initialized = ref false
@@ -304,34 +379,6 @@ end = struct
            && Array.for_all
                 (Array.init n ~f:(fun ordinal -> H.Device.get_attributes (H.Device.get ~ordinal)))
                 ~f:tile_mma_eligible))
-
-  (* A directory containing a COMPLETE rocWMMA header tree, if any: [ROCWMMA_PATH] variants, a clone
-     under [%LOCALAPPDATA%/rocwmma], or the HIP include tree (rocWMMA installs there on Linux).
-     rocWMMA is header-only and is NOT in the ROCm Windows SDK, hence the extra search paths.
-
-     "Complete" is load-bearing, not pedantry (gh-ocannl-1032): Ubuntu 26.04's librocwmma-dev 7.1.0
-     installs the five umbrella headers into /usr/include/rocwmma WITHOUT the rocwmma/internal/
-     directory that rocwmma.hpp's very first include needs, and that is the tree an [apt install
-     rocwmma] leaves behind on the distro ROCm stack. Probing rocwmma.hpp alone accepts it, and then
-     every tensorized kernel fails at hiprtc with "'internal/accessors.hpp' file not found" --
-     turning a clean capability decline into a compile error on the one path that is supposed to be
-     unreachable when the headers are absent. So require an internal header too; [types.hpp] is one
-     rocwmma.hpp pulls in unconditionally. *)
-  let rocwmma_include_dir =
-    lazy
-      (let candidates =
-         (match Sys.getenv "ROCWMMA_PATH" with
-           | Some p -> [ p; p ^ "/include"; p ^ "/library/include" ]
-           | None -> [])
-         @ (match Sys.getenv "LOCALAPPDATA" with
-           | Some l -> [ l ^ "/rocwmma/library/include" ]
-           | None -> [])
-         @ match Lazy.force hip_sdk_include_dir with Some d -> [ d ] | None -> []
-       in
-       List.find candidates ~f:(fun p ->
-           Stdlib.Sys.file_exists (p ^ "/rocwmma/rocwmma.hpp")
-           && Stdlib.Sys.file_exists (p ^ "/rocwmma/internal/types.hpp"))
-       |> Option.map ~f:(String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c)))
 
   let mma_supported () =
     Lazy.force all_rdna_wave32 && Option.is_some (Lazy.force rocwmma_include_dir)
@@ -1102,25 +1149,6 @@ end = struct
       let procs = [||]
     end) in
     C_syntax.codegen_capabilities (module Config)
-
-  (* hiprtc ships built-in HIP headers, and device-side printf needs no declaration on ROCm. *)
-  let hip_includes =
-    {|#include <hip/hip_fp16.h>
-#include <hip/hip_bf16.h>
-/* hip_fp8.h ships with ROCm >= 6.2 (hiprtc is clang, so __has_include is available); guarding
-   keeps non-fp8 kernels compiling on older SDKs, where fp8 kernels still fail with unknown type
-   __hip_fp8_e5m2. */
-#if __has_include(<hip/hip_fp8.h>)
-#include <hip/hip_fp8.h>
-#endif
-
-/* Define math constants that would normally come from <math.h> */
-#ifndef INFINITY
-#define INFINITY __builtin_huge_valf()
-#endif
-#ifndef NAN
-#define NAN __builtin_nanf("")
-#endif|}
 
   module Compile = C_syntax.Compile_driver (Hip_syntax_config)
 

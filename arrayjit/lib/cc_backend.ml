@@ -980,9 +980,21 @@ let host_capabilities () =
       | `None -> "none"
       | `Promoted -> "promoted"
       | `Native -> "native" );
+    (* gh-ocannl-1038: which runtime the pool-parallel Grid loops render against -- the probe that
+       LINKS a dispatch or OpenMP program, so a libomp installed or removed under an unchanged
+       compiler moves this answer, and with it every parallel kernel. *)
+    ( "parallel_grid",
+      match parallel_grid_syntax_setting () with
+      | `None -> "none"
+      | `Dispatch -> "dispatch"
+      | `Openmp -> "openmp" );
     ("compiler", compiler_command ());
     ("arch_flags", arch_flags ());
     ("simd_flags", simd_flags ());
+    (* gh-ocannl-1038: the digest [hardware_limits] carries of everything codegen consults after
+       lowering -- the OpenMP runtime's own controls among them, which no OCANNL setting names. With
+       it every field of this backend's [hardware_limits] is a function of this list. *)
+    ("codegen_tag", codegen_tag ());
   ]
 
 module Tn = Tnode

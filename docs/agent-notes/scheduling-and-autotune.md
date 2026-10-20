@@ -2163,7 +2163,9 @@ files.
   environment (machine-verify, a bare ssh command) silently lost the capability. Each HIP device's
   `static_properties` entry carries `tile_mma_eligible`, the device half read through the gate's
   own predicate, so a readback (`bin/device_props`) can tell the two halves apart without
-  restating it.
+  restating it. The header half is in `Hip_backend.host_capabilities` (`rocwmma_include`), which
+  the test configuration's host record carries, so a tree appearing or vanishing reruns the tests
+  whose verdicts read it (gh-ocannl-1038; build-and-test.md#dune-mechanics).
 - A search's COST is read from `autotune_progress` lines, not `autotune_log` (gh-ocannl-1061):
   the latter is per-candidate and times an extra untuned-default control, so it moves the cost it
   would record; the former adds a clock read per candidate, is flushed line by line (a search
