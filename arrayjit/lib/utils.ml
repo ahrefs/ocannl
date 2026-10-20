@@ -3334,6 +3334,18 @@ let macos_timing_environment =
            Option.map (macos_platform_uuid registry) ~f:(fun host ->
                (host, query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |]))))
 
+(** gh-ocannl-1038: the headers a C or C++ text includes by [#include <...>], in order -- the files
+    {!capability_dir} fingerprints, read off the prelude a backend compiles with. *)
+let included_headers text =
+  String.split_lines text
+  |> List.filter_map ~f:(fun line ->
+      match String.chop_prefix (String.strip line) ~prefix:"#include" with
+      | None -> None
+      | Some rest -> (
+          match String.lsplit2 (String.strip rest) ~on:'>' with
+          | Some (spec, _) -> String.chop_prefix spec ~prefix:"<"
+          | None -> None))
+
 (** gh-ocannl-1038: a found directory as a host-capability record states it. Three things can move
     while the path a probe answered stays the same, and each must move the record:
 

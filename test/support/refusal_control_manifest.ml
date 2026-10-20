@@ -765,6 +765,9 @@ let raw_direct_evidence =
     ( "config_dep_completeness.ml:86529712a3b8e4b7a66a3adcb8134331",
       "config_dep_completeness refuses an ambient record that leaves out the host, exiting 1: true"
     );
+    ( "config_dep_completeness.ml:86529712a3b8e4b7a66a3adcb8134331",
+      "config_dep_completeness refuses an ambient record whose producer depends on the host record \
+       and never reads it, exiting 1: true" );
     ( "digest_completeness.ml:7cab0a5763f4811f331a4aab327c6784",
       "digest_completeness refuses the malformed tree, exiting 1: true" );
     ( "digest_completeness.ml:1825a277ba0eda3313fbe079e465c15d",

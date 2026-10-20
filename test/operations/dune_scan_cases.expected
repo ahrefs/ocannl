@@ -313,6 +313,7 @@ ok: refused -- a datum comment
 config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true
 config_dep_completeness refuses a run handed no dune file, exiting 1: true
 config_dep_completeness refuses an ambient record that leaves out the host, exiting 1: true
+config_dep_completeness refuses an ambient record whose producer depends on the host record and never reads it, exiting 1: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] arguments the rule's

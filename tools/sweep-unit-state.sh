@@ -69,7 +69,7 @@ sweep_state_update() { # machine backend outcome [fingerprint] [log]
   local machine=$1 backend=$2 outcome=$3 fp=${4:-} log=${5:-}
   local label state stage previous_verdict previous_failure_ref
   local previous_fp current_goldens golden_paths path commit old_commit short old_short
-  local current_caps previous_caps line
+  local current_caps previous_caps previous_ref line
   label=$machine/$backend
   SWEEP_STATE_PASSED_AT=
   # skip/gate/error/timeout are recorded outcomes but not verdicts: they judged no
@@ -113,8 +113,19 @@ sweep_state_update() { # machine backend outcome [fingerprint] [log]
     awk -F '\t' '$1 == "capability" { sub(/^[^\t]*\t/, ""); print }' "$state" \
       >"$previous_caps" || die "cannot read the previous host capabilities for $label"
     if [ -s "$previous_caps" ] && ! cmp -s "$previous_caps" "$current_caps"; then
-      short=$(sweep_state_field "$state" last_ref | cut -c1-8)
-      say "  $label: HOST CAPABILITIES CHANGED since the previous verdict at $short -- a result that moved with them is about the box, not the code:"
+      previous_ref=$(sweep_state_field "$state" last_ref)
+      short=$(printf '%s' "$previous_ref" | cut -c1-8)
+      # The record is the backends' probes' output, so a commit that changed the probes (a key
+      # added, a format, a derived value) moves it on an unchanged box. Attributed to the box only
+      # when nothing producing it changed between the two refs; an unreadable range is not
+      # "unchanged".
+      if [ "$previous_ref" = "$full_sha" ] ||
+         git -C "$MAIN" diff --quiet "$previous_ref" "$full_sha" -- \
+           arrayjit/lib tools/host_caps.ml test/config 2>/dev/null; then
+        say "  $label: HOST CAPABILITIES CHANGED since the previous verdict at $short -- a result that moved with them is about the box, not the code:"
+      else
+        say "  $label: host-capability record changed since the previous verdict at $short, and so did the code producing it (arrayjit/lib, tools/host_caps.ml or test/config) -- a new key or format is the code; a moved value may still be the box:"
+      fi
       diff "$previous_caps" "$current_caps" | sed -n 's/^< /    was: /p; s/^> /    now: /p' |
         while IFS= read -r line; do say "$line"; done
     fi

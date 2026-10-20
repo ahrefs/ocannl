@@ -1710,6 +1710,23 @@ let hostless_tree =
     );
   ]
 
+(* The same producers with a host rule beside them that the record's producer DEPENDS on and never
+   reads: the dependency reruns the action, which writes the same bytes, so dune's early cutoff
+   still serves every test's cached verdict. *)
+let host_unread_tree =
+  [
+    ("test/config/ocannl_config", "");
+    ( "test/config/dune",
+      {dune|(rule (target ocannl_host_capabilities) (deps (universe)) (action (run ./host.exe)))
+(rule (target ocannl_ambient) (deps ocannl_config (universe) ocannl_host_capabilities)
+ (action (run ./env.exe)))
+(subdir ambient
+ (rule (target ocannl_config) (deps ../ocannl_config ../ocannl_ambient)
+  (action (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))
+|dune}
+    );
+  ]
+
 let scanner_refusal_controls exe =
   let source = "test/operations/config_dep_completeness.ml" in
   let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
@@ -1726,23 +1743,28 @@ let scanner_refusal_controls exe =
      tree too, where its closing manifest looks for it from a workspace root
      (`Refusal_control_manifest.print`); this directory has it as a dependency. *)
   let scanner_source = "config_dep_completeness.ml" in
-  let tree =
-    ("test/operations/" ^ scanner_source, Stdio.In_channel.read_all scanner_source) :: hostless_tree
-  in
-  Test_utils.Refusal_control_manifest.with_tree tree (fun root ->
-      let here = Stdlib.Sys.getcwd () in
-      let exe = if Stdlib.Filename.is_relative exe then Stdlib.Filename.concat here exe else exe in
-      let refused =
-        Stdlib.Sys.chdir root;
-        Exn.protect
-          ~f:(fun () ->
-            Test_utils.Refusal_control_manifest.refuses ~source ~exe
-              ("." :: List.map hostless_tree ~f:fst))
-          ~finally:(fun () -> Stdlib.Sys.chdir here)
+  let here = Stdlib.Sys.getcwd () in
+  let exe = if Stdlib.Filename.is_relative exe then Stdlib.Filename.concat here exe else exe in
+  List.iter
+    [
+      ("an ambient record that leaves out the host", hostless_tree);
+      ( "an ambient record whose producer depends on the host record and never reads it",
+        host_unread_tree );
+    ]
+    ~f:(fun (what, files) ->
+      let tree =
+        ("test/operations/" ^ scanner_source, Stdio.In_channel.read_all scanner_source) :: files
       in
-      Verdict.p
-        "config_dep_completeness refuses an ambient record that leaves out the host, exiting 1"
-        refused)
+      Test_utils.Refusal_control_manifest.with_tree tree (fun root ->
+          let refused =
+            Stdlib.Sys.chdir root;
+            Exn.protect
+              ~f:(fun () ->
+                Test_utils.Refusal_control_manifest.refuses ~source ~exe
+                  ("." :: List.map files ~f:fst))
+              ~finally:(fun () -> Stdlib.Sys.chdir here)
+          in
+          Verdict.p ("config_dep_completeness refuses " ^ what ^ ", exiting 1") refused))
 
 let () =
   let check name expected found =

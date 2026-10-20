@@ -342,6 +342,15 @@ state_fixture() {
   equal 'state: the change names the line that moved, both ways' "$(grep -E '^ +(was|now): ' "$TMP/messages" | tr -s ' ')" \
     "$(printf ' was: # host rocwmma_include=/usr/include\n now: # host rocwmma_include=none')"
   equal 'state: capability publication removes its scratch files too' "$(find "$UNIT_STATES" -type f | wc -l | tr -d ' ')" 2
+  # A commit that changed the probes' code moves the record on an unchanged box: not the box's.
+  mkdir -p "$MAIN/arrayjit/lib"
+  printf 'probe\n' >"$MAIN/arrayjit/lib/probe.ml"
+  git -C "$MAIN" add arrayjit/lib/probe.ml
+  git -C "$MAIN" commit -qm probe
+  full_sha=$(git -C "$MAIN" rev-parse HEAD)
+  : >"$TMP/messages"
+  sweep_state_update box hip pass '' "$TMP/caps-one.log"
+  equal 'state: a record moved across a probe-code change is not blamed on the box' "$(grep -c 'HOST CAPABILITIES CHANGED' "$TMP/messages"):$(grep -c 'and so did the code producing it' "$TMP/messages")" 0:1
 }
 
 # A green fixture must fail when its shipping function is broken. Each child
