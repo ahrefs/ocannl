@@ -171,8 +171,9 @@ def run(label, cmd, env=None, cwd=None, timeout=None, workload=None):
     pinned cores and GPU, and the sweep moves straight on to the next pair with nothing in its
     record to show it was measured against them. That is not hypothetical -- it happened while
     taking these numbers, and a CPU reference taken over the survivors read 340 ms against 0.13 ms
-    once the box was clean. A group not proven gone stops this sweep (`CleanupFailed`): every later
-    pair would be contaminated.
+    once the box was clean. A group not proven gone stops this sweep: the failed record is marked
+    `cleanup_unproven`, and its caller records the pass and raises `CleanupFailed`
+    (`stop_if_cleanup_unproven`), since every later pair would be contaminated.
 
     Returns the result line, stamped, or a failed record: orchestrate's `failure_record` (the
     reason, and the checkpoint a killed or failed OCANNL pass left, with its provenance) marked
@@ -189,16 +190,15 @@ def run(label, cmd, env=None, cwd=None, timeout=None, workload=None):
         label, TASKSET + cmd, env=e, cwd=cwd or str(HERE), timeout=timeout)
     wall = time.monotonic() - t0
     if line is None:
-        if o.group_unproven(note):
-            raise cell_group.CleanupFailed(
-                f"{label}: {note}. Stopping the sweep: clear it, then resume past what is "
-                "recorded.")
         rec = o.failure_record(
             label, note, o.ambient_ocannl_env(e), checkpoint,
             provenance=dict(SOURCE, fixture_sha256=DIGESTS.get(workload)))
         rec.update({"__failed__": True, "wall_s": round(wall, 2), "gate_ok": gate_ok})
         if o.CELL_LOG_DIR:
             rec["log"] = str(o.CELL_LOG_DIR / o.cell_log_name(label))
+        if o.group_unproven(note):
+            # The caller records the pass, then stops the sweep (`stop_if_cleanup_unproven`).
+            rec["cleanup_unproven"] = True
         return rec
     line["wall_s"] = round(wall, 2)
     line["rc"] = 0
@@ -331,6 +331,18 @@ def timed_run(label, cmd, env, timeout, workload):
     return run(label, cmd, env, timeout=timeout, workload=workload)
 
 
+def stop_if_cleanup_unproven(p, arm, workload, repeat, pass1, pass2):
+    """Stop the sweep over a pass whose process group was not proven gone, having first recorded
+    what the pair got so far -- its checkpoint included -- as an invalid row: every later pair
+    would be measured beside the survivor, and the record is all that is left of this one."""
+    if not p.get("cleanup_unproven"):
+        return
+    emit(record(arm, workload, repeat, pass1=pass1, pass2=pass2, valid=False))
+    raise cell_group.CleanupFailed(
+        f"{p.get('cell')}: {p.get('why')}. Stopping the sweep: clear it, then resume past what "
+        "is recorded.")
+
+
 def pass_label(arm, workload, repeat, which):
     """A pass's cell label, and so its log's name under $GH675_OUT/cells: stamped with the time,
     so a --rerun attempt of the same identity does not overwrite the earlier attempt's log."""
@@ -375,10 +387,12 @@ def do_pair(arm, workload, repeat, mk1, mk2, pre1=None, pre2=None, timeout=None)
             pre1()
         c, e = mk1()
         p1 = timed_run(pass_label(arm, workload, repeat, "pass1"), c, e, timeout, workload)
+        stop_if_cleanup_unproven(p1, arm, workload, repeat, pass1=p1, pass2={})
         if pre2:
             pre2()
         c, e = mk2()
         p2 = timed_run(pass_label(arm, workload, repeat, "pass2"), c, e, timeout, workload)
+        stop_if_cleanup_unproven(p2, arm, workload, repeat, pass1=p1, pass2=p2)
     except PreconditionFailed as ex:
         # Not a measurement that came out badly -- a measurement that was never set up. Recorded
         # so the gap is visible in the raw data, and loud so a sweep is not left to discover it.
@@ -461,7 +475,12 @@ def c_jit_warm(w, rep):
         # run (and discarded) a repeat 0.
         print(f"  prewarming {db} (unrecorded)", flush=True)
         c, e = tiny(w, cachedb=db / "cache.db", retime=False)
-        pre = timed_run(c, e, 1200)
+        pre = timed_run(pass_label("C_jit_warm", w, rep, "prewarm"), c, e, 1200, w)
+        if pre.get("cleanup_unproven"):
+            # Unrecorded like every prewarm, but no less a survivor beside every later pair.
+            raise cell_group.CleanupFailed(
+                f"{pre.get('cell')}: {pre.get('why')}. Stopping the sweep: clear it, then resume "
+                "past what is recorded.")
         if pre.get("__failed__") or not (db / "cache.db").exists():
             # A discarded prewarm failure is the subtlest way to get a cold-vs-warm pair labelled
             # as the warm-vs-warm control: both passes still report `searched: false`. And a
@@ -471,8 +490,8 @@ def c_jit_warm(w, rep):
             # prewarm write the marker this test actually reads.
             shutil.rmtree(db, ignore_errors=True)
             raise PreconditionFailed(
-                f"prewarm of {db} failed (rc={pre.get('rc')}, timeout={pre.get('timeout_s')}); "
-                "its partial cache was removed")
+                f"prewarm of {db} failed ({pre.get('why') or 'no cache.db written'}); its partial "
+                "cache was removed")
         PREWARMED.add(w)
     do_pair("C_jit_warm", w, rep,
             lambda: tiny(w, cachedb=db / "cache.db"),
@@ -516,6 +535,7 @@ def d_ocannl(w, rep):
 def ref_cpu(w, rep):
     cmd = [str(VENV), str(HERE / "runners/pytorch/run.py"), "--fixture", FIXTURE[w], "--device", "cpu"]
     r = timed_run(pass_label("REF_cpu", w, rep, "pass1"), cmd, {}, 3600, w)
+    stop_if_cleanup_unproven(r, "REF_cpu", w, rep, pass1=r, pass2={})
     emit(record("REF_cpu", w, rep, pass1=r, pass2={},
                 valid=not r.get("__failed__") and r.get("gate_ok") is not False))
 

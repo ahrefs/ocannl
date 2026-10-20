@@ -4679,6 +4679,69 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertEqual(record["provenance"]["source_revision"], "b" * 40)
         self.assertIs(record["gate_ok"], True)
 
+    def test_gh675_records_a_pass_whose_group_survived_before_stopping(self):
+        # Review round 1: a pass whose group was not proven gone stops the sweep, but only after
+        # the pair's record -- with the pass's checkpoint -- is in records.jsonl, and pass 2 is
+        # never launched beside the survivor.
+        import gh675_cells
+
+        note = "TIMED OUT after 1s (cap); A MEMBER SURVIVED SIGKILL (survivors)"
+        checkpoint = orchestrate.last_checkpoint(self.golden_checkpoint("running"))
+        with unittest.mock.patch.object(gh675_cells, "gate", return_value=True), \
+                unittest.mock.patch.object(
+                    orchestrate, "run_cell_kept", return_value=(None, note, checkpoint)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            failed = gh675_cells.run("A_beam2 mlp_small rep1 pass1", ["x"], workload="mlp_small")
+        self.assertIs(failed["cleanup_unproven"], True)
+        self.assertEqual(failed["checkpoint"], checkpoint)
+        # Negative control: an ordinary failure carries no such mark.
+        with unittest.mock.patch.object(gh675_cells, "gate", return_value=True), \
+                unittest.mock.patch.object(
+                    orchestrate, "run_cell_kept", return_value=(None, "exit 2", None)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertNotIn("cleanup_unproven", gh675_cells.run("x", ["x"]))
+
+        records = self.dir / "records.jsonl"
+        launched = []
+
+        def pass_run(label, cmd, env, timeout, workload):
+            launched.append(label)
+            return dict(failed)
+
+        with unittest.mock.patch.object(gh675_cells, "RECORDS", records), \
+                unittest.mock.patch.object(gh675_cells, "timed_run", side_effect=pass_run), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(cell_group.CleanupFailed, "SURVIVED SIGKILL"):
+                gh675_cells.do_pair(
+                    "A_beam2", "mlp_small", 1, lambda: (["a"], {}), lambda: (["b"], {}))
+        self.assertEqual(len(launched), 1)
+        rows = [json.loads(line) for line in records.read_text().splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertIs(rows[0]["valid"], False)
+        self.assertEqual(rows[0]["pass1"]["checkpoint"], checkpoint)
+
+    def test_gh675_warm_control_prewarms_through_the_cell_runner(self):
+        # Review round 1: the warm control's prewarm is a pass like any other, with its own label.
+        import gh675_cells
+
+        calls = []
+
+        def prewarm(label, cmd, env, timeout, workload):
+            calls.append((label, timeout, workload))
+            (self.dir / "tiny_jitwarm_mlp_small" / "cache.db").write_text("warm")
+            return {"step_ms": {"p50": 1.0}, "gate_ok": True}
+
+        with unittest.mock.patch.object(gh675_cells, "CACHES", self.dir), \
+                unittest.mock.patch.object(gh675_cells, "PREWARMED", set()), \
+                unittest.mock.patch.object(gh675_cells, "timed_run", side_effect=prewarm), \
+                unittest.mock.patch.object(gh675_cells, "do_pair") as pair, \
+                contextlib.redirect_stdout(io.StringIO()):
+            gh675_cells.ARMS["C_jit_warm"]("mlp_small", 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("C_jit_warm mlp_small rep1 prewarm", calls[0][0])
+        self.assertEqual(calls[0][1:], (1200, "mlp_small"))
+        pair.assert_called_once()
+
     @unittest.skipUnless(os.name == "posix", "the stand-in runner is a shebang script")
     def test_gh1002_keeps_a_killed_cells_checkpoint(self):
         import gh1002_cells

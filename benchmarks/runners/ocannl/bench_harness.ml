@@ -1247,7 +1247,11 @@ let label_writes = 3
     Nor may it eat the cell: past [budget_s] seconds (default {!dominant_kernel_budget_s}) it stops
     and reports ["no-kernel"], instrument over budget (gh-ocannl-1260). It is stopped mid-kernel
     where {!instrument_preemptible} ({!with_deadline}), and in any case starts no kernel once the
-    budget has passed. [time_kernel] is {!time_shipped_kernels}'. *)
+    budget has passed. A kernel that started inside the budget and is not interrupted (Windows, or a
+    long foreign call) may finish past it; when that was the last one, every kernel was timed and
+    the column is the full answer, so it is reported -- the budget bounds the instrument's cost, and
+    discarding a completed measurement would recover none of it. [time_kernel] is
+    {!time_shipped_kernels}'. *)
 let dominant_kernel ?(repeats = 20) ?budget_s ?(time_kernel = fun ~i:_ timing -> timing ()) ~ctx
     ~bindings routines =
   let budget_s = Option.value_or_thunk budget_s ~default:dominant_kernel_budget_s in
