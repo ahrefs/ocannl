@@ -737,51 +737,63 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       else Low_level.unflat_lines (padding_resets @ [ for_loops ])
     in
     if needs_init then
-      (* The initialization fills only the cells the accumulation can reach. An lhs axis indexed by
-         a product iterator with a bound symbolic extent gets the body's own [iterator < extent]
-         guard, so a run at extent [e] initializes the in-extent cells -- every cell the guarded
-         body reads -- and leaves the cells past the extent untouched. Stores, and the loops nested
-         under a guarded axis, scale with the extent; the guarded axis's own loop still spans the
-         declared maximum (bounds are static), exactly as the body's does. Those cells are
-         unspecified after an initializing accumulation (docs/shape_inference.md, "Symbolic extents:
-         cells past a bound extent"), so this changes no promise. It is deliberately NOT a [Fetch]:
-         a fill covers the materialized buffer, a promise [zero_grads] keeps for gradient
-         accumulation across extents, and the guarded initialization must stay distinguishable from
-         it. The margins of a padded target are established by [padding_resets] above, which the
-         unguarded [Fetch] path repeats. *)
-      let lhs_extents =
-        Array.map projections.project_lhs ~f:(function
-          | Indexing.Iterator iter -> bound_extent ~projections iter
-          | _ -> None)
-      in
-      let init =
-        if Array.for_all lhs_extents ~f:Option.is_none then
-          let dims = lazy projections.lhs_dims in
-          loop (Fetch { array = lhs; fetch_op = Constant neutral_value; dims })
-        else
-          let rec init_loop rev_idcs = function
-            | [] -> set lhs (Array.of_list_rev rev_idcs) (Low_level.Constant neutral_value)
-            | (d, _) :: axes when not (Indexing.iterated d) ->
-                init_loop (Indexing.Fixed_idx 0 :: rev_idcs) axes
-            | (d, extent) :: axes ->
-                let index = Indexing.get_symbol () in
-                let body = init_loop (Indexing.Iterator index :: rev_idcs) axes in
-                Low_level.For_loop
-                  {
-                    index;
-                    from_ = 0;
-                    to_ = d - 1;
-                    body =
-                      Option.value_map extent ~default:body ~f:(fun sym ->
-                          guard_below_extent ~index sym body);
-                    axis = Serial;
-                  }
-          in
-          init_loop []
-            (List.zip_exn (Array.to_list projections.lhs_dims) (Array.to_list lhs_extents))
-      in
+      let init = neutral_init ~reset_margins:false ~projections lhs neutral_value in
       Low_level.Seq (init, for_loops_with_resets)
     else for_loops_with_resets
+  (* An initialization pass fills only the cells the accumulation can reach. An axis of [tn] indexed
+     by a product iterator with a bound symbolic extent gets the body's own [iterator < extent]
+     guard, so a run at extent [e] initializes the in-extent cells -- every cell the guarded body
+     reads -- and leaves the cells past the extent untouched. Stores, and the loops nested under a
+     guarded axis, scale with the extent; the guarded axis's own loop still spans the declared
+     maximum (bounds are static), exactly as the body's does. Those cells are unspecified after an
+     initializing accumulation (docs/shape_inference.md, "Symbolic extents: cells past a bound
+     extent"), so this changes no promise. It is deliberately NOT a [Fetch]: a fill covers the
+     materialized buffer, a promise [zero_grads] keeps for gradient accumulation across extents, and
+     the guarded initialization must stay distinguishable from it. A [tn] with no bound-extent axis
+     keeps the [Fetch]. [projections] is [tn]'s view as the written side: [lhs_dims] its dims and
+     [project_lhs] its index per axis -- for a [Rev_sides] target, that target's own projections.
+     The unguarded [Fetch] also establishes a padded target's margins; the guarded nest stores only
+     semantic cells, so [~reset_margins] prepends [tn]'s margin resets to it. [loop_accum] passes
+     [false]: its [padding_resets] already reset the margins of the [lhs] it initializes, whereas
+     [loop_accum_rev]'s reset the side it reads, not its targets. *)
+  and neutral_init ~reset_margins ~(projections : Indexing.projections) tn neutral_value :
+      Low_level.t =
+    let extents =
+      Array.map projections.project_lhs ~f:(function
+        | Indexing.Iterator iter -> bound_extent ~projections iter
+        | _ -> None)
+    in
+    if Array.for_all extents ~f:Option.is_none then
+      let dims = lazy projections.lhs_dims in
+      loop (Fetch { array = tn; fetch_op = Constant neutral_value; dims })
+    else
+      let rec init_loop rev_idcs = function
+        | [] -> set tn (Array.of_list_rev rev_idcs) (Low_level.Constant neutral_value)
+        | (d, _) :: axes when not (Indexing.iterated d) ->
+            init_loop (Indexing.Fixed_idx 0 :: rev_idcs) axes
+        | (d, extent) :: axes ->
+            let index = Indexing.get_symbol () in
+            let body = init_loop (Indexing.Iterator index :: rev_idcs) axes in
+            Low_level.For_loop
+              {
+                index;
+                from_ = 0;
+                to_ = d - 1;
+                body =
+                  Option.value_map extent ~default:body ~f:(fun sym ->
+                      guard_below_extent ~index sym body);
+                axis = Serial;
+              }
+      in
+      let nest =
+        init_loop [] (List.zip_exn (Array.to_list projections.lhs_dims) (Array.to_list extents))
+      in
+      let margins =
+        if not reset_margins then []
+        else
+          match Lazy.force tn.padding with Some (_, v) -> reset_padding_regions tn v | None -> []
+      in
+      if List.is_empty margins then nest else Low_level.unflat_lines (margins @ [ nest ])
   and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
@@ -905,13 +917,23 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
               | Merge_buffer _ ->
                   raise @@ Utils.User_error "Rev_sides cannot initialize merge buffers"
             in
-            Some
-              (Fetch
-                 { array; fetch_op = Constant neutral_value; dims = lazy projections.rhs_dims.(i) }))
+            (* The target's own view as the written side, built whether or not the selector
+               attributes the target ([target_projections] drops one whose concatenation symbol has
+               dimension 1, indexed at [Fixed_idx 0]): the initialization needs only its dims, its
+               index per axis and the extent table, and the body's writes to it are guarded by the
+               same bound extents. *)
+            let projections =
+              {
+                projections with
+                lhs_dims = projections.rhs_dims.(i);
+                project_lhs = projections.project_rhs.(i);
+              }
+            in
+            Some (neutral_init ~reset_margins:true ~projections array neutral_value))
       |> Array.to_list
     in
     if List.is_empty init_ops then for_loops_with_resets
-    else Low_level.unflat_lines (List.map init_ops ~f:loop @ [ for_loops_with_resets ])
+    else Low_level.unflat_lines (init_ops @ [ for_loops_with_resets ])
   and loop (code : t) : Low_level.t =
     match code with
     | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } -> (

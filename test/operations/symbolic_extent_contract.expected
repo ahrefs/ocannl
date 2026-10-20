@@ -21,3 +21,12 @@ control: the unguarded non-initializing onto writes the cells past the extent: t
 control: every cell of the unguarded over has read the poison past the extent: true
 real compile at extent 2: onto's in-extent cells are the in-extent row sums: true
 real compile at extent 2: over sums exactly the in-extent rows: true
+the concatenation's gradient scatter is emitted non-initializing: true
+extent 0, initializing Rev_sides: every cell of u's gradient past the extent keeps its sentinel: true
+extent 0, initializing Rev_sides: every cell of v's gradient past the extent keeps its sentinel: true
+extent 2, initializing Rev_sides: u's in-extent gradient is its slice of cat's: true
+extent 2, initializing Rev_sides: every cell of u's gradient past the extent keeps its sentinel: true
+extent 2, initializing Rev_sides: v's in-extent gradient is its slice of cat's: true
+extent 2, initializing Rev_sides: every cell of v's gradient past the extent keeps its sentinel: true
+extent 4, initializing Rev_sides: u's in-extent gradient is its slice of cat's: true
+extent 4, initializing Rev_sides: v's in-extent gradient is its slice of cat's: true

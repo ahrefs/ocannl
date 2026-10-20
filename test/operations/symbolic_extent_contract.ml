@@ -23,7 +23,12 @@
    The initializing record's own initialization pass is guarded like its body, so the sentinel
    survives past the extent there too; a third program spells the unguarded initialization as an
    explicit [Fetch] fill ahead of the non-initializing record, and a fill covers the materialized
-   buffer whatever the extent -- the two must stay distinguishable. *)
+   buffer whatever the extent -- the two must stay distinguishable.
+
+   The last leg does the same for the other initializing writer, the [Rev_sides] scatter a
+   concatenation's gradient lowers to: its per-target initialization is guarded by the target's own
+   bound extents, so a sentinel past the extent survives in every target -- including one whose
+   concatenation segment has width 1, which the scatter indexes at [Fixed_idx 0]. *)
 
 open Base
 open Ocannl
@@ -37,11 +42,11 @@ let range = 4
 let width = 3
 let extents = [ 0; 2; range ]
 
-let rec find_accum = function
-  | Asgns.Accum_op _ as a -> Some a
-  | Asgns.Seq (a, b) -> Option.first_some (find_accum a) (find_accum b)
-  | Asgns.Block_comment (_, body) -> find_accum body
-  | Asgns.Noop | Asgns.Set_vec_unop _ | Asgns.Fetch _ -> None
+let rec find_accum ?(f = fun _ -> true) = function
+  | Asgns.Accum_op { rhs; _ } as a when f rhs -> Some a
+  | Asgns.Seq (a, b) -> Option.first_some (find_accum ~f a) (find_accum ~f b)
+  | Asgns.Block_comment (_, body) -> find_accum ~f body
+  | Asgns.Accum_op _ | Asgns.Noop | Asgns.Set_vec_unop _ | Asgns.Fetch _ -> None
 
 let accum_of t = Option.value_exn ~here:[%here] (find_accum (Train.forward t).Asgns.asgns)
 
@@ -194,4 +199,73 @@ let () =
   pf_all2 "real compile at extent %d: over sums exactly the in-extent rows" e
     (Context.get_values ctx over_tn)
     (Array.init width ~f:(column_sum e))
-    ~f:Float.equal
+    ~f:Float.equal;
+
+  (* {1 The [Rev_sides] scatter's initialization is guarded the same way.} A concatenation's
+     gradient writes each operand's gradient through [Rev_sides] -- one record, one target per
+     operand. The front end only emits it NON-initializing (a backprop [=+]), so the initializing
+     flavour is that record with [initialize_neutral] set: same projections. No projection carrying
+     a symbolic extent is proven surjective ([Affine.is_surjective]), so every target gets an
+     initialization pass. *)
+  let%op u = { u = 0.5 } in
+  let%op v = { v = 0.5 } in
+  let%op cat = (u, v) ++^ "s, b; s, c => s, b^c" [ "s"; "b"; "c" ] in
+  Shape.set_sym_dim s extent;
+  Shape.set_dim b 2;
+  Shape.set_dim c 1;
+  let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad in
+  let rev_sides =
+    match
+      find_accum
+        ~f:(function Asgns.Rev_sides _ -> true | _ -> false)
+        (Option.value_exn ~here:[%here] cat.Tensor.diff).Tensor.backprop.Asgns.asgns
+    with
+    | Some (Asgns.Accum_op r) ->
+        p "the concatenation's gradient scatter is emitted non-initializing"
+          (not r.initialize_neutral);
+        Asgns.Accum_op { r with initialize_neutral = true }
+    | _ -> failwith "expected the concatenation's Rev_sides gradient"
+  in
+  let gu = grad_of u and gv = grad_of v and gcat = grad_of cat in
+  let cat_width = 3 in
+  List.iter [ gu; gv; gcat ] ~f:Ll_test.materialize;
+  let rev_init =
+    let name = "sym_contract_rev_init" in
+    let llc = Asgns.to_low_level ~static_indices rev_sides in
+    Ll_test.link ~bindings ~name
+      (Ll_test.optimize ~materialized:[ gu; gv; gcat ] ~static_indices ~name llc)
+  in
+  (* [cat]'s gradient as [x] is seeded: [1 + 10 s + j] in extent, poison past it. *)
+  let gcat_cells e =
+    Array.init (range * cat_width) ~f:(fun i ->
+        let s = i / cat_width and j = i % cat_width in
+        if s < e then in_extent_x s j else poison s j)
+  in
+  List.iter extents ~f:(fun e ->
+      let ctx, routine = rev_init in
+      Idx.find_exn routine.Context.bindings extent := e;
+      let ctx =
+        Ll_test.run_linked (ctx, routine)
+          ~seed:[ (gcat, gcat_cells e); (gu, prior (range * 2)); (gv, prior range) ]
+      in
+      (* [u]'s gradient is columns [0, 2) of [cat]'s, [v]'s is column 2. *)
+      List.iter
+        [ ("u", gu, 2, 0); ("v", gv, 1, 2) ]
+        ~f:(fun (name, g, g_width, offset) ->
+          let got = Context.get_values ctx g in
+          let in_extent = e * g_width in
+          if e > 0 then
+            pf_all2
+              "extent %d, initializing Rev_sides: %s's in-extent gradient is its slice of cat's" e
+              name
+              (Array.sub got ~pos:0 ~len:in_extent)
+              (Array.init in_extent ~f:(fun i -> in_extent_x (i / g_width) (offset + (i % g_width))))
+              ~f:Float.equal;
+          if e < range then
+            pf_all2
+              "extent %d, initializing Rev_sides: every cell of %s's gradient past the extent \
+               keeps its sentinel"
+              e name
+              (Array.sub got ~pos:in_extent ~len:((range - e) * g_width))
+              (Array.sub (prior (range * g_width)) ~pos:in_extent ~len:((range - e) * g_width))
+              ~f:Float.equal))
