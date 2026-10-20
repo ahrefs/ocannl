@@ -4669,6 +4669,21 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name privatize_recheck)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL))
+ (modules privatize_recheck)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+(test
  ; ocannl-backend: none -- pure assembly parsing; no emission, runtime context or toolchain.
  (name asm_census_cases)
  (package neural_nets_lib)

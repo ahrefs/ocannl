@@ -381,15 +381,28 @@ files.
   scope-form update is re-keyed to the tile, since codegen types a scope local by its id's node),
   the entry write it descends from must widen — matched by position, as ops never reorder a node's
   accumulating writes, else every entry write must, so an unrelated narrow recurrence of the same
-  node does not decide it — and where `over` is an entry loop it must be the localizing level, as
-  the tile narrows once per execution of `over` (all three from the local Codex review). Which hardware levels a backend serializes is
+  node does not decide it — and where one execution of `over` covers an entry loop it must be the
+  localizing level, as the tile narrows once per execution of `over` (all three from the local
+  Codex review). "Covers" is a record `apply_typed` keeps (`loop_origin` in `schedule.ml`): an entry loop
+  covers itself, the OUTER half of a `Split` covers what its loop covered, and the INNER half
+  covers only part of it, so a tile over it stays at storage — wide, it narrowed once per outer
+  iteration, matching neither the entry program nor the split schedule without `Privatize`
+  (`test/operations/privatize_recheck`: 260 against 258 and 256). A loop any other op mints has no
+  record and is judged by the decision alone. Which hardware levels a backend serializes is
   codegen's fact, so the walk is asked vouching for none and for every one, and the op is refused
   where the answers differ — the pattern `Low_level.seed_first_write` already used. After all ops
   `apply_typed` re-checks each wide tile (`Schedule.privatized_tile_widens`) and falls it back to
   storage where a later op left an update the decision does not widen (`Schedule.privatize_fallbacks`
   records it) — BEFORE `simplify_llc`, which visits every `Set` and so forces the tile's precision,
   after which `Tn.update_prec` can no longer change it; the finalized program is judged again and a
-  failure there is refused. Hardware levels between
+  failure there is refused. The fallback is a safety net: the only op sequences that trip it put a
+  hardware-typed loop (`Retype`) or a tensor-node write (`Stage`'s loads) inside the scope a
+  materializing `Unroll`/`Partition` minted around the tile's update, programs compilation refuses
+  anyway (the renderer's hardware-axis table never holds a loop inside a scope body, which
+  `validate_parallel` also rejects; `validate_scope_bodies`); `privatize_recheck` pins both through
+  `apply`. Every other op keeps the update a widening accumulation: index rewrites map the write
+  and its self-read alike, the scope mints emit the grammar the peel re-reads, and no op rewrites
+  a contribution to read the tile. Hardware levels between
   the privatized loop and the update are still refused outright, and an f32/f64 target never
   reaches any of this. Do not reintroduce a schedule-side reconstruction of codegen's input: the
   rebuilt peel nest this replaced disagreed with codegen one shape at a time through eight review
