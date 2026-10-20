@@ -424,6 +424,32 @@ files.
   `test/operations/footprint_materialization.ml`; end to end through the default GPU schedule (the
   scratch crosses the prologue/reader statement boundary, so fission lifts it `On_device`, the
   two-launch form the issue ships first) by `test/operations/footprint_diagonal_einsum.ml`.
+- **A stored template carries only the operands that evaluate** (gh-ocannl-625,
+  `Low_level.elide_unevaluated_operands`, applied by `check_and_store_virtual` after its legality
+  walk, so acceptance is unchanged): the arm of a `Where` whose condition is decided, and the
+  operand behind an `And` / `Or` / `Relu_gate` decided shut, become `Constant 0.` at the operand's
+  own precision. Every reader of `optimize_ctx.computations` — the merge-taint
+  (`computation_reads_merge`) and spliced-read (`record_spliced_reads`) scans at a later routine's
+  entry, the fan-in guard, footprint eligibility, flip pricing — then sees only reads that execute,
+  so such a read neither taints nor registers provenance. The issue proposed storing the
+  `simplify_llc` residual instead; that was built and refuted: a template can replay beneath a
+  threefry operand, which the consumer's simplify never enters, and there the simplifier's own folds
+  change values — `Embed_index (Fixed_idx 0)` folded to `Constant 0.` converts to `uint4x32` through
+  `double_to_uint4x32` instead of `int32_to_uint4x32` (it changed `test_block_tensor`'s random
+  stream), and constant folds round in double. Elision changes no evaluated expression, so it is
+  exact wherever the template replays; the consumer's simplify still folds the decided `Where` in
+  every ordinary position. Decisions must hold wherever the template replays: the loops of the write
+  index's symbols do not extend the interval environment (the inliner substitutes the read site's
+  index, which need not lie in the producer's extent; a kept reduction loop keeps its extent, so it
+  decides), no bounds candidate is consulted (the decision would settle it at store time,
+  refusing a later writer, for a template that may never be consumed), and a test is decided only
+  if it comes out the same at every precision it may be evaluated at — its slot's precision as the
+  renderer reads it (a homogeneous operator's result precision, a `Where` condition's own
+  annotation) through a `compute_prec` unknown at store time, so every float precision for a float
+  slot (review round 1: `2049 = 2048` is false in single and true in half). The float `0 * x` the issue
+  also named is not dead under exact IEEE (`0 * inf` is NaN); under `fp_finite_math`, `Fp_algebra`
+  folds it on the raw lowering, ahead of storage. Pinned, with executed parity against the
+  materialized reading, by `test/operations/stored_template_elision.ml`.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,
