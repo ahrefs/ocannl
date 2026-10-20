@@ -331,10 +331,10 @@ files.
   suspect the emitter's spelling before the framework. Every Python reader of a runner's result or
   checkpoint line therefore parses it with `benchmarks/strict_json.py`'s `loads`, which refuses all
   three spellings (`NonFinite`, a `ValueError`), so a regressed emitter fails its cell by name instead
-  of reaching only the Python consumers. A new reader uses it too — a driver's inline `python3 -`
-  heredoc imports it from `STRICT_JSON_DIR`, and a script run under `python3 -I` puts its own
-  directory on `sys.path` first (`gh834_session.py`) — and test_orchestrate's inventory scan fails
-  any other `json.loads` in the drivers that is not exempted with a reason.
+  of reaching only the Python consumers. A new reader uses it too — a module a driver runs by path
+  finds it beside itself, and a script run under `python3 -I` puts its own directory on `sys.path`
+  first (`gh834_session.py`) — and test_orchestrate's inventory scan fails any other `json.loads`
+  in the drivers that is not exempted with a reason.
 - A shell driver reads that line by PARSING it (stdlib `python3`), never with a `sed`/`grep`
   pattern over its text: a scan from `"arm":"A"` to the first `}` read a nested object placed
   before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it --
@@ -344,10 +344,14 @@ files.
   fails a driver line that greps a quoted JSON key (gh-ocannl-1355). For a whole verdict,
   `benchmarks/gh834_session.py` is the shape; its harness `benchmarks/test-gh834-cells.sh` renders
   `Bench_json`'s own templates, so a renamed field fails there rather than in a box's session.
-  A driver's summary matrix lives in a module the driver runs by path, not in an inline heredoc
-  that a test can reach only by extracting it from the script's text: `gh1133_summary.py` owns
-  reading the numbered cells (`read_cells`), which `gh1003_summary.py` shares, so a change to how a
-  result line is read or refused lands once.
+  A shell driver's result reader -- a summary matrix, a gate, a protocol check -- lives in a module
+  the driver runs by path, not in an inline `python3 -` heredoc that a test can reach only by
+  extracting it from the script's text (gh-ocannl-1365: `gh612_parity.py`, `gh728_protocol.py`,
+  `gh1003_summary.py`): the test imports or runs it directly, and drives the driver's step where it
+  needs no device. `gh1133_summary.py` owns reading the numbered cells (`read_cells`), which
+  `gh1003_summary.py` shares, so a change to how a result line is read or refused lands once.
+  `gh1003_fold_cells.sh OUT CAP summary` over an earlier OUT re-renders its matrix under the fold
+  blocks its driver.log recorded -- the one invocation a non-empty OUT is accepted for.
 - Every report-writing script in `benchmarks/` -- `orchestrate.py`, the `gh*_cells.py`/`_summary.py`
   drivers, `gpt2_bucket.py`, `kernel_attribution.py`, and the shell drivers' inline Python --
   writes each Markdown table row through `benchmarks/display_safe.py`'s `table_row`/`table_lines`,
@@ -368,14 +372,22 @@ files.
   `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every
   parity step and again after the timed steps, before the dominant-kernel instrument -- which
   compiles and times every shipped kernel alone and can outlast the workload (a TUF
-  `gpt2_mini_train_s1024` cell lost six finite losses to a 90 s cap expiring inside it). A
+  `gpt2_mini_train_s1024` cell lost six finite losses to a 90 s cap expiring inside it). The
+  instrument's own wall-clock budget, `BENCH_DOMINANT_KERNEL_BUDGET_S`, bounds that stage: past it
+  the column is `no-kernel` and the cell keeps its result (gh-ocannl-1260,
+  `Bench_harness.with_deadline`); the checkpoint covers a cap shorter than the budget. A
   checkpoint carries the losses so far, stage statuses, the step count and the cell's identity, and
   NO timing: its `result` stage is always `pending` and `accepted` is `false`. `orchestrate.run_cell`
-  folds the last one into a failed cell's note and hands it to `on_checkpoint`, so the sweep's and
-  `gh1181_cells.py`'s failure records keep the losses -- beside the failure, never among the rows;
-  both add the fixture stamp, the source revision and the runner binary's sha256 under
-  `provenance`, since the checkpoint names its fixture and runner only by paths a later sweep
-  reuses. An interrupted cell's checkpoint is recorded before the cancellation propagates.
+  folds the last one into a failed cell's note and hands it to `on_checkpoint`;
+  `orchestrate.run_cell_kept` returns it beside the note, and `orchestrate.failure_record` is the
+  one record every sweep driver writes of a failed cell (gh-ocannl-1234: orchestrate's
+  `partial-failures.jsonl`, gh1181's `failures.jsonl`, gh675's failed passes in `records.jsonl`,
+  and gh1002's `failures.jsonl`, which reads the checkpoint off the cell's own `.err`). It keeps
+  the losses -- beside the failure, never among the rows -- with the dispatched `regime`, the
+  inherited OCANNL_* environment, and under `provenance` the fixture stamp, the source revision
+  and the runner binary's sha256, since the checkpoint names its fixture and runner only by paths
+  a later sweep reuses. An interrupted cell's checkpoint is recorded before the cancellation
+  propagates.
   The report's "Runner failures" table shows those saved losses' drift from the reference beside
   the envelope the cell would have been gated at (`saved_loss_parity`) -- a DIAGNOSTIC of whether
   the work before the failure was on course, worded outside the parity column's vocabulary; the
@@ -400,10 +412,12 @@ files.
   fifth completed after 157 s). Therefore `orchestrate.py` defaults `--beam-parallel` to `0` on
   every measurement box — the only setting that removes the spawn pool — while an explicit
   positive value opts back into the pool with the cap as backstop (gh-ocannl-843).
-  `cell_group.py` gives benchmark cells in `orchestrate.py`, `gh675_cells.py` and
-  `gh1002_cells.py` (and the latter's preflight Dune build, which forks compilers; gh-ocannl-1200)
-  one shared group/job, TERM-to-KILL, output-preserving reap discipline — the drivers start no
-  other child but short `git`/`ps` probes (`test_sweep_drivers_have_no_unmanaged_spawn_site`);
+  `cell_group.py` gives benchmark cells in `orchestrate.py` (whose `run_cell` gh675 and gh1181
+  run theirs through), `gh998_cells.py` and `gh1002_cells.py` (and the latter's preflight Dune
+  build, which forks compilers; gh-ocannl-1200) one shared group/job, TERM-to-KILL,
+  output-preserving reap discipline — the drivers start no other child but short `git`/`ps`/`sysctl`
+  probes (`test_sweep_drivers_have_no_unmanaged_spawn_site`, over every `benchmarks/*.py` that
+  imports `cell_group` directly or through another script, so a new driver is scanned unlisted);
   `orchestrate.py` puts cells under `--cell-timeout` (default 1800 s) and kills the GROUP on expiry:
   the pool workers hold the cell's
   stdout pipe, so killing the direct child alone moves the hang into the sweep's own

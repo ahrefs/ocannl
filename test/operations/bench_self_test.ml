@@ -249,6 +249,20 @@ let () =
         (is_str j "workload" protocol.H.workload);
       Verdict.p "variant names the self-test" (is_str j "variant" "self-test");
       Verdict.p "precision is f32" (is_str j "precision" "f32");
+      (* gh-ocannl-1262: read back off the compiled model, not echoed from the leg. *)
+      Verdict.p "storage_precision reads the compiled logits back as f32"
+        (is_str j "storage_precision" "f32");
+      (* Two-sided: the read-back follows the node's precision rather than naming f32 whatever ran.
+         A wrapped ndarray converted at wrap takes the requested precision as its storage. *)
+      let probe prec =
+        H.storage_precision
+          (TDSL.wrap ~l:"storage_probe" ~prec ~b:[] ~o:[ 2 ]
+             (Ir.Ndarray.init_array ~debug:"storage_probe" Ir.Ops.single ~dims:[| 2 |] ~padding:None
+                ~f:(fun _ -> 1.))
+             ())
+      in
+      Verdict.p "storage_precision reads a half node back as f16, a bfloat16 one as bf16"
+        (String.equal (probe Ir.Ops.half) "f16" && String.equal (probe Ir.Ops.bfloat16) "bf16");
       let recorded_licences = Option.value (field j "fp_licences") ~default:`Null in
       Verdict.p_all "float licence metadata records each resolved licence and its source"
         (H.fp_licence_record ()) ~f:(fun (key, value, source) ->
@@ -322,3 +336,102 @@ let () =
       (* The claim above has already failed the run; naming the line is what makes it
          diagnosable. *)
       Verdict.fail ("the emitted result line is not a JSON object: " ^ line)
+
+(* gh-ocannl-1260: the dominant-kernel instrument's wall-clock budget. The kernel timing is stood in
+   by a stall far longer than the budget -- a kernel that would eat the cell's cap -- and the
+   instrument must come back within its budget, not the stall: ["no-kernel"] naming the budget, and
+   the cell's measured columns intact, so the cell completes rather than losing its result line to a
+   diagnostic. The bound claimed is loose (a quarter of the stall, against a half-second budget), so
+   it is decided by whether the stall was cut short, not by how fast this host is. The control runs
+   the same counting hook under a budget nothing reaches: every kernel is started and the column
+   names one. Where the platform cannot interrupt a kernel in progress ([H.instrument_preemptible]:
+   no interval timer on Windows) the stalled leg is skipped -- it would only wait out the stall. *)
+let () =
+  let run ~budget_s ~stall_s =
+    let started = ref [] and kernels = ref 0 in
+    let time_kernel ~i timing =
+      started := i :: !started;
+      if Float.(stall_s > 0.) then Unix.sleepf stall_s;
+      timing ()
+    in
+    let t0 = Unix.gettimeofday () in
+    let line =
+      H.run_self_test ~out:Stdio.stderr ~dominant_kernel_budget_s:budget_s ~time_kernel
+        ~inspect_compiled:(fun _ routines ->
+          kernels := List.length (H.shipped_kernels (H.compiled_step_routines routines)))
+        ()
+    in
+    let wall_s = Unix.gettimeofday () -. t0 in
+    let j = try Yojson.Safe.from_string line with _ -> `Null in
+    (j, List.rev !started, !kernels, wall_s)
+  in
+  let stalled_labels =
+    [
+      "a stalled kernel timing is cut short: the cell completes in a fraction of the stall";
+      "and the instrument reports no-kernel, naming the budget it ran past";
+      "the over-budget cell still emits its result line with its timings";
+      "and with one loss per parity step";
+      "an inherited alarm due after the instrument keeps the time it had left";
+      "and its disposition: the inherited handler is the one that fires";
+      "an inherited alarm due before the budget still fires, cutting the instrument at it";
+    ]
+  in
+  if H.instrument_preemptible then (
+    let stall_s = 120. in
+    let j, _, _, wall_s = run ~budget_s:0.5 ~stall_s in
+    let dk = Option.value (field j "dominant_kernel") ~default:`Null in
+    Stdio.eprintf "bench_self_test: over-budget dominant kernel %s after %.1f s\n%!"
+      (Yojson.Safe.to_string dk) wall_s;
+    let label n = List.nth_exn stalled_labels n in
+    Verdict.p (label 0) Float.(wall_s < stall_s /. 4.);
+    Verdict.p (label 1)
+      (is_str dk "verdict" "no-kernel"
+      && Option.value_map (string_field dk "note") ~default:false ~f:(fun note ->
+          String.is_substring note ~substring:"instrument over budget"
+          && String.is_substring note ~substring:"BENCH_DOMINANT_KERNEL_BUDGET_S"));
+    let step_ms = Option.value (field j "step_ms") ~default:`Null in
+    Verdict.p (label 2)
+      (Option.value_map (number step_ms "p50") ~default:false ~f:(fun t -> Float.(t > 0.))
+      && Option.value_map (number j "queued_step_ms") ~default:false ~f:(fun t -> Float.(t > 0.)));
+    Verdict.p (label 3)
+      (match field j "losses" with
+      | Some (`List l) -> List.length l = H.self_test_protocol.H.parity_steps
+      | _ -> false);
+    (* Review round 2: a driver's cap set with [alarm] before [exec] is an interval timer the runner
+       inherits. Stood in by one whose handler only records that it fired. *)
+    let fired = ref false in
+    let previous =
+      Stdlib.Sys.signal Stdlib.Sys.sigalrm (Stdlib.Sys.Signal_handle (fun _ -> fired := true))
+    in
+    let set value =
+      ignore
+        (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = 0.; it_value = value }
+          : Unix.interval_timer_status)
+    in
+    set 1000.;
+    ignore (run ~budget_s:0.5 ~stall_s);
+    let left = (Unix.getitimer Unix.ITIMER_REAL).Unix.it_value in
+    (* Whose handler is installed is read by firing it. *)
+    set 0.01;
+    Unix.sleepf 0.2;
+    Verdict.p (label 4) Float.(left > 900. && left <= 1000.);
+    Verdict.p (label 5) !fired;
+    fired := false;
+    set 1.;
+    let j, _, _, wall_s = run ~budget_s:60. ~stall_s in
+    Unix.sleepf 0.2;
+    let dk = Option.value (field j "dominant_kernel") ~default:`Null in
+    Verdict.p (label 6) (!fired && Float.(wall_s < stall_s /. 4.) && is_str dk "verdict" "no-kernel");
+    set 0.;
+    Stdlib.Sys.set_signal Stdlib.Sys.sigalrm previous)
+  else
+    List.iter stalled_labels ~f:(fun label ->
+        Verdict.skipped ~aggregation:`Environment ~backend:"windows (no interval timer)" label);
+  let j, started, kernels, _ = run ~budget_s:3600. ~stall_s:0. in
+  Verdict.p "under a budget nothing reaches, the instrument starts every kernel"
+    (kernels >= 1 && List.equal Int.equal started (List.init kernels ~f:Fn.id));
+  Verdict.p "and names a dominant kernel"
+    (Option.value_map
+       (field (Option.value (field j "dominant_kernel") ~default:`Null) "segment")
+       ~default:false
+       ~f:(function `Int i -> i >= 0 | _ -> false))

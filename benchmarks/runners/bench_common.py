@@ -240,6 +240,41 @@ def tensor_precision_fields(params, inputs, autocast):
     }
 
 
+def tinygrad_dtype_name(dtypes, dtype):
+    """A tinygrad dtype under torch's name for the same format (`float32`, `bfloat16`, ...), so
+    `effective_precision` and `PRECISION_LABELS` read both frameworks' rows alike. tinygrad's own
+    `dtype.name` is its C spelling (`float`, `half`, `__bf16`); a format with no torch twin keeps
+    that spelling. `dtypes` is tinygrad's `dtypes` namespace, handed in so this module imports no
+    framework."""
+    for torch_name, attr in (
+        ("float32", "float32"),
+        ("float16", "float16"),
+        ("bfloat16", "bfloat16"),
+        ("float64", "float64"),
+    ):
+        if dtype == getattr(dtypes, attr, None):
+            return torch_name
+    return getattr(dtype, "name", str(dtype))
+
+
+def tinygrad_precision_fields(dtypes, params, inputs):
+    """A tinygrad result line's precision provenance (gh-ocannl-1262), from the run's own tensors.
+
+    `params` are every model weight (trainable or not), `inputs` maps a role to the batch tensor
+    the step was handed. tinygrad has no autocast; what stands in its place is the default float in
+    force (`DEFAULT_FLOAT`), the dtype of every float a tensor is created as without a stated one.
+    It is reported beside the tensors (`default_float`) and checked by the sweep like them.
+    """
+    param_dtypes = sorted({tinygrad_dtype_name(dtypes, p.dtype) for p in params})
+    input_dtypes = {role: tinygrad_dtype_name(dtypes, t.dtype) for role, t in inputs.items()}
+    return {
+        "param_dtypes": param_dtypes,
+        "input_dtypes": input_dtypes,
+        "default_float": tinygrad_dtype_name(dtypes, dtypes.default_float),
+        "effective_precision": effective_precision(param_dtypes, input_dtypes),
+    }
+
+
 # --- Peak device memory (gh-ocannl-1006) --------------------------------------------------
 #
 # The report's memory column is what a footprint-for-time trade (gh-ocannl-616) is read against,

@@ -137,36 +137,11 @@ for profile in exact approx; do
     leg "gpt_${profile}_$pass" env BENCH_FIXTURE="$FIXTURE" BENCH_TUNE=1 BENCH_KERNEL_TABLE=1 \
       "$GPT" ${extra[@]+"${extra[@]}"} --ocannl_autotune_cache_dir="$cache" "${PIN[@]}"
     # The two-pass protocol is what the replay's kernel table is quoted for, so it is verified off
-    # the runner's own result line rather than assumed from the exit status: the first pass must
-    # have searched, and the second must have replayed every arm and searched none -- a replay over
-    # an incomplete cache searches the missing arms and would publish a search-loaded table.
+    # the runner's own result line rather than assumed from the exit status (gh728_protocol.py).
     (
       set -o pipefail
-      STRICT_JSON_DIR="$TREE/benchmarks" python3 - "$OUT/gpt_${profile}_$pass.out" "$pass" <<'VERIFY' 2>&1 | tee -a "$OUT/manifest.txt"
-import os, sys
-sys.path.insert(0, os.environ["STRICT_JSON_DIR"])
-import strict_json
-path, want = sys.argv[1], sys.argv[2]
-try:
-    rows = [strict_json.loads(l) for l in open(path) if l.startswith('{"framework"')]
-except ValueError as e:  # NaN, Infinity or 1e999 included: a runner writes null there
-    sys.exit(f"   protocol: {path}: a result line is not strict JSON ({e})")
-if len(rows) != 1:
-    sys.exit(f"   protocol: {path}: expected one result line, found {len(rows)}")
-tune = rows[0].get("tune") or {}
-searched, n_search, n_replay = rows[0].get("searched"), tune.get("searches"), tune.get("replays")
-n_none = tune.get("no_searches")
-# A search that refused a timing window crowned its winner from an incomplete comparison.
-refused = sum((a.get("timings_contended") or 0) for a in tune.get("arms") or [])
-# An arm that neither searched nor replayed (a pre-search failure) ships the untuned default:
-# neither pass may carry one.
-ok = n_none == 0 and refused == 0 and ((searched is True and (n_search or 0) > 0) if want == "search" else (
-    searched is False and n_search == 0 and (n_replay or 0) > 0))
-line = (f"   protocol: {want} pass searched={searched} searches={n_search} replays={n_replay}"
-        f" no_searches={n_none} refused_windows={refused}")
-print(line + ("" if ok else "  -- NOT A " + want.upper() + " PASS"))
-sys.exit(0 if ok else 1)
-VERIFY
+      python3 "$TREE/benchmarks/gh728_protocol.py" "$OUT/gpt_${profile}_$pass.out" "$pass" 2>&1 |
+        tee -a "$OUT/manifest.txt"
     ) || FAILED=1
   done
 done

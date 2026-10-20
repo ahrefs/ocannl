@@ -406,27 +406,11 @@ class NonFiniteResultLineReadersTest(unittest.TestCase):
         self.assertEqual(gh1002_cells.result_line(base)["step_ms"]["p50"], 1.0)
 
 
-def shipped_heredoc(script, tag, within=None):
-    """The Python a shell driver feeds to `python3 -` through its `<<'TAG'` heredoc, as it ships;
-    with `within`, the first such heredoc after that shell function's definition line (for a tag
-    the script reuses)."""
-    lines = (HERE / script).read_text().splitlines()
-    starts = [i for i, line in enumerate(lines) if f"<<'{tag}'" in line]
-    if within is not None:
-        found = [i for i, line in enumerate(lines) if line.startswith(f"{within}() {{")]
-        if len(found) != 1:
-            raise AssertionError(f"{script}: {len(found)} definitions of {within}, expected one")
-        starts = [i for i in starts if i > found[0]][:1]
-    if len(starts) != 1:
-        raise AssertionError(f"{script}: {len(starts)} heredocs tagged {tag}, expected one")
-    end = next(i for i in range(starts[0] + 1, len(lines)) if lines[i] == tag)
-    return "\n".join(lines[starts[0] + 1:end]) + "\n"
-
-
-class ShellResultLineReadersTest(unittest.TestCase):
-    """The inline Python result-line readers of the shell drivers, run from the shipping text:
-    each refuses NaN, Infinity and 1e999 through strict_json, which it imports from the directory
-    the driver names in STRICT_JSON_DIR (the scratch cwd here holds no copy)."""
+class DriverResultReaderModulesTest(unittest.TestCase):
+    """The shell drivers' result-line readers, run by path the way their drivers run them -- from a
+    scratch cwd holding no copy of their imports -- and their wiring into the drivers
+    (gh-ocannl-1365: they were heredocs these tests extracted from the shell text). Each refuses
+    NaN, Infinity and 1e999 through strict_json with a finding rather than a traceback."""
 
     SPELLINGS = ("NaN", "Infinity", "1e999")
 
@@ -435,45 +419,103 @@ class ShellResultLineReadersTest(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
-    def run_heredoc(self, script, tag, *argv, within=None):
+    def module(self, name, *argv):
         return subprocess.run(
-            [sys.executable, "-", *map(str, argv)],
-            input=shipped_heredoc(script, tag, within),
-            text=True,
-            capture_output=True,
-            cwd=self.dir,
-            env=dict(os.environ, STRICT_JSON_DIR=str(HERE)),
-            timeout=60,
-        )
+            [sys.executable, str(HERE / name), *map(str, argv)],
+            text=True, capture_output=True, cwd=self.dir, timeout=60)
+
+    def gh612_cell(self, root, label, rep, losses, kind="search.out"):
+        cell = root / label / f"r{rep}"
+        cell.mkdir(parents=True, exist_ok=True)
+        (cell / kind).write_text("noise\n" + '{"losses":[%s]}\n' % ",".join(losses))
 
     def test_gh612_parity_fails_on_the_line_not_with_a_traceback(self):
         for spelled in self.SPELLINGS:
             with self.subTest(spelled=spelled):
-                cell = self.dir / spelled / "cell" / "r1"
-                cell.mkdir(parents=True)
-                (cell / "search.out").write_text('{"losses":[2.5,%s]}\n' % spelled)
-                proc = self.run_heredoc(
-                    "gh612_cells.sh", "EOF", self.dir / spelled, 64, 0, "", 2, within="cmd_parity")
+                root = self.dir / spelled
+                self.gh612_cell(root, "cell", 1, ["2.5", spelled])
+                proc = self.module("gh612_parity.py", root, 64, 0, "", 2)
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertIn("the result line is not strict JSON", proc.stderr)
                 self.assertNotIn("Traceback", proc.stderr)
 
+    def test_gh612_parity_passes_agreeing_cells_and_fails_a_divergent_one(self):
+        root = self.dir / "agree"
+        losses = ["2.5", "2.25"]
+        for label in ("base", "treat"):
+            self.gh612_cell(root, label, 1, losses)
+            self.gh612_cell(root, label, 1, losses, kind="replay2.out")
+        proc = self.module("gh612_parity.py", root, 64, 2, "base/r1 treat/r1", 2)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("4 records (2 search + 2 pass-2 replay), 1 distinct loss sequences", proc.stdout)
+        self.assertIn("parity gate PASSED", proc.stdout)
+        # Two-sided: the same tree with one cell a whole unit off, and one required cell absent.
+        self.gh612_cell(root, "treat", 1, ["3.5", "2.25"])
+        proc = self.module("gh612_parity.py", root, 64, 2, "base/r1 treat/r1 extra/r1", 2)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("PARITY GATE FAILED: loss divergence", proc.stderr)
+        self.assertIn("PARITY GATE FAILED: missing required cells: extra/r1", proc.stderr)
+        self.assertNotIn("parity gate PASSED", proc.stdout)
+
+    def test_gh612_parity_subcommand_runs_the_module(self):
+        # The driver end to end: `parity` touches no tree, fixture or device, so it runs here.
+        root = self.dir / "driven"
+        for label in ("a", "b"):
+            self.gh612_cell(root, label, 1, ["2.5", "2.25"])
+        proc = subprocess.run(
+            ["bash", str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            cwd=self.dir, timeout=120,
+            env=dict(os.environ, OUT_ROOT=str(root), EXPECT_STEPS="2"))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("parity gate PASSED", proc.stdout)
+        # Negative control: the step count the driver passes through is the gate's.
+        proc = subprocess.run(
+            ["bash", str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            cwd=self.dir, timeout=120, env=dict(os.environ, OUT_ROOT=str(root)))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("expected EXPECT_STEPS=8", proc.stderr)
+
+    GH728_LINE = ('{"framework":"ocannl","searched":%s,"step_ms":{"p50":%s},'
+                  '"tune":{"searches":%d,"replays":%d,"no_searches":0,"arms":[]}}\n')
+
     def test_gh728_protocol_check_refuses_the_line(self):
-        line = ('{"framework":"ocannl","searched":true,"step_ms":{"p50":%s},'
-                '"tune":{"searches":1,"replays":0,"no_searches":0,"arms":[]}}\n')
         for spelled in self.SPELLINGS:
             with self.subTest(spelled=spelled):
                 path = self.dir / f"gh728-{spelled}.out"
-                path.write_text(line % spelled)
-                proc = self.run_heredoc("gh728_cells.sh", "VERIFY", path, "search")
+                path.write_text(self.GH728_LINE % ("true", spelled, 1, 0) + "exit: 0\n")
+                proc = self.module("gh728_protocol.py", path, "search")
                 self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
                 self.assertIn("a result line is not strict JSON", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
         # Negative control: the same line with a finite timing is a search pass.
         path = self.dir / "gh728-finite.out"
-        path.write_text(line % "1.5")
-        proc = self.run_heredoc("gh728_cells.sh", "VERIFY", path, "search")
+        path.write_text(self.GH728_LINE % ("true", "1.5", 1, 0) + "exit: 0\n")
+        proc = self.module("gh728_protocol.py", path, "search")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("protocol: search pass", proc.stdout)
+
+    def test_gh728_a_replay_that_searched_is_no_replay(self):
+        replay = self.dir / "replay.out"
+        replay.write_text(self.GH728_LINE % ("false", "1.5", 0, 2))
+        proc = self.module("gh728_protocol.py", replay, "replay")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("NOT A", proc.stdout)
+        searched = self.dir / "searched.out"
+        searched.write_text(self.GH728_LINE % ("true", "1.5", 1, 1))
+        proc = self.module("gh728_protocol.py", searched, "replay")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("-- NOT A REPLAY PASS", proc.stdout)
+
+    def test_gh728_driver_checks_each_tuned_leg_through_the_module(self):
+        # The leg loop runs only after a build and on a device, so its wiring is read, not driven:
+        # the check is the module, handed each tuned leg's output and its pass, with its verdict
+        # failing the run.
+        text = (HERE / "gh728_cells.sh").read_text()
+        self.assertIn(
+            'python3 "$TREE/benchmarks/gh728_protocol.py" "$OUT/gpt_${profile}_$pass.out" "$pass"',
+            text)
+        self.assertIn(") || FAILED=1", text)
+        self.assertNotIn("python3 -", text)
 
 
 class Gh1003SummaryTest(unittest.TestCase):
@@ -553,8 +595,8 @@ class Gh1003SummaryTest(unittest.TestCase):
         self.assertNotIn("MISSING RESULT", proc.stdout)
 
     def test_the_driver_summary_step_writes_the_module_matrix(self):
-        # OUT must start empty, so the driver's own step can only be driven to its empty matrix: it
-        # proves the step reaches the module (summary.md holds its header and verdict) and fails.
+        # A fresh OUT: the step reaches the module (summary.md holds its header and verdict) and
+        # fails on the empty matrix.
         out = self.dir / "driven"
         proc = subprocess.run(
             ["bash", str(HERE / "gh1003_fold_cells.sh"), str(out), "60", "summary"],
@@ -564,6 +606,60 @@ class Gh1003SummaryTest(unittest.TestCase):
         self.assertIn("NO MEASUREMENT: no numbered cell produced a result line", summary)
         self.assertIn("| vs composed | vs two-pass |", summary)
         self.assertNotIn("Traceback", proc.stdout + proc.stderr)
+
+    def driver(self, *steps, env=None):
+        return subprocess.run(
+            ["bash", str(HERE / "gh1003_fold_cells.sh"), str(self.out), "60", *steps],
+            text=True, capture_output=True, cwd=self.dir, timeout=120,
+            env=dict(os.environ, **(env or {})))
+
+    def recorded_run(self, blocks):
+        """self.out as an earlier invocation left it: its driver.log header and a filled matrix."""
+        (self.out / "driver.log").write_text(
+            "gh1003: 2026-10-18T00:00:00Z root=/r out=/o cap=60 repeats=1\n"
+            f"gh1003: fold blocks: {blocks}; train fixtures: t; kernel table: 1; fixture dir: d; "
+            "steps: build provenance metal\n")
+        self.cell("metal-gpt2_mini-composed-r1.out", 10.0)
+        self.cell("metal-gpt2_mini-two-pass-r1.out", 8.0)
+        self.cell("metal-gpt2_mini-fold-64-r1.out", 5.0)
+
+    def test_a_lone_summary_step_re_renders_an_earlier_out(self):
+        # The filled matrix driven end to end (gh-ocannl-1365), under the fold blocks the earlier
+        # run recorded: fold-64 is in no default list, so a re-summary under the defaults would
+        # drop its row without a word.
+        self.recorded_run("8 64")
+        (self.out / "summary.md").write_text("the earlier rendering\n")
+        proc = self.driver("summary")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        expected = self.summary("composed two-pass fold-8 fold-64 composed two-pass-bwd fold-8-bwd fold-64-bwd")
+        self.assertEqual(expected.returncode, 0, expected.stdout + expected.stderr)
+        self.assertEqual((self.out / "summary.md").read_text(), expected.stdout)
+        self.assertIn("| metal | gpt2_mini | fold-64 | 5.0 | 5.0 | 0.500x | 0.625x |", expected.stdout)
+        log = (self.out / "driver.log").read_text()
+        self.assertIn("re-summarizing an existing OUT under its recorded fold blocks", log)
+        # The earlier header still leads, so a second re-summary reads the same blocks.
+        self.assertIn("gh1003: fold blocks: 8 64;", log.splitlines()[1])
+        self.assertEqual(self.driver("summary").returncode, 0)
+
+    def test_a_re_summary_refuses_what_it_cannot_render_faithfully(self):
+        self.recorded_run("8 64")
+        cases = [
+            # A measuring step would mix a new run's cells into the old one's.
+            (("metal",), {}, "is not empty"),
+            (("summary", "summary"), {"FOLD_BLOCKS": "8 16 32"}, "differs from the '8 64'"),
+        ]
+        for steps, env, why in cases:
+            with self.subTest(steps=steps, env=env):
+                proc = self.driver(*steps, env=env)
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn(why, proc.stderr)
+        # Agreeing FOLD_BLOCKS is no refusal (the control for the disagreeing one).
+        self.assertEqual(self.driver("summary", env={"FOLD_BLOCKS": "8 64"}).returncode, 0)
+        # A non-empty directory this driver did not write.
+        (self.out / "driver.log").unlink()
+        proc = self.driver("summary")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("holds no driver.log", proc.stderr)
 
 
 # Every `json.load`/`json.loads` call in the benchmark drivers, runners and their inline shell
@@ -578,6 +674,7 @@ JSON_LOADS_NOT_RESULT_LINES = {
     ("gh1002_cells.py", "recorded = json.loads(pf.read_text())"): "the driver's own preflight.json",
     ("gh1002_cells.py", '"workloads"'): "workload spec",
     ("gh1002_cells.py", "pre = json.loads((out"): "the driver's own preflight.json",
+    ("gh1002_cells.py", "ident = json.loads(pf.read_text())"): "the driver's own preflight.json",
     ("gh1181_cells.py", "return [json.loads(line) for line in path"):
         "the driver's own timings.jsonl/failures.jsonl (json_safe, allow_nan=False)",
     ("gh1181_cells.py", "versions = json.loads(supporting_output"): "the venv's version probe",
@@ -684,6 +781,22 @@ class OcannlResultLineTest(unittest.TestCase):
 
         self.assertEqual(blown["parity"], "DIVERGED")
         self.assertEqual(blown["diverged_at"], 1)
+
+    def test_a_label_the_storage_read_back_contradicts_fails_the_precision_gate(self):
+        # gh-ocannl-1262, on lines the OCaml emitter built: a row's storage_precision is what its
+        # model ran at. Stamped with what it ran at, it passes; stamped as a precision the runner
+        # did not apply -- the sweep's label over an ignored BENCH_PRECISION -- it fails.
+        parsed = [strict_loads(line) for line in self.lines()]
+        read_back = [r for r in parsed if r.get("storage_precision") is not None]
+        self.assertTrue(read_back, "no golden line carries a storage read-back")
+        unread = [r for r in parsed if r.get("storage_precision") is None]
+        self.assertTrue(unread, "no golden line spells a missing read-back")
+        honest = [dict(r) for r in read_back]
+        ignored = [dict(r, precision="bf16") for r in read_back]
+        self.assertEqual(orchestrate.precision_check(honest + unread), [])
+        self.assertEqual(orchestrate.precision_check(ignored), ignored)
+        for r in ignored:
+            self.assertEqual(r["precision_mismatch"], f"{r['storage_precision']} storage")
 
 
 def golden_checkpoint_lines():
@@ -1089,8 +1202,10 @@ class FailureRecordTest(unittest.TestCase):
         # The report's saved-loss diagnostic reads the checkpoint and regime off the failure.
         self.assertIn("failures.append(Failure(label, note, checkpoint, regime, cell_stamp))", main)
         # Both the cell and its search pass go through the helper that records an interrupted
-        # cell's checkpoint before the cancellation propagates.
-        self.assertEqual(main.count("run_cell("), 1)
+        # cell's checkpoint before the cancellation propagates -- the shared `run_cell_kept`, every
+        # sweep driver's runner (gh-ocannl-1234), and never `run_cell` bare.
+        self.assertEqual(main.count("run_cell_kept("), 1)
+        self.assertEqual(main.count("run_cell("), 0)
         self.assertEqual(main.count("run_kept("), 3)
         self.assertLess(main.index("source = source_identity(ROOT)"), main.index("def collect("))
 
@@ -4365,6 +4480,27 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0]["losses"], [10.375, 10.25, 10.125, 10.0, 9.875, 9.75])
 
+    def test_an_interrupted_cell_is_handed_over_with_or_without_a_checkpoint(self):
+        # Review round 2 (gh-ocannl-1234): an interrupt before the first checkpoint is a failed
+        # cell too, so `on_interrupted` hears of it with None rather than not at all.
+        checkpoint = orchestrate.last_checkpoint(self.golden_checkpoint("running"))
+
+        def interrupted(after_checkpoint):
+            def run_cell(label, cmd, on_checkpoint=None, **kwargs):
+                if after_checkpoint:
+                    on_checkpoint(checkpoint)
+                raise KeyboardInterrupt
+            return run_cell
+
+        for after_checkpoint, expected in ((False, [None]), (True, [checkpoint])):
+            with self.subTest(after_checkpoint=after_checkpoint):
+                heard = []
+                with unittest.mock.patch.object(
+                    orchestrate, "run_cell", side_effect=interrupted(after_checkpoint)
+                ), self.assertRaises(KeyboardInterrupt):
+                    orchestrate.run_cell_kept("cell", ["x"], on_interrupted=heard.append)
+                self.assertEqual(heard, expected)
+
     @unittest.skipUnless(os.name == "posix", "SIGALRM and process groups are POSIX here")
     def test_an_interrupted_cell_gets_the_same_cache_treatment_as_a_capped_one(self):
         # Ctrl-C on a wedged beam cell is the likeliest way anyone meets this bug by hand, and the
@@ -4437,6 +4573,230 @@ class CellTimeoutTest(unittest.TestCase):
 
         self.assertTrue(
             self.wait_gone(grandchild), f"pid {grandchild} outlived the cancelled sweep"
+        )
+
+    @unittest.skipUnless(os.name == "posix", "SIGHUP is POSIX-only")
+    def test_a_hangup_of_the_sweep_takes_its_cell_and_its_build_with_it(self):
+        # gh-ocannl-1234: the hangup of the terminal or ssh session the sweep runs in, delivered to
+        # orchestrate.py's own process while it waits on a cell and while it waits on a supporting
+        # command (a build). Both children lead sessions of their own, so the sweep is the only one
+        # to hear it, and each forks a SIGTERM-ignoring worker that only the group's SIGKILL takes.
+        for entry in ("run_cell('cell under a hung-up sweep', child)", "run_supporting(child)"):
+            with self.subTest(entry=entry):
+                tag = entry.split("(")[0]
+                pidfile = self.dir / f"hangup-{tag}-worker.pid"
+                kill_the_group_on_cleanup(self, pidfile)
+                leader = self.dir / f"hangup-{tag}-leader.pid"
+                kill_the_group_on_cleanup(self, leader)
+                child_source = (
+                    "import subprocess, sys, time\n"
+                    "kid = subprocess.Popen([sys.executable, '-c', 'import signal, time; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)'])\n"
+                    + publish_pid("sys.argv[1]", "kid.pid")
+                    + publish_pid("sys.argv[2]", "os.getpid()")
+                    + "time.sleep(300)\n"
+                )
+                driver = self.python(
+                    "import signal, sys, orchestrate\n"
+                    # A sweep started from a terminal: the hangup is a termination (one started
+                    # under nohup keeps ignoring it, test_a_nohup_driver_keeps_ignoring_hangups).
+                    "signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+                    "orchestrate.CELL_KILL_GRACE_S = 0.5\n"
+                    "orchestrate.install_termination_handler()\n"
+                    f"child = [sys.executable, '-c', {child_source!r}, sys.argv[1], sys.argv[2]]\n"
+                    f"orchestrate.{entry}\n"
+                    "print('returned')\n",
+                    pidfile,
+                    leader,
+                )
+                sweep = subprocess.Popen(
+                    driver,
+                    cwd=str(Path(orchestrate.__file__).parent),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                self.addCleanup(lambda sweep=sweep: sweep.poll() is None and sweep.kill())
+                end = time.monotonic() + 30
+                while time.monotonic() < end and not (pidfile.exists() and leader.exists()):
+                    time.sleep(0.05)
+                self.assertTrue(pidfile.exists() and leader.exists(), "the child never started")
+                worker, child = int(pidfile.read_text()), int(leader.read_text())
+
+                sweep.send_signal(signal.SIGHUP)
+                out, err = sweep.communicate(timeout=30)
+
+                self.assertNotEqual(sweep.returncode, 0, (out, err))
+                self.assertNotIn("returned", out)
+                self.assertIn("terminated by signal", err)
+                self.assertTrue(self.wait_gone(child), f"the {tag} child outlived the hangup")
+                self.assertTrue(self.wait_gone(worker), f"the {tag} worker outlived the hangup")
+
+    # gh-ocannl-1234: a cell killed at its cap after checkpointing its parity losses, in each sweep
+    # driver -- orchestrate's shared runner and the records gh1181, gh675 and gh1002 make of what it
+    # left. Each record carries the checkpoint whole, beside its provenance.
+    def test_the_shared_runner_and_gh1181_keep_a_killed_cells_checkpoint(self):
+        import gh1181_cells
+
+        # orchestrate.py's runner, and gh1181_cells.py's record of what it returned.
+        pidfile = self.dir / "kept.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        line = self.golden_checkpoint("running")
+        expected = orchestrate.last_checkpoint(line)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            line,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            result, note, checkpoint = orchestrate.run_cell_kept("killed", cell, timeout=1.0)
+        self.assertIsNone(result)
+        self.assertIn("TIMED OUT after 1s", note)
+        self.assertEqual(checkpoint, expected)
+        record = gh1181_cells.cell_failure(
+            "gpt2_mini_train_s1024", "ocannl-master-exact", 1, "search", note,
+            {"OCANNL_BACKEND": "cuda", "PATH": "/bin"}, "exact",
+            {"gpt2_mini_train_s1024": {"fixture_sha256": "f" * 64}}, {"master": "a" * 40},
+            checkpoint,
+        )
+        self.assertEqual(record["checkpoint"], expected)
+        self.assertEqual(record["why"], note)
+        self.assertEqual(record["regime"], "exact")
+        self.assertEqual(record["ambient_ocannl_env"], {"OCANNL_BACKEND": "cuda"})
+        self.assertEqual(record["provenance"]["fixture_sha256"], "f" * 64)
+        self.assertEqual(record["provenance"]["source_revision"], "a" * 40)
+        self.assertEqual((record["arm"], record["repeat"], record["stage"]),
+                         ("ocannl-master-exact", 1, "search"))
+
+    def test_gh675_keeps_a_killed_passs_checkpoint(self):
+        import gh675_cells
+
+        # A pass that wedged is a failed record, not an exception.
+        pidfile = self.dir / "gh675.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        line = self.golden_checkpoint("running")
+        expected = orchestrate.last_checkpoint(line)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            line,
+        )
+        with unittest.mock.patch.object(gh675_cells, "gate", return_value=True), \
+                unittest.mock.patch.object(gh675_cells, "TASKSET", []), \
+                unittest.mock.patch.dict(gh675_cells.DIGESTS, {"gpt2_mini": "d" * 64}), \
+                unittest.mock.patch.dict(gh675_cells.SOURCE, {"source_revision": "b" * 40}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            record = gh675_cells.run(
+                "D_ocannl gpt2_mini rep1 pass1", cell, timeout=1.0, workload="gpt2_mini"
+            )
+        self.assertTrue(record["__failed__"])
+        self.assertIn("TIMED OUT after 1s", record["why"])
+        self.assertEqual(record["checkpoint"], expected)
+        self.assertEqual(record["provenance"]["fixture_sha256"], "d" * 64)
+        self.assertEqual(record["provenance"]["source_revision"], "b" * 40)
+        self.assertIs(record["gate_ok"], True)
+
+    def test_gh675_records_a_pass_whose_group_survived_before_stopping(self):
+        # Review round 1: a pass whose group was not proven gone stops the sweep, but only after
+        # the pair's record -- with the pass's checkpoint -- is in records.jsonl, and pass 2 is
+        # never launched beside the survivor.
+        import gh675_cells
+
+        note = "TIMED OUT after 1s (cap); A MEMBER SURVIVED SIGKILL (survivors)"
+        checkpoint = orchestrate.last_checkpoint(self.golden_checkpoint("running"))
+        with unittest.mock.patch.object(gh675_cells, "gate", return_value=True), \
+                unittest.mock.patch.object(
+                    orchestrate, "run_cell_kept", return_value=(None, note, checkpoint)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            failed = gh675_cells.run("A_beam2 mlp_small rep1 pass1", ["x"], workload="mlp_small")
+        self.assertIs(failed["cleanup_unproven"], True)
+        self.assertEqual(failed["checkpoint"], checkpoint)
+        # Negative control: an ordinary failure carries no such mark.
+        with unittest.mock.patch.object(gh675_cells, "gate", return_value=True), \
+                unittest.mock.patch.object(
+                    orchestrate, "run_cell_kept", return_value=(None, "exit 2", None)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertNotIn("cleanup_unproven", gh675_cells.run("x", ["x"]))
+
+        records = self.dir / "records.jsonl"
+        launched = []
+
+        def pass_run(label, cmd, env, timeout, workload):
+            launched.append(label)
+            return dict(failed)
+
+        with unittest.mock.patch.object(gh675_cells, "RECORDS", records), \
+                unittest.mock.patch.object(gh675_cells, "timed_run", side_effect=pass_run), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(cell_group.CleanupFailed, "SURVIVED SIGKILL"):
+                gh675_cells.do_pair(
+                    "A_beam2", "mlp_small", 1, lambda: (["a"], {}), lambda: (["b"], {}))
+        self.assertEqual(len(launched), 1)
+        rows = [json.loads(line) for line in records.read_text().splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertIs(rows[0]["valid"], False)
+        self.assertEqual(rows[0]["pass1"]["checkpoint"], checkpoint)
+
+    def test_gh675_warm_control_prewarms_through_the_cell_runner(self):
+        # Review round 1: the warm control's prewarm is a pass like any other, with its own label.
+        import gh675_cells
+
+        calls = []
+
+        def prewarm(label, cmd, env, timeout, workload):
+            calls.append((label, timeout, workload))
+            (self.dir / "tiny_jitwarm_mlp_small" / "cache.db").write_text("warm")
+            return {"step_ms": {"p50": 1.0}, "gate_ok": True}
+
+        with unittest.mock.patch.object(gh675_cells, "CACHES", self.dir), \
+                unittest.mock.patch.object(gh675_cells, "PREWARMED", set()), \
+                unittest.mock.patch.object(gh675_cells, "timed_run", side_effect=prewarm), \
+                unittest.mock.patch.object(gh675_cells, "do_pair") as pair, \
+                contextlib.redirect_stdout(io.StringIO()):
+            gh675_cells.ARMS["C_jit_warm"]("mlp_small", 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("C_jit_warm mlp_small rep1 prewarm", calls[0][0])
+        self.assertEqual(calls[0][1:], (1200, "mlp_small"))
+        pair.assert_called_once()
+
+    @unittest.skipUnless(os.name == "posix", "the stand-in runner is a shebang script")
+    def test_gh1002_keeps_a_killed_cells_checkpoint(self):
+        import gh1002_cells
+
+        # Its own runner and .out/.err layout, orchestrate's record.
+        pidfile = self.dir / "gh1002.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        line = self.golden_checkpoint("running")
+        expected = orchestrate.last_checkpoint(line)
+        runner = self.dir / "bench_gpt"
+        runner.write_text(
+            f"#!{sys.executable}\nimport os, sys\n"
+            f"sys.stderr.write({line!r} + '\\n'); sys.stderr.flush()\n"
+            + publish_pid(repr(str(pidfile)), "os.getpid()")
+            + "import time; time.sleep(300)\n"
+        )
+        runner.chmod(0o755)
+        out = self.dir / "gh1002-out"
+        out.mkdir()
+        with unittest.mock.patch.object(gh1002_cells, "BENCH_GPT", runner), \
+                unittest.mock.patch.object(gh1002_cells, "CELL_TIMEOUT_S", 1), \
+                unittest.mock.patch.object(gh1002_cells, "CELL_TERMINATE_GRACE_S", 0.1), \
+                contextlib.redirect_stdout(io.StringIO()):
+            gh1002_cells.run_cell(out, "cc", "gpt2_mini_train", "A", 0)
+        records = [
+            strict_loads(text) for text in (out / "failures.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(len(records), 1)
+        self.assertIn("TIMED OUT after 1s", records[0]["why"])
+        self.assertEqual(records[0]["checkpoint"], expected)
+        self.assertEqual(records[0]["regime"], "exact")
+        self.assertEqual(
+            (records[0]["backend"], records[0]["fixture"], records[0]["treatment"]),
+            ("cc", "gpt2_mini_train", "A"),
         )
 
     @unittest.skipUnless(Path("/proc/self/stat").exists(), "the zombie distinction needs procfs")
@@ -5607,6 +5967,31 @@ meta = {
 save_file({k: v.to(dtype).contiguous() for k, v in tensors.items()}, path, metadata=meta)
 """
 
+# The torch probe fixture's twin for the tinygrad runner, which loads through safetensors.numpy
+# (so no bfloat16: numpy has no such dtype).
+TINYGRAD_PROBE_FIXTURE = """
+import sys
+import numpy as np
+from safetensors.numpy import save_file
+
+path, dtype = sys.argv[1], np.dtype(sys.argv[2])
+rng = np.random.default_rng(0)
+n, d_in, hidden, d_out = 8, 4, 6, 3
+tensors = {
+    "x": rng.standard_normal((n, d_in)),
+    "y": np.eye(d_out)[np.arange(n) % d_out],
+    "w1": rng.standard_normal((hidden, d_in)) * 0.5,
+    "b1": np.zeros(hidden),
+    "w2": rng.standard_normal((d_out, hidden)) * 0.5,
+    "b2": np.zeros(d_out),
+}
+meta = {
+    "model": "mlp", "name": "precision_probe", "n_layers": "2", "batch_size": "4", "lr": "0.1",
+    "parity_steps": "3", "warmup_steps": "1", "timed_steps": "2",
+}
+save_file({k: np.ascontiguousarray(v.astype(dtype)) for k, v in tensors.items()}, path, metadata=meta)
+"""
+
 # Runs the torch runner inside an autocast context the runner knows nothing about: the case a
 # matmul-policy getter cannot see and the step's own autocast read must.
 UNDER_AUTOCAST = """
@@ -5758,6 +6143,128 @@ class TensorPrecisionTest(unittest.TestCase):
         self.assertIsNone(
             bench_common.torch_autocast_state(torch_with({}, raises=RuntimeError("xla")), "xla")
         )
+
+    def test_tinygrad_dtypes_are_named_as_torch_names_them(self):
+        # tinygrad spells its dtypes in C (`float`, `half`, `__bf16`); the row names them as the
+        # torch rows do, so one `effective_precision` and one label map read both.
+        def dtype(name):
+            return types.SimpleNamespace(name=name)
+
+        dtypes = types.SimpleNamespace(
+            float32=dtype("float"), float16=dtype("half"), bfloat16=dtype("__bf16"),
+            float64=dtype("double"), int32=dtype("int"),
+        )
+        dtypes.default_float = dtypes.float16
+        names = [
+            bench_common.tinygrad_dtype_name(dtypes, getattr(dtypes, attr))
+            for attr in ("float32", "float16", "bfloat16", "float64", "int32")
+        ]
+        self.assertEqual(names, ["float32", "float16", "bfloat16", "float64", "int"])
+
+        def tensor(attr):
+            return types.SimpleNamespace(dtype=getattr(dtypes, attr))
+
+        fields = bench_common.tinygrad_precision_fields(
+            dtypes, [tensor("float32"), tensor("float32")],
+            {"input": tensor("int32"), "target": tensor("float32")},
+        )
+        self.assertEqual(
+            fields,
+            {
+                "param_dtypes": ["float32"],
+                "input_dtypes": {"input": "int", "target": "float32"},
+                "default_float": "float16",
+                "effective_precision": "f32",
+            },
+        )
+
+    def test_a_tinygrad_or_ocannl_label_the_run_contradicts_is_a_mismatch(self):
+        # gh-ocannl-1262: the two frameworks precision_check did not cover. A tinygrad row's
+        # tensors and default float, and an OCANNL row's storage read-back, against the label.
+        def tiny(effective="f32", default_float="float32", precision="f32"):
+            row = cell("tinygrad", "CPU", "jit", [2.3, 2.2, 2.1], precision=precision)
+            row.update(
+                param_dtypes=["float32"], input_dtypes={"input": "float32", "target": "float32"},
+                default_float=default_float, effective_precision=effective,
+            )
+            return row
+
+        def ocannl(storage, precision="f32"):
+            row = cell("ocannl", "cc", "default", [2.3, 2.2, 2.1], precision=precision)
+            row["storage_precision"] = storage
+            return row
+
+        honest_tiny = tiny()
+        ignored_tiny = tiny(precision="bf16")
+        half_default = tiny(default_float="float16")
+        honest_ocannl = ocannl("bf16", precision="bf16")
+        gate_leg = ocannl("f16", precision="f16-gated4")
+        ignored_ocannl = ocannl("f32", precision="bf16")
+        older_ocannl = cell("ocannl", "cc", "default", [2.3, 2.2, 2.1], precision="bf16")
+
+        mismatched = orchestrate.precision_check(
+            [honest_tiny, ignored_tiny, half_default, honest_ocannl, gate_leg, ignored_ocannl,
+             older_ocannl]
+        )
+
+        self.assertEqual(mismatched, [ignored_tiny, half_default, ignored_ocannl])
+        # Labelled bf16, it ran f32 tensors under an f32 default: both say so.
+        self.assertEqual(ignored_tiny["precision_mismatch"], "f32 tensors, default float float32")
+        self.assertEqual(half_default["precision_mismatch"], "default float float16")
+        self.assertEqual(ignored_ocannl["precision_mismatch"], "f32 storage")
+        for row in (honest_tiny, honest_ocannl, gate_leg, older_ocannl):
+            self.assertNotIn("precision_mismatch", row)
+
+    def test_the_real_tinygrad_runner_reads_its_precision_back_from_a_cpu_run(self):
+        """The tinygrad runner end to end on a tiny CPU fixture, where the bench venv has tinygrad:
+        an f32 fixture, an f16 one (read back, not echoed), and the f32 fixture under a half
+        DEFAULT_FLOAT. A requested-but-ignored precision is the first run stamped bf16."""
+        venv = bench_venv.venv_python(HERE)
+        probe = subprocess.run(
+            [str(venv), "-c", "import tinygrad, safetensors.numpy, numpy"],
+            capture_output=True, text=True, timeout=120,
+        ) if venv.exists() else None
+        if probe is None or probe.returncode != 0:
+            self.skipTest(f"the bench venv at {venv} cannot import tinygrad, safetensors, numpy")
+        run_py = HERE / "runners/tinygrad/run.py"
+
+        def row(fixture, **env):
+            done = subprocess.run(
+                [str(venv), str(run_py), "--fixture", fixture, "--device", "CPU", "--jit", "0"],
+                capture_output=True, text=True, timeout=600, env=dict(os.environ, **env),
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return strict_loads(done.stdout.strip().splitlines()[-1])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixtures = {}
+            for dtype in ("float32", "float16"):
+                fixtures[dtype] = str(Path(tmp) / f"probe_{dtype}.safetensors")
+                subprocess.run(
+                    [str(venv), "-c", TINYGRAD_PROBE_FIXTURE, fixtures[dtype], dtype],
+                    check=True, timeout=300,
+                )
+            f32 = row(fixtures["float32"])
+            f16 = row(fixtures["float16"])
+            half_default = row(fixtures["float32"], DEFAULT_FLOAT="HALF")
+
+        self.assertEqual(f32["param_dtypes"], ["float32"])
+        self.assertEqual(f32["input_dtypes"], {"input": "float32", "target": "float32"})
+        self.assertEqual(f32["default_float"], "float32")
+        self.assertEqual(f32["effective_precision"], "f32")
+        self.assertEqual(f16["param_dtypes"], ["float16"])
+        self.assertEqual(f16["effective_precision"], "f16")
+        self.assertEqual(half_default["default_float"], "float16")
+
+        for r in (f32, f16, half_default):
+            r["precision"] = "f32"  # as the sweep stamps every tinygrad cell
+        ignored = dict(f32, precision="bf16")
+        mismatched = orchestrate.precision_check([f32, ignored, f16, half_default])
+
+        self.assertEqual(mismatched, [ignored, f16, half_default])
+        self.assertEqual(ignored["precision_mismatch"], "f32 tensors, default float float32")
+        self.assertEqual(f16["precision_mismatch"], "f16 tensors")
+        self.assertIn("default float float16", half_default["precision_mismatch"])
 
     def torch_row(self, effective, precision="f32", autocast=None):
         row = cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1], precision=precision)

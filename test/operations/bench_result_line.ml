@@ -182,7 +182,7 @@ let ordinary =
 
 (* Everything a diverged, half-measured, tuned cell reports at once. *)
 let diverged =
-  Bench_json.result_line ~backend:"metal" ~variant:"tuned" ~precision:"f16"
+  Bench_json.result_line ~backend:"metal" ~variant:"tuned" ~precision:"f16" ~storage_precision:"f16"
     ~profile:(Some "approximate")
     ~regime_knobs:
       [
