@@ -65,8 +65,13 @@ class GitFailed(Exception):
     pass
 
 
+# Git paths are bytes, not text in any encoding: decode them as UTF-8 with surrogateescape, so a
+# path that is not valid UTF-8 round-trips to stdout byte for byte instead of failing the replay.
+GIT_TEXT = {"encoding": "utf-8", "errors": "surrogateescape"}
+
+
 def git(repo: str, *args: str) -> str:
-    done = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    done = subprocess.run(["git", "-C", repo, *args], capture_output=True, **GIT_TEXT)
     if done.returncode != 0:
         raise GitFailed(f"git {' '.join(args)}: exit {done.returncode}: {done.stderr.strip()}")
     return done.stdout
@@ -236,7 +241,7 @@ def main(argv: list[str]) -> int:
             continue
         # Exit 1 with nothing said is "no common ancestor"; anything else (a missing object in a
         # shallow or damaged clone, exit 128) is a failed read, not a merge to leave out.
-        found = subprocess.run(["git", "-C", repo, "merge-base", ps[0], ps[1]], capture_output=True, text=True)
+        found = subprocess.run(["git", "-C", repo, "merge-base", ps[0], ps[1]], capture_output=True, **GIT_TEXT)
         if found.returncode == 1 and not found.stdout.strip() and not found.stderr.strip():
             not_replayed["no merge base"] += 1
             continue
@@ -308,6 +313,7 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="surrogateescape")
         sys.exit(main(sys.argv[1:]))
     except Usage as e:
         print(f"{ME}: {e}", file=sys.stderr)

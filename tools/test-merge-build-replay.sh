@@ -208,6 +208,34 @@ if harness_leg 'a merge base that cannot be read fails the replay #replay'; then
   fi
 fi
 
+# A path that is not valid UTF-8 is still a path: both sides add odd<0xff>.ml, and the replay
+# reports it, byte for byte, rather than failing to decode git's output. Built with plumbing, so
+# no file of that name touches the work tree (APFS refuses one).
+if harness_leg 'a path that is not UTF-8 is replayed byte for byte #replay'; then
+  E=$TMP/bytes
+  odd=$'odd\xff.ml'
+  side_with() { # BRANCH CONTENT: a commit on BRANCH adding $odd with CONTENT, through the index
+    local blob
+    blob=$(printf '%s\n' "$2" | git -C "$E" hash-object -w --stdin) &&
+      git -C "$E" update-index --add --cacheinfo "100644,$blob,$odd" &&
+      git -C "$E" commit -q -m "$1"
+  }
+  rm -rf "$E" && mkdir -p "$E" && printf '1\n' >"$E/a.ml" &&
+    git -C "$E" init -q && git -C "$E" checkout -q -b main && git -C "$E" add -A &&
+    git -C "$E" commit -q -m init && git -C "$E" branch f &&
+    side_with main-odd main && git -C "$E" symbolic-ref HEAD refs/heads/f && git -C "$E" read-tree f &&
+    side_with f-odd side && m=$(git -C "$E" commit-tree -p main -p f -m m-odd 'main^{tree}') &&
+    git -C "$E" update-ref refs/heads/main "$m"
+  built=$?
+  rc=0
+  python3 "$SRC" --repo "$E" --set 'ml=*.ml' main >"$out" 2>&1 || rc=$?
+  if [ "$built" != 0 ]; then
+    report 1 'a non-UTF-8 path both sides added builds and is listed' "the fixture did not build: $(cat "$out")"
+  elif [ "$rc" = 0 ] && [ "$(row ml)" = 11- ] && grep -qF "    1  $odd" "$out"; then
+    report 0 'a non-UTF-8 path both sides added builds and is listed'
+  else report 1 'a non-UTF-8 path both sides added builds and is listed' "exit $rc; $(cat "$out")"; fi
+fi
+
 # The built-in sets come from the replayed tree's own definitions, read at run time: change them
 # (uncommitted, in a clone) and the replay follows.
 if harness_leg 'built-in sets are read from where they are defined #definitions'; then
