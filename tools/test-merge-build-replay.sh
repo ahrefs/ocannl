@@ -208,16 +208,18 @@ if harness_leg 'a merge base that cannot be read fails the replay #replay'; then
   fi
 fi
 
-# A path that is not valid UTF-8 is still a path: both sides add odd<0xff>.ml, and the replay
-# reports it, byte for byte, rather than failing to decode git's output. Built with plumbing, so
-# no file of that name touches the work tree (APFS refuses one).
-if harness_leg 'a path that is not UTF-8 is replayed byte for byte #replay'; then
+# Paths are bytes, and printing them is the replay's to make safe: both sides add odd<0xff>.ml,
+# which is not UTF-8, and new<LF>line.ml, whose newline would forge a report line. The replay
+# decodes both and lists them escaped as git quotes them, never raw. Built with plumbing, so no
+# file of either name touches the work tree (APFS refuses the first).
+if harness_leg 'paths that are not UTF-8 or hold a newline are replayed and printed escaped #replay'; then
   E=$TMP/bytes
-  odd=$'odd\xff.ml'
-  side_with() { # BRANCH CONTENT: a commit on BRANCH adding $odd with CONTENT, through the index
+  odd=$'odd\xff.ml' nl=$'new\nline.ml'
+  side_with() { # BRANCH CONTENT: a commit on BRANCH adding $odd and $nl with CONTENT, through the index
     local blob
     blob=$(printf '%s\n' "$2" | git -C "$E" hash-object -w --stdin) &&
       git -C "$E" update-index --add --cacheinfo "100644,$blob,$odd" &&
+      git -C "$E" update-index --add --cacheinfo "100644,$blob,$nl" &&
       git -C "$E" commit -q -m "$1"
   }
   rm -rf "$E" && mkdir -p "$E" && printf '1\n' >"$E/a.ml" &&
@@ -229,11 +231,21 @@ if harness_leg 'a path that is not UTF-8 is replayed byte for byte #replay'; the
   built=$?
   rc=0
   python3 "$SRC" --repo "$E" --set 'ml=*.ml' main >"$out" 2>&1 || rc=$?
+  label='the shared non-UTF-8 and newline paths build, and are listed escaped'
   if [ "$built" != 0 ]; then
-    report 1 'a non-UTF-8 path both sides added builds and is listed' "the fixture did not build: $(cat "$out")"
-  elif [ "$rc" = 0 ] && [ "$(row ml)" = 11- ] && grep -qF "    1  $odd" "$out"; then
-    report 0 'a non-UTF-8 path both sides added builds and is listed'
-  else report 1 'a non-UTF-8 path both sides added builds and is listed' "exit $rc; $(cat "$out")"; fi
+    report 1 "$label" "the fixture did not build: $(cat "$out")"
+  elif [ "$rc" = 0 ] && [ "$(row ml)" = 11- ] && grep -qxF '        1  "odd\377.ml"' "$out" &&
+       grep -qxF '        1  "new\nline.ml"' "$out" && ! grep -qx 'line.ml"\{0,1\}' "$out" &&
+       ! LC_ALL=C grep -q $'\xff' "$out"; then
+    report 0 "$label"
+  else report 1 "$label" "exit $rc; $(cat "$out")"; fi
+  # A shallow clone hides boundary merges and merge bases: refused, never a short count.
+  rm -rf "$TMP/shallow" && git clone -q --depth 1 "file://$E" "$TMP/shallow" 2>/dev/null
+  rc=0
+  python3 "$SRC" --repo "$TMP/shallow" --set 'ml=*.ml' HEAD >"$out" 2>&1 || rc=$?
+  if [ "$rc" = 2 ] && has 'is a shallow clone, whose boundary hides merges and merge bases'; then
+    report 0 'a shallow clone is refused'
+  else report 1 'a shallow clone is refused' "exit $rc; $(cat "$out")"; fi
 fi
 
 # The built-in sets come from the replayed tree's own definitions, read at run time: change them

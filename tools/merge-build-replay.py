@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay a branch's merge history against merge-build input sets, to size the boundary.
+r"""Replay a branch's merge history against merge-build input sets, to size the boundary.
 
 Usage: tools/merge-build-replay.py [--since DATE] [--until DATE] [--set NAME[=GLOB,...]]...
                                    [--trigger same-input|any-input] [--top N] [--repo DIR]
@@ -37,8 +37,16 @@ only the merges it builds beyond the PREVIOUS set, so a widening sequence of set
 step adds. A Markdown summary table closes the report. `--verbose` also prints each merge with the
 sets that would build it.
 
-Exit status: 0 the replay ran; 1 a git command failed; 2 a usage error, or a built-in set whose
-definition could not be read.
+A path is printed as itself unless it holds a double quote, a backslash, a control character
+(C0, DEL or C1) or a byte that is not UTF-8: then it is printed in double quotes with those
+escaped as git's own quoting does (`\"`, `\\`, `\t`, `\n`, octal `\377`), so no path can forge a
+report line or reach the terminal as a control sequence. Merge subjects are escaped the same way.
+
+A shallow clone is refused: its boundary commits lose their parents, which hides boundary merges
+from the listing and can hide merge bases (ship-pr's merge build refuses one too).
+
+Exit status: 0 the replay ran; 1 a git command failed; 2 a usage error, a shallow clone, or a
+built-in set whose definition could not be read.
 """
 
 from __future__ import annotations
@@ -182,6 +190,30 @@ def git_quotes(path: str) -> bool:
     return any(c in '"\\' or ord(c) < 0x20 or ord(c) == 0x7F for c in path)
 
 
+C_ESCAPES = {'"': '\\"', "\\": "\\\\", "\a": "\\a", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\v": "\\v", "\f": "\\f", "\r": "\\r"}
+
+
+def printable(text: str) -> str:
+    """The text as itself when it is safe to print, else double-quoted with git's C escapes and
+    each control character's or undecodable byte's octal."""
+
+    def unsafe(c: str) -> bool:
+        o = ord(c)
+        return c in '"\\' or o < 0x20 or o == 0x7F or 0x80 <= o <= 0x9F or 0xDC80 <= o <= 0xDCFF
+
+    if not any(unsafe(c) for c in text):
+        return text
+    out = []
+    for c in text:
+        if c in C_ESCAPES:
+            out.append(C_ESCAPES[c])
+        elif unsafe(c):
+            out.extend(f"\\{b:03o}" for b in c.encode("utf-8", "surrogateescape"))
+        else:
+            out.append(c)
+    return '"' + "".join(out) + '"'
+
+
 def matching(paths, globs: list[str], other: dict[str, list[str]]) -> list[str]:
     return sorted(
         p for p in paths if any(fnmatch.fnmatchcase(n, g) for n in (p, *other.get(p, [])) for g in globs)
@@ -209,6 +241,8 @@ def main(argv: list[str]) -> int:
     if args.top < 0:
         raise Usage("--top takes a count, 0 for all")
     repo = git(args.repo, "rev-parse", "--show-toplevel").strip()
+    if git(repo, "rev-parse", "--is-shallow-repository").strip() == "true":
+        raise Usage(f"{repo} is a shallow clone, whose boundary hides merges and merge bases: run `git fetch --unshallow` first")
 
     sets = resolve_sets(repo, args.sets or ["config", "shell-tier"])
     trigger, trigger_from = args.trigger, "--trigger"
@@ -275,7 +309,7 @@ def main(argv: list[str]) -> int:
                     triggered[name].update(hits)
             previous = name
         if args.verbose:
-            per_merge.append(f"{sha[:10]} {subject[:72]}: {' '.join(built_by) or '-'}")
+            per_merge.append(f"{sha[:10]} {printable(subject[:72])}: {' '.join(built_by) or '-'}")
 
     revs = " ".join(args.revs or ["HEAD"])
     window = "".join(f" --{k} {v!r}" for k, v in (("since", args.since), ("until", args.until)) if v)
@@ -296,7 +330,7 @@ def main(argv: list[str]) -> int:
             print(f"  beyond {previous}: {beyond[name]} merge(s); the paths that triggered those, by merges:")
         common = triggered[name].most_common(args.top or None)
         for path, n in common:
-            print(f"    {n:5d}  {path}")
+            print(f"    {n:5d}  {printable(path)}")
         rest = len(triggered[name]) - len(common)
         if rest > 0:
             print(f"    ... {rest} more path(s) (--top 0 lists all)")
