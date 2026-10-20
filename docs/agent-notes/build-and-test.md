@@ -197,7 +197,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Run on the two merge commits above, it refused the first in its compile tier and the second in
   its shell tier. A clash across paths only one side changed, or one only a runtime test sees, is
   outside that boundary. To check a merge by hand, run the script at the root of a checkout whose
-  HEAD is that merge; `--plan` prints the tiers it selects and why.
+  HEAD is that merge; `--plan` prints the tiers it selects and why. To size a change to that
+  boundary, replay the history rather than rebuilding a script for it:
+  `tools/merge-build-replay.py --since '2026-09-19 18:30 +0200' --until '2026-10-19 18:30 +0200'
+  --set 'ocaml-sh=*.ml,*.mli,dune,*/dune,dune-project,*.opam,*.sh' --set 'md=@ocaml-sh,*.md'
+  --set config --set shell-tier <remote>/master` (the staging repository's remote, whatever
+  `git remote -v` names it) reproduces the counts above (166, 238, 245, 6 of 474). Per named
+  glob set it prints the merges replayed, the merges that would build, and the paths that
+  triggered the ones it adds over the set before it; with no `--set` it replays the config's
+  `input` lines and the shell tier's `SHELL_GLOB`, read from where each is defined. Spell a time
+  and a zone in `--since`/`--until`: git fills a bare date with the current time of day and a
+  zoneless one with the local zone. `tools/test-merge-build-replay.sh` pins its shell-tier replay
+  to the script's own `--plan` merge by merge.
 
 ### Scan corpora, goldens and floors
 
@@ -827,7 +838,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   ordinary `FAIL  leg naming: ...`. Gated and alone-clean so far: `tools/test-test-run.sh`,
   `tools/test-mutation-run.sh`, `tools/test-promote.sh`, `tools/test-machine-verify.sh`,
   `scripts/test-setup-ocaml-env.sh`, `tools/test-merge-build-check.sh`,
-  `tools/test-affected-tests.sh` and the two `benchmarks/test-*box*.sh`.
+  `tools/test-merge-build-replay.sh`, `tools/test-affected-tests.sh` and the two
+  `benchmarks/test-*box*.sh`.
 - **A leg that cannot go on ends itself, never the harness** (gh-ocannl-1374). Each leg of
   `tools/test-test-run.sh` is a function run by `harness_leg_run 'NAME' leg_N`; a check it cannot
   get past (an extraction or mutant that matched nothing, a fixture repository that will not

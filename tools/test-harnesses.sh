@@ -61,6 +61,7 @@ shell tools/test-action-durations.sh
 shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
 shell tools/test-merge-build-check.sh
+shell tools/test-merge-build-replay.sh
 shell benchmarks/test-gh1133-cells.sh
 shell benchmarks/test-gh834-cells.sh
 shell benchmarks/test-check-box.sh

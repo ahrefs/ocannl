@@ -592,6 +592,8 @@ tools/test-machine-verify.sh uses the shared harness contract: true
 tools/test-machine-verify.sh parses: true
 tools/test-merge-build-check.sh uses the shared harness contract: true
 tools/test-merge-build-check.sh parses: true
+tools/test-merge-build-replay.sh uses the shared harness contract: true
+tools/test-merge-build-replay.sh parses: true
 tools/test-mutation-run.sh uses the shared harness contract: true
 tools/test-mutation-run.sh parses: true
 tools/test-pin-revisions.sh uses the shared harness contract: true
