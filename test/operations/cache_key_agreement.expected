@@ -10,7 +10,7 @@ each settings-borne key outside Keyed is flipped by restore_settings: true
 and moves no component of the cache key: true
 no registered non-Keyed key moves the cache key when flipped off its default: true
 the probe compiles to the same kernel under the same key twice over: true
-every key a compile reads outside Keyed and search-shaping has oracle values or an exemption: true
+every key a compile reads whose class promises an unchanged kernel has oracle values or an exemption: true
 no such key changes the emitted kernel while leaving the cache key unchanged: true
 
 Keyed keys this sweep cannot flip in-process:

@@ -26,9 +26,10 @@
    nothing.
 
    That is stage 1: the registry against the key. Stage 2 is the oracle for the half both can get
-   wrong together -- a key that changes the emitted kernel, is classified neither [Keyed] nor
-   search-shaping, and is not hashed: every key a compile reads outside those classes is flipped,
-   the probe recompiled, and a changed kernel under an unchanged key is reported by name.
+   wrong together -- a key that changes the emitted kernel, is classified as leaving it alone
+   (execution-neutral, placement-shaping, untimed-model), and is not hashed: every such key a
+   compile reads is flipped, the probe recompiled, and a changed kernel under an unchanged key is
+   reported by name.
 
    A [Keyed] key the sweep cannot flip in-process says why ([unflippable]), and the reason stays
    true: such a key must not be read per lookup by the key computation, or it could have been
@@ -192,11 +193,16 @@ let off_default (kind : Utils.config_value_kind) default =
    cannot see a key that changes the emitted kernel, is classified neither [Keyed] nor
    search-shaping, AND is not hashed -- both halves agree, and both are wrong. [buffer_aliasing] was
    exactly that until gh-ocannl-572's review: dropping the [restrict] qualifier is a textual change
-   in the emitted C no part of the registry knew about. So every key a compile reads outside those
-   two classes is flipped here, the kernel recompiled, and a changed kernel under an unchanged key
-   is an under-keying, reported by name. [Search_shaping] is out by its class's own reason: it
-   shapes the untuned default pipeline, which a cached winner replays its own ops over, so a
-   different default kernel under one key is what the class says.
+   in the emitted C no part of the registry knew about. So every key a compile reads whose class
+   promises an unchanged kernel -- execution-neutral, placement-shaping, untimed-model -- is flipped
+   here, the kernel recompiled, and a changed kernel under an unchanged key is an under-keying,
+   reported by name. The other classes are out by their own statements: [Search_shaping] shapes the
+   untuned default pipeline, which a cached winner replays its own ops over, so a different default
+   kernel under one key is what the class says; and a [Code_borne] key changes the lowered code, so
+   the digest carries it, and a flip of one the probe does not exercise (online softmax on a probe
+   with no attention) could never fail here (Codex P2, round 2). That class's guards are
+   [digest_completeness]'s check 3 (no code-borne key read at codegen) and the representatives of
+   [digest_identity_flips].
 
    Which keys a compile reads is TRACED, not listed, so a key that starts being read at compile time
    joins the oracle the day it does; this table must then give it values, or the first claim of the
@@ -205,18 +211,13 @@ let off_default (kind : Utils.config_value_kind) default =
 let emitted_flips =
   [
     ("cc_backend_post_compile_timeout", [ "2.5" ]);
-    ("fp_contract", flag);
-    ("fp_reassociate", flag);
-    ("fp_finite_math", flag);
-    ("limit_constant_fill_size", [ "4096" ]);
     ("max_shape_error_origins", [ "3"; "9" ]);
-    ("online_softmax", flag);
     ("output_dlls_in_build_directory", flag);
     ("output_prec_in_ll_files", flag);
     ("cd_ident_style", [ "name_only"; "name_and_label" ]);
   ]
 
-(* Read at compile time, outside the two classes, and deliberately not flipped. *)
+(* Read at compile time, in the classes the oracle covers, and deliberately not flipped. *)
 let emitted_exemptions =
   [
     ( "ll_ident_style",
@@ -603,14 +604,14 @@ let () =
     in
     let oracle_class key =
       match Utils.classify_config_key key with
-      | Some
-          ( ( Utils.Code_borne | Utils.Execution_neutral | Utils.Placement_shaping
-            | Utils.Untimed_model ),
-            _ ) ->
-          true
-      | Some ((Utils.Keyed _ | Utils.Search_shaping | Utils.Aggregate), _) | None -> false
+      | Some ((Utils.Execution_neutral | Utils.Placement_shaping | Utils.Untimed_model), _) -> true
+      | Some ((Utils.Code_borne | Utils.Keyed _ | Utils.Search_shaping | Utils.Aggregate), _) | None
+        ->
+          false
     in
-    let settings_rows = Set.of_list (module String) (List.map settings_flips ~f:fst) in
+    let settings_rows =
+      Set.of_list (module String) (List.map settings_flips ~f:fst) |> Set.filter ~f:oracle_class
+    in
     let population =
       Set.union (Set.filter traced_reads ~f:oracle_class) settings_rows |> Set.to_list
     in
@@ -622,14 +623,15 @@ let () =
           Option.map (List.Assoc.find emitted_flips key ~equal:String.equal) ~f:(fun c ->
               (Per_lookup, c))
     in
-    p_all ~min:5
-      "every key a compile reads outside Keyed and search-shaping has oracle values or an exemption"
+    p_all ~min:4
+      "every key a compile reads whose class promises an unchanged kernel has oracle values or an \
+       exemption"
       population ~f:(fun key ->
         let ok = exempt key || Option.is_some (values key) in
         if not ok then eprintf "%s is read during a compile; give it values in emitted_flips\n" key;
         ok);
     let flipped = List.filter population ~f:(Fn.non exempt) in
-    p_none ~min:5 "no such key changes the emitted kernel while leaving the cache key unchanged"
+    p_none ~min:4 "no such key changes the emitted kernel while leaving the cache key unchanged"
       flipped ~f:(fun key ->
         match values key with
         | None -> false
