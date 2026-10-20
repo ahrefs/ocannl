@@ -5738,6 +5738,17 @@ let resolve_cache_dir ?cache_dir ~search () =
    caller's later lowering folds it and the base did not -- seen on gpt2_mini_train, where a
    structural comparison refused every timing context), but folding a guard removes no node the code
    accesses, and that drift is exactly what [compile_candidate]'s rebase is for. *)
+let lineage_accesses (opt : LL.optimized) =
+  let table = Hashtbl.create (module Ir.Tnode) in
+  List.iter (LL.affine_accesses opt.LL.llc) ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
+      Hashtbl.update table a.a_tn ~f:(fun prev ->
+          let r, w = Option.value prev ~default:(false, false) in
+          if a.a_write then (r, true) else (true, w)));
+  fun tn ->
+    match Hashtbl.find table tn with
+    | None -> "-"
+    | Some (r, w) -> (if r then "r" else "") ^ if w then "w" else ""
+
 let lineage_identity (opt : LL.optimized) =
   LL.affine_accesses opt.LL.llc
   |> List.map ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->

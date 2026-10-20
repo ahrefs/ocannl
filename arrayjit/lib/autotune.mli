@@ -3053,6 +3053,11 @@ val lineage_identity : Ir.Low_level.optimized -> string
     lowerings of one lineage (a gather guard folded once the base compile settled its index's
     bounds) does not, which is why it is not a structural digest. *)
 
+val lineage_accesses : Ir.Low_level.optimized -> Ir.Tnode.t -> string
+(** The per-node reading of {!lineage_identity}: how the lowering's code accesses the node -- ["r"],
+    ["w"], ["rw"], or ["-"] for not at all. For a key that must not depend on process-local node ids
+    ([Train.placement_problem] tags each node with it, and the canonicalizer numbers them). *)
+
 val compile_deferred : deferred -> Context.t * Context.routine
 (** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]
     that call ran under, and like {!tune_deferred} itself inside {!exclusive_search}. At most once:

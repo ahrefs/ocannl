@@ -524,6 +524,24 @@ let () =
     (String.equal d (problem_digest (Context.auto ()) t2' comp'));
   p "the problem digest is the same for a fresh lineage"
     (String.equal d (problem_digest (Context.auto ()) t2 comp));
+  (* gh-ocannl-1421: with a timing context the key also carries how each lineage's lowering accesses
+     every node, per node, so it is still free of process-local node ids. *)
+  let timed_digest ~decide loss comp =
+    SC.digest
+      (Train.placement_problem
+         ~timing_ctx:(decide (Context.auto ()))
+         (Context.auto ()) loss comp Ir.Indexing.Empty)
+  in
+  let materialize_mid mc c = Context.decide_materialized c [ mc.Tensor.value ] in
+  p "with a timing context, a same-shape graph over other tensors has the same digest"
+    (String.equal
+       (timed_digest ~decide:(materialize_mid mc) t2 comp)
+       (timed_digest ~decide:(materialize_mid mc') t2' comp'));
+  p "with a timing context, how the timing lineage lowers the routine enters the digest"
+    (not
+       (String.equal
+          (timed_digest ~decide:Fn.id t2 comp)
+          (timed_digest ~decide:(materialize_mid mc) t2 comp)));
   p "a lineage that inherits a decision poses a different problem"
     (not
        (String.equal d

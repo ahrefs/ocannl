@@ -17,6 +17,8 @@ the control process replays nothing recorded: both arms report: true
 the control process leaves the entry recorded for the other problem untouched: true
 the problem digest is structural: a same-shape graph over other tensors has the same digest: true
 the problem digest is the same for a fresh lineage: true
+with a timing context, a same-shape graph over other tensors has the same digest: true
+with a timing context, how the timing lineage lowers the routine enters the digest: true
 a lineage that inherits a decision poses a different problem: true
 the same computation tuned against a different loss poses a different problem: true
 a timing context that inherits a decision poses a different problem: true
