@@ -489,20 +489,23 @@ let placement_problem ?name ?timing_ctx ctx loss comp bindings =
         let tlowered = Context.lowered_for_decisions ?name tctx comp bindings in
         ( Context.placements tctx,
           tlowered.Ir.Low_level.optimize_ctx,
-          (* gh-ocannl-1421: both lineages' lowered programs, which the tags above do not pin (an
-             inherited computation changes the program, not a placement tag). Whether a search is
-             [Lineage_refused] is a function of the two, so a decision recorded beside such a search
-             applies only where they are the same. Canonical digests, free of process-local ids. *)
-          ";ts="
-          ^ Autotune.lineage_identity ~static_indices tlowered
-          ^ ";cs="
-          ^ Autotune.lineage_identity ~static_indices lowered ))
+          (* gh-ocannl-1421: how each lineage's lowered program accesses the node, which the tags
+             above do not pin (an inherited computation changes the program, not a placement tag).
+             Whether a search is [Lineage_refused] depends on the two lowerings, so a decision
+             recorded beside such a search should apply only where they agree. Per node, so the
+             canonicalizer numbers the nodes and the key is process-independent; accesses rather
+             than code, since this key is taken before any compile has settled value bounds and the
+             code drifts with them (review round 6). *)
+          Autotune.lineage_accesses tlowered,
+          Autotune.lineage_accesses lowered ))
   in
   Ir.Schedule_cache.canonicalize_source ~static_indices
     ~node_tag:(fun tn ->
       (if Set.mem embedded tn then ";e" else "")
-      ^ Option.value_map timing ~default:"" ~f:(fun (plc, octx, programs) ->
-          ";t" ^ Ir.Schedule_cache.lineage_tag plc octx tn ^ programs))
+      ^ Option.value_map timing ~default:"" ~f:(fun (plc, octx, t_access, c_access) ->
+          ";t"
+          ^ Ir.Schedule_cache.lineage_tag plc octx tn
+          ^ ";ta=" ^ t_access tn ^ ";ca=" ^ c_access tn))
     ~lineage:(Context.placements ctx) lowered
 
 (** A recorded placement decision as the three lists the context API takes — materialized, inlined,
@@ -940,6 +943,38 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   (Exn.to_string exn);
                 None))
   in
+  (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships. *)
+  let deliver ~what ~commit compiled =
+    (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships.
+
+       A raising callback is the caller's failure and propagates, like [report]'s — but it
+       propagates INSTEAD of returning [compiled]. Dropping the OCaml value frees nothing (the
+       backend's pool table roots the slabs), and the caller never received a handle, so the routine
+       would be permanently unreachable and unreleasable: a repeatedly-tuning process with a flaky
+       callback accumulates one routine footprint per call. Release it here, then re-raise the
+       caller's own exception with its original backtrace. *)
+    (match on_ship with
+    | None -> ()
+    | Some f -> (
+        try f what
+        with exn ->
+          let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+          (try Context.release (fst compiled)
+           with exn2 when not (must_propagate exn2) ->
+             logf "release after a failing on_ship callback failed: %s" (Exn.to_string exn2));
+          Stdlib.Printexc.raise_with_backtrace exn backtrace));
+    (* gh-ocannl-786: recorded once the artifact has actually shipped -- after the callback, whose
+       failure means nothing shipped -- and protected like it: a process-level failure while the
+       entry is written would otherwise leave the shipped routine unreachable. *)
+    (try commit ()
+     with exn ->
+       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+       (try Context.release (fst compiled)
+        with exn2 when not (must_propagate exn2) ->
+          logf "release after a failing placement recording failed: %s" (Exn.to_string exn2));
+       Stdlib.Printexc.raise_with_backtrace exn backtrace);
+    compiled
+  in
   (* The unwrap is the type-level statement of an invariant established on every path that reaches
      it: on the cold path both arms [Error] propagated, [a_wins] never picks a failed arm, and the
      flip chain only ever replaces its incumbent with a strictly faster {e completed} search
@@ -951,7 +986,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      shipping the next completed result: [fallbacks], in order, each shipped under its own name and
      never recorded -- the evidence the recording would rest on includes a placement that did not
      compile. A forced arm passes none, so its failure propagates. *)
-  let rec ship ?(fallbacks = []) ~what ~commit = function
+  let rec ship ?(fallbacks = []) ?last_resort ~what ~commit = function
     | Ok deferred -> (
         (* A later arm can poison the lineage after this one succeeded. With a [timing_ctx] that is
            the scratch lineage and the winner — compiled from [ctx] — is unaffected. WITHOUT one the
@@ -966,11 +1001,25 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
             raise poisoned
         | None -> (
             match Autotune.compile_deferred deferred with
+            | exception exn
+              when (not (must_propagate exn))
+                   && List.is_empty fallbacks && Option.is_some last_resort ->
+                (* Every completed result failed to compile after an earlier one shipped a
+                   substitute and was released for them: that substitute -- the caller's untuned
+                   default -- is compiled again rather than failing a call that had a usable
+                   routine. *)
+                let resort_what = Option.value_exn last_resort in
+                logf "%s's compile failed (%s): shipping %s's untuned default after all, unrecorded"
+                  what (Exn.to_string exn) resort_what;
+                deliver ~what:resort_what
+                  ~commit:(fun () ->
+                    logf "placement store: nothing recorded, no measured placement compiled")
+                  (Autotune.untuned_compile ?name ctx comp bindings)
             | exception exn when (not (must_propagate exn)) && not (List.is_empty fallbacks) ->
                 let fallback_what, fallback = List.hd_exn fallbacks in
                 logf "%s's compile failed (%s): shipping %s instead, unrecorded" what
                   (Exn.to_string exn) fallback_what;
-                ship ~fallbacks:(List.tl_exn fallbacks) ~what:fallback_what
+                ship ~fallbacks:(List.tl_exn fallbacks) ?last_resort ~what:fallback_what
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, the measured winner did not compile")
                   fallback
@@ -986,7 +1035,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   "%s's compile shipped the untuned default in place of its measured schedule: \
                    shipping %s instead, unrecorded"
                   what fallback_what;
-                ship ~fallbacks:(List.tl_exn fallbacks) ~what:fallback_what
+                ship ~fallbacks:(List.tl_exn fallbacks)
+                  ~last_resort:(Option.value last_resort ~default:what)
+                  ~what:fallback_what
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, the measured winner did not compile")
                   fallback
@@ -1001,39 +1052,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       what
                   else commit
                 in
-                (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships.
-
-                   A raising callback is the caller's failure and propagates, like [report]'s — but
-                   it propagates INSTEAD of returning [compiled]. Dropping the OCaml value frees
-                   nothing (the backend's pool table roots the slabs), and the caller never received
-                   a handle, so the routine would be permanently unreachable and unreleasable: a
-                   repeatedly-tuning process with a flaky callback accumulates one routine footprint
-                   per call. Release it here, then re-raise the caller's own exception with its
-                   original backtrace. *)
-                (match on_ship with
-                | None -> ()
-                | Some f -> (
-                    try f what
-                    with exn ->
-                      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                      (try Context.release (fst compiled)
-                       with exn2 when not (must_propagate exn2) ->
-                         logf "release after a failing on_ship callback failed: %s"
-                           (Exn.to_string exn2));
-                      Stdlib.Printexc.raise_with_backtrace exn backtrace));
-                (* gh-ocannl-786: recorded once the artifact has actually shipped -- after the
-                   callback, whose failure means nothing shipped -- and protected like it: a
-                   process-level failure while the entry is written would otherwise leave the
-                   shipped routine unreachable. *)
-                (try commit ()
-                 with exn ->
-                   let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                   (try Context.release (fst compiled)
-                    with exn2 when not (must_propagate exn2) ->
-                      logf "release after a failing placement recording failed: %s"
-                        (Exn.to_string exn2));
-                   Stdlib.Printexc.raise_with_backtrace exn backtrace);
-                compiled))
+                deliver ~what ~commit compiled))
     | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
   (* The completed results among [candidates], as [ship]'s fallbacks. *)

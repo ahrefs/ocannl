@@ -5729,15 +5729,41 @@ let resolve_cache_dir ?cache_dir ~search () =
   (* A search-less [tune] replays only a cache someone asked for. *)
   if search || cache_dir_chosen then cache_dir else ""
 
-(* gh-ocannl-1421: the lineage-independent identity of a lowering of the routine -- its structural
-   digest ([with_placements:false], canonically numbered, so free of process-local ids). Two
-   lineages are compared by lowering BOTH at the same moment: the structural code drifts between
-   lowerings of one lineage taken at different times (a gather guard folds once a compile has
-   settled its index tensor's bounds, so a lowering taken after the base compile folds what the base
-   kept), but two lowerings taken together see the same bounds, and differ only where the lineages
-   do -- an inlined or materialized node, an inherited computation, whatever its accesses. *)
+(* gh-ocannl-1421: how a lowering's code accesses each tensor node -- ["r"], ["w"], ["rw"], or ["-"]
+   for not at all. Stable under the drift between two lowerings of one lineage (folding a gather
+   guard removes no accessed node), and per node, so a caller can tag nodes with it inside a
+   canonically numbered key. *)
+let lineage_accesses (opt : LL.optimized) =
+  let table = Hashtbl.create (module Ir.Tnode) in
+  List.iter (LL.affine_accesses opt.LL.llc) ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
+      Hashtbl.update table a.a_tn ~f:(fun prev ->
+          let r, w = Option.value prev ~default:(false, false) in
+          if a.a_write then (r, true) else (true, w)));
+  fun tn ->
+    match Hashtbl.find table tn with
+    | None -> "-"
+    | Some (r, w) -> (if r then "r" else "") ^ if w then "w" else ""
+
+(* gh-ocannl-1421: the identity two lowerings of the routine, from two lineages, must share for a
+   schedule tuned on the one to apply to the other: the canonical structural digest -- the code,
+   arithmetic included -- AND the actual tensor nodes it reads and writes, since the canonical form
+   alpha-renames nodes, and two isomorphic programs reading different buffers ([u := x] against [u
+   := y]) would otherwise compare equal. Process-local (node ids): for comparing two lowerings in
+   one call, never for a persisted key. The two are lowered together, at the same moment: the
+   structural code drifts between lowerings of one lineage taken at different times (a gather guard
+   folds once a compile has settled its index tensor's bounds, so a lowering taken after the base
+   compile folds what the base kept), but two lowerings taken together see the same bounds. *)
 let lineage_identity ~static_indices (opt : LL.optimized) =
+  let nodes =
+    LL.affine_accesses opt.LL.llc
+    |> List.map ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
+        Ir.Tnode.id a.a_tn ^ if a.a_write then "w" else "r")
+    |> List.dedup_and_sort ~compare:String.compare
+    |> String.concat ~sep:","
+  in
   SC.digest (SC.canonicalize ~static_indices ~with_placements:false opt)
+  ^ "/"
+  ^ Stdlib.Digest.to_hex (Stdlib.Digest.string nodes)
 
 (* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk is
    already forced (it returns the routine [tune] compiled before reporting); with it

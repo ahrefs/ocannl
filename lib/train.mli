@@ -647,9 +647,10 @@ val placement_evidence_clean : Autotune.report -> bool
     on (gh-ocannl-786's rule): it completed, with no contention-refused window, uncut by its budget
     (gh-ocannl-1409), and measured something. A {!Autotune.Lineage_refused} search measured nothing
     but spoils nothing either (gh-ocannl-1421): its placement can never ship into the caller under
-    this decision problem, whose key carries both lineages' lowered programs ({!placement_problem}),
-    so the decision does not skip a competitor a later process could measure. The recorder's own
-    predicate, exposed so a test judges evidence exactly as the recorder does. *)
+    this decision problem, whose key carries how both lineages' lowerings access each node
+    ({!placement_problem}), so the decision does not skip a competitor a later process could measure
+    -- up to lineage pairs that differ only in inherited arithmetic, which share a key. The
+    recorder's own predicate, exposed so a test judges evidence exactly as the recorder does. *)
 
 (** {2 Printing} *)
 

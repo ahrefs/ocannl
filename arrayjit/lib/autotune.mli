@@ -3047,11 +3047,18 @@ val tune_deferred :
 
 val lineage_identity :
   static_indices:Ir.Indexing.static_symbol list -> Ir.Low_level.optimized -> string
-(** gh-ocannl-1421: a lowering's lineage-independent identity, its canonical structural digest (no
-    process-local ids). {!tune} compares the caller's and the timing context's lowerings, taken
-    together so they see the same tensor-node value bounds -- a lowering taken after a compile has
-    settled an index tensor's bounds folds a gather guard an earlier one kept -- and refuses on a
-    difference ({!Lineage_refused}). [Train.placement_problem] keys on the same pair. *)
+(** gh-ocannl-1421: what a lowering of the routine in one lineage must share with one in another for
+    a schedule tuned on the first to apply to the second: its canonical structural digest (the code,
+    arithmetic included) and the actual tensor nodes it reads and writes (the canonical form
+    alpha-renames nodes). Process-local, by node ids: {!tune} compares the caller's and the timing
+    context's lowerings, taken together so they see the same tensor-node value bounds -- a lowering
+    taken after a compile has settled an index tensor's bounds folds a gather guard an earlier one
+    kept -- and refuses on a difference ({!Lineage_refused}). *)
+
+val lineage_accesses : Ir.Low_level.optimized -> Ir.Tnode.t -> string
+(** How the lowering's code accesses the node: ["r"], ["w"], ["rw"], or ["-"] for not at all. Stable
+    under the bounds drift, and per node, so [Train.placement_problem] tags each node with it inside
+    its canonically numbered (process-independent) key. *)
 
 val compile_deferred : deferred -> Context.t * Context.routine
 (** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]

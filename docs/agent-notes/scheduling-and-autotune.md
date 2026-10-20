@@ -2051,18 +2051,21 @@ files.
   on cc, an unclassified `Failure` on Metal) and a fissioned one raised
   `promote_local_to_device: … is virtual`, fatal under strict classification. Before the cache and
   the search, `tune` lowers the routine analysis-only (`Context.lowered_for_decisions`) in BOTH the
-  caller's and the timing context and compares their `Autotune.lineage_identity` (the canonical
-  structural digest); a mismatch reports `Lineage_refused`, searches nothing, warns on stderr
-  unconditionally and ships the untuned default at `best_ms = infinity`, and a lowering that fails
-  is a pre-search failure. Together, because lowering is stateful in compile order: the base
+  caller's and the timing context and compares their `Autotune.lineage_identity`: the canonical
+  structural digest AND the actual nodes read and written (the canonical form alpha-renames nodes,
+  so `u := x` and `u := y` would otherwise match; an access set alone misses `x + y` against
+  `x - y` -- review rounds 5-6). A mismatch reports `Lineage_refused`, searches nothing, warns on
+  stderr unconditionally and ships the untuned default at `best_ms = infinity`; a lowering that
+  fails is a pre-search failure. Together, because lowering is stateful in compile order: the base
   compile settles an index tensor's value bounds, so a lowering taken after it folds a gather guard
   the base kept -- comparing the base itself with the caller's lowering refused every arm A of
-  `bench_gpt`'s `gpt2_mini_train` (cc, CUDA, HIP). Not an access set either: two inherited
-  computations of a node over the same operands (`x + y`, `x - y`) access alike (review round 5).
-  Up front, not at the winner compile: a refusal there left the arm ranked, and its decision
-  recorded, by the crown it never shipped. `Train.placement_evidence_clean` lets such an arm stand
-  beside a recording, since `Train.placement_problem` keys on both identities (canonical, so the
-  key stays process-independent). No compile-time backstop: it would compare a post-timing
+  `bench_gpt`'s `gpt2_mini_train` (cc, CUDA, HIP). Up front, not at the winner compile: a refusal
+  there left the arm ranked, and its decision recorded, by the crown it never shipped.
+  `Train.placement_evidence_clean` lets such an arm stand beside a recording;
+  `Train.placement_problem` tags each node with both lineages' `Autotune.lineage_accesses`
+  (canonically numbered, and drift-stable, since the key is taken before any compile settles
+  bounds) -- coarser than the refusal, so two lineage pairs differing only in inherited arithmetic
+  share a key (a perf-only residual). No compile-time backstop: it would compare a post-timing
   lowering, where drift is the rule. It is conservative: a timing
   lineage that inlines a computation the caller holds materialized (`flip_twins`' inheriting
   lineage) runs fine but is refused too. `placement_store` run 6 ranks fissioned candidates first
