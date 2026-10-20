@@ -137,6 +137,8 @@ let refusing_claims =
     "p_all";
     "p_all2";
     "pf_all2";
+    "p_close";
+    "pf_close";
     "p_none";
     "p_alli";
     "p_exists";
@@ -146,6 +148,7 @@ let refusing_claims =
     "claimf";
     "pass_fail";
     "pass_fail_all2";
+    "pass_fail_close";
     "gated";
     "gated_all";
     "gated_alli";

@@ -28,7 +28,13 @@
 
    `Verdict.gated` (gh-ocannl-997) rides the same harness for the same second property, one gate
    over: skipped or evaluated, a passing gated claim prints `p`'s line, which is the whole reason it
-   exists. *)
+   exists.
+
+   `p_close` (gh-ocannl-1224) is `p_all2` specialized to float readbacks under a tolerance, and
+   rides it for all three properties, plus a fourth: what a VALUE failure adds on stderr -- the
+   differing-cell count, the first and the worst cell with both values, and the reference's
+   magnitude -- while its stdout stays `p`'s bare `false` line. `p_all2`'s own value failure adds a
+   count and a first index there, which is all a predicate over an unknown type can name. *)
 
 open Base
 open Verdict.Claims
@@ -87,6 +93,17 @@ let () =
       Verdict.p_all2 ~min:3 "all three cells match the reference" got want ~f:Float.equal;
       pf_all2 "computed %s matches the reference cell for cell" "readback" got want ~f:Float.equal;
       pass_fail_all2 "the PASS/FAIL readback matches the reference" got want ~f:Float.equal;
+      p_close "the readback is within an absolute tolerance of the reference" got
+        [| 1.25; 2.0; 2.75 |] ~tol:(fun _ -> 0.25);
+      p_close "the readback is within a relative tolerance of the reference" [| 100.; 2.0 |]
+        [| 101.; 2.0 |] ~tol:(fun w -> 0.01 *. Float.abs w);
+      p_close "a zero tolerance admits exactly the equal cells, infinities included"
+        [| 1.0; Float.infinity; Float.neg_infinity |] [| 1.0; Float.infinity; Float.neg_infinity |]
+        ~tol:(fun _ -> 0.);
+      pf_close "computed %s is within tolerance of the reference" "readback" got want ~tol:(fun _ ->
+          0.);
+      pass_fail_close "the PASS/FAIL readback is within tolerance of the reference" got want
+        ~tol:(fun _ -> 0.);
       p_pairwise_distinct "the three source values are pairwise distinct" distinct ~equal:Int.equal
         ~to_string:Int.to_string
   (* === Shape: what a non-empty collection prints, compared against [p]'s own line. === *)
@@ -96,6 +113,21 @@ let () =
   | "shape_pf_all2" -> Verdict.pf_all2 "%s" "the claim" got want ~f:Float.equal
   | "shape_pass_fail" -> Verdict.pass_fail "the claim" true
   | "shape_pass_fail_all2" -> Verdict.pass_fail_all2 "the claim" got want ~f:Float.equal
+  | "shape_p_close" -> p_close "the claim" got want ~tol:(fun _ -> 0.)
+  | "shape_pf_close" -> pf_close "%s" "the claim" got want ~tol:(fun _ -> 0.)
+  | "shape_pass_fail_close" -> pass_fail_close "the claim" got want ~tol:(fun _ -> 0.)
+  (* gh-ocannl-1224: two of four cells differ beyond 0.25; the second-differing one, at index 3, is
+     the furthest from its reference. *)
+  | "shape_p_close_false" ->
+      p_close ~what_ran:"seed 3" "the claim" [| 1.0; 2.5; 3.0; 4.0 |] [| 1.0; 2.0; 3.0; 8.0 |]
+        ~tol:(fun _ -> 0.25)
+  | "shape_pass_fail_close_false" ->
+      pass_fail_close "the claim" [| 1.0; 2.5; 3.0; 4.0 |] [| 1.0; 2.0; 3.0; 8.0 |] ~tol:(fun _ ->
+          0.25)
+  (* A NaN outranks a finite distance however large, and the relative tolerance is evaluated at the
+     worst cell's reference. *)
+  | "close_nan_worst" ->
+      p_close "the claim" [| 1.0; Float.nan; 10.0 |] [| 1.0; 2.0; 3.0 |] ~tol:(fun w -> 0.5 *. w)
   | "shape_p_pairwise_distinct" ->
       p_pairwise_distinct "the claim" distinct ~equal:Int.equal ~to_string:Int.to_string
   | "shape_p_false" -> Verdict.p "the claim" false
@@ -179,6 +211,17 @@ let () =
         ~detail:(fun () -> "got []")
   | "pass_fail_all2_length" ->
       Verdict.pass_fail_all2 "the readback matches the reference" got [| 1.0; 2.0 |] ~f:Float.equal
+  | "close_empty" ->
+      p_close "the readback is within tolerance of the reference" [||] [||] ~tol:(fun _ -> 1.)
+  | "close_length" ->
+      p_close "the readback is within tolerance of the reference" got [| 1.0; 2.0 |] ~tol:(fun _ ->
+          1.)
+  | "close_short" ->
+      p_close ~min:3 "all three cells are within tolerance" [| 1.0 |] [| 1.0 |] ~tol:(fun _ -> 1.)
+  | "pf_close_empty" ->
+      pf_close "computed %s is within tolerance" "readback" [||] [||] ~tol:(fun _ -> 1.)
+  | "pass_fail_close_length" ->
+      pass_fail_close "the readback is within tolerance" got [| 1.0; 2.0 |] ~tol:(fun _ -> 1.)
   | "pairwise_empty" ->
       p_pairwise_distinct "the source values are pairwise distinct" [] ~equal:Int.equal
         ~to_string:Int.to_string
@@ -245,6 +288,19 @@ let () =
       refused "a PASS/FAIL parity claim reports a length mismatch without raising"
         ~line:"the readback matches the reference: FAIL (length 3 vs 2)"
         (run_child "pass_fail_all2_length");
+      refused "a float-parity claim over two empty readbacks fails rather than passing vacuously"
+        ~line:"the readback is within tolerance of the reference (empty): false"
+        (run_child "close_empty");
+      refused "a float-parity claim reports a length mismatch as a failed claim naming both lengths"
+        ~line:"the readback is within tolerance of the reference (length 3 vs 2): false"
+        (run_child "close_length");
+      refused "a float-parity pair below its stated floor fails, naming the shortfall"
+        ~line:"all three cells are within tolerance (only 1 of 3): false" (run_child "close_short");
+      refused "a computed-label float-parity claim refuses two empty readbacks"
+        ~line:"computed readback is within tolerance (empty): false" (run_child "pf_close_empty");
+      refused "a PASS/FAIL float-parity claim reports a length mismatch without raising"
+        ~line:"the readback is within tolerance: FAIL (length 3 vs 2)"
+        (run_child "pass_fail_close_length");
       refused "pairwise distinctness refuses an empty source population"
         ~line:"the source values are pairwise distinct (empty): false" (run_child "pairwise_empty");
       refused "pairwise distinctness requires at least two source values"
@@ -300,6 +356,14 @@ let () =
       let _, pass_fail_all2_true, _ = run_child "shape_pass_fail_all2" in
       Verdict.p "a satisfied PASS/FAIL parity claim prints what `Verdict.pass_fail` prints"
         (String.equal pass_fail_true pass_fail_all2_true);
+      let _, close_true, _ = run_child "shape_p_close" in
+      let _, pf_close_true, _ = run_child "shape_pf_close" in
+      let _, pass_fail_close_true, _ = run_child "shape_pass_fail_close" in
+      Verdict.p
+        "a satisfied float-parity claim prints what `Verdict.p` prints, in either label form"
+        (String.equal plain_true close_true && String.equal plain_true pf_close_true);
+      Verdict.p "a satisfied PASS/FAIL float-parity claim prints what `Verdict.pass_fail` prints"
+        (String.equal pass_fail_true pass_fail_close_true);
       let _, pairwise_true, _ = run_child "shape_p_pairwise_distinct" in
       Verdict.p "a satisfied pairwise-distinct claim prints what `Verdict.p` prints"
         (String.equal plain_true pairwise_true);
@@ -309,9 +373,45 @@ let () =
         (String.equal plain_false all_false && String.equal plain_false "the claim: false\n");
       (* The elementwise refutation — the failure the sweep must keep catching — still prints the
          bare line: the `(…)` detail is reserved for what the claim could not express. *)
-      let _, all2_false, _ = run_child "shape_p_all2_false" in
+      let all2_status, all2_false, all2_stderr = run_child "shape_p_all2_false" in
       Verdict.p "a genuinely differing cell refutes the claim and prints what `Verdict.p` prints"
         (String.equal plain_false all2_false);
+      (* gh-ocannl-1224: the count and position go to stderr, outside the golden, and the run still
+         exits 1 on the claim. *)
+      Verdict.p
+        "a parity claim's value failure names its failing-cell count and first cell on stderr"
+        (Poly.equal all2_status (Unix.WEXITED 1)
+        && String.is_substring all2_stderr
+             ~substring:
+               "the claim: 1 of 3 cells fail the predicate; first at 1 (not part of the golden)\n");
+      let close_status, close_false, close_stderr = run_child "shape_p_close_false" in
+      Verdict.p "a float-parity value failure prints what `Verdict.p` prints on stdout"
+        (Poly.equal close_status (Unix.WEXITED 1) && String.equal plain_false close_false);
+      Verdict.p
+        "a float-parity value failure names on stderr the differing count, the first and the worst \
+         cell with both values and the tolerance there, the reference's magnitude and what ran"
+        (String.is_substring close_stderr
+           ~substring:
+             "the claim (seed 3): 2 of 4 cells differ beyond tolerance; first at 1, worst at 3: \
+              got 4 vs want 8 (|diff| 4, tolerance 0.25 there); max |want| 8 (not part of the \
+              golden)\n");
+      Verdict.p_none
+        "the detail line is not a `FAIL: ` row, so a mutation run counts only the claim"
+        (String.split_lines close_stderr) ~f:(fun line ->
+          String.is_prefix line ~prefix:"FAIL: "
+          && String.is_substring line ~substring:"differ beyond tolerance");
+      let _, pass_fail_close_false, pass_fail_close_stderr =
+        run_child "shape_pass_fail_close_false"
+      in
+      Verdict.p
+        "a PASS/FAIL float-parity value failure keeps the bare FAIL row and the stderr detail"
+        (String.equal pass_fail_close_false "the claim: FAIL\n"
+        && String.is_substring pass_fail_close_stderr
+             ~substring:"the claim: 2 of 4 cells differ beyond tolerance; first at 1, worst at 3:");
+      let _, _, nan_stderr = run_child "close_nan_worst" in
+      Verdict.p "a NaN cell ranks as the worst, ahead of any finite distance"
+        (String.is_substring nan_stderr
+           ~substring:"the claim: 2 of 3 cells differ beyond tolerance; first at 1, worst at 1:");
       (* At the default floor there is no shortfall to name, so an unwitnessed existential prints
          the bare line too -- the `(…)` detail is reserved for what the claim could not express. *)
       let _, plain_none, _ = run_child "exists_none" in

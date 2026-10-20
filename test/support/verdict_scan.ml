@@ -331,7 +331,7 @@ type dialect_census = {
 (** The site counts are what a blind walk cannot produce, as {!scan}'s literal counts are for the
     claim-shape scan: they let the consuming test tell "no pairing" from "nothing read". *)
 
-let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
+let pass_fail_callees = [ "pass_fail"; "pass_fail_all2"; "pass_fail_close" ]
 let skipped_callees = [ "skipped" ]
 
 (** Whose a claim callee is, as {!Verdict_callee} resolves it: [Verdict]'s, [Ambiguous] -- reaching
@@ -2609,8 +2609,19 @@ let folded_slots =
   ]
 
 (** The members with no boolean of the claim's own to read: a message, a skip, a row boundary, an
-    emptiness census, a distinctness check. *)
-let folded_unread_members = [ "fail"; "skipped"; "case"; "p_empty"; "p_pairwise_distinct" ]
+    emptiness census, a distinctness check, and the float-parity forms, whose [~tol] answers a
+    distance rather than a verdict. *)
+let folded_unread_members =
+  [
+    "fail";
+    "skipped";
+    "case";
+    "p_empty";
+    "p_pairwise_distinct";
+    "p_close";
+    "pf_close";
+    "pass_fail_close";
+  ]
 
 let folded_gate_census content =
   let ast = Read.structure_of content in

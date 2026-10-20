@@ -2000,6 +2000,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   combinator, `p_pairwise_distinct name xs ~equal ~to_string`: it refuses fewer than two source
   values, since distinctness over one element is as vacuous as `for_all` over none, and reports the
   first collision by `to_string` on stderr.
+- A float readback compared under a tolerance goes through `p_close name got want ~tol` (and
+  `pf_close`, `pass_fail_close`; gh-ocannl-1224), `tol` answering the admitted difference for a
+  reference value (`fun _ -> 1e-3`, `fun w -> 1e-3 +. (1e-5 *. Float.abs w)`), never `p_all2` with
+  a hand-rolled `Float.(abs (a - b) < …)` predicate. Its value failure keeps `p`'s bare `false`
+  line and adds, on stderr only, the differing-cell count, the first and worst cell with both
+  values and the tolerance there, max |want| and `?what_ran` -- what gh-ocannl-1217 needed a
+  remote reproduction round to learn (5 ulps at magnitude 2e5 in every seed: reference rounding,
+  not a seed). `p_all2`'s own value failure adds a count and first index there; neither detail
+  line carries the `FAIL: ` prefix `tools/mutation-run.sh` counts.
 - Guarantees that fire only on an empty collection are never exercised by a green suite, so
   `verdict_quantified` stages them: the satisfied forms run directly, and each refusal runs as a
   CHILD process whose streams the parent captures. Capturing is not tidiness — a refusal prints
