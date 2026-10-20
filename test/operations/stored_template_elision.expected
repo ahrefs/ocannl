@@ -1,0 +1,27 @@
+merge: routine A defers v: true
+merge: the stored template no longer reads the merge buffer: true
+merge: consuming v in a later routine is legal: true
+merge: routine B declares no merge buffer: true
+merge: executed values are the selected arm's: true
+merge: the deferred reading agrees with the materialized one: true
+provenance: routine A defers v: true
+provenance: the stored template no longer reads the dead arm: true
+provenance: extra keeps its raw guards-taken verdict (not spliced, not an input): true
+provenance: the live arm's leaf is a spliced input: true
+provenance: the read after the taken guard sees the write: true
+provenance: executed values are the selected arm's: true
+provenance: the deferred reading agrees with the materialized one: true
+gate: routine A defers v: true
+gate: the stored template no longer reads behind the shut gate: true
+gate: the gated leaf is not an input of routine B: true
+gate: executed values are the live operand's: true
+gate: the deferred reading agrees with the materialized one: true
+kept loop: routine A defers v: true
+kept loop: the reduction extent folded the guard at store time: true
+kept loop: consuming v in a later routine is legal: true
+kept loop: executed values are the reduction's: true
+kept loop: the deferred reading agrees with the materialized one: true
+live code: routine A defers pctr: true
+live code: a uint4x32 template keeps its embedded index: true
+live code: routine A defers fctr: true
+live code: a float template keeps its embedded index: true

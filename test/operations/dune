@@ -6914,6 +6914,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name stored_template_elision)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules stored_template_elision)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (executable
  ; cc-vector-width: independent -- claims are about arm selection, checked against the run's own
  ; measurements.
