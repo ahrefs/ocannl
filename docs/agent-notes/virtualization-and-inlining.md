@@ -441,8 +441,12 @@ files.
   every ordinary position. Decisions must hold wherever the template replays: the loops of the write
   index's symbols do not extend the interval environment (the inliner substitutes the read site's
   index, which need not lie in the producer's extent; a kept reduction loop keeps its extent, so it
-  decides), and no bounds candidate is consulted (the decision would settle it at store time,
-  refusing a later writer, for a template that may never be consumed). The float `0 * x` the issue
+  decides), no bounds candidate is consulted (the decision would settle it at store time,
+  refusing a later writer, for a template that may never be consumed), and a test is decided only
+  if it comes out the same at every precision it may be evaluated at — its slot's precision as the
+  renderer reads it (a homogeneous operator's result precision, a `Where` condition's own
+  annotation) through a `compute_prec` unknown at store time, so every float precision for a float
+  slot (review round 1: `2049 = 2048` is false in single and true in half). The float `0 * x` the issue
   also named is not dead under exact IEEE (`0 * inf` is NaN); under `fp_finite_math`, `Fp_algebra`
   folds it on the raw lowering, ahead of storage. Pinned, with executed parity against the
   materialized reading, by `test/operations/stored_template_elision.ml`.

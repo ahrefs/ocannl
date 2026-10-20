@@ -157,6 +157,28 @@ let case_gate () =
   p_all2 "gate: the deferred reading agrees with the materialized one" (List.hd_exn got)
     (List.hd_exn got_m) ~f:Float.equal
 
+(* Review round 1: a gate is decided at every precision it may be evaluated at -- a homogeneous
+   operator evaluates its operands at its result precision, through the backend's [compute_prec].
+   [2049] rounds to [2048] in half but not in single, so a half-valued [(2049 = 2048) && gx] is open
+   where half arithmetic is native and shut where it is widened; its second operand must stay
+   (deciding at the gate's own single annotation would elide it). *)
+let case_precision_dependent_gate () =
+  let gx = mk "pgx" in
+  materialize gx;
+  let v = (node_factory ~prec:Ir.Ops.half ~first_id:6400 ~dims:[| dim |] ()) "pgv" in
+  let ctx = LL.empty_optimize_ctx () in
+  let llc =
+    let s = sym () in
+    loop_n s dim
+      (set v
+         [| iter s |]
+         (binop Ir.Ops.And (binop Ir.Ops.Cmpeq (c 2049.) (c 2048.)) (get gx [| iter s |])))
+  in
+  let o = optimize_in ctx ~name:"sts_pgate_a" llc in
+  p "precision-dependent gate: routine A defers v" (known_virtual o v);
+  p "precision-dependent gate: the operand behind it is kept"
+    (Option.equal Int.equal (template_count ctx v ~f:(read_of gx)) (Some 1))
+
 let case_provenance () =
   let build () =
     let gflag = mk ~dims:[| 1 |] "gflag" and extra = mk "extra" and ell = mk "pell" in
@@ -295,5 +317,6 @@ let () =
   case_merge ();
   case_provenance ();
   case_gate ();
+  case_precision_dependent_gate ();
   case_kept_loop ();
   case_live_code ()

@@ -16,6 +16,8 @@ gate: the stored template no longer reads behind the shut gate: true
 gate: the gated leaf is not an input of routine B: true
 gate: executed values are the live operand's: true
 gate: the deferred reading agrees with the materialized one: true
+precision-dependent gate: routine A defers v: true
+precision-dependent gate: the operand behind it is kept: true
 kept loop: routine A defers v: true
 kept loop: the reduction extent folded the guard at store time: true
 kept loop: consuming v in a later routine is legal: true

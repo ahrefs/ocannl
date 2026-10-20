@@ -4277,16 +4277,29 @@ let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
    read site's index for them and it need not lie in the producer's extent (a kept loop keeps its
    extent, freshened); and no bounds candidate is consulted ([node_bounds = false]). *)
 let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool) (llc : t) : t =
-  let decided ~ienv ((c, prec) : scalar_arg) =
-    let r = interval_of ~ienv ~prec c in
-    if Interval.definitely_true r.ival then Some true
-    else if Interval.definitely_false r.ival then Some false
-    else None
+  (* Review round 1: a test is decided only if it comes out the same at every precision it may be
+     EVALUATED at. That is the precision of its slot as the renderer reads it -- a homogeneous
+     operator's operands at the operator's result precision, a [Where] condition at its own
+     annotation (C_syntax.pp_scalar_op) -- mapped through the backend's [compute_prec], which may
+     widen a float, unknown at store time; so a float slot asks every float precision, an integer
+     slot only itself. A half gate of [1e-8] is shut where a single one is open. *)
+  let candidates prec = if Ops.is_float prec then Ops.float_precs else [ prec ] in
+  let decided ~ienv ~prec (c : scalar_t) =
+    let verdict q =
+      let r = interval_of ~ienv ~prec:q c in
+      if Interval.definitely_true r.ival then Some true
+      else if Interval.definitely_false r.ival then Some false
+      else None
+    in
+    match List.map (candidates prec) ~f:verdict with
+    | Some v :: rest when List.for_all rest ~f:(Option.equal Bool.equal (Some v)) -> Some v
+    | _ -> None
   in
   let elided ((_, prec) : scalar_arg) : scalar_arg = (Constant 0., prec) in
   let extend ienv index ~from_ ~to_ =
     if opaque index then ienv else ienv_extend ienv index ~from_ ~to_
   in
+  let tn_prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
   let rec stmt ~ienv (c : t) : t =
     match c with
     | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
@@ -4298,38 +4311,45 @@ let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool
         Scan_loop
           {
             sc with
-            carried = List.map carried ~f:(fun cr -> { cr with init = scalar ~ienv cr.init });
+            carried =
+              List.map carried ~f:(fun cr ->
+                  { cr with init = scalar ~ienv ~prec:(tn_prec cr.prev.tn) cr.init });
             body = stmt ~ienv:(extend ienv index ~from_ ~to_) body;
           }
-    | Set ({ llsc; _ } as set) -> Set { set with llsc = scalar ~ienv llsc }
-    | Set_dynamic ({ dyn_value; llsc; _ } as set) ->
-        Set_dynamic { set with dyn_value = arg ~ienv dyn_value; llsc = scalar ~ienv llsc }
-    | Set_from_vec ({ arg = a; _ } as set) -> Set_from_vec { set with arg = arg ~ienv a }
-    | Set_local (id, v) -> Set_local (id, scalar ~ienv v)
-    | If { cond; body } -> If { cond = arg ~ienv cond; body = stmt ~ienv body }
+    | Set ({ tn; llsc; _ } as set) -> Set { set with llsc = scalar ~ienv ~prec:(tn_prec tn) llsc }
+    | Set_dynamic ({ tn; dyn_value; llsc; _ } as set) ->
+        Set_dynamic
+          { set with dyn_value = own ~ienv dyn_value; llsc = scalar ~ienv ~prec:(tn_prec tn) llsc }
+    | Set_from_vec ({ arg = a; _ } as set) -> Set_from_vec { set with arg = own ~ienv a }
+    | Set_local (id, v) -> Set_local (id, scalar ~ienv ~prec:(tn_prec id.tn) v)
+    | If { cond; body } -> If { cond = own ~ienv cond; body = stmt ~ienv body }
     | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = stmt ~ienv fallback }
-  and arg ~ienv ((sc, prec) : scalar_arg) : scalar_arg = (scalar ~ienv sc, prec)
-  and scalar ~ienv (sc : scalar_t) : scalar_t =
+  (* An operand evaluated at its own annotation (a heterogeneous slot). *)
+  and own ~ienv ((sc, ann) : scalar_arg) : scalar_arg = (scalar ~ienv ~prec:ann sc, ann)
+  (* An operand evaluated at the enclosing result precision (a homogeneous slot). *)
+  and at ~ienv ~prec ((sc, ann) : scalar_arg) : scalar_arg = (scalar ~ienv ~prec sc, ann)
+  and scalar ~ienv ~prec (sc : scalar_t) : scalar_t =
     match sc with
     | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_local _ | Get_merge_buffer _ -> sc
-    | Get_dynamic ({ dyn_value; _ } as g) -> Get_dynamic { g with dyn_value = arg ~ienv dyn_value }
+    | Get_dynamic ({ dyn_value; _ } as g) -> Get_dynamic { g with dyn_value = own ~ienv dyn_value }
     | Local_scope ({ body; _ } as scope) -> Local_scope { scope with body = stmt ~ienv body }
-    | Ternop (Ops.Where, cond, a, b) -> (
-        match decided ~ienv cond with
-        | Some true -> Ternop (Ops.Where, arg ~ienv cond, arg ~ienv a, elided b)
-        | Some false -> Ternop (Ops.Where, arg ~ienv cond, elided a, arg ~ienv b)
-        | None -> Ternop (Ops.Where, arg ~ienv cond, arg ~ienv a, arg ~ienv b))
-    | Ternop (op, a, b, d) -> Ternop (op, arg ~ienv a, arg ~ienv b, arg ~ienv d)
-    | Binop (op, ((_, gprec) as g), x) ->
+    | Ternop (Ops.Where, ((cnd, cprec) as cond), a, b) -> (
+        match decided ~ienv ~prec:cprec cnd with
+        | Some true -> Ternop (Ops.Where, own ~ienv cond, at ~ienv ~prec a, elided b)
+        | Some false -> Ternop (Ops.Where, own ~ienv cond, elided a, at ~ienv ~prec b)
+        | None -> Ternop (Ops.Where, own ~ienv cond, at ~ienv ~prec a, at ~ienv ~prec b))
+    | Ternop (((Ops.FMA | Ops.Mul3) as op), a, b, d) ->
+        Ternop (op, at ~ienv ~prec a, at ~ienv ~prec b, at ~ienv ~prec d)
+    | Binop (op, ((g, _) as gate), x) when Ops.is_homogeneous_prec_binop op ->
         (* The renderings: [g && x], [g || x], [(g > 0.0 ? x : 0.0)]. [Satur01_gate]'s rendering
            tests [floor] of its gate, not the interval this would decide, so it is left alone. *)
         let shut =
           match op with
-          | Ops.And -> Option.equal Bool.equal (decided ~ienv g) (Some false)
-          | Ops.Or -> Option.equal Bool.equal (decided ~ienv g) (Some true)
+          | Ops.And -> Option.equal Bool.equal (decided ~ienv ~prec g) (Some false)
+          | Ops.Or -> Option.equal Bool.equal (decided ~ienv ~prec g) (Some true)
           | Ops.Relu_gate ->
               Option.equal Bool.equal
-                (decided ~ienv (Binop (Ops.Cmplt, (Constant 0., gprec), g), gprec))
+                (decided ~ienv ~prec (Binop (Ops.Cmplt, (Constant 0., prec), gate)))
                 (Some false)
           | Ops.Satur01_gate | Ops.Arg1 | Ops.Arg2 | Ops.Add | Ops.Sub | Ops.Mul | Ops.Div
           | Ops.ToPowOf | Ops.Max | Ops.Min | Ops.Mod | Ops.Cmplt | Ops.Cmple | Ops.Cmpeq
@@ -4337,8 +4357,10 @@ let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool
           | Ops.Uint4x32_to_prec_uniform_lane ->
               false
         in
-        Binop (op, arg ~ienv g, if shut then elided x else arg ~ienv x)
-    | Unop (op, a) -> Unop (op, arg ~ienv a)
+        Binop (op, at ~ienv ~prec gate, if shut then elided x else at ~ienv ~prec x)
+    | Binop (op, a, b) -> Binop (op, own ~ienv a, own ~ienv b)
+    | Unop (op, a) when Ops.is_homogeneous_prec_unop op -> Unop (op, at ~ienv ~prec a)
+    | Unop (op, a) -> Unop (op, own ~ienv a)
   in
   stmt ~ienv:(ienv_of_static_indices ~node_bounds:false static_indices) llc
 
