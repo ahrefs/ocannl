@@ -1,0 +1,7 @@
+the rule seeds the matmul with no workgroup-memory limit: true
+the stand-in granule rounds the seeded tiles above their exact sizes: true
+the gate admits the seeded schedule at a limit of its estimate, and refuses it one byte below, requesting the estimate: true
+the rule handed the stand-in seeds the geometry at a limit of its gate estimate: true
+the rule handed the stand-in refutes it one byte below, where a rule handed no capabilities still seeds it: true
+the seeded plan handed the stand-in seeds the geometry at the gate estimate and not one byte below, where a plan handed no capabilities does: true
+the plan's decision rule handed the stand-in decides the geometry at the gate estimate and not one byte below, where a rule handed no capabilities does: true

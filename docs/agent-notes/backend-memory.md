@@ -272,7 +272,12 @@ files.
   `codegen_capabilities.workgroup_allocation_alignment` (gh-ocannl-1330), through
   `Schedule.kernel_workgroup_bytes` — which the sketch families' workgroup-memory refutations and
   filters call too, with the compiling context's capabilities (`?capabilities`; without them they
-  charge exact tile sizes and no scratch, a weaker floor). With the gate exact, the one route to
+  charge exact tile sizes and no scratch, a weaker floor). So does the untuned default's
+  scalar-blocktile seeding rule (`Autotune.seeded_params`, through `seeded_plan`, its decision
+  rule and every context-holding caller); its tiles are multiples of 8 elements, so Metal's
+  granule changes none of its verdicts today, and
+  `test/operations/seeded_params_capabilities.ml` pins the threading with a coarser stand-in
+  granule (seeded at the gate's estimate, refuted one byte below). With the gate exact, the one route to
   the link-time refusal is the test seam `Schedule.with_gate_capabilities`. Guards:
   `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; plus one
   converted scope they are refused at `Hardware_limits`) and
