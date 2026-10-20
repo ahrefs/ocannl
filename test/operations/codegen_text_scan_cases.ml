@@ -813,6 +813,116 @@ let () = p "ordinary" (String.is_substring src ~substring:"cuda")|ocaml},
 let src = store backend_name
 let () = p "ordinary" (String.is_substring src ~substring:"cuda")|ocaml},
       "+partial(opaque, mutation)" );
+    (* gh-ocannl-1237: a full application substitutes every argument, and used to discharge the
+       callee's boundaries with them -- including the [Mutation] of an argument the callee stores
+       into a cell and reads back. The returned [^ y] keeps a parameter in the result, which is what
+       sent the write boundary down the [Unresolved] arm that forgot the stored argument. *)
+    ( "a stored argument keeps its mutation boundary through a full application",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "w") "") ~substring:"m5")|ocaml},
+      "+partial(mutation)" );
+    ( "a stored argument keeps its mutation boundary through a named result",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let src = store (Generated.read "w") ""
+let () = p "marker" (String.is_substring src ~substring:"m5")|ocaml},
+      "+partial(mutation)" );
+    ( "a stored source beside a returned one keeps the direct pin and the mutation",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "a") (Generated.read "w")) ~substring:"m6")|ocaml},
+      {|"m6" +partial(mutation)|} );
+    (* The boundary is the stored TEXT's, not the write's: ordinary text through the cell carries
+       nothing a site could pin, so the returned source's pin stays whole. *)
+    ( "an ordinary stored argument does not mark a direct pin partial",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let () = p "marker" (String.is_substring (store backend_name (Generated.read "w")) ~substring:"m7")|ocaml},
+      {|"m7"|} );
+    (* Stored AND returned: the direct flow still names the text, so the pin stays beside the
+       boundary rather than vanishing into an uncorrelated cell (the live census's [reduction_forms]
+       counts subscripts into a ref while returning the text it scanned). *)
+    ( "an argument both stored and returned keeps its pin beside the mutation",
+      {ocaml|let store x = let n = ref 0 in n := String.length x; x
+let () = p "marker" (String.is_substring (store (Generated.read "w")) ~substring:"m9")|ocaml},
+      {|"m9" +partial(mutation)|} );
+    (* A wrapper that hands its own parameter to a storing callee stores it too (review round 1). *)
+    ( "a wrapper forwarding a stored argument keeps the mutation boundary",
+      {ocaml|let store x y = let r = ref "" in r := x; !r ^ y
+let wrapper z = store z ""
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m10")|ocaml},
+      "+partial(mutation)" );
+    ( "a wrapper forwarding a stored and returned argument keeps the mutation boundary",
+      {ocaml|let store x = let n = ref 0 in n := String.length x; x
+let wrapper z = store z
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m11")|ocaml},
+      {|"m11" +partial(mutation)|} );
+    (* A storing helper called for its effect alone writes what it stores (review round 3). *)
+    ( "a discarded call to a storing helper is a write of its argument",
+      {ocaml|let cell = ref ""
+let store x = cell := x; ()
+let wrapper z = store z; !cell
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m12")|ocaml},
+      "+partial(mutation)" );
+    ( "a discarded call storing generated text directly is a write of it",
+      {ocaml|let cell = ref ""
+let store x = cell := x
+let src = (store (Generated.read "w"); !cell)
+let () = p "marker" (String.is_substring src ~substring:"m13")|ocaml},
+      "+partial(mutation)" );
+    ( "a helper whose body is a field write stores its argument",
+      {ocaml|let cell = { value = "" }
+let store x = cell.value <- x
+let wrapper z = store z; cell.value
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m14")|ocaml},
+      "+partial(mutation)" );
+    ( "a storing call computing a discarded field write's target is a write",
+      {ocaml|let cell = ref ""
+let box = { value = "" }
+let store x = cell := x; box
+let wrapper z = (store z).value <- ""; !cell
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m15")|ocaml},
+      "+partial(mutation)" );
+    ( "a storing call computing a field write's target, as a helper's body, is a write",
+      {ocaml|let cell = ref ""
+let box = { value = "" }
+let store x = cell := x; box
+let wrapper z = (store z).value <- ""
+let outer z = wrapper z; !cell
+let () = p "marker" (String.is_substring (outer (Generated.read "w")) ~substring:"m16")|ocaml},
+      "+partial(mutation)" );
+    ( "a parameter written under a loop is stored",
+      {ocaml|let cell = ref ""
+let store x = for _ = 1 to 1 do cell := x done
+let wrapper z = store z; !cell
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m17")|ocaml},
+      "+partial(mutation)" );
+    (* gh-ocannl-1237: the [Stdlib]-qualified spellings of the cell operators are the same cells. *)
+    ( "Stdlib-qualified reference operators are a cell write and read",
+      {ocaml|let store x = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"qualified mutation marker")|ocaml},
+      "+partial(mutation)" );
+    ( "a Stdlib-qualified stored argument keeps its boundary through a full application",
+      {ocaml|let store x y = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "w") "") ~substring:"m5")|ocaml},
+      "+partial(mutation)" );
+    ( "a Stdlib-qualified dereference of an initialised ref is a cell read",
+      {ocaml|let store x = let r = ref x in Stdlib.( ! ) r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"qualified read marker")|ocaml},
+      "+partial(mutation)" );
+    ( "an unqualified dereference of an initialised ref is a cell read",
+      {ocaml|let store x = let r = ref x in !r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"read marker")|ocaml},
+      "+partial(mutation)" );
+    ( "Stdlib.Array.get is a cell read",
+      {ocaml|let store x = let a = [| x |] in Stdlib.Array.get a 0
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"array read marker")|ocaml},
+      "+partial(mutation)" );
+    ( "Stdlib.Array.set is a cell write",
+      {ocaml|let store x y = let a = [| "" |] in Stdlib.Array.set a 0 x; a.(0) ^ y
+let () = p "marker" (String.is_substring (store (Generated.read "w") "") ~substring:"m8")|ocaml},
+      "+partial(mutation)" );
     ( "an independent generated result survives a preceding write boundary",
       {ocaml|let store x = let r = ref "" in r := x; Generated.read "internal"
 let src = store backend_name
@@ -1301,8 +1411,12 @@ let association_cases =
 let attempt_cases =
   let parse source () = ignore (Scan.rejections ~emitters ~path:"case.ml" ~contents:source) in
   [
-    ("a syntax error is the file's", parse "let =\n", "unparsed");
-    ("a lexical error is the file's", parse "let s = \"unterminated\n", "unparsed");
+    ( "a syntax error is the file's, with where the parser stopped",
+      parse "let =\n",
+      "unparsed at line 1, characters 4-5: Syntax error" );
+    ( "a lexical error is the file's, with where the lexer stopped",
+      parse "let s = \"unterminated\n",
+      "unparsed at line 1, characters 8-9: String literal not terminated" );
     ("a source that parses is scanned", parse "let x = 1\n", "scanned");
     ( "a scanner exception is the scanner's, with its text",
       (fun () ->
@@ -1312,7 +1426,7 @@ let attempt_cases =
 
 let render_attempt = function
   | Attempt.Scanned () -> "scanned"
-  | Attempt.Unparsed -> "unparsed"
+  | Attempt.Unparsed where -> "unparsed at " ^ where
   | Attempt.Raised exn -> "raised " ^ exn
 
 let render_association = function

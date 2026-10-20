@@ -366,4 +366,10 @@ files.
   or their history (gh-ocannl-1201): a selected interface or non-module target (only `.ml` targets
   are read), an `(include …)` or `(dynamic_include …)` stanza, and an `(:include …)` term or
   `%{read:…}`, `%{read-lines:…}` or `%{read-strings:…}` form in a module-owner or generator
-  stanza, whose external file's edits this reader would neither see nor attribute.
+  stanza, whose external file's edits this reader would neither see nor attribute. A pform is read
+  off the atom's source spelling (`Dune_stanza_scan.live_pforms`, gh-ocannl-1264), since sexplib
+  decodes `"\%{read:f}"` (dune's literal text) and `"\\%{read:f}"` (a live pform) to one atom.
+- A source in the window that does not parse refuses the report naming the file and the commit
+  (gh-ocannl-1264). Windows before 0.6.0 stop that way: `0.4.0..0.5.0` meets
+  `arrayjit/lib/backend_impl.ml` at `0f6feaf5b`, a first-parent commit that never compiled (a stray
+  `~` in a parameter list). Start the window after such a commit; older history is not read.

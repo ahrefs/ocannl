@@ -118,13 +118,24 @@ let require_sources ~fail sources =
     false)
   else true
 
-let references_or_refusal ~fail ~source contents =
-  match rename_references ~source contents with
-  | references -> references
-  | exception exn ->
+(* One source's references, its failures told apart (gh-ocannl-1292): a source that does not parse
+   is the source's to fix, and any other exception is this scan's own defect, which used to be
+   reported as a parse failure of a file that is fine. [scan] is the reader, a parameter so the
+   refusal control can plant the defect. *)
+let references_or_refusal ?(scan = rename_references) ~fail ~source contents =
+  match Test_utils.Scan_attempt.run (fun () -> scan ~source contents) with
+  | Scanned references -> references
+  | Unparsed where ->
       fail
         (Printf.sprintf "%s does not parse as OCaml, so this scan cannot vouch for it: %s" source
-           (Exn.to_string exn));
+           where);
+      []
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the rename scan raised %s on %s, which parses -- a defect in the scanner rather than \
+            in the source, so the source's rename references went uncounted"
+           exn source);
       []
 
 let refusal_control () =
@@ -173,9 +184,33 @@ let refusal_control () =
   direct_case "an empty OCaml source corpus reaches its refusal"
     ~format:"no OCaml sources among the arguments -- the rule's glob matches nothing" (fun fail ->
       ignore (require_sources ~fail [] : bool));
-  direct_case "an invalid OCaml source reaches the parse refusal"
-    ~format:"%s does not parse as OCaml, so this scan cannot vouch for it: %s" (fun fail ->
+  (* The two ways a source's read can fail, each reaching its own refusal and only that one
+     (gh-ocannl-1292): the observation is recorded only for the message the format names. *)
+  let routed_case label ~format ~fragment run =
+    let messages = ref [] in
+    run (fun message -> messages := message :: !messages);
+    let routed =
+      match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
+    in
+    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    Verdict.p label routed
+  in
+  routed_case "an invalid OCaml source reaches the parse refusal"
+    ~format:"%s does not parse as OCaml, so this scan cannot vouch for it: %s"
+    ~fragment:"bad.ml does not parse as OCaml" (fun fail ->
       ignore (references_or_refusal ~fail ~source:"bad.ml" "let =" : reference list));
+  routed_case
+    "a scanner exception on a source that parses reaches the scanner-defect refusal, not the parse \
+     one"
+    ~format:
+      "the rename scan raised %s on %s, which parses -- a defect in the scanner rather than in the \
+       source, so the source's rename references went uncounted"
+    ~fragment:"raised Invalid_argument(\"planted\") on good.ml, which parses" (fun fail ->
+      ignore
+        (references_or_refusal
+           ~scan:(fun ~source:_ _ -> invalid_arg "planted")
+           ~fail ~source:"good.ml" "let x = 1"
+          : reference list));
   Test_utils.Refusal_control_manifest.print source
 
 let () =

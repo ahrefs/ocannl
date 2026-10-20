@@ -67,15 +67,17 @@ let canonical_fields = function
 let consumed_heads =
   [ "library"; "executable"; "executables"; "test"; "tests"; "ocamllex"; "menhir" ]
 
-(* The pforms that expand to a file's contents. *)
-let read_pforms = [ "%{read:"; "%{read-lines:"; "%{read-strings:" ]
+(* The pforms that expand to a file's contents, by the prefix of what [%{…}] encloses. *)
+let read_pforms = [ "read:"; "read-lines:"; "read-strings:" ]
 
 (** Parse [contents], refusing inputs Dune reads from another file. An [(include f)] or
     [(dynamic_include f)] stanza, an [(:include f)] term or a [%{read:f}] form makes stanzas, a
     module list or configuration depend on [f], whose edits this reader would neither see nor
-    attribute; the audited API-root Dune files and their history have none (gh-ocannl-1201). *)
+    attribute; the audited API-root Dune files and their history have none (gh-ocannl-1201). A pform
+    is read off the atom's source spelling, so an escaped [\%{read:f}] inside quotes -- the literal
+    text -- passes (gh-ocannl-1264). *)
 let consumed_stanzas dune_path contents =
-  let stanzas = Dune_stanza_scan.stanzas contents in
+  let spelled = Dune_stanza_scan.spelled_stanzas contents in
   let refuse form head =
     failwith
       (Printf.sprintf
@@ -83,23 +85,27 @@ let consumed_stanzas dune_path contents =
           (gh-ocannl-1201)"
          dune_path form head)
   in
-  List.iter stanzas ~f:(fun stanza ->
+  List.iter spelled ~f:(fun (stanza, spelling) ->
       let head = Option.value (Dune_stanza_scan.head stanza) ~default:"" in
       if List.mem [ "include"; "dynamic_include" ] head ~equal:String.equal then
         refuse ("(" ^ head ^ " ...)") head
       else if List.mem consumed_heads head ~equal:String.equal then
         (* Only an [(:include ...)] TERM reads a file: a bare [:include] atom is an ordinary
            argument, e.g. to a preprocessing action. *)
-        let rec external_input = function
+        let rec external_input sexp (spelling : Dune_stanza_scan.raw_form) =
+          match sexp with
           | Sexp.List (Sexp.Atom ":include" :: _) -> Some ":include"
-          | Sexp.List terms -> List.find_map terms ~f:external_input
+          | Sexp.List terms ->
+              List.find_map (List.zip_exn terms spelling.raw_children) ~f:(fun (term, spelling) ->
+                  external_input term spelling)
           | Sexp.Atom atom ->
               Option.some_if
-                (List.exists read_pforms ~f:(fun pform -> String.is_substring atom ~substring:pform))
+                (List.exists (Dune_stanza_scan.live_pforms spelling) ~f:(fun pform ->
+                     List.exists read_pforms ~f:(fun prefix -> String.is_prefix pform ~prefix)))
                 atom
         in
-        Option.iter (external_input stanza) ~f:(fun form -> refuse form head));
-  stanzas
+        Option.iter (external_input stanza spelling) ~f:(fun form -> refuse form head));
+  List.map spelled ~f:fst
 
 type ownership = {
   generators : (string * string * Sexp.t) list;  (** generator input, generated [.ml], config *)

@@ -15,6 +15,8 @@ select configuration with an explicit target interface stays quiet: true
 private generator configuration edits remain manual-review entries: true
 private ownership dependency and prose edits do not change publication entries: true
 module lists and configuration read from other files refuse: true
+an escaped read pform inside quotes is literal text and passes: true
+a read pform after an escaped backslash, unquoted, or after a line break stays live: true
 a bare include atom, a variable named like a read pform and an include outside module owners and generators pass: true
 a selected interface target refuses by name: true
 re-exported dependencies remain publication-input evidence at any depth: true

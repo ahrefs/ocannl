@@ -20,7 +20,7 @@ ok: use -- a renamed censused labelled parameter is forwarded
 ok: use -- an alias of a censused labelled parameter is forwarded
 ok: use -- a case binder is unresolved rather than a forwarded function parameter
 ok: use -- a for index is unresolved rather than a forwarded function parameter
-ok: use -- a recursive alias never borrows the outer literal
+ok: use -- a recursive binding never borrows the outer literal
 ok: use -- class constructor parameters are unresolved because instantiations are not censused
 ok: use -- a literal inside a class remains resolved
 ok: use -- a direct store through a structure-level alias
@@ -40,6 +40,22 @@ ok: use -- an export resolves in the structure's scope, through outer aliases
 ok: use -- exports carry through nested structures and signature constraints
 ok: use -- a structure bound in expression position exports too
 ok: use -- an included structure's exports are the includer's
+ok: use -- a structure including the cache module is the cache module
+ok: use -- and stays one beside its own definitions
+ok: use -- through an alias of the cache module, a nested include and a signature constraint
+ok: use -- including Ir makes its Schedule_cache reachable through the structure
+ok: use -- an included module's exports still win over the structure's base
+ok: use -- a later include of another named module keeps the cache's values
+ok: use -- a structure's own value shadows the included cache's
+ok: use -- an alias of the included cache's value is still the cache's
+ok: use -- but an alias of another module's value shadows
+ok: use -- and so does an alias of the structure's own value
+ok: use -- and a later include of the cache takes the name back
+ok: use -- an include of a namespace of modules leaves the structure's own values
+ok: use -- opening a structure brings in the modules it inherits from an include
+ok: use -- a literal signature hides the modules an include brought in
+ok: use -- a resolver reached through a structure including Autotune certifies nothing
+ok: use -- a structure including an unrelated module is not the cache
 ok: use -- an open inside a structure is not an export
 ok: use -- opening a structure brings its exported alias into scope
 ok: use -- and its unrelated export shadows an outer alias, locally opened too
@@ -49,7 +65,8 @@ ok: use -- a name a literal signature declares still shadows on open
 ok: use -- an unreadable signature may hide an unrelated export, so it shadows nothing
 ok: use -- a nested signature narrows the nested structure's exports
 ok: use -- and an unreadable one may hide names at any depth
-ok: use -- a name a literal signature substitutes away is not declared
+ok: use -- a name a literal signature only substitutes is not declared
+ok: use -- and a substitution does not take an earlier declaration away
 ok: use -- a structure an unreadable signature may hide does not shadow a later open
 ok: use -- a resolver alias an unreadable signature may hide certifies nothing
 ok: use -- a bare store is not a call into the cache module

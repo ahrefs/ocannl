@@ -641,15 +641,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   a module binding — stays written against the constructors.
 - A scan's failure on a source is classified through `Test_utils.Scan_attempt`, never a
   `try … with _ ->` that calls every exception "does not parse": `run` tells the parser's errors
-  (the input's fault) from any other exception (the scanner's, kept with its one-line
-  `Printexc.to_string` text), and a case file's per-snippet catch-all is `attempted ~what ~name
-  ~default`, which reports either as a `Verdict.fail`.
+  (the input's fault, `Unparsed` carrying the parser's own one-line report: line, columns, what)
+  from any other exception (the scanner's, kept with its one-line `Printexc.to_string` text), and a
+  case file's per-snippet catch-all is `attempted ~what ~name ~default`, which reports either as a
+  `Verdict.fail`. Each repository scan's two refusals are separate formats, the reader an argument
+  of its `*_or_refusal` function so the refusal control can plant a raise and claim that exactly the
+  defect message fired (`routed_case`, gh-ocannl-1292). Not yet routed: `env_var_deps`'s
+  `Generated.init` caller census and its `source_reads_key` probe, and the dune-file readers, whose
+  parse errors are sexplib's or `Dune_stanza_scan`'s rather than located ppxlib ones.
 - Type-check every OCaml snippet a scan's cases feed it before trusting the arm. The parser
   accepts programs the type checker rejects — a duplicate top-level `module` parses cleanly — and
   an arm over such a snippet pins the scanner's reading of code no compiler would build, so its
   verdict says nothing about the tree the scan polices. A plain-OCaml snippet goes to a scratch
   file and `ocamlc -stop-after typing -c arm.ml` (`ocamlfind ocamlc -package base …` when it opens
-  a library). A snippet in project syntax (`let%op`, `[%cd …]`, a `[@@deriving …]` whose generated
+  a library). Snippets that call stand-in names (`key`, `Autotune.tune`) check against a stub
+  module compiled first and OPENED at each arm's top, not pasted in: an arm may rebind a stub's
+  name (`module Autotune = Other`), legal over an open and a duplicate definition beside a
+  paste. An unreadable signature `S` an arm constrains by is declared in that arm. Doing this
+  for `cache_dir_scan_cases` (gh-ocannl-1248) found five arms no compiler accepts, one of which
+  pinned a mis-modelled `module X :=` (a local substitution, not a removal). A snippet in project syntax (`let%op`, `[%cd …]`, a `[@@deriving …]` whose generated
   names it references) needs the owning stanza's preprocessors, libraries and DSL scope, which bare
   `ocamlc` lacks — it reports the uninterpreted extension instead of checking the expanded program —
   so check it as a module of a scratch stanza copied from the owning one (`dune build @check`).
@@ -2268,7 +2278,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Ordinary forwarding wrappers, mutation, partial applications and unfollowed callbacks remain
   explicitly partial; this includes ordinary-source calls, which contribute no fragment. Known
   local calls can validate captured parameters and callbacks; unknown higher-order calls keep any
-  independently validated fragments alongside their partial mark.
+  independently validated fragments alongside their partial mark. A parameter the callee writes
+  into a cell is recorded (`provenance.stored`), so substituting it does NOT discharge `Mutation`
+  (gh-ocannl-1237): an argument that only the cell returns joins uncorrelated, one also returned
+  directly keeps its pins beside the mark, and ordinary text adds nothing. A wrapper forwarding
+  its parameter to such a callee stores it too, and a call made only for its effect (a discarded
+  `store z;`) is a write of what it stores. The cell operators are
+  `!`, `:=`, `Array`/`Bytes` `get`/`set` and field writes, bare or under a `Stdlib` qualifier.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose

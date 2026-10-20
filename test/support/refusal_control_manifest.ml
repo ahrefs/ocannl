@@ -48,6 +48,7 @@ let raw_entries =
         "[scanner-refusal:bccd646d58b5010b1fe4eee6abe7eb53] corpus arguments must";
         "[scanner-refusal:fb72b56980e9afc888059f90e9734599] arguments the rule's";
         "[scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch";
+        "[scanner-refusal:125c419015c4e6332b0fa19c8e6a1762] rename scan raised";
         "[scanner-refusal:77ea18b8b8167a5861a77a9a6bbe45bf] unrelated rename spelling";
         "[scanner-refusal:298ab0be4c86a0dabfaeeddc5e67bd29] contributes its derived";
         "[scanner-refusal:dfeaf03eef363cf0944237d1f754cb5a] generated-source negative control";
@@ -137,6 +138,7 @@ let raw_entries =
         "[scanner-refusal:88e191145bdba435fd0fb303d486d684] gitignore no longer";
         "[scanner-refusal:3076fb53f1ae34b427f82aaa89404cb3] root gitignore pattern";
         "[scanner-refusal:e2fdd92481a66b85f6f54b5c68513edd] sources this check";
+        "[scanner-refusal:af5123353725f010d363e6b3758bfef2] cache-directory reader raised";
         "[scanner-refusal:cd6f72db4a56b656b92efd2c4a07945f] the cache directory";
         "[scanner-refusal:a8ea78ba60f371d22646868a36871617] argument";
         "[scanner-refusal:4168ef8491021497635783bb1f7e4232] no source reads";
@@ -260,8 +262,11 @@ let raw_entries =
         "[scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules";
         "[scanner-refusal:b10ed46107421e53b9d08523e194ffa2] dead-export census does";
         "[scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch";
+        "[scanner-refusal:ccd19577d4db5de19151a2932010e536] export census raised";
         "[scanner-refusal:a2a944c677a0439ea6a8b98ef3decc70] its mention counts";
+        "[scanner-refusal:9dfdb9e8a6d23c9cf5340fe76dc0f63d] type census raised";
         "[scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does";
+        "[scanner-refusal:0c431826a46525bb3cd9cd36a4c9e833] reference census raised";
         "[scanner-refusal:e8c85fd2a3138c8fe3283ab67595826c] zero-reference implicit export";
         "[scanner-refusal:8e094223fc3e55912db0c3f53c9fcaca] named dead-export exemptions";
         "[scanner-refusal:e32dfff95d976581bde669214a7e6415] dead-export exemption remains";
@@ -641,12 +646,13 @@ let raw_entries =
         "[scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim";
         "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
+        "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
+        "[scanner-refusal:4b8222a751df16e2ca351f7bacca5583] claim readers raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
         "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
-        "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
         "[scanner-refusal:ad023891a3bd7827b3905292c487055b] claim-shaped literal any";

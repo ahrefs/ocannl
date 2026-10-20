@@ -132,6 +132,25 @@ ok: source -- a discarded record write keeps the source dependency explicitly un
 ok: source -- a let-bound write keeps its source dependency explicitly uncertain
 ok: source -- a generated ref initializer cannot validate text after an ordinary overwrite
 ok: source -- a generated record initializer cannot validate an overwritten field
+ok: source -- a stored argument keeps its mutation boundary through a full application
+ok: source -- a stored argument keeps its mutation boundary through a named result
+ok: source -- a stored source beside a returned one keeps the direct pin and the mutation
+ok: source -- an ordinary stored argument does not mark a direct pin partial
+ok: source -- an argument both stored and returned keeps its pin beside the mutation
+ok: source -- a wrapper forwarding a stored argument keeps the mutation boundary
+ok: source -- a wrapper forwarding a stored and returned argument keeps the mutation boundary
+ok: source -- a discarded call to a storing helper is a write of its argument
+ok: source -- a discarded call storing generated text directly is a write of it
+ok: source -- a helper whose body is a field write stores its argument
+ok: source -- a storing call computing a discarded field write's target is a write
+ok: source -- a storing call computing a field write's target, as a helper's body, is a write
+ok: source -- a parameter written under a loop is stored
+ok: source -- Stdlib-qualified reference operators are a cell write and read
+ok: source -- a Stdlib-qualified stored argument keeps its boundary through a full application
+ok: source -- a Stdlib-qualified dereference of an initialised ref is a cell read
+ok: source -- an unqualified dereference of an initialised ref is a cell read
+ok: source -- Stdlib.Array.get is a cell read
+ok: source -- Stdlib.Array.set is a cell write
 ok: source -- an independent generated result survives a preceding write boundary
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context
@@ -181,8 +200,8 @@ ok: boundary -- a haystack read back out of an array cell is a mutation
 ok: boundary -- a source parameter rebound to other text
 ok: boundary -- a source-taking helper handed ordinary text is unvalidated
 every partial-itemisation boundary has a case meeting it alone: true
-ok: attempt -- a syntax error is the file's
-ok: attempt -- a lexical error is the file's
+ok: attempt -- a syntax error is the file's, with where the parser stopped
+ok: attempt -- a lexical error is the file's, with where the lexer stopped
 ok: attempt -- a source that parses is scanned
 ok: attempt -- a scanner exception is the scanner's, with its text
 ok: rejection -- opening the reader hides its calls from the qualifier

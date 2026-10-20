@@ -356,40 +356,75 @@ let require_implementations ~fail implementations =
     false)
   else true
 
-let exports_or_refusal ~fail ~source contents =
-  match Scan.exports_of_source ~source contents with
-  | exports -> exports
-  | exception Scan.Unmodelled_deriving_arguments { deriver; line } ->
+(* Each census's failures told apart (gh-ocannl-1292): a source that does not parse is the source's
+   to fix, and any other exception is this scan's own defect, which used to be reported as a parse
+   failure. Each reader is an argument so the refusal control can plant the defect. *)
+(* An implementation's value and type exports, read together so that one source's failure is
+   reported once and both censuses skip it (review round 4: the type exports used to be read
+   outside the refusal). *)
+let read_implementation ~source contents =
+  (Scan.exports_of_source ~source contents, Scan.type_exports_of_source ~source contents)
+
+let exports_or_refusal ~census ~fail ~source contents =
+  match
+    Test_utils.Scan_attempt.run (fun () ->
+        match census ~source contents with
+        | exports -> Ok exports
+        | exception Scan.Unmodelled_deriving_arguments { deriver; line } -> Error (deriver, line))
+  with
+  | Scanned (Ok exports) -> Some exports
+  | Scanned (Error (deriver, line)) ->
       fail
         (Printf.sprintf
            "%s:%d: the dead-export census does not model arguments to [@@deriving %s], so it \
             cannot say which values the deriving generates; extend Dead_export_scan.derived_names \
             against the expander"
            source line deriver);
-      []
-  | exception exn ->
+      None
+  | Unparsed where ->
       fail
         (Printf.sprintf "%s does not parse as OCaml, so this scan cannot vouch for it: %s" source
-           (Exn.to_string exn));
-      []
-
-let type_counts_or_refusal ~fail ~type_exports ~implementations ~interfaces =
-  match Scan.type_mention_counts ~type_exports ~implementations ~interfaces with
-  | counts -> counts
-  | exception exn ->
+           where);
+      None
+  | Raised exn ->
       fail
         (Printf.sprintf
-           "a source of the type census does not parse, so its mention counts are unknown: %s"
-           (Exn.to_string exn));
+           "the export census raised %s on %s, which parses -- a defect in the scanner rather than \
+            in the source, so the source's exports went uncounted"
+           exn source);
+      None
+
+let type_counts_or_refusal ~census ~fail ~type_exports ~implementations ~interfaces =
+  match
+    Test_utils.Scan_attempt.run (fun () -> census ~type_exports ~implementations ~interfaces)
+  with
+  | Scanned counts -> counts
+  | Unparsed where ->
+      fail
+        (Printf.sprintf
+           "a source of the type census does not parse, so its mention counts are unknown: %s" where);
+      Hashtbl.create (module String)
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the type census raised %s -- a defect in the scanner rather than in a source, so the \
+            type mention counts are unknown"
+           exn);
       Hashtbl.create (module String)
 
-let references_or_refusal ~fail ~exports ~sources =
-  match Scan.references ~exports ~sources with
-  | references -> references
-  | exception exn ->
+let references_or_refusal ~census ~fail ~exports ~sources =
+  match Test_utils.Scan_attempt.run (fun () -> census ~exports ~sources) with
+  | Scanned references -> references
+  | Unparsed where ->
       fail
-        (Printf.sprintf "an OCaml source does not parse, so this scan cannot vouch for it: %s"
-           (Exn.to_string exn));
+        (Printf.sprintf "an OCaml source does not parse, so this scan cannot vouch for it: %s" where);
+      []
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the reference census raised %s -- a defect in the scanner rather than in a source, so \
+            the reference counts are unknown"
+           exn);
       []
 
 let refusal_control () =
@@ -406,31 +441,84 @@ let refusal_control () =
   case "an empty implementation census reaches its refusal"
     ~format:"no .mli-less implementation modules found under arrayjit/lib, tensor or lib"
     (fun fail -> ignore (require_implementations ~fail [] : bool));
-  case "an invalid implementation reaches the export-parser refusal"
-    ~format:"%s does not parse as OCaml, so this scan cannot vouch for it: %s" (fun fail ->
-      ignore (exports_or_refusal ~fail ~source:"arrayjit/lib/bad.ml" "let =" : Scan.export list));
+  (* The two ways each census can fail, each reaching its own refusal and only that one
+     (gh-ocannl-1292): the observation is recorded only for the message the format names. *)
+  let routed_case label ~format ~fragment run =
+    let messages = ref [] in
+    run (fun message -> messages := message :: !messages);
+    let routed =
+      match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
+    in
+    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    Verdict.p label routed
+  in
+  let planted ~fragment =
+    ("raised Invalid_argument(\"planted\")" ^ fragment, fun () -> invalid_arg "planted")
+  in
+  routed_case "an invalid implementation reaches the export-parser refusal"
+    ~format:"%s does not parse as OCaml, so this scan cannot vouch for it: %s"
+    ~fragment:"bad.ml does not parse as OCaml" (fun fail ->
+      ignore
+        (exports_or_refusal ~census:read_implementation ~fail ~source:"arrayjit/lib/bad.ml" "let ="
+          : (Scan.export list * Scan.type_export list) option));
+  let fragment, raise_planted = planted ~fragment:" on arrayjit/lib/good.ml, which parses" in
+  routed_case "a defect of the export census reaches the scanner-defect refusal, not the parse one"
+    ~format:
+      "the export census raised %s on %s, which parses -- a defect in the scanner rather than in \
+       the source, so the source's exports went uncounted" ~fragment (fun fail ->
+      ignore
+        (exports_or_refusal
+           ~census:(fun ~source:_ _ -> raise_planted ())
+           ~fail ~source:"arrayjit/lib/good.ml" "let value = 1"
+          : (Scan.export list * Scan.type_export list) option));
   case "a deriving with unmodelled arguments reaches its refusal"
     ~format:
       "%s:%d: the dead-export census does not model arguments to [@@deriving %s], so it cannot say \
        which values the deriving generates; extend Dead_export_scan.derived_names against the \
        expander" (fun fail ->
       ignore
-        (exports_or_refusal ~fail ~source:"arrayjit/lib/fields.ml"
+        (exports_or_refusal ~census:read_implementation ~fail ~source:"arrayjit/lib/fields.ml"
            "type r = { a : int } [@@deriving fields ~getters]"
-          : Scan.export list));
+          : (Scan.export list * Scan.type_export list) option));
   let exports = Scan.exports_of_source ~source:"arrayjit/lib/sample.ml" "let value = 1" in
-  case "an invalid consumer reaches the reference-parser refusal"
-    ~format:"an OCaml source does not parse, so this scan cannot vouch for it: %s" (fun fail ->
+  routed_case "an invalid consumer reaches the reference-parser refusal"
+    ~format:"an OCaml source does not parse, so this scan cannot vouch for it: %s"
+    ~fragment:"an OCaml source does not parse" (fun fail ->
       ignore
-        (references_or_refusal ~fail ~exports ~sources:[ ("consumer.ml", "let =") ]
+        (references_or_refusal ~census:Scan.references ~fail ~exports
+           ~sources:[ ("consumer.ml", "let =") ]
+          : Scan.reference list));
+  let fragment, raise_planted = planted ~fragment:" -- a defect in the scanner" in
+  routed_case
+    "a defect of the reference census reaches the scanner-defect refusal, not the parse one"
+    ~format:
+      "the reference census raised %s -- a defect in the scanner rather than in a source, so the \
+       reference counts are unknown" ~fragment (fun fail ->
+      ignore
+        (references_or_refusal
+           ~census:(fun ~exports:_ ~sources:_ -> raise_planted ())
+           ~fail ~exports
+           ~sources:[ ("consumer.ml", "let x = 1") ]
           : Scan.reference list));
   let type_exports = Scan.type_exports_of_source ~source:"arrayjit/lib/sample.ml" "type t = T" in
-  case "an invalid interface reaches the type-census refusal"
+  routed_case "an invalid interface reaches the type-census refusal"
     ~format:"a source of the type census does not parse, so its mention counts are unknown: %s"
-    (fun fail ->
+    ~fragment:"a source of the type census does not parse" (fun fail ->
       ignore
-        (type_counts_or_refusal ~fail ~type_exports ~implementations:[]
+        (type_counts_or_refusal ~census:Scan.type_mention_counts ~fail ~type_exports
+           ~implementations:[]
            ~interfaces:[ ("consumer.mli", "val") ]
+          : (string, int) Hashtbl.t));
+  let fragment, raise_planted = planted ~fragment:" -- a defect in the scanner" in
+  routed_case "a defect of the type census reaches the scanner-defect refusal, not the parse one"
+    ~format:
+      "the type census raised %s -- a defect in the scanner rather than in a source, so the type \
+       mention counts are unknown" ~fragment (fun fail ->
+      ignore
+        (type_counts_or_refusal
+           ~census:(fun ~type_exports:_ ~implementations:_ ~interfaces:_ -> raise_planted ())
+           ~fail ~type_exports ~implementations:[]
+           ~interfaces:[ ("consumer.mli", "val x : int") ]
           : (string, int) Hashtbl.t));
   Test_utils.Refusal_control_manifest.print source
 
@@ -457,11 +545,14 @@ let () =
   in
   let implementations = List.filter sources ~f:(fun (source, _) -> Set.mem implicit source) in
   if not (require_implementations ~fail:Verdict.fail implementations) then Stdlib.exit 1;
-  let exports =
-    List.concat_map implementations ~f:(fun (source, contents) ->
-        exports_or_refusal ~fail:Verdict.fail ~source contents)
+  let readings =
+    List.filter_map implementations ~f:(fun (source, contents) ->
+        exports_or_refusal ~census:read_implementation ~fail:Verdict.fail ~source contents)
   in
-  let references = references_or_refusal ~fail:Verdict.fail ~exports ~sources in
+  let exports = List.concat_map readings ~f:fst in
+  let references =
+    references_or_refusal ~census:Scan.references ~fail:Verdict.fail ~exports ~sources
+  in
   let counts = Scan.counts ~exports references in
   let exemptions = Set.of_list (module String) exempt_zero_reference_exports in
   let zero_reference =
@@ -490,17 +581,14 @@ let () =
     (Set.length exemptions = List.length exempt_zero_reference_exports);
   Verdict.p_empty "every named dead-export exemption remains necessary"
     ~over:exempt_zero_reference_exports stale;
-  let type_exports =
-    List.concat_map implementations ~f:(fun (source, contents) ->
-        Scan.type_exports_of_source ~source contents)
-  in
+  let type_exports = List.concat_map readings ~f:snd in
   let interface_sources =
     Scan.interfaces_among (List.map arguments ~f:fst)
     |> List.map ~f:(fun source -> (source, In_channel.read_all (Map.find_exn on_disk source)))
   in
   let type_counts =
-    type_counts_or_refusal ~fail:Verdict.fail ~type_exports ~implementations:sources
-      ~interfaces:interface_sources
+    type_counts_or_refusal ~census:Scan.type_mention_counts ~fail:Verdict.fail ~type_exports
+      ~implementations:sources ~interfaces:interface_sources
   in
   let type_exemptions = Set.of_list (module String) exempt_unmentioned_types in
   let type_offenders =

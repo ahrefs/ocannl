@@ -789,3 +789,16 @@ run `20261019T200705Z-70844` exited 0.
 | UTF-8 validity quantifies over its string | `verdict_scan.ml`: is_valid_utf_8 a pattern test | Failed: `refuses a gate that closes on the string a gated validity claim reads` | `20261019T235636Z-25376` |
 | A callback's optional parameter is a part of its default | `verdict_scan.ml`: the default dropped | Failed: `refuses a gate read off the default of a callback's optional parameter` | `20261019T235658Z-39149` |
 | The reference primitives qualified by a standard library are followed as unqualified ones | `verdict_scan.ml`: a qualified primitive is another module's function | Failed: `refuses a gate read off the initializer of a qualified Stdlib reference` | `20261020T001533Z-48552` |
+
+## gh-ocannl-1292 mutation runs
+
+The claim readers over one source and the syntax matrix's per-cell reader classify a failure
+through `Test_utils.Scan_attempt`: a source that does not parse is reported by name, an exception
+from one that parses is the reader's own defect, named as such. Each run used tools/mutation-run.sh
+on `verdict_ratchet.ml` and the focused verdict_ratchet alias, exited 1 on exactly the listed false
+claims, and restored the source byte-for-byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A claim reader that raises on a source that parses refuses as a reader defect | `verdict_ratchet.ml`: the raised arm of `read_claims` reports nothing | Failed: `a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one` | `20261019T223808Z-39359` |
+| A matrix cell whose reader raises reads as a reader defect | `verdict_ratchet.ml`: `matrix_cell_helpers` classifies a raise as a parse failure | Failed: `a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure` | `20261019T223830Z-62902` |

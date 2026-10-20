@@ -981,6 +981,11 @@ type provenance = {
       (** The returned data depends on an argument, rather than an internal generated-text read. *)
   parameters : Set.M(String).t;
   buffer : bool;
+  stored : Set.M(String).t;
+      (** The parameters whose argument this expression writes into a cell -- a reference, a mutable
+          field, an array -- where it may be read back (gh-ocannl-1237). Substituting such an
+          argument does not discharge the [Mutation] boundary the way substituting a directly
+          returned one discharges its parameter's: what the cell hands back is not modelled. *)
   uncertainty : uncertainty;
   because : boundary list;
       (** The boundaries behind a non-[Known] [uncertainty], sorted; empty exactly when it is
@@ -1001,6 +1006,7 @@ let no_provenance =
     parameter_dependent = false;
     parameters = Set.empty (module String);
     buffer = false;
+    stored = Set.empty (module String);
     uncertainty = Known;
     because = [];
     functions = [];
@@ -1037,6 +1043,7 @@ let join_provenance a b =
            ((a.generated && not a.parameter_dependent) || (b.generated && not b.parameter_dependent));
     parameters = Set.union a.parameters b.parameters;
     buffer = a.buffer || b.buffer;
+    stored = Set.union a.stored b.stored;
     uncertainty =
       (let joined = join_uncertainty a.uncertainty b.uncertainty in
        if
@@ -1053,7 +1060,7 @@ let equal_provenance a b =
   Bool.equal a.generated b.generated
   && Bool.equal a.parameter_dependent b.parameter_dependent
   && Set.equal a.parameters b.parameters
-  && Bool.equal a.buffer b.buffer
+  && Bool.equal a.buffer b.buffer && Set.equal a.stored b.stored
   && Poly.equal a.uncertainty b.uncertainty
   && Poly.equal a.because b.because
   && Poly.equal a.functions b.functions
@@ -1078,18 +1085,32 @@ let argument_provenance of_expr parameter args =
       then uncertain Unresolved Unsupplied_application result
       else result
 
-(** The standard reference operator [name] ([!] or [:=]) at [callee]: an operator the file binds
-    itself, where it is spelled, is that binding, not a read or write of a cell. *)
+(** The standard reference operator [name] ([!] or [:=]) at [callee]: spelled bare, or qualified by
+    a path meaning [Stdlib] ([Stdlib.( ! )], through any alias in scope; gh-ocannl-1237). An
+    operator the file binds itself, where it is spelled bare, is that binding, not a read or write
+    of a cell. *)
 let ref_operator scope callee name =
   Poly.equal (longident_of callee) (Some [ name ])
   && not (Hashtbl.mem scope.values (span callee.pexp_loc))
+  || calls scope callee ~target:"Stdlib" ~name
 
-(** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get]. What was stored there is not
-    modelled, so a value read this way carries the [Mutation] boundary. *)
+(** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get], each also under a [Stdlib.]
+    qualifier ([Stdlib.Array.get] resolves to [Array] as any qualified path resolves to its last
+    module). What was stored there is not modelled, so a value read this way carries the [Mutation]
+    boundary. *)
 let reads_cell scope callee =
   ref_operator scope callee "!"
   || calls scope callee ~target:"Array" ~name:"get"
   || calls scope callee ~target:"Bytes" ~name:"get"
+
+(** A write into a mutable cell: [:=], [Array.set], [Bytes.set], each bare or under [Stdlib.]. *)
+let writes_cell scope callee =
+  ref_operator scope callee ":="
+  || calls scope callee ~target:"Array" ~name:"set"
+  || calls scope callee ~target:"Bytes" ~name:"set"
+
+(** Whether [p] carries anything a site could pin: generated text, a parameter, a buffer. *)
+let carries_text p = p.generated || (not (Set.is_empty p.parameters)) || p.buffer
 
 let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
     ?(source_parameters = Hashtbl.Poly.create ()) ?(function_parameters = Hashtbl.Poly.create ())
@@ -1104,36 +1125,56 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
     | _ -> false
   in
   let rec of_expr expr =
-    let effect_boundary result discarded =
+    (* What [discarded] writes into cells, by any route: a cell operator, a field write, or a call
+       made for its effect whose provenance stores (review rounds 3 to 7). Nested functions are not
+       entered -- their writes happen when they are called. *)
+    let collect_writes discarded =
       let written = ref no_provenance in
       let writes =
-        object
+        object (self)
           inherit Ast_traverse.iter as super
           method! attribute _ = ()
 
           method! expression e =
             match e.pexp_desc with
             | Pexp_function _ -> ()
-            | Pexp_setfield (_, _, rhs) | Pexp_setinstvar (_, rhs) ->
+            | Pexp_setfield (target, _, rhs) ->
+                (* The target is computed too, and may itself store (review round 5). *)
+                self#expression target;
                 written := join_provenance !written (of_expr rhs)
-            | Pexp_apply (callee, args)
-              when ref_operator scope callee ":="
-                   || calls scope callee ~target:"Array" ~name:"set"
-                   || calls scope callee ~target:"Bytes" ~name:"set" ->
+            | Pexp_setinstvar (_, rhs) -> written := join_provenance !written (of_expr rhs)
+            | Pexp_apply (callee, args) when writes_cell scope callee ->
                 List.iter args ~f:(fun (_, arg) ->
                     written := join_provenance !written (of_expr arg))
+            | Pexp_apply _ ->
+                (* A call made for its effect writes whatever it stores (review round 3): a helper
+                   that stores its argument, here or in a cell outside it, reads as a write of that
+                   argument. *)
+                let side_effect = of_expr e in
+                if
+                  carries_text side_effect
+                  && (List.mem side_effect.because Mutation ~equal:Poly.equal
+                     || not (Set.is_empty side_effect.stored))
+                then written := join_provenance !written side_effect;
+                super#expression e
             | _ -> super#expression e
         end
       in
       writes#expression discarded;
+      !written
+    in
+    let effect_boundary result discarded =
+      let written = ref (collect_writes discarded) in
+      let stored = Set.union result.stored (Set.union !written.parameters !written.stored) in
       if !written.generated || (not (Set.is_empty !written.parameters)) || !written.buffer then
         if result.generated || not (Set.is_empty result.parameters) then
-          uncertain Unresolved Mutation result
+          { (uncertain Unresolved Mutation result) with stored }
         else
           {
             (uncertain Uncorrelated Mutation (join_provenance result !written)) with
             uncertainty = Uncorrelated;
             functions = [];
+            stored;
           }
       else result
     in
@@ -1184,7 +1225,55 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               }
           else result
         in
-        { result with functions = [ span expr.pexp_loc ] }
+        (* A parameter written into a cell ANYWHERE in the body is stored -- under a loop, a branch
+           or a match as much as in a discarded position (review round 7). *)
+        let effects =
+          List.fold
+            (match body with
+            | Pfunction_body body -> [ body ]
+            | Pfunction_cases (cases, _, _) -> List.map cases ~f:(fun c -> c.pc_rhs))
+            ~init:no_provenance
+            ~f:(fun acc body -> join_provenance acc (collect_writes body))
+        in
+        {
+          result with
+          functions = [ span expr.pexp_loc ];
+          stored =
+            Set.union_list (module String) [ result.stored; effects.parameters; effects.stored ];
+        }
+    | (Pexp_apply (_, _) | Pexp_setfield _ | Pexp_setinstvar _)
+      when match expr.pexp_desc with
+           | Pexp_apply (callee, _) -> writes_cell scope callee
+           | _ -> true ->
+        (* The value of a write is [()], and what it writes is stored: so a function whose body is
+           the write stores its argument (review round 3), a field or instance-variable write as
+           much as a cell operator (review round 4). *)
+        let written =
+          match expr.pexp_desc with
+          | Pexp_setfield (target, _, rhs) ->
+              (* The target is computed too, and may itself store (review round 6). *)
+              let target = of_expr target in
+              if
+                carries_text target
+                && (List.mem target.because Mutation ~equal:Poly.equal
+                   || not (Set.is_empty target.stored))
+              then join_provenance (of_expr rhs) target
+              else of_expr rhs
+          | Pexp_setinstvar (_, rhs) -> of_expr rhs
+          | Pexp_apply (_, args) ->
+              List.fold args ~init:no_provenance ~f:(fun acc (_, arg) ->
+                  join_provenance acc (of_expr arg))
+          | _ -> no_provenance
+        in
+        let stored = Set.union written.parameters written.stored in
+        if carries_text written then
+          {
+            (uncertain Uncorrelated Mutation written) with
+            uncertainty = Uncorrelated;
+            functions = [];
+            stored;
+          }
+        else { no_provenance with stored }
     | Pexp_apply (callee, args) ->
         let callee_value = of_expr callee in
         let direct_source =
@@ -1261,12 +1350,65 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                     join_provenance acc (of_expr argument))
               else result
             in
-            if callee_value.generated && not callee_value.parameter_dependent then result
-            else
-              List.fold formal_parameters ~init:result ~f:(fun acc (symbol, destination) ->
-                  if Set.mem callee_value.parameters symbol then
-                    join_provenance acc (argument_provenance of_expr destination args)
-                  else acc)
+            let result =
+              if callee_value.generated && not callee_value.parameter_dependent then result
+              else
+                List.fold formal_parameters ~init:result ~f:(fun acc (symbol, destination) ->
+                    if Set.mem callee_value.parameters symbol then
+                      join_provenance acc (argument_provenance of_expr destination args)
+                    else acc)
+            in
+            (* gh-ocannl-1237: an argument the callee stores into a cell arrives, at least in part,
+               through memory the scan does not model -- so substituting it does not discharge the
+               [Mutation] boundary the way substituting a directly returned argument discharges its
+               parameter's. Where the callee ALSO returns the argument directly (a body that writes
+               an index derived from its source into a counter while building its result from that
+               source), the direct flow still names the text, and the boundary only stays
+               [Unresolved]; where the cell is the only way the argument comes back, it joins
+               [Uncorrelated], as the same write does inside a body. An argument carrying nothing a
+               site could pin (ordinary text) adds nothing. *)
+            let carries = carries_text in
+            let stored_only, stored_returned =
+              List.fold formal_parameters ~init:(no_provenance, no_provenance)
+                ~f:(fun (only, returned) (symbol, destination) ->
+                  if Set.mem callee_value.stored symbol && parameter_supplied destination args then
+                    let argument = argument_provenance of_expr destination args in
+                    if Set.mem callee_value.parameters symbol then
+                      (only, join_provenance returned argument)
+                    else (join_provenance only argument, returned)
+                  else (only, returned))
+            in
+            (* A supplied argument that names an enclosing parameter is stored in its turn: a
+               wrapper handing its own parameter to this callee stores it too, so applying the
+               wrapper must not discharge the boundary either (review round 1). *)
+            let result =
+              {
+                result with
+                stored =
+                  Set.union_list
+                    (module String)
+                    [
+                      List.fold formal_parameters ~init:result.stored
+                        ~f:(fun acc (symbol, destination) ->
+                          if parameter_supplied destination args then Set.remove acc symbol else acc);
+                      stored_only.parameters;
+                      stored_only.stored;
+                      stored_returned.parameters;
+                      stored_returned.stored;
+                    ];
+              }
+            in
+            let result =
+              if carries stored_returned then uncertain Unresolved Mutation result else result
+            in
+            if carries stored_only then
+              join_provenance result
+                {
+                  (uncertain Uncorrelated Mutation stored_only) with
+                  uncertainty = Uncorrelated;
+                  functions = [];
+                }
+            else result
           else !found
         in
         let found =

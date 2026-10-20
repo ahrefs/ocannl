@@ -2865,6 +2865,37 @@ let matrix_expected family = function
   | Refusal -> [ family.reports ]
   | Inverted | Guarded | Shadowed -> []
 
+(* One matrix cell's helpers, or the placeholder its failure reads as with the diagnostic naming it:
+   a cell that does not parse is a fixture defect, and an exception from one that parses is the
+   claim reader's (gh-ocannl-1292), told apart rather than both called a parse failure. [claims] is
+   the reader, a parameter so the control below can plant the defect. *)
+let matrix_cell_helpers ?(claims = quantified_claims) source =
+  match
+    Test_utils.Scan_attempt.run (fun () ->
+        claims (Sources.structure_of source)
+        |> List.map ~f:(fun claim -> claim.helper)
+        |> List.dedup_and_sort ~compare:String.compare)
+  with
+  | Scanned helpers -> (helpers, None)
+  | Unparsed where -> ([ "<does not parse>" ], Some ("does not parse: " ^ where))
+  | Raised exn ->
+      ( [ "<reader raised>" ],
+        Some ("the claim reader raised " ^ exn ^ " on it, which parses -- a reader defect") )
+
+let run_matrix_reader_control () =
+  let planted, planted_why =
+    matrix_cell_helpers ~claims:(fun _ -> invalid_arg "planted") "let x = 1"
+  in
+  let unparsed, unparsed_why = matrix_cell_helpers "let =" in
+  let says why fragment =
+    Option.value_map why ~default:false ~f:(String.is_substring ~substring:fragment)
+  in
+  ( "a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure",
+    List.equal String.equal planted [ "<reader raised>" ]
+    && says planted_why "raised Invalid_argument(\"planted\")"
+    && List.equal String.equal unparsed [ "<does not parse>" ]
+    && says unparsed_why "does not parse: line 1" )
+
 (* Runs the matrix: per family, the grid row and whether every cell read as expected. A cell that
    does not parse is a fixture defect and reads as unexpected too, named on stderr. *)
 let run_syntax_matrix () =
@@ -2875,18 +2906,10 @@ let run_syntax_matrix () =
                 String.of_char_list
                   (List.map matrix_cases ~f:(fun case ->
                        let source = matrix_source family quantifier spelling case in
-                       let found =
-                         match Sources.structure_of source with
-                         | structure ->
-                             quantified_claims structure
-                             |> List.map ~f:(fun claim -> claim.helper)
-                             |> List.dedup_and_sort ~compare:String.compare
-                         | exception exception_ ->
-                             eprintf "syntax matrix: %s / %s / %s does not parse: %s\n%s\n"
-                               family.family quantifier.quantifier spelling.spelling
-                               (Exn.to_string exception_) source;
-                             [ "<does not parse>" ]
-                       in
+                       let found, failure = matrix_cell_helpers source in
+                       Option.iter failure ~f:(fun why ->
+                           eprintf "syntax matrix: %s / %s / %s %s\n%s\n" family.family
+                             quantifier.quantifier spelling.spelling why source);
                        let expected = matrix_expected family case in
                        if List.equal String.equal found expected then matrix_case_letter case
                        else (
@@ -4609,7 +4632,7 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
 let read_gates ~fail ~source ~census content =
   match Test_utils.Scan_attempt.run (fun () -> census content) with
   | Test_utils.Scan_attempt.Scanned gates -> gates
-  | Unparsed -> { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
+  | Unparsed _ -> { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
   | Raised exn ->
       fail
         (Printf.sprintf
@@ -4617,6 +4640,61 @@ let read_gates ~fail ~source ~census content =
             not of the source, and the source's gated claims went uncompared"
            exn source);
       { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
+
+(* The four claim readers over one source, their failures told apart (gh-ocannl-1292): a source that
+   does not parse is reported by name, and an exception from one that parses is a reader defect,
+   named as such rather than as a syntax error. [readers] is a parameter so the control below can
+   plant the defect. *)
+let all_readers content =
+  ( Scan.scan content,
+    quantified_claims (Sources.structure_of content),
+    Scan.dialect_census content,
+    Scan.line_break_census content )
+
+let read_claims ?(readers = all_readers) ~fail ~source content =
+  let nothing () =
+    ( { Scan.sites = []; literals = 0; applied_literals = 0 },
+      [],
+      { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
+      { Scan.broken = []; label_sites = 0 } )
+  in
+  match Test_utils.Scan_attempt.run (fun () -> readers content) with
+  | Scanned readings -> readings
+  | Unparsed where ->
+      fail
+        (Printf.sprintf "%s does not parse as OCaml, so this check cannot vouch for it: %s" source
+           where);
+      nothing ()
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the claim readers raised %s on %s, which parses -- a defect in the scanner rather than \
+            in the source, so the source's claims went unchecked"
+           exn source);
+      nothing ()
+
+let run_claim_reader_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let format =
+    "the claim readers raised %s on %s, which parses -- a defect in the scanner rather than in the \
+     source, so the source's claims went unchecked"
+  in
+  let messages = ref [] in
+  ignore
+    (read_claims ~source:"fixture.ml"
+       ~fail:(fun message -> messages := message :: !messages)
+       ~readers:(fun _ -> invalid_arg "planted")
+       "let () = ()"
+      : Scan.scan * _ * Scan.dialect_census * Scan.line_break_census);
+  let routed =
+    match !messages with
+    | [ m ] -> String.is_substring m ~substring:"raised Invalid_argument(\"planted\") on fixture.ml"
+    | _ -> false
+  in
+  if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+  ( "a claim reader's exception on a source that parses reaches the scanner-defect refusal, not \
+     the parse one",
+    routed )
 
 let refuse_unread_gate ~fail ~source (form, line) =
   fail
@@ -4976,7 +5054,7 @@ let refuse_folded_gate ~fail ~source (fold : Scan.folded_gate) =
 let read_folded_gates ~fail ~source ~census content =
   match Test_utils.Scan_attempt.run (fun () -> census content) with
   | Test_utils.Scan_attempt.Scanned folds -> folds
-  | Unparsed -> { Scan.folded = []; folded_claim_sites = 0 }
+  | Unparsed _ -> { Scan.folded = []; folded_claim_sites = 0 }
   | Raised exn ->
       fail
         (Printf.sprintf
@@ -5249,6 +5327,7 @@ let () =
     @ [ run_line_break_refusal_control () ]
     @ run_gate_population_controls ()
     @ [ run_gate_refusal_control () ]
+    @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
     @ run_agreement_controls () @ run_ambiguous_remedy_controls ()
@@ -5275,21 +5354,7 @@ let () =
          arrives is whatever the test directories hold -- including whatever a `(select …)` or a ppx
          put there -- and the one thing worse than a parse failure here is one that leaves nobody
          knowing which of three hundred files it was about. *)
-      let scanned, helper_claims, dialects, line_breaks =
-        try
-          ( Scan.scan content,
-            quantified_claims (Sources.structure_of content),
-            Scan.dialect_census content,
-            Scan.line_break_census content )
-        with exception_ ->
-          fail
-            (Printf.sprintf "%s does not parse as OCaml, so this check cannot vouch for it: %s"
-               source (Exn.to_string exception_));
-          ( { Scan.sites = []; literals = 0; applied_literals = 0 },
-            [],
-            { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
-            { Scan.broken = []; label_sites = 0 } )
-      in
+      let scanned, helper_claims, dialects, line_breaks = read_claims ~fail ~source content in
       label_sites := !label_sites + line_breaks.Scan.label_sites;
       List.iter line_breaks.Scan.broken ~f:(fun site ->
           Int.incr line_break_offenders;
