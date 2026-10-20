@@ -138,7 +138,9 @@ fi
 # The replay's shell-tier set must decide as the gate itself does: run merge-build-check.sh --plan
 # on every merge the replay reports and compare. A clone, so HEAD moves outside the shared fixture,
 # extended by m8: main adds q"uote.txt, a name git quotes, while the side edits b.ml -- nothing
-# shared, but the gate fails closed on the quoted name and selects the shell tier.
+# shared, but the gate fails closed on the quoted name and selects the shell tier -- and m9: main
+# edits s/t.sh, the side r.sh -- a script on each side, none shared, which the gate skips under
+# either trigger. The comparison runs under both triggers.
 if harness_leg 'the shell-tier replay agrees with merge-build-check.sh on every merge #gate'; then
   if [ -z "$FIXTURE" ]; then report 1 'shell-tier agreement' 'no fixture'; else
     C=$TMP/gate
@@ -146,9 +148,13 @@ if harness_leg 'the shell-tier replay agrees with merge-build-check.sh on every 
     shared=$R R=$C
     side f8 && first b.ml && commit f8 && git -C "$R" checkout -q main && printf 'x\n' >"$R/q\"uote.txt" &&
       commit main8 && merge m8 f8 || bad=' (m8 could not be built)'
+    side f9 && last r.sh && commit f9 && git -C "$R" checkout -q main && last s/t.sh && commit main9 &&
+      merge m9 f9 || bad+=' (m9 could not be built)'
     R=$shared
-    replay --repo "$C" --set shell-tier --verbose main
-    n=0 bad=${bad-} selected=0
+    fixture_bad=${bad-}
+    for trigger in same-input any-input; do
+    replay --repo "$C" --set shell-tier --trigger "$trigger" --verbose main
+    n=0 bad=$fixture_bad selected=0
     while read -r sha subject sets; do
       n=$((n + 1))
       git -C "$C" checkout -q --detach "$sha" 2>/dev/null || { bad+=" $sha(checkout)"; continue; }
@@ -162,16 +168,22 @@ if harness_leg 'the shell-tier replay agrees with merge-build-check.sh on every 
       selected=$((selected + gate))
       [ "$gate" = "$mine" ] || bad+=" $subject(gate $gate, replay $mine)"
     done < <(sed -n 's/^  \([0-9a-f]\{10\}\) \([^:]*\): \(.*\)$/\1 \2 \3/p' "$out")
-    if [ "$rc" = 0 ] && [ "$n" = 7 ] && [ "$selected" = 3 ] && [ -z "$bad" ]; then
-      report 0 'the replay and the gate select the shell tier on the same 3 of 7 merges'
-    else report 1 'the replay and the gate select the shell tier on the same 3 of 7 merges' \
+    label="under $trigger, the replay and the gate select the shell tier on the same 3 of 8 merges"
+    if [ "$rc" = 0 ] && [ "$n" = 8 ] && [ "$selected" = 3 ] && [ -z "$bad" ]; then
+      report 0 "$label"
+    else report 1 "$label" \
       "exit $rc, $n merge(s) compared, gate selected $selected; disagreements:${bad:- none}; $(cat "$out")"; fi
-    # Negative controls: a replay that ignores renames' other names loses m3, and one without the
-    # quoted-path fallback loses m8; the comparison must see each.
-    for control in 'rename-blind:m3:s/for n in (p, \*other.get(p, \[\]))/for n in (p,)/' \
-                   'quote-blind:m8:s/if src == CHECK_PATH and quoted:/if False:/'; do
+    done
+    # Negative controls: a replay that ignores renames' other names loses m3, one without the
+    # quoted-path fallback loses m8, and one whose shell tier follows any-input gains m9; the
+    # comparison must see each.
+    for control in 'rename-blind:m3:-:82-:s/for n in (p, \*other.get(p, \[\]))/for n in (p,)/' \
+                   'quote-blind:m8:-:82-:s/if src == CHECK_PATH and quoted:/if False:/' \
+                   'trigger-following:m9:shell-tier:84-:s/elif trigger == "same-input" or src == CHECK_PATH:/elif trigger == "same-input":/'; do
       what=${control%%:*} rest=${control#*:}
-      merge_name=${rest%%:*} program=${rest#*:}
+      merge_name=${rest%%:*} rest=${rest#*:}
+      verdict=${rest%%:*} rest=${rest#*:}
+      want_row=${rest%%:*} program=${rest#*:}
       label="negative control: a $what replay disagrees with the gate on $merge_name"
       M=$TMP/$what.py
       sed "$program" "$SRC" >"$M"
@@ -180,8 +192,8 @@ if harness_leg 'the shell-tier replay agrees with merge-build-check.sh on every 
         continue
       fi
       rc=0
-      (cd "$C" && python3 "$M" --set shell-tier --verbose main) >"$out" 2>&1 || rc=$?
-      if [ "$rc" = 0 ] && grep -qE "^  [0-9a-f]{10} $merge_name: -\$" "$out" && [ "$(row shell-tier)" = 72- ]; then
+      (cd "$C" && python3 "$M" --set shell-tier --trigger any-input --verbose main) >"$out" 2>&1 || rc=$?
+      if [ "$rc" = 0 ] && grep -qE "^  [0-9a-f]{10} $merge_name: $verdict\$" "$out" && [ "$(row shell-tier)" = "$want_row" ]; then
         report 0 "$label"
       else report 1 "$label" "exit $rc; $(cat "$out")"; fi
     done
@@ -259,11 +271,12 @@ if harness_leg 'built-in sets are read from where they are defined #definitions'
       mv "$D/check.new" "$D/tools/merge-build-check.sh"
     replay --repo "$D" origin/main
     # any-input from the config: config (*.md *.txt) builds where each side changed one: m2 (n.md)
-    # and m3 (r.txt); shell-tier, now *.ml, builds m1 and m4.
+    # and m3 (r.txt); shell-tier, now *.ml and same-input whatever the trigger, builds m1 alone
+    # (x.ml shared), not m4 (a.ml against b.ml).
     if [ "$rc" = 0 ] && has 'set config: *.md *.txt  (.github/ship-pr-merge-build)' &&
        has 'set shell-tier: *.ml  (tools/merge-build-check.sh)' &&
        has 'trigger any-input (.github/ship-pr-merge-build)' &&
-       [ "$(row config)" = 62- ] && [ "$(row shell-tier)" = 622 ]; then
+       [ "$(row config)" = 62- ] && [ "$(row shell-tier)" = 611 ]; then
       report 0 'edited definitions change the default sets and trigger'
     else report 1 'edited definitions change the default sets and trigger' "exit $rc; $(cat "$out")"; fi
     printf "SHELL_GLOB='*.sh'\n" >>"$D/tools/merge-build-check.sh"
