@@ -249,6 +249,20 @@ let () =
         (is_str j "workload" protocol.H.workload);
       Verdict.p "variant names the self-test" (is_str j "variant" "self-test");
       Verdict.p "precision is f32" (is_str j "precision" "f32");
+      (* gh-ocannl-1262: read back off the compiled model, not echoed from the leg. *)
+      Verdict.p "storage_precision reads the compiled logits back as f32"
+        (is_str j "storage_precision" "f32");
+      (* Two-sided: the read-back follows the node's precision rather than naming f32 whatever ran.
+         A wrapped ndarray converted at wrap takes the requested precision as its storage. *)
+      let probe prec =
+        H.storage_precision
+          (TDSL.wrap ~l:"storage_probe" ~prec ~b:[] ~o:[ 2 ]
+             (Ir.Ndarray.init_array ~debug:"storage_probe" Ir.Ops.single ~dims:[| 2 |]
+                ~padding:None ~f:(fun _ -> 1.))
+             ())
+      in
+      Verdict.p "storage_precision reads a half node back as f16, a bfloat16 one as bf16"
+        (String.equal (probe Ir.Ops.half) "f16" && String.equal (probe Ir.Ops.bfloat16) "bf16");
       let recorded_licences = Option.value (field j "fp_licences") ~default:`Null in
       Verdict.p_all "float licence metadata records each resolved licence and its source"
         (H.fp_licence_record ()) ~f:(fun (key, value, source) ->

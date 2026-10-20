@@ -46,6 +46,8 @@ let with_master_weights_except_ln ~prec f =
 type prepared = {
   ctx : Context.t;
   batch_loss : Tensor.t;
+  logits : Tensor.t;
+      (** The decoder body's output: the result line's [storage_precision] is read off it. *)
   step_shape : H.step_shape;
   bindings : Ir.Indexing.unit_bindings;
   batch_n : Ir.Indexing.static_symbol;
@@ -227,4 +229,16 @@ let prepare ~materialize st =
           ]
         else [])
   in
-  { ctx; batch_loss; step_shape; bindings; batch_n; n_batches; batch_size; seq; leg; mapping }
+  {
+    ctx;
+    batch_loss;
+    logits;
+    step_shape;
+    bindings;
+    batch_n;
+    n_batches;
+    batch_size;
+    seq;
+    leg;
+    mapping;
+  }

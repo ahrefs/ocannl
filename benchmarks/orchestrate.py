@@ -202,7 +202,7 @@ SKIP_CELLS = set(
 )
 
 sys.path.insert(0, str(HERE / "runners"))
-from bench_common import read_st_metadata  # noqa: E402
+from bench_common import PRECISION_LABELS, read_st_metadata  # noqa: E402
 
 
 def cell_skipped(workload, backend, variant, precision, skips=None):
@@ -882,26 +882,39 @@ def shadowing_check(results):
 
 
 def precision_check(results):
-    """Rows whose runner ran tensors or an autocast context other than the row's precision label.
+    """Rows whose run contradicts the row's precision label, in any framework.
 
-    The row's `precision` is what the sweep labels it with (f32 for every torch cell); the runner
-    reports what its run's tensors were (`effective_precision`, from the parameter and floating
-    input dtypes it read back) and whether autocast was on inside the step (gh-ocannl-1208). A
-    label the run contradicts -- a weight cast on load, an autocast context, a requested precision
-    the runner did not apply -- is a number quoted at a precision it was not measured at, and the
-    parity reference is such a row too. `precision_mismatch` says what ran, in words the report
-    prints. Rows whose runner reports no `effective_precision` (OCANNL's, tinygrad's, and torch
-    rows predating the field) are not checked; an autocast state torch could not read (None) is
-    not a mismatch, and the row's `autocast` says it is unknown.
+    The row's `precision` is what the sweep labels it with (f32 for every torch and tinygrad cell,
+    the dispatched precision for an OCANNL one); each runner reports what its run actually used,
+    read back from the run rather than echoed from a flag:
+
+    - torch and tinygrad: what the run's tensors were (`effective_precision`, from the parameter
+      and floating input dtypes); torch also whether autocast was on inside the step
+      (gh-ocannl-1208), tinygrad the default float in force (`default_float`, gh-ocannl-1262) --
+      the dtype of every float it creates without a stated one;
+    - OCANNL: the storage precision its model body was compiled at (`storage_precision`, read off
+      the logits node; gh-ocannl-1262), which a `BENCH_PRECISION` the runner ignored leaves at f32.
+
+    A label the run contradicts -- a weight cast on load, an autocast context, a requested
+    precision the runner did not apply -- is a number quoted at a precision it was not measured
+    at, and the parity reference is such a row too. `precision_mismatch` says what ran, in words
+    the report prints. A field a row does not carry (a runner predating it) is not checked; an
+    autocast state torch could not read (None) is not a mismatch, and the row's `autocast` says it
+    is unknown.
     """
     mismatched = []
     for r in results:
-        ran = r.get("effective_precision")
-        if ran is None:
-            continue
+        base = precision_base(r.get("precision", "f32"))
         found = []
-        if ran != precision_base(r.get("precision", "f32")):
+        ran = r.get("effective_precision")
+        if ran is not None and ran != base:
             found.append(f"{ran} tensors")
+        default_float = r.get("default_float")
+        if default_float is not None and PRECISION_LABELS.get(default_float, default_float) != base:
+            found.append(f"default float {default_float}")
+        storage = r.get("storage_precision")
+        if storage is not None and storage != base:
+            found.append(f"{storage} storage")
         autocast = r.get("autocast")
         if autocast and autocast.get("enabled"):
             found.append(f"autocast to {autocast.get('dtype')}")
@@ -3402,7 +3415,10 @@ def main():
                         f"{shown} tinygrad/{device}/{'jit' if jit else 'nojit'}"
                         f"{regime_label(tiny_regime)}",
                         [str(VENV_PY), str(HERE / "runners/tinygrad/run.py"), "--fixture", str(fx), "--device", device, "--jit", str(jit)],
-                        override={"regime": tiny_regime},
+                        # An f32 cell, stamped as such so the row states the precision it was
+                        # requested at beside the one its runner read back (`precision_check`,
+                        # gh-ocannl-1262).
+                        override={"regime": tiny_regime, "precision": "f32"},
                     )
                 if args.beam:
                     # PARALLEL sizes tinygrad's candidate-compile pool (its own knob, read where
@@ -3428,6 +3444,7 @@ def main():
                             "beam": args.beam,
                             "beam_parallel": args.beam_parallel,
                             "regime": tiny_regime,
+                            "precision": "f32",
                         },
                         env=beam_env,
                         # The one cell whose cache a kill can tear: the beam search writes its

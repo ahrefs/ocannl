@@ -782,6 +782,22 @@ class OcannlResultLineTest(unittest.TestCase):
         self.assertEqual(blown["parity"], "DIVERGED")
         self.assertEqual(blown["diverged_at"], 1)
 
+    def test_a_label_the_storage_read_back_contradicts_fails_the_precision_gate(self):
+        # gh-ocannl-1262, on lines the OCaml emitter built: a row's storage_precision is what its
+        # model ran at. Stamped with what it ran at, it passes; stamped as a precision the runner
+        # did not apply -- the sweep's label over an ignored BENCH_PRECISION -- it fails.
+        parsed = [strict_loads(line) for line in self.lines()]
+        read_back = [r for r in parsed if r.get("storage_precision") is not None]
+        self.assertTrue(read_back, "no golden line carries a storage read-back")
+        unread = [r for r in parsed if r.get("storage_precision") is None]
+        self.assertTrue(unread, "no golden line spells a missing read-back")
+        honest = [dict(r) for r in read_back]
+        ignored = [dict(r, precision="bf16") for r in read_back]
+        self.assertEqual(orchestrate.precision_check(honest + unread), [])
+        self.assertEqual(orchestrate.precision_check(ignored), ignored)
+        for r in ignored:
+            self.assertEqual(r["precision_mismatch"], f"{r['storage_precision']} storage")
+
 
 def golden_checkpoint_lines():
     """The checkpoint lines `Bench_json` built, with the prefix a runner writes them behind, as the
@@ -5867,6 +5883,31 @@ meta = {
 save_file({k: v.to(dtype).contiguous() for k, v in tensors.items()}, path, metadata=meta)
 """
 
+# The torch probe fixture's twin for the tinygrad runner, which loads through safetensors.numpy
+# (so no bfloat16: numpy has no such dtype).
+TINYGRAD_PROBE_FIXTURE = """
+import sys
+import numpy as np
+from safetensors.numpy import save_file
+
+path, dtype = sys.argv[1], np.dtype(sys.argv[2])
+rng = np.random.default_rng(0)
+n, d_in, hidden, d_out = 8, 4, 6, 3
+tensors = {
+    "x": rng.standard_normal((n, d_in)),
+    "y": np.eye(d_out)[np.arange(n) % d_out],
+    "w1": rng.standard_normal((hidden, d_in)) * 0.5,
+    "b1": np.zeros(hidden),
+    "w2": rng.standard_normal((d_out, hidden)) * 0.5,
+    "b2": np.zeros(d_out),
+}
+meta = {
+    "model": "mlp", "name": "precision_probe", "n_layers": "2", "batch_size": "4", "lr": "0.1",
+    "parity_steps": "3", "warmup_steps": "1", "timed_steps": "2",
+}
+save_file({k: np.ascontiguousarray(v.astype(dtype)) for k, v in tensors.items()}, path, metadata=meta)
+"""
+
 # Runs the torch runner inside an autocast context the runner knows nothing about: the case a
 # matmul-policy getter cannot see and the step's own autocast read must.
 UNDER_AUTOCAST = """
@@ -6018,6 +6059,128 @@ class TensorPrecisionTest(unittest.TestCase):
         self.assertIsNone(
             bench_common.torch_autocast_state(torch_with({}, raises=RuntimeError("xla")), "xla")
         )
+
+    def test_tinygrad_dtypes_are_named_as_torch_names_them(self):
+        # tinygrad spells its dtypes in C (`float`, `half`, `__bf16`); the row names them as the
+        # torch rows do, so one `effective_precision` and one label map read both.
+        def dtype(name):
+            return types.SimpleNamespace(name=name)
+
+        dtypes = types.SimpleNamespace(
+            float32=dtype("float"), float16=dtype("half"), bfloat16=dtype("__bf16"),
+            float64=dtype("double"), int32=dtype("int"),
+        )
+        dtypes.default_float = dtypes.float16
+        names = [
+            bench_common.tinygrad_dtype_name(dtypes, getattr(dtypes, attr))
+            for attr in ("float32", "float16", "bfloat16", "float64", "int32")
+        ]
+        self.assertEqual(names, ["float32", "float16", "bfloat16", "float64", "int"])
+
+        def tensor(attr):
+            return types.SimpleNamespace(dtype=getattr(dtypes, attr))
+
+        fields = bench_common.tinygrad_precision_fields(
+            dtypes, [tensor("float32"), tensor("float32")],
+            {"input": tensor("int32"), "target": tensor("float32")},
+        )
+        self.assertEqual(
+            fields,
+            {
+                "param_dtypes": ["float32"],
+                "input_dtypes": {"input": "int", "target": "float32"},
+                "default_float": "float16",
+                "effective_precision": "f32",
+            },
+        )
+
+    def test_a_tinygrad_or_ocannl_label_the_run_contradicts_is_a_mismatch(self):
+        # gh-ocannl-1262: the two frameworks precision_check did not cover. A tinygrad row's
+        # tensors and default float, and an OCANNL row's storage read-back, against the label.
+        def tiny(effective="f32", default_float="float32", precision="f32"):
+            row = cell("tinygrad", "CPU", "jit", [2.3, 2.2, 2.1], precision=precision)
+            row.update(
+                param_dtypes=["float32"], input_dtypes={"input": "float32", "target": "float32"},
+                default_float=default_float, effective_precision=effective,
+            )
+            return row
+
+        def ocannl(storage, precision="f32"):
+            row = cell("ocannl", "cc", "default", [2.3, 2.2, 2.1], precision=precision)
+            row["storage_precision"] = storage
+            return row
+
+        honest_tiny = tiny()
+        ignored_tiny = tiny(precision="bf16")
+        half_default = tiny(default_float="float16")
+        honest_ocannl = ocannl("bf16", precision="bf16")
+        gate_leg = ocannl("f16", precision="f16-gated4")
+        ignored_ocannl = ocannl("f32", precision="bf16")
+        older_ocannl = cell("ocannl", "cc", "default", [2.3, 2.2, 2.1], precision="bf16")
+
+        mismatched = orchestrate.precision_check(
+            [honest_tiny, ignored_tiny, half_default, honest_ocannl, gate_leg, ignored_ocannl,
+             older_ocannl]
+        )
+
+        self.assertEqual(mismatched, [ignored_tiny, half_default, ignored_ocannl])
+        # Labelled bf16, it ran f32 tensors under an f32 default: both say so.
+        self.assertEqual(ignored_tiny["precision_mismatch"], "f32 tensors, default float float32")
+        self.assertEqual(half_default["precision_mismatch"], "default float float16")
+        self.assertEqual(ignored_ocannl["precision_mismatch"], "f32 storage")
+        for row in (honest_tiny, honest_ocannl, gate_leg, older_ocannl):
+            self.assertNotIn("precision_mismatch", row)
+
+    def test_the_real_tinygrad_runner_reads_its_precision_back_from_a_cpu_run(self):
+        """The tinygrad runner end to end on a tiny CPU fixture, where the bench venv has tinygrad:
+        an f32 fixture, an f16 one (read back, not echoed), and the f32 fixture under a half
+        DEFAULT_FLOAT. A requested-but-ignored precision is the first run stamped bf16."""
+        venv = bench_venv.venv_python(HERE)
+        probe = subprocess.run(
+            [str(venv), "-c", "import tinygrad, safetensors.numpy, numpy"],
+            capture_output=True, text=True, timeout=120,
+        ) if venv.exists() else None
+        if probe is None or probe.returncode != 0:
+            self.skipTest(f"the bench venv at {venv} cannot import tinygrad, safetensors, numpy")
+        run_py = HERE / "runners/tinygrad/run.py"
+
+        def row(fixture, **env):
+            done = subprocess.run(
+                [str(venv), str(run_py), "--fixture", fixture, "--device", "CPU", "--jit", "0"],
+                capture_output=True, text=True, timeout=600, env=dict(os.environ, **env),
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return strict_loads(done.stdout.strip().splitlines()[-1])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixtures = {}
+            for dtype in ("float32", "float16"):
+                fixtures[dtype] = str(Path(tmp) / f"probe_{dtype}.safetensors")
+                subprocess.run(
+                    [str(venv), "-c", TINYGRAD_PROBE_FIXTURE, fixtures[dtype], dtype],
+                    check=True, timeout=300,
+                )
+            f32 = row(fixtures["float32"])
+            f16 = row(fixtures["float16"])
+            half_default = row(fixtures["float32"], DEFAULT_FLOAT="HALF")
+
+        self.assertEqual(f32["param_dtypes"], ["float32"])
+        self.assertEqual(f32["input_dtypes"], {"input": "float32", "target": "float32"})
+        self.assertEqual(f32["default_float"], "float32")
+        self.assertEqual(f32["effective_precision"], "f32")
+        self.assertEqual(f16["param_dtypes"], ["float16"])
+        self.assertEqual(f16["effective_precision"], "f16")
+        self.assertEqual(half_default["default_float"], "float16")
+
+        for r in (f32, f16, half_default):
+            r["precision"] = "f32"  # as the sweep stamps every tinygrad cell
+        ignored = dict(f32, precision="bf16")
+        mismatched = orchestrate.precision_check([f32, ignored, f16, half_default])
+
+        self.assertEqual(mismatched, [ignored, f16, half_default])
+        self.assertEqual(ignored["precision_mismatch"], "f32 tensors, default float float32")
+        self.assertEqual(f16["precision_mismatch"], "f16 tensors")
+        self.assertIn("default float float16", half_default["precision_mismatch"])
 
     def torch_row(self, effective, precision="f32", autocast=None):
         row = cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1], precision=precision)

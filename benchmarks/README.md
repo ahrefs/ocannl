@@ -396,6 +396,15 @@ cell is the step: cite the step cell. Each issue's cell:
   `runners/` from `sys.path` again right after importing `bench_common`: left there, the worker's
   own `import tinygrad` resolves `runners/tinygrad/` as a namespace package, every worker dies,
   the pool respawns them forever, and the search hangs rather than failing (gh-ocannl-675).
+  Every result line carries the torch runner's `param_dtypes`, `input_dtypes` and
+  `effective_precision` (tinygrad dtypes under torch's names) and, in place of autocast, the
+  `default_float` in force (`DEFAULT_FLOAT`; gh-ocannl-1262); the sweep stamps every tinygrad cell
+  `precision: f32` and fails a row whose tensors or default float contradict it, as for torch.
+- OCANNL result lines carry `storage_precision` beside the requested `precision`: the storage
+  precision the model body (its logits node) was compiled at, read back from the graph rather than
+  echoed from the parsed `BENCH_PRECISION` leg (gh-ocannl-1262). The sweep fails a row whose
+  read-back contradicts the precision it dispatched, so a precision request the runner ignored is
+  a **`PRECISION MISMATCH`** rather than a quoted number.
 - `orchestrate.py` — runs the matrix (dispatching the OCANNL executable on the fixture's
   `model`), enforces the parity gate, writes `results/results.jsonl` and
   `results/report.md` (`BENCH_RESULTS_DIR=<dir>` writes them, and the `partial*.jsonl`

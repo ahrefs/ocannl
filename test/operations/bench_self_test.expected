@@ -19,6 +19,8 @@ backend names the backend the cell ran on: true
 workload names the self-test model, not a benchmark cell: true
 variant names the self-test: true
 precision is f32: true
+storage_precision reads the compiled logits back as f32: true
+storage_precision reads a half node back as f16, a bfloat16 one as bf16: true
 float licence metadata records each resolved licence and its source: true
 compile_s is a non-negative number: true
 searched is false in an untuned cell: true

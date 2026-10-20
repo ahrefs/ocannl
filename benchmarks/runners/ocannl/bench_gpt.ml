@@ -33,6 +33,7 @@ let () =
   let {
     Bench_gpt_model.ctx;
     batch_loss;
+    logits;
     step_shape;
     bindings;
     batch_n;
@@ -110,7 +111,8 @@ let () =
             report column and composes the two axes itself (gh-ocannl-539), so a reduced-precision
             cell is distinguished by the precision field rather than by overloading this one. *)
          (if tune then "tuned" else if materialize then "materialized" else "default")
-       ~precision:leg.H.label ~compile_s ~tokens_per_step:(batch_size * seq) ~tune:arms
+       ~precision:leg.H.label ~storage_of:logits ~compile_s ~tokens_per_step:(batch_size * seq)
+       ~tune:arms
        ~dominant_kernel:(fun () ->
          H.dominant_kernel ~ctx:!ctx_ref ~bindings (H.step_routines routines))
        ~run_step

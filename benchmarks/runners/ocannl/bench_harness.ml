@@ -98,6 +98,24 @@ let precision_leg ~runner ~training ?st () =
   if Float.(init_scale <= 0.) then failwith (runner ^ ": loss scale must be positive");
   { label; base; prec; static_scale; gate_interval; init_scale }
 
+(** The report's label of a storage precision: [f32], [bf16], [f16], [f64], else
+    {!Ir.Ops.prec_string}. *)
+let precision_label prec =
+  match prec with
+  | Ir.Ops.Single_prec _ -> "f32"
+  | Ir.Ops.Bfloat16_prec _ -> "bf16"
+  | Ir.Ops.Half_prec _ -> "f16"
+  | Ir.Ops.Double_prec _ -> "f64"
+  | _ -> Ir.Ops.prec_string prec
+
+(** The storage precision [t]'s value node was compiled at, as {!precision_label} spells it — the
+    result line's [storage_precision] (gh-ocannl-1262). A runner hands {!measure_and_emit} its model
+    body's output (the logits): every precision leg's storage policy re-precisions that subtree and
+    pins only the loss head, so a [BENCH_PRECISION] the runner never applied reads back as the
+    precision the cell did run at, where echoing the leg it parsed would agree with the request
+    whatever ran. Read once the graph is compiled, when the precision is settled. *)
+let storage_precision (t : Tensor.t) = precision_label (Lazy.force t.Tensor.value.Tn.storage_prec)
+
 (** The step shapes of the training legs, before compilation. *)
 type train_parts =
   | Plain_step of Asgns.comp  (** One fused routine: f32, bf16, and the f16 static-scale leg. *)
@@ -1274,6 +1292,9 @@ let protocol_of_st ~fixture st =
     Keep the protocol here rather than in a caller (gh-ocannl-702): {!run_self_test} is what stands
     behind this function in a fresh checkout, and it stands behind exactly what this function does.
 
+    [storage_of] is the model body's output, whose compiled storage precision the line reports as
+    [storage_precision] beside the requested [precision] ({!storage_precision}).
+
     [dominant_kernel] measures the report's %-of-peak column (see {!dominant_kernel}); it is called
     once, after the timed steps and the memory reading, unless [BENCH_DOMINANT_KERNEL=0]. Without it
     the line carries [null] there.
@@ -1305,9 +1326,9 @@ let protocol_of_st ~fixture st =
     (the [tune] object's [no_searches] is what tells that apart from a replay — a count of arms
     whose {!Autotune.outcome} was one of the two states that search nothing, rather than an
     inference from two counters that are both zero). *)
-let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
-    ?tokens_per_step ?tune ?(out = Stdio.stdout) ?(checkpoint_out = Stdio.stderr) ?dominant_kernel
-    ~run_step ~read_loss ~sync () =
+let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") ?storage_of
+    ~compile_s ?tokens_per_step ?tune ?(out = Stdio.stdout) ?(checkpoint_out = Stdio.stderr)
+    ?dominant_kernel ~run_step ~read_loss ~sync () =
   let { workload; parity_steps; warmup_steps; timed_steps; fixture } = protocol in
   Stdio.eprintf "bench: compiled in %.1fs, starting %d parity steps\n%!" compile_s parity_steps;
   let dominant_kernel = if dominant_kernel_enabled () then dominant_kernel else None in
@@ -1393,7 +1414,9 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
   let dominant_kernel = Option.map dominant_kernel ~f:(fun measure -> measure ()) in
   Array.sort synced ~compare:Float.compare;
   let line =
-    Bench_json.result_line ~backend ~variant ~precision ~profile ~regime_knobs ~ambient_resolved
+    Bench_json.result_line ~backend ~variant ~precision
+      ?storage_precision:(Option.map storage_of ~f:storage_precision)
+      ~profile ~regime_knobs ~ambient_resolved
       ~fp_licences:(fp_licence_record ()) ~workload ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
       ~shipped_mma:(mma_wire (step_census routines))
@@ -1525,7 +1548,7 @@ let run_self_test ?(out = Stdio.stdout) ?checkpoint_out ?(leg = self_test_leg) ?
      What the self-test guards is the protocol and the emitter, not the search. *)
   let line =
     measure_and_emit ~routines ~protocol:self_test_protocol ~backend ~variant:"self-test" ~compile_s
-      ~out ?checkpoint_out
+      ~storage_of:logits ~out ?checkpoint_out
       ~dominant_kernel:
         (Option.value late_probe ~default:(fun () ->
              dominant_kernel ~ctx:!ctx_ref ~bindings (step_routines routines)))
