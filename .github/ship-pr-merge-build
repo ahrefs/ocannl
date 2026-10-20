@@ -14,7 +14,8 @@
 # reads a new kind of file; the few paths nothing reads (editor settings) cost a build only when
 # both sides change one. Replayed over the 474 first-parent merges on master from 2026-09-19 to
 # 2026-10-19, the OCaml-and-scripts list this replaced built 166 of them, adding `*.md` would
-# build 238 and every path builds 245, at about 40 s each. What stays outside: a clash across
+# build 238 and every path builds 245, at about 40 s each (tools/merge-build-replay.py replays a
+# history against any glob sets, these lines by default). What stays outside: a clash across
 # paths only ONE side changed, and one the compile tier cannot see (a runtime test's verdict);
 # both are the integration loop's, on master.
 #
