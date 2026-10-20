@@ -1063,14 +1063,20 @@ let width_limits_type_home = "arrayjit/lib/backend_intf.ml"
    rounds 1-3 of staging#1263, where proving arbitrary statements of a setting kept finding new ways
    to write one).
 
-   "Starts a search" is derived from the search's entry point [search_value] of [search_home] and
-   the values of the framework library ([search_wrapper_root]) that reach it, transitively
-   (`Train.tune_placements`): the paths a program names them by, under an alias or an `open` too, or
-   any path ending in one, whatever qualifies it. "Can select cc" is the backend rule's own answer
-   for the run: `(env_var OCANNL_BACKEND)`, or a backend marker naming cc or multidev_cc, the two
-   backends rendering through `Cc_backend`. *)
+   "Starts a search" is derived from the search's entry points [search_value] (and
+   [search_values_extra]) of [search_home] and the values of the framework library
+   ([search_wrapper_root]) that reach it, transitively (`Train.tune_placements`): the paths a
+   program names them by, under an alias or an `open` too, or any path ending in one, whatever
+   qualifies it. "Can select cc" is the backend rule's own answer for the run: `(env_var
+   OCANNL_BACKEND)`, or a backend marker naming cc or multidev_cc, the two backends rendering
+   through `Cc_backend`. *)
 let search_home = "arrayjit/lib/autotune.ml"
 let search_value = [ "Autotune"; "tune" ]
+
+(* Further entry points, followed where [search_home] defines them: [tune_deferred]
+   (gh-ocannl-1408), which [Train.tune_placements] searches through. [search_value] alone is the
+   anchor the derivation refuses to lose. *)
+let search_values_extra = [ [ "Autotune"; "tune_deferred" ] ]
 let search_wrapper_root = "lib/"
 let search_wrapper_library = "Ocannl"
 
@@ -1611,16 +1617,18 @@ let main () =
   let width_table = ref [] in
   (* gh-ocannl-1368: the search's entry points, derived. The anchor is refused when it moves, as the
      width's are: a renamed `tune` would otherwise retire the rule with an empty population. *)
-  let search_anchor_found =
+  let search_home_defines =
     match List.Assoc.find source_files ~equal:String.equal search_home with
-    | None -> false
+    | None -> fun _ -> false
     | Some on_disk ->
-        List.exists
-          (Sources.definitions (In_channel.read_all on_disk))
-          ~f:(fun d ->
-            d.Sources.top_level
-            && Option.equal String.equal d.Sources.name (Some (List.last_exn search_value)))
+        let definitions = Sources.definitions (In_channel.read_all on_disk) in
+        fun value ->
+          List.exists definitions ~f:(fun d ->
+              d.Sources.top_level
+              && Option.equal String.equal d.Sources.name (Some (List.last_exn value)))
   in
+  let search_anchor_found = search_home_defines search_value in
+  let search_values = search_value :: List.filter search_values_extra ~f:search_home_defines in
   (* The framework library's values reaching the search, by module and name: a value reaches it when
      it names a qualified path ending in the entry point or in an earlier-found wrapper, or a value
      of its own module that does, closed to its fixpoint across the library's modules. A call
@@ -1642,7 +1650,7 @@ let main () =
     in
     let tag = "<search>" in
     let rec close found =
-      let tails = search_value :: List.map found ~f:(fun (m, v) -> m :: String.split v ~on:'.') in
+      let tails = search_values @ List.map found ~f:(fun (m, v) -> m :: String.split v ~on:'.') in
       let next =
         List.concat_map library ~f:(fun (module_name, content) ->
             if
@@ -1680,9 +1688,9 @@ let main () =
      else [])
     @ (m :: String.split v ~on:'.')
   in
-  let search_paths = search_value :: List.map search_wrappers ~f:wrapper_path in
+  let search_paths = search_values @ List.map search_wrappers ~f:wrapper_path in
   let search_tails =
-    search_value :: List.map search_wrappers ~f:(fun (m, v) -> m :: String.split v ~on:'.')
+    search_values @ List.map search_wrappers ~f:(fun (m, v) -> m :: String.split v ~on:'.')
   in
   let search_reach =
     List.filter_map source_files ~f:(fun (path, on_disk) ->
@@ -3745,8 +3753,8 @@ let main () =
      diff. *)
   printf "  (the search's entry points: %s)\n"
     (String.concat ~sep:", "
-       (String.concat ~sep:"." search_value
-       :: List.map search_wrappers ~f:(fun w -> String.concat ~sep:"." (wrapper_path w))));
+       (List.map search_values ~f:(String.concat ~sep:".")
+       @ List.map search_wrappers ~f:(fun w -> String.concat ~sep:"." (wrapper_path w))));
   printf "  (the blessed support values pinning the file: %s)\n"
     (String.concat ~sep:", " (List.map vector_file_blessed ~f:(fun (m, v) -> m ^ "." ^ v)));
   List.sort !search_table ~compare:(fun (a, _, _) (b, _, _) -> String.compare a b)
