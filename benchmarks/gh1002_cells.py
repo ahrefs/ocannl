@@ -65,7 +65,6 @@ from pathlib import Path
 
 import box_gate
 import cell_group
-import orchestrate
 import strict_json
 from display_safe import code_span, display_value, log_line, table_lines
 
@@ -230,6 +229,10 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
 
 def cell_checkpoint(base):
     """The last checkpoint the cell wrote to its .err (`orchestrate.last_checkpoint`), or None."""
+    # Imported here, as gh1181_cells.py does: the summaries' readers (kernel_attribution.py's
+    # KERNEL, test/operations' gh1002_kernels) load this module with its own imports only.
+    import orchestrate
+
     try:
         return orchestrate.last_checkpoint(
             Path(str(base) + ".err").read_text(encoding="utf-8", errors="replace"))
@@ -244,6 +247,8 @@ def record_failure(out, base, why, env, checkpoint):
     left (gh-ocannl-1209) with its provenance, which is the run's preflight identity -- plus the
     cell's coordinates. The cell's .out/.err/.status stay what `summarize` reads; this is the record
     of what a failure kept."""
+    import orchestrate  # see cell_checkpoint
+
     backend, fixture, treatment, r = base.name.split("__")
     pf = out / "preflight.json"
     ident = json.loads(pf.read_text()) if pf.exists() else {}
