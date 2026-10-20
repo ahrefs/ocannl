@@ -200,7 +200,14 @@ files.
   `hardware_limits.codegen_tag` — `cache_key` takes the whole limits record precisely so a new
   component reaches every call site. What a numerics mode resolves to needs no such component: the
   key derives it from the backend's `codegen_capabilities` (gh-ocannl-1117; the precision note owns
-  it). `digest_identity_flips` calibrates one representative per
+  it). Shape is not substance: `cache_key_agreement` (gh-ocannl-596) flips every `Keyed` key and
+  requires its OWN component to move (`Schedule_cache.cache_key_components`), and requires no
+  other key to be read while the key is computed (a trace of `Utils.accessed_global_args`, plain and
+  behind the routine-log gate). Adding a `Keyed` key means a row in its `keyed_flips` table --
+  candidates, the regime its gate needs, and the backend predicate whose tag hashes it -- or in
+  `unflippable` with the reason; keys resolved at startup flip through their resolver
+  (`Utils.restore_settings`, the memoized `Numerics` policy), the settings-borne set derived from
+  `utils.ml`. `digest_identity_flips` calibrates one representative per
   class against a real compile; when picking a code-borne representative note that many optimizer
   keys (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an

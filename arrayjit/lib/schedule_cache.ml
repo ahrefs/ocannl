@@ -802,8 +802,12 @@ let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "devi
 *)
 let queued_objective_version = 3
 
-let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) ~capabilities
-    canonical ~backend =
+(* Each component of the key under its name, in [key_components] order, an empty rendering kept:
+   what [cache_key] concatenates, and what a check comparing two keys component by component reads
+   (gh-ocannl-596: a flip has to move the component its classification names, not merely the
+   key). *)
+let cache_key_components ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits)
+    ~capabilities canonical ~backend =
   Option.map timing_identity ~f:(fun identity ->
       let objective = match objective with Some o -> sanitize o | None -> objective_tag () in
       let objective =
@@ -834,9 +838,15 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
         | "timing" -> "t" ^ objective
         | other -> invalid_arg ("Schedule_cache.cache_key: unhandled key component " ^ other)
       in
+      List.map key_components ~f:(fun name -> (name, component name)))
+
+let cache_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend =
+  Option.map
+    (cache_key_components ?objective ~timing_identity ~limits ~capabilities canonical ~backend)
+    ~f:(fun components ->
       String.concat ~sep:"-"
-        (List.filter_map key_components ~f:(fun name ->
-             match component name with "" -> None | part -> Some part)))
+        (List.filter_map components ~f:(fun (_, part) ->
+             Option.some_if (not (String.is_empty part)) part)))
 
 let ensure_dir = Utils.Atomic_file.ensure_dir
 

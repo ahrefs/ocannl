@@ -418,6 +418,19 @@ val cache_key :
     capabilities and optional observed toolchain metadata; it does not change construction limits or
     promise complete runtime/driver provenance. *)
 
+val cache_key_components :
+  ?objective:string ->
+  timing_identity:Backend_intf.timing_identity option ->
+  limits:Backend_intf.hardware_limits ->
+  capabilities:Backend_intf.codegen_capabilities ->
+  canonical ->
+  backend:string ->
+  (string * string) list option
+(** {!cache_key}'s components, each under its {!key_components} name and in that order, an empty
+    rendering (the [pool] component on a GPU backend) included: what {!cache_key} joins. For a check
+    that a configuration flip moves the component its classification names
+    ([test/operations/cache_key_agreement], gh-ocannl-596). *)
+
 val cache_regime_version : int
 (** Version of the filename-key regime recorded once per cache directory (gh-ocannl-835). Bump it
     when the schema of {!key_components} changes, or how a key becomes a filename ({!cache_file}).

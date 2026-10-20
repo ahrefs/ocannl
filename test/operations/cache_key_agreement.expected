@@ -1,0 +1,31 @@
+the flip and unflippable tables cover exactly the Keyed class: true
+every key utils.ml resolves into Utils.settings is flipped through restore_settings, and only those: true
+every Keyed key the running backend hashes moves its own component when flipped: true
+every Keyed key outside the running backend's scope moves nothing when flipped: true
+no key outside the Keyed class is read while the cache key is computed: true
+the key computation reads its Keyed keys per lookup, so the trace sees reads: true
+no unflippable Keyed key is read per lookup by the key computation: true
+each settings-borne key outside Keyed is flipped by restore_settings: true
+and moves no component of the cache key: true
+no registered non-Keyed key moves the cache key when flipped off its default: true
+
+Keyed keys this sweep cannot flip in-process:
+  backend -- a parameter, not a lookup: backends are process-wide singletons, and the component is the backend name the caller passes
+  cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes
+  cc_grid_private_bytes_cap -- resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; the codegen tag hashes that resolved value
+
+Keyed keys hashed only on some backends:
+  cc_backend_optimization_level -- CPU backends
+  cc_backend_compiler_command -- CPU backends
+  cc_backend_arch_flags -- CPU backends
+  cc_backend_simd_flags -- CPU backends
+  cc_backend_fp_contract -- CPU backends
+  cc_backend_fast_math -- CPU backends
+  cc_vector_bytes -- CPU backends
+  cc_vector_registers -- CPU backends
+  cc_fp16_arithmetic -- CPU backends
+  cc_parallel_grid -- CPU backends
+  cc_parallel_chunks -- CPU backends
+  output_debug_files_in_build_directory -- CUDA and HIP
+  gpu_graph_capture -- CUDA and HIP
+  gpu_elide_covered_zeros -- GPU backends
