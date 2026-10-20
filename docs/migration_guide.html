@@ -157,7 +157,6 @@ Tips</a></li>
 <li><a href="#gradient-computation" id="toc-gradient-computation">Gradient Computation</a></li>
 <li><a href="#sgd-optimizer" id="toc-sgd-optimizer">SGD
 Optimizer</a></li>
-<li><a href="#training-step-execution" id="toc-training-step-execution">Training Step Execution</a></li>
 <li><a href="#writing-your-own-training-functions" id="toc-writing-your-own-training-functions">Writing Your Own Training
 Functions</a></li>
 <li><a href="#key-insights" id="toc-key-insights">Key Insights</a></li>
@@ -830,110 +829,101 @@ autograd/<strong>init</strong>.py</a>):</p>
 <span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    <span class="co"># 1. Zero gradients if needed</span></span>
 <span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># 2. Set output gradient to grad_tensors (default 1.0)</span></span>
 <span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># 3. Walk computation graph backwards accumulating gradients</span></span></code></pre></div>
-<p><strong>OCANNL</strong> (from train.ml):</p>
-<div class="sourceCode" id="cb25"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> grad_update ?(setup_for_parallel = <span class="kw">false</span>) loss =</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  set_materialized loss.Tensor.value;</span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* This just builds a computation graph, doesn&#39;t execute *)</span></span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  [%cd</span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    loss.forward;           <span class="co">(* Run forward pass *)</span></span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    loss.zero_grads;        <span class="co">(* Zero all parameter gradients *)</span></span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    loss.grad =: <span class="dv">1</span>;         <span class="co">(* Set output gradient to 1 *)</span></span>
-<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    loss.backprop]          <span class="co">(* Run backpropagation *)</span></span></code></pre></div>
+<p><strong>OCANNL</strong> (simplified from train.ml):
+<code>ocaml doc-adapted=lib/train.ml let grad_update ?(setup_for_parallel = false) loss =   set_materialized loss.Tensor.value;   (* This just builds a computation graph, doesn&#39;t execute *)   [%cd     loss.forward;           (* Run forward pass *)     loss.zero_grads;        (* Zero all parameter gradients *)     loss.grad =: 1;         (* Set output gradient to 1 *)     loss.backprop]          (* Run backpropagation *)</code></p>
 <p>Key difference: PyTorch executes immediately, OCANNL returns a
 computation description to compile.</p>
 <h3 id="sgd-optimizer">SGD Optimizer</h3>
 <p><strong>PyTorch</strong> (<a href="https://github.com/pytorch/pytorch/blob/main/torch/optim/sgd.py">from
 optim/sgd.py</a>):</p>
-<div class="sourceCode" id="cb26"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="at">@torch.no_grad</span>()</span>
-<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> step(<span class="va">self</span>):</span>
-<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> group <span class="kw">in</span> <span class="va">self</span>.param_groups:</span>
-<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>        weight_decay <span class="op">=</span> group[<span class="st">&#39;weight_decay&#39;</span>]</span>
-<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>        momentum <span class="op">=</span> group[<span class="st">&#39;momentum&#39;</span>]</span>
-<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>        </span>
-<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> p <span class="kw">in</span> group[<span class="st">&#39;params&#39;</span>]:</span>
-<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> p.grad <span class="kw">is</span> <span class="va">None</span>:</span>
-<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>                <span class="cf">continue</span></span>
-<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>            d_p <span class="op">=</span> p.grad</span>
-<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>            </span>
-<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Add weight decay</span></span>
-<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> weight_decay <span class="op">!=</span> <span class="dv">0</span>:</span>
-<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>                d_p <span class="op">=</span> d_p.add(p, alpha<span class="op">=</span>weight_decay)</span>
-<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>            </span>
-<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Apply momentum</span></span>
-<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> momentum <span class="op">!=</span> <span class="dv">0</span>:</span>
-<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>                buf <span class="op">=</span> <span class="va">self</span>.state[p].get(<span class="st">&#39;momentum_buffer&#39;</span>, <span class="va">None</span>)</span>
-<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> buf <span class="kw">is</span> <span class="va">None</span>:</span>
-<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a>                    buf <span class="op">=</span> torch.clone(d_p).detach()</span>
-<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>                <span class="cf">else</span>:</span>
-<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>                    buf.mul_(momentum).add_(d_p)</span>
-<span id="cb26-23"><a href="#cb26-23" aria-hidden="true" tabindex="-1"></a>                </span>
-<span id="cb26-24"><a href="#cb26-24" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> nesterov:</span>
-<span id="cb26-25"><a href="#cb26-25" aria-hidden="true" tabindex="-1"></a>                    d_p <span class="op">=</span> d_p.add(buf, alpha<span class="op">=</span>momentum)</span>
-<span id="cb26-26"><a href="#cb26-26" aria-hidden="true" tabindex="-1"></a>                <span class="cf">else</span>:</span>
-<span id="cb26-27"><a href="#cb26-27" aria-hidden="true" tabindex="-1"></a>                    d_p <span class="op">=</span> buf</span>
-<span id="cb26-28"><a href="#cb26-28" aria-hidden="true" tabindex="-1"></a>            </span>
-<span id="cb26-29"><a href="#cb26-29" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Update parameters</span></span>
-<span id="cb26-30"><a href="#cb26-30" aria-hidden="true" tabindex="-1"></a>            p.add_(d_p, alpha<span class="op">=-</span>lr)</span></code></pre></div>
-<p><strong>OCANNL</strong> (from train.ml):</p>
-<div class="sourceCode" id="cb27"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_one ~learning_rate ?(momentum = <span class="fl">0.0</span>) ?(weight_decay = <span class="fl">0.0</span>) ?(nesterov = <span class="kw">false</span>) p =</span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Again, just building computation graph *)</span></span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>  [%cd</span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>    { sgd_delta } =: p.grad + (!.weight_decay *. p);</span>
-<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> Float.(momentum &gt; <span class="fl">0.0</span>) <span class="kw">then</span> (</span>
-<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>      { sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta;</span>
-<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>      <span class="kw">if</span> nesterov <span class="kw">then</span> </span>
-<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>        sgd_delta =+ !.momentum *. sgd_momentum </span>
-<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>      <span class="kw">else</span> </span>
-<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>        sgd_delta =: sgd_momentum);</span>
-<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    p =- learning_rate * sgd_delta]</span>
-<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss =</span>
-<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Apply sgd_one to the parameters the loss trains: those of [loss.params] whose gradient the</span></span>
-<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a><span class="co">     backprop code writes (so e.g. a backbone frozen behind [stop_gradient] takes no step) *)</span></span>
-<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> f = sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov <span class="kw">in</span></span>
-<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Set</span>.to_list (trainable_params loss)</span>
-<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>  |&gt; <span class="dt">List</span>.map ~f </span>
-<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>  |&gt; Asgns.sequence  <span class="co">(* Combine into single computation *)</span></span></code></pre></div>
-<p>The math is identical! The difference is compilation vs eager
-execution.</p>
-<h3 id="training-step-execution">Training Step Execution</h3>
-<p><strong>PyTorch</strong> (typical training loop):</p>
-<div class="sourceCode" id="cb28"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Everything executes immediately when called</span></span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>optimizer.zero_grad()        <span class="co"># Modifies tensors in-place</span></span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>output <span class="op">=</span> model(<span class="bu">input</span>)        <span class="co"># Executes forward pass</span></span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>loss <span class="op">=</span> criterion(output, target)  <span class="co"># Computes loss</span></span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>loss.backward()              <span class="co"># Executes backprop</span></span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>optimizer.step()             <span class="co"># Updates parameters</span></span></code></pre></div>
+<div class="sourceCode" id="cb25"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="at">@torch.no_grad</span>()</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> step(<span class="va">self</span>):</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> group <span class="kw">in</span> <span class="va">self</span>.param_groups:</span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>        weight_decay <span class="op">=</span> group[<span class="st">&#39;weight_decay&#39;</span>]</span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>        momentum <span class="op">=</span> group[<span class="st">&#39;momentum&#39;</span>]</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> p <span class="kw">in</span> group[<span class="st">&#39;params&#39;</span>]:</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> p.grad <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>                <span class="cf">continue</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>            d_p <span class="op">=</span> p.grad</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Add weight decay</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> weight_decay <span class="op">!=</span> <span class="dv">0</span>:</span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>                d_p <span class="op">=</span> d_p.add(p, alpha<span class="op">=</span>weight_decay)</span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Apply momentum</span></span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> momentum <span class="op">!=</span> <span class="dv">0</span>:</span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>                buf <span class="op">=</span> <span class="va">self</span>.state[p].get(<span class="st">&#39;momentum_buffer&#39;</span>, <span class="va">None</span>)</span>
+<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> buf <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a>                    buf <span class="op">=</span> torch.clone(d_p).detach()</span>
+<span id="cb25-21"><a href="#cb25-21" aria-hidden="true" tabindex="-1"></a>                <span class="cf">else</span>:</span>
+<span id="cb25-22"><a href="#cb25-22" aria-hidden="true" tabindex="-1"></a>                    buf.mul_(momentum).add_(d_p)</span>
+<span id="cb25-23"><a href="#cb25-23" aria-hidden="true" tabindex="-1"></a>                </span>
+<span id="cb25-24"><a href="#cb25-24" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> nesterov:</span>
+<span id="cb25-25"><a href="#cb25-25" aria-hidden="true" tabindex="-1"></a>                    d_p <span class="op">=</span> d_p.add(buf, alpha<span class="op">=</span>momentum)</span>
+<span id="cb25-26"><a href="#cb25-26" aria-hidden="true" tabindex="-1"></a>                <span class="cf">else</span>:</span>
+<span id="cb25-27"><a href="#cb25-27" aria-hidden="true" tabindex="-1"></a>                    d_p <span class="op">=</span> buf</span>
+<span id="cb25-28"><a href="#cb25-28" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb25-29"><a href="#cb25-29" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Update parameters</span></span>
+<span id="cb25-30"><a href="#cb25-30" aria-hidden="true" tabindex="-1"></a>            p.add_(d_p, alpha<span class="op">=-</span>lr)</span></code></pre></div>
+<p><strong>OCANNL</strong> (simplified from train.ml): ```ocaml
+doc-adapted=lib/train.ml let sgd_one ~learning_rate ?(momentum = 0.0)
+?(weight_decay = 0.0) ?(nesterov = false) p = (* Again, just building
+computation graph *) [%cd { sgd_delta } =: p.grad + (!.weight_decay
+<em>. p); if Float.(momentum &gt; 0.0) then ( { sgd_momentum } =:
+(!.momentum </em>. sgd_momentum) + sgd_delta; if nesterov then sgd_delta
+=+ !.momentum <em>. sgd_momentum else sgd_delta =: sgd_momentum); p =-
+learning_rate </em> sgd_delta]</p>
+<p>let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss
+= (* Apply sgd_one to the parameters the loss trains: those of
+[loss.params] whose gradient the backprop code writes (so e.g. a
+backbone frozen behind [stop_gradient] takes no step) <em>) let f =
+sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov in Set.to_list
+(trainable_params loss) |&gt; List.map ~f |&gt; Asgns.sequence (</em>
+Combine into single computation *)</p>
+<pre><code>
+The math is identical! The difference is compilation vs eager execution.
+
+### Training Step Execution
+
+**PyTorch** (typical training loop):
+```python
+# Everything executes immediately when called
+optimizer.zero_grad()        # Modifies tensors in-place
+output = model(input)        # Executes forward pass
+loss = criterion(output, target)  # Computes loss
+loss.backward()              # Executes backprop
+optimizer.step()             # Updates parameters</code></pre>
 <p><strong>OCANNL</strong> (equivalent pattern):</p>
-<div class="sourceCode" id="cb29"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build computation graph - nothing executes yet *)</span></span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> update = Train.grad_update loss <span class="kw">in</span>           <span class="co">(* forward + backward *)</span></span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss <span class="kw">in</span> <span class="co">(* parameter updates *)</span></span>
-<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile once *)</span></span>
-<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx, routine = Train.to_routine ctx bindings </span>
-<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
-<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Execute many times *)</span></span>
-<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>Train.run ctx routine  <span class="co">(* NOW it executes everything *)</span></span></code></pre></div>
+<div class="sourceCode" id="cb27"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build computation graph - nothing executes yet *)</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> update = Train.grad_update loss <span class="kw">in</span>           <span class="co">(* forward + backward *)</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss <span class="kw">in</span> <span class="co">(* parameter updates *)</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile once *)</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx, routine = Train.to_routine ctx bindings </span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Execute many times *)</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>Train.run ctx routine  <span class="co">(* NOW it executes everything *)</span></span></code></pre></div>
 <h3 id="writing-your-own-training-functions">Writing Your Own Training
 Functions</h3>
 <p>Since <code>Train</code> is just convenience functions, you can
 easily write your own:</p>
 <p><strong>Custom optimizer example:</strong></p>
-<div class="sourceCode" id="cb30"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Adam optimizer - not in Train module but easy to add *)</span></span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> adam_update ~learning_rate ~beta1 ~beta2 ~epsilon loss =</span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> adam_one p =</span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>    [%cd</span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* First moment estimate *)</span></span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>      { m } =: (!.beta1 *. m) + ((<span class="fl">1.0</span> - !.beta1) *. p.grad);</span>
-<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Second moment estimate *)</span>  </span>
-<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>      { v } =: (!.beta2 *. v) + ((<span class="fl">1.0</span> - !.beta2) *. (p.grad *. p.grad));</span>
-<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Bias correction and update *)</span></span>
-<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>      p =- learning_rate * (m / (<span class="dt">sqrt</span> v + !.epsilon))]</span>
-<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
-<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Set</span>.to_list loss.Tensor.params </span>
-<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>  |&gt; <span class="dt">List</span>.map ~f:adam_one</span>
-<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>  |&gt; Asgns.sequence</span></code></pre></div>
+<div class="sourceCode" id="cb28"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Adam optimizer - not in Train module but easy to add *)</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> adam_update ~learning_rate ~beta1 ~beta2 ~epsilon loss =</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> adam_one p =</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    [%cd</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* First moment estimate *)</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>      { m } =: (!.beta1 *. m) + ((<span class="fl">1.0</span> - !.beta1) *. p.grad);</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Second moment estimate *)</span>  </span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>      { v } =: (!.beta2 *. v) + ((<span class="fl">1.0</span> - !.beta2) *. (p.grad *. p.grad));</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Bias correction and update *)</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>      p =- learning_rate * (m / (<span class="dt">sqrt</span> v + !.epsilon))]</span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Set</span>.to_list loss.Tensor.params </span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>  |&gt; <span class="dt">List</span>.map ~f:adam_one</span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>  |&gt; Asgns.sequence</span></code></pre></div>
 <h3 id="key-insights">Key Insights</h3>
 <ol type="1">
 <li><strong>No magic</strong>: <code>Train</code> functions are just
@@ -1009,12 +999,12 @@ with <code>~train_step</code> to split the randomness key</li>
 </ul></li>
 </ol>
 <p><strong>Example:</strong></p>
-<div class="sourceCode" id="cb31"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Parameter init - happens once, deterministic is fine *)</span></span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>{ w = uniform () }</span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training randomness - needs train_step for proper key splitting *)</span></span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>dropout ~rate:<span class="fl">0.5</span> () ~train_step x</span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* internally uses: uniform_at !@train_step *)</span></span></code></pre></div>
+<div class="sourceCode" id="cb29"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Parameter init - happens once, deterministic is fine *)</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>{ w = uniform () }</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training randomness - needs train_step for proper key splitting *)</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>dropout ~rate:<span class="fl">0.5</span> () ~train_step x</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* internally uses: uniform_at !@train_step *)</span></span></code></pre></div>
 <h2 id="further-resources">Further Resources</h2>
 <ul>
 <li><a href="../dev/neural_nets_lib/Ocannl/Shape/index.html">Shape

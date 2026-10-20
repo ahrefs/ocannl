@@ -1317,12 +1317,12 @@ let%op block = [a; b]
 &lt;div up-at-unpause pause&gt;&lt;/div&gt;
 &lt;h2&gt;&lt;span&gt;Capturing Dimensions&lt;/span&gt;&lt;/h2&gt;
 &lt;div id=&quot;capture-dims&quot; class=&quot;block&quot; title=&quot;Dimension Variables&quot;&gt;
-&lt;p&gt;&lt;span&gt;Capture dimension values for computation:&lt;/span&gt;&lt;/p&gt;
-&lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;let%op normalize x =
-  let mean = (x ++ &amp;quot;... | ..d.. =&amp;gt; ... | 0&amp;quot; [&amp;quot;d&amp;quot;]) /. dim d in
+&lt;p&gt;&lt;span&gt;Capture dimension values for computation -- the opening of &lt;/span&gt;&lt;code&gt;layer_norm&lt;/code&gt;&lt;span&gt; in &lt;/span&gt;&lt;code&gt;lib/nn_blocks.ml&lt;/code&gt;&lt;span&gt;,&lt;/span&gt;
+&lt;span&gt;where &lt;/span&gt;&lt;code&gt;++&lt;/code&gt;&lt;span&gt; sums over the captured row &lt;/span&gt;&lt;code&gt;d&lt;/code&gt;&lt;span&gt; and &lt;/span&gt;&lt;code&gt;dim d&lt;/code&gt;&lt;span&gt; turns the sum into a mean:&lt;/span&gt;&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;let%op layer_norm ~label ?(epsilon = 1e-5) () x =
+  let mean = (x ++ &amp;quot; ... | ..d.. =&amp;gt; ... | 0 &amp;quot; [ &amp;quot;d&amp;quot; ]) /. dim d in
   let centered = x - mean in
-  let variance = ((centered *. centered) ++ &amp;quot;... | ... =&amp;gt; ... | 0&amp;quot;) /. dim d in
-  centered /. sqrt (variance + !.1e-5)
+  let variance = ((centered *. centered) ++ &amp;quot; ... | ... =&amp;gt; ... | 0 &amp;quot;) /. dim d in
 &lt;/code&gt;&lt;/pre&gt;
 &lt;/div&gt;
 &lt;p id=&quot;capture-warning&quot; class=&quot;remark&quot; up-at-unpause=capture-dims pause&gt;&lt;strong&gt;&lt;span&gt;Warning&lt;/span&gt;&lt;/strong&gt;&lt;span&gt;: Captured variables can shadow other identifiers. Only capture what you need!&lt;/span&gt;&lt;/p&gt;
@@ -1394,20 +1394,21 @@ let%op reduce_last_n ~n ?(keepdim = true) () =
 &lt;li&gt;&lt;code&gt;&amp;quot;...|...-&amp;gt;...; ...|...-&amp;gt;... =&amp;gt; ...|...-&amp;gt;...&amp;quot;&lt;/code&gt;&lt;span&gt; - Pointwise binary op&lt;/span&gt;&lt;/li&gt;
 &lt;/ul&gt;
 &lt;/div&gt;
-&lt;pre id=&quot;pattern-examples&quot; class=&quot;example&quot; title=&quot;Real Examples from nn_blocks.ml&quot; down-at-unpause pause&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* Layer norm - reduce over feature dimensions; ++ sums, so divide by dim d *)
-let%op layer_norm ~label ?(epsilon = 1e-5) () x =
-  let mean = (x ++ &amp;quot;... | ..d.. =&amp;gt; ... | 0&amp;quot; [&amp;quot;d&amp;quot;]) /. dim d in
-  let centered = x - mean in
-  let variance = ((centered *. centered) ++ &amp;quot;... | ... =&amp;gt; ... | 0&amp;quot;) /. dim d in
-  let normalized = centered /. sqrt (variance + !.epsilon) in
-  ({ gamma = 1. } *. normalized) + { beta = 0. }
-
-(* Attention scores with flexible batching *)
-let scores = 
-  q +* &amp;quot;..batch.., seq | heads, ..dims..; 
-        ..batch.., time | heads, ..dims.. =&amp;gt; 
-        ..batch.., seq | time -&amp;gt; heads&amp;quot; 
-    [&amp;quot;heads&amp;quot;; &amp;quot;dims&amp;quot;] k
+&lt;pre id=&quot;pattern-examples&quot; class=&quot;example&quot; title=&quot;Real Examples from nn_blocks.ml&quot; down-at-unpause pause&gt;&lt;code class=&quot;language-ocaml&quot;&gt;  let scores =
+    (q +* k &amp;quot; ... s | h d; ... t | h d =&amp;gt; ... s | t -&amp;gt; h&amp;quot; [ &amp;quot;h&amp;quot;; &amp;quot;d&amp;quot; ]) /. sqrt (dim d)
+  in
+  Shape.set_dim h num_heads;
+  (* NOTE: often d_k = d_v = d_model / num_heads, but we allow for other values. *)
+  Shape.set_dim d d_k;
+  Shape.set_dim e d_v;
+  (* We don't need to lift [softmax ~spec ()] because it doesn't introduce any new params. *)
+  let attn_weights =
+    softmax ~spec:&amp;quot; ... | t -&amp;gt; ...&amp;quot; ?temperature ()
+      (match mask with None -&amp;gt; scores | Some mask -&amp;gt; where mask scores !.mask_fill)
+  in
+  let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
+  (* w_o output shape will automatically be set to the model dimension(s) by shape inference. *)
+  { w_o } * (attn_weights +* v &amp;quot; ... s | t -&amp;gt; h; ... t | h e =&amp;gt; ... s | h e&amp;quot; [ &amp;quot;e&amp;quot; ])
 &lt;/code&gt;&lt;/pre&gt;
 &lt;h2 up-at-unpause pause&gt;&lt;span&gt;Shape Inference Magic&lt;/span&gt;&lt;/h2&gt;
 &lt;div id=&quot;inference&quot; class=&quot;definition&quot; title=&quot;How Shape Inference Works&quot;&gt;
