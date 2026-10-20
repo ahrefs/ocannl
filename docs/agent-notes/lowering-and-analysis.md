@@ -207,7 +207,9 @@ files.
   candidates, the regime its gate needs, and the backend predicate whose tag hashes it -- or in
   `unflippable` with the reason; keys resolved at startup flip through their resolver
   (`Utils.restore_settings`, the memoized `Numerics` policy), the settings-borne set derived from
-  `utils.ml`. `digest_identity_flips` calibrates one representative per
+  `utils.ml`. Its stage 2 recompiles a probe under every key a compile reads outside `Keyed` and
+  search-shaping, and fails a changed kernel under an unchanged key -- so a new compile-time read
+  owes `emitted_flips` a row. `digest_identity_flips` calibrates one representative per
   class against a real compile; when picking a code-borne representative note that many optimizer
   keys (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an

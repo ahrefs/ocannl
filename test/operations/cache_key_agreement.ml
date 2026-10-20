@@ -25,9 +25,14 @@
    and kinds [Utils.config_key_defaults] owns, are flipped off their default too and must move
    nothing.
 
+   That is stage 1: the registry against the key. Stage 2 is the oracle for the half both can get
+   wrong together -- a key that changes the emitted kernel, is classified neither [Keyed] nor
+   search-shaping, and is not hashed: every key a compile reads outside those classes is flipped,
+   the probe recompiled, and a changed kernel under an unchanged key is reported by name.
+
    A [Keyed] key the sweep cannot flip in-process says why ([unflippable]), and the reason stays
    true: such a key must not be read per lookup by the key computation, or it could have been
-   flipped. That table is the reviewable artifact, printed below. *)
+   flipped. That table and the oracle's exemptions are the reviewable artifacts, printed below. *)
 
 open Base
 open Stdio
@@ -166,6 +171,84 @@ let off_default (kind : Utils.config_value_kind) default =
   | Text -> [ "flipped-text" ]
   | Positive_float_or_unset -> [ "1.5" ]
   | Float_at_least { floor } -> [ Float.to_string (floor +. 3.) ]
+
+(* Stage 2 (gh-ocannl-596's codegen-diff oracle). Stage 1 checks the registry against the key; it
+   cannot see a key that changes the emitted kernel, is classified neither [Keyed] nor
+   search-shaping, AND is not hashed -- both halves agree, and both are wrong. [buffer_aliasing] was
+   exactly that until gh-ocannl-572's review: dropping the [restrict] qualifier is a textual change
+   in the emitted C no part of the registry knew about. So every key a compile reads outside those
+   two classes is flipped here, the kernel recompiled, and a changed kernel under an unchanged key
+   is an under-keying, reported by name. [Search_shaping] is out by its class's own reason: it
+   shapes the untuned default pipeline, which a cached winner replays its own ops over, so a
+   different default kernel under one key is what the class says.
+
+   Which keys a compile reads is TRACED, not listed, so a key that starts being read at compile time
+   joins the oracle the day it does; this table must then give it values, or the first claim of the
+   stage names it. Rows for keys this backend's compile does not read are other backends'. The
+   settings-borne keys take their values from [settings_flips]. *)
+let emitted_flips =
+  [
+    ("cc_backend_post_compile_timeout", [ "2.5" ]);
+    ("cc_backend_verify_codesign", flag);
+    ("fp_contract", flag);
+    ("fp_reassociate", flag);
+    ("fp_finite_math", flag);
+    ("limit_constant_fill_size", [ "4096" ]);
+    ("max_shape_error_origins", [ "3"; "9" ]);
+    ("online_softmax", flag);
+    ("output_dlls_in_build_directory", flag);
+    ("output_prec_in_ll_files", flag);
+    ("cd_ident_style", [ "name_only"; "name_and_label" ]);
+  ]
+
+(* Read at compile time, outside the two classes, and deliberately not flipped. *)
+let emitted_exemptions =
+  [
+    ( "ll_ident_style",
+      "identifier spelling: the canonical rendering alpha-renames identifiers away, and code that \
+       differs only in their names compiles to the same kernel -- a changed text is what the key \
+       is right to ignore" );
+    ( "build_files_prefix",
+      "it moves the very artifacts this oracle reads, and Generated refuses a set prefix" );
+  ]
+
+(* A kernel's text with its numbered identifiers renamed by first appearance: a fresh build of the
+   program numbers its tensors and loop indices afresh ([n62], [i110]), and two texts that differ
+   only there are one kernel. Number literals are copied whole, so a hex float's letters are not
+   read as an identifier. *)
+let alpha_normalized text =
+  let names = Hashtbl.create (module String) in
+  let out = Buffer.create (String.length text) in
+  let n = String.length text in
+  let is_ident_char c = Char.is_alphanum c || Char.equal c '_' in
+  let rec scan i =
+    if i < n then
+      let c = text.[i] in
+      if Char.is_alpha c || Char.equal c '_' then (
+        let j = ref i in
+        while !j < n && is_ident_char text.[!j] do
+          Int.incr j
+        done;
+        let ident = String.sub text ~pos:i ~len:(!j - i) in
+        if Char.is_digit ident.[String.length ident - 1] then
+          let fresh = Hashtbl.length names in
+          Buffer.add_string out
+            ("@" ^ Int.to_string (Hashtbl.find_or_add names ident ~default:(fun () -> fresh)))
+        else Buffer.add_string out ident;
+        scan !j)
+      else if Char.is_digit c then (
+        let j = ref i in
+        while !j < n && (is_ident_char text.[!j] || Char.equal text.[!j] '.') do
+          Int.incr j
+        done;
+        Buffer.add_string out (String.sub text ~pos:i ~len:(!j - i));
+        scan !j)
+      else (
+        Buffer.add_char out c;
+        scan (i + 1))
+  in
+  scan 0;
+  Buffer.contents out
 
 let canonical_of ctx =
   let a =
@@ -404,9 +487,108 @@ let () =
               eprintf "%s=%s: the key computation read it and raised %s\n" key value
                 (Exn.to_string exn);
               true));
+  (* 7. Stage 2: the codegen-diff oracle. The program is rebuilt per compile (memory modes are
+     decided per tensor), under one routine name, with debug artifacts on so that [Generated] can
+     read the kernel each compile emits. *)
+  let routine = "cka_probe" in
+  Test_utils.Generated.init ~backend_name:backend;
+  let probe =
+    let a =
+      TDSL.ndarray [| 1.; 2.; 3.; 4.; 5.; 6.; 7.; 8. |] ~label:[ "cka_p" ] ~output_dims:[ 8 ] ()
+    in
+    Train.forward TDSL.O.(relu a + (a *. a))
+  in
+  let compile_probe () =
+    Test_utils.Generated.arm routine;
+    let canon = ref None in
+    let _ctx, _routine =
+      Context.compile ~name:routine
+        ~lowered_transform:(fun opt ->
+          canon := Some (SC.canonicalize ~static_indices:[] opt);
+          [ opt ])
+        ctx probe Ir.Indexing.Empty
+    in
+    let canon = Option.value_exn ~here:[%here] !canon in
+    let key =
+      Option.value_exn ~here:[%here]
+        (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx)
+           ~capabilities:(Context.codegen_capabilities ctx)
+           canon ~backend)
+    in
+    (key, alpha_normalized (Test_utils.Generated.read routine))
+  in
+  let oracle () =
+    let baseline_key, baseline_src = compile_probe () in
+    let traced_reads =
+      let saved = Hash_set.to_list Utils.accessed_global_args in
+      Hash_set.clear Utils.accessed_global_args;
+      let again_key, again_src = compile_probe () in
+      let r = Hash_set.to_list Utils.accessed_global_args in
+      List.iter saved ~f:(Hash_set.add Utils.accessed_global_args);
+      let stable = String.equal again_key baseline_key && String.equal again_src baseline_src in
+      if not stable then
+        eprintf "two compiles of the probe, normalized:\n%s\n----\n%s\n" baseline_src again_src;
+      p "the probe compiles to the same kernel under the same key twice over" stable;
+      Set.of_list (module String) r
+    in
+    let oracle_class key =
+      match Utils.classify_config_key key with
+      | Some
+          ( ( Utils.Code_borne | Utils.Execution_neutral | Utils.Placement_shaping
+            | Utils.Untimed_model ),
+            _ ) ->
+          true
+      | Some ((Utils.Keyed _ | Utils.Search_shaping | Utils.Aggregate), _) | None -> false
+    in
+    let settings_rows = Set.of_list (module String) (List.map settings_flips ~f:fst) in
+    let population =
+      Set.union (Set.filter traced_reads ~f:oracle_class) settings_rows |> Set.to_list
+    in
+    let exempt key = List.Assoc.mem emitted_exemptions key ~equal:String.equal in
+    let values key =
+      match List.Assoc.find settings_flips key ~equal:String.equal with
+      | Some candidates -> Some (Settings, candidates)
+      | None ->
+          Option.map (List.Assoc.find emitted_flips key ~equal:String.equal) ~f:(fun c ->
+              (Per_lookup, c))
+    in
+    p_all ~min:5
+      "every key a compile reads outside Keyed and search-shaping has oracle values or an exemption"
+      population ~f:(fun key ->
+        let ok = exempt key || Option.is_some (values key) in
+        if not ok then eprintf "%s is read during a compile; give it values in emitted_flips\n" key;
+        ok);
+    let flipped = List.filter population ~f:(Fn.non exempt) in
+    p_none ~min:5 "no such key changes the emitted kernel while leaving the cache key unchanged"
+      flipped ~f:(fun key ->
+        match values key with
+        | None -> false
+        | Some (resolver, candidates) ->
+            List.exists candidates ~f:(fun value ->
+                match with_stated key value resolver compile_probe with
+                | None -> false
+                | Some (key', src) ->
+                    let under =
+                      String.equal key' baseline_key && not (String.equal src baseline_src)
+                    in
+                    if under then
+                      eprintf "%s=%s changes the emitted kernel but not the cache key\n" key value;
+                    under
+                | exception exn ->
+                    eprintf "%s=%s: the probe compile raised %s\n" key value (Exn.to_string exn);
+                    true))
+  in
+  (match with_stated "output_debug_files_in_build_directory" "true" Settings oracle with
+  | Some () -> ()
+  | None ->
+      Verdict.fail
+        "output_debug_files_in_build_directory is stated on the commandline or in the environment, \
+         so the oracle cannot read the kernels it compiles");
   (* The reviewable part: what this sweep takes on trust, and why. *)
   printf "\nKeyed keys this sweep cannot flip in-process:\n";
   List.iter unflippable ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
+  printf "\nKeys a compile reads that the codegen-diff oracle does not flip:\n";
+  List.iter emitted_exemptions ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nKeyed keys hashed only on some backends:\n";
   List.iter keyed_flips ~f:(fun (key, flip) ->
       match flip.scope with

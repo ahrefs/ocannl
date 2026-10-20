@@ -8,11 +8,18 @@ no unflippable Keyed key is read per lookup by the key computation: true
 each settings-borne key outside Keyed is flipped by restore_settings: true
 and moves no component of the cache key: true
 no registered non-Keyed key moves the cache key when flipped off its default: true
+the probe compiles to the same kernel under the same key twice over: true
+every key a compile reads outside Keyed and search-shaping has oracle values or an exemption: true
+no such key changes the emitted kernel while leaving the cache key unchanged: true
 
 Keyed keys this sweep cannot flip in-process:
   backend -- a parameter, not a lookup: backends are process-wide singletons, and the component is the backend name the caller passes
   cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes
   cc_grid_private_bytes_cap -- resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; the codegen tag hashes that resolved value
+
+Keys a compile reads that the codegen-diff oracle does not flip:
+  ll_ident_style -- identifier spelling: the canonical rendering alpha-renames identifiers away, and code that differs only in their names compiles to the same kernel -- a changed text is what the key is right to ignore
+  build_files_prefix -- it moves the very artifacts this oracle reads, and Generated refuses a set prefix
 
 Keyed keys hashed only on some backends:
   cc_backend_optimization_level -- CPU backends
