@@ -27,7 +27,7 @@ module IDX = Train.IDX
 open Nn_blocks.DSL_modules
 module Asgns = Ir.Assignments
 
-let lenet = Nn_blocks.lenet
+let lenet = Demo_models.lenet
 let cross_entropy_loss = Nn_blocks.cross_entropy_loss
 
 let () =

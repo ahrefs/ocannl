@@ -508,6 +508,18 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; bench_mlp_bn_step is a manual diagnostic (not a test): the mlp_bn_names training step through the
+; untuned default pipeline, its segment census and steady-state per-step timing
+; (benchmarks/gh1343_ab.sh drives it before/after gh-ocannl-1343). Run from test/config or
+; benchmarks/.
+
+(executable
+ (name bench_mlp_bn_step)
+ (modules bench_mlp_bn_step)
+ (libraries base ocannl stdio dataprep unix)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; virtual_grads_parity is a fast regression test for the backward stale-local CSE bug: parameter
 ; gradients through a Virtual pre-activation must match the softmax-CE oracle.
 

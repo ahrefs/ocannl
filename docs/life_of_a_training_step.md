@@ -436,9 +436,9 @@ unobservable one would default to `Local`, and an observable node still *undecid
 forcing point materializes only because nothing was stored to recompute it from. What
 actually breaks observation is a recomputation that transitively depends on a `Local` node
 with no materialized node shielding the dependency. (Implementation status: the placement
-guards are in; recompute-on-read exists today as the best-effort `Train.ensure_printable`
-path — a `for_print` copy compiled and registered as a read proxy, used by `Train.printf` /
-`printf_tree` — while bare `Context.get_values` raises for a node with no buffer, host-init
+guards are in; recompute-on-read exists today as the best-effort for-print path behind
+`Train.printf` / `printf_tree` (`ensure_printable` in `lib/train.ml`) — a `for_print` copy
+compiled and registered as a read proxy — while bare `Context.get_values` raises for a node with no buffer, host-init
 data, or proxy; the full contract is the manifesto's stated goal state.) Decisions land in
 `Placements` on the `optimize_ctx`, which is *forked per compile* (`copy_optimize_ctx` in
 `Backends.lower_assignments`): the same tensor can be virtual in one routine and on-device in

@@ -14,14 +14,13 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
    [Tile_mma] as the register-tiled vector micro-kernel ([C_syntax]'s [try_register_tile]), so the
    autotune menu may propose [Tensorize] over CPU serial triples. The register renderer peels edge
    tiles, so any block extents are legal (intrinsic tile 1×1×1); the lane loop renders serially, so
-   a single lane suffices. [simd_vector_bytes] reports the register-tiling's vector width
-   (gh-ocannl-479: autotune's seeding pre-filter checks micro-kernel extents against the lane
-   count); the only CPU backend is cc, so its setting is authoritative here. *)
+   a single lane suffices. [simd_vector] reports the register-tiling's vector file (gh-ocannl-479:
+   autotune's seeding pre-filter checks micro-kernel extents against the lane count); the only CPU
+   backend is cc, so its setting is authoritative here. *)
 let cpu_mma_limits () =
   {
     no_hardware_limits with
-    simd_vector_bytes = Cc_backend.vector_bytes_setting ();
-    simd_vector_registers = Cc_backend.vector_registers_setting ();
+    simd_vector = Cc_backend.vector_file_setting ();
     native_fp16_arithmetic = Cc_backend.has_native_fp16_arithmetic ();
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;

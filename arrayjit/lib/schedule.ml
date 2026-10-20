@@ -6070,9 +6070,20 @@ let lane_preamble_reductions ~lane (nest : Low_level.t) : (Indexing.symbol * int
    capping at 2 made every rank-3+ site's companion coverage decline, serializing the axis whose
    spreading the hardware wanted most). The alignment rule is arity-independent; a longer chain only
    asks the same per-position question more times. [lanes] reads chains through {!path_loops}' lane
-   extension (the GPU preset's lane geometry, see {!lane_geometry}). *)
+   extension (the GPU preset's lane geometry, see {!lane_geometry}).
+
+   [shared_locals] (the CPU preset, gh-ocannl-1343): a nest writing no materialized node takes its
+   chain from its scratch writes instead of staying empty. Under the GPU reading such a nest runs
+   whole in every thread over a per-thread copy, so an empty chain is the safe default; on the C
+   backends a serial nest runs once and [Local] scratch is ONE function-scope array, so the empty
+   chain leaves a whole matmul serial whenever its product is a non-materialized intermediate. The
+   chain loops then go through the same alignment and per-nest agreement rules as any written
+   scratch, and the C renderer's own shared/privatization rule for locals under a pool-parallel
+   [Grid] loop ([C_syntax.parallel_grid_safe]) stays the final word on whether the loop renders in
+   parallel. *)
 let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = false)
-    ?(preamble_reductions = false) (opt : Low_level.optimized) : Low_level.t list list =
+    ?(preamble_reductions = false) ?(shared_locals = false) (opt : Low_level.optimized) :
+    Low_level.t list list =
   let open Low_level in
   let plc = opt.optimize_ctx.placements in
   let nests, bare = split_nests plc opt.llc in
@@ -6080,16 +6091,22 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
   if List.exists bare ~f:(fun a -> a.a_write && Tn.Placements.is_materialized_peek plc a.a_tn) then
     raise Bail;
   (* Chains: per nest, the outermost (up to [max_chain]) Serial path loops whose index occurs as a
-     plain [Iterator] component in every materialized write vector of the nest. *)
+     plain [Iterator] component in every materialized write vector of the nest -- or, under
+     [shared_locals], of every write vector of a nest that writes only scratch. *)
   let chains =
     List.map nests ~f:(fun n ->
         let mat_writes =
           List.filter n.n_accesses ~f:(fun a ->
               a.a_write && Tn.Placements.is_materialized_peek plc a.a_tn)
         in
+        let owned_writes =
+          if shared_locals && List.is_empty mat_writes then
+            List.filter n.n_accesses ~f:(fun a -> a.a_write)
+          else mat_writes
+        in
         let qualifies s =
-          (not (List.is_empty mat_writes))
-          && List.for_all mat_writes ~f:(fun a ->
+          (not (List.is_empty owned_writes))
+          && List.for_all owned_writes ~f:(fun a ->
               Array.exists a.a_idcs ~f:(fun idx ->
                   Indexing.equal_axis_index idx (Indexing.Iterator s)))
         in
@@ -7381,7 +7398,26 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
         Utils.registered_int ~arg_name:"cpu_schedule_min_parallel")
   in
   try
-    let chains = analyze_parallel_chains opt in
+    (* Scratch-writing nests take chains too (gh-ocannl-1343). Linking them to their readers can
+       bail the kernel, or trim a reader's chain to the prefix it shares with the scratch writer --
+       a [y[i, j]] reading [s[i]] keeps only [i]. A trim costs this preset nothing by itself:
+       alignment keeps every trimmed chain's outermost loop, and the outermost loop is all it
+       retypes. What a trim can cost is the threshold: the largest parallel size can drop below
+       [min_parallel] where the plain analysis met it, and then the whole kernel would stay serial.
+       So the plain analysis (scratch-writing nests serial, as before) is the result when the
+       scratch-aware one bails or loses threshold eligibility the plain one has -- never merely
+       because its chains are shorter. *)
+    let chains =
+      let plain = lazy (analyze_parallel_chains opt) in
+      match analyze_parallel_chains ~shared_locals:true opt with
+      | exception Bail -> Lazy.force plain
+      | shared when max_parallel_size shared >= min_parallel -> shared
+      | shared -> (
+          match Lazy.force plain with
+          | plain when max_parallel_size plain >= min_parallel -> plain
+          | _ -> shared
+          | exception Bail -> shared)
+    in
     crosscheck_scratch_containment opt chains;
     if max_parallel_size chains < min_parallel then []
     else
@@ -7411,8 +7447,10 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     consumer) and alignment-trimming merges still cut. On GPU backends every merge -- dependent or
     conflict-free -- is also judged against the default GPU schedule ({!keeps_mapping},
     gh-ocannl-1126): one that costs a statement its own mapping keeps the boundary. The probe is the
-    schedule the kernel will receive under [gpu_serial_lanes = cut]; under [admitted] or [off] it
-    leaves out the lane geometry, so no boundary is kept for lanes (gh-ocannl-1167).
+    schedule the kernel will receive; under [gpu_serial_lanes = admitted] a merge between nests with
+    a lane path is judged without the lane geometry, so no boundary is kept for lanes between them
+    (gh-ocannl-1167), while a neighbour with no lane path is still cut off rather than cost a nest
+    its lanes (gh-ocannl-1239).
 
     Segmentation is conservative and total (no [Bail]): a statement opaque to the analysis
     ([Staged_compilation], barriers, pre-annotated loops) or one the annotator can never cover (bare
@@ -7437,6 +7475,12 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
       to [On_device] ({!Tnode.Placements.promote_local_to_device}): [Local] is always a compiler
       decision premised on single-kernel lifetime, and fission runs before any consumer of the
       decision (codegen parameter lists, context allocation) has read it.
+
+    A whole-node [Zero_out] of scratch (a non-materialized node) conflicts with nothing, so the
+    grouping would take it into whatever segment precedes it; it joins that segment only when the
+    unit accumulating into its node would join too (gh-ocannl-1343) -- otherwise the node crosses to
+    its accumulation, its promotion makes the zero a bare materialized write, and both segments lose
+    their annotation.
 
     Adjacent segments that both end up unannotated are coalesced back (fewer launches); if
     everything coalesces, the routine compiles to a single kernel exactly as before. *)
@@ -7935,20 +7979,53 @@ let dry_run = Indexing.discarding_symbols
 (* Config [gpu_fission_keep_mapping] (gh-ocannl-1126). *)
 let gpu_fission_keep_mapping = lazy (Utils.registered_flag ~arg_name:"gpu_fission_keep_mapping")
 
-(* The schedule-aware half of the merge decision (gh-ocannl-1126): [mapping] is the per-segment
-   default GPU schedule ({!fission_keep_mapping}): the schedule the kernel will actually receive,
-   lane plans and lane geometry included, under [gpu_serial_lanes = cut]; without the lane geometry
-   under [admitted] or [off], so no boundary is kept for lanes (gh-ocannl-1167) -- and a merge the
-   legality rules admit is still refused when some statement of the merged kernel gets less of its
-   own mapping than it gets alone: fewer groups, or fewer active threads. Both kinds of merge are
-   judged: a dependent one whose alignment trims a statement's chain to the common prefix (the
-   composed [v.grad] merged with [w_v.grad], which reduces over the positions [v.grad]'s blocks
-   own), and an independent one whose kernel no longer admits a statement's geometry (under [cut],
-   the fused dV lane nest merged with dK, which is no lane nest; the lm_head logits beside the row
-   max that trims them). A segment's statements were each admitted under this test, so comparing
-   every statement with its standalone mapping is the same as comparing with the segment before the
-   extension. Per statement, never the kernel's largest thread count: one well-mapped nest does not
-   pay for another's lost one.
+(* The probes of the schedule-aware merge decision ({!keeps_mapping}): [mp_kernel] is the schedule
+   the kernel will actually receive, lanes included unless they are [off]; [mp_lane_trade], under
+   [gpu_serial_lanes = admitted] only, the same schedule without the lane geometry (gh-ocannl-1167,
+   gh-ocannl-1239). Lazy, so the configuration is read on the first merge probe, not for every
+   routine. *)
+type mapping_probe = {
+  mp_kernel : Low_level.optimized -> schedule;
+  mp_lane_trade : (Low_level.optimized -> schedule) option Lazy.t;
+}
+
+let mapping_probe ?lane_trade kernel =
+  { mp_kernel = kernel; mp_lane_trade = Lazy.from_val lane_trade }
+
+(* Whether a top-level statement has a lane path: the lane extension of its path ({!path_loops}
+   [~lanes:true ~preamble_reductions:true] -- the shape alone, whatever the device's economics)
+   reaches further than its plain path. A [laneless_nest] is a loop nest without one, which the lane
+   geometry can never reach: a kernel holding one beside a lane nest is declined by
+   {!lane_geometry}. *)
+let lane_path stmt =
+  List.length (path_loops ~lanes:true ~preamble_reductions:true stmt)
+  > List.length (path_loops stmt)
+
+let laneless_nest stmt = (not (List.is_empty (path_loops stmt))) && not (lane_path stmt)
+
+(* The schedule-aware half of the merge decision (gh-ocannl-1126): [mapping.mp_kernel] is the
+   per-segment default GPU schedule ({!fission_keep_mapping}): the schedule the kernel will actually
+   receive, lane plans and lane geometry included -- and a merge the legality rules admit is still
+   refused when some statement of the merged kernel gets less of its own mapping than it gets alone:
+   fewer groups, or fewer active threads. Both kinds of merge are judged: a dependent one whose
+   alignment trims a statement's chain to the common prefix (the composed [v.grad] merged with
+   [w_v.grad], which reduces over the positions [v.grad]'s blocks own), and an independent one whose
+   kernel no longer admits a statement's geometry (under [cut], the fused dV lane nest merged with
+   dK, which is no lane nest; the lm_head logits beside the row max that trims them). A segment's
+   statements were each admitted under this test, so comparing every statement with its standalone
+   mapping is the same as comparing with the segment before the extension. Per statement, never the
+   kernel's largest thread count: one well-mapped nest does not pay for another's lost one.
+
+   Under [gpu_serial_lanes = admitted] ([mp_lane_trade], gh-ocannl-1167) the merge is judged on the
+   plain plans instead, so a merge costing a nest nothing but its lanes is taken: the fused dV joins
+   dK, both nests with a lane path, and the two merged on the plain plan beat dV cut apart onto its
+   lanes on HIP. That trade is between nests with a lane path. A kernel that would also hold a loop
+   nest with no lane path at all ({!laneless_nest}: a row statistic sharing the forward value pass's
+   plain chain) declines the lanes for a neighbour that could never take them, which no measurement
+   backs and which would cost the forward value pass its ~13% (gh-ocannl-1239). So such a merge must
+   ALSO pass on [mp_kernel], except that a statement of the segment may keep the mapping it already
+   has there: a lane nest the trade already took off its lanes loses nothing more to the lane-less
+   neighbour. The admitted merges are thus a subset of the plain-plan ones.
 
    A mapping cut needs no retest after scope-local resolution ({!resolve_scope_crossings}). A cut
    whose new segment cannot replicate its scope-local definitions -- a unit between the definition
@@ -7959,13 +8036,38 @@ let gpu_fission_keep_mapping = lazy (Utils.registered_flag ~arg_name:"gpu_fissio
    {!analyze_parallel_chains} declines (the bare group has no chain, so the alignment trims the
    component to nothing). If that analysis ever admits such a pair, a merged-back mapping cut has to
    take the refused merge instead. *)
-let keeps_mapping ~mapping (opt : Low_level.optimized) seg (u : funit) standalone =
+let keeps_mapping ~(mapping : mapping_probe) ~standalone (opt : Low_level.optimized) seg (u : funit)
+    =
   let units = seg.g_units @ [ u ] in
-  let llc = Low_level.unflat_lines (List.concat_map units ~f:(fun u' -> u'.f_stmts)) in
-  let merged = dry_run (fun () -> statement_mappings llc (mapping (segment_optimized opt llc))) in
-  match List.zip merged (List.map units ~f:standalone) with
-  | Unequal_lengths -> true
-  | Ok pairs -> List.for_all pairs ~f:(fun ((g, a), (g0, a0)) -> g >= g0 && a >= a0)
+  let probe sched units =
+    let llc = Low_level.unflat_lines (List.concat_map units ~f:(fun u' -> u'.f_stmts)) in
+    dry_run (fun () -> statement_mappings llc (sched (segment_optimized opt llc)))
+  in
+  let keeps (g, a) (g0, a0) = g >= g0 && a >= a0 in
+  let kept sched =
+    match List.zip (probe sched units) (List.map units ~f:(standalone sched)) with
+    | Unequal_lengths -> true
+    | Ok pairs -> List.for_all pairs ~f:(fun (m, alone) -> keeps m alone)
+  in
+  match Lazy.force mapping.mp_lane_trade with
+  | None -> kept mapping.mp_kernel
+  | Some plain -> (
+      kept plain
+      &&
+      let stmts = List.concat_map units ~f:(fun u' -> u'.f_stmts) in
+      (not (List.exists stmts ~f:lane_path && List.exists stmts ~f:laneless_nest))
+      ||
+      let before = lazy (probe mapping.mp_kernel seg.g_units) in
+      let n_before = List.length seg.g_units in
+      match
+        List.zip (probe mapping.mp_kernel units) (List.map units ~f:(standalone mapping.mp_kernel))
+      with
+      | Unequal_lengths -> true
+      | Ok pairs ->
+          List.for_alli pairs ~f:(fun i (m, alone) ->
+              keeps m alone
+              || i < n_before
+                 && Option.exists (List.nth (Lazy.force before) i) ~f:(fun b -> keeps m b)))
 
 (* The [`Zeros] half (gh-ocannl-1169): a zero segment shares ONE launch too, and {!zero_expansion}'s
    lane plans need one common topology across its nodes and a union launch within twice the largest
@@ -7997,16 +8099,24 @@ let group_units ?max_chain ?(arity_cuts = false) ?(fold_zeros = false) ?mapping 
   (* One standalone probe per unit, taken only when a merge is judged. An expanded zero shares its
      [f_index] with its whole-node [`Zeros] original, so the key carries the kind. *)
   let standalone =
+    (* Keyed by the probe too: an [admitted] merge asks both of its probes (gh-ocannl-1239). *)
     let memo = Hashtbl.create (module Int) in
-    fun mapping (u : funit) ->
+    fun sched (u : funit) ->
       let key = (2 * u.f_index) + match u.f_kind with `Zeros -> 1 | `Normal | `Solo -> 0 in
-      Hashtbl.find_or_add memo key ~default:(fun () ->
+      let probes = Hashtbl.find_or_add memo key ~default:(fun () -> ref []) in
+      match List.Assoc.find !probes sched ~equal:phys_equal with
+      | Some m -> m
+      | None ->
           let llc = Low_level.unflat_lines u.f_stmts in
-          match
-            dry_run (fun () -> statement_mappings llc (mapping (segment_optimized opt llc)))
-          with
-          | [ m ] -> m
-          | _ -> (1, 1))
+          let m =
+            match
+              dry_run (fun () -> statement_mappings llc (sched (segment_optimized opt llc)))
+            with
+            | [ m ] -> m
+            | _ -> (1, 1)
+          in
+          probes := (sched, m) :: !probes;
+          m
   in
   let mergeable seg s u =
     (* In [arity_cuts] mode even a conflict-free extension must pass the uniform-shape rule: an
@@ -8015,14 +8125,41 @@ let group_units ?max_chain ?(arity_cuts = false) ?(fold_zeros = false) ?mapping 
     if arity_cuts then aligned_merge ?max_chain ~uniform_shapes:true opt seg u
     else
       ((not (mat_conflict plc seg s)) || aligned_merge ?max_chain opt seg u)
-      && Option.for_all mapping ~f:(fun mapping ->
-          keeps_mapping ~mapping opt seg u (standalone mapping))
+      && Option.for_all mapping ~f:(fun mapping -> keeps_mapping ~mapping ~standalone opt seg u)
+  in
+  (* gh-ocannl-1343: a whole-node [Zero_out] of scratch (a non-materialized node, so a [`Normal]
+     unit the conflict rule never cuts) belongs with the unit that accumulates into it. Joined to
+     the preceding segment while that unit cuts, the zero leaves its node crossing the boundary: the
+     crossing is promoted to [On_device], and the promoted zero, a bare materialized write, bails
+     the annotation of BOTH segments -- which then coalesce into one serial kernel. So such a zero
+     joins the current segment only when the next unit, touching the node, would join it too. A next
+     unit that cannot join a [`Normal] segment at all -- a [`Solo] one, whose accesses are unknown
+     when it is opaque to the analysis -- splits the zero off whenever it may touch the node (review
+     round 2): the zero then shares the serial unit's fate instead of the preceding segment's. *)
+  let scratch_zero (u : funit) =
+    match List.filter u.f_stmts ~f:(function Low_level.Noop | Comment _ -> false | _ -> true) with
+    | [ Low_level.Zero_out tn ] when not (Tn.Placements.is_materialized_peek plc tn) -> Some tn
+    | _ -> None
+  in
+  let touches tn ~reads ~writes = Set.mem reads tn || Set.mem writes tn in
+  let splits_from_user seg u next =
+    match (scratch_zero u, next) with
+    | Some tn, v :: _ when not (touches tn ~reads:seg.g_reads ~writes:seg.g_writes) -> (
+        match v with
+        | { f_kind = `Normal; f_sum = Some s'; _ } ->
+            touches tn ~reads:s'.s_reads ~writes:s'.s_writes
+            && not (mergeable (merge_segs ~kind:`Normal seg (seg_of_unit u)) s' v)
+        | { f_kind = `Normal; f_sum = None; _ } -> false
+        | { f_kind = `Solo | `Zeros; f_sum; _ } ->
+            Option.for_all f_sum ~f:(fun s' -> touches tn ~reads:s'.s_reads ~writes:s'.s_writes))
+    | _ -> false
   in
   let rec go cur acc = function
     | [] -> List.rev (close cur acc)
     | u :: tl -> (
         match (cur, u.f_kind, u.f_sum) with
-        | Some ({ g_kind = `Normal; _ } as seg), `Normal, Some s when mergeable seg s u ->
+        | Some ({ g_kind = `Normal; _ } as seg), `Normal, Some s
+          when mergeable seg s u && not (splits_from_user seg u tl) ->
             go (Some (merge_segs ~kind:`Normal seg (seg_of_unit u))) acc tl
         | Some ({ g_kind = `Zeros; _ } as seg), `Zeros, Some s
           when (not (mat_conflict plc seg s))
@@ -8339,13 +8476,23 @@ let promote_statement_crossing_locals plc (stmts : Low_level.t list) :
               (tn, prior) :: undo)
             else undo))
 
-(* Where lanes are only [Lanes_admitted] (gh-ocannl-1167), the merge is judged on the plain plans: a
-   merge that costs a nest nothing but its lanes is taken, and the kernel it lands in keeps them
-   wherever it still admits them. *)
+(* Where lanes are only [Lanes_admitted] (gh-ocannl-1167), a merge between nests the lanes can reach
+   is judged on the plain plans: a merge that costs a nest nothing but its lanes is taken, and the
+   kernel it lands in keeps them wherever it still admits them. A merge bringing in a nest the lanes
+   can never reach is judged on the lanes too (gh-ocannl-1239, {!keeps_mapping}). *)
 let fission_keep_mapping ~is_gpu ~limits =
   if is_gpu && Lazy.force gpu_fission_keep_mapping then
-    let lanes = lazy (equal_serial_lanes (serial_lanes_for limits) Lanes_cut) in
-    Some (fun opt -> default_gpu ~lanes:(Lazy.force lanes) ~limits opt)
+    let mode = lazy (serial_lanes_for limits) in
+    let lanes = lazy (not (equal_serial_lanes (Lazy.force mode) Lanes_off)) in
+    Some
+      {
+        mp_kernel = (fun opt -> default_gpu ~lanes:(Lazy.force lanes) ~limits opt);
+        mp_lane_trade =
+          lazy
+            (Option.some_if
+               (equal_serial_lanes (Lazy.force mode) Lanes_admitted)
+               (fun opt -> default_gpu ~lanes:false ~limits opt));
+      }
   else None
 
 (* The expanded form of a whole-node [zero] that {!group_units} may fold into the reduction [next]
@@ -8646,11 +8793,15 @@ let default_schedule_fingerprint ~backend_name =
       in
       (* [zero-topology-v1] (gh-ocannl-1169): under [keep_mapping], zero segments cut where a node
          would lose its lane plan, over shape-sorted zero runs. *)
+      (* [lane-trade-v1] (gh-ocannl-1239): under [admitted], a merge bringing a nest with no lane
+         path into a kernel is judged on the lanes too. *)
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1+lane-trade-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
       let mp = Utils.registered_int ~arg_name:"cpu_schedule_min_parallel" in
-      [%string "cpu:fission=%{fission#Bool}:min_parallel=%{mp#Int}"]
+      (* [scratch-chains-v1] (gh-ocannl-1343): scratch-writing nests take chains, and a scratch
+         node's whole-node zero joins the segment of its accumulation. *)
+      [%string "cpu:policy=scratch-chains-v1:fission=%{fission#Bool}:min_parallel=%{mp#Int}"]
 
 let maybe_default_schedule ~backend_name ?(limits = Backend_intf.no_hardware_limits) ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized =

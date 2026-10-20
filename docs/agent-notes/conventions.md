@@ -56,6 +56,15 @@ files.
   before removing it" as a P2 and cited `AGENTS.md:L17`, which is the Structure and Ownership
   bullet naming `lib/` and states no policy at all. A review citation to a line that does not say
   the thing is a finding about the review — check the citation before complying with it.
+- `lib/`'s surface is declared, not implied by a missing `.mli` (gh-ocannl-1010): the recipe modules
+  (`Train`, `Parallel`, `Calibrate`, `Mixed_prec`, `Precision_policy`, and the earlier `Persistence`
+  and `Safetensors`) each have an interface that publishes recipes and hides helpers, and a
+  published item's doc comment lives in the interface alone — the implementation keeps only
+  implementation comments. `Nn_blocks` deliberately has no interface: every component there is
+  meant for reuse, so a block added to it is public by construction, and the dead-export census
+  (`test/operations/dead_export_scan.ml`) lists its uncalled blocks as awaiting callers, not as
+  leaks. Complete example architectures belong in `Demo_models`, not `Nn_blocks`. A new `lib/`
+  module that mixes recipes with helpers gets its interface in the PR that adds it.
 - `ocannl_config.reference` ships with every setting COMMENTED OUT, and the two forms are
   load-bearing: a commented-out setting is `#key=value` with NO space after the `#`, while prose
   (and the verbatim profile-payload blocks at the end of the file) always uses `# `. That is how

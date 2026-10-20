@@ -15,9 +15,11 @@
    twin's component differs from that single's exactly where the candidate sketched it.
 
    1. [differ]: the second layer's product is materialized and the first's is not, so the twins
-   differ in placements -- on a GPU backend, where fission restores an unneeded [Local] promotion;
-   on the C backends fission promotes every product the next layer reads, and the twins agree, so
-   the leg is skipped there. Each twin gets its own singles, and no single sketches both.
+   differ in placements -- on a GPU backend, where fission restores an unneeded [Local] promotion.
+   On the C backends the first product stays [Local] too, but its whole-node zero opens its own
+   accumulation's segment (gh-ocannl-1343), so the two products' segments differ in structure and
+   there are no twins: the leg is skipped there. Each twin gets its own singles, and no single
+   sketches both.
 
    The first twin's [Local] product keeps the layer's [relu] in the twin's kernel as a companion the
    unfused sketches cannot cover (GPU companion coverage, gh-ocannl-521), so only the epilogue-fused

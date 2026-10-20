@@ -59,11 +59,12 @@ let one_line text =
     String.map text ~f:(fun c -> if is_control c then ' ' else c)
   else text
 
-(* [msg] with every line of it prefixed by ["FAIL: "]. A [FAIL: ] row is a run's own, never a
-   golden's, and [tools/mutation-run.sh] matches a mutated run's other rows against the golden row
-   by row: an unprefixed continuation line -- an "expected/got" pair, a child's captured output --
-   would be a row the golden lacks, and turn a caught mutant into one that "stopped early". A
-   trailing newline adds no empty row. *)
+(* [msg] with every line of it prefixed by ["FAIL: "]. A [FAIL: ] row is a run's own (a golden has
+   one only where it captures a refusing child), and [tools/mutation-run.sh] counts none toward the
+   golden's rows and matches a mutated run's other rows against the golden row by row: an unprefixed
+   continuation line -- an "expected/got" pair, a child's captured output -- would be a row the
+   golden lacks, and turn a caught mutant into one that "stopped early". A trailing newline adds no
+   empty row. *)
 let fail_lines msg =
   let lines =
     match String.split msg ~on:'\n' with
@@ -576,6 +577,20 @@ let case label f =
 (** Whether any check has failed so far. For a test that wants to say something extra about a bad
     run; the exit status is taken care of without it. *)
 let any_failed () = not (List.is_empty !failed_names)
+
+(** [success_trailer ?blank_line rows] prints each of [rows] as an [OK: <row>] line, behind an empty
+    line when [blank_line], provided no check has failed so far -- and nothing otherwise: a scan's
+    closing statement of what its claims established, which a failing run must not print. It is the
+    one shape a success trailer takes. [tools/mutation-run.sh] matches a failing run of a scan
+    against its golden without the trailer's [OK: ] rows and the empty line before them, and
+    [tools/test-mutation-run.sh] replays [verdict_teardown]'s transcripts of runs that print through
+    here, so a trailer reworded here turns that harness red instead of the runner reading every
+    failing run of every scan as stopped early (gh-ocannl-1364). Each row prints on one line
+    ({!one_line}). *)
+let success_trailer ?(blank_line = false) rows =
+  if not (any_failed ()) then (
+    if blank_line then Stdio.print_string "\n";
+    List.iter rows ~f:(fun row -> Stdio.printf "OK: %s\n" (one_line row)))
 
 (** Ends a NEGATIVE-CONTROL run, one whose failures are the output its golden pins: exits 1 when
     something failed and 0 when nothing did, without the teardown's ["FAILED: n checks …"] line.

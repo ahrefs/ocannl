@@ -839,10 +839,12 @@ val lane_all_reduce_simdgroups_for : Backend_intf.hardware_limits -> int
 (** How {!default_gpu} weighs its lane geometry (gh-ocannl-1167). Every lane recomputes its nest's
     per-pair scalar preamble, which the plain plan pays once per thread. [Lanes_cut]: taken wherever
     a kernel admits it, and {!fission_keep_mapping} cuts a kernel rather than merge a lane nest out
-    of its lanes. [Lanes_admitted]: taken wherever a kernel admits it, but merges are judged on the
-    plain plans, so a merge costing a nest nothing but its lanes is taken. [Lanes_off]: never taken,
-    so the preamble-reduction treatment has nothing to apply to. Config [gpu_serial_lanes], whose
-    [auto] default resolves per device ({!serial_lanes_for}). *)
+    of its lanes. [Lanes_admitted]: taken wherever a kernel admits it, but merges between nests with
+    a lane path are judged on the plain plans, so such a merge costing a nest nothing but its lanes
+    is taken; a neighbour with no lane path is still cut off rather than cost a nest its lanes
+    (gh-ocannl-1239, {!mapping_probe}). [Lanes_off]: never taken, so the preamble-reduction
+    treatment has nothing to apply to. Config [gpu_serial_lanes], whose [auto] default resolves per
+    device ({!serial_lanes_for}). *)
 type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
 
 val gpu_serial_lanes : unit -> serial_lanes option
@@ -934,9 +936,16 @@ val default_cpu : ?min_parallel:int -> Low_level.optimized -> schedule
     nest's outermost parallelizable loop is merely retyped to [Grid] — pool-backed Grid rendering in
     the C backend (docs/proposals/gh-ocannl-164.md) partitions that loop into contiguous chunks
     executing on a process-global native thread pool, and a [Workgroup] split would only add loop
-    structure that runs serially inside a chunk. Returns the empty schedule below [min_parallel]
-    (default from config [cpu_schedule_min_parallel] = 16384; task fan-out costs more than a GPU
-    launch is worth on small kernels). *)
+    structure that runs serially inside a chunk. One departure from the GPU analysis
+    (gh-ocannl-1343): a nest that writes only scratch ([Local], a function-scope array on the C
+    backends) takes its chain from those writes instead of staying serial -- on GPU such a nest runs
+    whole in every thread over a per-thread copy, on the C backends a serial nest runs once, on one
+    core. Where linking such a nest to its readers bails, or trims a reader's chain so that the
+    kernel falls below [min_parallel] where the plain analysis met it, the plain analysis is the
+    result, and the C renderer's rule for locals under a pool-parallel loop stays the final word on
+    rendering. Returns the empty schedule below [min_parallel] (default from config
+    [cpu_schedule_min_parallel] = 16384; task fan-out costs more than a GPU launch is worth on small
+    kernels). *)
 
 val log_launches : bool Lazy.t
 (** Config [schedule_log_launches]: backend [compile] logs one stderr line per compiled segment with
@@ -978,12 +987,13 @@ val default_pipeline_fissions : unit -> bool
 val default_schedule_fingerprint : backend_name:string -> string
 (** A stable summary of the policy and configuration that shape the untuned default pipeline on this
     backend: the {!automatic_schedule_active} gate (["inactive"] when it is off — the untuned
-    default is then the unscheduled serial form), the [schedule_fission] gate, and the preset
-    thresholds ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] /
-    [cpu_schedule_min_parallel]). Diagnostics recorded against one default pipeline (e.g. the
-    autotuner's [default_ms], gh-ocannl-552) compare fingerprints to detect that a config change
-    redefined the default (Codex P2 on PR #279). Does not cover per-device hardware limits — cache
-    consumers already key per backend. *)
+    default is then the unscheduled serial form), the policy's version tags (bumped when a change
+    redefines the untuned default), the [schedule_fission] gate, and the preset thresholds
+    ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] / [cpu_schedule_min_parallel]).
+    Diagnostics recorded against one default pipeline (e.g. the autotuner's [default_ms],
+    gh-ocannl-552) compare fingerprints to detect that a config change redefined the default (Codex
+    P2 on PR #279). Does not cover per-device hardware limits — cache consumers already key per
+    backend. *)
 
 val maybe_default_schedule :
   backend_name:string ->
@@ -1022,20 +1032,39 @@ val statement_mappings : Low_level.t -> schedule -> (int * int) list
     geometry's cooperative preamble reduction, gh-ocannl-1124), adding threads only past its width.
 *)
 
+type mapping_probe = {
+  mp_kernel : Low_level.optimized -> schedule;
+  mp_lane_trade : (Low_level.optimized -> schedule) option Lazy.t;
+}
+(** The probes of schedule-aware fission's merge rule (gh-ocannl-1126): [mp_kernel], the schedule a
+    merged kernel will receive, against which a merge is refused when it gives some statement fewer
+    groups or active threads of its own loops than it gets alone; and, where lanes are only
+    [Lanes_admitted] (gh-ocannl-1167), [mp_lane_trade], the same schedule without the lane geometry,
+    on which a merge is judged instead -- unless the merged kernel would hold a loop nest with no
+    lane path beside one with a lane path, which must pass on both (gh-ocannl-1239: such a kernel
+    declines the lanes for a neighbour that could never take them). *)
+
+val mapping_probe :
+  ?lane_trade:(Low_level.optimized -> schedule) ->
+  (Low_level.optimized -> schedule) ->
+  mapping_probe
+(** [mapping_probe ?lane_trade kernel]: the probes, no lane trade unless given. *)
+
 val fission_keep_mapping :
-  is_gpu:bool -> limits:Backend_intf.hardware_limits -> (Low_level.optimized -> schedule) option
-(** The [keep_mapping] schedule {!maybe_default_schedules} passes to {!fission_scheduled}:
+  is_gpu:bool -> limits:Backend_intf.hardware_limits -> mapping_probe option
+(** The [keep_mapping] probes {!maybe_default_schedules} passes to {!fission_scheduled}:
     {!default_gpu} at [limits] on a GPU backend while config [gpu_fission_keep_mapping] is on (the
-    default), [None] otherwise -- without its lane geometry unless {!serial_lanes_for} is
-    [Lanes_cut], so a merge costing a nest only its lanes is taken. A caller replicating the default
-    segmentation (the autotuner's fissioned candidates) passes the same, so its segments are the
-    untuned pipeline's. *)
+    default), [None] otherwise -- with its lane geometry unless {!serial_lanes_for} is [Lanes_off],
+    and under [Lanes_admitted] with the lane-free {!default_gpu} as the lane trade, so a merge
+    costing a nest only its lanes is taken where every nest of the kernel has a lane path. A caller
+    replicating the default segmentation (the autotuner's fissioned candidates) passes the same, so
+    its segments are the untuned pipeline's. *)
 
 val fission_scheduled :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
-  ?keep_mapping:(Low_level.optimized -> schedule) ->
+  ?keep_mapping:mapping_probe ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
   static_indices:Indexing.static_symbol list ->
@@ -1081,9 +1110,10 @@ val fission_scheduled :
     times it), never the default.
 
     [keep_mapping] (gh-ocannl-1126): the default GPU schedule, as {!fission_keep_mapping} probes it
-    -- the schedule each candidate kernel would actually receive, except that where lanes are not
-    [Lanes_cut] the probe leaves out the lane geometry, so no boundary is kept for lanes. A merge
-    the rules above admit -- an aligned dependent merge, and a conflict-free one, which they admit
+    -- the schedule each candidate kernel would actually receive, except that where lanes are
+    [Lanes_admitted] a merge between nests with a lane path is judged without the lane geometry, so
+    no boundary is kept for lanes between them ({!mapping_probe}, gh-ocannl-1239). A merge the rules
+    above admit -- an aligned dependent merge, and a conflict-free one, which they admit
     unconditionally -- is still refused when some statement of the merged kernel gets fewer [Grid]
     groups or fewer active threads of its OWN loops under [keep_mapping] than it gets in a kernel of
     its own: the kernel boundary is kept rather than a nest's mapping lost. Only the refused merges
@@ -1119,7 +1149,7 @@ val fission_segmented :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
-  ?keep_mapping:(Low_level.optimized -> schedule) ->
+  ?keep_mapping:mapping_probe ->
   ?replay:segmentation * (int -> Low_level.optimized -> schedule option) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->

@@ -210,29 +210,29 @@ let tensorized_capability_refutation ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.
              (Ir.Numerics.cpu_accum_prec ~native_fp16_arithmetic:native_fp16 d_prec)
              prec
       in
-      let lanes = limits.Ir.Backend_intf.simd_vector_bytes / max 1 (Ir.Ops.prec_in_bytes prec) in
+      let lanes = limits.Ir.Backend_intf.simd_vector.bytes / max 1 (Ir.Ops.prec_in_bytes prec) in
       List.find_map
         [
-          ( limits.Ir.Backend_intf.simd_vector_bytes >= 8,
+          ( limits.Ir.Backend_intf.simd_vector.bytes >= 8,
             lazy
-              (Printf.sprintf "no usable SIMD vector file (simd_vector_bytes=%d < 8)"
-                 limits.Ir.Backend_intf.simd_vector_bytes) );
+              (Printf.sprintf "no usable SIMD vector file (simd_vector.bytes=%d < 8)"
+                 limits.Ir.Backend_intf.simd_vector.bytes) );
           ( lanes >= 2,
             lazy
-              (Printf.sprintf "fewer than two vector lanes at %s (simd_vector_bytes=%d)"
-                 (Ir.Ops.prec_string prec) limits.Ir.Backend_intf.simd_vector_bytes) );
+              (Printf.sprintf "fewer than two vector lanes at %s (simd_vector.bytes=%d)"
+                 (Ir.Ops.prec_string prec) limits.Ir.Backend_intf.simd_vector.bytes) );
           ( uniform_vec_capable,
             lazy
               "register tiling requires uniform vector-capable compute precisions (f32/f64, or \
                fp16 where arithmetic is native)" );
           (* [Register_tile.check]'s register-file rule, at the seeding (gh-ocannl-1285): a file
              holding no four-row tile declines every geometry, the default included. *)
-          ( Ir.Register_tile.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector_registers
+          ( Ir.Register_tile.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector.registers
             >= 1,
             lazy
               (Printf.sprintf
-                 "the vector register file holds no %d-row register tile (simd_vector_registers=%d)"
-                 Ir.Register_tile.rm_cap limits.Ir.Backend_intf.simd_vector_registers) );
+                 "the vector register file holds no %d-row register tile (simd_vector.registers=%d)"
+                 Ir.Register_tile.rm_cap limits.Ir.Backend_intf.simd_vector.registers) );
           ( not (Utils.debug_log_from_routines ()),
             lazy
               "routine logging is active (debug_log_from_routines): [C_syntax.try_register_tile] \
@@ -1557,7 +1557,8 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
     | LL.Tile_mma { d = tn, _; _ } ->
         Ir.Tnode.Placements.is_materialized_peek plc tn
     | LL.Seq (a, b) -> writes_materialized a || writes_materialized b
-    | LL.For_loop { body; _ } | LL.If { body; _ } -> writes_materialized body
+    | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } ->
+        writes_materialized body
     | _ -> false
   in
   let mentions syms stmt =
@@ -1567,7 +1568,12 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
   (* Only nests that write a MATERIALIZED node need covering — [validate_parallel]'s rule is about
      shared memory, and routine-local scratch is per-thread by construction. Restricting the demand
      this way also keeps the query out of the way of the pipelines it never needed to constrain: a
-     site with nothing to cover neither consults the analysis nor can be failed by it. *)
+     site with nothing to cover neither consults the analysis nor can be failed by it. The walk
+     enters [Scan_loop] bodies, as [validate_parallel]'s does (gh-ocannl-1134): a scan's row writes
+     (the online softmax's max and normalizer) are a companion's writes like any other. Stopping at
+     the scan let a kernel holding one pass this verdict, and then every seed died at compile. An
+     aligned scan nest takes the site's geometry on its enclosing loops and runs serially per
+     thread; a scan over the site's own column axis trims below the site's arity and is refuted. *)
   let needs =
     List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(fun stmt ->
         match stmt with
@@ -1599,7 +1605,7 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
         | LL.Seq (a, b) ->
             go a;
             go b
-        | LL.For_loop { body; _ } | LL.If { body; _ } -> go body
+        | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> go body
         | _ -> ()
       in
       go stmt;
@@ -2951,7 +2957,7 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
              must ({!Ir.Backend_intf.simd_lanes_for}); seeding asks the same question, or it would
              withhold candidates the renderer would in fact tile. *)
           let lanes =
-            Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes
+            Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes
               ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes cprec))
               ~extent:site.c_noc
           in
@@ -2959,10 +2965,10 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
           let failing =
             List.filter_map
               [
-                ( limits.Ir.Backend_intf.simd_vector_bytes >= 8,
+                ( limits.Ir.Backend_intf.simd_vector.bytes >= 8,
                   lazy
                     (Printf.sprintf "the %d-byte vector file is under 8 bytes"
-                       limits.Ir.Backend_intf.simd_vector_bytes) );
+                       limits.Ir.Backend_intf.simd_vector.bytes) );
                 ( Option.is_some lanes,
                   lazy
                     (Printf.sprintf "no SIMD lane count fits the out-channel extent %d at %s"
@@ -4121,10 +4127,10 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
            whether a given extent can be tiled is [lanes_fit], which lets the renderer's per-extent
            halving ({!Ir.Backend_intf.simd_lanes_for}) through instead of gating every extent on the
            widest vector. *)
-        let lanes = limits.Ir.Backend_intf.simd_vector_bytes / max 1 (Ir.Ops.prec_in_bytes prec) in
+        let lanes = limits.Ir.Backend_intf.simd_vector.bytes / max 1 (Ir.Ops.prec_in_bytes prec) in
         let lanes_fit extent =
           Option.is_some
-            (Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes
+            (Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes
                ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes prec))
                ~extent)
         in
@@ -4141,15 +4147,12 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
         let leaf (p : sketch_params) =
           let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
           let n = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
-          let vector_bytes = limits.Ir.Backend_intf.simd_vector_bytes in
-          let vector_registers = limits.Ir.Backend_intf.simd_vector_registers in
+          let file = limits.Ir.Backend_intf.simd_vector in
           let elt_bytes = max 1 (Ir.Ops.prec_in_bytes prec) in
           match
-            Ir.Register_tile.alternatives ~vector_bytes ~vector_registers ~elt_bytes ~m ~n
+            Ir.Register_tile.alternatives ~file ~elt_bytes ~m ~n
             @
-            if rm_twin_seeded then
-              Option.to_list
-                (Ir.Register_tile.rm_twin ~vector_bytes ~vector_registers ~elt_bytes ~m ~n)
+            if rm_twin_seeded then Option.to_list (Ir.Register_tile.rm_twin ~file ~elt_bytes ~m ~n)
             else []
           with
           | [] -> leaf p

@@ -351,6 +351,26 @@ let depends_on_universe args =
   in
   match args with None -> false | Some args -> List.exists args ~f:found
 
+(** Whether [args] — ONE dependency field's arguments — run the action in a sandbox where an
+    unlisted file is ABSENT: a top-level [(sandbox …)] naming both [always] and
+    [preserve_file_kind], in either order (gh-ocannl-1359). Neither alone is that. Without [always]
+    the rule is sandboxed only when the invocation asks, and dune's default asks for none. Without
+    [preserve_file_kind] dune may pick the symlink sandbox, which isolates nothing from a script
+    interpreter: Python puts a symlinked script's RESOLVED directory on [sys.path], so an unlisted
+    module beside it in [_build/default] is found anyway (lukstafi/ocannl-staging#1151 measured it:
+    a dropped dependency still passed under [(sandbox always)]). A [none] anywhere in the form is
+    not isolation either, whatever else it says. *)
+let isolating_sandbox args =
+  let isolates = function
+    | Sexp.List (Sexp.Atom "sandbox" :: settings) ->
+        let has name =
+          List.exists settings ~f:(function Sexp.Atom a -> String.equal a name | _ -> false)
+        in
+        has "always" && has "preserve_file_kind" && not (has "none")
+    | _ -> false
+  in
+  match args with None -> false | Some args -> List.exists args ~f:isolates
+
 (** The one spelling OCANNL reads the backend under (gh-ocannl-652 dropped the lowercase form). *)
 let backend_env_var = "OCANNL_BACKEND"
 
@@ -882,6 +902,9 @@ type site = {
   declared_ambient_paths : string list;
       (** the [ocannl_ambient] files the same deps depend on, as written (gh-ocannl-1149) *)
   depends_on_universe : bool;  (** whether the same deps include [(universe)] (gh-ocannl-1149) *)
+  isolating_sandbox : bool;
+      (** whether the same deps run the action in a sandbox that ISOLATES it: {!isolating_sandbox}
+          (gh-ocannl-1359) *)
   declares_backend : bool;
       (** whether THE DEPS THIS SITE RUNS UNDER declare [(env_var OCANNL_BACKEND)] — read from the
           same field as {!declares_config}, and for the same reason. A stanza can carry dependency
@@ -1371,6 +1394,7 @@ let sites_of_stanza subdir stanza =
         declared_config_paths = declared_config_paths deps_field;
         declared_ambient_paths = declared_config_paths ~name:ambient_file deps_field;
         depends_on_universe = depends_on_universe deps_field;
+        isolating_sandbox = isolating_sandbox deps_field;
         declares_backend = declares_env_var deps_field backend_env_var;
         path_rewritten;
         executables;

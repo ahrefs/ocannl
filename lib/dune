@@ -30,6 +30,7 @@
   calibrate
   parallel
   nn_blocks
+  demo_models
   ocannl
   persistence
   precision_policy

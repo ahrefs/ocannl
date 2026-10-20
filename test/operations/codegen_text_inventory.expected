@@ -157,6 +157,8 @@ test/operations/cpu_parallel.ml
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "dispatch_apply"
+test/operations/cpu_scratch_matmul_grid.ml [also pins text this scan cannot name: opaque aggregate component]
+    "Pool-backed Grid rendering"
 test/operations/cpu_simd_reduction.ml
     "#pragma"
     "Vectorized reduction rendering"

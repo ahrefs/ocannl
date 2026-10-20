@@ -59,6 +59,26 @@ files.
   `wte.grad` + final-LN-grad union. Zero runs are stably sorted by shape in `collect_units` (they
   commute; units stay a function of the code), else the cuts fall at every alternation of a
   backward pass's shapes. Case 4 of `gpu_fission_mapping`.
+- Scratch (`Local`, a function-scope array on the C backends) is where the CPU preset and fission
+  part from the GPU reading (gh-ocannl-1343). A whole-node `Zero_out` of scratch conflicts with
+  nothing, so greedy grouping used to take it into the PRECEDING segment and cut before its
+  accumulation; the node then crossed the boundary, `promote_crossing` made it `On_device`, and the
+  promoted zero -- a bare materialized write -- bailed BOTH segments, which coalesced serial. In
+  mlp_bn_names the batch-norm statistics' zeros serialized the first layer's 1000x200x30 matmul that
+  way. `group_units` now lets such a zero join a segment only when the unit accumulating into its
+  node would join too; a `Solo` next unit that may touch the node (opaque units always may)
+  splits it off as well, so the zero shares the serial unit's fate (review round 2). Separately, `default_cpu` runs `analyze_parallel_chains ~shared_locals:true`:
+  a nest writing only scratch takes its chain from those writes (on GPU it runs whole per thread
+  over a per-thread copy, so the empty chain is right there; on cc a serial nest runs once, on one
+  core), falling back to the plain analysis when linking it bails OR costs the kernel its
+  `min_parallel` eligibility (a `y[i, j]` reading `s[i]` is trimmed to `[i]`; compare
+  threshold eligibility, never chain sizes -- the preset retypes only the outermost loop, which a
+  trim keeps, and a size comparison left the scratch nest serial in exactly the case it serves:
+  review round 1; the test's stats and rowstats legs pin both directions) -- `C_syntax.parallel_grid_safe`
+  stays the arbiter of whether a loop over a local renders in parallel. Mind the size: at the
+  default `stack_threshold_in_bytes` (16 KB) a scratch node holds at most 4096 cells, below the
+  default `cpu_schedule_min_parallel`, so the chain change bites in the tuner's `min_parallel:1`
+  presets or beside a large nest; the zero rule bites at any size. `test/operations/cpu_scratch_matmul_grid`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
@@ -122,13 +142,17 @@ files.
   per layer at s1024; its plain plan walks a whole row per thread), while the fused dV loses -- not
   on its own, but because `keeps_mapping` cut it from dK to keep its lanes (dK 1.03 + dV 2.30 ms,
   against 1.72 ms for the two merged on the plain plan). So `admitted` takes lanes wherever a
-  kernel admits them and has `fission_keep_mapping` probe WITHOUT lanes: no boundary is kept for
-  lanes, so a merge costing a nest only its lanes goes through. That is broader than the evidence
-  (a dK/dV cut): a new nest sharing the value pass's plain chain -- a saved row statistic, say --
-  would now merge with it and cost the forward its lanes (`lane_geometry` declines a kernel mixing
-  lane and plain nests). Gating lanes wholesale was measured and rejected (it threw away the
-  forward win). Measured on gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged.
-  Leg 7 of `gpu_serial_lanes` pins both halves, the training step's own forward included. `cut`
+  kernel admits them and has `fission_keep_mapping` judge merges between nests WITH a lane path
+  on the plain plans (`mapping_probe`'s `mp_lane_trade`): no boundary is kept for lanes between
+  them, so dV joins dK. The evidence is that dK/dV trade only, so a merged kernel that would also
+  hold a loop nest with NO lane path (`Schedule.laneless_nest`: a row statistic sharing the value
+  pass's plain chain) must pass the lane-inclusive probe too -- a segment's statement may keep the
+  mapping it already has there, so a nest the trade already took off its lanes loses nothing more
+  (gh-ocannl-1239; per-nest lanes in a mixed kernel was the costlier alternative: the coverage
+  rule would need a guarded lane slot for the plain nest).
+  Gating lanes wholesale was measured and rejected (it threw away the forward win). Measured on
+  gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged. Leg 7 of `gpu_serial_lanes`
+  pins both halves, the training step's own forward included; leg 8 the row-statistic cut. `cut`
   keeps a boundary only where a merge would cost a nest its lanes, never "dV runs apart": where lanes
   are cheap dK takes them too (the cooperative preamble), on dV's topology, so dQ, dK and dV share
   one lane kernel on Metal and CUDA (leg 7's executed-step claim).
@@ -1925,8 +1949,9 @@ files.
   under, its `replay` callback answering `None` for a segment left to its kind's preset, and keys
   its segments by first unit plus structural digest, `Autotune.seg_key`). Segments of one structure
   share a sketch key only when their placement-aware digests agree too, so repeated layers still
-  share one sketch. On the C backends fission's crossing promotions leave such twins agreeing in
-  placements; a GPU's restored `Local` products are what split them (`autotune_sketch_placements`).
+  share one sketch. A GPU's restored `Local` products are what split such twins
+  (`autotune_sketch_placements`); on the C backends a `Local` product's zero opens its own segment
+  (gh-ocannl-1343, above), so the twins differ in structure there instead.
   The replay-validity check rides
   on the position: segment `i`'s digest must equal the saved `i`th, and a recorded segmentation
   that does not partition the routine's units, or separates a scope-local definition from a use,
@@ -2052,6 +2077,18 @@ files.
   queries the scan index is an ordinary loop symbol: `loop_ranges`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
+- **A scan nest in a GPU sketch's kernel is a companion like any other** (gh-ocannl-1134):
+  `companion_geometry` walks into `Scan_loop` bodies for its coverage demand, as
+  `validate_parallel` does, so a scan's materialized row writes need covering. Where the scan's
+  enclosing loops align with the site's full chain, they take the site's per-position geometry and
+  the scan runs serially per thread. The two-pass attention's scan runs over the score site's column
+  axis, so its chain trims below the site's arity and the family is refuted naming the scan's
+  nodes. Fission makes the cut there: the default schedule-aware `keep_mapping` probe already keeps
+  the scores' kernel apart, and `arity_cuts` does so under the legality rules alone. The walk used
+  to stop at the scan: the witness passed and every seed died at compile, which is how gh-1003's
+  stage-1 tuned arm lost its tensorized scores. A new walker deciding a kernel's write demand must
+  descend into scan bodies too. `test/operations/scan_companion_coverage` executes every seed of
+  both shapes.
 ## Timing identity
 
 - Timed cache evidence uses `Context.timing_identity` separately from conservative construction

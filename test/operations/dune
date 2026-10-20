@@ -146,6 +146,8 @@
   (alias runtest-ll_test_ratchet)
   (alias runtest-ll_test_scan_cases)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-tensorized_census_ratchet)
+  (alias runtest-tensorized_census_scan_cases)
   (alias runtest-operand_key_scan_cases)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
@@ -313,6 +315,7 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
@@ -3482,6 +3485,9 @@
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
+  tensorized_census_ratchet.ml
+  tensorized_census_ratchet.expected
+  tensorized_census_scan_cases.expected
   provenance_tag_inventory.ml
   provenance_tag_inventory.expected
   provenance_tag_scan_cases.expected
@@ -3542,6 +3548,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
+   tensorized_census_ratchet.ml
+   tensorized_census_ratchet.expected,tensorized_census_scan_cases.expected
    provenance_tag_inventory.ml
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
    render_decline_inventory.ml
@@ -3865,7 +3873,10 @@
 ; against external qualified, aliased, opened, or included references, and (gh-ocannl-1009) every
 ; top-level type declaration against a mention of its name anywhere but its own declaration. The matching policy is pure in
 ; test/support/dead_export_scan.ml, so these cases exercise it against synthetic violations and
-; near misses rather than trusting today's usually-clean repository as its own control.
+; near misses rather than trusting today's usually-clean repository as its own control. They also
+; hold every modelled derived name and inferred call equal to the installed PPX expansion of a
+; fixture corpus (gh-ocannl-913/914), hence the linked derivers: listing [ppx_hash] registers it,
+; its archive being force-linked.
 
 (test
  ; ocannl-backend: none -- reads synthetic OCaml sources through ppxlib and links no backend.
@@ -3880,7 +3891,7 @@
   ppx_compare.expander
   ppx_enumerate
   ppx_fields_conv
-  ppx_hash.expander
+  ppx_hash
   ppx_sexp_conv
   ppx_sexp_conv.expander
   ppx_variants_conv
@@ -4719,6 +4730,42 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS))
  (modules cpu_parallel)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1343: the default CPU pipeline parallelizes a matmul whose product is a non-materialized
+; intermediate (fission keeps a scratch zero with its accumulation; default_cpu takes chains from
+; scratch writes), with parity against the unscheduled compile.
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
+ (name cpu_scratch_matmul_grid)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules cpu_scratch_matmul_grid)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -7576,7 +7623,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules verdict_teardown)
- (libraries base stdio unix arrayjit.verdict fresh_process))
+ (libraries base stdio unix arrayjit.verdict fresh_process test_utils))
 
 ; The uint4x32 FFI stubs read four lanes out of an [int array], a type that carries no length, so
 ; the C helper has to check the arity rather than assume it (gh-ocannl-688). Links arrayjit.ir
@@ -7617,8 +7664,10 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
- ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md and the tools scripts as text and links no backend.
- (target agent_notes_structure.actual)
+ ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md, the tools scripts and the test sources as text and links no backend.
+ ; The test sources are read for the agent-note pointers their string literals print (gh-ocannl-1358);
+ ; with them the argument list outgrows Windows' command line, so it goes over as a response file.
+ (targets agent_notes_structure.actual agent_notes_structure.filelist)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
@@ -7626,11 +7675,19 @@
   ../../AGENTS.md
   ../../docs/agent-notes.md
   (glob_files_rec ../../docs/agent-notes/*.md)
-  (glob_files ../../tools/*.sh))
+  (glob_files ../../tools/*.sh)
+  (glob_files_rec ../../test/*.ml))
  (action
-  (with-stdout-to
-   %{target}
-   (run %{dep:agent_notes_structure.exe} %{deps}))))
+  (progn
+   (with-stdout-to
+    agent_notes_structure.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    agent_notes_structure.actual
+    (run
+     %{dep:agent_notes_structure.exe}
+     %{workspace_root}
+     @agent_notes_structure.filelist)))))
 
 (rule
  (alias runtest-agent_notes_structure)
@@ -8305,24 +8362,22 @@
   (diff config_usage_scan_control.expected config_usage_scan_control.actual)))
 
 (rule
- ; ocannl-backend: none -- drives every direct config-usage refusal through injected state, and
- ; resolves the agent-note pointers those refusals print against the notes' headings.
+ ; ocannl-backend: none -- drives every direct config-usage refusal through injected state.
+ ; The agent-note pointers those refusals print are resolved by agent_notes_structure (gh-ocannl-1358).
  (target config_usage_scan_refusal_control.actual)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
   config_usage_scan.ml
-  config_usage_scan_token_grammar.fixture
-  (glob_files ../../docs/agent-notes/*.md))
+  config_usage_scan_token_grammar.fixture)
  (action
   (with-stdout-to
    %{target}
    (run
     %{dep:config_usage_scan.exe}
     --refusal-control
-    %{dep:config_usage_scan_token_grammar.fixture}
-    ../../docs/agent-notes))))
+    %{dep:config_usage_scan_token_grammar.fixture}))))
 
 ; A tool-invented name in a *.sh or *.py source is refused with a hint naming the fix; the same
 ; names in an OCaml source keep the general message. Each <name>.fixture is scanned as <name>.
@@ -8729,6 +8784,50 @@
  (package neural_nets_lib)
  (action
   (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
+
+; gh-ocannl-1309: an executed claim about a tensorized routine whose item judges no mma census --
+; parity alone also passes for a Tile_mma that declined to the scalar fallback (gh-ocannl-1283).
+; The reader states its closed lists of recognised forms. Same arrangement as ll_test_ratchet.
+
+(executable
+ (name tensorized_census_ratchet)
+ (modules tensorized_census_ratchet)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target tensorized_census_ratchet.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:tensorized_census_ratchet.exe}
+    %{workspace_root}
+    %{dep:tensorized_census_ratchet.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-tensorized_census_ratchet)
+ (package neural_nets_lib)
+ (action
+  (diff tensorized_census_ratchet.expected tensorized_census_ratchet.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic source cases and child scanner invocations.
+ (name tensorized_census_scan_cases)
+ (package neural_nets_lib)
+ (modules tensorized_census_scan_cases)
+ (libraries base stdio unix fresh_process test_utils arrayjit.verdict)
+ (deps ocannl_config tensorized_census_ratchet.exe)
+ (action
+  (run %{test} %{dep:tensorized_census_ratchet.exe})))
 
 ; gh-ocannl-1056: a census total printed in a repository-scan golden -- hand-fixed three times
 ; (gh-ocannl-665, gh-ocannl-701, gh-ocannl-1046) -- is refused on the PR that adds it. The scanner
@@ -9192,6 +9291,16 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; Host-only controls for the benchmark driver's report validator.
+;
+; The three Python controls below hand-list the benchmark modules their scripts import, and run in
+; a copying sandbox (gh-ocannl-1359): unsandboxed, an import of an unlisted module passes whenever
+; another rule happened to copy that module into _build/default/benchmarks (gh1002_kernels went
+; without `box_gate.py` that way, which gh1002_cells.py imports at its top). `(sandbox always)`
+; alone would pick the symlink sandbox, where Python resolves the script back into _build/default
+; and finds the neighbours anyway; `preserve_file_kind` rules that out. `config_dep_completeness`
+; requires the setting of every rule whose program it cannot place, these among them
+; (build-and-test.md#dune-mechanics). Each stays an alias-only action that diffs its own output:
+; a target-producing rule running an opaque command is one `bin_smoke_membership_scan` refuses.
 
 (rule
  ; ocannl-backend: none -- runs Python report controls and launches no OCANNL executable.
@@ -9202,7 +9311,8 @@
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9228,7 +9338,8 @@
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9250,9 +9361,11 @@
   gh1002_kernels.py
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9936,6 +10049,34 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules split_reduce_block_hoist)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1134: a Scan_loop nest is a companion of the GPU sketch sharing its kernel.
+ (name scan_companion_coverage)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules scan_companion_coverage)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

@@ -5097,7 +5097,6 @@ let () =
   Verdict.p "the walk read string literals out of these sources" (!literals > 0);
   Verdict.p "and placed some of them as arguments of a named function" (!applied > 0);
   Verdict.p "over more than one test directory" (List.length directories > 1);
-  if not (Verdict.any_failed ()) then
-    printf
-      "\nOK: test claims route through `Verdict`, and quantified bindings cannot pass on nothing.\n";
+  Verdict.success_trailer ~blank_line:true
+    [ "test claims route through `Verdict`, and quantified bindings cannot pass on nothing." ];
   Test_utils.Refusal_control_manifest.print "verdict_ratchet.ml"

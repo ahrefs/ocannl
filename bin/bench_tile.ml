@@ -57,21 +57,23 @@ let parse_rn args rn =
 
     [machine] is a thunk, forced once by EITHER spelling and not at all without a flag: a bench that
     would otherwise not have created a context by this point should not acquire one to answer a
-    question nobody asked. It returns the machine's vector width in bytes and its vector register
-    count ([Context.hardware_limits]'s [simd_vector_bytes] and [simd_vector_registers]), and the
-    COMPUTE precision's element width — compute, not storage, because that is what the renderer's
-    [elt_bytes] is: a narrow-storage GEBP holds its C-tile at the compute precision.
+    question nobody asked. It returns the machine's vector register file, its width and its register
+    count ([Context.hardware_limits]'s [simd_vector], gh-ocannl-1399), and the COMPUTE precision's
+    element width — compute, not storage, because that is what the renderer's [elt_bytes] is: a
+    narrow-storage GEBP holds its C-tile at the compute precision.
 
     [--tile=] needs it for the same reason [--rn=] does, even though it derives nothing: a backend
     whose file renders no multi-lane vector has no register-tiled rendering for a geometry to
     describe, and its [Tile_mma] goes to the hardware's own intrinsics (or declines) whatever the
     schedule carries. Taking the request there would print a geometry under "(requested)" that
     nothing honoured — the "timed is not tensorized" hazard, one level up from the census bracket,
-    which reports the intrinsic rendering as a success. GPU backends report [simd_vector_bytes = 0]
+    which reports the intrinsic rendering as a success. GPU backends report a 0-byte [simd_vector]
     and are exactly this case. *)
 let of_args args ~machine =
   let honoured_here t =
-    let vector_bytes, vector_registers, elt_bytes = machine () in
+    let ({ bytes = vector_bytes; registers = vector_registers } : Ir.Vector_file.t), elt_bytes =
+      machine ()
+    in
     match RT.simd_lane_ladder ~vector_bytes ~elt_bytes with
     | [] ->
         Bench_args.bad args

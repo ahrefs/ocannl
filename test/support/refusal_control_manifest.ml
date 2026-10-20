@@ -20,6 +20,11 @@ let raw_entries =
     ("ll_test_ratchet.ml", []);
     ("refused_action_streams.ml", []);
     ("operand_key_ratchet.ml", []);
+    ( "tensorized_census_ratchet.ml",
+      [
+        "[scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity";
+        "[scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run";
+      ] );
     ("provenance_tag_inventory.ml", []);
     ( "render_decline_inventory.ml",
       [
@@ -63,10 +68,12 @@ let raw_entries =
         "[scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes";
         "[scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets";
         "[scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers";
+        "[scanner-refusal:94abf9ad59c6aa58e4608e31b0c1481a] sources' string literals";
         "[scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported";
         "[scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries";
         "[scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet";
         "[scanner-refusal:ec62d0a7d728c7ab15a2c9b8608c6404] every exemption still";
+        "[scanner-refusal:91d29d400185d4fe574f5deb83d48157] every pointer-fixture exemption";
       ] );
     ( "changelog_unreleased_scan.ml",
       [
@@ -189,6 +196,7 @@ let raw_entries =
         "[scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient";
         "[scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads";
         "[scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan";
+        "[scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics";
         "[scanner-refusal:6d151bed80a45201e61d096c2c38d210] which has no";
         "[scanner-refusal:5509acc7fac8ff0412e3631b49c06dc7] change directory without";
         "[scanner-refusal:cb948484fece727200c2dc74529ab671] the ambient environment";
@@ -240,7 +248,6 @@ let raw_entries =
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
         "[scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";
-        "[scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names";
         "[scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies";
         "[scanner-refusal:98de32226b019b81ff6e88bf4e44c14b] supplies OCaml implementation";
         "[scanner-refusal:05a2eb509694607c615f131c6949c1f1] inventory supplies Markdown";
@@ -253,6 +260,7 @@ let raw_entries =
     ( "dead_export_scan.ml",
       [
         "[scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules";
+        "[scanner-refusal:b10ed46107421e53b9d08523e194ffa2] dead-export census does";
         "[scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch";
         "[scanner-refusal:ccd19577d4db5de19151a2932010e536] export census raised";
         "[scanner-refusal:a2a944c677a0439ea6a8b98ef3decc70] its mention counts";
@@ -689,6 +697,8 @@ let raw_direct_evidence =
     ( "config_dep_completeness.ml:6c29eb9b1db92bba229707a7cd8e1b5b",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:cebf445823df462f70b459a86b20e3d3",
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
+    ( "config_dep_completeness.ml:5e382153a89be91293964b5417659f1a",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:6d151bed80a45201e61d096c2c38d210",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
@@ -1174,29 +1184,15 @@ let doubly_classified =
   List.filter_map direct_evidence ~f:(fun (key, _) ->
       Option.some_if (List.Assoc.mem catalogue_only key ~equal:String.equal) key)
 
-let print source =
-  let source_path =
-    if Stdlib.Sys.file_exists source then source
-    else
-      let basename = Stdlib.Filename.basename source in
-      if Stdlib.Sys.file_exists basename then basename
-      else Stdlib.Filename.concat "test/operations" source
-  in
-  let normalized = String.substr_replace_all source ~pattern:"\\" ~with_:"/" in
-  let source =
-    match String.substr_index normalized ~pattern:"test/operations/" with
-    | Some position -> String.drop_prefix normalized position
-    | None ->
-        let local = "test/operations/" ^ Stdlib.Filename.basename normalized in
-        (* A bare or [./]-prefixed name is this directory's scan whether or not it has a row yet;
-           the bootstrap below must print the key the census derives, not the spelling. *)
-        if
-          List.Assoc.mem entries local ~equal:String.equal
-          || String.equal (Stdlib.Filename.dirname normalized) "."
-        then local
-        else normalized
-  in
-  let diagnostics = Refusal_control_scan.diagnostics (In_channel.read_all source_path) in
+(** The section [print] ends a scan's golden with: its heading, then the marker of each of
+    [diagnostics] that [expected] (the source's registered row) lists and this run exercised -- a
+    claim's once Verdict recorded it passing, a direct failure's once its refusal ran -- and the
+    catalogue-only ones after them. [source] is the key a direct failure's observations are filed
+    under. Exposed apart from [print] so that a control can print a section for diagnostics it
+    extracted itself, through the same printer: [verdict_teardown]'s transcripts, which
+    [tools/test-mutation-run.sh] replays through [tools/mutation-run.sh], are of runs ending here
+    (gh-ocannl-1364). *)
+let print_section ~source ~expected diagnostics =
   let passed_labels = ref (Verdict.passed_labels ()) in
   let catalogued = ref [] in
   let rivals =
@@ -1206,39 +1202,6 @@ let print source =
         | Refusal_control_scan.Claim -> None)
   in
   printf "\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n";
-  (* Bootstrap: a scan with no row, or an empty one, gets its row written out on stderr -- never
-     into the golden, and never into the manifest, so the census claim in env_var_deps still decides
-     whether the row was added. A registered row with no diagnostics to list has nothing to say. *)
-  let registered = List.Assoc.find entries source ~equal:String.equal in
-  let expected = Option.value registered ~default:[] in
-  let row_source =
-    Option.value (String.chop_prefix source ~prefix:"test/operations/") ~default:source
-  in
-  if List.is_empty expected && not (List.is_empty diagnostics && Option.is_some registered) then (
-    eprintf
-      "%s has %s row in Refusal_control_manifest; add this row to `raw_entries` in \
-       test/support/refusal_control_manifest.ml (not part of the golden):\n"
-      source
-      (if Option.is_some registered then "an empty" else "no");
-    eprintf "%s" (row ~source:row_source diagnostics))
-  else
-    (* A stale row -- a diagnostic gained, lost or reworded -- gets the same treatment, again only
-       on stderr: the catalogue still holds the manifest to the extraction, and a marker outside the
-       row prints nothing below, so the census claim in env_var_deps still decides. *)
-    Option.iter
-      (row_difference ~registered:expected
-         ~extracted:(List.map diagnostics ~f:Refusal_control_scan.marker))
-      ~f:(fun difference ->
-        eprint_row_difference ~source:row_source diagnostics difference;
-        match unevidenced_failures ~source ~registered:expected diagnostics with
-        | [] -> ()
-        | keys ->
-            eprintf
-              "  direct failures new to the row with no `raw_direct_evidence` entry, none recorded \
-               through `observe_failure` in this run: unless the scan's separate control run \
-               records it, each needs a hand-written entry naming the control output that observes \
-               it, under the key\n";
-            List.iter keys ~f:(eprintf "    %S\n"));
   diagnostics
   |> List.iter ~f:(fun diagnostic ->
       let marker = Refusal_control_scan.marker diagnostic in
@@ -1272,3 +1235,61 @@ let print source =
     printf
       "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";
     List.iter (List.rev !catalogued) ~f:(printf "  %s\n"))
+
+let print source =
+  let source_path =
+    if Stdlib.Sys.file_exists source then source
+    else
+      let basename = Stdlib.Filename.basename source in
+      if Stdlib.Sys.file_exists basename then basename
+      else Stdlib.Filename.concat "test/operations" source
+  in
+  let normalized = String.substr_replace_all source ~pattern:"\\" ~with_:"/" in
+  let source =
+    match String.substr_index normalized ~pattern:"test/operations/" with
+    | Some position -> String.drop_prefix normalized position
+    | None ->
+        let local = "test/operations/" ^ Stdlib.Filename.basename normalized in
+        (* A bare or [./]-prefixed name is this directory's scan whether or not it has a row yet;
+           the bootstrap below must print the key the census derives, not the spelling. *)
+        if
+          List.Assoc.mem entries local ~equal:String.equal
+          || String.equal (Stdlib.Filename.dirname normalized) "."
+        then local
+        else normalized
+  in
+  let diagnostics = Refusal_control_scan.diagnostics (In_channel.read_all source_path) in
+  (* Bootstrap: a scan with no row, or an empty one, gets its row written out on stderr -- never
+     into the golden, and never into the manifest, so the census claim in env_var_deps still decides
+     whether the row was added. A registered row with no diagnostics to list has nothing to say. *)
+  let registered = List.Assoc.find entries source ~equal:String.equal in
+  let expected = Option.value registered ~default:[] in
+  let row_source =
+    Option.value (String.chop_prefix source ~prefix:"test/operations/") ~default:source
+  in
+  if List.is_empty expected && not (List.is_empty diagnostics && Option.is_some registered) then (
+    eprintf
+      "%s has %s row in Refusal_control_manifest; add this row to `raw_entries` in \
+       test/support/refusal_control_manifest.ml (not part of the golden):\n"
+      source
+      (if Option.is_some registered then "an empty" else "no");
+    eprintf "%s" (row ~source:row_source diagnostics))
+  else
+    (* A stale row -- a diagnostic gained, lost or reworded -- gets the same treatment, again only
+       on stderr: the catalogue still holds the manifest to the extraction, and a marker outside the
+       row prints nothing below, so the census claim in env_var_deps still decides. *)
+    Option.iter
+      (row_difference ~registered:expected
+         ~extracted:(List.map diagnostics ~f:Refusal_control_scan.marker))
+      ~f:(fun difference ->
+        eprint_row_difference ~source:row_source diagnostics difference;
+        match unevidenced_failures ~source ~registered:expected diagnostics with
+        | [] -> ()
+        | keys ->
+            eprintf
+              "  direct failures new to the row with no `raw_direct_evidence` entry, none recorded \
+               through `observe_failure` in this run: unless the scan's separate control run \
+               records it, each needs a hand-written entry naming the control output that observes \
+               it, under the key\n";
+            List.iter keys ~f:(eprintf "    %S\n"));
+  print_section ~source ~expected diagnostics
