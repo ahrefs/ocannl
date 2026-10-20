@@ -54,7 +54,7 @@ let replayed (r : Autotune.report) =
 let completed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Searched -> true | _ -> false
 
-let approx x y = Float.(abs (x - y) < 1e-2)
+let approx_tol _ = 1e-2
 
 (* Emitted code up to the numbering of fresh names: loop symbols ([i40], [i40_lo]) and value
    temporaries ([v5_z]) carry process-wide counters, so two compiles of one schedule in one process
@@ -224,7 +224,7 @@ let () =
         (Context.get_values ctx z.Tensor.value, Context.get_values ctx r.Tensor.value))
   in
   let expected = Array.append z_expected r_expected in
-  let correct label (zv, rv) = p_all2 label (Array.append zv rv) expected ~f:approx in
+  let correct label (zv, rv) = p_close label (Array.append zv rv) expected ~tol:approx_tol in
   (* The emitted source of the fissioned routine: the batch of its segment kernels. *)
   let fissioned_source = name ^ "__seg" in
 
@@ -405,7 +405,7 @@ let () =
     (Option.value_map report ~default:false ~f:(fun r ->
          SC.equal_saved_schedule r.Autotune.best_schedule
            (List.concat_map stored ~f:(fun s -> s.SC.seg_saved))));
-  p_all2 "the twins' replay computes the right values" got z2_expected ~f:approx
+  p_close "the twins' replay computes the right values" got z2_expected ~tol:approx_tol
 
 (* --- 6. A folded segment replays under a zero policy that no longer proposes the fold. --- *)
 let () =
@@ -469,7 +469,7 @@ let () =
   let source_a = if cache_available then Some (Generated.read source) else None in
   cache_claim "the folded winner replays from the cache"
     (Option.value_map report_a ~default:false ~f:replayed);
-  p_all2 "the folded replay computes the right values" got_a expected ~f:approx;
+  p_close "the folded replay computes the right values" got_a expected ~tol:approx_tol;
   Unix.putenv "OCANNL_GPU_SCHEDULE_MIN_PARALLEL" "1000000";
   let refolds, _ = fission rut ~fold_zeros:true () in
   gated ~when_:is_gpu ~on:backend_name "the raised threshold no longer proposes the fold"
@@ -481,9 +481,9 @@ let () =
       cache_claim
         ("under the raised threshold the folded winner replays from the cache, " ^ leg)
         (Option.value_map report ~default:false ~f:replayed);
-      p_all2
+      p_close
         ("under the raised threshold the folded replay computes the right values, " ^ leg)
-        got expected ~f:approx;
+        got expected ~tol:approx_tol;
       cache_claim
         ("under the raised threshold the folded replay emits identical code, " ^ leg)
         (match source_a with

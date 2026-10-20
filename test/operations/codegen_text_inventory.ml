@@ -112,6 +112,20 @@ let refuse_raised ~fail raised =
             parses, so the census is short by whatever the file pins"
            exn path))
 
+(* gh-ocannl-1294: a test that opens build_files/ itself reads whatever is there -- a previous run's
+   artifact, a same-named routine's -- and, where nothing is, passes over zero files. *)
+let refuse_direct_reads ~fail sites =
+  List.iter sites ~f:(fun site ->
+      if site.Scan.direct then
+        fail
+          (Printf.sprintf
+             "%s reads build_files/ itself (Utils.build_files_dir or Utils.build_file), so nothing \
+              ties what it reads to this run's compile: a stale artifact, another routine's of the \
+              same name, or no file at all reads the same. Read generated code through \
+              Test_utils.Generated -- init before the first compile, read or assert_emits after it \
+              (gh-ocannl-1294)"
+             site.Scan.site_path))
+
 let refusal_control () =
   let source = "test/operations/codegen_text_inventory.ml" in
   let refused = ref false in
@@ -159,6 +173,32 @@ let refusal_control () =
       Verdict.p "a scan handed a source that does not parse refuses it, exiting 1"
         (Test_utils.Refusal_control_manifest.refuses ~source ~exe:(Fresh_process.executable ())
            [ root; Stdlib.Filename.concat root "test/unparsable.ml" ]));
+  (* gh-ocannl-1294: the direct-read refusal, on a test that lists build_files/ itself and pins a
+     fragment of what it finds there -- classified by the scan's own reader, so the control fails if
+     that reader stops marking such a test. *)
+  let direct_fixture =
+    "let sources =\n\
+    \  Stdlib.Sys.readdir (Utils.build_files_dir ())\n\
+    \  |> Array.to_list\n\
+    \  |> List.map ~f:Stdio.In_channel.read_all\n\
+     let () =\n\
+    \  let has substring = List.exists sources ~f:(String.is_substring ~substring) in\n\
+    \  Verdict.p \"guard\" (has \": (float)(0.0))\")\n"
+  in
+  let direct_refused = ref false in
+  let fail _message =
+    direct_refused := true;
+    Test_utils.Refusal_control_manifest.observe_failure ~source
+      ~format:
+        "%s reads build_files/ itself (Utils.build_files_dir or Utils.build_file), so nothing ties \
+         what it reads to this run's compile: a stale artifact, another routine's of the same \
+         name, or no file at all reads the same. Read generated code through Test_utils.Generated \
+         -- init before the first compile, read or assert_emits after it (gh-ocannl-1294)"
+  in
+  refuse_direct_reads ~fail
+    (Option.to_list
+       (Scan.classify_source ~emitters:[] ~path:"test/direct.ml" ~contents:direct_fixture));
+  Verdict.p "a test reading build_files/ itself reaches the direct-read refusal" !direct_refused;
   Test_utils.Refusal_control_manifest.print source
 
 let () =
@@ -274,6 +314,7 @@ let () =
            "%s does not parse as OCaml, so the scan cannot say whether it pins emitted text" path));
   refuse_raised ~fail:Verdict.fail (List.rev !raised);
   List.iter (List.sort !rejected ~compare:String.compare) ~f:Verdict.fail;
+  refuse_direct_reads ~fail:Verdict.fail sites;
   let golden_paths = List.map goldens ~f:(fun g -> g.Scan.path) in
   let site_paths = List.map sites ~f:(fun s -> s.Scan.site_path) in
   Floors.report ~floors:golden_floors ~noun:"golden" ~what:"Goldens holding emitted text"
@@ -390,4 +431,7 @@ let () =
     ~f:(fun i -> not (List.is_empty i.Emitter_frontier.declared));
   Verdict.p_empty "no source hides a route to generated text behind an open" ~over:source_files
     !rejected;
+  Verdict.p_none
+    "no test source reads build_files/ itself: generated code is read through Test_utils.Generated"
+    sites ~f:(fun site -> site.Scan.direct);
   Test_utils.Refusal_control_manifest.print "codegen_text_inventory.ml"

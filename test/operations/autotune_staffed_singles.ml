@@ -139,8 +139,6 @@ let search ?(staffed = true) ?(log = false) ?(progress = false) ?keyed ?width ?s
     report.Autotune.best_label report.Autotune.best_ms;
   o
 
-let with_stderr_captured = Scripted_search.with_stderr_captured
-
 (* The keys in sweep order, by their singles' first appearance among [measured]. *)
 let keys measured =
   List.filter measured ~f:is_single
@@ -367,7 +365,7 @@ let () =
     && Option.exists !second ~f:(fun k -> String.equal k (key_of (List.hd_exn (focus label))))
   in
   let o, lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         search ~progress:true ~width:0 ~refuse ~tag:"refused_all" ~cost ())
   in
   let r = o.report in
@@ -385,12 +383,9 @@ let () =
         && List.count ofk ~f:(fun l -> not (is_staffed l)) = staffed_n));
   (* [tried=<k>/<total>], with [?] for a phase announced without a total. *)
   let tried =
-    List.filter_map lines ~f:(fun line ->
-        if not (String.is_prefix line ~prefix:"autotune-progress: ") then None
-        else
-          List.find_map (String.split line ~on:' ') ~f:(fun w ->
-              Option.bind (String.chop_prefix w ~prefix:"tried=") ~f:(fun v ->
-                  match String.split v ~on:'/' with [ k; t ] -> Some (k, t) | _ -> None)))
+    List.filter_map (Stderr_capture.Progress.of_lines lines) ~f:(fun line ->
+        Option.bind (Stderr_capture.Progress.field line "tried") ~f:(fun v ->
+            match String.split v ~on:'/' with [ k; t ] -> Some (k, t) | _ -> None))
   in
   p_all "progress: no attempt is counted past its phase's announced total" tried ~f:(fun (k, t) ->
       String.equal t "?" || Int.of_string k <= Int.of_string t)
@@ -442,7 +437,7 @@ let () =
     false
   in
   let o, lines =
-    with_stderr_captured (fun () -> search ~log:true ~width:0 ~refuse ~tag:"slower" ~cost ())
+    Stderr_capture.lines (fun () -> search ~log:true ~width:0 ~refuse ~tag:"slower" ~cost ())
   in
   let staffed_lines = List.filter lines ~f:(String.is_prefix ~prefix:"autotune: staffed: ") in
   let joins k l =
@@ -478,7 +473,7 @@ let () =
     if early (key_of entry) then 40. +. (hashed entry /. 10.) else hashed entry /. 10.
   in
   let o, lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         search ~log:true ~width:0 ~keyed:3 ~refuse
           ~chain:(Fissioned_chain.chain_with_output ~third:true ())
           ~tag:"shrunk" ~cost ())
@@ -514,7 +509,7 @@ let () =
     else hashed entry
   in
   let o, lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         search ~log:true ~width:0 ~refuse ~tag:"refused_staffed" ~cost ())
   in
   let r = o.report in
@@ -621,7 +616,7 @@ let () =
    are the search's own, read off its [autotune_log] lines. *)
 let () =
   let o, lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         search ~log:true ~width:0
           ~chain:(Fissioned_chain.chain_with_output ~rows:64 ())
           ~tag:"heavy" ~cost ())

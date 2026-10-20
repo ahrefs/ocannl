@@ -111,8 +111,8 @@ let () =
         !acc)
   in
   Verdict.p "scalar reduction matches host reference" Float.(abs (got_total - ref_total) < 1e-3);
-  Verdict.p_all2 "row reduction matches host reference" got_per_col ref_per_col ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-3));
+  Verdict.p_close "row reduction matches host reference" got_per_col ref_per_col ~tol:(fun _ ->
+      1e-3);
   let ref_index_total = Float.of_int (rows * cols * ((rows * cols) - 1) / 2) in
   Verdict.p "index-only reduction matches host reference"
     Float.(abs (got_index_total - ref_index_total) < 1e-3);

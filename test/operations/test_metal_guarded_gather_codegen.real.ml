@@ -9,11 +9,7 @@ open Operation.DSL_modules
 let vocab = 4
 let embed = 3
 
-let read_metal_sources () =
-  let dir = Utils.build_files_dir () in
-  (try Stdlib.Sys.readdir dir |> Array.to_list with _ -> [])
-  |> List.filter ~f:(String.is_suffix ~suffix:".metal")
-  |> List.map ~f:(fun file -> Stdio.In_channel.read_all (Stdlib.Filename.concat dir file))
+module Generated = Test_utils.Generated
 
 let build_embedding id_values =
   let ids =
@@ -34,14 +30,18 @@ let build_embedding id_values =
 let () =
   Tensor.unsafe_reinitialize ();
   Utils.settings.output_debug_files_in_build_directory <- true;
+  (* This run's own artifacts only, and a missing kernel a failure (gh-ocannl-1294). *)
+  Generated.init ~backend_name:"metal";
   let ctx = Context.metal () in
   let embedded = build_embedding [| 1.; 3.; 0. |] in
-  let _ctx = Train.forward_once ctx embedded in
-  let sources = read_metal_sources () in
-  let has substring = List.exists sources ~f:(String.is_substring ~substring) in
+  Train.set_materialized embedded.Tensor.value;
+  let ctx, routine =
+    Context.compile ~name:"mggc_embed" ctx (Train.forward embedded) Ir.Indexing.Empty
+  in
+  let (_ : Context.t) = Context.run ctx routine in
+  let src = Generated.read "mggc_embed" in
+  let has substring = String.is_substring src ~substring in
   Verdict.p "guarded gather source casts signed guard to float"
     (has "? C[" && has ": (float)(0.0))" && has "(float)(ids[");
-  if has "double" then
-    Stdio.eprintf "guarded gather source unexpectedly contains `double` (not part of the golden)\n";
-  Verdict.p_none "guarded gather source contains no double declarations" sources ~f:(fun source ->
-      String.is_substring source ~substring:"double")
+  Verdict.p "guarded gather source contains no double declarations"
+    ((not (String.is_empty src)) && not (has "double"))

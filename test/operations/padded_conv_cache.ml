@@ -165,9 +165,9 @@ let () =
   let r2, r1 =
     match !reports with [ r2; r1 ] -> (r2, r1) | _ -> failwith "expected two reports"
   in
-  let approx a b = Float.(abs (a - b) <= 1e-4 *. (1. + abs b)) in
-  p_all2 "pass 1's tuned gradients match the untuned compile" tuned1 reference ~f:approx;
-  p_all2 "pass 2's gradients match the untuned compile" tuned2 reference ~f:approx;
+  let approx_tol b = Float.(1e-4 *. (1. + abs b)) in
+  p_close "pass 1's tuned gradients match the untuned compile" tuned1 reference ~tol:approx_tol;
+  p_close "pass 2's gradients match the untuned compile" tuned2 reference ~tol:approx_tol;
   p "pass 1 searched" (match r1.Autotune.outcome with Autotune.Searched -> true | _ -> false);
   (* A search whose timings were refused for contention is not stored, by design
      ([Autotune.search_measurements_cacheable]); that is not this issue's question, so it closes the

@@ -35,7 +35,8 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
+let approx a b = Float.(abs (a - b) < approx_tol b)
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 module Generated = Test_utils.Generated
@@ -64,7 +65,9 @@ let run_named ~label ~name =
    it asked for (mangling is a codegen concern, not a rename of the user's routine). *)
 let colliding ~label ~name ~emitted =
   let values, routine_name = run_named ~label ~name in
-  p_all2 (Printf.sprintf "routine named %S computes correct values" name) values expected ~f:approx;
+  p_close
+    (Printf.sprintf "routine named %S computes correct values" name)
+    values expected ~tol:approx_tol;
   p
     (Printf.sprintf "routine named %S keeps its given name in the routine record" name)
     (String.equal routine_name name);
@@ -104,7 +107,7 @@ let () = colliding ~label:"gh686_dg" ~name:"686_leading_digit" ~emitted:"k_686_l
 let () =
   let name = "gh686_ordinary_name" in
   let values, routine_name = run_named ~label:"gh686_ok" ~name in
-  p_all2 "an ordinary routine name computes correct values" values expected ~f:approx;
+  p_close "an ordinary routine name computes correct values" values expected ~tol:approx_tol;
   p "an ordinary routine name reaches the routine record unchanged" (String.equal routine_name name);
   Generated.assert_emits ~routine:name
     ~contains:("void " ^ name ^ "(")
@@ -124,9 +127,9 @@ let () =
   let ctx = Context.auto () in
   let ctx, routine = Context.compile ctx comp Idx.Empty in
   let ctx = Context.run ctx routine in
-  p_all2 "a Block_comment-named reserved routine computes correct values"
+  p_close "a Block_comment-named reserved routine computes correct values"
     (Context.get_values ctx c.Tensor.value)
-    expected ~f:approx
+    expected ~tol:approx_tol
 
 (* --- 6. The other half of the same table: a tensor NODE whose label is a reserved word. Node names
    already avoid [ident_blacklist] by construction (a collision forces the disambiguated
@@ -145,9 +148,9 @@ let () =
   let ctx = Context.auto () in
   let ctx = Train.forward_once ctx t in
   let expected_not = Array.map av ~f:(fun x -> if Float.(x = 0.) then 1. else 0.) in
-  p_all2 "a node labeled by a C++ alternative token computes correct values"
+  p_close "a node labeled by a C++ alternative token computes correct values"
     (Context.get_values ctx t.Tensor.value)
-    expected_not ~f:approx
+    expected_not ~tol:approx_tol
 
 (* --- 7. gh-ocannl-707: beyond the C floor. The implementation's reserved namespace ([__x], [_X]),
    where the vendors put most of what their headers declare, is closed by rule rather than by table:
@@ -317,7 +320,7 @@ let () =
   in
   let label = "a routine named after a header name no table holds runs or fails as its name's" in
   (match outcome with
-  | `Ran values -> p_all2 label values expected ~f:approx
+  | `Ran values -> p_close label values expected ~tol:approx_tol
   | `Attributed msg -> p label (names_random msg)
   | `Other _ -> p label false);
   let collides_here =

@@ -217,16 +217,16 @@ let check_parity ~what ~name ~build =
   let _, g_legacy, v_legacy =
     step ~name:(name ^ "_legacy") ~build ~transform:(pipeline ~keep:false) ()
   in
-  let close g w = Float.(abs (g -. w) <= 1e-5 *. max 1. (abs w)) in
+  let close_tol w = Float.(1e-5 *. max 1. (abs w)) in
   p
     (what ^ ": the gradients are not identically zero")
     (Array.exists g_keep ~f:(fun v -> Float.(v <> 0.)));
-  p_all2
+  p_close
     (what ^ ": the gradients agree with the legality-only segmentation's")
-    g_keep g_legacy ~f:close;
-  p_all2
+    g_keep g_legacy ~tol:close_tol;
+  p_close
     (what ^ ": the updated parameters agree with the legality-only segmentation's")
-    v_keep v_legacy ~f:close
+    v_keep v_legacy ~tol:close_tol
 
 (* The attention block of gpu_serial_lanes leg 6, at [heads] heads of width [width]. The caller
    picks the forward and backward forms through [Online_softmax]. *)

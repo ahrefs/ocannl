@@ -170,18 +170,17 @@ let precision_policy spatial =
   Train.set_materialized y.value;
   let ctx = Train.forward_once (Context.cpu ()) y in
   let mean, variance = moments data in
-  p_all2 "policy batch-norm forward matches host oracle within 0.01"
-    (Context.get_values ctx y.value) (normalize data mean variance) ~f:(fun actual expected ->
-      Float.(abs (actual -. expected) < 0.01));
+  p_close "policy batch-norm forward matches host oracle within 0.01"
+    (Context.get_values ctx y.value) (normalize data mean variance) ~tol:(fun _ -> 0.01);
   let inference = layer ~train_step:None x in
   Train.set_materialized inference.value;
   let ctx = Train.forward_once ctx inference in
-  p_all2 "policy batch-norm inference uses reduced-precision running statistics"
+  p_close "policy batch-norm inference uses reduced-precision running statistics"
     (Context.get_values ctx inference.value)
     (normalize data
        (Array.map mean ~f:(fun v -> v *. 0.5))
        (Array.map variance ~f:(fun v -> (v *. 0.5) +. 0.5)))
-    ~f:(fun actual expected -> Float.(abs (actual -. expected) < 0.01));
+    ~tol:(fun _ -> 0.01);
   Context.release ctx
 
 let data_parallel () =

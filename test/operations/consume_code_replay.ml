@@ -6,8 +6,7 @@ open Nn_blocks.DSL_modules
 open Verdict.Claims
 
 let values ctx name node expected =
-  p_all2 name (Context.get_values ctx node) expected ~f:(fun got want ->
-      Float.(abs (got -. want) < 1e-5))
+  p_close name (Context.get_values ctx node) expected ~tol:(fun _ -> 1e-5)
 
 let () =
   let w = TDSL.param ~values:[| -2.; 3. |] "replay_w" ~output_dims:[ 2 ] () in

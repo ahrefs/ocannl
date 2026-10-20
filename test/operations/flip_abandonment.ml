@@ -29,7 +29,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let approx a b = Float.(abs (a -. b) < 1e-4)
+let approx_tol _ = 1e-4
 let n = 8
 let k = 2
 let ratio = Autotune.flip_abandon_ratio ~margin:1.25 ()
@@ -363,19 +363,13 @@ let cache_replay comp =
   p "a replay under other repeats abandons nothing, where the same shape's replay would"
     (replays_no_record other_repeats)
 
-(* An [autotune-progress:] line's [key=value] fields; values are unquoted words here. *)
-let progress_fields line =
-  Option.map (String.chop_prefix line ~prefix:"autotune-progress: ") ~f:(fun rest ->
-      String.split rest ~on:' '
-      |> List.filter_map ~f:(fun w ->
-          Option.map (String.lsplit2 w ~on:'=') ~f:(fun (k, v) ->
-              (k, String.strip ~drop:(Char.equal '"') v))))
+let field = Stderr_capture.Progress.field
 
-let field fields key = List.Assoc.find fields key ~equal:String.equal
-
+(* Runs [f] with stderr captured (and echoed back), answering its result with the progress lines it
+   wrote. *)
 let with_stderr_captured f =
-  let result, lines = Scripted_search.with_stderr_captured f in
-  (result, List.filter_map lines ~f:progress_fields)
+  let result, lines = Stderr_capture.lines f in
+  (result, Stderr_capture.Progress.of_lines lines)
 
 (* [Train.tune_placements] with one flip: arm A's windows measure 4 ms, arm B's 50 ms, and the
    flip's per [flip_script] (1-based within the flip's search). The searches are told apart by how
@@ -421,7 +415,7 @@ let executed_chain ?fail_arm_a_at ?(cache_dir = "") comp t2 expected ~flip_scrip
                 let ctx = Context.run ctx routine in
                 Context.get_values ctx t2.Tensor.value)))
   in
-  p_all2 "the shipped routine computes the plain compile's values" got expected ~f:approx;
+  p_close "the shipped routine computes the plain compile's values" got expected ~tol:approx_tol;
   let events name =
     List.filter lines ~f:(fun f -> Option.equal String.equal (field f "event") (Some name))
   in

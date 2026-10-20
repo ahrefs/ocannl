@@ -97,7 +97,7 @@ let memory_declines (r : Autotune.report) =
         d.Autotune.count
       else 0)
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 
 let () =
   let mav =
@@ -118,7 +118,7 @@ let () =
   let expected = Context.get_values ctx_ref t2.Tensor.value in
   let check_values what (ctx, routine) =
     let ctx = Context.run ctx routine in
-    p_all2 what (Context.get_values ctx t2.Tensor.value) expected ~f:approx
+    p_close what (Context.get_values ctx t2.Tensor.value) expected ~tol:approx_tol
   in
   let tune ~cache_dir ~report =
     Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~report (Context.auto ()) comp

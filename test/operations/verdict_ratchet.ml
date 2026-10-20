@@ -5100,6 +5100,122 @@ let run_folded_gate_refusal_control () =
   ( "refuses a planted folded gate, and names a folded-gate reader that raised",
     !refused_fold && !refused_raise )
 
+(* {1 A float tolerance belongs to p_close, not to a parity predicate (gh-ocannl-1224)}
+
+   [Verdict.p_close] names a failure's differing cells, its worst cell with both values and the
+   reference's magnitude on stderr; a [p_all2] whose predicate hand-rolls the same tolerance prints
+   a bare [false], which is how gh-ocannl-1217's sweep came to need a reproduction round on a remote
+   box. The reader is [Verdict_scan.tolerance_census]; its header lists what it cannot see. The
+   controls are the predicates it must find, as [<line>:<predicate>], and the near misses it must
+   not. *)
+let tolerance_controls =
+  [
+    ( "refuses an inline abs-of-difference predicate in an opened p_all2",
+      {ocaml|open Verdict.Claims
+let () = p_all2 "matches" got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3))|ocaml},
+      [ "2:an inline function" ] );
+    ( "refuses a predicate bound to a tolerance function, in each parity form",
+      {ocaml|let approx a b = Float.abs (a -. b) < 1e-4
+let () =
+  Verdict.pf_all2 "%s matches" leg got want ~f:approx;
+  Verdict.pass_fail_all2 "matches" got want ~f:approx|ocaml},
+      [ "3:approx"; "4:approx" ] );
+    ( "refuses a partially applied tolerance function and a renaming of one",
+      {ocaml|let close ~tol a b = Float.(abs (a - b) <= tol *. max 1. (abs b))
+let near = close ~tol:1e-5
+let () =
+  Verdict.p_all2 "first" got want ~f:(close ~tol:1e-4);
+  Verdict.p_all2 "second" got want ~f:near|ocaml},
+      [ "4:close"; "5:near" ] );
+    ( "accepts an exact or bitwise parity predicate, which has no tolerance to name",
+      {ocaml|let same_bits a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
+let () =
+  Verdict.p_all2 "equal" got want ~f:Float.equal;
+  Verdict.p_all2 "bitwise" got want ~f:same_bits|ocaml},
+      [] );
+    ( "does not read a predicate name a later binding takes over",
+      {ocaml|let approx a b = Float.(abs (a - b) < 1e-4)
+let approx = Float.equal
+let () = Verdict.p_all2 "matches" got want ~f:approx|ocaml},
+      [] );
+    ( "does not read a p_all2 the source binds itself",
+      {ocaml|let p_all2 _ _ _ ~f:_ = ()
+let () = p_all2 "matches" got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3))|ocaml},
+      [] );
+  ]
+
+let tolerance_findings source =
+  List.map (Scan.tolerance_census source).Scan.hand_rolled ~f:(fun (site : Scan.tolerance_site) ->
+      Printf.sprintf "%d:%s" site.tolerance_line site.predicate)
+
+let run_tolerance_controls () =
+  List.map tolerance_controls ~f:(fun (label, source, expected) ->
+      let found = tolerance_findings source in
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "tolerance control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found);
+      (label, ok))
+
+let refuse_hand_rolled_tolerance ~fail ~source (site : Scan.tolerance_site) =
+  fail
+    (Printf.sprintf
+       "%s:%d compares float readbacks through `%s` with %s, which hand-rolls a tolerance (an \
+        `abs` of a difference): a failure prints a bare `false`, naming no cell, no values and no \
+        magnitude. Write it as `Verdict.p_close <label> got want ~tol:(fun want -> <bound>)` (or \
+        `pf_close`, `pass_fail_close`), whose failure names all three on stderr (gh-ocannl-1224)%s"
+       source site.tolerance_line site.tolerance_callee
+       (if String.equal site.predicate "an inline function" then site.predicate
+        else "`" ^ site.predicate ^ "`")
+       (ambiguity_remedy ~ambiguous:site.tolerance_ambiguous ~callee:(Some site.tolerance_callee)))
+
+(* The tolerance reader over one source, its failures told apart as {!read_gates} tells the gate
+   reader's apart. *)
+let read_tolerances ~fail ~source ~census content =
+  match Test_utils.Scan_attempt.run (fun () -> census content) with
+  | Test_utils.Scan_attempt.Scanned census -> census
+  | Unparsed _ -> { Scan.hand_rolled = []; parity_sites = 0 }
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the tolerance reader raised %s on %s, which parses -- a defect of \
+            Verdict_scan.tolerance_census, not of the source, and the source's parity predicates \
+            went unread"
+           exn source);
+      { Scan.hand_rolled = []; parity_sites = 0 }
+
+(* The wiring from a finding to the failure, exercised on a refusing control. *)
+let run_tolerance_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let site_format =
+    "%s:%d compares float readbacks through `%s` with %s, which hand-rolls a tolerance (an `abs` \
+     of a difference): a failure prints a bare `false`, naming no cell, no values and no \
+     magnitude. Write it as `Verdict.p_close <label> got want ~tol:(fun want -> <bound>)` (or \
+     `pf_close`, `pass_fail_close`), whose failure names all three on stderr (gh-ocannl-1224)%s"
+  and raised_format =
+    "the tolerance reader raised %s on %s, which parses -- a defect of \
+     Verdict_scan.tolerance_census, not of the source, and the source's parity predicates went \
+     unread"
+  in
+  let _, fixture, _ = List.hd_exn tolerance_controls in
+  let refused_site = ref false and refused_raise = ref false in
+  List.iter (Scan.tolerance_census fixture).Scan.hand_rolled
+    ~f:
+      (refuse_hand_rolled_tolerance ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_site := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:site_format));
+  ignore
+    (read_tolerances ~source:"fixture.ml"
+       ~fail:(fun _ ->
+         refused_raise := true;
+         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+       ~census:(fun _ -> raise Stdlib.Exit)
+       "let () = ()"
+      : Scan.tolerance_census);
+  ( "refuses a planted hand-rolled tolerance, and names a tolerance reader that raised",
+    !refused_site && !refused_raise )
+
 (* {1 One resolver: every reader agrees whose a claim is (gh-ocannl-1361)}
 
    Whether a callee is [Verdict]'s is decided once, by [Test_utils.Verdict_callee], and every reader
@@ -5311,6 +5427,7 @@ let () =
   let line_break_offenders = ref 0 and label_sites = ref 0 in
   let gate_offenders = ref 0 and gated_sites = ref 0 in
   let folded_offenders = ref 0 and folded_claim_sites = ref 0 in
+  let tolerance_offenders = ref 0 and parity_sites = ref 0 in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
         if String.is_suffix relative ~suffix:("/" ^ manifest_file) then
@@ -5330,6 +5447,8 @@ let () =
     @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
+    @ run_tolerance_controls ()
+    @ [ run_tolerance_refusal_control () ]
     @ run_agreement_controls () @ run_ambiguous_remedy_controls ()
   in
   let matrix_rows = run_syntax_matrix () in
@@ -5375,6 +5494,11 @@ let () =
       List.iter folds.Scan.folded ~f:(fun fold ->
           Int.incr folded_offenders;
           refuse_folded_gate ~fail ~source fold);
+      let tolerances = read_tolerances ~fail ~source ~census:Scan.tolerance_census content in
+      parity_sites := !parity_sites + tolerances.Scan.parity_sites;
+      List.iter tolerances.Scan.hand_rolled ~f:(fun site ->
+          Int.incr tolerance_offenders;
+          refuse_hand_rolled_tolerance ~fail ~source site);
       skipped_sites := !skipped_sites + dialects.Scan.skipped_sites;
       pass_fail_sites := !pass_fail_sites + dialects.Scan.pass_fail_sites;
       List.iter dialects.Scan.pairings ~f:(fun pairing ->
@@ -5524,6 +5648,8 @@ let () =
   eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
   eprintf "Verdict claim labels read for line breaks: %d.\n" !label_sites;
   eprintf "Verdict claim values read for a folded gate: %d.\n" !folded_claim_sites;
+  eprintf "Verdict parity claims whose predicate was read for a hand-rolled tolerance: %d.\n"
+    !parity_sites;
   printf "\n";
   (* Stated so that `true` is the passing reading, as every line of a golden should be. *)
   Verdict.p "every test source decides its claims through Verdict" (!offenders = 0);
@@ -5534,6 +5660,10 @@ let () =
     (!skipped_sites > 0 && !pass_fail_sites > 0);
   Verdict.p "no claim label literal carries a line break" (!line_break_offenders = 0);
   Verdict.p "and the line-break reader read the labels of Verdict claims" (!label_sites > 0);
+  Verdict.p "no parity claim hand-rolls a float tolerance into its predicate"
+    (!tolerance_offenders = 0);
+  Verdict.p "and the tolerance reader read the predicates of Verdict parity claims"
+    (!parity_sites > 0);
   (* The claim forms whose labels it reads, held equal to every [Verdict.Claims] member but [fail],
      whose argument is a multi-line message: a new claim form it did not read would be a label it
      never checks. *)

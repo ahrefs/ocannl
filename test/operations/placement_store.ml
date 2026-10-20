@@ -52,7 +52,7 @@ module SC = Ir.Schedule_cache
 open Verdict.Claims
 module Cache_plant = Test_utils.Cache_plant
 
-let approx a b = Float.(abs (a -. b) < 1e-4)
+let approx_tol _ = 1e-4
 let n = 8
 let cache_dir = "autotune_cache_placement_store"
 
@@ -421,9 +421,9 @@ let () =
   p "the recording process runs to completion and reports what it observed" (Option.is_some record);
   let on_record f = Option.value_map record ~default:false ~f in
   let reference = Option.value_map record ~default:[||] ~f:(fun c -> c.reference) in
-  p_all2 "the recording process's tuned routine computes its plain compile's values"
+  p_close "the recording process's tuned routine computes its plain compile's values"
     (Option.value_map record ~default:[||] ~f:(fun c -> c.values))
-    reference ~f:approx;
+    reference ~tol:approx_tol;
   let recorded = held () in
   let entry = Option.map recorded ~f:(fun (_, e, _) -> e) in
   let recorder_clean = on_record (fun c -> c.clean) in
@@ -447,9 +447,9 @@ let () =
     (on_record (fun r -> on_replay (fun c -> c.uid <> r.uid)));
   p "the replaying process poses the recording process's problem digest"
     (on_record (fun r -> on_replay (fun c -> String.equal c.digest r.digest)));
-  p_all2 "the replaying process's routine computes the right values"
+  p_close "the replaying process's routine computes the right values"
     (Option.value_map replay ~default:[||] ~f:(fun c -> c.values))
-    reference ~f:approx;
+    reference ~tol:approx_tol;
   unless_refused
     [ ops placement_lookups replay ]
     "across processes, the replay is exact when the recording process recorded a decision: one \
@@ -497,9 +497,9 @@ let () =
   p "the control process runs to completion and reports what it observed" (Option.is_some control);
   p "the control process, whose lineage inherits a decision, poses a different problem digest"
     (on_record (fun r -> on_control (fun c -> not (String.equal c.digest r.digest))));
-  p_all2 "the control process's routine computes the right values"
+  p_close "the control process's routine computes the right values"
     (Option.value_map control ~default:[||] ~f:(fun c -> c.values))
-    reference ~f:approx;
+    reference ~tol:approx_tol;
   let given_held = given_recording ~recorded:(Option.is_some held_before_control) ~on:unrecorded in
   given_held [] "the control process replays nothing recorded: both arms report"
     (on_control (fun c -> c.arms = 2));
@@ -583,7 +583,7 @@ let () =
   let attempts1 = recording_run ~cache_dir () in
   let (arms1, flips1, shipped1, materialized1, got1, persisted1), keys1 = List.last_exn attempts1 in
   p "the cold run reports both arms in position" (List.length arms1 = 2);
-  p_all2 "the cold run's routine computes the right values" got1 expected ~f:approx;
+  p_close "the cold run's routine computes the right values" got1 expected ~tol:approx_tol;
   let clean1 = clean_evidence (arms1 @ flips1) in
   (* Non-emptiness is the recorded case; a run whose evidence the load spoiled records nothing. *)
   let stored1 = List.length keys1 = 1 in
@@ -643,7 +643,7 @@ let () =
           (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty e.SC.decision));
   (* --- Run 2: warm. --- *)
   let arms2, flips2, shipped2, materialized2, got2, persisted2 = run () in
-  p_all2 "the warm run's routine computes the right values" got2 expected ~f:approx;
+  p_close "the warm run's routine computes the right values" got2 expected ~tol:approx_tol;
   (* A refused lookup makes the warm run a cold one; the claims resting on the replay are skipped
      then, as on a refused store, and where run 1 recorded nothing. The first claim reads both ways:
      without an entry the warm run must search both arms. *)
@@ -688,7 +688,8 @@ let () =
         if !attempts = 1 then failwith "ps: injected replay failure")
       run
   in
-  p_all2 "after a failed replay, the routine computes the right values" got2b expected ~f:approx;
+  p_close "after a failed replay, the routine computes the right values" got2b expected
+    ~tol:approx_tol;
   p "a failed replay is not reported; the arms it falls back to report in position"
     (List.length arms2b = 2);
   (* --- Run 3: a forced arm neither consults nor records the store. Whichever run recorded the
@@ -711,7 +712,7 @@ let () =
         String.equal e.SC.outcome_digest
           (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty e.SC.decision));
   let arms3, _, shipped3, _, got3, persisted3 = run ~ship_arm:Train.Force_arm_b () in
-  p_all2 "the forced run's routine computes the right values" got3 expected ~f:approx;
+  p_close "the forced run's routine computes the right values" got3 expected ~tol:approx_tol;
   p "a forced arm searches both arms whatever the store holds" (List.length arms3 = 2);
   p "a forced arm ships the forced arm" (String.equal shipped3 "B");
   p "a forced run leaves the recorded decision untouched"
@@ -724,7 +725,8 @@ let () =
   Stdio.eprintf "run 3b (not part of the golden): bypassing a store that %s\n%!"
     (if Option.is_some recorded then "holds an entry" else "is empty");
   let arms3b, _, _, _, got3b, persisted3b = run ~placement_store:false () in
-  p_all2 "the bypassed-store run's routine computes the right values" got3b expected ~f:approx;
+  p_close "the bypassed-store run's routine computes the right values" got3b expected
+    ~tol:approx_tol;
   p "a bypassed store compares both arms, in position, whatever the store holds"
     (List.length arms3b = 2);
   (* Skipped where run 1 could not cache (gh-ocannl-1043: its own context's identity) or never had
@@ -768,9 +770,9 @@ let () =
       let arms, flips, _, _, got, persisted = run () in
       stale_placement_stores := !stale_placement_stores @ corrupting @ placement_stores persisted;
       stale_runs := !stale_runs @ [ (persisted, arms) ];
-      p_all2
+      p_close
         (Printf.sprintf "after an entry that %s, the routine computes the right values" how)
-        got expected ~f:approx;
+        got expected ~tol:approx_tol;
       (* Skipped also on a refused read of it: the run then never saw the stale entry, and tunes
          both arms cold. *)
       given_recording ~recorded:(Option.is_some recorded) ~on:unrecorded1
@@ -829,8 +831,8 @@ let () =
       ()
   in
   let (arms6, flips6, shipped6, _, got6, persisted6), keys6 = List.last_exn attempts6 in
-  p_all2 "with a timing context, the cold run's routine computes the right values" got6 expected
-    ~f:approx;
+  p_close "with a timing context, the cold run's routine computes the right values" got6 expected
+    ~tol:approx_tol;
   let clean6 = clean_evidence (arms6 @ flips6) in
   let entry6 =
     match keys6 with [ k ] -> SC.lookup_placements ~dir:timing_cache_dir ~key:(Some k) | _ -> None
@@ -889,8 +891,8 @@ let () =
   let arms6w, flips6w, shipped6w, _, got6w, persisted6w =
     run ~timing_ctx:(timing_ctx ()) ~rank_fissioned_first:true ~cache_dir:timing_cache_dir ()
   in
-  p_all2 "with a timing context, the warm run's routine computes the right values" got6w expected
-    ~f:approx;
+  p_close "with a timing context, the warm run's routine computes the right values" got6w expected
+    ~tol:approx_tol;
   Stdio.eprintf
     "run 6w (not part of the golden): arms [%s], %d flip reports, shipped %s, entry %s, source \
      digests [%s] vs recorded %s\n\
@@ -973,8 +975,8 @@ let () =
           raise (Stdlib.Sys_error "ps: injected commit refusal"))
       ~f:(fun () -> tune_in ~cache_dir:refused_cache_dir (mc, t2, comp))
   in
-  p_all2 "under refused commits, the cold run's routine computes the right values" got8 expected
-    ~f:approx;
+  p_close "under refused commits, the cold run's routine computes the right values" got8 expected
+    ~tol:approx_tol;
   (* Over the arms the run tuned: the decision it reached is what must have left no entry. *)
   p_empty "refused commits leave no decision recorded" ~over:arms8
     (placement_keys ~cache_dir:refused_cache_dir ());

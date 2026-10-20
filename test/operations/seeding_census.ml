@@ -246,28 +246,7 @@ let () =
     | [] -> false);
   (* === The key: log_seeding writes the rendered lines; tune emits its whole-routine line. === *)
   p "autotune_log_seeding is on for this run" (Autotune.log_seeding_enabled ());
-  let capture f =
-    let file = Stdlib.Filename.temp_file "seeding_census" ".stderr" in
-    Stdio.Out_channel.flush Stdio.stderr;
-    let saved = Unix.dup Unix.stderr in
-    let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-    Unix.dup2 fd Unix.stderr;
-    Unix.close fd;
-    let restore () =
-      Stdio.Out_channel.flush Stdio.stderr;
-      Unix.dup2 saved Unix.stderr;
-      Unix.close saved
-    in
-    (match f () with
-    | () -> restore ()
-    | exception exn ->
-        restore ();
-        raise exn);
-    let lines = String.split_lines (Stdio.In_channel.read_all file) in
-    Stdlib.Sys.remove file;
-    List.iter lines ~f:(Stdio.eprintf "%s\n");
-    lines
-  in
+  let capture f = snd (Stderr_capture.lines f) in
   let logged =
     capture (fun () ->
         Autotune.log_seeding ~where:"probe" ~is_gpu:true ~is_cpu:false ~limits:gpu_limits opt)

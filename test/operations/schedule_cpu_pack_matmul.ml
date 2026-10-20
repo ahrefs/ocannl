@@ -38,7 +38,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-3)
+let approx_tol _ = 1e-3
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 module Generated = Test_utils.Generated
@@ -121,7 +121,7 @@ let () =
   in
   let ctx_a = Context.run ctx_a routine_a in
   let got_packed = Context.get_values ctx_a mc1.Tensor.value in
-  p_all2 "packed tiled matmul matches the naive twin" got_packed got_naive ~f:approx;
+  p_close "packed tiled matmul matches the naive twin" got_packed got_naive ~tol:approx_tol;
   let src = Generated.read "mmp_packed" in
   let has sub = String.is_substring src ~substring:sub in
   let count_sub sub = String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length in

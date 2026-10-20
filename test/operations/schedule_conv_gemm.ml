@@ -332,15 +332,15 @@ let () =
       run_plain (tag ^ "_ref") y
     in
     let swapped, _ = run_sched (tag ^ "_swap") (make_conv (tag ^ "_s")) ~tensorized:false in
-    p_all2 (tag ^ ": reorder-only conv matches the natural form within tolerance") swapped want
-      ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close (tag ^ ": reorder-only conv matches the natural form within tolerance") swapped want
+      ~tol:(fun _ -> 1e-3);
     if on_cpu then (
       let full, census = run_sched (tag ^ "_gemm") (make_conv (tag ^ "_g")) ~tensorized:true in
       p_all2
         (tag ^ ": packed+tensorized conv matches the reorder-only twin bitwise")
         full swapped ~f:Float.equal;
-      p_all2 (tag ^ ": packed+tensorized conv matches the natural form within tolerance") full want
-        ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+      p_close (tag ^ ": packed+tensorized conv matches the natural form within tolerance") full want
+        ~tol:(fun _ -> 1e-3);
       claim_tensorized
         (tag ^ ": the packed+tensorized conv's routine is labeled tensorized")
         (rendered_tensorized census);
@@ -537,8 +537,8 @@ let () =
          else if Lazy.force gpu_capable then r.Autotune.sketch_candidates > 0
          else r.Autotune.sketch_candidates = 0)
   | _ -> p "conv sketches seeded (serial+grid, with fused-epilogue twins)" false);
-  p_all2 "tuned conv+tail matches the untuned twin within tolerance" got_t want_t ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-3));
+  p_close "tuned conv+tail matches the untuned twin within tolerance" got_t want_t ~tol:(fun _ ->
+      1e-3);
 
   (* === The fused conv twin, hand-built (deterministic — independent of which candidate the tuner
      crowns): the serial implicit-GEMM pipeline plus [Fuse_epilogue] on the conv output. A
@@ -612,8 +612,8 @@ let () =
     let fused, n_fused, census_f = run_tail_sched "cvf_fused" (make_tail "cvf_f") ~fused:true in
     p "cvf: fusion merges the tail into the conv nest" (n_unfused = 2 && n_fused = 1);
     p_all2 "cvf: fused conv twin matches the unfused pipeline bitwise" fused unfused ~f:Float.equal;
-    p_all2 "cvf: fused conv twin matches the natural form within tolerance" fused want_t
-      ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close "cvf: fused conv twin matches the natural form within tolerance" fused want_t
+      ~tol:(fun _ -> 1e-3);
     claim_tensorized "cvf: the unfused and the fused conv routines are both labeled tensorized"
       (rendered_tensorized census_u && rendered_tensorized census_f))
   else (
@@ -732,8 +732,8 @@ let () =
         ]
     in
     let got, census = run_fiss_sched "cvu_gpu" y ~conv_sched in
-    p_all2 "cvu: GPU staged conv pipeline matches the natural form within tolerance" got want8
-      ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close "cvu: GPU staged conv pipeline matches the natural form within tolerance" got want8
+      ~tol:(fun _ -> 1e-3);
     claim_tensorized "cvu: the GPU staged conv pipeline's routine is labeled tensorized"
       (rendered_tensorized census))
   else (
@@ -883,8 +883,8 @@ let () =
            && r.Autotune.fiss_sketch_timed = 2
          else true)
   | _ -> p "cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc)" false);
-  p_all2 "cvu: tuned conv matches the untuned twin within tolerance" got_u want8 ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-3));
+  p_close "cvu: tuned conv matches the untuned twin within tolerance" got_u want8 ~tol:(fun _ ->
+      1e-3);
 
   (* --- The GPU staged pipeline on a stride-2 conv (gh-ocannl-502): the compacting Stage packs the
      strided row densely through the cooperative shared tiles — the loads keep the stride, the tile
@@ -943,8 +943,8 @@ let () =
         ]
     in
     let got, census = run_fiss_sched "cvu2_gpu" y ~conv_sched in
-    p_all2 "cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance"
-      got want8s2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close "cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance"
+      got want8s2 ~tol:(fun _ -> 1e-3);
     let rendered_label =
       "cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized"
     in
@@ -994,8 +994,8 @@ let () =
   | _ ->
       p "cvu2: stride-2 conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
         false);
-  p_all2 "cvu2: tuned stride-2 conv matches the untuned twin within tolerance" got_u2 want8s2
-    ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+  p_close "cvu2: tuned stride-2 conv matches the untuned twin within tolerance" got_u2 want8s2
+    ~tol:(fun _ -> 1e-3);
 
   (* --- Row-block flavors on a strided row (gh-ocannl-502 x gh-ocannl-500 x gh-ocannl-485): an
      unzeroed fission segment proposes the cache-panel flavors too, and a row extent that does not
@@ -1139,7 +1139,7 @@ let () =
     let got, census =
       run_fiss_sched "cvb_cpu" y ~conv_sched:(blocked_sched ~shared:false ~simd_width:1 (x, kern))
     in
-    p_all2 blocked_claim got want16 ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close blocked_claim got want16 ~tol:(fun _ -> 1e-3);
     claim_tensorized blocked_rendered_claim (rendered_tensorized census))
   else if has_uniform_f32_mma then (
     let w =
@@ -1151,7 +1151,7 @@ let () =
     let got, census =
       run_fiss_sched "cvb_gpu" y ~conv_sched:(blocked_sched ~shared:true ~simd_width:w (x, kern))
     in
-    p_all2 blocked_claim got want16 ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close blocked_claim got want16 ~tol:(fun _ -> 1e-3);
     claim_tensorized blocked_rendered_claim (rendered_tensorized census))
   else (
     skipped blocked_claim;
@@ -1185,8 +1185,8 @@ let () =
          else if on_cpu then r.Autotune.fiss_sketch_candidates = 3
          else true)
   | _ -> p "cvb: blocked flavors seeded per fission segment" false);
-  p_all2 "cvb: tuned blocked conv matches the untuned twin within tolerance" got_b want16
-    ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+  p_close "cvb: tuned blocked conv matches the untuned twin within tolerance" got_b want16
+    ~tol:(fun _ -> 1e-3);
   (* The same site whole-routine (gh-ocannl-503, see [cvz]): the dividing 8-row block flavor and the
      pipelined twins, with the expanded zero's row loop split into the same [Grid] blocks. *)
   if Lazy.force gpu_capable then (
@@ -1284,8 +1284,8 @@ let () =
         ]
     in
     let got, census = run_fiss_sched "cvmb_cpu" y ~conv_sched in
-    p_all2 "cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance"
-      got want_mb ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close "cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance"
+      got want_mb ~tol:(fun _ -> 1e-3);
     claim_tensorized
       "cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized"
       (rendered_tensorized census))
@@ -1318,8 +1318,8 @@ let () =
          else if has_uniform_f32_mma then r.Autotune.fiss_sketch_candidates = 0
          else true)
   | _ -> p "cvmb: blocked flavor seeded on the merged fission segment" false);
-  p_all2 "cvmb: tuned merged-blocked conv matches the untuned twin within tolerance" got_mb want_mb
-    ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+  p_close "cvmb: tuned merged-blocked conv matches the untuned twin within tolerance" got_mb want_mb
+    ~tol:(fun _ -> 1e-3);
 
   (* --- The aligned-merged Grid flavor: conv + two materialized elementwise companions form one
      aligned-merged segment; the Grid conv seed adopts the default preset's whole-segment geometry
@@ -1373,8 +1373,8 @@ let () =
         ]
     in
     let got, census = run_fiss_sched "cva_gemm" y ~conv_sched in
-    p_all2 "cva: aligned-grid conv pipeline on a merged segment matches within tolerance" got want_m
-      ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    p_close "cva: aligned-grid conv pipeline on a merged segment matches within tolerance" got
+      want_m ~tol:(fun _ -> 1e-3);
     claim_tensorized "cva: the aligned-grid conv pipeline's routine is labeled tensorized"
       (rendered_tensorized census))
   else (
@@ -1410,5 +1410,5 @@ let () =
            && r.Autotune.fiss_sketch_timed = 4
          else r.Autotune.sketch_candidates = 0 && r.Autotune.fiss_sketch_candidates = 0)
   | _ -> p "cva: aligned-grid conv seeded and timed on the merged fission segment" false);
-  p_all2 "cva: tuned merged conv graph matches the untuned twin within tolerance" got_m want_m
-    ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
+  p_close "cva: tuned merged conv graph matches the untuned twin within tolerance" got_m want_m
+    ~tol:(fun _ -> 1e-3)

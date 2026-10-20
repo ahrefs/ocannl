@@ -41,7 +41,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-3)
+let approx_tol _ = 1e-3
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
 let has_shared = Sched.backend_is_gpu backend_name
@@ -136,7 +136,7 @@ let () =
     in
     let ctx_a = Context.run ctx_a routine_a in
     let got_smem = Context.get_values ctx_a mc1.Tensor.value in
-    p_all2 "SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial ~f:approx;
+    p_close "SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial ~tol:approx_tol;
     let src = Generated.read "mm_smem" in
     let has sub = String.is_substring src ~substring:sub in
     let count_sub sub =
@@ -221,8 +221,8 @@ let () =
     in
     let ctx_b = Context.run ctx_b routine_b in
     let got_b = Context.get_values ctx_b cb.Tensor.value in
-    p_all2 "broadcast staging values correct (GPU) or clean rejection (CPU)" got_b bcast_expected
-      ~f:approx;
+    p_close "broadcast staging values correct (GPU) or clean rejection (CPU)" got_b bcast_expected
+      ~tol:approx_tol;
     let src = Generated.read "bcast_staged" in
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length

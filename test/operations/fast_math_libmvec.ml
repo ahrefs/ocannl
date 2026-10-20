@@ -81,8 +81,8 @@ let () =
   let want = Array.init n ~f:(fun i -> Float.exp (Float.of_int i /. 64.)) in
   (* libmvec's single-precision [expf] variants are within a few ulp; 1e-5 relative is a loose bound
      on that and a tight one on anything other than [exp]. *)
-  p_all2 "kernel loaded and computed exp to 1e-5 relative" got want ~f:(fun g w ->
-      Float.(abs (g - w) <= 1e-5 * w));
+  p_close "kernel loaded and computed exp to 1e-5 relative" got want ~tol:(fun w ->
+      Float.(1e-5 * w));
   let gcc_on_glibc =
     (match before with Some m -> libmvec_available m | None -> false) && compiler_is_gcc ()
   in

@@ -802,3 +802,24 @@ claims, and restored the source byte-for-byte.
 |---|---|---|---|
 | A claim reader that raises on a source that parses refuses as a reader defect | `verdict_ratchet.ml`: the raised arm of `read_claims` reports nothing | Failed: `a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one` | `20261019T223808Z-39359` |
 | A matrix cell whose reader raises reads as a reader defect | `verdict_ratchet.ml`: `matrix_cell_helpers` classifies a raise as a parse failure | Failed: `a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure` | `20261019T223830Z-62902` |
+
+## gh-ocannl-1224 mutation runs
+
+The tolerance reader (`Verdict_scan.tolerance_census`) refuses a Verdict parity claim (`p_all2`,
+`pf_all2`, `pass_fail_all2`) whose `~f` predicate hand-rolls a float tolerance -- a function applying
+`abs` to a difference, inline or through a name its scope binds to one -- since `Verdict.p_close`
+names a failure's worst cell and a bare `false` does not. Each run used tools/mutation-run.sh on the
+named module and the focused verdict_ratchet alias, exited 1 on exactly the listed false claims, and
+restored the source byte-for-byte. Each run's baseline exited 0 (`20261020T074259Z-75071`,
+`20261020T074352Z-54285`, `20261020T074446Z-41902`, `20261020T074535Z-34295`,
+`20261020T074637Z-12691`, `20261020T074730Z-66560`, `20261020T074918Z-30841`).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A function applying abs to a difference is a hand-rolled tolerance | `verdict_scan.ml`: no subtraction recognized under an abs | Failed: `refuses an inline abs-of-difference predicate in an opened p_all2`, `refuses a predicate bound to a tolerance function, in each parity form`, `refuses a partially applied tolerance function and a renaming of one`, `refuses a planted hand-rolled tolerance, and names a tolerance reader that raised` | `20261020T074316Z-2989` |
+| A predicate name is read through the binding its scope gives it | `verdict_scan.ml`: a bound name never resolves | Failed: refuses a predicate bound to a tolerance function, in each parity form; refuses a partially applied tolerance function and a renaming of one | `20261020T074419Z-95282` |
+| A partial application of a tolerance function is one | `verdict_scan.ml`: an applied name not followed | Failed: refuses a partially applied tolerance function and a renaming of one | `20261020T074511Z-90239` |
+| A name is a tolerance only through its binding, not by being a name | `verdict_scan.ml`: every unqualified predicate name read as a tolerance | Failed: `accepts an exact or bitwise parity predicate, which has no tolerance to name`, does not read a predicate name a later binding takes over, and the corpus claim | `20261020T074704Z-33925` |
+| A later binding of a name replaces what it denoted | `verdict_scan.ml`: a name once bound to a tolerance stays one | Failed: `does not read a predicate name a later binding takes over` | `20261020T074756Z-99032` |
+| Only Verdict's parity claims are read | `verdict_scan.ml`: every callee of a parity name read as Verdict's | Failed: `does not read a p_all2 the source binds itself` | `20261020T074609Z-91663` |
+| A tolerance reader that raises on a source that parses refuses as a reader defect | `verdict_ratchet.ml`: the raised arm of `read_tolerances` reports nothing | Failed: refuses a planted hand-rolled tolerance, and names a tolerance reader that raised | `20261020T074933Z-67188` |

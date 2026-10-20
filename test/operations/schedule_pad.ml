@@ -48,7 +48,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-2)
+let approx_tol _ = 1e-2
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
 let on_cpu = Sched.backend_is_cpu backend_name
@@ -241,7 +241,7 @@ let () =
     in
     let ctx = Context.run ctx routine in
     let got = Context.get_values ctx gc1.Tensor.value in
-    p_all2 "padded staged+tensorized matmul parity (GPU)" got want ~f:approx;
+    p_close "padded staged+tensorized matmul parity (GPU)" got want ~tol:approx_tol;
     (* The schedule's tensorization pass pads n to 8 (72 here). Whether that shape reaches a real
        intrinsic is a tile-capability question; the routine census is the authoritative outcome. *)
     p "padded GPU intrinsics follow the advertised tile divisibility"

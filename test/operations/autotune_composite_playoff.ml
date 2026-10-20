@@ -147,17 +147,11 @@ let search ?(trace = true) ?(log = false) ?progress ?width ?margin ~tag ~single 
     phases = List.map calls ~f:(fun c -> c.Autotune.decision.phase);
   }
 
-let with_stderr_captured = Scripted_search.with_stderr_captured
-
-(* The [autotune-progress:] lines among [lines] that carry every one of [fields] ([key=value] words,
-   values unquoted as the stage and event names print). *)
+(* The [autotune-progress:] lines among [lines] that carry every one of [fields] ([key=value], the
+   value unquoted). *)
 let progress_lines lines fields =
-  List.count lines ~f:(fun line ->
-      match String.chop_prefix line ~prefix:"autotune-progress: " with
-      | None -> false
-      | Some rest ->
-          let words = String.split rest ~on:' ' in
-          List.for_all fields ~f:(fun field -> List.mem words field ~equal:String.equal))
+  Stderr_capture.Progress.count lines
+    (List.map fields ~f:(fun field -> String.lsplit2_exn field ~on:'='))
 
 let streams_off () = (not (Autotune.log_enabled ())) && not (Autotune.progress_enabled ())
 
@@ -358,7 +352,7 @@ let () =
   (* Without this, a line below could come from the ambient config rather than the override. *)
   p "streams: the ambient config leaves both diagnostic streams off" (streams_off ());
   let logged, lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         search ~log:true ~progress:true ~tag:"logged" ~single:(fun _ -> 100.) ~composite:faster ())
   in
   Stdio.eprintf "logged trace (not part of the golden): %s\n%!"
@@ -392,7 +386,7 @@ let () =
   let%op pc = pa * pb in
   let comp = Train.forward pc in
   let ((), _), lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         Scripted_search.scripted
           ~measure:(fun _ -> 1.)
           (fun () ->

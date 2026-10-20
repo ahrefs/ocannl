@@ -83,6 +83,6 @@ let () =
   let ctx = Context.auto () in
   let ctx = Train.forward_once ctx ybf in
   let got = Context.get_values ctx ybf.Tensor.value in
-  let close a b = Float.(abs (a - b) < 0.05 *. (1. +. abs b)) in
-  p_all2 "bf16-converted weights: forward tracks f32 within bf16 tolerance" got want ~f:close;
+  let close_tol b = Float.(0.05 *. (1. +. abs b)) in
+  p_close "bf16-converted weights: forward tracks f32 within bf16 tolerance" got want ~tol:close_tol;
   printf "\nDone.\n%!"

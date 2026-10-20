@@ -176,9 +176,11 @@ let raw_entries =
       [
         "[scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for";
         "[scanner-refusal:3f0b314f29005911be716581fa1a4f10] the scan raised";
+        "[scanner-refusal:564de56163a842792f2175c0c12d75d5] Utils.build_files_dir";
         "[scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion";
         "[scanner-refusal:2c67621c20b4be85e0176da0370f83cb] reaches the scanner-defect";
         "[scanner-refusal:0e0975906df73fda3897bc10ee9904c0] refuses it exiting";
+        "[scanner-refusal:c79e4912bfeafc46c28c350ff68cf352] build_files/";
         "[scanner-refusal:123bedafe19167d3536ddb2ca1115d21] cannot say whether";
         "[scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module";
         "[scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root";
@@ -189,6 +191,7 @@ let raw_entries =
         "[scanner-refusal:545694a8ea6e371db823bcc7d2639f85] scanned library interfaces";
         "[scanner-refusal:327f5dea331c9591f8d59a6da296202d] scanned library declares";
         "[scanner-refusal:80b2a504ebea9c64f6fcc3c5da12164e] generated text behind";
+        "[scanner-refusal:7b848f96a84cc15bb6e1027465d08502] Test_utils.Generated";
       ] );
     ( "config_dep_completeness.ml",
       [
@@ -399,6 +402,7 @@ let raw_entries =
         "[scanner-refusal:a2ef9338814a08816bb85a6bab6ac71c] statically recoverable scanner";
         "[scanner-refusal:96e2132b9ea14b4c19e7573b7725b9ec] omits the declaration";
         "[scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes";
+        "[scanner-refusal:9129542c43718bbbdd95f40fe5b0f98b] reaching the initializer";
         "[scanner-refusal:055900a8a1fbefd29b7c64a46953700f] external command handed";
         "[scanner-refusal:fac924c455e2114b6e6bdebdc44811fd] same stanza declaring";
         "[scanner-refusal:b4a6c6ad5ae1c0d26b7fe78da5c5aa7f] command handed nothing";
@@ -652,6 +656,8 @@ let raw_entries =
         "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
+        "[scanner-refusal:ac1d55bdf5afdaf0a236eb7741190229] compares float readbacks";
+        "[scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
@@ -663,6 +669,8 @@ let raw_entries =
         "[scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail";
         "[scanner-refusal:df1860b788314bd677ee963aff3f8186] label literal carries";
         "[scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-break reader read";
+        "[scanner-refusal:b56027d13651cbbf21ae177b43426575] parity claim hand-rolls";
+        "[scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read";
         "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";

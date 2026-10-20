@@ -174,8 +174,10 @@ let () =
   in
   eprintf "running normalizers: %s (not part of the golden)\n%!"
     (String.concat ~sep:" " (Array.to_list (Array.map got ~f:(Printf.sprintf "%.9g"))));
-  let close g w = Float.(abs (g -. w) <= 1e-5 *. max 1. (abs w)) in
-  p_all2 "every running normalizer is within 1e-5 relative of the host recurrence" got want ~f:close;
+  let close_tol w = Float.(1e-5 *. max 1. (abs w)) in
+  let close g w = Float.(abs (g - w) <= close_tol w) in
+  p_close "every running normalizer is within 1e-5 relative of the host recurrence" got want
+    ~tol:close_tol;
   p "the final normalizer equals the direct sum of exp(x - max x) within 1e-5 relative"
     (close got.(n - 1) final_direct);
   p_alli

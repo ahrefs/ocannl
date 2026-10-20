@@ -34,7 +34,7 @@ let completed (r : Autotune.report) =
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -172,7 +172,7 @@ let () =
   in
   let pctx = Context.run pctx proutine in
   let priv_got = Context.get_values pctx mc.Tensor.value in
-  p_all2 "privatized replay values correct" priv_got mm_expected ~f:approx;
+  p_close "privatized replay values correct" priv_got mm_expected ~tol:approx_tol;
   p "privatized replay structurally equals the direct application"
     (String.equal !priv_replay_digest priv_direct_digest);
 
@@ -201,7 +201,7 @@ let () =
   in
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx c.Tensor.value in
-  p_all2 "replayed schedule values correct" got expected_c ~f:approx;
+  p_close "replayed schedule values correct" got expected_c ~tol:approx_tol;
   p "replayed schedule structurally equals the direct application"
     (String.equal !replay_digest direct_digest);
   p "saved schedule roundtrips through sexp"
@@ -236,8 +236,8 @@ let () =
   let r2, r1 =
     match !reports with [ r2; r1 ] -> (r2, r1) | _ -> failwith "expected two reports"
   in
-  p_all2 "tuned elementwise values correct" got1 expected_c ~f:approx;
-  p_all2 "tuned matmul values correct" got_mm1 mm_expected ~f:approx;
+  p_close "tuned elementwise values correct" got1 expected_c ~tol:approx_tol;
+  p_close "tuned matmul values correct" got_mm1 mm_expected ~tol:approx_tol;
   p "first tune call searches (cache miss)" (completed r1);
   (* Which candidates a search times is host-dependent (gh-ocannl-892): a timing window that is
      mostly host stalls is refused ([Autotune.admitted_timing_ms]) and grows [timings_contended]
@@ -361,8 +361,8 @@ let () =
   p "second report names its winner, or the load refused it every timing"
     ((not (String.is_empty r2.Autotune.best_label))
     || (r2.Autotune.candidates_timed = 0 && r2.Autotune.timings_contended > 0));
-  p_all2 "cached schedule replays to correct elementwise values" got2 expected_c ~f:approx;
-  p_all2 "cached schedule replays to correct matmul values" got_mm2 mm_expected ~f:approx;
+  p_close "cached schedule replays to correct elementwise values" got2 expected_c ~tol:approx_tol;
+  p_close "cached schedule replays to correct matmul values" got_mm2 mm_expected ~tol:approx_tol;
 
   (* --- gh-ocannl-559: with the search off (config [autotune_search], which the [reproducible]
      profile sets), nothing is timed. A committed cache entry still replays -- a pinned schedule is
@@ -387,18 +387,20 @@ let () =
     (r3.Autotune.candidates_timed = 0 && r3.Autotune.rounds_run = 0
     && List.is_empty r3.Autotune.best_schedule
     && String.is_empty r3.Autotune.best_label);
-  p_all2 "search off without a cache returns correct untuned elementwise values" got3 expected_c
-    ~f:approx;
-  p_all2 "search off without a cache returns correct untuned matmul values" got_mm3 mm_expected
-    ~f:approx;
+  p_close "search off without a cache returns correct untuned elementwise values" got3 expected_c
+    ~tol:approx_tol;
+  p_close "search off without a cache returns correct untuned matmul values" got_mm3 mm_expected
+    ~tol:approx_tol;
   let cache_committed =
     cache_available && (first_cacheable || (completed r2 && r2.Autotune.timings_contended = 0))
   in
   let r4, got4, got_mm4 = tune_no_search ~cache_dir () in
   p "search off replays exactly when a complete search committed a cache entry"
     (Bool.equal (replayed r4) cache_committed && r4.Autotune.candidates_timed = 0);
-  p_all2 "cache replay under search off gives correct elementwise values" got4 expected_c ~f:approx;
-  p_all2 "cache replay under search off gives correct matmul values" got_mm4 mm_expected ~f:approx;
+  p_close "cache replay under search off gives correct elementwise values" got4 expected_c
+    ~tol:approx_tol;
+  p_close "cache replay under search off gives correct matmul values" got_mm4 mm_expected
+    ~tol:approx_tol;
   (* gh-ocannl-644, gh-ocannl-677: what a call did about searching is ONE state, and the states a
      measurement harness must tell apart are reached right here -- a completed search, a cached
      winner replayed, and a call that neither searched nor replayed because the search is off and
@@ -467,4 +469,4 @@ let () =
   let r6 = Option.value_exn ~here:[%here] !r6 in
   p "search off ignores the unchosen default cache directory"
     (match r6.Autotune.outcome with Autotune.Search_disabled -> true | _ -> false);
-  p_all2 "the ignored-cache fallback is still a correct routine" got6 expected_c ~f:approx
+  p_close "the ignored-cache fallback is still a correct routine" got6 expected_c ~tol:approx_tol

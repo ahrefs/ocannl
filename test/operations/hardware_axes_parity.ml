@@ -28,7 +28,7 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-5)
+let approx_tol _ = 1e-5
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 module Generated = Test_utils.Generated
@@ -78,8 +78,8 @@ let () =
   let ctx_s = Context.run ctx_s routine_s in
   let got_c1s = Context.get_values ctx_s c1s.Tensor.value in
   let got_c2s = Context.get_values ctx_s c2s.Tensor.value in
-  p_all2 "serial add-nest values correct" got_c1s expected_c1 ~f:approx;
-  p_all2 "serial multiply-nest values correct" got_c2s expected_c2 ~f:approx;
+  p_close "serial add-nest values correct" got_c1s expected_c1 ~tol:approx_tol;
+  p_close "serial multiply-nest values correct" got_c2s expected_c2 ~tol:approx_tol;
 
   (* --- Grid+Workgroup annotated twin (unequal Grid extents: 4 vs 6 => guard on the 4-nest) --- *)
   let%op c1a = a + b in
@@ -94,8 +94,8 @@ let () =
   let ctx_a = Context.run ctx_a routine_a in
   let got_c1a = Context.get_values ctx_a c1a.Tensor.value in
   let got_c2a = Context.get_values ctx_a c2a.Tensor.value in
-  p_all2 "annotated add-nest values match the serial twin" got_c1a got_c1s ~f:approx;
-  p_all2 "annotated multiply-nest values match the serial twin" got_c2a got_c2s ~f:approx;
+  p_close "annotated add-nest values match the serial twin" got_c1a got_c1s ~tol:approx_tol;
+  p_close "annotated multiply-nest values match the serial twin" got_c2a got_c2s ~tol:approx_tol;
   (let src = Generated.read "combo_annot" in
    let has s = String.is_substring src ~substring:s in
    (* This is intentionally dialect identity: the assertion names the MSL, CUDA/HIP, and C spellings
@@ -127,7 +127,7 @@ let () =
   in
   let ctx_u = Context.run ctx_u routine_u in
   let got_c3u = Context.get_values ctx_u c3u.Tensor.value in
-  p_all2 "unrolled variant values correct" got_c3u expected_c1 ~f:approx;
+  p_close "unrolled variant values correct" got_c3u expected_c1 ~tol:approx_tol;
   (let src = Generated.read "unroll_annot" in
    (* The inner extent-8 loop unrolls into blocks binding the index to 0..7. *)
    p "unrolled kernel repeats the body with constant bindings"

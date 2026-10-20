@@ -207,30 +207,176 @@ let p_all ?min name xs ~f =
     about the run (one side was reshaped, or one readback was truncated) that deserves to be read
     off the transcript. Reported before emptiness, so a one-sided empty says which side it was.
 
-    [?min] bounds the COMMON length, as in {!p_all}. *)
-type all2_outcome = All2_short of string | All2_holds of bool
+    [?min] bounds the COMMON length, as in {!p_all}.
+
+    A VALUE failure prints the bare [<claim>: false] {!p} prints, and adds one line on stderr, which
+    no golden diffs: how many cells failed [f] and the first of them,
+    [<claim>: 2 of 64 cells fail the predicate; first at 17 (not part of the golden)]
+    (gh-ocannl-1224). [f] therefore runs on every cell once the population floor is met, as in
+    {!p_all}. It cannot print the values, since it does not know their type: a claim over float
+    readbacks under a tolerance goes through {!p_close}, which does. *)
+type all2_outcome = All2_short of string | All2_holds of { failed : int; first : int }
 
 (* Shared by the two output dialects below: [p_all2] renders booleans and [pass_fail_all2] renders
    PASS/FAIL, but a missing population and a length mismatch are the same refusal in either dialect.
    Keeping the classification here also keeps [f] unevaluated when the pair is structurally too
-   short to support its claim. *)
+   short to support its claim. Past the floor [f] visits every cell, so a failure can be counted;
+   [first] is meaningful only where [failed > 0]. *)
 let all2_outcome ?(min = 1) got want ~f =
   let n_got = Array.length got and n_want = Array.length want in
   if n_got <> n_want then All2_short (Printf.sprintf "length %d vs %d" n_got n_want)
-  else if if min <= 1 then n_got > 0 else n_got >= min then
-    All2_holds (Array.for_all2_exn got want ~f)
+  else if if min <= 1 then n_got > 0 else n_got >= min then (
+    let failed = ref 0 and first = ref (-1) in
+    Array.iteri got ~f:(fun i a ->
+        if not (f a want.(i)) then (
+          if !failed = 0 then first := i;
+          Int.incr failed));
+    All2_holds { failed = !failed; first = !first })
   else All2_short (if n_got = 0 then "empty" else Printf.sprintf "only %d of %d" n_got min)
+
+(* The stderr line a value failure of [p_all2] or [pass_fail_all2] adds: a count and a position,
+   which is all a predicate over an unknown type can name. Not prefixed [FAIL: ]: the claim's own
+   line is the one [tools/mutation-run.sh] reads, and this is diagnosis beside it. *)
+let report_all2_failure name ~cells ~failed ~first =
+  Stdio.eprintf "%s: %d of %d cell%s fail the predicate; first at %d (not part of the golden)\n%!"
+    (one_line name) failed cells
+    (if cells = 1 then "" else "s")
+    first
 
 let p_all2 ?min name got want ~f =
   match all2_outcome ?min got want ~f with
   | All2_short detail -> short_fail name detail
-  | All2_holds holds -> p name holds
+  | All2_holds { failed = 0; _ } -> p name true
+  | All2_holds { failed; first } ->
+      p name false;
+      report_all2_failure name ~cells:(Array.length got) ~failed ~first
 
 (** [pf_all2 fmt … got want ~f] is {!p_all2} with a COMPUTED label, as {!pf} is to {!p}. Format
     arguments precede the two arrays and their predicate, so the call keeps the claim-shaped order:
     [pf_all2 "%s values match" leg got want ~f]. Empty or mismatched readbacks retain [p_all2]'s
     distinct refusal wording; [?min] has the same common-length meaning. *)
 let pf_all2 ?min fmt = Printf.ksprintf (fun label got want ~f -> p_all2 ?min label got want ~f) fmt
+
+(** {2 Float parity under a tolerance (gh-ocannl-1224)}
+
+    [p_close name got want ~tol] claims that the float readback [got] matches the reference [want]
+    cell for cell: each [got.(i)] equals [want.(i)], or lies within [tol want.(i)] of it
+    ([Float.(abs (got - want) <= tol want)]). [tol] answers the admitted difference for a reference
+    value, so one argument spells every tolerance the parity tests use: absolute ([fun _ -> 1e-3]),
+    relative with an absolute floor ([fun w -> 1e-3 +. (1e-5 *. Float.abs w)]), relative above
+    magnitude one ([fun w -> 1e-4 *. Float.max 1. (Float.abs w)]), or exact ([fun _ -> 0.]). Its
+    structural refusals are {!p_all2}'s -- an empty pair, a length mismatch, a pair below [?min] --
+    and so is its passing line.
+
+    What it adds is the failure: the bare [<claim>: false] on stdout, as {!p} prints it, and on
+    stderr one line that answers the triage questions a bare [false] cannot, outside every golden:
+    [<claim> (<what_ran>): 3 of 4096 cells differ beyond tolerance; first at 17, worst at 902: got
+     196608.031 vs want 196608 (|diff| 0.0312, tolerance 0.001 there); max |want| 2.1e+05 (not part
+     of the golden)]. The worst cell is the failing one furthest from its reference (a NaN on either
+    side ranks first), and max |want| is the magnitude that tells a few ulps of reordered rounding
+    from a misread operand at a glance. gh-ocannl-1217 needed a reproduction round on a remote box
+    to learn exactly that; with this line, the sweep log alone carries it. [?what_ran] names the
+    candidate that produced [got] (a seed, a schedule, a preset) when the label is shared across a
+    loop of them.
+
+    A cell where the two values are EQUAL holds whatever [tol] says, so matching infinities match,
+    and a NaN on either side never does. The bound is inclusive, so [fun _ -> 0.] is exact equality.
+*)
+type close_outcome =
+  | Close_short of string
+  | Close_holds of {
+      differing : int;
+      first : int;
+      worst : int;
+      magnitude : float;
+      worst_tol : float;
+    }
+
+let close_outcome ?(min = 1) ~tol got want =
+  let n_got = Array.length got and n_want = Array.length want in
+  if n_got <> n_want then Close_short (Printf.sprintf "length %d vs %d" n_got n_want)
+  else if if min <= 1 then n_got > 0 else n_got >= min then (
+    let differing = ref 0 and first = ref (-1) and worst = ref (-1) and magnitude = ref 0. in
+    (* How far a failing cell is from its reference, for ranking: a NaN is a tier of its own above
+       every distance, the infinite ones included, so a NaN cell is the worst whatever precedes
+       it. *)
+    let rank i =
+      let d = Float.abs (got.(i) -. want.(i)) in
+      if Float.is_nan d then (1, 0.) else (0, d)
+    in
+    let further a b =
+      let (tier_a, d_a), (tier_b, d_b) = (rank a, rank b) in
+      tier_a > tier_b || (tier_a = tier_b && Float.(d_a > d_b))
+    in
+    Array.iteri got ~f:(fun i g ->
+        let w = want.(i) in
+        if not (Float.is_nan w) then magnitude := Float.max !magnitude (Float.abs w);
+        (* Only equal values pass without a finite difference: a finite value against an infinite
+           reference, or opposite infinities, differ by an infinite amount, which no tolerance -- an
+           infinite relative one included -- admits. *)
+        let d = Float.abs (g -. w) in
+        if not (Float.equal g w || (Float.is_finite d && Float.(d <= tol w))) then (
+          if !differing = 0 then first := i;
+          Int.incr differing;
+          (* Strictly further: among equals the earliest stands, and an earlier NaN is not displaced
+             by a later one. *)
+          if !worst < 0 || further i !worst then worst := i));
+    Close_holds
+      {
+        differing = !differing;
+        first = !first;
+        worst = !worst;
+        magnitude = !magnitude;
+        worst_tol = (if !worst < 0 then 0. else tol want.(!worst));
+      })
+  else Close_short (if n_got = 0 then "empty" else Printf.sprintf "only %d of %d" n_got min)
+
+let report_close_failure ?what_ran name got want ~differing ~first ~worst ~magnitude ~worst_tol =
+  Stdio.eprintf
+    "%s%s: %d of %d cell%s differ%s beyond tolerance; first at %d, worst at %d: got %.9g vs want \
+     %.9g (|diff| %.3g, tolerance %.3g there); max |want| %.6g (not part of the golden)\n\
+     %!"
+    (one_line name)
+    (match what_ran with None -> "" | Some what -> " (" ^ one_line what ^ ")")
+    differing (Array.length got)
+    (if Array.length got = 1 then "" else "s")
+    (if differing = 1 then "s" else "")
+    first worst got.(worst) want.(worst)
+    (Float.abs (got.(worst) -. want.(worst)))
+    worst_tol magnitude
+
+let p_close ?min ?what_ran name got want ~tol =
+  match close_outcome ?min ~tol got want with
+  | Close_short detail -> short_fail name detail
+  | Close_holds { differing = 0; _ } -> p name true
+  | Close_holds { differing; first; worst; magnitude; worst_tol } ->
+      p name false;
+      report_close_failure ?what_ran name got want ~differing ~first ~worst ~magnitude ~worst_tol
+
+(** [pf_close fmt … got want ~tol] is {!p_close} with a COMPUTED label, as {!pf_all2} is to
+    {!p_all2}: [pf_close "%s: the tuned routine matches the plain compile" leg got want ~tol]. *)
+let pf_close ?min ?what_ran fmt =
+  Printf.ksprintf (fun label got want ~tol -> p_close ?min ?what_ran label got want ~tol) fmt
+
+(** [within name got want ~tol] answers whether {!p_close} would pass, WITHOUT making a claim: on a
+    [false] it prints {!p_close}'s stderr line (or the structural reason,
+    [<name>: empty (not part of the golden)]) and records nothing. It is the predicate of an
+    aggregate claim over candidates whose number is not the golden's to pin --
+    [p_all "every seed matches" runs ~f:(fun (seed, got) -> Verdict.within ~what_ran:seed "the
+     block" got want ~tol)] -- so that the claim stays one row while the candidate that failed it
+    still names its worst cell. A single readback goes through {!p_close}. Not a [Claims] member,
+    being no claim. *)
+let within ?min ?what_ran name got want ~tol =
+  match close_outcome ?min ~tol got want with
+  | Close_holds { differing = 0; _ } -> true
+  | Close_holds { differing; first; worst; magnitude; worst_tol } ->
+      report_close_failure ?what_ran name got want ~differing ~first ~worst ~magnitude ~worst_tol;
+      false
+  | Close_short reason ->
+      Stdio.eprintf "%s%s: %s (not part of the golden)\n%!" (one_line name)
+        (match what_ran with None -> "" | Some what -> " (" ^ one_line what ^ ")")
+        (one_line reason);
+      false
 
 (** [p_none name xs ~f] claims that no element of [xs] satisfies [f], and that there is an element —
     the guarded form of [p name (not (List.exists xs ~f))] and of
@@ -528,7 +674,10 @@ let pass_fail ?detail label b =
 *)
 let pass_fail_all2 ?min ?detail label got want ~f =
   match all2_outcome ?min got want ~f with
-  | All2_holds holds -> pass_fail ?detail label holds
+  | All2_holds { failed = 0; _ } -> pass_fail ?detail label true
+  | All2_holds { failed; first } ->
+      pass_fail ?detail label false;
+      report_all2_failure label ~cells:(Array.length got) ~failed ~first
   | All2_short reason ->
       let detail =
         match detail with
@@ -536,6 +685,17 @@ let pass_fail_all2 ?min ?detail label got want ~f =
         | Some caller_detail -> fun () -> reason ^ "; " ^ caller_detail ()
       in
       pass_fail ~detail label false
+
+(** [pass_fail_close label got want ~tol] is {!p_close} in {!pass_fail}'s output dialect: a
+    structural refusal is the [<label>: FAIL (<reason>)] row {!pass_fail_all2} prints, and a value
+    failure the bare [<label>: FAIL] row, with {!p_close}'s worst-cell line beside it on stderr. *)
+let pass_fail_close ?min ?what_ran label got want ~tol =
+  match close_outcome ?min ~tol got want with
+  | Close_short reason -> pass_fail ~detail:(fun () -> reason) label false
+  | Close_holds { differing = 0; _ } -> pass_fail label true
+  | Close_holds { differing; first; worst; magnitude; worst_tol } ->
+      pass_fail label false;
+      report_close_failure ?what_ran label got want ~differing ~first ~worst ~magnitude ~worst_tol
 
 (** [case label f] runs one case of a test -- a group of claims that share a setup -- and turns an
     exception escaping it into a failed claim,
@@ -618,6 +778,8 @@ module Claims = struct
   let p_all = p_all
   let p_all2 = p_all2
   let pf_all2 = pf_all2
+  let p_close = p_close
+  let pf_close = pf_close
   let p_none = p_none
   let p_alli = p_alli
   let p_empty = p_empty
@@ -630,6 +792,7 @@ module Claims = struct
   let gated_exists = gated_exists
   let pass_fail = pass_fail
   let pass_fail_all2 = pass_fail_all2
+  let pass_fail_close = pass_fail_close
   let case = case
 end
 

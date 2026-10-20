@@ -34,7 +34,7 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_cpu = Sched.backend_is_cpu backend_name
 
@@ -87,7 +87,7 @@ let () =
   let ctx, routine = Context.compile ctx comp Ir.Indexing.Empty in
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx e.Tensor.value in
-  p_all2 "chain values correct" got expected ~f:approx;
+  p_close "chain values correct" got expected ~tol:approx_tol;
   (* Run again: results must be stable. *)
   let ctx = Context.run ctx routine in
   let got2 = Context.get_values ctx e.Tensor.value in
@@ -536,5 +536,5 @@ let () =
   in
   let wg = Context.get_values ctx (grad_of w) in
   (* dl/dw = x. *)
-  p_all2 "backward gradient values correct" wg xv ~f:approx;
+  p_close "backward gradient values correct" wg xv ~tol:approx_tol;
   Generated.assert_emits ~routine:"fission_bwd__seg" ~contains:"__seg0" "backward pass fissioned"

@@ -275,6 +275,25 @@ let field stanza name =
 
 let rec atoms = function Sexp.Atom a -> [ a ] | Sexp.List l -> List.concat_map l ~f:atoms
 
+(** A stanza's [(select <target> from (<libs> -> <arm>) … (-> <arm>))] relationships in its
+    [libraries], as [(target, arm)] pairs: an arm is source for the generated target module, never a
+    module named [*.real] or [*.missing] (gh-ocannl-964, shared with the artifact-directory rule by
+    gh-ocannl-1294). *)
+let select_arms stanza =
+  Option.value (field stanza "libraries") ~default:[]
+  |> List.concat_map ~f:(function
+    | Sexp.List (Sexp.Atom "select" :: Sexp.Atom target :: Sexp.Atom "from" :: arms)
+      when String.is_suffix target ~suffix:".ml" ->
+        List.filter_map arms ~f:(function
+          | Sexp.List terms -> (
+              match
+                List.drop_while terms ~f:(fun term -> not (Sexp.equal term (Sexp.Atom "->")))
+              with
+              | [ Sexp.Atom "->"; Sexp.Atom source ] -> Some (target, source)
+              | _ -> None)
+          | _ -> None)
+    | _ -> [])
+
 (** Whether a [copy_files] pattern could name [name] — the literal spelling, or a wildcard that
     covers it. Only [*] and [?] are interpreted; a pattern using dune's set syntax ([{a,b}], [[ab]])
     is taken as possibly matching, since this decides where a config EXISTS and guessing wide only

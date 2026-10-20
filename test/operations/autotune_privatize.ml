@@ -37,7 +37,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a -. b) < 1e-3)
+let approx_tol _ = 1e-3
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 let named name (comp : Asgns.comp) : Asgns.comp =
@@ -95,7 +95,7 @@ let () =
   let ctx_a = Context.run ctx_a routine_a in
   let got_priv = Context.get_values ctx_a mc1.Tensor.value in
   p "extension appends exactly one Privatize targeting the accumulator" (!n_privatize = 1);
-  p_all2 "privatized preset matches the identity twin" got_priv got_naive ~f:approx;
+  p_close "privatized preset matches the identity twin" got_priv got_naive ~tol:approx_tol;
 
   (* --- The bf16 twin: the precision the extension mints at, and its saved form --- *)
   let bf16 = Ir.Ops.bfloat16 in

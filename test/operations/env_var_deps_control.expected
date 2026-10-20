@@ -20,6 +20,7 @@ module calls `Test_utils.Generated.init`, run by a rule that does or does not de
 
 the checker reports the stanza and exits 1 when the rule running it omits the declaration: true
 the same tree with the declaration added passes and says nothing about it: true
+a select arm reaching the initializer is its stanza's: the stanza is named without it: true
 The credential rule is put to the declaring tree above plus one rule whose only dependency is
 a single `(env_var ...)`: a deny-listed name, a name matched by a pattern, and a near miss;
 then to the same rule reading a name through `%{env:...}` instead, to the program's module
@@ -348,6 +349,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from
   [scanner-refusal:96e2132b9ea14b4c19e7573b7725b9ec] omits the declaration
   [scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes
+  [scanner-refusal:9129542c43718bbbdd95f40fe5b0f98b] reaching the initializer
   [scanner-refusal:055900a8a1fbefd29b7c64a46953700f] external command handed
   [scanner-refusal:fac924c455e2114b6e6bdebdc44811fd] same stanza declaring
   [scanner-refusal:b4a6c6ad5ae1c0d26b7fe78da5c5aa7f] command handed nothing
