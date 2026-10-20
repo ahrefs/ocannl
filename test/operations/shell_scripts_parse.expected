@@ -230,6 +230,7 @@ errexit-negation fixture negation after a for loop whose body turns errexit off 
 errexit-negation fixture negation in a loop body re-entered by continue after set -e is classified as specified: true
 errexit-negation fixture negation after a case inside a command substitution is classified as specified: true
 errexit-negation fixture negation after reserved-word spellings as arguments in a substitution is classified as specified: true
+errexit-negation fixture negation after a case spelled in a comment inside a substitution is classified as specified: true
 errexit-negation fixture negation after an esac argument inside a substitution's case arm is classified as specified: true
 errexit-negation fixture negation inside a case inside a command substitution is classified as specified: true
 errexit-negation fixture function's final negation, every call piped is classified as specified: true
@@ -238,6 +239,7 @@ errexit-negation fixture function's final negation, called with errexit off is c
 errexit-negation fixture function's final negation, one call piped and one weighed is classified as specified: true
 errexit-negation fixture function's final negation, called as a condition is classified as specified: true
 errexit-negation fixture function's final negation, through a caller whose status is discarded is classified as specified: true
+errexit-negation fixture function's final negation, its only call before a redefinition piped is classified as specified: true
 errexit-negation fixture function's final negation, run only as another command's argument is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture pair in multiline quote is classified as specified: true

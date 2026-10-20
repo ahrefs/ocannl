@@ -105,16 +105,16 @@ let unquote line =
     Option.map (String.chop_prefix trimmed ~prefix:">") ~f:(fun rest ->
         Option.value (String.chop_prefix rest ~prefix:" ") ~default:rest)
 
-(** Whether a caption line presents the fence below it as code from an OCaml source file: it says
+(** The OCaml source files a caption line presents the fence below it as code from, lowercased: each
     [from] followed by a file name ending in [.ml] or [.mli], possibly behind a link bracket, a code
     span or a parenthesis. *)
-let cites_source caption =
+let cited_sources caption =
   let caption = String.lowercase caption in
   let length = String.length caption in
   let is_name c = Char.is_alphanum c || List.mem [ '_'; '.'; '/'; '-' ] c ~equal:Char.equal in
   let rec from_at start =
     match String.substr_index caption ~pattern:"from " ~pos:start with
-    | None -> false
+    | None -> []
     | Some at ->
         let word_start = at = 0 || not (Char.is_alphanum caption.[at - 1]) in
         let rec skip index =
@@ -130,8 +130,10 @@ let cites_source caption =
           String.rstrip ~drop:(Char.equal '.')
             (String.sub caption ~pos:name_start ~len:(name_end name_start - name_start))
         in
-        (word_start && (String.is_suffix name ~suffix:".ml" || String.is_suffix name ~suffix:".mli"))
-        || from_at (at + 5)
+        let cited =
+          word_start && (String.is_suffix name ~suffix:".ml" || String.is_suffix name ~suffix:".mli")
+        in
+        (if cited then [ name ] else []) @ from_at (at + 5)
   in
   from_at 0
 
@@ -149,10 +151,24 @@ let parse ~path text =
             let finish acc =
               let declared, info_words = provenance ~path ~line:opening info in
               let code = String.concat ~sep:"\n" (List.rev code) in
-              if Option.is_none declared && Option.exists opened_caption ~f:cites_source then
-                fail path opening
-                  "a fence captioned as code `from <file>.ml` declares doc-excerpt=<path> or \
-                   doc-adapted=<path>";
+              let cited = Option.value_map opened_caption ~default:[] ~f:cited_sources in
+              (match declared with
+              | _ when List.is_empty cited -> ()
+              | None ->
+                  fail path opening
+                    "a fence captioned as code `from <file>.ml` declares doc-excerpt=<path> or \
+                     doc-adapted=<path>"
+              | Some (Excerpt source | Adapted source) ->
+                  (* The declaration names the file the caption cites, by its repository path. *)
+                  let source = String.lowercase source in
+                  if
+                    not
+                      (List.exists cited ~f:(fun name ->
+                           String.equal source name || String.is_suffix source ~suffix:("/" ^ name)))
+                  then
+                    fail path opening
+                      (Printf.sprintf "the caption cites %s, but the fence declares %s"
+                         (String.concat ~sep:", " cited) source));
               if ocaml_info info || annotated info then
                 {
                   path;
