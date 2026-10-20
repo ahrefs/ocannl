@@ -806,20 +806,76 @@ module Shell_lexer = struct
 
   (* Skip one [$()] body while preserving its recursive quote scopes. The caller only needs the byte
      after the matching close: every list operator inside the substitution is nested by definition
-     and cannot consume the outer negated pipeline. *)
+     and cannot consume the outer negated pipeline.
+
+     The body is a command list, so a [case] in it carries patterns whose [)] closes nothing
+     (gh-ocannl-1266): a [case] word in command position -- first in the body, after a separator or
+     a parenthesis, or after a reserved word that a command follows -- opens a frame, [in] starts
+     its patterns, a pattern's [)] at the frame's own depth starts its arm without closing a
+     parenthesis, an arm terminator ([;;], [;&], [;;&]) starts the next pattern, and [esac] closes
+     the frame. A pattern's optional leading [(] opens nothing either; any other parenthesis (an
+     extglob, a subshell in an arm) is counted as before. A comment -- a [#] starting a word -- runs
+     to its line's end and holds nothing: no [case], and no parenthesis. *)
   let rec skip_command_substitution line index =
+    let length = String.length line in
+    let body = index in
+    let is_meta character =
+      Char.is_whitespace character
+      || List.mem [ ';'; '&'; '|'; '('; ')'; '<'; '>' ] character ~equal:Char.equal
+    in
+    let word_at index =
+      let rec finish index =
+        if index < length && not (is_meta line.[index]) then finish (index + 1) else index
+      in
+      String.sub line ~pos:index ~len:(finish index - index)
+    in
+    (* The last index a word continues past -- a closing quote, a nested substitution's or
+       expansion's closer -- so the character after it starts no word: [$(x)#y] holds no comment. *)
+    let glued = ref (-1) in
+    let glue finish =
+      glued := finish - 1;
+      finish
+    in
+    (* A word starts after an unescaped blank or separator, as {!comment_starts} reads one: an
+       escaped space ([foo\ #bar]) continues its word, and so does a glued closer. *)
+    let word_start index =
+      let rec backslashes index count =
+        if index > body && Char.equal line.[index - 1] '\\' then backslashes (index - 1) (count + 1)
+        else count
+      in
+      index = body
+      || !glued <> index - 1
+         && (Char.is_whitespace line.[index - 1]
+            || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal)
+         && backslashes (index - 1) 0 % 2 = 0
+    in
+    (* Whether the next word is in command position, tracked forward through the body: true at its
+       start and after a separator or a parenthesis, kept across a reserved word a command follows,
+       and false after any other word -- so [echo then case] holds no [case]. *)
+    let at_command = ref true in
+    let function_head = ref false in
+    (* Right after [time] in command position, where its [-p] and [--] keep command position. *)
+    let after_time = ref false in
+    let keeps_command_position =
+      [ "then"; "do"; "else"; "elif"; "if"; "while"; "until"; "{"; "!"; "time" ]
+    in
+    (* The open [case] frames, innermost first: the depth each opened at, and where it is. *)
+    let cases : (int * [ `Subject | `Pattern of bool | `Arm ] ref) list ref = ref [] in
+    (* An arithmetic body ([$((], or [((] handed over from its second parenthesis) holds
+       expressions, not commands: its words are variables, so nothing in it opens a [case]. *)
+    let arithmetic = index < length && Char.equal line.[index] '(' in
     let rec loop index quote escaped depth =
-      if index >= String.length line then index
+      if index >= length then index
       else
         let character = line.[index] in
         match quote with
         | `Single ->
-            if Char.equal character '\'' then loop (index + 1) `None false depth
+            if Char.equal character '\'' then loop (glue (index + 1)) `None false depth
             else loop (index + 1) `Single false depth
         | `Ansi_c ->
             if escaped then loop (index + 1) `Ansi_c false depth
             else if Char.equal character '\\' then loop (index + 1) `Ansi_c true depth
-            else if Char.equal character '\'' then loop (index + 1) `None false depth
+            else if Char.equal character '\'' then loop (glue (index + 1)) `None false depth
             else loop (index + 1) `Ansi_c false depth
         | `Double ->
             if escaped then loop (index + 1) `Double false depth
@@ -829,29 +885,108 @@ module Shell_lexer = struct
             else if starts_at line ~pos:index "${" then
               loop (skip_parameter_expansion line (index + 2)) `Double false depth
             else if Char.equal character '`' then loop (index + 1) `Backtick_double false depth
-            else if Char.equal character '"' then loop (index + 1) `None false depth
+            else if Char.equal character '"' then loop (glue (index + 1)) `None false depth
             else loop (index + 1) `Double false depth
         | (`Backtick_none | `Backtick_double) as backtick ->
             if escaped then loop (index + 1) backtick false depth
             else if Char.equal character '\\' then loop (index + 1) backtick true depth
             else if Char.equal character '`' then
-              loop (index + 1)
+              loop
+                (glue (index + 1))
                 (match backtick with `Backtick_double -> `Double | `Backtick_none -> `None)
                 false depth
             else loop (index + 1) backtick false depth
-        | `None ->
-            if escaped then loop (index + 1) `None false depth
-            else if Char.equal character '\\' then loop (index + 1) `None true depth
-            else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c false depth
-            else if starts_at line ~pos:index "${" then
-              loop (skip_parameter_expansion line (index + 2)) `None false depth
-            else if Char.equal character '\'' then loop (index + 1) `Single false depth
-            else if Char.equal character '"' then loop (index + 1) `Double false depth
-            else if Char.equal character '`' then loop (index + 1) `Backtick_none false depth
-            else if Char.equal character '(' then loop (index + 1) `None false (depth + 1)
-            else if Char.equal character ')' then
-              if depth = 1 then index + 1 else loop (index + 1) `None false (depth - 1)
-            else loop (index + 1) `None false depth
+        | `None when arithmetic -> plain index escaped depth
+        | `None when (not escaped) && Char.equal character '#' && word_start index ->
+            (* A comment, to its line's end: its words open no [case]. *)
+            loop
+              (Option.value (String.index_from line index '\n') ~default:length)
+              `None false depth
+        | `None when (not escaped) && !at_command && starts_at line ~pos:index "((" ->
+            (* An arithmetic command, read as an arithmetic body. *)
+            loop (skip_command_substitution line (index + 1)) `None false depth
+        | `None -> (
+            let command = !at_command in
+            if escaped then at_command := false
+            else if List.mem [ ';'; '&'; '|'; '('; ')'; '\n' ] character ~equal:Char.equal then (
+              (* A new command: nothing pending from the previous one's head carries over. *)
+              at_command := true;
+              after_time := false;
+              function_head := false)
+            else if Char.is_whitespace character then ()
+            else if word_start index then (
+              let word = word_at index in
+              let timed =
+                !after_time && command && List.mem [ "-p"; "--" ] word ~equal:String.equal
+              in
+              after_time := command && (String.equal word "time" || timed);
+              if timed then at_command := true
+              else if !function_head then (
+                (* [function NAME]: the body that follows starts in command position. *)
+                function_head := false;
+                at_command := true)
+              else if command && String.equal word "function" then (
+                function_head := true;
+                at_command := false)
+              else at_command := command && List.mem keeps_command_position word ~equal:String.equal);
+            let frame =
+              match !cases with (opened, where) :: _ when opened = depth -> Some where | _ -> None
+            in
+            let keyword =
+              if (not escaped) && word_start index && Char.is_alpha character then word_at index
+              else ""
+            in
+            let close () =
+              cases := List.tl_exn !cases;
+              loop (index + 4) `None false depth
+            in
+            match (keyword, frame) with
+            | "case", (None | Some { contents = `Arm }) when command ->
+                cases := (depth, ref `Subject) :: !cases;
+                loop (index + 4) `None false depth
+            | "in", Some ({ contents = `Subject } as where) ->
+                where := `Pattern false;
+                loop (index + 2) `None false depth
+            | "esac", Some { contents = `Pattern false } -> close ()
+            | "esac", Some { contents = `Arm } when command -> close ()
+            | _ -> (
+                match frame with
+                | Some ({ contents = `Pattern started } as where)
+                  when (not escaped) && not (Char.is_whitespace character) ->
+                    if Char.equal character '(' && not started then (
+                      where := `Pattern true;
+                      loop (index + 1) `None false depth)
+                    else if Char.equal character ')' then (
+                      where := `Arm;
+                      loop (index + 1) `None false depth)
+                    else (
+                      where := `Pattern true;
+                      plain index escaped depth)
+                | Some ({ contents = `Arm } as where)
+                  when (not escaped) && Char.equal character ';'
+                       && index + 1 < length
+                       && List.mem [ ';'; '&' ] line.[index + 1] ~equal:Char.equal ->
+                    where := `Pattern false;
+                    let width = if starts_at line ~pos:index ";;&" then 3 else 2 in
+                    loop (index + width) `None false depth
+                | _ -> plain index escaped depth))
+    and plain index escaped depth =
+      let character = line.[index] in
+      if escaped then loop (index + 1) `None false depth
+      else if Char.equal character '\\' then loop (index + 1) `None true depth
+      else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c false depth
+      else if starts_at line ~pos:index "$(" then
+        (* A nested substitution is a body of its own, an arithmetic one included. *)
+        loop (glue (skip_command_substitution line (index + 2))) `None false depth
+      else if starts_at line ~pos:index "${" then
+        loop (glue (skip_parameter_expansion line (index + 2))) `None false depth
+      else if Char.equal character '\'' then loop (index + 1) `Single false depth
+      else if Char.equal character '"' then loop (index + 1) `Double false depth
+      else if Char.equal character '`' then loop (index + 1) `Backtick_none false depth
+      else if Char.equal character '(' then loop (index + 1) `None false (depth + 1)
+      else if Char.equal character ')' then
+        if depth = 1 then index + 1 else loop (index + 1) `None false (depth - 1)
+      else loop (index + 1) `None false depth
     in
     loop index `None false 1
 
@@ -1520,8 +1655,10 @@ end
     position: first in a statement, after [!]/[time] for the openers, or right after a compound's
     closer. A statement ends at [;], a lone [&], an arm terminator, or a newline that no
     [&&]/[||]/[|] carries over; its operands are its [&&]/[||]/[|] elements, and a compound is one
-    operand of the statement it sits in. Quotes, substitutions, [[[ ... ]]] (across lines too) and
-    parentheses that open no command (arrays, [(( ))], process substitution) are text.
+    operand of the statement it sits in. Quotes, command and process substitutions, [[[ ... ]]]
+    (across lines too) and parentheses that open no command (arrays, [(( ))]) are text; a
+    substitution's end is found through the [case] patterns in it, whose [)] closes nothing
+    ({!Shell_lexer.skip_command_substitution}, gh-ocannl-1266).
 
     Errexit, as a single may-be-on bit that flows through that tree in source order from off. A
     simple command turns it on or off through {!Shell_lexer.command_errexit}. Wherever bash could
@@ -1537,9 +1674,12 @@ end
       ended; after [fi] errexit may be on if any body, or (without [else]) the last condition, may
       leave it on. [case]: each arm starts from the state before [case] ([;&]/[;;&] also from the
       arm falling into it); afterwards it may be on if any arm, or no arm, leaves it on. A loop body
-      is read again from a head that may be on when one pass may leave it on, so a [set -e] late in
-      a body reaches its earlier statements, and a loop whose body holds a [set -e] anywhere may
-      leave errexit on ([break] can leave right after it);
+      is read again from a head that may be on when one pass may leave it on, or when the loop holds
+      a [set -e] anywhere ([continue] can re-enter the head right after it), so a [set -e] late in a
+      body reaches its earlier statements. A [while]/[until] loop is left where its condition ends,
+      so a condition that turns errexit off leaves it off (gh-ocannl-1266); a [for]/[select] loop
+      from its head, which it may leave untouched; and a loop holding a [set -e] anywhere may leave
+      errexit on ([break] can leave right after it);
     - inside a compound whose status a condition, a [!] or a following [&&]/[||] reads, bash ignores
       errexit for every command, so nothing there is judged under it;
     - a function body runs where it is called, which a text scan cannot see: it is entered with
@@ -1549,13 +1689,23 @@ end
       in it, since [return] can leave right after one; so [enable() { set -e; }], and the
       [set +e ... set -e] save-and-restore that assumes its caller had it on -- makes every off
       state in the file untrustworthy: such a script is read with errexit on from its first line,
-      and no [set +e] in it turns it off.
+      and no [set +e] in it turns it off. The scan names those functions on a line of its golden
+      ({!note}), so the switch is never silent.
 
     Status consumers. A statement's status is consumed -- it is not an assertion errexit has to stop
     on -- when the statement is a condition ([if]/[elif]/[while]/[until]), when its own list
     consumes it (each arm's rule), or when it is the LAST statement of a context that hands its
     status on:
-    - a function body: its status is the return value the call site weighs;
+    - a function body: its status is the return value the call site weighs -- unless the file shows
+      calls of the function and every one discards that status (gh-ocannl-1266): a pipe after it
+      ([pipefail] is not read, as for a piped subshell), a background job, or a statement nothing
+      consumes where errexit is certainly off. A call is a simple command whose command word, past
+      [!], [time], unquoted assignments and redirections, names a function the file defines. A name
+      the file defines more than once -- redefined, or defined in a branch, a subshell or another
+      body -- is not bound to a definition at all: each of its bodies stops handing its status on as
+      soon as any visible call of the name discards it. A call the scan cannot see -- another
+      command's argument ([run f], [command f], [trap f EXIT]), a substitution, another file --
+      discards nothing, and a function with no visible call at all keeps the return value as read;
     - a subshell, whose nonzero exit is a failure of its own, unless a pipeline discards it or it
       runs in the background;
     - a brace group, [if] branch or [case] arm whose compound hands its status on in turn: as a
@@ -1578,21 +1728,23 @@ end
 
     Loud (a live assertion flagged): an errexit transition inside a branch is read as possibly not
     taken; a [set +e] behind [time] or a redirection is read as possibly not run, and a [set -e]
-    ending a pipeline as possibly run here; a loop that ends by turning errexit off in its condition
-    still reads as possibly leaving it on; a function body is judged under errexit even where every
+    ending a pipeline as possibly run here; a function body is judged under errexit even where every
     call runs with it off; a function that may turn errexit on discards every off state in the file,
     called or not; a loop body's last statement is not consumed even where the loop runs once, nor a
     fall-through arm's where no arm follows it at run time; the script's own last statement is not a
     consumer, since an EXIT trap can replace the exit status -- [|| exit 1] is the explicit
     spelling; a [rc=$?] or a bare [return] on the next statement is not one either -- [|| rc=$?] and
     [|| return 1] are; and a statement whose status a pipeline discards is flagged although a plain
-    failure there is lost too.
+    failure there is lost too -- also a function's last statement where every visible call discards
+    the function's status.
 
     Silent (an inert assertion not flagged): errexit turned on by [eval], a sourced file, an
     invocation flag ([bash -e script]; a shebang flag is refused by {!Shebang} already), or a caller
-    of a sourced library; a function's last statement where every call discards the function's
-    status ([f | cat], [f &]) -- the scan does not follow calls, and takes the return value as read;
-    commands inside substitutions; and what each arm declares of its own. *)
+    of a sourced library; a function's last statement where only some visible calls discard its
+    status, or where the calls are out of sight (above) -- the fix for a discarding call is at the
+    call, not in the body; commands inside substitutions; the statements of an [if]/[while]/[until]
+    condition other than its last, which are read as consumed although bash discards their status;
+    and what each arm declares of its own. *)
 module Shell_context = struct
   module L = Shell_lexer
 
@@ -1633,14 +1785,15 @@ module Shell_context = struct
   (** What a [(] or [{] opens, judged by the operand text before it: a group when nothing precedes
       it but [!] or [time] ([-p], [--]); a function body after a function head in any spelling
       ([f()], [f ()], [function f], [function f()]); otherwise nothing ([arr=(], [<(]). *)
+  let rec drop_pipeline_prefix = function
+    | "!" :: rest -> drop_pipeline_prefix rest
+    | "time" :: "-p" :: "--" :: rest | "time" :: "--" :: rest -> drop_pipeline_prefix rest
+    | "time" :: "-p" :: rest -> drop_pipeline_prefix rest
+    | "time" :: rest -> drop_pipeline_prefix rest
+    | words -> words
+
   let opener text =
-    let rec drop = function
-      | "!" :: rest -> drop rest
-      | "time" :: "-p" :: "--" :: rest | "time" :: "--" :: rest -> drop rest
-      | "time" :: "-p" :: rest -> drop rest
-      | "time" :: rest -> drop rest
-      | words -> words
-    in
+    let drop = drop_pipeline_prefix in
     (* A function name is any word that is not an assignment and needs no quoting. *)
     let name word =
       (not (String.is_empty word))
@@ -1903,6 +2056,12 @@ module Shell_context = struct
                       push (Function `Paren) ~at:index ~next:(index + 1) ~phase:Commands
                         ~open_branch:(Some (false, false));
                       continue (index + 1)
+                  | (`Group | `No)
+                    when index > 0 && List.mem [ '<'; '>' ] text.[index - 1] ~equal:Char.equal ->
+                      (* A process substitution holds a command list, read as a [$()] body is. *)
+                      let finish = L.skip_command_substitution text (index + 1) in
+                      glued_at := finish - 1;
+                      continue finish
                   | `Group | `No -> continue ~parens:1 (index + 1)
               else if Char.equal c ')' then (
                 (match frame.kind with
@@ -2123,22 +2282,68 @@ module Shell_context = struct
             | None -> List.map (L.shell_words operand.text) ~f:L.literal_shell_word
             | Some compound -> List.concat_map compound.branches ~f:command_words))
 
-  (** The names of the functions [branch] defines anywhere. *)
-  let rec defined_functions (branch : branch) =
+  (** The functions [branch] defines anywhere, by name. *)
+  let rec definitions (branch : branch) =
     List.concat_map branch.statements ~f:(fun statement ->
         List.concat_map statement.operands ~f:(fun operand ->
             match operand.compound with
             | None -> []
             | Some compound ->
                 let own =
-                  match (compound.kind, L.shell_words operand.text) with
+                  match (compound.kind, drop_pipeline_prefix (L.shell_words operand.text)) with
                   | ( Function _,
                       ([ head ] | [ "function"; head ] | [ head; "()" ] | [ "function"; head; "()" ])
                     ) ->
-                      [ Option.value (String.chop_suffix head ~suffix:"()") ~default:head ]
+                      [
+                        (Option.value (String.chop_suffix head ~suffix:"()") ~default:head, compound);
+                      ]
                   | _ -> []
                 in
-                own @ List.concat_map compound.branches ~f:defined_functions))
+                own @ List.concat_map compound.branches ~f:definitions))
+
+  let defined_functions branch = List.map (definitions branch) ~f:fst
+
+  (** The command name a simple command runs, past what can stand in front of it: [!], [time] ([-p],
+      [--]), assignments and redirections. [command] and [builtin] are names of their own: neither
+      runs a function. *)
+  let command_name text =
+    (* Only an assignment as written: a quoted [ 'X=1' ] is the command it names, not a prefix. *)
+    let syntactic_assignment word =
+      match String.lsplit2 word ~on:'=' with
+      | Some (name, _) ->
+          let name = Option.value (String.chop_suffix name ~suffix:"+") ~default:name in
+          (* An array element, [A[0]=x], is an assignment word too. *)
+          let name =
+            match String.lsplit2 name ~on:'[' with
+            | Some (base, subscript) when String.is_suffix subscript ~suffix:"]" -> base
+            | _ -> name
+          in
+          (not (String.is_empty name))
+          && (Char.is_alpha name.[0] || Char.equal name.[0] '_')
+          && String.for_all name ~f:(fun c -> Char.is_alphanum c || Char.equal c '_')
+      | None -> false
+    in
+    let rec drop = function
+      | "!" :: rest -> drop rest
+      | "time" :: "-p" :: "--" :: rest | "time" :: ("-p" | "--") :: rest | "time" :: rest ->
+          drop rest
+      | word :: rest when syntactic_assignment word -> drop rest
+      | word :: rest -> (
+          match L.redirection_prefix word with
+          | Some true -> drop rest
+          | Some false -> drop (List.drop rest 1)
+          | None -> word :: rest)
+      | [] -> []
+    in
+    Option.map (List.hd (drop (L.shell_words text))) ~f:L.literal_shell_word
+
+  (** Every simple command in [branch], anywhere, with the statement it is operand [index] of. *)
+  let rec simple_commands (branch : branch) =
+    List.concat_map branch.statements ~f:(fun statement ->
+        List.concat_mapi statement.operands ~f:(fun index operand ->
+            match operand.compound with
+            | None -> [ (operand.text, statement, index) ]
+            | Some compound -> List.concat_map compound.branches ~f:simple_commands))
 
   type judgement = {
     statement : statement;
@@ -2164,11 +2369,11 @@ module Shell_context = struct
       List.exists branches ~f:(fun b -> not (List.is_empty (enabling_sites ~functions:[] [] b)))
     in
     (* One reading of the tree. [leaky]: some function body may turn errexit on for a caller that
-       had it off, so no off state can be trusted. Returns the judgements and whether a body was
-       found to be leaky. *)
-    let reading ~leaky =
+       had it off, so no off state can be trusted. [unread]: the function bodies whose status every
+       call the file shows discards. Returns the judgements and the bodies found to be leaky. *)
+    let reading ~leaky ~unread =
       let judgements = Hashtbl.create (module Int) in
-      let leak = ref false in
+      let leak = ref [] in
       (* Off while a function body's transfer is computed from an entry it is not judged under. *)
       let recording = ref true in
       let record statement ~errexit ~consumed =
@@ -2241,17 +2446,18 @@ module Shell_context = struct
                   (match shape with `Paren -> true | `Brace -> false)
                   || not (List.mem functions compound ~equal:phys_equal))
             in
+            let hands_on = not (List.mem unread compound ~equal:phys_equal) in
             List.iter compound.branches ~f:(fun body ->
                 (* Where the body runs is unknown: neither the definition's context nor its ignoring
                    applies. *)
-                ignore (branch body ~entry:(leaky || entry') ~hands_on:true ~ignored:false : bool);
+                ignore (branch body ~entry:(leaky || entry') ~hands_on ~ignored:false : bool);
                 (* A call from a caller with errexit off: may the body hand it back on? *)
                 match shape with
                 | `Brace ->
                     let saved = !recording in
                     recording := false;
-                    if branch body ~entry:false ~hands_on:true ~ignored:false || may_enable [ body ]
-                    then leak := true;
+                    if branch body ~entry:false ~hands_on ~ignored:false || may_enable [ body ] then
+                      leak := compound :: !leak;
                     recording := saved
                 | `Paren -> ());
             entry
@@ -2270,15 +2476,22 @@ module Shell_context = struct
             List.exists exits ~f:Fn.id || (bodies <= conditions && last_condition)
         | Loop ->
             (* A body hands nothing on: a later iteration overwrites its last statement's status. *)
+            (* One pass from [head]: its end state, every state it passes through, and the states
+               its condition ends in -- where a [while]/[until] loop is left when it is not left by
+               [break]. *)
             let pass head =
-              List.fold compound.branches ~init:(head, head) ~f:(fun (state, joined) b ->
+              List.fold compound.branches ~init:(head, head, false)
+                ~f:(fun (state, joined, tested) b ->
                   let exit = branch b ~entry:state ~hands_on:false in
-                  (exit, joined || exit))
+                  (exit, joined || exit, tested || (b.condition && exit)))
             in
-            let exit, joined = pass entry in
-            let head = entry || exit in
-            (if Bool.equal head entry then joined else snd (pass head))
-            || may_enable compound.branches
+            (* [break] and [continue] can leave a body right after any [set -e] in it. *)
+            let enables = may_enable compound.branches in
+            let ((exit, _, _) as first) = pass entry in
+            let head = entry || exit || enables in
+            let _, joined, tested = if Bool.equal head entry then first else pass head in
+            let conditional = List.exists compound.branches ~f:(fun b -> b.condition) in
+            (if conditional then tested else joined) || enables
         | Case ->
             (* An arm ending in [;&]/[;;&] hands nothing on: the arm it falls into overwrites its
                status. *)
@@ -2296,12 +2509,72 @@ module Shell_context = struct
             arms false entry compound.branches
       in
       ignore (branch top ~entry:leaky ~hands_on:false ~ignored:false : bool);
-      ( Hashtbl.data judgements
-        |> List.sort ~compare:(fun a b -> Int.compare a.statement.id b.statement.id),
-        !leak )
+      (judgements, !leak)
     in
-    let _, leaky = reading ~leaky:false in
-    (fst (reading ~leaky), not (List.is_empty sites))
+    let definitions = definitions top in
+    let _, leaks = reading ~leaky:false ~unread:[] in
+    let leaky = not (List.is_empty leaks) in
+    (* The calls the file shows, by the function name each runs: a simple command whose command word
+       names a function the file defines. *)
+    let calls =
+      List.filter_map (simple_commands top) ~f:(fun (text, statement, index) ->
+          Option.bind (command_name text) ~f:(fun name ->
+              Option.some_if
+                (List.exists definitions ~f:(fun (defined, _) -> String.equal defined name))
+                (name, (statement, index))))
+    in
+    (* Whether a call's status reaches nothing: a pipe after it discards it, and so does a
+       background job; as its statement's status, it reaches something when the statement's is
+       consumed or may be weighed by errexit. *)
+    let discards judgements (statement, index) =
+      match List.nth statement.connectors index with
+      | Some (And | Or) -> false
+      | Some Pipe -> true
+      | None ->
+          statement.async
+          || Option.value_map (Hashtbl.find judgements statement.id) ~default:false
+               ~f:(fun { errexit; consumed; _ } -> not (errexit || consumed))
+    in
+    (* The visible calls of a name. *)
+    let calls_of name =
+      List.filter_map calls ~f:(fun (called, site) ->
+          Option.some_if (String.equal called name) site)
+    in
+    (* Which definition a call runs is a question of run-time order and shell scope, so a name
+       defined more than once binds no call to one body: each of its bodies counts as discarded as
+       soon as any of the name's calls discards -- loud where the discarding call ran another body,
+       never silent. *)
+    let ambiguous name =
+      List.count definitions ~f:(fun (defined, _) -> String.equal defined name) > 1
+    in
+    (* A body hands its status on unless the file shows calls of it and every one discards the
+       status; discarding a body's status can make a call in it discard too, so to a fixpoint. *)
+    let rec settle unread =
+      let judgements, _ = reading ~leaky ~unread in
+      let found =
+        List.filter_map definitions ~f:(fun (name, compound) ->
+            let sites = calls_of name in
+            Option.some_if
+              (if ambiguous name then List.exists sites ~f:(discards judgements)
+               else (not (List.is_empty sites)) && List.for_all sites ~f:(discards judgements))
+              compound)
+      in
+      let grown =
+        List.fold found ~init:unread ~f:(fun grown compound ->
+            if List.mem grown compound ~equal:phys_equal then grown else compound :: grown)
+      in
+      if List.length grown = List.length unread then judgements else settle grown
+    in
+    let judgements =
+      Hashtbl.data (settle [])
+      |> List.sort ~compare:(fun a b -> Int.compare a.statement.id b.statement.id)
+    in
+    let leaking =
+      List.filter_map definitions ~f:(fun (name, compound) ->
+          Option.some_if (List.mem leaks compound ~equal:phys_equal) name)
+      |> List.dedup_and_sort ~compare:String.compare
+    in
+    (judgements, not (List.is_empty sites), leaking)
 
   type t = {
     judgements : judgement list;
@@ -2309,6 +2582,9 @@ module Shell_context = struct
     refusals : (int * string) list;
         (** This module's, for a script that may turn errexit on: elsewhere nothing is judged, so
             nothing rests on the structure. *)
+    leaking : string list;
+        (** The functions whose body may turn errexit back on for a caller that had it off, which
+            make the whole file read with errexit on from its first line. *)
   }
 
   let read text =
@@ -2318,14 +2594,26 @@ module Shell_context = struct
           lexical := (line, reason) :: !lexical)
     in
     let refuse line reason = refusals := (line, reason) :: !refusals in
-    let judgements, enables_errexit = judge (structure ~refuse lines) in
+    let judgements, enables_errexit, leaking = judge (structure ~refuse lines) in
     let refusals =
       if enables_errexit then
         List.dedup_and_sort !refusals ~compare:(fun (line, reason) (line', reason') ->
             match Int.compare line line' with 0 -> String.compare reason reason' | order -> order)
       else []
     in
-    { judgements; lexical = List.rev !lexical; refusals }
+    { judgements; lexical = List.rev !lexical; refusals; leaking }
+
+  (** The note that makes the whole-file reading visible in the golden (gh-ocannl-1266): a file read
+      this way loses every [set +e] in it silently otherwise. *)
+  let note ~rel t =
+    Option.some_if
+      (not (List.is_empty t.leaking))
+      (Printf.sprintf
+         "%s: read with errexit on from its first line: %s may turn errexit back on for a caller \
+          that had it off"
+         rel
+         (String.concat ~sep:", "
+            (List.map t.leaking ~f:(fun name -> Printf.sprintf "function `%s`" name))))
 
   (** The lines of the statements [shape] picks that run under errexit with their status consumed by
       nothing. *)
@@ -2405,7 +2693,36 @@ module Shell_context = struct
     let messages = ref [] in
     report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (read "fi\n");
     Verdict.p_empty "a script that never turns errexit on is not refused for its structure"
-      ~over:[ "fi\n" ] !messages
+      ~over:[ "fi\n" ] !messages;
+    (* A command list inside a substitution is text to this module, and a [case] in one closes no
+       parenthesis with its patterns (gh-ocannl-1266). *)
+    List.iter
+      [
+        ("command substitution", "set -e\nx=$(case $y in a) echo 1 ;; *) echo 2 ;; esac)\n");
+        ( "multiline command substitution",
+          "set -e\nx=$(\n  case $y in\n    (a) echo 1 ;;\n    @(b|c)) echo 2 ;&\n  esac\n)\n" );
+        ("nested case", "set -e\nx=$(case $y in a) case $z in b) : ;; esac ;; esac)\n");
+        ("timed case in a command substitution", "set -e\nx=$(time -p case y in y) : ;; esac)\n");
+        ( "function-keyword body in a command substitution",
+          "set -e\nx=$(function f { case x in a) : ;; esac; }; f)\n" );
+        ("process substitution", "set -e\ncat <(case $y in a) echo 1 ;; esac) >/dev/null\n");
+      ]
+      ~f:(fun (name, text) ->
+        let messages = ref [] in
+        report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (read text);
+        Verdict.p_empty
+          (Printf.sprintf "a case inside a %s keeps the structure readable" name)
+          ~over:[ text ] !messages);
+    (* The whole-file errexit reading is named in the golden, and only where it happens. *)
+    let restore = "set -e\nf() {\n  set +e\n  x\n  set -e\n}\nset +e\n! probe\n" in
+    Verdict.p "a save-and-restore function is named as the reason for the whole-file reading"
+      (Option.equal String.equal
+         (note ~rel:"fixture.sh" (read restore))
+         (Some
+            "fixture.sh: read with errexit on from its first line: function `f` may turn errexit \
+             back on for a caller that had it off"));
+    Verdict.p "a file whose functions leave errexit alone carries no whole-file note"
+      (Option.is_none (note ~rel:"fixture.sh" (read "set -e\nf() {\n  x\n}\nset +e\n! probe\n")))
 end
 
 (** A deliberately textual check for statement-position command negation in scripts that enable
@@ -2695,6 +3012,107 @@ module Errexit_negation = struct
       ( "negation after set +e in a file with a save-and-restore function",
         "set -e\nf() {\n  set +e\n  x\n  set -e\n}\nset +e\n! probe\n",
         [ 8 ] );
+      (* gh-ocannl-1266: a loop left through a condition that turns errexit off, a [case] inside a
+         substitution, and the calls that decide whether a function's status is read. *)
+      ( "negation after a loop whose condition turns errexit off",
+        "set -e\nwhile set +e; read -r x; do :; done\n! probe\n",
+        [] );
+      ( "negation after a loop whose condition turns errexit off, then set -e",
+        "set -e\nwhile set +e; read -r x; do :; done\nset -e\n! probe\n",
+        [ 4 ] );
+      ( "negation after a for loop whose body turns errexit off",
+        "set -e\nfor x in a; do set +e; done\n! probe\n",
+        [ 3 ] );
+      ( "negation in a loop body re-entered by continue after set -e",
+        "while read -r x; do\n  ! probe\n  set -e\n  continue\n  set +e\ndone\n",
+        [ 2 ] );
+      ( "negation after a case inside a command substitution",
+        "set -e\nx=$(case $y in\n  a) echo 1 ;;\nesac)\n! probe\n",
+        [ 5 ] );
+      ( "negation after reserved-word spellings as arguments in a substitution",
+        "set -e\nx=$(echo then case x in foo)\n! probe\n",
+        [ 3 ] );
+      ( "negation after a case spelled in a comment inside a substitution",
+        "set -e\nx=$( # ; case x in\n  echo 1\n)\n! probe\n",
+        [ 5 ] );
+      ( "negation after an escaped space before a hash inside a substitution",
+        "set -e\nx=$(echo foo\\ #literal)\n! probe\n",
+        [ 3 ] );
+      ( "negation after case and in as arithmetic variables inside a substitution",
+        "set -e\nx=$(echo $((case + in)))\n! probe\n",
+        [ 3 ] );
+      ( "negation after an arithmetic command naming case inside a substitution",
+        "set -e\nx=$( (( case = in )); echo 1 )\n! probe\n",
+        [ 3 ] );
+      ( "negation after an arithmetic substitution naming case",
+        "set -e\nx=$((case + in))\n! probe\n",
+        [ 3 ] );
+      ( "negation after a substitution closer glued to a hash",
+        "set -e\nx=$(echo $(echo x)#literal)\n! probe\n",
+        [ 3 ] );
+      ( "negation after a quote glued to a hash inside a substitution",
+        "set -e\nx=$(echo 'x'#literal)\n! probe\n",
+        [ 3 ] );
+      ( "negation after an argument -p before case inside a substitution",
+        "set -e\nx=$(echo -p case x in foo)\n! probe\n",
+        [ 3 ] );
+      ( "negation after a finished time and a command named -p before case inside a substitution",
+        "set -e\nx=$(time; -p case x in foo)\n! probe\n",
+        [ 3 ] );
+      ( "negation after an esac argument inside a substitution's case arm",
+        "set -e\nx=$(case $y in a) echo esac ;; esac)\n! probe\n",
+        [ 3 ] );
+      ( "negation inside a case inside a command substitution",
+        "set -e\nx=$(case $y in a) ! probe ;; esac)\n",
+        [] );
+      ( "function's final negation, every call piped",
+        "set -e\nabsent() {\n  ! grep -q x f\n}\nabsent | cat\n",
+        [ 3 ] );
+      ( "function's final negation, every call in the background",
+        "set -e\nabsent() {\n  ! grep -q x f\n}\nabsent &\nwait\n",
+        [ 3 ] );
+      ( "function's final negation, called with errexit off",
+        "set -e\nabsent() {\n  ! grep -q x f\n}\nset +e\nabsent\n",
+        [ 3 ] );
+      ( "function's final negation, one call piped and one weighed",
+        "set -e\nabsent() {\n  ! grep -q x f\n}\nabsent | cat\nabsent\n",
+        [] );
+      ( "function's final negation, called as a condition",
+        "set -e\nabsent() {\n  ! grep -q x f\n}\nif absent; then :; fi\n",
+        [] );
+      ( "function's final negation, through a caller whose status is discarded",
+        "set -e\nabsent() {\n  ! grep -q x f\n}\ncheck() {\n  set +e\n  absent\n}\ncheck | cat\n",
+        [ 3 ] );
+      ( "function's final negation, its only call before a redefinition piped",
+        "set -e\nf() {\n  ! grep -q x f\n}\nf | cat\nf() {\n  :\n}\nf\n",
+        [ 3 ] );
+      ( "function's final negation, its only call before a same-line redefinition piped",
+        "set -e\nf() { ! probe; }; f | cat; f() { :; }; f\n",
+        [ 2 ] );
+      ( "function's final negation, every real call piped beside a quoted assignment-shaped command",
+        "set -e\nf() {\n  ! probe\n}\nf | cat\nif 'X=1' f; then :; fi\n",
+        [ 3 ] );
+      ( "function's final negation, called after a conditional redefinition (declared loud)",
+        "set -e\nf() { ! probe; }; f | cat; if false; then f() { :; }; fi; f\n",
+        [ 2 ] );
+      ( "function's final negation, every call piped under pipefail (declared loud)",
+        "set -eo pipefail\nf() {\n  ! probe\n}\nf | cat\n",
+        [ 3 ] );
+      ( "function's final negation, called after a redefinition behind && (declared loud)",
+        "set -e\nf() { ! probe; }; f | cat; false && f() { :; }; f\n",
+        [ 2 ] );
+      ( "function's final negation, defined and piped in a subshell beside a parent definition",
+        "set -e\nf() { :; }\n( f() {\n  ! probe\n}; f | cat )\nf\n",
+        [ 4 ] );
+      ( "timed function's final negation, every call piped",
+        "set -e\ntime f() {\n  ! probe\n}\nf | cat\n",
+        [ 3 ] );
+      ( "function's final negation, every call piped behind an array assignment",
+        "set -e\nf() {\n  ! probe\n}\nA[0]=x f | cat\n",
+        [ 3 ] );
+      ( "function's final negation, run only as another command's argument",
+        "set -e\nabsent() {\n  ! grep -q x f\n}\nrun absent | cat\ncommand absent | cat\n",
+        [] );
     ]
 
   let controls () =
@@ -3048,6 +3466,19 @@ module Errexit_and_list = struct
       ("pair in command substitution", "set -e\nok=$([ -e a ] && [ -e b ] && echo y)\n", []);
       ("assignment then a test", "set -e\nx=1 && [ -e b ]\n", []);
       ("pair without errexit", "set -u\n[ -e a ] && [ -e b ]\n", []);
+      (* gh-ocannl-1266. *)
+      ( "pair after a loop whose condition turns errexit off",
+        "set -e\nwhile set +e; read -r x; do :; done\n[ -e a ] && [ -e b ]\n",
+        [] );
+      ( "pair after a case inside a command substitution",
+        "set -e\nx=$(case $y in a) echo 1 ;; esac)\n[ -e a ] && [ -e b ]\n",
+        [ 3 ] );
+      ( "function's final pair, every call piped",
+        "set -e\nready() {\n  [ -e a ] && [ -e b ]\n}\nready | cat\n",
+        [ 3 ] );
+      ( "function's final pair, one call piped and one an or-tail",
+        "set -e\nready() {\n  [ -e a ] && [ -e b ]\n}\nready | cat\nready || exit 1\n",
+        [] );
     ]
 
   let controls () =
@@ -3119,6 +3550,11 @@ module Errexit_execution_controls = struct
   (** [shopt -s lastpipe], which bash 3.2 lacks. *)
   let lastpipe = ("`lastpipe`", "shopt -s lastpipe\n")
 
+  (** A [case] pattern without its leading [(] inside a substitution, which bash 3.2 reads as the
+      substitution's closer. *)
+  let case_in_substitution =
+    ("a `case` inside `$( )`", "x=$(case y in y) : ;; esac)\ncat <(case y in y) : ;; esac)\n")
+
   let both ?requires boundary name template =
     ( name,
       template,
@@ -3179,8 +3615,35 @@ module Errexit_execution_controls = struct
         "for i in 1; do\n  set -e\n  break\n  set +e\ndone\n@@\necho SURVIVED\n";
       both Inert "in a function defined and called in one subshell"
         "(\n  set -e\n  f() {\n    @@\n    :\n  }\n  f\n  echo REACHED\n)\necho SURVIVED\n";
+      both Live "after a loop whose condition turns errexit off"
+        "set -e\nn=0\nwhile set +e; [ \"$n\" = 0 ]; do n=1; done\n@@\necho SURVIVED\n";
+      both Inert "after a for loop whose body turns errexit off, run zero times"
+        "set -e\nset --\nfor i in \"$@\"; do set +e; done\n@@\necho SURVIVED\n";
+      both Inert "in a loop body re-entered by continue after set -e"
+        "for i in 1 2; do\n\
+        \  if [ \"$i\" = 2 ]; then\n\
+        \    @@\n\
+        \    echo REACHED\n\
+        \  fi\n\
+        \  set -e\n\
+        \  continue\n\
+        \  set +e\n\
+         done\n\
+         echo SURVIVED\n";
+      both ~requires:case_in_substitution Inert "after a case inside a command substitution"
+        "set -e\nx=$(case y in y) echo 1 ;; esac)\n@@\necho SURVIVED\n";
+      both ~requires:case_in_substitution Inert "after a case inside a process substitution"
+        "set -e\ncat <(case y in y) echo 1 ;; esac) >/dev/null\n@@\necho SURVIVED\n";
+      both ~requires:case_in_substitution Live "inside a case inside a command substitution"
+        "set -e\nx=$(case y in y) @@ ;; esac)\necho SURVIVED\n";
       (* Status consumers. *)
       both Live "as a function's last statement" "set -e\nf() {\n  @@\n}\nf\necho SURVIVED\n";
+      both Loud "as a function's last statement, every call piped"
+        "set -e\nf() {\n  @@\n}\nf | cat\necho SURVIVED\n";
+      both Loud "as a function's last statement, called with errexit off"
+        "set -e\nf() {\n  @@\n}\nset +e\nf\necho SURVIVED\n";
+      both Live "as a function's last statement, one call piped and one weighed"
+        "set -e\nf() {\n  @@\n}\nf | cat\nf\necho SURVIVED\n";
       both Inert "before a function's last statement"
         "set -e\nf() {\n  @@\n  :\n}\nf\necho SURVIVED\n";
       both Live "as a function's last if branch"
@@ -3461,6 +3924,7 @@ let () =
         Verdict.pf "%s uses the shared harness contract" rel (Harness_contract.compliant text);
       let first_line = Option.value (first_line_of path) ~default:"" in
       let context = Shell_context.read text in
+      Option.iter (Shell_context.note ~rel context) ~f:print_endline;
       Shell_context.report ~fail:Verdict.fail ~rel context;
       Errexit_negation.report ~fail:Verdict.fail ~rel context;
       Errexit_and_list.report ~fail:Verdict.fail ~rel context;

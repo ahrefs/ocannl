@@ -252,14 +252,14 @@ is still being designed—the natural `[rhs1; rhs2]` conflicts with block tensor
 ## Capturing Dimensions
 
 {#capture-dims .block title="Dimension Variables"}
-> Capture dimension values for computation:
+> Capture dimension values for computation -- the opening of `layer_norm` in `lib/nn_blocks.ml`,
+> where `++` sums over the captured row `d` and `dim d` turns the sum into a mean:
 > 
-> ```ocaml
-> let%op normalize x =
->   let mean = (x ++ "... | ..d.. => ... | 0" ["d"]) /. dim d in
+> ```ocaml doc-excerpt=lib/nn_blocks.ml
+> let%op layer_norm ~label ?(epsilon = 1e-5) () x =
+>   let mean = (x ++ " ... | ..d.. => ... | 0 " [ "d" ]) /. dim d in
 >   let centered = x - mean in
->   let variance = ((centered *. centered) ++ "... | ... => ... | 0") /. dim d in
->   centered /. sqrt (variance + !.1e-5)
+>   let variance = ((centered *. centered) ++ " ... | ... => ... | 0 ") /. dim d in
 > ```
 
 {pause up=capture-dims #capture-warning .remark}
@@ -353,21 +353,22 @@ The `[%oc ...]` syntax allows embedding arbitrary OCaml code without `%op` attem
 > * `"...|...->...; ...|...->... => ...|...->..."` - Pointwise binary op
 
 {pause down #pattern-examples .example title="Real Examples from nn_blocks.ml"}
-```ocaml
-(* Layer norm - reduce over feature dimensions; ++ sums, so divide by dim d *)
-let%op layer_norm ~label ?(epsilon = 1e-5) () x =
-  let mean = (x ++ "... | ..d.. => ... | 0" ["d"]) /. dim d in
-  let centered = x - mean in
-  let variance = ((centered *. centered) ++ "... | ... => ... | 0") /. dim d in
-  let normalized = centered /. sqrt (variance + !.epsilon) in
-  ({ gamma = 1. } *. normalized) + { beta = 0. }
-
-(* Attention scores with flexible batching *)
-let scores = 
-  q +* "..batch.., seq | heads, ..dims..; 
-        ..batch.., time | heads, ..dims.. => 
-        ..batch.., seq | time -> heads" 
-    ["heads"; "dims"] k
+```ocaml doc-excerpt=lib/nn_blocks.ml
+  let scores =
+    (q +* k " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ]) /. sqrt (dim d)
+  in
+  Shape.set_dim h num_heads;
+  (* NOTE: often d_k = d_v = d_model / num_heads, but we allow for other values. *)
+  Shape.set_dim d d_k;
+  Shape.set_dim e d_v;
+  (* We don't need to lift [softmax ~spec ()] because it doesn't introduce any new params. *)
+  let attn_weights =
+    softmax ~spec:" ... | t -> ..." ?temperature ()
+      (match mask with None -> scores | Some mask -> where mask scores !.mask_fill)
+  in
+  let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
+  (* w_o output shape will automatically be set to the model dimension(s) by shape inference. *)
+  { w_o } * (attn_weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ])
 ```
 
 {pause up}

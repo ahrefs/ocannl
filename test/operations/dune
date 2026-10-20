@@ -3354,9 +3354,9 @@
  ; ocannl-backend: none -- pure Markdown parser controls.
  (name doc_examples_scan_cases)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps ocannl_config ../../lib/nn_blocks.ml)
  (modules doc_examples_scan_cases)
- (libraries base test_utils arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict))
 
 (test
  ; ocannl-backend: none -- invokes ocamlc on extracted API examples; it executes no backend.

@@ -47,6 +47,14 @@ unsupported shell execution context "set -e\n}\n" reaches its refusal: true
 unsupported shell execution context "set -e\nwhile true; do\n  :\n" reaches its refusal: true
 unsupported shell execution context "set -e\ncase x in\n  x) : ;;\n" reaches its refusal: true
 a script that never turns errexit on is not refused for its structure: true
+a case inside a command substitution keeps the structure readable: true
+a case inside a multiline command substitution keeps the structure readable: true
+a case inside a nested case keeps the structure readable: true
+a case inside a timed case in a command substitution keeps the structure readable: true
+a case inside a function-keyword body in a command substitution keeps the structure readable: true
+a case inside a process substitution keeps the structure readable: true
+a save-and-restore function is named as the reason for the whole-file reading: true
+a file whose functions leave errexit alone carries no whole-file note: true
 errexit-negation fixture multiline single quote is classified as specified: true
 errexit-negation fixture multiline double quote is classified as specified: true
 errexit-negation fixture quoted heredoc is classified as specified: true
@@ -218,6 +226,39 @@ errexit-negation fixture negation in a group an || tail reads is classified as s
 errexit-negation fixture negation after a redirected set +e is classified as specified: true
 errexit-negation fixture negation after a builtin set +e beside a set function is classified as specified: true
 errexit-negation fixture negation after set +e in a file with a save-and-restore function is classified as specified: true
+errexit-negation fixture negation after a loop whose condition turns errexit off is classified as specified: true
+errexit-negation fixture negation after a loop whose condition turns errexit off, then set -e is classified as specified: true
+errexit-negation fixture negation after a for loop whose body turns errexit off is classified as specified: true
+errexit-negation fixture negation in a loop body re-entered by continue after set -e is classified as specified: true
+errexit-negation fixture negation after a case inside a command substitution is classified as specified: true
+errexit-negation fixture negation after reserved-word spellings as arguments in a substitution is classified as specified: true
+errexit-negation fixture negation after a case spelled in a comment inside a substitution is classified as specified: true
+errexit-negation fixture negation after an escaped space before a hash inside a substitution is classified as specified: true
+errexit-negation fixture negation after case and in as arithmetic variables inside a substitution is classified as specified: true
+errexit-negation fixture negation after an arithmetic command naming case inside a substitution is classified as specified: true
+errexit-negation fixture negation after an arithmetic substitution naming case is classified as specified: true
+errexit-negation fixture negation after a substitution closer glued to a hash is classified as specified: true
+errexit-negation fixture negation after a quote glued to a hash inside a substitution is classified as specified: true
+errexit-negation fixture negation after an argument -p before case inside a substitution is classified as specified: true
+errexit-negation fixture negation after a finished time and a command named -p before case inside a substitution is classified as specified: true
+errexit-negation fixture negation after an esac argument inside a substitution's case arm is classified as specified: true
+errexit-negation fixture negation inside a case inside a command substitution is classified as specified: true
+errexit-negation fixture function's final negation, every call piped is classified as specified: true
+errexit-negation fixture function's final negation, every call in the background is classified as specified: true
+errexit-negation fixture function's final negation, called with errexit off is classified as specified: true
+errexit-negation fixture function's final negation, one call piped and one weighed is classified as specified: true
+errexit-negation fixture function's final negation, called as a condition is classified as specified: true
+errexit-negation fixture function's final negation, through a caller whose status is discarded is classified as specified: true
+errexit-negation fixture function's final negation, its only call before a redefinition piped is classified as specified: true
+errexit-negation fixture function's final negation, its only call before a same-line redefinition piped is classified as specified: true
+errexit-negation fixture function's final negation, every real call piped beside a quoted assignment-shaped command is classified as specified: true
+errexit-negation fixture function's final negation, called after a conditional redefinition (declared loud) is classified as specified: true
+errexit-negation fixture function's final negation, every call piped under pipefail (declared loud) is classified as specified: true
+errexit-negation fixture function's final negation, called after a redefinition behind && (declared loud) is classified as specified: true
+errexit-negation fixture function's final negation, defined and piped in a subshell beside a parent definition is classified as specified: true
+errexit-negation fixture timed function's final negation, every call piped is classified as specified: true
+errexit-negation fixture function's final negation, every call piped behind an array assignment is classified as specified: true
+errexit-negation fixture function's final negation, run only as another command's argument is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture pair in multiline quote is classified as specified: true
 errexit-and-list fixture pair in heredoc is classified as specified: true
@@ -355,6 +396,10 @@ errexit-and-list fixture quoted pair is classified as specified: true
 errexit-and-list fixture pair in command substitution is classified as specified: true
 errexit-and-list fixture assignment then a test is classified as specified: true
 errexit-and-list fixture pair without errexit is classified as specified: true
+errexit-and-list fixture pair after a loop whose condition turns errexit off is classified as specified: true
+errexit-and-list fixture pair after a case inside a command substitution is classified as specified: true
+errexit-and-list fixture function's final pair, every call piped is classified as specified: true
+errexit-and-list fixture function's final pair, one call piped and one an or-tail is classified as specified: true
 the bare [ A ] && [ B ] fixture reaches the one-predicate-per-statement refusal: true
 errexit execution control after set -e, `! true`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control after set -e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
@@ -418,8 +463,26 @@ errexit execution control after a loop left by break right after set -e, `! true
 errexit execution control after a loop left by break right after set -e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control in a function defined and called in one subshell, `! true`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control in a function defined and called in one subshell, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a loop whose condition turns errexit off, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after a loop whose condition turns errexit off, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after a for loop whose body turns errexit off, run zero times, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a for loop whose body turns errexit off, run zero times, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a loop body re-entered by continue after set -e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a loop body re-entered by continue after set -e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a case inside a command substitution, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a case inside a command substitution, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a case inside a process substitution, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a case inside a process substitution, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control inside a case inside a command substitution, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control inside a case inside a command substitution, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control as a function's last statement, `! true`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control as a function's last statement, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last statement, every call piped, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as a function's last statement, every call piped, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as a function's last statement, called with errexit off, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as a function's last statement, called with errexit off, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as a function's last statement, one call piped and one weighed, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last statement, one call piped and one weighed, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control before a function's last statement, `! true`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control before a function's last statement, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control as a function's last if branch, `! true`: not flagged; bash treats its failure as it treats `false`: true
@@ -620,6 +683,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical
   [scanner-refusal:d06f79ba9c87a43873089eb160369d9c] unsupported shell execution
   [scanner-refusal:f472d334deac706e33952da7e799b22a] never turns errexit
+  [scanner-refusal:1b6c2569972a33c6d8cdd0f5ea2c5752] a case inside
+  [scanner-refusal:77db671c892d42f5738f054827480452] save-and-restore function is
+  [scanner-refusal:b8ca55024e0a84b39a4011db683a7ba9] functions leave errexit
   [scanner-refusal:88b12da9841dbf6131676bf4fb0f4686] statement-position ! command
   [scanner-refusal:003eba7381c87352fb02cd374fa62ea9] errexit-negation fixture
   [scanner-refusal:b67c631ab7ecd7df55fc002761cf99f6] reaches the absent()-style

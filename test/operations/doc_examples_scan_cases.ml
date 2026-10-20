@@ -60,4 +60,84 @@ let () =
     && refuses "\t```ocaml doc-check=hidden\nlet x = 1\n```"
     && refuses "```ocaml doc-check=api\nlet x = 1");
   p "malformed inline selection cannot silently disappear"
-    (refuses "- Doc-check `api`: `let x = 1`" && refuses "- Doc-check `api`: missing code.")
+    (refuses "- Doc-check `api`: `let x = 1`" && refuses "- Doc-check `api`: missing code.");
+  (* Provenance (gh-ocannl-1265): excerpts held to the repository file they name, here the real
+     [lib/nn_blocks.ml] the shapes slides quote. *)
+  let library = Stdio.In_channel.read_all "../../lib/nn_blocks.ml" in
+  let read = function "lib/nn_blocks.ml" -> Some library | _ -> None in
+  let failures source = E.check_provenance ~read (parse source) in
+  let layer_norm_head =
+    List.find_exn (String.split_lines library) ~f:(String.is_prefix ~prefix:"let%op layer_norm")
+  in
+  (* The same words, one per quoted line and indented: different whitespace only. *)
+  let respaced =
+    String.concat
+      (List.map (String.split ~on:' ' layer_norm_head) ~f:(fun word -> ">   " ^ word ^ "\n"))
+  in
+  p_empty "an excerpt matching its source up to whitespace is accepted" ~over:[ layer_norm_head ]
+    (failures ("> ```ocaml doc-excerpt=lib/nn_blocks.ml\n" ^ respaced ^ "> ```\n"));
+  let drifted_capture =
+    "> ```ocaml doc-excerpt=lib/nn_blocks.ml\n\
+     > let%op layer_norm ~label ?(epsilon = 1e-5) () x =\n\
+     >   let mean = x ++ \" ... | ..d.. => ... | 0 \" [ \"d\" ] in\n\
+     >   let centered = (x - mean) /. dim d in\n\
+     > ```\n"
+  in
+  p
+    "the drifted capture slide, reintroduced under its annotation, is refused at its first drifted \
+     line"
+    (match failures drifted_capture with
+    | [ failure ] -> String.is_substring failure ~substring:"has no line \"let mean = x ++"
+    | _ -> false);
+  let drifted_examples =
+    "{pause down #pattern-examples .example title=\"Real Examples from nn_blocks.ml\"}\n\
+     ```ocaml\n\
+     let%op layer_norm () x =\n\
+    \  let mean = x ++ \"... | ..d.. => ... | 0\" [\"d\"] in\n\
+    \  let normalized = (x - mean) /. dim d in\n\
+    \  ({ gamma = 1. } *. normalized) + { beta = 0. }\n\
+     ```\n"
+  in
+  p "the drifted examples slide is refused without a provenance declaration"
+    (refuses drifted_examples);
+  p "the drifted examples slide is refused as an excerpt"
+    (List.length
+       (failures
+          (String.substr_replace_first drifted_examples ~pattern:"```ocaml\n"
+             ~with_:"```ocaml doc-excerpt=lib/nn_blocks.ml\n"))
+    = 1);
+  p "an adaptation naming no file is refused"
+    (List.length (failures "```ocaml doc-adapted=lib/no_such_file.ml\nlet x = 1\n```\n") = 1);
+  p_empty "an adaptation naming an existing file is accepted" ~over:[ "lib/nn_blocks.ml" ]
+    (failures "```ocaml doc-adapted=lib/nn_blocks.ml\nlet x = 1\n```\n");
+  p "an empty excerpt is refused"
+    (List.length (failures "```ocaml doc-excerpt=lib/nn_blocks.ml\n```\n") = 1);
+  p "a caption citing an OCaml source directly above a fence requires a declaration"
+    (refuses "**OCANNL** (from train.ml):\n```ocaml\nlet x = 1\n```\n"
+    && refuses "> Code from [`nn_blocks.ml`](../lib/nn_blocks.ml):\n> ```text\nx\n> ```\n"
+    && refuses "Code from **nn_blocks.ml**:\n```ocaml\nlet x = 1\n```\n"
+    && refuses "Code from _nn_blocks.ml_:\n```ocaml\nlet x = 1\n```\n"
+    && refuses "Code from \"<nn_blocks.ml>\":\n```ocaml\nlet x = 1\n```\n");
+  p "a declaration must name the file its caption cites"
+    (refuses "**OCANNL** (from train.ml):\n```ocaml doc-adapted=lib/nn_blocks.ml\nlet x = 1\n```\n"
+    && not
+         (refuses "**OCANNL** (from train.ml):\n```ocaml doc-adapted=lib/train.ml\nlet x = 1\n```\n")
+    );
+  p "a caption apart from the fence, or citing another language, requires none"
+    ((not (refuses "the pattern from `nn_blocks.ml`:\n\n```ocaml\nlet x = 1\n```\n"))
+    && not (refuses "**PyTorch** (from optim/sgd.py):\n```python\nx = 1\n```\n"));
+  p "a provenance declaration is read on any fence language, next to the language word only"
+    (Poly.equal
+       (List.map (parse "```bash doc-adapted=lib/nn_blocks.ml\necho\n```\n") ~f:(fun b ->
+            b.E.provenance))
+       [ Some (E.Adapted "lib/nn_blocks.ml") ]
+    && refuses "```ocaml doc-check=api doc-excerpt=lib/nn_blocks.ml\nlet x = 1\n```\n"
+    && refuses "```ocaml doc-excerpt=../lib/nn_blocks.ml\nlet x = 1\n```\n");
+  p "a quoted fence is read through its quote markers, and checked when annotated"
+    (Poly.equal
+       (List.map (parse "> ```ocaml doc-check=api\n> let x = 1\n>\n> let y = x\n> ```\n")
+          ~f:(fun b -> b.E.code))
+       [ "let x = 1\n\nlet y = x" ]);
+  p "a quoted annotated fence the quote abandons, or a nested quote, fails loudly"
+    (refuses "> ```ocaml doc-excerpt=lib/nn_blocks.ml\n> let x = 1\nlet y = 2\n"
+    && refuses "> > ```ocaml doc-check=api\n> > let x = 1\n> > ```\n")

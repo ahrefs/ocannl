@@ -538,8 +538,8 @@ def backward(tensors, grad_tensors=None, retain_graph=None):
     # 3. Walk computation graph backwards accumulating gradients
 ```
 
-**OCANNL** (from train.ml):
-```ocaml
+**OCANNL** (simplified from train.ml):
+```ocaml doc-adapted=lib/train.ml
 let grad_update ?(setup_for_parallel = false) loss =
   set_materialized loss.Tensor.value;
   (* This just builds a computation graph, doesn't execute *)
@@ -588,8 +588,8 @@ def step(self):
             p.add_(d_p, alpha=-lr)
 ```
 
-**OCANNL** (from train.ml):
-```ocaml
+**OCANNL** (simplified from train.ml):
+```ocaml doc-adapted=lib/train.ml
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   (* Again, just building computation graph *)
   [%cd

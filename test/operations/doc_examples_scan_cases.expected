@@ -11,3 +11,16 @@ an empty compilation selection is refused: true
 malformed annotations fail loudly: true
 unsupported annotated indentation and unclosed fences fail loudly: true
 malformed inline selection cannot silently disappear: true
+an excerpt matching its source up to whitespace is accepted: true
+the drifted capture slide, reintroduced under its annotation, is refused at its first drifted line: true
+the drifted examples slide is refused without a provenance declaration: true
+the drifted examples slide is refused as an excerpt: true
+an adaptation naming no file is refused: true
+an adaptation naming an existing file is accepted: true
+an empty excerpt is refused: true
+a caption citing an OCaml source directly above a fence requires a declaration: true
+a declaration must name the file its caption cites: true
+a caption apart from the fence, or citing another language, requires none: true
+a provenance declaration is read on any fence language, next to the language word only: true
+a quoted fence is read through its quote markers, and checked when annotated: true
+a quoted annotated fence the quote abandons, or a nested quote, fails loudly: true

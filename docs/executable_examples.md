@@ -27,6 +27,25 @@ exempt, but an update that recommends today's API must use a checked self-contai
 The [routine-context proposal](proposals/centered-init-and-to-routine-context.md) demonstrates
 both forms. Plain `ocaml` fences remain unchecked for gradual adoption.
 
+## Excerpts of library code
+
+Compilation cannot tell an excerpt from a paraphrase: a slide that restates a library function
+compiles, or stays unchecked, however far it drifts from the code it claims to show. So a fence of
+any language can declare where its code comes from, right after the language word:
+`ocaml doc-excerpt=lib/nn_blocks.ml` says the block is a verbatim excerpt of that repository
+file, and the extraction fails unless the block, with every whitespace run read as one space, is
+a substring of the file. Indentation and line breaks may differ; nothing else may, comments
+included, so commentary goes in the prose around the fence. `ocaml doc-adapted=lib/train.ml`
+says the block is a simplification of that file; it is held only to the file existing, and the
+prose should say "simplified". Either can precede `doc-check=` or `doc-skip`.
+
+A fence captioned as code from an OCaml file -- the line directly above its opening says
+`from <file>.ml` or `.mli`, such as a slide title "Real Examples from nn_blocks.ml" or
+"**OCANNL** (from train.ml):" -- must carry one of the two declarations. A caption separated from
+the fence by a blank line, or citing another language, is prose and is not read. Both slides the
+shapes deck quotes from `lib/nn_blocks.ml` are checked excerpts; `doc_examples.expected` lists
+each declaration beside the compiled groups.
+
 The generated `_build/default/test/operations/doc_examples.inventory` lists every recognized
 OCaml fence and selected agent-note span, including unchecked examples, with source locations
 and reasons. `doc_examples.expected` pins every selected block
@@ -36,10 +55,12 @@ root README and AGENTS guide, derived from a clean Dune source inventory. Symlin
 copies appear under each source path.
 
 The reader deliberately supports only top-level backtick or tilde fences with at most three
-leading spaces and the one-line agent-note form. An annotated unsupported form fails rather
-than disappearing. Other languages, arbitrary inline API mentions, indentation-only blocks,
-list-relative fences and blockquoted fences are outside this compilation contract. The
-inventory does not claim those are checked.
+leading spaces, the same fences inside one level of block quote (`> ```ocaml`, as the slides'
+containers write them; a quoted annotated fence that the quote leaves before its closing fence
+fails), and the one-line agent-note form. An annotated unsupported form fails rather than
+disappearing. Other languages (beyond the provenance declarations above), arbitrary inline API
+mentions, indentation-only blocks, list-relative fences and nested block quotes are outside this
+compilation contract. The inventory does not claim those are checked.
 
 Compilation checks name resolution, types and PPX expansion. It cannot prove a simplified
 optimizer has the same semantics as the real one, or that a valid memory gauge measures the
