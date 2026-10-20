@@ -5973,25 +5973,33 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     sealed := true;
     let log = log_enabled () and progress = progress_enabled () in
     let compiled = ref None in
-    fun () ->
+    let outcome () =
       match !compiled with
       | Some (Ok result) -> result
       | Some (Error (exn, backtrace)) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
-      | None -> (
-          (* A failure is kept too: the compile runs once, and a caller catching its exception and
-             asking again gets the same exception, not a second attempt's side effects. *)
-          (* The search's own compile, so it holds the search like the search did
-             (gh-ocannl-1352) -- only here, where it runs: a memoized outcome is returned unguarded. *)
-          match exclusive_search (fun () -> with_streams ~log ~progress compile) with
-          | result ->
-              compiled := Some (Ok result);
-              result
-          (* The guard refused before anything ran: not an outcome, so a later turn compiles. *)
-          | exception (Concurrent_search _ as exn) -> raise exn
-          | exception exn ->
-              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-              compiled := Some (Error (exn, backtrace));
-              Stdlib.Printexc.raise_with_backtrace exn backtrace)
+      | None -> invalid_arg "Autotune.compile_deferred: no outcome recorded"
+    in
+    fun () ->
+      if Option.is_some !compiled then outcome ()
+      else
+        (* The search's own compile, so it holds the search like the search did (gh-ocannl-1352) --
+           only where it runs: a memoized outcome is returned unguarded. A failure is kept too: the
+           compile runs once, and a caller catching its exception and asking again gets the same
+           exception, not a second attempt's side effects. *)
+        match
+          exclusive_search (fun () ->
+              (* Rechecked under the guard: another domain may have compiled between the read above
+                 and the acquisition. *)
+              if Option.is_none !compiled then
+                compiled :=
+                  Some
+                    (match with_streams ~log ~progress compile with
+                    | result -> Ok result
+                    | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())))
+        with
+        | () -> outcome ()
+        (* The guard refused before anything ran: not an outcome, so a later turn compiles. *)
+        | exception (Concurrent_search _ as exn) -> raise exn
   in
   (* The end of every path that ships a routine: [compile] produces it. Eagerly, it is compiled
      first and reported after -- a report is a record of what the call achieved, and a compile that
