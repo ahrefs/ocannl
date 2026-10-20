@@ -94,101 +94,60 @@ let counted (r : Autotune.report) =
    the stanza declares both keys' environment variables, so an ambient override reruns the test,
    whose width and margin claims then fail). *)
 let search ?(trace = true) ?(log = false) ?progress ?width ?margin ~tag ~single ~composite () =
-  let report = ref None and singles = ref 0 and composites = ref [] and calls = ref [] in
-  let measured = ref [] in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
+  let singles = ref 0 and composites = ref 0 and calls = ref [] in
   let observed body =
     if trace then Autotune.with_timing_call_observer (fun c -> calls := c :: !calls) body
     else body ()
   in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
-      Hashtbl.remove Utils.config_file_args playoff_width_key;
-      Hashtbl.remove Utils.config_file_args playoff_margin_key)
-    ~f:(fun () ->
-      Option.iter width ~f:(fun w ->
-          Hashtbl.set Utils.config_file_args ~key:playoff_width_key ~data:(Int.to_string w));
-      Option.iter margin ~f:(fun m ->
-          Hashtbl.set Utils.config_file_args ~key:playoff_margin_key ~data:(Float.to_string m));
-      observed @@ fun () ->
-      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest:_ _ms ->
-        measured := label :: !measured;
-        if is_single label then (
+  let settings =
+    Option.value_map width ~default:[] ~f:(fun w -> [ (playoff_width_key, Int.to_string w) ])
+    @ Option.value_map margin ~default:[] ~f:(fun m -> [ (playoff_margin_key, Float.to_string m) ])
+  in
+  let (o : Scripted_search.observed) =
+    observed @@ fun () ->
+    Scripted_search.search ~settings ~log ?progress ~tag
+      ~measure:(fun w ->
+        if is_single w.label then (
           let ms = single !singles in
           Int.incr singles;
           ms)
-        else if is_composite label then (
-          let ms = composite (List.length !composites) in
-          composites := (label, ms) :: !composites;
+        else if is_composite w.label then (
+          let ms = composite !composites in
+          Int.incr composites;
           ms)
-        else 1000. );
-      let ctx, _routine =
-        Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log ?progress
-              ~report:(fun r -> report := Some r)
-              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
-      in
-      Context.release ctx);
-  match !report with
-  | Some report ->
-      let r = report in
-      Stdio.eprintf
-        "%s (not part of the golden): singles %d, composite %s, playoff timed %d swaps %d, crown \
-         %s %.2f ms\n\
-         %!"
-        tag !singles
-        (match r.Autotune.fiss_sketch_composite with
-        | `Timed -> "timed"
-        | `Refused -> "refused"
-        | `Proposed -> "proposed"
-        | `Singles_refused -> "singles refused"
-        | `Ineligible -> "ineligible")
-        r.Autotune.fiss_sketch_playoff_timed r.Autotune.fiss_sketch_playoff_swaps
-        r.Autotune.best_label r.Autotune.best_ms;
-      List.iter (List.rev !composites) ~f:(fun (label, ms) ->
-          Stdio.eprintf "  %s window (not part of the golden): %s %.2f ms\n%!" tag label ms);
-      let calls = List.rev !calls in
-      {
-        report;
-        measured = List.rev !measured;
-        composite_ms = List.rev !composites;
-        calls;
-        phases = List.map calls ~f:(fun c -> c.Autotune.decision.phase);
-      }
-  | None -> failwith (tag ^ ": the search delivered no report")
+        else 1000.)
+      (Fissioned_chain.chain ())
+  in
+  let composite_ms =
+    List.filter_map o.windows ~f:(fun (w, ms) ->
+        Option.some_if (is_composite w.label) (w.label, ms))
+  in
+  let r = o.report in
+  Stdio.eprintf
+    "%s (not part of the golden): singles %d, composite %s, playoff timed %d swaps %d, crown %s \
+     %.2f ms\n\
+     %!"
+    tag !singles
+    (match r.Autotune.fiss_sketch_composite with
+    | `Timed -> "timed"
+    | `Refused -> "refused"
+    | `Proposed -> "proposed"
+    | `Singles_refused -> "singles refused"
+    | `Ineligible -> "ineligible")
+    r.Autotune.fiss_sketch_playoff_timed r.Autotune.fiss_sketch_playoff_swaps r.Autotune.best_label
+    r.Autotune.best_ms;
+  List.iter composite_ms ~f:(fun (label, ms) ->
+      Stdio.eprintf "  %s window (not part of the golden): %s %.2f ms\n%!" tag label ms);
+  let calls = List.rev !calls in
+  {
+    report = r;
+    measured = o.measured;
+    composite_ms;
+    calls;
+    phases = List.map calls ~f:(fun c -> c.Autotune.decision.phase);
+  }
 
-(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote. The
-   captured text is echoed back to stderr once stderr is restored, whether [f] returned or raised
-   (an exception is re-raised with its original backtrace after the echo), so nothing the run wrote
-   is hidden; the file is removed on every path. *)
-let with_stderr_captured f =
-  let file = Stdlib.Filename.temp_file "autotune_composite_playoff" ".stderr" in
-  Exn.protect
-    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
-    ~f:(fun () ->
-      Stdio.Out_channel.flush Stdio.stderr;
-      let saved = Unix.dup Unix.stderr in
-      let outcome =
-        Exn.protect
-          ~finally:(fun () -> Unix.close saved)
-          ~f:(fun () ->
-            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
-            let outcome =
-              match f () with
-              | result -> Ok result
-              | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())
-            in
-            Stdio.Out_channel.flush Stdio.stderr;
-            Unix.dup2 saved Unix.stderr;
-            outcome)
-      in
-      let text = Stdio.In_channel.read_all file in
-      Stdio.eprintf "%s%!" text;
-      match outcome with
-      | Ok result -> (result, String.split_lines text)
-      | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
+let with_stderr_captured = Scripted_search.with_stderr_captured
 
 (* The [autotune-progress:] lines among [lines] that carry every one of [fields] ([key=value] words,
    values unquoted as the stage and event names print). *)
@@ -432,17 +391,14 @@ let () =
   let pb = Fissioned_chain.matrix ~label:"pb" ~modulus:7 ~offset:(-3.) ~stride:1. in
   let%op pc = pa * pb in
   let comp = Train.forward pc in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
-  let (), lines =
+  let ((), _), lines =
     with_stderr_captured (fun () ->
-        Exn.protect
-          ~finally:(fun () -> Autotune.Seam.set Autotune.on_candidate_measured old_measured)
-          ~f:(fun () ->
-            (Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ms -> 1.);
+        Scripted_search.scripted
+          ~measure:(fun _ -> 1.)
+          (fun () ->
             let ctx, _routine =
-              Autotune.with_uncontended_test_windows (fun () ->
-                  Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:true
-                    ~progress:true (Context.cpu ()) pc comp Ir.Indexing.Empty)
+              Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:true
+                ~progress:true (Context.cpu ()) pc comp Ir.Indexing.Empty
             in
             Context.release ctx))
   in

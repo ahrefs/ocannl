@@ -116,86 +116,71 @@ let composite_ms ?seat ~n label =
 (* One search under [rule] (stated at the config-file level for this search only), seating as the
    beam's near-copy the alternate labelled [seat], or without one the last alternate timed. *)
 let search ?seat rule =
-  let report = ref None and composites = ref [] and children = ref [] and measured = ref [] in
-  let attempts = ref [] in
+  let composites = ref [] and children = ref [] in
   (* Every timed candidate's digest tag -> (full digest, scripted time). *)
   let timed = Hashtbl.create (module String) in
   (* The two fastest composites: the beam round 1 expands (its singles, presets and baseline are
      scripted far slower). Fixed at the first round candidate. *)
   let beam = ref None in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
-  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
-      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
-      Hashtbl.remove Utils.config_file_args expansion_key)
-    ~f:(fun () ->
-      Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:rule;
-      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
-        Option.iter (round_move label) ~f:(fun move -> attempts := move :: !attempts) );
-      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest _ms ->
-        measured := label :: !measured;
-        let ms =
-          if is_single label then 100.
-          else if is_composite label then (
-            let n = List.length !composites in
-            composites := (label, Autotune.digest_tag digest) :: !composites;
-            composite_ms ?seat ~n label)
-          else
-            match round_move label with
-            | None -> 1000.
-            | Some (parent, segment) ->
-                let head, near_copy, differing =
-                  match !beam with
-                  | Some b -> b
-                  | None ->
-                      let ranked =
-                        Hashtbl.to_alist timed
-                        |> List.sort ~compare:(fun (_, (_, a)) (_, (_, b)) -> Float.compare a b)
-                      in
-                      let b =
-                        match ranked with
-                        | (h, (hd, _)) :: (n, (nd, _)) :: _ ->
-                            let hs = segment_digests hd and ns = segment_digests nd in
-                            let differing =
-                              if List.length hs <> List.length ns then [ -1 ]
-                              else
-                                List.filter_mapi (List.zip_exn hs ns) ~f:(fun i (x, y) ->
-                                    if String.equal x y then None else Some i)
-                            in
-                            (h, n, differing)
-                        | _ -> ("", "", [])
-                      in
-                      beam := Some b;
-                      b
-                in
-                let parent_ms =
-                  Option.value_map (Hashtbl.find timed parent) ~default:1000. ~f:snd
-                in
-                let ms =
-                  if
-                    String.equal parent near_copy
-                    && (not (String.equal near_copy head))
-                    && List.mem differing segment ~equal:Int.equal
-                  then parent_ms -. gain
-                  else parent_ms +. loss
-                in
-                children := { label; parent; segment; ms } :: !children;
-                ms
-        in
-        Hashtbl.set timed ~key:(Autotune.digest_tag digest) ~data:(digest, ms);
-        ms );
-      let ctx, _routine =
-        Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
-              ~progress:false
-              ~report:(fun r -> report := Some r)
-              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
-      in
-      Context.release ctx);
-  match (!report, !beam) with
-  | Some report, Some (head, near_copy, differing) ->
+  let measure (w : Scripted_search.window) =
+    let label = w.label and digest = w.digest in
+    let ms =
+      if is_single label then 100.
+      else if is_composite label then (
+        let n = List.length !composites in
+        composites := (label, Autotune.digest_tag digest) :: !composites;
+        composite_ms ?seat ~n label)
+      else
+        match round_move label with
+        | None -> 1000.
+        | Some (parent, segment) ->
+            let head, near_copy, differing =
+              match !beam with
+              | Some b -> b
+              | None ->
+                  let ranked =
+                    Hashtbl.to_alist timed
+                    |> List.sort ~compare:(fun (_, (_, a)) (_, (_, b)) -> Float.compare a b)
+                  in
+                  let b =
+                    match ranked with
+                    | (h, (hd, _)) :: (n, (nd, _)) :: _ ->
+                        let hs = segment_digests hd and ns = segment_digests nd in
+                        let differing =
+                          if List.length hs <> List.length ns then [ -1 ]
+                          else
+                            List.filter_mapi (List.zip_exn hs ns) ~f:(fun i (x, y) ->
+                                if String.equal x y then None else Some i)
+                        in
+                        (h, n, differing)
+                    | _ -> ("", "", [])
+                  in
+                  beam := Some b;
+                  b
+            in
+            let parent_ms = Option.value_map (Hashtbl.find timed parent) ~default:1000. ~f:snd in
+            let ms =
+              if
+                String.equal parent near_copy
+                && (not (String.equal near_copy head))
+                && List.mem differing segment ~equal:Int.equal
+              then parent_ms -. gain
+              else parent_ms +. loss
+            in
+            children := { label; parent; segment; ms } :: !children;
+            ms
+    in
+    Hashtbl.set timed ~key:(Autotune.digest_tag digest) ~data:(digest, ms);
+    ms
+  in
+  let (o : Scripted_search.observed) =
+    Scripted_search.search
+      ~settings:[ (expansion_key, rule) ]
+      ~rounds:1 ~log:false ~progress:false ~tag:rule ~measure (Fissioned_chain.chain ())
+  in
+  match !beam with
+  | Some (head, near_copy, differing) ->
+      let report = o.report in
       let children = List.rev !children in
       Stdio.eprintf
         "%s, seating %s (not part of the golden): beam %s + %s (differing in segment(s) %s), %d \
@@ -208,16 +193,15 @@ let search ?seat rule =
         (List.length children) report.Autotune.best_label report.Autotune.best_ms;
       {
         report;
-        measured = List.rev !measured;
+        measured = o.measured;
         head;
         near_copy;
         differing;
         children;
-        attempts = List.rev !attempts;
+        attempts = List.filter_map o.attempts ~f:round_move;
         composites = List.rev !composites;
       }
-  | Some _, None -> failwith (rule ^ ": the search timed no round candidate")
-  | None, _ -> failwith (rule ^ ": the search delivered no report")
+  | None -> failwith (rule ^ ": the search timed no round candidate")
 
 let labels children = List.map children ~f:(fun c -> c.label)
 let from parent (o : observed) = List.filter o.children ~f:(fun c -> String.equal c.parent parent)
@@ -263,33 +247,28 @@ let probe_beam_width = 5
    it compiled any. Returns the report delivered on the way out and the timed composites. *)
 let probe () =
   let report = ref None and composites = ref [] in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
-  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
-      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
-      Hashtbl.remove Utils.config_file_args expansion_key)
-    ~f:(fun () ->
-      Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:"full";
-      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
-        if Option.is_some (round_move label) then raise Probe_stop );
-      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest _ms ->
-        if is_single label then 100.
-        else if is_composite label then (
-          let n = List.length !composites in
-          composites := (label, Autotune.digest_tag digest) :: !composites;
-          composite_ms ~n label)
-        else 1000. );
+  ignore
+    ( Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
+          if Option.is_some (round_move label) then raise Probe_stop)
+    @@ fun () ->
+      Scripted_search.scripted
+        ~settings:[ (expansion_key, "full") ]
+        ~measure:(fun w ->
+          if is_single w.label then 100.
+          else if is_composite w.label then (
+            let n = List.length !composites in
+            composites := (w.label, Autotune.digest_tag w.digest) :: !composites;
+            composite_ms ~n w.label)
+          else 1000.)
+      @@ fun () ->
       match
-        Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:probe_beam_width ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
-              ~progress:false
-              ~report:(fun r -> report := Some r)
-              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
+        Autotune.tune ~beam_width:probe_beam_width ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
+          ~progress:false
+          ~report:(fun r -> report := Some r)
+          (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty
       with
       | ctx, _ -> Context.release ctx
-      | exception Probe_stop -> ());
+      | exception Probe_stop -> () );
   match !report with
   | Some report -> (report, List.rev !composites)
   | None -> failwith "probe: the search delivered no report"
@@ -426,16 +405,11 @@ let () =
 
 (* A malformed rule refuses the search before it compiles anything. *)
 let () =
-  let attempts = ref 0 in
-  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
-  let outcome =
-    Exn.protect
-      ~finally:(fun () ->
-        Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
-        Hashtbl.remove Utils.config_file_args expansion_key)
-      ~f:(fun () ->
-        Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:"widest";
-        (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun _ -> Int.incr attempts);
+  let outcome, (record : Scripted_search.record) =
+    Scripted_search.scripted
+      ~settings:[ (expansion_key, "widest") ]
+      ~measure:(fun w -> w.reading)
+      (fun () ->
         match
           Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false ~progress:false
             (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty
@@ -449,4 +423,4 @@ let () =
   | `Refused key ->
       p "malformed: the refusal names the key" (String.equal key "autotune_round_expansion")
   | `Accepted -> p "malformed: the refusal names the key" false);
-  p "malformed: nothing was compiled" (!attempts = 0)
+  p "malformed: nothing was compiled" (List.length record.attempts = 0)

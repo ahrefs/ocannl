@@ -138,19 +138,13 @@ let twins segments =
 (* One search, every window scripted alike; the per-segment singles of the coarse segmentation it
    timed, as (label, schedule digest components). *)
 let singles comp =
-  let measured = ref [] in
-  Autotune.Seam.with_value Autotune.on_candidate_measured
-    (fun ~label ~digest _ms ->
-      measured := (label, digest) :: !measured;
-      1.)
-    (fun () ->
-      let ctx, _routine =
-        Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false
-              ~progress:false (Context.auto ()) comp Ir.Indexing.Empty)
-      in
-      Context.release ctx);
-  List.rev !measured
+  let (o : Scripted_search.observed) =
+    Scripted_search.search ~ctx:(Context.auto ()) ~beam_width:1 ~log:false ~progress:false
+      ~tag:"singles"
+      ~measure:(fun _ -> 1.)
+      comp
+  in
+  List.map o.windows ~f:(fun (w, _) -> (w.label, w.digest))
   |> List.filter_map ~f:(fun (label, digest) ->
       if
         String.is_prefix label ~prefix:"F_sketch["
