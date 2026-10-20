@@ -6974,6 +6974,27 @@
   (run %{test} "--ocannl_autotune_log_seeding=true")))
 
 (test
+ ; The scalar-blocktile seeding rule prices workgroup memory with the capabilities it is handed
+ ; (post-wave task wave-20261018o p1-3, after gh-ocannl-1330).
+ (name seeded_params_capabilities)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules seeded_params_capabilities)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; cc-vector-width: independent -- a lone pointwise sum seeds no sketch family; claims compare
  ; progress lines with the reports.
  ; gh-ocannl-1061: the tuner's progress lines, with a candidate line at every attempt.

@@ -2059,6 +2059,7 @@ val site_reduction_extent : matmul_site -> int
     contraction loop's — for a backprop weight gradient, the batch-and-sequence product. *)
 
 val seeded_params :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   limits:Ir.Backend_intf.hardware_limits ->
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
   min_reduction:int ->
@@ -2075,9 +2076,14 @@ val seeded_params :
     loops as grid blocks on a batched site where the device admits them, and the first geometry of a
     fixed preference list (64x64x8/4x4, 32x32x8/4x4, 32x32x16/2x2, 16x16x8/2x2, 16x16x8/4x4) whose
     launch has 128 blocks, else the one putting the most threads on the output — among the
-    geometries padding the output by at most an eighth, where there are any. Exposed for tests. *)
+    geometries padding the output by at most an eighth, where there are any. [capabilities] as for
+    {!matmul_sketch_tree}: the compiling context's {!Context.codegen_capabilities}, so the tree's
+    workgroup-memory refutation charges the staged tiles exactly as the gate judging the seeded
+    kernel does; every caller holding a context passes them, the seeded plan's decision rule
+    included. Exposed for tests. *)
 
 val seeded_params_judged :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   limits:Ir.Backend_intf.hardware_limits ->
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
   min_reduction:int ->
@@ -2194,6 +2200,7 @@ val seeded_plan :
   ?seed_gate:seed_gate ->
   ?min_serial:int ->
   ?reduction_sink:bool ->
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   backend:string ->
   limits:Ir.Backend_intf.hardware_limits ->
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
@@ -2205,7 +2212,9 @@ val seeded_plan :
     at 0, or nothing to split, seed or sink). The optional arguments are {!seeded_default}'s, the
     [auto] gate included: {!tune} seeds this plan first, and the plan's {!seeded_plan_digest} joins
     the search trajectory's identity, so a gate steered by the device description's [Untimed]
-    capacity reaches the search only as the plan it resolved to (gh-ocannl-1253). *)
+    capacity reaches the search only as the plan it resolved to (gh-ocannl-1253). [capabilities] are
+    the compiling context's, which {!seeded_params} prices workgroup memory by — in the plan's
+    segments and in its decision rule; {!tune} passes its context's, as the untuned compile does. *)
 
 val seeded_plan_digest : seeded_plan -> string
 (** The plan's identity from its content (split sites by target name, extents and block count; the
