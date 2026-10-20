@@ -50,6 +50,7 @@ a script that never turns errexit on is not refused for its structure: true
 a case inside a command substitution keeps the structure readable: true
 a case inside a multiline command substitution keeps the structure readable: true
 a case inside a nested case keeps the structure readable: true
+a case inside a timed case in a command substitution keeps the structure readable: true
 a case inside a function-keyword body in a command substitution keeps the structure readable: true
 a case inside a process substitution keeps the structure readable: true
 a save-and-restore function is named as the reason for the whole-file reading: true
@@ -238,6 +239,7 @@ errexit-negation fixture negation after an arithmetic command naming case inside
 errexit-negation fixture negation after an arithmetic substitution naming case is classified as specified: true
 errexit-negation fixture negation after a substitution closer glued to a hash is classified as specified: true
 errexit-negation fixture negation after a quote glued to a hash inside a substitution is classified as specified: true
+errexit-negation fixture negation after an argument -p before case inside a substitution is classified as specified: true
 errexit-negation fixture negation after an esac argument inside a substitution's case arm is classified as specified: true
 errexit-negation fixture negation inside a case inside a command substitution is classified as specified: true
 errexit-negation fixture function's final negation, every call piped is classified as specified: true
@@ -249,9 +251,10 @@ errexit-negation fixture function's final negation, through a caller whose statu
 errexit-negation fixture function's final negation, its only call before a redefinition piped is classified as specified: true
 errexit-negation fixture function's final negation, its only call before a same-line redefinition piped is classified as specified: true
 errexit-negation fixture function's final negation, every real call piped beside a quoted assignment-shaped command is classified as specified: true
-errexit-negation fixture function's final negation, called after a conditional redefinition is classified as specified: true
-errexit-negation fixture function's final negation, every call piped under pipefail is classified as specified: true
-errexit-negation fixture function's final negation, called after a redefinition behind && is classified as specified: true
+errexit-negation fixture function's final negation, called after a conditional redefinition (declared loud) is classified as specified: true
+errexit-negation fixture function's final negation, every call piped under pipefail (declared loud) is classified as specified: true
+errexit-negation fixture function's final negation, called after a redefinition behind && (declared loud) is classified as specified: true
+errexit-negation fixture function's final negation, defined and piped in a subshell beside a parent definition is classified as specified: true
 errexit-negation fixture timed function's final negation, every call piped is classified as specified: true
 errexit-negation fixture function's final negation, run only as another command's argument is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
