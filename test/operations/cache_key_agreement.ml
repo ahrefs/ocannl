@@ -144,6 +144,13 @@ let keyed_flips =
     ("autotune_timing", config [ "isolated"; "queued" ]);
   ]
 
+(* Components that move WITH a classified one by derivation, not by a second reading of the key: the
+   codegen tag hashes what the numerics policy resolves to on this backend
+   ([Backend_intf.codegen_capabilities_fingerprint], gh-ocannl-1117), so a policy flip may move it
+   too. Each listed pair is one fact under two views, which partitions the cache no finer than the
+   classified component alone. *)
+let derived_components = [ ("numerics", [ "codegen" ]) ]
+
 let unflippable =
   [
     ( "backend",
@@ -345,6 +352,10 @@ let () =
   let backend = Context.backend_name ctx in
   (* A backend-uniform golden cannot say which backend the sweep ran on (gh-ocannl-622). *)
   eprintf "cache_key_agreement: sweeping on the %s backend (not part of the golden)\n%!" backend;
+  (* Before the first compile, as [Generated] requires: [canonical_of] compiles, and with debug
+     artifacts configured on it would write through [build_files/] before [init]'s cleanup and
+     symlink refusals ran (Codex P1, round 1). *)
+  Test_utils.Generated.init ~backend_name:backend;
   let canon = canonical_of ctx in
   let components () =
     Option.value_exn ~here:[%here]
@@ -446,6 +457,11 @@ let () =
   let here, elsewhere =
     List.partition_tf took_effect ~f:(fun (_, _, scope, _) -> in_scope scope backend)
   in
+  let describe flips =
+    String.concat ~sep:"; "
+      (List.map flips ~f:(fun (value, moved) ->
+           value ^ " moved [" ^ String.concat ~sep:", " moved ^ "]"))
+  in
   p_all ~min:8 "every Keyed key the running backend hashes moves its own component when flipped"
     here ~f:(fun (key, component, _, flips) ->
       let ok =
@@ -453,9 +469,25 @@ let () =
       in
       if not ok then
         eprintf "%s is classified Keyed %S, but no flip moved it: %s\n" key component
-          (String.concat ~sep:"; "
-             (List.map flips ~f:(fun (value, moved) ->
-                  value ^ " moved [" ^ String.concat ~sep:", " moved ^ "]")));
+          (describe flips);
+      ok);
+  (* And no other component, beyond what [derived_components] says follows from it: a flip that also
+     moves a component its classification does not name is over-keying there, or a misclassification
+     (Codex P2, round 1). A candidate equal to the baseline moves nothing and passes. *)
+  p_all ~min:8 "and no Keyed flip moves a component its classification does not account for" here
+    ~f:(fun (key, component, _, flips) ->
+      let allowed =
+        component
+        :: Option.value ~default:[]
+             (List.Assoc.find derived_components component ~equal:String.equal)
+      in
+      let ok =
+        List.for_all flips ~f:(fun (_, moved) ->
+            List.for_all moved ~f:(List.mem allowed ~equal:String.equal))
+      in
+      if not ok then
+        eprintf "%s is classified Keyed %S, but a flip moved another component: %s\n" key component
+          (describe flips);
       ok);
   p_all ~min:1 "every Keyed key outside the running backend's scope moves nothing when flipped"
     elsewhere ~f:(fun (key, _, scope, flips) ->
@@ -527,7 +559,6 @@ let () =
      decided per tensor), under one routine name, with debug artifacts on so that [Generated] can
      read the kernel each compile emits. *)
   let routine = "cka_probe" in
-  Test_utils.Generated.init ~backend_name:backend;
   let probe =
     let a =
       TDSL.ndarray [| 1.; 2.; 3.; 4.; 5.; 6.; 7.; 8. |] ~label:[ "cka_p" ] ~output_dims:[ 8 ] ()

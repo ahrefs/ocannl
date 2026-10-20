@@ -1,6 +1,7 @@
 the flip and unflippable tables cover exactly the Keyed class: true
 every key utils.ml resolves into Utils.settings is flipped through restore_settings, and only those: true
 every Keyed key the running backend hashes moves its own component when flipped: true
+and no Keyed flip moves a component its classification does not account for: true
 every Keyed key outside the running backend's scope moves nothing when flipped: true
 no key outside the Keyed class is read while the cache key is computed: true
 the key computation reads its Keyed keys per lookup, so the trace sees reads: true
