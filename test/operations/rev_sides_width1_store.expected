@@ -35,5 +35,8 @@ shared: the shared node keeps an init pass: true
 shared: the reference sums both columns of cat's gradient: true
 shared: the initializing scatter equals the reference: true
 alias: the initializing scatter accumulates into the shared parent, with no plain store: true
+alias: no statement of the scatter touches an alias view itself: true
+alias: slice 0 keeps its sentinel, slice 1 sums both columns: true
 padded: the padded width-1 target gets a plain store and no init: true
 padded: its margin is still reset to the padding value: true
+padded: the physical buffer holds the margin value, then cat's second column: true

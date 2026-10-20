@@ -750,12 +750,13 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      extent"), so this changes no promise. It is deliberately NOT a [Fetch]: a fill covers the
      materialized buffer, a promise [zero_grads] keeps for gradient accumulation across extents, and
      the guarded initialization must stay distinguishable from it. A [tn] with no bound-extent axis
-     keeps the [Fetch]. [projections] is [tn]'s view as the written side: [lhs_dims] its dims and
-     [project_lhs] its index per axis -- for a [Rev_sides] target, that target's own projections.
-     The unguarded [Fetch] also establishes a padded target's margins; the guarded nest stores only
-     semantic cells, so [~reset_margins] prepends [tn]'s margin resets to it. [loop_accum] passes
-     [false]: its [padding_resets] already reset the margins of the [lhs] it initializes, whereas
-     [loop_accum_rev]'s reset the side it reads, not its targets. *)
+     keeps the [Fetch], unless it is a slice-alias view. [projections] is [tn]'s view as the written
+     side: [lhs_dims] its dims and [project_lhs] its index per axis -- for a [Rev_sides] target,
+     that target's own projections. The unguarded [Fetch] also establishes a padded target's
+     margins; the guarded nest stores only semantic cells, so [~reset_margins] prepends [tn]'s
+     margin resets to it. [loop_accum] passes [false]: its [padding_resets] already reset the
+     margins of the [lhs] it initializes, whereas [loop_accum_rev]'s reset the side it reads, not
+     its targets. *)
   and neutral_init ~reset_margins ~(projections : Indexing.projections) tn neutral_value :
       Low_level.t =
     let extents =
@@ -763,7 +764,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
         | Indexing.Iterator iter -> bound_extent ~projections iter
         | _ -> None)
     in
-    if Array.for_all extents ~f:Option.is_none then
+    (* A slice-alias view owns no buffer: a [Fetch] would lower to a whole-node [Zero_out] of the
+       view itself, which leaves the parent's slice untouched, whereas the nest's stores go through
+       [set] and [resolve_alias] to that slice, like the body's. *)
+    if Array.for_all extents ~f:Option.is_none && not (Tn.is_alias tn) then
       let dims = lazy projections.lhs_dims in
       loop (Fetch { array = tn; fetch_op = Constant neutral_value; dims })
     else

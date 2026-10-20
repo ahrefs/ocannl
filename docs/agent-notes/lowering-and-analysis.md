@@ -541,7 +541,9 @@ files.
   hand-built `lhses = [| Node t; Node t |]`, or two slice-alias views of one parent: compare after
   `resolve_alias`) is never attributed: two plain stores would drop one contribution. A target whose
   init an initializing scatter elides still gets its padding-margin reset there, since the plain
-  stores write only semantic cells and the record's own `padding_resets` cover the side it reads. Static/runtime
+  stores write only semantic cells and the record's own `padding_resets` cover the side it reads.
+  `neutral_init` never `Fetch`es a slice-alias view: the `Fetch` would lower to a `Zero_out` of the
+  bufferless view, which drops silently, so a view gets the nest, whose `set` resolves the alias. Static/runtime
   extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
   scatters against explicit neutral initialization.
 

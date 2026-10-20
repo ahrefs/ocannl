@@ -27,7 +27,8 @@
 
    The last cases, on hand-built records, keep the attribution from overreaching: two width-1
    targets naming ONE storage (one node, or two slice-alias views of one parent) must still
-   accumulate, and a padded width-1 target whose init is elided must still get its margin. *)
+   accumulate into the parent's slice, and a padded width-1 target whose init is elided must still
+   get its margin; both are executed. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -266,29 +267,54 @@ let shared_case () =
     (run (link ~name:"shared_unscheduled" initializing))
     reference ~f:Float.equal
 
+(* [cat]'s gradient for the hand-built records: [1 + 10 s + j], two columns. *)
+let gcat_pair = Array.init (rows * 2) ~f:(fun i -> in_extent_cell (i / 2) (i % 2))
+
 (* {2 Two slice-alias views of one parent.} Distinct nodes whose accesses [resolve_alias] redirects
-   to the same parent cells (one batch index): sharing is judged on the storage, so both still
-   accumulate. *)
+   to the same parent cells (batch index 1 of 2): sharing is judged on the storage, so both still
+   accumulate, and their init reaches the parent's slice through the same resolution. Executed:
+   slice 1 holds the sum of both columns, and slice 0 keeps its sentinel. *)
 let alias_case () =
   let label = "alias" in
   let parent = node [| 2; rows; 1 |] "alias_parent" in
-  let batch_idx, _ = Idx.get_static_symbol ~static_range:2 Idx.Empty in
+  let batch_idx, bindings = Idx.get_static_symbol ~static_range:2 Idx.Empty in
+  let static_indices = Idx.bound_symbols bindings in
   let views =
     Array.init 2 ~f:(fun k ->
         let view = node [| rows; 1 |] ("alias_view" ^ Int.to_string k) in
         Tn.set_alias_of view ~parent ~batch_idx;
         view)
   in
-  let _, _, _, initializing = width1_pair ~targets:(fun ~ga:_ ~gb:_ -> views) in
-  let wr = writes_of ~tn:parent (Asgns.to_low_level initializing) in
+  let _, gcat, _, initializing = width1_pair ~targets:(fun ~ga:_ ~gb:_ -> views) in
+  let llc = Asgns.to_low_level ~static_indices initializing in
+  let wr = writes_of ~tn:parent llc in
   p
     (label ^ ": the initializing scatter accumulates into the shared parent, with no plain store")
-    (wr.read_add_writes > 0 && wr.plain_stores = 0)
+    (wr.read_add_writes > 0 && wr.plain_stores = 0);
+  p_none (label ^ ": no statement of the scatter touches an alias view itself")
+    (Array.to_list views) ~f:(fun view -> LL.code_touches_tn view llc);
+  List.iter [ parent; gcat ] ~f:Ll_test.materialize;
+  let name = "alias_unscheduled" in
+  let ctx, routine =
+    Ll_test.link ~bindings ~name
+      (Ll_test.optimize ~materialized:[ parent; gcat ] ~static_indices ~name llc)
+  in
+  Idx.find_exn routine.Context.bindings batch_idx := 1;
+  let ctx =
+    Ll_test.run_linked (ctx, routine) ~seed:[ (gcat, gcat_pair); (parent, prior (2 * rows)) ]
+  in
+  pf_all2 "%s: slice 0 keeps its sentinel, slice 1 sums both columns" label
+    (Context.get_values ctx parent)
+    (Array.append
+       (Array.sub (prior (2 * rows)) ~pos:0 ~len:rows)
+       (Array.init rows ~f:(fun s -> in_extent_cell s 0 +. in_extent_cell s 1)))
+    ~f:Float.equal
 
 (* {2 A padded width-1 target.} [b]'s gradient replaced by a node with a one-row top margin holding
    7. Its semantic cells are written exactly once, so its init is elided; the plain stores write
    only those cells, so the scatter still establishes the margin (device buffers are allocated raw),
-   as the init it replaces would have. *)
+   as the init it replaces would have. Executed on a physical buffer seeded with sentinels in every
+   cell, margin included: the margin holds 7 and the semantic cells [cat]'s second column. *)
 let padded_case () =
   let label = "padded" in
   let padded =
@@ -296,12 +322,31 @@ let padded_case () =
       ~padding:(Some ([| Ir.Ops.{ left = 1; right = 0 }; Ir.Ops.{ left = 0; right = 0 } |], 7.))
       [| rows; 1 |] "padded_target"
   in
-  let _, _, _, initializing = width1_pair ~targets:(fun ~ga ~gb:_ -> [| ga; padded |]) in
-  let wr = writes_of ~tn:padded (Asgns.to_low_level initializing) in
+  let ga, gcat, _, initializing = width1_pair ~targets:(fun ~ga ~gb:_ -> [| ga; padded |]) in
+  let llc = Asgns.to_low_level initializing in
+  let wr = writes_of ~tn:padded llc in
   p
     (label ^ ": the padded width-1 target gets a plain store and no init")
     (wr.plain_stores > 0 && wr.read_add_writes = 0 && wr.inits = 0);
-  p (label ^ ": its margin is still reset to the padding value") (wr.margins > 0)
+  p (label ^ ": its margin is still reset to the padding value") (wr.margins > 0);
+  List.iter [ ga; padded; gcat ] ~f:Ll_test.materialize;
+  let name = "padded_unscheduled" in
+  let ctx, routine =
+    Ll_test.link ~name (Ll_test.optimize ~materialized:[ ga; padded; gcat ] ~name llc)
+  in
+  let physical_dims = [| rows + 1; 1 |] in
+  let sentinels =
+    Ir.Ndarray.create_array ~debug:name Ir.Ops.single ~dims:physical_dims ~padding:None
+  in
+  for i = 0 to rows do
+    Ir.Ndarray.set_from_float sentinels [| i; 0 |] (-100. -. Float.of_int i)
+  done;
+  let ctx = Context.from_host ctx padded sentinels in
+  let ctx = Ll_test.run_linked (ctx, routine) ~seed:[ (gcat, gcat_pair); (ga, prior rows) ] in
+  pf_all2 "%s: the physical buffer holds the margin value, then cat's second column" label
+    (Ir.Ndarray.retrieve_flat_values (Context.to_host ctx padded))
+    (Array.append [| 7. |] (Array.init rows ~f:(fun s -> in_extent_cell s 1)))
+    ~f:Float.equal
 
 let () =
   Tensor.unsafe_reinitialize ();
