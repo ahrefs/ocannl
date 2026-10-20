@@ -384,14 +384,23 @@ files.
   node does not decide it — and where one execution of `over` covers an entry loop it must be the
   localizing level, as the tile narrows once per execution of `over` (all three from the local
   Codex review). "Covers" is a record `apply_typed` keeps (`loop_origin` in `schedule.ml`): an entry loop
-  covers itself, the OUTER half of a `Split` covers what its loop covered, and so does the loop a
-  `Coalesce` merges, from its OUTER loop (one execution runs every outer iteration); the INNER half
-  of a `Split` and each `Partition` segment cover only part of their loop, so a tile over one stays
-  at storage — wide, it narrowed once per execution of that part, matching neither the entry
-  program nor the schedule without `Privatize` (`test/operations/privatize_recheck`: 260 against
-  258 and 256, for the split, coalesced-then-split and partition legs alike). A loop any other op
-  mints, or one minted from a loop with no record, has no record and is judged by the decision
-  alone. Which hardware levels a backend serializes is
+  covers itself, the OUTER half of a `Split` covers what its loop covered (a `Split_reduce`'s
+  block loop is one), and so does the loop a `Coalesce` merges, from its OUTER loop (one execution
+  runs every outer iteration); the INNER half of a `Split` (a `Split_reduce`'s in-block loop) and
+  each `Partition` segment cover only part of their loop, so a tile over one stays at storage —
+  wide, it narrowed once per execution of that part, matching neither the entry program nor the
+  schedule without `Privatize` (`test/operations/privatize_recheck`: 260 against 258 and 256, for
+  the split, coalesced-then-split and partition legs alike). A loop any other op mints, or one
+  minted from a loop with no record, has no record and is judged by the decision alone; a
+  `Split_reduce`'s combine loops are the case, and no `Privatize` is admissible over them. Through
+  a `Split_reduce` the judgment is reached only by a node accumulated BESIDE the target in the
+  split statement (the target's own accumulation moves into the partials node, which the entry
+  lacks, so its tile is at storage); that write shares the reduction loop's body with the
+  target's, so the serial rendering never localizes it at the reduction loop, and a tile over
+  either minted loop stays at storage (without the record: 258 over the block loop, 260 over the
+  in-block one, against 256). No tuner path puts a `Privatize` in the same schedule as a
+  `Split_reduce` — the split prelude is applied alone, before fission — so each segment's
+  `Privatize` sees the split's loops as entry loops. Which hardware levels a backend serializes is
   codegen's fact, so the walk is asked vouching for none and for every one, and the op is refused
   where the answers differ — the pattern `Low_level.seed_first_write` already used. After all ops
   `apply_typed` re-checks each wide tile (`Schedule.privatized_tile_widens`) and falls it back to

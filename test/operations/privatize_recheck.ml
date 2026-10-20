@@ -30,7 +30,17 @@
    the localizing loop and the one inside it covers that loop, and so does the outer half of a
    [Split] of it (258, on an f32 tile); the inner half of that [Split] covers only part of it, and
    keeps storage (256). A segment of a [Partition] of the localizing loop runs only part of it, and
-   keeps storage too (256). Without the record both storage legs widened (260 and 260). *)
+   keeps storage too (256). Without the record both storage legs widened (260 and 260).
+
+   4. Provenance for loops a [Split_reduce] mints. Its pass-1 pair is a [Split] of the reduction
+   loop: one execution of the block loop runs every iteration of it, the in-block loop only one
+   block's chunk. The split target's own accumulation moves into the minted partials node, which the
+   program [apply] was handed lacks, so a [Privatize] of it is judged by nothing and keeps storage;
+   the judgment reaches a minted loop through ANOTHER node accumulated in the same statement, whose
+   write [Split_reduce] re-indexes but does not redirect. That write shares the reduction loop's
+   body with the target's, so the serial rendering localizes it at a loop inside the reduction loop
+   and never at the reduction loop itself: a [Privatize] over the block loop or the in-block loop
+   keeps storage (256, as without [Privatize]). Without the record both widened (258 and 260). *)
 
 open Base
 module Tn = Ir.Tnode
@@ -51,6 +61,8 @@ let tiles (llc : LL.t) =
   Ll_test.walk llc ~on_stmt:(function
     | LL.Set { tn; llsc; _ }
       when String.equal tn.Tn.namespace "tile"
+           (* [Split_reduce]'s partials share the namespace; they are no [Privatize] tile. *)
+           && (not (List.mem tn.Tn.label "partials" ~equal:String.equal))
            && LL.scalar_touches_tn tn llsc
            && not (List.mem !acc tn ~equal:Tn.equal) ->
         acc := tn :: !acc
@@ -111,6 +123,14 @@ let claim_coalesce_inner =
 let claim_partition =
   "a Privatize over a segment of a Partition of the localizing loop keeps a bf16 storage tile and \
    the partitioned schedule's own narrowing (256, as without Privatize)"
+
+let claim_split_reduce_entry =
+  "the program the Split_reduce legs schedule localizes the node accumulated beside the \
+   Split_reduce target at its own inner loop, widened there"
+
+let claim_split_reduce =
+  "a Privatize of that node over a Split_reduce's block loop, or over its in-block loop, keeps a \
+   bf16 storage tile and the split schedule's own narrowing (256, as without Privatize)"
 
 (* === The final re-check === *)
 
@@ -455,10 +475,112 @@ let minted_legs () =
     && List.equal Float.equal part part_twin
     && only_prec bf16 part_llc)
 
+(* === Provenance for Split_reduce-minted loops === *)
+
+(* [x] varies along every axis; each [m] pair adds 0.625 to its cell, each pair of [k] iterations
+   (one [Split_reduce] block) 1.25. *)
+let xs_ikm =
+  [|
+    0.25;
+    0.375;
+    0.5;
+    0.125;
+    0.375;
+    0.25;
+    0.125;
+    0.5;
+    0.5;
+    0.125;
+    0.25;
+    0.375;
+    0.125;
+    0.5;
+    0.375;
+    0.25;
+  |]
+
+let node_sr = Ll_test.node_factory ~prec:bf16 ~first_id:14200 ~dims:[| 2 |] ()
+
+(* [i { k { m { acc[i] += x[i, k, m] }; tot[i] += x[i, k, 0] } }]: [tot] is the [Split_reduce]
+   target, [acc] the node accumulated beside it. The serial rendering localizes [acc] at [m] (its
+   level's single-statement chain; [k]'s body holds two statements, so no level enclosing [tot]'s
+   write localizes it) and narrows once per [(i, k)], which stays at 256. *)
+let build_ikm_tot name =
+  let acc = node_sr (name ^ "_acc")
+  and tot = node_sr (name ^ "_tot")
+  and x = node_sr ~dims:[| 2; 4; 2 |] (name ^ "_x") in
+  List.iter [ acc; tot; x ] ~f:Ll_test.materialize;
+  let i = Ll_test.sym () and k = Ll_test.sym () and m = Ll_test.sym () in
+  let raw =
+    Ll_test.loop_n i 2
+      (Ll_test.loop_n k 4
+         (LL.Seq
+            ( Ll_test.loop_n m 2
+                (Ll_test.set acc
+                   [| it i |]
+                   (bin Ir.Ops.Add
+                      (Ll_test.get acc [| it i |])
+                      (Ll_test.get x [| it i; it k; it m |]))),
+              Ll_test.set tot
+                [| it i |]
+                (bin Ir.Ops.Add
+                   (Ll_test.get tot [| it i |])
+                   (Ll_test.get x [| it i; it k; Ll_test.fixed 0 |])) )))
+  in
+  (Ll_test.optimize ~materialized:[ acc; tot; x ] ~name raw, acc, tot, x, m, k)
+
+let exec_tot ~name ~acc ~tot ~x o =
+  Ll_test.execute ~name o
+    ~seed:[ (acc, [| 256.0; 256.0 |]); (tot, [| 0.0; 0.0 |]); (x, xs_ikm) ]
+    ~read:[ acc ]
+  |> List.hd_exn |> Array.to_list
+
+let split_reduce_legs () =
+  (* Two blocks of two [k] iterations each. A tile widened over the block loop would narrow once
+     (258), over the in-block loop once per block (260); neither is the entry program's per-[(i, k)]
+     narrowing, which both the split schedule and a storage tile keep (256). *)
+  let run name ~privatize =
+    let o, acc, tot, x, _, k = build_ikm_tot name in
+    let sr, block, inner, _ = Sched.split_reduce ~axis:k ~target:tot ~num_blocks:2 in
+    let ops =
+      sr
+      ::
+      (match privatize with
+      | `None -> []
+      | `Block -> [ pz ~target:acc ~over:block ]
+      | `Inner -> [ pz ~target:acc ~over:inner ])
+    in
+    let scheduled = Sched.apply ops o in
+    (exec_tot ~name ~acc ~tot ~x scheduled, scheduled.LL.llc)
+  in
+  let serial, localized =
+    let o, acc, tot, x, m, _ = build_ikm_tot "prc_sr_serial" in
+    let widths = LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:acc o.LL.llc in
+    ( exec_tot ~name:"prc_sr_serial" ~acc ~tot ~x o,
+      match widths with
+      | [ { LL.sa_level = Some level; sa_widens = true } ] -> Ir.Indexing.equal_symbol level m
+      | _ -> false )
+  in
+  let twin, _ = run "prc_sr_twin" ~privatize:`None in
+  let block, block_llc = run "prc_sr_block" ~privatize:`Block in
+  let inner, inner_llc = run "prc_sr_inner" ~privatize:`Inner in
+  Stdio.eprintf
+    "privatize_recheck: split-reduce legs serial %s, twin %s, block %s, in-block %s (not part of \
+     the golden)\n\
+     %!"
+    (floats serial) (floats twin) (floats block) (floats inner);
+  p claim_split_reduce_entry localized;
+  p claim_split_reduce
+    (List.equal Float.equal serial [ 256.0; 256.0 ]
+    && List.equal Float.equal twin serial
+    && List.equal Float.equal block twin && List.equal Float.equal inner twin
+    && only_prec bf16 block_llc && only_prec bf16 inner_llc)
+
 let () =
   Test_utils.with_policy
     (fun pol -> { pol with Numerics.bf16_arithmetic = Numerics.Bf16_wide })
     (fun () ->
       recheck_legs ();
       provenance_legs ();
-      minted_legs ())
+      minted_legs ();
+      split_reduce_legs ())

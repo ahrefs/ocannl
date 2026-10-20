@@ -10,3 +10,5 @@ a Privatize over the outer half of a Split of a loop inside the localizing level
 a Privatize over the loop a Coalesce merged from the localizing loop and the loop inside it, and one over the outer half of a Split of that merged loop, widen like the localizing loop (258 with the serial rendering, on an f32 tile): true
 a Privatize over the inner half of that Split of the merged loop keeps a bf16 storage tile and the split schedule's own narrowing (256, as without Privatize): true
 a Privatize over a segment of a Partition of the localizing loop keeps a bf16 storage tile and the partitioned schedule's own narrowing (256, as without Privatize): true
+the program the Split_reduce legs schedule localizes the node accumulated beside the Split_reduce target at its own inner loop, widened there: true
+a Privatize of that node over a Split_reduce's block loop, or over its in-block loop, keeps a bf16 storage tile and the split schedule's own narrowing (256, as without Privatize): true
