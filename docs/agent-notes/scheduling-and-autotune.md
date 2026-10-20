@@ -2025,17 +2025,20 @@ files.
   virtual, a whole-routine winner emitted code reading an undeclared buffer (a classified decline
   on cc, an unclassified `Failure` on Metal) and a fissioned one raised
   `promote_local_to_device: … is virtual`, fatal under strict classification. `tune` now compares
-  the STRUCTURAL digest of the base lowering (taken in the base transform, `timing_ctx` only) with
-  that of the caller's analysis-only lowering (`Context.lowered_for_decisions`) before the cache
-  and the search; a mismatch reports `Lineage_refused`, searches nothing, warns on stderr
+  `Autotune.lineage_identity` -- the set of tensor nodes the code reads and writes -- of the base
+  lowering (taken in the base transform, `timing_ctx` only) with that of the caller's
+  analysis-only lowering (`Context.lowered_for_decisions`) before the cache and the search; a
+  mismatch reports `Lineage_refused`, searches nothing, warns on stderr
   unconditionally and ships the untuned default at `best_ms = infinity`. Up front, not at the
   winner compile: a refusal there left the arm ranked, and its decision recorded, by the crown it
   never shipped (the local review's P2). `Train.placement_evidence_clean` lets such an arm stand
-  beside a recording, since the problem key carries both lineages. Both lowerings are taken BEFORE
-  any timing run: a check at the winner compile would compare a post-timing fresh lowering, which
-  value-bounds drift can fold differently on equal lineages (the drift `rebase` exists for), so
-  no such backstop exists. Structural, because placement classes legitimately differ across
-  lineages on identical code (a node `Local` in one and on-device in the other is not refused). It is conservative: a timing
+  beside a recording, since the problem key carries both identities. NOT the structural digest:
+  the base compile itself settles an index tensor's value bounds, so the caller's later lowering
+  folds a gather guard the base kept, and on `gpt2_mini_train` (`bench_gpt`'s scratch
+  `timing_ctx`) a structural comparison refused every arm A on cc, CUDA and HIP alike. Folding
+  a guard removes no accessed node, and that drift is what `rebase` exists for; inlining a node,
+  or computing one the other only reads, changes the access set. No compile-time backstop either:
+  it would compare a post-timing lowering, where drift is the rule. It is conservative: a timing
   lineage that inlines a computation the caller holds materialized (`flip_twins`' inheriting
   lineage) runs fine but is refused too. `placement_store` run 6 ranks fissioned candidates first
   through `Autotune.on_candidate_measured`, which reproduced the old failure deterministically.

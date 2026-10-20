@@ -939,14 +939,14 @@ type outcome =
           clean measured prefixes are cached for a later {!Abandonment_replay}. *)
   | Lineage_refused of { caller_digest : string; timing_digest : string }
       (** gh-ocannl-1421: the [timing_ctx] lowers this routine to another program than the caller's
-          context does -- the structural digests ([with_placements:false]) of the two lowerings,
-          carried here, differ, as when the timing lineage materializes a node the caller's leaves
-          virtual. Every candidate derives from the timing lineage's base lowering, so no schedule
-          tuned or cached there can be compiled into the caller: nothing is searched or replayed,
-          and the caller gets the untuned default compile, as under {!Search_disabled}. Every time
-          is [infinity], so a caller ranking searches ([Train.tune_placements]) ranks it last; it is
-          no failure. Decided before the cache is consulted, from an analysis-only lowering of the
-          caller's context ({!Context.lowered_for_decisions}). *)
+          context does -- the {!lineage_identity} digests of the two lowerings, carried here,
+          differ, as when the timing lineage materializes a node the caller's leaves virtual. Every
+          candidate derives from the timing lineage's base lowering, so no schedule tuned or cached
+          there can be compiled into the caller: nothing is searched or replayed, and the caller
+          gets the untuned default compile, as under {!Search_disabled}. Every time is [infinity],
+          so a caller ranking searches ([Train.tune_placements]) ranks it last; it is no failure.
+          Decided before the cache is consulted, from an analysis-only lowering of the caller's
+          context ({!Context.lowered_for_decisions}). *)
 
 type timing_mode =
   | Isolated
@@ -3044,6 +3044,14 @@ val tune_deferred :
     {!tune}'s winner replay would), the untuned default where the search shipped that, and for a
     cache hit the entry's replay -- compiled twice in all, since the first replay (the one that
     tells a stale entry from a sound one, and supplies the report's emission census) is released. *)
+
+val lineage_identity : Ir.Low_level.optimized -> string
+(** gh-ocannl-1421: a digest of the set of tensor nodes a lowering's code reads and writes (each
+    with its direction) -- what another lineage's lowering of the routine must share for a schedule
+    tuned on the one to apply to the other. A node inlined in one lowering and accessed in the
+    other, or computed in one and only read in the other, changes it; the code drift between two
+    lowerings of one lineage (a gather guard folded once the base compile settled its index's
+    bounds) does not, which is why it is not a structural digest. *)
 
 val compile_deferred : deferred -> Context.t * Context.routine
 (** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]

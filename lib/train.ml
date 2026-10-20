@@ -484,10 +484,6 @@ let placement_problem ?name ?timing_ctx ctx loss comp bindings =
   let embedded = Set.of_list (module Tn) (embedded_nodes loss) in
   let static_indices = Ir.Indexing.bound_symbols bindings in
   let lowered = Context.lowered_for_decisions ?name ctx comp bindings in
-  let structural opt =
-    Ir.Schedule_cache.digest
-      (Ir.Schedule_cache.canonicalize ~static_indices ~with_placements:false opt)
-  in
   let timing =
     Option.map timing_ctx ~f:(fun tctx ->
         let tlowered = Context.lowered_for_decisions ?name tctx comp bindings in
@@ -497,7 +493,8 @@ let placement_problem ?name ?timing_ctx ctx loss comp bindings =
              inherited computation changes the program, not a placement tag). Whether a search is
              [Lineage_refused] is a function of the two, so a decision recorded beside such a search
              applies only where they are the same programs. *)
-          ";ts=" ^ structural tlowered ^ ";cs=" ^ structural lowered ))
+          ";ts=" ^ Autotune.lineage_identity tlowered ^ ";cs=" ^ Autotune.lineage_identity lowered
+        ))
   in
   Ir.Schedule_cache.canonicalize_source ~static_indices
     ~node_tag:(fun tn ->
