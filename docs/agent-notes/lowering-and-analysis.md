@@ -537,9 +537,11 @@ files.
   `loop_accum_rev` attributes it by rewriting a dimension-1 `Fixed_idx 0` axis of its view to
   `Iterator selected` (the same index, the symbol ranging over `[0]`); otherwise it was never proven
   injective and got read-add-write plus an init (`test/operations/rev_sides_width1_store.ml`).
-  Each target's queries see only that target's writes, so a node named by two targets (a
-  hand-built `lhses = [| Node t; Node t |]`) is never attributed: two plain stores would drop one
-  contribution. Static/runtime
+  Each target's queries see only that target's writes, so a storage named by two targets (a
+  hand-built `lhses = [| Node t; Node t |]`, or two slice-alias views of one parent: compare after
+  `resolve_alias`) is never attributed: two plain stores would drop one contribution. A target whose
+  init an initializing scatter elides still gets its padding-margin reset there, since the plain
+  stores write only semantic cells and the record's own `padding_resets` cover the side it reads. Static/runtime
   extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
   scatters against explicit neutral initialization.
 

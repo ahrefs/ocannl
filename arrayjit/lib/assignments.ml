@@ -816,10 +816,16 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           (* Keep inactive symbols in the domain: removing one would make the source availability
              proof mistake it for an always-available static parameter. *)
           (* Each target's queries judge that target's writes alone, so they are sound only when no
-             other target writes the same node: [(t, t) ++^ ...] scatters both segments into one
-             gradient, and two plain stores would keep only the later contribution. A node named
-             by more than one target keeps the read-add-write form and its init. *)
-          let shared = Array.existsi lhses ~f:(fun j buf -> j <> i && equal_buffer buf lhses.(i)) in
+             other target writes the same storage: [(t, t) ++^ ...] scatters both segments into one
+             gradient, and two plain stores would keep only the later contribution. Storage is
+             compared after [resolve_alias], as [set] and [get] resolve it, so two slice-alias
+             views of one parent count as one. A storage named by more than one target keeps the
+             read-add-write form and its init. *)
+          let storage = function Node tn | Merge_buffer tn -> fst (resolve_alias tn [||]) in
+          let shared =
+            Array.existsi lhses ~f:(fun j buf ->
+                j <> i && Tn.equal (storage buf) (storage lhses.(i)))
+          in
           let attributed =
             match selector with
             | _ when shared -> None
@@ -938,7 +944,18 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     let init_ops =
       Array.filter_mapi lhses ~f:(fun i buf ->
-          if not target_needs_init.(i) then None
+          if not target_needs_init.(i) then
+            (* An initializing scatter that elides a target's init writes only its semantic cells,
+               and this record's [padding_resets] cover the side it reads: a padded target's margins
+               are established here, as [neutral_init] would have (device buffers are allocated
+               raw). A non-initializing scatter accumulates into a target its own writer already
+               established. *)
+            match buf with
+            | Node tn when initialize_neutral -> (
+                match Lazy.force tn.padding with
+                | Some (_, v) -> Some (Low_level.unflat_lines (reset_padding_regions tn v))
+                | None -> None)
+            | _ -> None
           else
             let array =
               match buf with

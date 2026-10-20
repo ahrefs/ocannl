@@ -34,3 +34,6 @@ shared: the initializing scatter accumulates into the shared node, with no plain
 shared: the shared node keeps an init pass: true
 shared: the reference sums both columns of cat's gradient: true
 shared: the initializing scatter equals the reference: true
+alias: the initializing scatter accumulates into the shared parent, with no plain store: true
+padded: the padded width-1 target gets a plain store and no init: true
+padded: its margin is still reset to the padding value: true

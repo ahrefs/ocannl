@@ -25,8 +25,9 @@
    path ([Context.compile], the backend's default schedule). Every in-extent target cell of the two
    initializing runs equals the reference's, which equals the target's slice of [cat]'s gradient.
 
-   A last case keeps the attribution from overreaching: two width-1 targets naming ONE node must
-   still accumulate. *)
+   The last cases, on hand-built records, keep the attribution from overreaching: two width-1
+   targets naming ONE storage (one node, or two slice-alias views of one parent) must still
+   accumulate, and a padded width-1 target whose init is elided must still get its margin. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -45,15 +46,16 @@ let rec find_rev_sides = function
   | Asgns.Block_comment (_, body) -> find_rev_sides body
   | Asgns.Accum_op _ | Asgns.Noop | Asgns.Set_vec_unop _ | Asgns.Fetch _ -> None
 
-(* The statements of raw lowered code that write [tn], by form: an initialization stores a constant
-   (or zeroes the node), a read-add-write reads the cell it writes, and a plain store does
-   neither. *)
-type writes = { inits : int; read_add_writes : int; plain_stores : int }
+(* The statements of raw lowered code that write [tn], by form: an initialization stores the
+   accumulation's neutral zero (or zeroes the node), a margin reset stores the padding value (never
+   zero in this file), a read-add-write reads the cell it writes, and a plain store does neither. *)
+type writes = { inits : int; margins : int; read_add_writes : int; plain_stores : int }
 
 let writes_of ~tn llc =
-  let form : LL.t -> [ `Init | `Read_add_write | `Plain_store ] option = function
+  let form : LL.t -> [ `Init | `Margin | `Read_add_write | `Plain_store ] option = function
     | LL.Zero_out t when Tn.equal t tn -> Some `Init
-    | LL.Set { tn = t; llsc = LL.Constant _; _ } when Tn.equal t tn -> Some `Init
+    | LL.Set { tn = t; llsc = LL.Constant v; _ } when Tn.equal t tn ->
+        Some (if Float.equal v 0. then `Init else `Margin)
     | LL.Set { tn = t; llsc; _ } when Tn.equal t tn ->
         Some (if LL.scalar_touches_tn tn llsc then `Read_add_write else `Plain_store)
     | _ -> None
@@ -64,6 +66,7 @@ let writes_of ~tn llc =
   in
   {
     inits = count `Init;
+    margins = count `Margin;
     read_add_writes = count `Read_add_write;
     plain_stores = count `Plain_store;
   }
@@ -188,14 +191,12 @@ let case ~label ~rows ~symbolic =
                   how name (Array.sub got ~pos:0 ~len) (Array.sub reference ~pos:0 ~len)
                   ~f:Float.equal)))
 
-(* {1 Two width-1 targets naming one node.} A [Rev_sides] whose two width-1 segments both write the
-   same node: the gradient record of [(a, b) ++^ "s, c; s, d => s, c^d"] with [c = d = 1], its
-   targets replaced by [a]'s gradient twice. (The front end cannot emit it: the gradient of [(w, w)
-   ++^ ...] is refused at lowering as ambiguous.) Each target alone is injective and surjective, but
-   both write every cell: plain stores would keep only the later column, so a node named by more
-   than one target keeps the read-add-write form and its init. *)
-let shared_case () =
-  let label = "shared" and rows = 3 in
+(* {1 Hand-built targets.} The front end cannot emit the records below; each is the gradient record
+   of [(a, b) ++^ "s, c; s, d => s, c^d"] with [c = d = 1], flipped to initializing, its targets
+   replaced by [targets ~ga ~gb]. *)
+let rows = 3
+
+let width1_pair ~targets =
   let%op a = { a = 0.5 } in
   let%op b = { b = 0.5 } in
   let%op cat = (a, b) ++^ "s, c; s, d => s, c^d" [ "s"; "c"; "d" ] in
@@ -203,15 +204,37 @@ let shared_case () =
   Shape.set_dim c 1;
   Shape.set_dim d 1;
   let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad in
-  let ga = grad_of a and gcat = grad_of cat in
-  let non_initializing, initializing =
-    match
-      find_rev_sides (Option.value_exn ~here:[%here] cat.Tensor.diff).Tensor.backprop.Asgns.asgns
-    with
-    | Some (Asgns.Accum_op ({ rhs = Asgns.Rev_sides { op; _ }; _ } as r)) ->
-        let rhs = Asgns.Rev_sides { op; lhses = [| Asgns.Node ga; Asgns.Node ga |] } in
-        (Asgns.Accum_op { r with rhs }, Asgns.Accum_op { r with rhs; initialize_neutral = true })
-    | _ -> failwith "expected the concatenation's Rev_sides gradient"
+  let ga = grad_of a and gb = grad_of b and gcat = grad_of cat in
+  match
+    find_rev_sides (Option.value_exn ~here:[%here] cat.Tensor.diff).Tensor.backprop.Asgns.asgns
+  with
+  | Some (Asgns.Accum_op ({ rhs = Asgns.Rev_sides { op; _ }; _ } as r)) ->
+      let rhs =
+        Asgns.Rev_sides { op; lhses = Array.map (targets ~ga ~gb) ~f:(fun t -> Asgns.Node t) }
+      in
+      ( ga,
+        gcat,
+        Asgns.Accum_op { r with rhs },
+        Asgns.Accum_op { r with rhs; initialize_neutral = true } )
+  | _ -> failwith "expected the concatenation's Rev_sides gradient"
+
+let next_id = ref 31000
+
+let node ?(padding = None) dims label =
+  Int.incr next_id;
+  Tn.create (Tn.Specified Ir.Ops.single) ~id:!next_id ~label:[ label ]
+    ~unpadded_dims:(lazy dims)
+    ~padding:(lazy padding)
+    ()
+
+(* {2 Two width-1 targets naming one node.} [a]'s gradient twice. (The gradient of [(w, w) ++^ ...]
+   is refused at lowering as ambiguous.) Each target alone is injective and surjective, but both
+   write every cell: plain stores would keep only the later column, so a node named by more than one
+   target keeps the read-add-write form and its init. *)
+let shared_case () =
+  let label = "shared" in
+  let ga, gcat, non_initializing, initializing =
+    width1_pair ~targets:(fun ~ga ~gb:_ -> [| ga; ga |])
   in
   let wr = writes_of ~tn:ga (Asgns.to_low_level initializing) in
   p
@@ -243,8 +266,47 @@ let shared_case () =
     (run (link ~name:"shared_unscheduled" initializing))
     reference ~f:Float.equal
 
+(* {2 Two slice-alias views of one parent.} Distinct nodes whose accesses [resolve_alias] redirects
+   to the same parent cells (one batch index): sharing is judged on the storage, so both still
+   accumulate. *)
+let alias_case () =
+  let label = "alias" in
+  let parent = node [| 2; rows; 1 |] "alias_parent" in
+  let batch_idx, _ = Idx.get_static_symbol ~static_range:2 Idx.Empty in
+  let views =
+    Array.init 2 ~f:(fun k ->
+        let view = node [| rows; 1 |] ("alias_view" ^ Int.to_string k) in
+        Tn.set_alias_of view ~parent ~batch_idx;
+        view)
+  in
+  let _, _, _, initializing = width1_pair ~targets:(fun ~ga:_ ~gb:_ -> views) in
+  let wr = writes_of ~tn:parent (Asgns.to_low_level initializing) in
+  p
+    (label ^ ": the initializing scatter accumulates into the shared parent, with no plain store")
+    (wr.read_add_writes > 0 && wr.plain_stores = 0)
+
+(* {2 A padded width-1 target.} [b]'s gradient replaced by a node with a one-row top margin holding
+   7. Its semantic cells are written exactly once, so its init is elided; the plain stores write
+   only those cells, so the scatter still establishes the margin (device buffers are allocated raw),
+   as the init it replaces would have. *)
+let padded_case () =
+  let label = "padded" in
+  let padded =
+    node
+      ~padding:(Some ([| Ir.Ops.{ left = 1; right = 0 }; Ir.Ops.{ left = 0; right = 0 } |], 7.))
+      [| rows; 1 |] "padded_target"
+  in
+  let _, _, _, initializing = width1_pair ~targets:(fun ~ga ~gb:_ -> [| ga; padded |]) in
+  let wr = writes_of ~tn:padded (Asgns.to_low_level initializing) in
+  p
+    (label ^ ": the padded width-1 target gets a plain store and no init")
+    (wr.plain_stores > 0 && wr.read_add_writes = 0 && wr.inits = 0);
+  p (label ^ ": its margin is still reset to the padding value") (wr.margins > 0)
+
 let () =
   Tensor.unsafe_reinitialize ();
   case ~label:"concrete" ~rows:3 ~symbolic:false;
   case ~label:"symbolic" ~rows:4 ~symbolic:true;
-  shared_case ()
+  shared_case ();
+  alias_case ();
+  padded_case ()
