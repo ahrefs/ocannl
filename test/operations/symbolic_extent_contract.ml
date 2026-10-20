@@ -18,7 +18,12 @@
    cell read from the wrong row or column changes the sum; every cell PAST the extent holds a poison
    two orders of magnitude larger, so a read past the extent is a visible jump in an in-extent
    result; and the target's prior content is a per-cell sentinel distinct from every value the
-   accumulation produces, so a write past the extent -- or a misplaced one -- fails exactly. *)
+   accumulation produces, so a write past the extent -- or a misplaced one -- fails exactly.
+
+   The initializing record's own initialization pass is guarded like its body, so the sentinel
+   survives past the extent there too; a third program spells the unguarded initialization as an
+   explicit [Fetch] fill ahead of the non-initializing record, and a fill covers the materialized
+   buffer whatever the extent -- the two must stay distinguishable. *)
 
 open Base
 open Ocannl
@@ -92,6 +97,12 @@ let () =
   let onto_accum_only = link ~name:"sym_contract_onto_accum" (non_initializing onto_accum) in
   let over_init = link ~name:"sym_contract_over_init" over_accum in
   let over_accum_only = link ~name:"sym_contract_over_accum" (non_initializing over_accum) in
+  let onto_fetch_then_accum =
+    link ~name:"sym_contract_onto_fetch"
+      (Asgns.Seq
+         ( Asgns.Fetch { array = onto_tn; fetch_op = Asgns.Constant 0.; dims = onto_tn.Tn.dims },
+           non_initializing onto_accum ))
+  in
   List.iter extents ~f:(fun e ->
       let before = prior range in
       (* {1 Reads: an in-extent result never depends on a cell past the extent.} *)
@@ -99,12 +110,27 @@ let () =
       if e > 0 then
         pf_all2 "extent %d, initializing onto: in-extent cells are the row sums of in-extent x" e
           (Array.sub got ~pos:0 ~len:e) (Array.init e ~f:row_sum) ~f:Float.equal;
-      (* Past the extent an initializing accumulation leaves UNSPECIFIED content: shown, not
-         pinned. *)
-      Stdio.eprintf
-        "extent %d, initializing onto, cells past the extent (not part of the golden): %s\n" e
-        (String.concat ~sep:" "
-           (List.map (Array.to_list (Array.sub got ~pos:e ~len:(range - e))) ~f:Float.to_string));
+      (* Past the extent an initializing accumulation leaves UNSPECIFIED content by contract; the
+         lowering guards its initialization pass like the body, so a planted sentinel survives
+         there. Pinned as what the lowering does, not as a promise. *)
+      if e < range then
+        pf_all2 "extent %d, initializing onto: every cell past the extent keeps its sentinel" e
+          (Array.sub got ~pos:e ~len:(range - e))
+          (Array.sub before ~pos:e ~len:(range - e))
+          ~f:Float.equal;
+      (* A [Fetch] in the same routine is a fill, and a fill covers the materialized buffer (rule 4)
+         whatever the extent: the initialization the lowering emitted before it was guarded, spelled
+         as that fill ahead of the non-initializing record, still overwrites every sentinel. *)
+      let got = run onto_fetch_then_accum ~target:onto_tn ~e in
+      if e > 0 then
+        pf_all2 "extent %d, Fetch fill then accumulation onto: in-extent cells are the row sums" e
+          (Array.sub got ~pos:0 ~len:e) (Array.init e ~f:row_sum) ~f:Float.equal;
+      if e < range then
+        p_all
+          (Printf.sprintf
+             "extent %d, Fetch fill then accumulation onto: every cell past the extent is filled" e)
+          (Array.to_list (Array.sub got ~pos:e ~len:(range - e)))
+          ~f:(Float.equal 0.);
       let got = run over_init ~target:over_tn ~e in
       pf_all2 "extent %d, initializing over: every cell sums exactly the in-extent rows" e got
         (Array.init width ~f:(column_sum e))

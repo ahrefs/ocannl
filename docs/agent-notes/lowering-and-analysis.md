@@ -442,12 +442,19 @@ files.
   `can_skip_accumulation` drops the neutral-element init, and skipping the write would leave the
   target holding whatever preceded it rather than zero -- soundness would have to couple the guard
   to the accumulation-elision decision, for a symbol that can only take the values 0 and 1.
-- **Past a bound extent, only the accumulation BODY is guarded**: `loop_accum`'s `needs_init` fill
-  and every `Fetch` iterate the materialized maximum. `docs/shape_inference.md` ("Symbolic extents:
-  cells past a bound extent", gh-ocannl-928) makes the first unspecified and the second a promise;
-  keep `Fetch` unguarded even if the init fill is ever guarded, because `zero_grads` clearing the
-  whole buffer is what keeps gradient accumulation across different extents exact
-  (`test/operations/symbolic_extent_backward.ml`, gh-ocannl-929).
+- **Past a bound extent, the accumulation body and `loop_accum`'s `needs_init` pass are guarded;
+  every `Fetch` iterates the materialized maximum.** The init pass is built as its own guarded loop
+  nest over `lhs_dims` (each lhs axis indexed by an `Iterator` with a bound extent gets the body's
+  `iterator < extent` guard), NOT as a `Fetch`, so it no longer lowers to a whole-node `Zero_out`
+  for those targets; a target with no bound-extent axis keeps the `Fetch` path unchanged.
+  `docs/shape_inference.md` ("Symbolic extents: cells past a bound extent", gh-ocannl-928) makes
+  what the init leaves past the extent unspecified and the `Fetch` coverage a promise: keep `Fetch`
+  unguarded, because `zero_grads` clearing the whole buffer is what keeps gradient accumulation
+  across different extents exact (`test/operations/symbolic_extent_backward.ml`, gh-ocannl-929).
+  `loop_accum_rev`'s per-target init (the `Rev_sides` scatter) still goes through an unguarded
+  `Fetch`. `test/operations/symbolic_extent_contract.ml` pins both sides: a sentinel past the
+  extent survives the initializing record, and an explicit `Fetch` ahead of the non-initializing
+  one still overwrites it.
 - A lowering-time reader of `Indexing.variable_ref` must force a dims lazy (or otherwise finish
   inference) FIRST: forcing dims is what runs `Shape.finish_inference` and fills row-var-bound refs
   (`..d..` captures such as layer norm's `/. dim d`). "Inference is already forced by now" is not an

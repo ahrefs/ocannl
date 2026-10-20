@@ -1,13 +1,19 @@
 the reduction onto the symbolic axis is sized at the declared maximum: true
+extent 0, initializing onto: every cell past the extent keeps its sentinel: true
+extent 0, Fetch fill then accumulation onto: every cell past the extent is filled: true
 extent 0, initializing over: every cell sums exactly the in-extent rows: true
 extent 0, non-initializing onto: every cell past the extent keeps its prior: true
 extent 0, non-initializing over: every cell adds exactly the in-extent rows: true
 extent 2, initializing onto: in-extent cells are the row sums of in-extent x: true
+extent 2, initializing onto: every cell past the extent keeps its sentinel: true
+extent 2, Fetch fill then accumulation onto: in-extent cells are the row sums: true
+extent 2, Fetch fill then accumulation onto: every cell past the extent is filled: true
 extent 2, initializing over: every cell sums exactly the in-extent rows: true
 extent 2, non-initializing onto: in-extent cells add the row sums to their prior: true
 extent 2, non-initializing onto: every cell past the extent keeps its prior: true
 extent 2, non-initializing over: every cell adds exactly the in-extent rows: true
 extent 4, initializing onto: in-extent cells are the row sums of in-extent x: true
+extent 4, Fetch fill then accumulation onto: in-extent cells are the row sums: true
 extent 4, initializing over: every cell sums exactly the in-extent rows: true
 extent 4, non-initializing onto: in-extent cells add the row sums to their prior: true
 extent 4, non-initializing over: every cell adds exactly the in-extent rows: true
