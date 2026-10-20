@@ -42,11 +42,11 @@ let range = 4
 let width = 3
 let extents = [ 0; 2; range ]
 
-let rec find_accum = function
-  | Asgns.Accum_op _ as a -> Some a
-  | Asgns.Seq (a, b) -> Option.first_some (find_accum a) (find_accum b)
-  | Asgns.Block_comment (_, body) -> find_accum body
-  | Asgns.Noop | Asgns.Set_vec_unop _ | Asgns.Fetch _ -> None
+let rec find_accum ?(f = fun _ -> true) = function
+  | Asgns.Accum_op { rhs; _ } as a when f rhs -> Some a
+  | Asgns.Seq (a, b) -> Option.first_some (find_accum ~f a) (find_accum ~f b)
+  | Asgns.Block_comment (_, body) -> find_accum ~f body
+  | Asgns.Accum_op _ | Asgns.Noop | Asgns.Set_vec_unop _ | Asgns.Fetch _ -> None
 
 let accum_of t = Option.value_exn ~here:[%here] (find_accum (Train.forward t).Asgns.asgns)
 
@@ -214,15 +214,11 @@ let () =
   Shape.set_dim b 2;
   Shape.set_dim c 1;
   let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad in
-  let rec find_rev_sides = function
-    | Asgns.Accum_op { rhs = Asgns.Rev_sides _; _ } as a -> Some a
-    | Asgns.Seq (a, b) -> Option.first_some (find_rev_sides a) (find_rev_sides b)
-    | Asgns.Block_comment (_, body) -> find_rev_sides body
-    | Asgns.Accum_op _ | Asgns.Noop | Asgns.Set_vec_unop _ | Asgns.Fetch _ -> None
-  in
   let rev_sides =
     match
-      find_rev_sides (Option.value_exn ~here:[%here] cat.Tensor.diff).Tensor.backprop.Asgns.asgns
+      find_accum
+        ~f:(function Asgns.Rev_sides _ -> true | _ -> false)
+        (Option.value_exn ~here:[%here] cat.Tensor.diff).Tensor.backprop.Asgns.asgns
     with
     | Some (Asgns.Accum_op r) ->
         p "the concatenation's gradient scatter is emitted non-initializing"
