@@ -27,7 +27,7 @@ type settings = {
           in intent from element indexing within a single tensor, though both currently follow it.
       *)
 }
-[@@deriving sexp]
+[@@deriving sexp_of]
 
 let settings =
   {
@@ -111,6 +111,7 @@ let known_config_keys =
       "cuda_printf_fifo_size";
       "hip_printf_fifo_size";
       "exit_stream_teardown_timeout";
+      "device_init_deadline";
       "hip_scratch_validation";
       "gpu_graph_capture";
       "multidev_num_devices";
@@ -527,6 +528,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "cc_backend_verify_codesign";
         "cc_backend_post_compile_timeout";
         "max_shape_error_origins";
+        "device_init_deadline";
       ] );
     ( Execution_neutral,
       "identifier spelling in generated code and in printouts",
@@ -2640,6 +2642,94 @@ let bounded_exit_teardown (resources : exit_teardown_resource list) : exit_teard
     poll ();
     Array.to_list outcomes |> List.map ~f:(Option.value ~default:Still_busy)
 
+external device_init_deadline_supported : unit -> bool = "ocannl_device_init_deadline_supported"
+(** Whether this build can arm the device-init deadline at all (not on Windows, which has no
+    SIGALRM): the predicate {!with_device_init_deadline}'s stubs are compiled under. *)
+
+(** The fixed start of the diagnostic the deadline writes. [tools/test-run.sh]'s digest recognizes a
+    wedged device by it, and [test/operations/device_init_deadline] checks that the two agree. *)
+let device_init_deadline_tag = "OCANNL device_init_deadline:"
+
+(** Test-only: when set, {!with_device_init_deadline} runs it inside the guarded region, before the
+    guarded initialization -- so a test can simulate a stuck initialization (a sleep) and, by
+    raising, skip the real one. *)
+let device_init_test_stall : (unit -> unit) option ref = ref None
+
+(** The pieces of {!with_device_init_deadline}: its C stubs ([utils_stubs.c]) and its setting. *)
+module Device_init_deadline_internals = struct
+  external arm : float -> string -> int = "ocannl_device_init_deadline_arm"
+  external disarm : unit -> unit = "ocannl_device_init_deadline_disarm"
+
+  let default = 120.0
+
+  (* Read once, at module initialization, while the process has one domain: the configuration reader
+     records every access in a table no two domains may touch at once, and a guarded call can come
+     from any domain, beside any other domain's configuration reads. *)
+  let seconds =
+    let setting =
+      get_global_arg ~default:(Float.to_string default) ~arg_name:"device_init_deadline"
+    in
+    match Float.of_string_opt (String.strip setting) with
+    | Some t when Float.is_finite t -> t
+    | _ ->
+        Stdio.eprintf
+          "OCANNL: device_init_deadline=%s is not a finite number of seconds; using %g\n%!" setting
+          default;
+        default
+end
+
+(** [with_device_init_deadline ~backend_name f] runs [f] -- a GPU backend's device discovery, device
+    query or device opening -- under a deadline of [device_init_deadline] seconds (gh-ocannl-1281;
+    [0] or negative disables; 120 when the setting is absent or not a finite number): if [f] has not
+    returned by then, the process writes a diagnostic opening with {!device_init_deadline_tag},
+    naming the backend and the key, and dies by SIGALRM (status 142), since a wedged driver never
+    returns and nothing in-process can unwind out of it. The bound is a watchdog thread of the C
+    stubs ([utils_stubs.c]), not a signal handler or the real-time timer, so the program's own
+    timers, handlers and signal masks are left alone. The deadline is disarmed when [f] returns or
+    raises, so it is never armed across user code, and it is not armed at all when SIGALRM does not
+    have its default disposition (killing by it would have to override the program's own) or on
+    Windows.
+
+    Guarded regions are serialized process-wide, in the stubs: the watchdog holds one deadline at a
+    time, and a region entered while another thread's is armed waits for it, bounded by its
+    deadline. A region entered from inside the same thread's armed one runs under the outer
+    deadline.
+
+    A healthy device initializes in well under a second (the harness's device probe, a whole fresh
+    process, answers in 0.2-0.6 s), so the default is generous for cold starts on loaded, WSL2 or
+    freshly installed boxes. *)
+let with_device_init_deadline ~backend_name f =
+  let module Stub = Device_init_deadline_internals in
+  let seconds = Stub.seconds in
+  let armed =
+    Float.(seconds > 0.)
+    &&
+    match
+      Stub.arm seconds
+        (Printf.sprintf
+           "\n\
+            %s %s device initialization or query did not finish within %gs; the device or driver \
+            is likely wedged. Dying by SIGALRM. The bound is the config key device_init_deadline \
+            (seconds; 0 disables; gh-ocannl-1281).\n"
+           device_init_deadline_tag backend_name seconds)
+    with
+    | 1 -> true
+    | 0 -> false
+    | _ ->
+        (* Fail closed: a configured bound that cannot be armed is not "no bound". *)
+        failwith
+          (Printf.sprintf
+             "OCANNL: cannot arm the %gs device_init_deadline before a %s driver call: its \
+              watchdog thread could not be started (device_init_deadline=0 proceeds without the \
+              bound; gh-ocannl-1281)"
+             seconds backend_name)
+  in
+  Exn.protect
+    ~f:(fun () ->
+      Option.iter !device_init_test_stall ~f:(fun stall -> stall ());
+      f ())
+    ~finally:(fun () -> if armed then Stub.disarm ())
+
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
   set_log_level @@ max 2 settings.log_level
@@ -2819,8 +2909,8 @@ end
 type requirement =
   | Skip
   | Required
-  | Optional of { callback_if_missing : unit -> unit [@sexp.opaque] [@compare.ignore] }
-[@@deriving compare, sexp]
+  | Optional of { callback_if_missing : unit -> unit [@sexp.opaque] }
+[@@deriving sexp_of]
 
 let default_indent = ref 2
 

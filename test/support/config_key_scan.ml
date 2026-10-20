@@ -616,12 +616,16 @@ let generated_init_calls_in_source content =
     source in the tree. *)
 let could_call_generated_init content = String.is_substring content ~substring:generated_module
 
-(** Which requested paths an OCaml source names under the scanner's lexical module model.
+(** Every site where an OCaml source names one of the requested paths under the scanner's lexical
+    module model: the path as the source SPELLS it -- [F.small_menu] under
+    [module F = Fissioned_chain] -- beside the requested path it resolves to, so a caller can follow
+    one particular reference (gh-ocannl-1368's width-pinning helpers).
 
-    Used only for schedule-pipeline configuration-key derivation (gh-ocannl-1149). Lifecycle
-    membership instead uses {!Lifecycle_scan}'s resolution-free Dune contract (gh-ocannl-798). This
-    source pass remains an approximation rather than a typed OCaml environment. *)
-let module_references_in_source content ~paths =
+    Used for env_var_deps' derivations: the schedule pipeline's configuration keys (gh-ocannl-1149)
+    and the programs starting an autotune search (gh-ocannl-1368). Lifecycle membership instead uses
+    {!Lifecycle_scan}'s resolution-free Dune contract (gh-ocannl-798). This source pass remains an
+    approximation rather than a typed OCaml environment. *)
+let module_reference_sites content ~paths =
   let structure = structure_of content in
   let rec starts_with components path =
     match (components, path) with
@@ -920,15 +924,20 @@ let module_references_in_source content ~paths =
         (match flatten_module_path lid with
         | Some components ->
             List.iter paths ~f:(fun path ->
-                let spelling = String.concat ~sep:"." path in
-                if matches components path && not (List.mem !found spelling ~equal:String.equal)
-                then found := spelling :: !found)
+                if matches components path then
+                  found := (components, String.concat ~sep:"." path) :: !found)
         | None -> ());
         super#longident lid
     end
   in
   walk#structure structure;
   List.rev !found
+
+(** Which requested paths an OCaml source names: {!module_reference_sites}, by requested path. *)
+let module_references_in_source content ~paths =
+  List.fold (module_reference_sites content ~paths) ~init:[] ~f:(fun found (_, spelling) ->
+      if List.mem found spelling ~equal:String.equal then found else spelling :: found)
+  |> List.rev
 
 type label_use = { key : string option; offset : int }
 (** Every place the [arg_name] label names a configuration key, and what it names it with. [key] is
@@ -1511,6 +1520,198 @@ let value_paths_in_source content =
   in
   iterator#structure (structure_of content);
   List.rev !found
+
+(** Which top-level values of a module STATE one of [literals] -- set a setting rather than read it
+    (gh-ocannl-1368: which support values pin the cc vector file, the derivation its blessed helpers
+    are held equal to).
+
+    A statement is a WRITE that carries the literal in its arguments: an application of one of
+    [table_writes] ([Hashtbl.set], ...) to one of [tables] ([Utils.config_file_args]), or of one of
+    [env_writes] ([Unix.putenv]). A value also states the literal when it hands it to a top-level
+    value of the same module that writes whatever it is given -- [Fissioned_chain.small_menu] passes
+    ["cc_vector_bytes"] in a list to its local [state], whose body is a [Hashtbl.set] on the table
+    -- and when it names a value that states it. A literal outside a write's arguments is not a
+    statement: a [Hashtbl.mem] on the table, an [~arg_name] read, a format string, a table of names
+    (Codex P2, round 1 of staging#1263).
+
+    A write whose value is a string literal [pins] rejects states nothing -- ["-1"] and [""] leave
+    the cc width on its auto-probe -- and neither does a [(literal, value)] pair whose value is one;
+    a computed value is trusted.
+
+    Flow-insensitive within a value, and an over-read where it errs: a value that sets the key and
+    later unsets it states it. A literal reaching a write through a local binding, or nested modules
+    and functor bodies, are not followed. *)
+let stating_reach ~literals ~tables ~table_writes ~env_writes ~pins content =
+  let structure = structure_of content in
+  let ident_path expr =
+    match expr.pexp_desc with Pexp_ident { txt; _ } -> flatten_module_path txt | _ -> None
+  in
+  let ends_in names expr =
+    Option.exists (ident_path expr) ~f:(fun path ->
+        List.mem names (List.last_exn path) ~equal:String.equal)
+  in
+  let is_literal expr =
+    Option.exists (string_literal expr) ~f:(fun s -> List.mem literals s ~equal:String.equal)
+  in
+  let unpinning value = Option.exists (string_literal value) ~f:(Fn.non pins) in
+  let positional (lbl, _) = match lbl with Asttypes.Nolabel -> true | _ -> false in
+  (* Whether an argument list carries a literal a write could state: anywhere in it, except under an
+     [~arg_name] argument, and except a key paired with a literal value [pins] rejects. *)
+  let carries args =
+    let found = ref false in
+    let iterator =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          match expr.pexp_desc with
+          | Pexp_apply (fn, args) ->
+              self#expression fn;
+              List.iter args ~f:(fun (lbl, arg) ->
+                  if not (is_our_label lbl) then self#expression arg)
+          | Pexp_tuple [ key; value ] when is_literal key ->
+              if not (unpinning value) then found := true;
+              self#expression value
+          | _ ->
+              if is_literal expr then found := true;
+              super#expression expr
+      end
+    in
+    List.iter args ~f:(fun (lbl, arg) -> if not (is_our_label lbl) then iterator#expression arg);
+    !found
+  in
+  (* A write, and the value it sets: its [~data], or else its last positional argument. *)
+  let write_value fn args =
+    if
+      ends_in table_writes fn
+      && List.exists args ~f:(fun ((_, arg) as a) -> positional a && ends_in tables arg)
+      || ends_in env_writes fn
+    then
+      Some
+        (match
+           List.find args ~f:(fun (lbl, _) ->
+               match lbl with Asttypes.Labelled "data" -> true | _ -> false)
+         with
+        | Some (_, value) -> Some value
+        | None -> Option.map (List.last (List.filter args ~f:positional)) ~f:snd)
+    else None
+  in
+  let direct_of expr =
+    let writes = ref false and states = ref false and calls = ref [] and names = ref [] in
+    let iterator =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          match expr.pexp_desc with
+          | Pexp_apply (fn, args) ->
+              (match write_value fn args with
+              | Some value ->
+                  writes := true;
+                  if carries args && not (Option.exists value ~f:unpinning) then states := true
+              | None ->
+                  if carries args then
+                    Option.iter (ident_path fn) ~f:(fun p -> calls := p :: !calls));
+              self#expression fn;
+              List.iter args ~f:(fun (lbl, arg) ->
+                  if not (is_our_label lbl) then self#expression arg)
+          | _ ->
+              Option.iter (ident_path expr) ~f:(fun path -> names := path :: !names);
+              super#expression expr
+      end
+    in
+    iterator#expression expr;
+    (!writes, !states, !calls, !names)
+  in
+  let named =
+    List.concat_map structure ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_value (_, bindings) ->
+            List.filter_map bindings ~f:(fun b ->
+                Option.map (pattern_name b.pvb_pat) ~f:(fun name -> (name, direct_of b.pvb_expr)))
+        | _ -> [])
+  in
+  let local name = List.Assoc.mem named name ~equal:String.equal in
+  (* Both closed to their fixpoint over the whole file: a name refers to any top-level value of that
+     spelling, the flow-insensitive over-read the header admits. *)
+  let fixpoint step =
+    let rec go set =
+      let set' =
+        List.fold named ~init:set ~f:(fun acc (name, direct) ->
+            if Set.mem acc name || not (step acc direct) then acc else Set.add acc name)
+      in
+      if Set.length set' = Set.length set then set else go set'
+    in
+    go (Set.empty (module String))
+  in
+  let names_any set names =
+    List.exists names ~f:(function [ name ] -> Set.mem set name && local name | _ -> false)
+  in
+  (* The values that write whatever they are handed: a write in their body, or a call of one. *)
+  let writing = fixpoint (fun set (writes, _, _, names) -> writes || names_any set names) in
+  let states_with set (_, states, calls, names) =
+    states || names_any writing calls || names_any set names
+  in
+  Set.to_list (fixpoint states_with)
+
+type initialization_item = {
+  runs : bool;
+      (** Whether evaluating the item runs code at module initialization: a bare expression, or a
+          binding of anything but a function. *)
+  paths : string list list;
+      (** Every value path the item names, nested modules and function bodies included. *)
+  called : string list list;
+      (** The functions the item CALLS in statement position, which a run of it reaches: the
+          elements of a sequence, a [let]'s bound expressions and body, the branches of an [if],
+          through type constraints and local [open]s. A path in a closure the item builds, or in an
+          argument, is not one. *)
+  literals : string list;  (** Every string literal the item spells. *)
+}
+
+(** Each top-level item of [content], in source order (gh-ocannl-1368: whether a program pins the cc
+    vector file before its first search, and keeps it pinned). *)
+let initialization_items content =
+  let rec statements expr =
+    match expr.pexp_desc with
+    | Pexp_sequence (first, rest) -> statements first @ statements rest
+    | Pexp_let (_, bindings, body) ->
+        List.concat_map bindings ~f:(fun b -> statements b.pvb_expr) @ statements body
+    | Pexp_ifthenelse (_, then_, else_) ->
+        statements then_ @ Option.value_map else_ ~default:[] ~f:statements
+    | Pexp_constraint (inner, _) | Pexp_open (_, inner) -> statements inner
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) ->
+        Option.to_list (flatten_module_path txt)
+    | _ -> []
+  in
+  List.map (structure_of content) ~f:(fun item ->
+      let paths = ref [] and literals = ref [] in
+      let iterator =
+        object
+          inherit Ast_traverse.iter as super
+
+          method! expression expr =
+            (match expr.pexp_desc with
+            | Pexp_ident { txt; _ } ->
+                Option.iter (flatten_module_path txt) ~f:(fun path -> paths := path :: !paths)
+            | _ -> Option.iter (string_literal expr) ~f:(fun s -> literals := s :: !literals));
+            super#expression expr
+        end
+      in
+      iterator#structure_item item;
+      let evaluated =
+        match item.pstr_desc with
+        | Pstr_eval (expr, _) -> [ expr ]
+        | Pstr_value (_, bindings) ->
+            List.filter_map bindings ~f:(fun b ->
+                match b.pvb_expr.pexp_desc with Pexp_function _ -> None | _ -> Some b.pvb_expr)
+        | _ -> []
+      in
+      {
+        runs = not (List.is_empty evaluated);
+        paths = List.rev !paths;
+        called = List.concat_map evaluated ~f:statements;
+        literals = List.rev !literals;
+      })
 
 (** Every record type [content] declares at top level, with its labels:
     [type t = { a : int; b : int }] contributes [("t", ["a"; "b"])]. *)

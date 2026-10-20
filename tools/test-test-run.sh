@@ -252,6 +252,10 @@
 #      reaped, though /proc/locks names only the dead acquirer, or nobody
 #      (gh-ocannl-1107); the negative control, the census trusting that
 #      name, leaves the holder running (skipped where nothing is named).
+#  84 sits after leg 36: a red run carrying, at a line's start, the line a
+#      GPU backend's device-init deadline writes before its process dies by
+#      SIGALRM is WEDGED DEVICE (exit 1) quoting it; indented, it is FAIL
+#      (gh-ocannl-1281).
 #  68-69 sit after leg 36: promotion is offered only on a diff dune printed
 #      (gh-ocannl-1055).
 #  68. a rule whose action failed, its quoted stanza naming a `.corrected`
@@ -2111,6 +2115,23 @@ case $REPEAT_TEST_MODE in
   usage_operand)
     printf "dune: option '-j': invalid concurrency value, must be 'auto' or a positive\n      number\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
     exit 1 ;;
+  # gh-ocannl-1281: a test whose GPU device initialization outlived the
+  # in-process deadline -- its line, at a line's start, among an ordinary red
+  # run's -- and a test quoting such a line, indented, which is no death.
+  wedged_init)
+    printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
+    printf 'OCANNL device_init_deadline: hip device initialization did not finish within 120s; the device or driver is likely wedged. Dying by SIGALRM.\n' >&2
+    exit 1 ;;
+  # ...and the same line followed by more output than the digest's 10MB scan
+  # window: parallel actions can bury it.
+  wedged_long)
+    printf 'OCANNL device_init_deadline: hip device initialization did not finish within 120s; the device or driver is likely wedged. Dying by SIGALRM.\n' >&2
+    perl -e 'my $l = ("y" x 99) . "\n"; print STDERR $l for 1 .. 110000'
+    exit 1 ;;
+  wedged_quoted)
+    printf 'File "test/operations/dune", lines 3-9, characters 0-120:\n' >&2
+    printf '  child | OCANNL device_init_deadline: hip device initialization did not finish within 1s\n' >&2
+    exit 1 ;;
   # An ordinary red run: a located error, exit 1 -- and the same with a test's
   # own output opening on a `dune:` line, which no `Usage:` line follows.
   red)
@@ -3694,6 +3715,43 @@ else
 fi
 }
 harness_leg_run '36: a red run still digests as FAIL #digest' leg_36
+
+# Leg 84 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
+# line a GPU backend's device-init deadline writes before its process dies by
+# SIGALRM is WEDGED DEVICE, keeping dune's 1 and quoting the line -- also when
+# 11MB of output follows it, past the digest's 10MB tail; the same
+# line indented (a test quoting a child's stderr) leaves the run an ordinary
+# FAIL.
+if harness_leg '84: a device-init deadline death is WEDGED DEVICE #digest'; then
+wedged_label="a red run carrying the device-init deadline's line is WEDGED DEVICE (exit 1), an indented one is FAIL"
+wedged_detail=
+argv_mode=wedged_init argv_probe wedged-init run build @cheap
+case $argv_rc:$argv_out in
+  1:*"verdict: WEDGED DEVICE ("*"(exit 1)"*"wedged device (the device_init_deadline's own line):"*"  OCANNL device_init_deadline: hip device initialization"*"journalctl -k"*) ;;
+  *) wedged_detail="wedged_init: exit $argv_rc (want 1) or verdict/quote missing: $argv_out" ;;
+esac
+if [ -z "$wedged_detail" ]; then
+  argv_mode=wedged_long argv_probe wedged-long run build @cheap
+  case $argv_rc:$argv_out in
+    1:*"verdict: WEDGED DEVICE ("*"  OCANNL device_init_deadline: hip device initialization"*) ;;
+    *) wedged_detail="wedged_long: the line before 11MB of output was missed: exit $argv_rc: $(printf '%s' "$argv_out" | head -c 2000)" ;;
+  esac
+fi
+if [ -z "$wedged_detail" ]; then
+  argv_mode=wedged_quoted argv_probe wedged-quoted run build @cheap
+  case $argv_rc:$argv_out in
+    *WEDGED* | *"wedged device"*) wedged_detail="wedged_quoted: an indented quote read as a death: $argv_out" ;;
+    1:*"verdict: FAIL (exit 1)"*) ;;
+    *) wedged_detail="wedged_quoted: exit $argv_rc (want 1) or FAIL missing: $argv_out" ;;
+  esac
+fi
+argv_mode=
+if [ -z "$wedged_detail" ]; then
+  report 0 "$wedged_label"
+else
+  report 1 "$wedged_label" "$wedged_detail"
+fi
+fi # leg 84
 
 # Legs 68-69 (gh-ocannl-1055): promotion is offered only on a diff dune printed.
 # A rule whose action failed names its `.corrected` file in the quoted stanza,

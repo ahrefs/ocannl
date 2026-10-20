@@ -67,10 +67,12 @@ let raw_entries =
         "[scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes";
         "[scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets";
         "[scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers";
+        "[scanner-refusal:94abf9ad59c6aa58e4608e31b0c1481a] sources' string literals";
         "[scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported";
         "[scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries";
         "[scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet";
         "[scanner-refusal:ec62d0a7d728c7ab15a2c9b8608c6404] every exemption still";
+        "[scanner-refusal:91d29d400185d4fe574f5deb83d48157] every pointer-fixture exemption";
       ] );
     ( "changelog_unreleased_scan.ml",
       [
@@ -192,6 +194,7 @@ let raw_entries =
         "[scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient";
         "[scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads";
         "[scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan";
+        "[scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics";
         "[scanner-refusal:6d151bed80a45201e61d096c2c38d210] which has no";
         "[scanner-refusal:5509acc7fac8ff0412e3631b49c06dc7] change directory without";
         "[scanner-refusal:cb948484fece727200c2dc74529ab671] the ambient environment";
@@ -243,7 +246,6 @@ let raw_entries =
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
         "[scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";
-        "[scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names";
         "[scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies";
         "[scanner-refusal:98de32226b019b81ff6e88bf4e44c14b] supplies OCaml implementation";
         "[scanner-refusal:05a2eb509694607c615f131c6949c1f1] inventory supplies Markdown";
@@ -256,6 +258,7 @@ let raw_entries =
     ( "dead_export_scan.ml",
       [
         "[scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules";
+        "[scanner-refusal:b10ed46107421e53b9d08523e194ffa2] dead-export census does";
         "[scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch";
         "[scanner-refusal:a2a944c677a0439ea6a8b98ef3decc70] its mention counts";
         "[scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does";
@@ -319,6 +322,12 @@ let raw_entries =
         "[scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value";
         "[scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names";
         "[scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost";
+        "[scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost";
+        "[scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose";
+        "[scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does";
+        "[scanner-refusal:e96ac262e859176f6f0ec05d6f2f30cb] the wrong stanza";
+        "[scanner-refusal:0a10ab654cc394b5f797d88ea889d086] inside the parentheses";
+        "[scanner-refusal:be4bb5e070f7c1653c2f7236cb2e6a18] times and only";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
         "[scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend";
         "[scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker";
@@ -358,10 +367,14 @@ let raw_entries =
         "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
         "[scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width";
+        "[scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than";
+        "[scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file";
+        "[scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search";
         "[scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
+        "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
         "[scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no";
@@ -517,6 +530,40 @@ let raw_entries =
         "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
         "[scanner-refusal:1980131e56fcd4b8e4810ba218228fe7] whose rule depends";
         "[scanner-refusal:a6af1a4eabd80e213ebd285160652900] argument stays ungated";
+        "[scanner-refusal:4bff8c4ce57f4125cd336ce630eaf5bb] a program starting";
+        "[scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent";
+        "[scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable";
+        "[scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization";
+        "[scanner-refusal:720484df63c40ad6dd2418d4cfa706cc] program's own statements";
+        "[scanner-refusal:6454f0cfc83773267ad5cf7695226069] helper printing its";
+        "[scanner-refusal:be7654cb2fedf501f96178ab18687738] search started through";
+        "[scanner-refusal:7fbb55a505a047a588bcf2bfe6df0f36] program whose only";
+        "[scanner-refusal:c6749493265651edae753b4d91b6057f] program that starts";
+        "[scanner-refusal:297ca2b13030714ee532288bcdea6931] refused as contradictory";
+        "[scanner-refusal:008feff3fd3ac8bf0aa213425ccab973] marker declaring anything";
+        "[scanner-refusal:f73bf9597915d82e0263c79001cade55] stanza are refused";
+        "[scanner-refusal:46430b0f534e84dda590f0e5cb983438] marker's sentinel outside";
+        "[scanner-refusal:d3576c4f9152f9f5a8f7b5bd17bc7e39] no program's modules";
+        "[scanner-refusal:435bce2f838f426728b540ba5f6c905f] marker between stanzas";
+        "[scanner-refusal:3956653315998753df29070b7b38ae6c] entry point renamed";
+        "[scanner-refusal:eb27e7f56b8d3460a37076b391593d9e] configuration table pins";
+        "[scanner-refusal:22825750e1b48f737f60249e27047e28] empty string which";
+        "[scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's";
+        "[scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does";
+        "[scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the";
+        "[scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement";
+        "[scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds";
+        "[scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself";
+        "[scanner-refusal:e1e7c11bf8ecfecb20b9031955b16937] helper called after";
+        "[scanner-refusal:63423f2793604647b96a315b851f1859] ocannl_cc_vector_bytes=-1";
+        "[scanner-refusal:48335fe342f8e4b1cdf081db8783e475] search started through";
+        "[scanner-refusal:0876bfabcf2ed9abc14e936d4ebd9018] command-line setting in";
+        "[scanner-refusal:25394c54f621666e9eb6b4419cee87fd] closure the initializer";
+        "[scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before";
+        "[scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu";
+        "[scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which";
+        "[scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes";
+        "[scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );
@@ -595,6 +642,7 @@ let raw_entries =
         "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
+        "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
@@ -688,6 +736,8 @@ let raw_direct_evidence =
     ( "config_dep_completeness.ml:6c29eb9b1db92bba229707a7cd8e1b5b",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:cebf445823df462f70b459a86b20e3d3",
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
+    ( "config_dep_completeness.ml:5e382153a89be91293964b5417659f1a",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:6d151bed80a45201e61d096c2c38d210",
       "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
@@ -811,6 +861,28 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:3d0e227333c3757cabc427ac4fb81130",
       "a linked library whose source the scan was never handed is refused, not read as making no \
        reads: true" );
+    ( "env_var_deps.ml:a81eacf691e2faeada3ee2b79d5fd7a6",
+      "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
+       are both refused: true" );
+    ( "env_var_deps.ml:0a10ab654cc394b5f797d88ea889d086",
+      "a marker between stanzas is refused rather than attributed: true" );
+    ( "env_var_deps.ml:2dc2479687a000324b3f828912a7f4a8",
+      "an entry point renamed away is refused as a lost anchor, not read as no search: true" );
+    ( "env_var_deps.ml:677d819fac904c64b7025b4f17c07b5a",
+      "a marker on a program that starts no search is refused as stale: true" );
+    ( "env_var_deps.ml:43edb2931bbdd95a9e49a3d134b34e9c",
+      "a program starting a search with a run that can select cc is reported when it neither pins \
+       the width nor carries the marker: true" );
+    ( "env_var_deps.ml:9de3b3fd1cd96a8d87e76bfa31534244",
+      "a marker declaring anything but `independent` is refused: true" );
+    ( "env_var_deps.ml:a45f7f9b519fd1f5ef3516593179eef6",
+      "a marker on a program that pins the width is refused as contradictory: true" );
+    ( "env_var_deps.ml:be4bb5e070f7c1653c2f7236cb2e6a18",
+      "the marker's sentinel outside a comment is refused: true" );
+    ( "env_var_deps.ml:e47faeb8aa90e38e3dd7b698f6ac8998",
+      "two markers on one stanza are refused: true" );
+    ( "env_var_deps.ml:e96ac262e859176f6f0ec05d6f2f30cb",
+      "a marker on a rule, which names no program's modules, is refused: true" );
     ( "env_var_deps.ml:77abb7920eac5544c6bf60dd498ec9cf",
       "a test projecting a width field off a limits record is reported, naming the variable and \
        the read, when its stanza declares neither: true" );

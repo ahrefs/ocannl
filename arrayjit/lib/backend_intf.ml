@@ -96,7 +96,7 @@ type mma_input_format =
       (** OCANNL's single fp8 today ([Ops.Fp8_prec], e5m2). An e4m3 constructor slots in here when
           the precision exists (gh-ocannl-481 item 2); descriptor entries are keyed per operand
           pair, so mixed e5m2×e4m3 combinations need no interface change. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 
 (** A physical layout the backend's tensor-core loads can consume for a cooperatively staged operand
     tile, beyond the plain row-major one (gh-ocannl-481 item 3, D3). *)
@@ -106,7 +106,7 @@ type mma_staged_layout =
           [ldmatrix.sync.aligned.m8n8] or swizzle-aware byte gathers where [ldmatrix.b16] cannot
           form the register. Metal banks too but has no [ldmatrix] analogue; a later [simdgroup]-era
           entry would reuse this type. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 
 (** Where a tensor-unit rendering keeps its accumulator. The distinction is observable whenever a
     reduction is split into outer [k] blocks: {!Mma_per_statement} crosses only the intrinsic's own
@@ -189,7 +189,7 @@ type mma_capability = {
           sm_80+, phase 2, the [cp.async] arm); HIP stays empty until its LDS async-copy arm lands.
           Empty on CPU backends (cooperative staging is not renderable there). *)
 }
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 (** Tensor-core capability descriptor (docs/proposals/tensorize-mma.md §6). Which operand precisions
     are supported is decided per call by the backend's [mma_syntax] hook (the emission is the source
     of truth); this record carries what schedule construction needs. *)
@@ -404,7 +404,7 @@ type hardware_limits = {
           ["auto"] resolves to is a per-machine fact, and crowns do not transfer across machines
           either. [None] where the backend has no such knobs. *)
 }
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of]
 
 (** Equality of the [(a-operand, b-operand, accumulator)] format triple that keys
     {!field-mma_capability.mma_format_tiles} and {!field-mma_capability.mma_staged_layouts}. All

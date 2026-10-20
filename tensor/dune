@@ -9,7 +9,7 @@
  (public_name neural_nets_lib.einsum_parser)
  (libraries base menhirLib)
  (preprocess
-  (pps ppx_compare ppx_fields_conv ppx_hash ppx_sexp_conv))
+  (pps ppx_compare ppx_hash ppx_sexp_conv))
  (modules einsum_types lexer parser einsum_parser)
  (flags :standard -w -69-3))
 
@@ -59,4 +59,4 @@
  (modules ppx_shared ppx_cd ppx_op ppx_extend_dsls ppx_ocannl)
  (libraries base ppxlib str einsum_parser)
  (preprocess
-  (pps ppxlib.metaquot ppx_variants_conv)))
+  (pps ppxlib.metaquot)))

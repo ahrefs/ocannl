@@ -56,10 +56,12 @@ agent_notes_structure.ml has exactly the explicitly assigned refusal controls: t
 agent_notes_structure.ml: [scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers (claim) is catalogued beside agent_notes_structure.expected: true
+agent_notes_structure.ml: [scanner-refusal:94abf9ad59c6aa58e4608e31b0c1481a] sources' string literals (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:ec62d0a7d728c7ab15a2c9b8608c6404] every exemption still (claim) is catalogued beside agent_notes_structure.expected: true
+agent_notes_structure.ml: [scanner-refusal:91d29d400185d4fe574f5deb83d48157] every pointer-fixture exemption (claim) is catalogued beside agent_notes_structure.expected: true
 backend_golden_family_scan.ml has exactly the explicitly assigned refusal controls: true
 backend_golden_family_scan.ml: [scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance (claim) is catalogued beside backend_golden_family_scan.expected: true
 bin_smoke_membership_scan.ml has exactly the explicitly assigned refusal controls: true
@@ -169,6 +171,7 @@ config_dep_completeness.ml: [scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] a
 config_dep_completeness.ml: [scanner-refusal:3e9cd231a7db9663f3ceba5ab3891105] produces the ambient (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:6c29eb9b1db92bba229707a7cd8e1b5b] Dune_stanza_scan.action_heads (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:cebf445823df462f70b459a86b20e3d3] Dune_stanza_scan (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
+config_dep_completeness.ml: [scanner-refusal:5e382153a89be91293964b5417659f1a] build-and-test.md#dune-mechanics (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:6d151bed80a45201e61d096c2c38d210] which has no (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:5509acc7fac8ff0412e3631b49c06dc7] change directory without (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:cb948484fece727200c2dc74529ab671] the ambient environment (direct failure) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
@@ -214,7 +217,6 @@ config_usage_scan.ml: [scanner-refusal:b8ac42648b6918233995586551724f6f] documen
 config_usage_scan.ml: [scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:98de32226b019b81ff6e88bf4e44c14b] supplies OCaml implementation (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:05a2eb509694607c615f131c6949c1f1] inventory supplies Markdown (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
@@ -225,6 +227,7 @@ config_usage_scan.ml: [scanner-refusal:e457cc60db51565a141d184de6993035] ocannl_
 config_usage_scan.ml: [scanner-refusal:e325a76c47f652bc02203717ce08c44a] checked-in debug config (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 dead_export_scan.ml has exactly the explicitly assigned refusal controls: true
 dead_export_scan.ml: [scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
+dead_export_scan.ml: [scanner-refusal:b10ed46107421e53b9d08523e194ffa2] dead-export census does (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:a2a944c677a0439ea6a8b98ef3decc70] its mention counts (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
@@ -282,6 +285,12 @@ env_var_deps.ml: [scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width
 env_var_deps.ml: [scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:e96ac262e859176f6f0ec05d6f2f30cb] the wrong stanza (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:0a10ab654cc394b5f797d88ea889d086] inside the parentheses (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:be4bb5e070f7c1653c2f7236cb2e6a18] times and only (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -321,10 +330,14 @@ env_var_deps.ml: [scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the co
 env_var_deps.ml: [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -479,6 +492,40 @@ env_var_deps.ml: [scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions a
 env_var_deps.ml: [scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:1980131e56fcd4b8e4810ba218228fe7] whose rule depends (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a6af1a4eabd80e213ebd285160652900] argument stays ungated (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:4bff8c4ce57f4125cd336ce630eaf5bb] a program starting (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:720484df63c40ad6dd2418d4cfa706cc] program's own statements (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:6454f0cfc83773267ad5cf7695226069] helper printing its (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:be7654cb2fedf501f96178ab18687738] search started through (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:7fbb55a505a047a588bcf2bfe6df0f36] program whose only (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:c6749493265651edae753b4d91b6057f] program that starts (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:297ca2b13030714ee532288bcdea6931] refused as contradictory (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:008feff3fd3ac8bf0aa213425ccab973] marker declaring anything (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:f73bf9597915d82e0263c79001cade55] stanza are refused (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:46430b0f534e84dda590f0e5cb983438] marker's sentinel outside (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:d3576c4f9152f9f5a8f7b5bd17bc7e39] no program's modules (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:435bce2f838f426728b540ba5f6c905f] marker between stanzas (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:3956653315998753df29070b7b38ae6c] entry point renamed (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:eb27e7f56b8d3460a37076b391593d9e] configuration table pins (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:22825750e1b48f737f60249e27047e28] empty string which (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:e1e7c11bf8ecfecb20b9031955b16937] helper called after (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:63423f2793604647b96a315b851f1859] ocannl_cc_vector_bytes=-1 (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:48335fe342f8e4b1cdf081db8783e475] search started through (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:0876bfabcf2ed9abc14e936d4ebd9018] command-line setting in (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:25394c54f621666e9eb6b4419cee87fd] closure the initializer (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 refused_action_streams.ml has exactly the explicitly assigned refusal controls: true
@@ -565,6 +612,7 @@ verdict_ratchet.ml: [scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports t
 verdict_ratchet.ml: [scanner-refusal:b58d64bebca3825149316fa29084d773] which reads (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
+verdict_ratchet.ml: [scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true

@@ -768,7 +768,11 @@ jobs:
       env:
         OCANNL_TOOL_HARNESS_STRICT: 1
       run: tools/test-harnesses.sh --promotion
+    # The script's default command also builds the repository scans (gh-ocannl-1321), which need
+    # the project's dependencies this switch does not hold; the build matrix runs them.
     - name: Check formatting and documentation comments
+      env:
+        OCANNL_TOOL_FMT_CHECK_SCANS: 0
       run: tools/fmt-check.sh
 
   # The promotion fixtures again, at the declared Dune floor (gh-ocannl-1215).
