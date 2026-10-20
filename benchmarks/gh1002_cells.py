@@ -43,7 +43,9 @@ every phase boundary.
 Resumable: a cell whose output already holds a result line is not run again. A run directory is
 bound to one revision and one set of fixture bytes (preflight.json): resuming it from a different
 checkout or with different fixtures refuses rather than mixing the two. Each cell -- and the
-preflight's Dune build -- runs in its own process group, killed whole at its deadline. `summarize`
+preflight's Dune build -- runs in its own process group, killed whole at its deadline. A cell that
+ends without a result appends orchestrate's failure record to DIR/failures.jsonl: the reason, and
+the checkpoint of the loss work it completed, with the run's identity (gh-ocannl-1234). `summarize`
 fails on a matrix with a missing cell, a missing torch reference or an incomplete kernel table
 (`--partial` lists missing cells instead).
 """
@@ -63,6 +65,7 @@ from pathlib import Path
 
 import box_gate
 import cell_group
+import orchestrate
 import strict_json
 from display_safe import code_span, display_value, log_line, table_lines
 
@@ -183,8 +186,18 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
     with open(str(base) + ".cmd", "w") as f:
         f.write(" ".join(f"{k}={v}" for k, v in extra.items()) + " " + " ".join(argv) + "\n")
     log(f"run {base.name}")
-    with open(str(base) + ".out", "w") as o, open(str(base) + ".err", "w") as e:
-        status = run_in_own_group(argv, env=clean_env(extra), stdout=o, stderr=e)
+    env = clean_env(extra)
+    try:
+        with open(str(base) + ".out", "w") as o, open(str(base) + ".err", "w") as e:
+            status = run_in_own_group(argv, env=env, stdout=o, stderr=e)
+    except BaseException as exc:
+        # Interrupted, or a cleanup not proven complete: what the cell completed is recorded
+        # before the cancellation propagates, as orchestrate's sweep records it.
+        checkpoint = cell_checkpoint(base)
+        if checkpoint is not None:
+            why = str(exc) if isinstance(exc, cell_group.CleanupFailed) else "interrupted mid-cell"
+            record_failure(out, base, why, env, checkpoint)
+        raise
     with open(str(base) + ".status", "w") as f:
         f.write(f"{status}\n")
     if artifacts:
@@ -198,13 +211,56 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
             with open(str(base) + ".status", "w") as f:
                 f.write("no-artifacts\n")
             log(f"FAILED {base.name}: no generated sources under {display_value(str(staged))}")
+            record_failure(out, base, f"no generated sources (status {status})", env,
+                           cell_checkpoint(base))
             return
     res = result_line(base)
     if res is None:
         log(f"FAILED {base.name}: status {status}, no result line")
+        if status == "timeout":
+            why = (f"TIMED OUT after {CELL_TIMEOUT_S:g}s (cap) -- killed the cell's whole "
+                   "process group")
+        elif status != 0:
+            why = f"exit {status}"
+        else:
+            why = "no result line with the fixture's full finite loss window"
+        record_failure(out, base, why, env, cell_checkpoint(base))
     else:
         log(f"done {base.name}: p50 {res['step_ms']['p50']:.1f} ms, "
             f"peak {res['peak_memory_bytes'] / 2**20:.1f} MiB")
+
+
+def cell_checkpoint(base):
+    """The last checkpoint the cell wrote to its .err (`orchestrate.last_checkpoint`), or None."""
+    try:
+        return orchestrate.last_checkpoint(
+            Path(str(base) + ".err").read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
+
+
+def record_failure(out, base, why, env, checkpoint):
+    """Append the cell's failure to DIR/failures.jsonl as orchestrate records one (gh-ocannl-1234):
+    `orchestrate.failure_record` -- the reason, the regime (every cell here is untuned under no
+    profile: exact), the inherited OCANNL_* environment, and the checkpoint a killed or failed cell
+    left (gh-ocannl-1209) with its provenance, which is the run's preflight identity -- plus the
+    cell's coordinates. The cell's .out/.err/.status stay what `summarize` reads; this is the record
+    of what a failure kept."""
+    backend, fixture, treatment, r = base.name.split("__")
+    pf = out / "preflight.json"
+    ident = json.loads(pf.read_text()) if pf.exists() else {}
+    record = orchestrate.failure_record(
+        base.name, why, orchestrate.ambient_ocannl_env(env), checkpoint,
+        provenance={"source_revision": ident.get("revision"),
+                    # A dirty tree is refused before the preflight records its identity.
+                    "source_tracked_changes": False if ident else None,
+                    "bench_gpt_sha256": ident.get("bench_gpt_sha256"),
+                    "fixture_content_sha256": (ident.get("fixtures") or {}).get(fixture),
+                    "host": ident.get("host")},
+        regime="exact")
+    record.update(backend=backend, fixture=fixture, treatment=treatment, repeat=r)
+    with open(out / "failures.jsonl", "a") as f:
+        f.write(json.dumps(orchestrate.json_safe(record), allow_nan=False) + "\n")
 
 
 def run_in_own_group(argv, cwd=HERE, timeout=None, **kw):

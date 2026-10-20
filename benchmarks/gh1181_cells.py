@@ -194,6 +194,29 @@ def environment(a, fixtures):
     }
 
 
+def cell_label(workload, arm, repeat, stage):
+    return f"{workload}-r{repeat}-{arm}-{stage}"
+
+
+def cell_failure(workload, arm, repeat, stage, why, env, regime, stamps, shas, checkpoint=None):
+    """One line of failures.jsonl: orchestrate's own failure record (gh-ocannl-1234) -- the
+    dispatched regime and the inherited OCANNL_* environment beside the reason, and the losses a
+    killed cell completed (gh-ocannl-1209) kept with its failure, never among the rows the gates
+    and the summary read, stamped as a row would be since the checkpoint names its fixture and
+    runner only by path -- with this driver's identity of the cell alongside. `stamps` are the
+    workloads' fixture stamps and `shas` the trees' revisions (a dirty tree is refused up front)."""
+    import orchestrate as o
+
+    tree = ARMS.get(arm, (None, None))[1]
+    record = o.failure_record(
+        cell_label(workload, arm, repeat, stage), why, o.ambient_ocannl_env(env), checkpoint,
+        provenance=dict(stamps.get(workload, {}), source_revision=shas.get(tree),
+                        source_tracked_changes=False),
+        regime=regime)
+    record.update(workload=workload, arm=arm, repeat=repeat, stage=stage)
+    return record
+
+
 def measure(a):
     out = a.out.resolve()
     # Read by orchestrate at import: every cell's combined output lands in cells/ as it runs.
@@ -272,42 +295,29 @@ def measure(a):
     searched_once = {}  # (workload, arm) -> the latest search pass, gated with its repeat
     search_cost = {}  # (workload, arm) -> compile_s of that search plus its completion passes
 
-    def fail(workload, arm, repeat, stage, why, checkpoint=None):
-        failures.append({"workload": workload, "arm": arm, "repeat": repeat, "stage": stage,
-                         "why": why})
-        if checkpoint is not None:
-            # The losses a killed cell completed (gh-ocannl-1209): kept with its failure, never
-            # among the rows the gates and the summary read, and stamped as a row would be, since
-            # the checkpoint names its fixture and runner only by path.
-            tree = ARMS.get(arm, (None, None))[1]
-            failures[-1].update(
-                checkpoint=checkpoint,
-                provenance=dict(stamps.get(workload, {}), revision=shas.get(tree),
-                                executable_sha256=executables.get(tree, {}).get("sha256")),
-            )
-        append(out, "failures.jsonl", failures[-1])
+    def fail(workload, arm, repeat, stage, why, env, regime, checkpoint=None):
+        record = cell_failure(workload, arm, repeat, stage, why, env, regime, stamps, shas,
+                              checkpoint)
+        failures.append(record)
+        append(out, "failures.jsonl", record)
 
     def run(workload, arm, repeat, stage, cmd, env, cwd, regime):
         remaining = a.total_timeout - (time.monotonic() - start)
         if remaining < 30:
-            fail(workload, arm, repeat, stage, "total time cap reached")
+            fail(workload, arm, repeat, stage, "total time cap reached", env, regime)
             return None
-        label = f"{workload}-r{repeat}-{arm}-{stage}"
-        kept = []
-        try:
-            row, note = o.run_cell(
-                label, [*pin, *cmd], env=env, cwd=cwd,
-                # A zero cell cap disables only the cell's own cap, never the total.
-                timeout=min(a.cell_timeout, remaining) if a.cell_timeout else remaining,
-                on_incomplete=(o.ocannl_cache_note if arm.startswith("ocannl") else None),
-                on_checkpoint=kept.append)
-        except BaseException:
-            if kept:  # interrupted: record what the cell completed before propagating
-                fail(workload, arm, repeat, stage, "interrupted mid-cell", kept[-1])
-            raise
+        label = cell_label(workload, arm, repeat, stage)
+        row, note, checkpoint = o.run_cell_kept(
+            label, [*pin, *cmd], env=env, cwd=cwd,
+            # Interrupted: record what the cell completed before propagating.
+            on_interrupted=lambda kept: fail(
+                workload, arm, repeat, stage, "interrupted mid-cell", env, regime, kept),
+            # A zero cell cap disables only the cell's own cap, never the total.
+            timeout=min(a.cell_timeout, remaining) if a.cell_timeout else remaining,
+            on_incomplete=(o.ocannl_cache_note if arm.startswith("ocannl") else None))
         if row is None:
-            fail(workload, arm, repeat, stage, note, kept[-1] if kept else None)
-            if "SURVIVED SIGKILL" in note or "LIVENESS IS UNKNOWN" in note:
+            fail(workload, arm, repeat, stage, note, env, regime, checkpoint)
+            if o.group_unproven(note):
                 raise RuntimeError("cell group cleanup unproven: " + note)
             return None
         framework = row.get("framework")
@@ -320,7 +330,7 @@ def measure(a):
             row["wrong_backend"] = want
             append(out, "raw.jsonl", row)
             fail(workload, arm, repeat, stage,
-                 f"ran on backend {row.get('backend')!r}, expected {want!r}")
+                 f"ran on backend {row.get('backend')!r}, expected {want!r}", env, regime)
             return None
         append(out, "raw.jsonl", row)
         return row

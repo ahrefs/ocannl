@@ -674,6 +674,7 @@ JSON_LOADS_NOT_RESULT_LINES = {
     ("gh1002_cells.py", "recorded = json.loads(pf.read_text())"): "the driver's own preflight.json",
     ("gh1002_cells.py", '"workloads"'): "workload spec",
     ("gh1002_cells.py", "pre = json.loads((out"): "the driver's own preflight.json",
+    ("gh1002_cells.py", "ident = json.loads(pf.read_text())"): "the driver's own preflight.json",
     ("gh1181_cells.py", "return [json.loads(line) for line in path"):
         "the driver's own timings.jsonl/failures.jsonl (json_safe, allow_nan=False)",
     ("gh1181_cells.py", "versions = json.loads(supporting_output"): "the venv's version probe",
@@ -1185,8 +1186,10 @@ class FailureRecordTest(unittest.TestCase):
         # The report's saved-loss diagnostic reads the checkpoint and regime off the failure.
         self.assertIn("failures.append(Failure(label, note, checkpoint, regime, cell_stamp))", main)
         # Both the cell and its search pass go through the helper that records an interrupted
-        # cell's checkpoint before the cancellation propagates.
-        self.assertEqual(main.count("run_cell("), 1)
+        # cell's checkpoint before the cancellation propagates -- the shared `run_cell_kept`, every
+        # sweep driver's runner (gh-ocannl-1234), and never `run_cell` bare.
+        self.assertEqual(main.count("run_cell_kept("), 1)
+        self.assertEqual(main.count("run_cell("), 0)
         self.assertEqual(main.count("run_kept("), 3)
         self.assertLess(main.index("source = source_identity(ROOT)"), main.index("def collect("))
 
@@ -4533,6 +4536,167 @@ class CellTimeoutTest(unittest.TestCase):
 
         self.assertTrue(
             self.wait_gone(grandchild), f"pid {grandchild} outlived the cancelled sweep"
+        )
+
+    @unittest.skipUnless(os.name == "posix", "SIGHUP is POSIX-only")
+    def test_a_hangup_of_the_sweep_takes_its_cell_and_its_build_with_it(self):
+        # gh-ocannl-1234: the hangup of the terminal or ssh session the sweep runs in, delivered to
+        # orchestrate.py's own process while it waits on a cell and while it waits on a supporting
+        # command (a build). Both children lead sessions of their own, so the sweep is the only one
+        # to hear it, and each forks a SIGTERM-ignoring worker that only the group's SIGKILL takes.
+        for entry in ("run_cell('cell under a hung-up sweep', child)", "run_supporting(child)"):
+            with self.subTest(entry=entry):
+                tag = entry.split("(")[0]
+                pidfile = self.dir / f"hangup-{tag}-worker.pid"
+                kill_the_group_on_cleanup(self, pidfile)
+                leader = self.dir / f"hangup-{tag}-leader.pid"
+                kill_the_group_on_cleanup(self, leader)
+                child_source = (
+                    "import subprocess, sys, time\n"
+                    "kid = subprocess.Popen([sys.executable, '-c', 'import signal, time; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)'])\n"
+                    + publish_pid("sys.argv[1]", "kid.pid")
+                    + publish_pid("sys.argv[2]", "os.getpid()")
+                    + "time.sleep(300)\n"
+                )
+                driver = self.python(
+                    "import signal, sys, orchestrate\n"
+                    # A sweep started from a terminal: the hangup is a termination (one started
+                    # under nohup keeps ignoring it, test_a_nohup_driver_keeps_ignoring_hangups).
+                    "signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+                    "orchestrate.CELL_KILL_GRACE_S = 0.5\n"
+                    "orchestrate.install_termination_handler()\n"
+                    f"child = [sys.executable, '-c', {child_source!r}, sys.argv[1], sys.argv[2]]\n"
+                    f"orchestrate.{entry}\n"
+                    "print('returned')\n",
+                    pidfile,
+                    leader,
+                )
+                sweep = subprocess.Popen(
+                    driver,
+                    cwd=str(Path(orchestrate.__file__).parent),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                self.addCleanup(lambda sweep=sweep: sweep.poll() is None and sweep.kill())
+                end = time.monotonic() + 30
+                while time.monotonic() < end and not (pidfile.exists() and leader.exists()):
+                    time.sleep(0.05)
+                self.assertTrue(pidfile.exists() and leader.exists(), "the child never started")
+                worker, child = int(pidfile.read_text()), int(leader.read_text())
+
+                sweep.send_signal(signal.SIGHUP)
+                out, err = sweep.communicate(timeout=30)
+
+                self.assertNotEqual(sweep.returncode, 0, (out, err))
+                self.assertNotIn("returned", out)
+                self.assertIn("terminated by signal", err)
+                self.assertTrue(self.wait_gone(child), f"the {tag} child outlived the hangup")
+                self.assertTrue(self.wait_gone(worker), f"the {tag} worker outlived the hangup")
+
+    # gh-ocannl-1234: a cell killed at its cap after checkpointing its parity losses, in each sweep
+    # driver -- orchestrate's shared runner and the records gh1181, gh675 and gh1002 make of what it
+    # left. Each record carries the checkpoint whole, beside its provenance.
+    def test_the_shared_runner_and_gh1181_keep_a_killed_cells_checkpoint(self):
+        import gh1181_cells
+
+        # orchestrate.py's runner, and gh1181_cells.py's record of what it returned.
+        pidfile = self.dir / "kept.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        line = self.golden_checkpoint("running")
+        expected = orchestrate.last_checkpoint(line)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            line,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            result, note, checkpoint = orchestrate.run_cell_kept("killed", cell, timeout=1.0)
+        self.assertIsNone(result)
+        self.assertIn("TIMED OUT after 1s", note)
+        self.assertEqual(checkpoint, expected)
+        record = gh1181_cells.cell_failure(
+            "gpt2_mini_train_s1024", "ocannl-master-exact", 1, "search", note,
+            {"OCANNL_BACKEND": "cuda", "PATH": "/bin"}, "exact",
+            {"gpt2_mini_train_s1024": {"fixture_sha256": "f" * 64}}, {"master": "a" * 40},
+            checkpoint,
+        )
+        self.assertEqual(record["checkpoint"], expected)
+        self.assertEqual(record["why"], note)
+        self.assertEqual(record["regime"], "exact")
+        self.assertEqual(record["ambient_ocannl_env"], {"OCANNL_BACKEND": "cuda"})
+        self.assertEqual(record["provenance"]["fixture_sha256"], "f" * 64)
+        self.assertEqual(record["provenance"]["source_revision"], "a" * 40)
+        self.assertEqual((record["arm"], record["repeat"], record["stage"]),
+                         ("ocannl-master-exact", 1, "search"))
+
+    def test_gh675_keeps_a_killed_passs_checkpoint(self):
+        import gh675_cells
+
+        # A pass that wedged is a failed record, not an exception.
+        pidfile = self.dir / "gh675.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        line = self.golden_checkpoint("running")
+        expected = orchestrate.last_checkpoint(line)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            line,
+        )
+        with unittest.mock.patch.object(gh675_cells, "gate", return_value=True), \
+                unittest.mock.patch.object(gh675_cells, "TASKSET", []), \
+                unittest.mock.patch.dict(gh675_cells.DIGESTS, {"gpt2_mini": "d" * 64}), \
+                unittest.mock.patch.dict(gh675_cells.SOURCE, {"source_revision": "b" * 40}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            record = gh675_cells.run(
+                "D_ocannl gpt2_mini rep1 pass1", cell, timeout=1.0, workload="gpt2_mini"
+            )
+        self.assertTrue(record["__failed__"])
+        self.assertIn("TIMED OUT after 1s", record["why"])
+        self.assertEqual(record["checkpoint"], expected)
+        self.assertEqual(record["provenance"]["fixture_sha256"], "d" * 64)
+        self.assertEqual(record["provenance"]["source_revision"], "b" * 40)
+        self.assertIs(record["gate_ok"], True)
+
+    @unittest.skipUnless(os.name == "posix", "the stand-in runner is a shebang script")
+    def test_gh1002_keeps_a_killed_cells_checkpoint(self):
+        import gh1002_cells
+
+        # Its own runner and .out/.err layout, orchestrate's record.
+        pidfile = self.dir / "gh1002.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        line = self.golden_checkpoint("running")
+        expected = orchestrate.last_checkpoint(line)
+        runner = self.dir / "bench_gpt"
+        runner.write_text(
+            f"#!{sys.executable}\nimport os, sys\n"
+            f"sys.stderr.write({line!r} + '\\n'); sys.stderr.flush()\n"
+            + publish_pid(repr(str(pidfile)), "os.getpid()")
+            + "import time; time.sleep(300)\n"
+        )
+        runner.chmod(0o755)
+        out = self.dir / "gh1002-out"
+        out.mkdir()
+        with unittest.mock.patch.object(gh1002_cells, "BENCH_GPT", runner), \
+                unittest.mock.patch.object(gh1002_cells, "CELL_TIMEOUT_S", 1), \
+                unittest.mock.patch.object(gh1002_cells, "CELL_TERMINATE_GRACE_S", 0.1), \
+                contextlib.redirect_stdout(io.StringIO()):
+            gh1002_cells.run_cell(out, "cc", "gpt2_mini_train", "A", 0)
+        records = [
+            strict_loads(text) for text in (out / "failures.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(len(records), 1)
+        self.assertIn("TIMED OUT after 1s", records[0]["why"])
+        self.assertEqual(records[0]["checkpoint"], expected)
+        self.assertEqual(records[0]["regime"], "exact")
+        self.assertEqual(
+            (records[0]["backend"], records[0]["fixture"], records[0]["treatment"]),
+            ("cc", "gpt2_mini_train", "A"),
         )
 
     @unittest.skipUnless(Path("/proc/self/stat").exists(), "the zombie distinction needs procfs")

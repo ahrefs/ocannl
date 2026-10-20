@@ -1044,10 +1044,26 @@ def _group_observation(proc, allow_zombie_gone=False):
     return proc.observe(allow_zombie_gone=allow_zombie_gone)
 
 
+# What a failure note says when a cell's group was not proven gone after SIGKILL: one phrase per
+# observation, and the only spelling `group_unproven` reads.
+_REMAINING_NOTES = {
+    cell_group.SURVIVORS: "A MEMBER SURVIVED SIGKILL",
+    cell_group.UNKNOWN: "GROUP LIVENESS IS UNKNOWN AFTER SIGKILL",
+}
+
+
 def _remaining_note(observation):
-    if observation is cell_group.SURVIVORS:
-        return "A MEMBER SURVIVED SIGKILL"
-    return "GROUP LIVENESS IS UNKNOWN AFTER SIGKILL"
+    return _REMAINING_NOTES.get(observation, _REMAINING_NOTES[cell_group.UNKNOWN])
+
+
+def group_unproven(note):
+    """Whether a `run_cell` failure note says the cell's process group was not proven gone.
+
+    `run_cell` records such a cell and returns, which is the matrix's policy: the sweep goes on and
+    the note says which later rows to disbelieve. A focused driver that would rather stop than time
+    the next cell beside a survivor (gh1181_cells.py, gh675_cells.py) asks this of the note.
+    """
+    return note is not None and any(phrase in note for phrase in _REMAINING_NOTES.values())
 
 
 def kill_cell_group(proc):
@@ -1200,6 +1216,26 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None, o
     """
     with _cancellation.deferring():
         return _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint)
+
+
+def run_cell_kept(label, cmd, on_interrupted=None, **kwargs):
+    """`run_cell`, plus the last checkpoint a failed cell left: `(result, note, checkpoint)`.
+
+    The one way every sweep driver runs a cell and keeps what a failed one completed
+    (gh-ocannl-1234): `checkpoint` is the cell's last checkpoint when it ended without a result
+    (`last_checkpoint`), else None, and is what the driver's failure record carries
+    (`failure_record`). An interrupted cell raises out of here like out of `run_cell`; its
+    checkpoint is first handed to `on_interrupted(checkpoint)`, since the driver writes nothing else
+    for it before the cancellation propagates.
+    """
+    kept = []
+    try:
+        result, note = run_cell(label, cmd, on_checkpoint=kept.append, **kwargs)
+    except BaseException:
+        if kept and on_interrupted:
+            on_interrupted(kept[-1])
+        raise
+    return result, note, (kept[-1] if kept else None)
 
 
 # The longest a cell log's file name may be, in bytes: below the 255-byte component limit of
@@ -3193,19 +3229,17 @@ def main():
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
     def run_kept(label, cmd, regime=None, cell_stamp=None, **kwargs):
-        """`run_cell` under the sweep's cap, plus the last checkpoint a failed cell left. An
-        interrupted cell's checkpoint is recorded before the cancellation propagates: the sweep
-        writes nothing else for it."""
-        kept = []
-        try:
-            r, note = run_cell(
-                label, cmd, timeout=args.cell_timeout, on_checkpoint=kept.append, **kwargs
-            )
-        except BaseException:
-            if kept:
-                record_failure(label, "interrupted mid-cell", kept[-1], regime, cell_stamp)
-            raise
-        return r, note, (kept[-1] if kept else None)
+        """`run_cell_kept` under the sweep's cap. An interrupted cell's checkpoint is recorded
+        before the cancellation propagates: the sweep writes nothing else for it."""
+        return run_cell_kept(
+            label,
+            cmd,
+            on_interrupted=lambda checkpoint: record_failure(
+                label, "interrupted mid-cell", checkpoint, regime, cell_stamp
+            ),
+            timeout=args.cell_timeout,
+            **kwargs,
+        )
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()

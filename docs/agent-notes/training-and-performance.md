@@ -375,11 +375,16 @@ files.
   `gpt2_mini_train_s1024` cell lost six finite losses to a 90 s cap expiring inside it). A
   checkpoint carries the losses so far, stage statuses, the step count and the cell's identity, and
   NO timing: its `result` stage is always `pending` and `accepted` is `false`. `orchestrate.run_cell`
-  folds the last one into a failed cell's note and hands it to `on_checkpoint`, so the sweep's and
-  `gh1181_cells.py`'s failure records keep the losses -- beside the failure, never among the rows;
-  both add the fixture stamp, the source revision and the runner binary's sha256 under
-  `provenance`, since the checkpoint names its fixture and runner only by paths a later sweep
-  reuses. An interrupted cell's checkpoint is recorded before the cancellation propagates.
+  folds the last one into a failed cell's note and hands it to `on_checkpoint`;
+  `orchestrate.run_cell_kept` returns it beside the note, and `orchestrate.failure_record` is the
+  one record every sweep driver writes of a failed cell (gh-ocannl-1234: orchestrate's
+  `partial-failures.jsonl`, gh1181's `failures.jsonl`, gh675's failed passes in `records.jsonl`,
+  and gh1002's `failures.jsonl`, which reads the checkpoint off the cell's own `.err`). It keeps
+  the losses -- beside the failure, never among the rows -- with the dispatched `regime`, the
+  inherited OCANNL_* environment, and under `provenance` the fixture stamp, the source revision
+  and the runner binary's sha256, since the checkpoint names its fixture and runner only by paths
+  a later sweep reuses. An interrupted cell's checkpoint is recorded before the cancellation
+  propagates.
   The report's "Runner failures" table shows those saved losses' drift from the reference beside
   the envelope the cell would have been gated at (`saved_loss_parity`) -- a DIAGNOSTIC of whether
   the work before the failure was on course, worded outside the parity column's vocabulary; the
@@ -404,10 +409,12 @@ files.
   fifth completed after 157 s). Therefore `orchestrate.py` defaults `--beam-parallel` to `0` on
   every measurement box — the only setting that removes the spawn pool — while an explicit
   positive value opts back into the pool with the cap as backstop (gh-ocannl-843).
-  `cell_group.py` gives benchmark cells in `orchestrate.py`, `gh675_cells.py` and
-  `gh1002_cells.py` (and the latter's preflight Dune build, which forks compilers; gh-ocannl-1200)
-  one shared group/job, TERM-to-KILL, output-preserving reap discipline — the drivers start no
-  other child but short `git`/`ps` probes (`test_sweep_drivers_have_no_unmanaged_spawn_site`);
+  `cell_group.py` gives benchmark cells in `orchestrate.py` (whose `run_cell` gh675 and gh1181
+  run theirs through), `gh998_cells.py` and `gh1002_cells.py` (and the latter's preflight Dune
+  build, which forks compilers; gh-ocannl-1200) one shared group/job, TERM-to-KILL,
+  output-preserving reap discipline — the drivers start no other child but short `git`/`ps`/`sysctl`
+  probes (`test_sweep_drivers_have_no_unmanaged_spawn_site`, over every `benchmarks/*.py` that
+  imports `cell_group` directly or through another script, so a new driver is scanned unlisted);
   `orchestrate.py` puts cells under `--cell-timeout` (default 1800 s) and kills the GROUP on expiry:
   the pool workers hold the cell's
   stdout pipe, so killing the direct child alone moves the hang into the sweep's own

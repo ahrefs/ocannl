@@ -45,7 +45,7 @@ from pathlib import Path
 import bench_venv
 import box_gate
 import cell_group
-import strict_json
+import orchestrate as o
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / "benchmarks"
@@ -65,7 +65,9 @@ FIXTURE = {w: str(HERE / f"fixtures/{w}.safetensors") for w in ("mlp_small", "gp
 DIGESTS = {}  # filled at startup; stamped on every record
 PREWARMED = set()  # workloads whose warm-cache control has been prewarmed IN THIS INVOCATION
 ATTEMPTS = {}  # (arm, workload, repeat) -> prior rows, so a --rerun row says which attempt it is
-_cancellation = cell_group.CancellationDeferral("gh675_cells")
+# The checkout's identity, read once before the first cell (`orchestrate.source_identity`), for
+# the provenance a failed pass's checkpoint is stamped with.
+SOURCE = {}
 
 # Every variable that is a TREATMENT in this experiment rather than part of the box. A child
 # inherits the driver's environment, so one of these exported in the operator's shell silently
@@ -130,14 +132,11 @@ def gate():
     for _ in range(24):
         load = float(open("/proc/loadavg").read().split()[0])
         try:
-            _probe, out, _ = run_managed(
+            out = o.run_supporting(
                 [NVSMI, "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True,
                 timeout=30,
-                context="GPU-utilization probe",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            ).stdout
             util = out.strip().splitlines()[0]
             util = int(util)
         except Exception as ex:
@@ -163,95 +162,46 @@ def gate():
     return False
 
 
-def communicate_clean(proc, timeout, context):
-    """Wait for one managed child and abort this experiment if its group is not proven gone."""
-    try:
-        with _cancellation.cancellable():
-            out, err = proc.communicate(timeout=timeout)
-    except BaseException:
-        result = cell_group.terminate(proc, grace=5)
-        if result.observation is not cell_group.GONE:
-            raise cell_group.CleanupFailed(
-                f"{context} process group was not observed gone after SIGKILL "
-                f"({result.observation.value}) and may still hold the pinned CPUs or GPU. "
-                "Stopping the sweep: clear it, then resume past what is recorded."
-            )
-        raise
-    initial = proc.observe()
-    if initial is not cell_group.GONE:
-        result = cell_group.terminate(proc, grace=5)
-        if result.observation is not cell_group.GONE:
-            raise cell_group.CleanupFailed(
-                f"{context} left a process group that was not observed gone after SIGKILL "
-                f"({result.observation.value}). Every later pair would be contaminated; "
-                "clear it before resuming."
-            )
-    else:
-        proc.close()
-    return out, err
+def run(label, cmd, env=None, cwd=None, timeout=None, workload=None):
+    """One pass through orchestrate's own cell runner (gh-ocannl-1234), behind the idle gate.
 
+    `orchestrate.run_cell` runs it in a session of its own, so a timeout or a cancellation reaches
+    the DESCENDANTS. `subprocess.run(timeout=...)` kills the runner only, and tinygrad's beam search
+    farms its candidate compiles out to a spawn pool: the orphaned workers survive on the same
+    pinned cores and GPU, and the sweep moves straight on to the next pair with nothing in its
+    record to show it was measured against them. That is not hypothetical -- it happened while
+    taking these numbers, and a CPU reference taken over the survivors read 340 ms against 0.13 ms
+    once the box was clean. A group not proven gone stops this sweep (`CleanupFailed`): every later
+    pair would be contaminated.
 
-def run_managed(args, timeout, context, **kwargs):
-    """Spawn and wait with cancellation deferred until the group has a cleanup owner."""
-    with _cancellation.deferring():
-        proc = cell_group.spawn(args, **kwargs)
-        out, err = communicate_clean(proc, timeout=timeout, context=context)
-        return proc, out, err
-
-
-def run(cmd, env=None, cwd=None, timeout=None):
+    Returns the result line, stamped, or a failed record: orchestrate's `failure_record` (the
+    reason, and the checkpoint a killed or failed OCANNL pass left, with its provenance) marked
+    `__failed__`. A nonzero exit fails the pass even when a well-formed result line was printed
+    first: whatever raised after `emit` ran with the measurement's own resources still live, and
+    this driver cannot show that it did not touch the numbers.
+    """
     e = base_env()
     if env:
         e.update(env)
     gate_ok = gate()
     t0 = time.monotonic()
-    # Its own session, so a timeout can reach the DESCENDANTS. `subprocess.run(timeout=...)` kills
-    # the runner only, and tinygrad's beam search farms its candidate compiles out to a spawn pool:
-    # the orphaned workers survive on the same pinned cores and GPU, and the sweep moves straight
-    # on to the next pair with nothing in its record to show it was measured against them. That is
-    # not hypothetical -- it happened while taking these numbers, and a CPU reference taken over
-    # the survivors read 340 ms against 0.13 ms once the box was clean.
-    proc, out, err = run_managed(
-        TASKSET + cmd,
-        timeout=timeout,
-        context="benchmark cell",
-        env=e,
-        cwd=cwd or str(HERE),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    line, note, checkpoint = o.run_cell_kept(
+        label, TASKSET + cmd, env=e, cwd=cwd or str(HERE), timeout=timeout)
     wall = time.monotonic() - t0
-    p = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
-    line, rejected = None, None
-    for ln in reversed(p.stdout.strip().splitlines()):
-        ln = ln.strip()
-        if ln.startswith("{") and ln.endswith("}"):
-            try:
-                line = strict_json.loads(ln)
-                break
-            except strict_json.NonFinite as ex:
-                # A number JSON cannot spell: the runner's emitter regressed (it writes null), and
-                # an earlier line is not this cell's result either.
-                rejected = str(ex)
-                break
-            except Exception:
-                pass
-    if line is None or p.returncode != 0:
-        # A nonzero exit invalidates the run even when a well-formed result line was printed
-        # first: whatever raised after `emit` (framework teardown, an interpreter-shutdown error)
-        # ran with the measurement's own resources still live, and this driver cannot show that it
-        # did not touch the numbers. Cheaper to drop the pair than to publish an unexplained one.
-        rec = {"__failed__": True, "rc": p.returncode, "wall_s": round(wall, 2),
-               "gate_ok": gate_ok, "stdout_tail": p.stdout[-3000:],
-               "stderr_tail": p.stderr[-3000:]}
-        if line is not None:
-            rec["result_despite_nonzero_exit"] = line
-        if rejected is not None:
-            rec["result_line_not_strict_json"] = rejected
+    if line is None:
+        if o.group_unproven(note):
+            raise cell_group.CleanupFailed(
+                f"{label}: {note}. Stopping the sweep: clear it, then resume past what is "
+                "recorded.")
+        rec = o.failure_record(
+            label, note, o.ambient_ocannl_env(e), checkpoint,
+            provenance=dict(SOURCE, fixture_sha256=DIGESTS.get(workload)))
+        rec.update({"__failed__": True, "wall_s": round(wall, 2), "gate_ok": gate_ok})
+        if o.CELL_LOG_DIR:
+            rec["log"] = str(o.CELL_LOG_DIR / o.cell_log_name(label))
         return rec
     line["wall_s"] = round(wall, 2)
-    line["rc"] = p.returncode
+    line["rc"] = 0
     line["gate_ok"] = gate_ok
     return line
 
@@ -370,17 +320,21 @@ def emit(rec):
           f"compile_s={r1.get('compile_s')}/{r2.get('compile_s')}", flush=True)
 
 
-def timed_run(cmd, env, timeout):
+def timed_run(label, cmd, env, timeout, workload):
     """`run`, with a timeout recorded as a failure of THIS invocation rather than of the pair.
 
-    Letting `TimeoutExpired` escape to the caller loses which half wedged -- and a pass-1 wedge
-    (the searching process) and a pass-2 wedge (the replaying one) are different findings, which
-    is exactly the distinction gh-ocannl-760 rests on.
+    The cap's kill is a failed pass (`run_cell`'s TIMED OUT note) rather than an exception, so the
+    caller still knows which half wedged -- and a pass-1 wedge (the searching process) and a pass-2
+    wedge (the replaying one) are different findings, which is exactly the distinction
+    gh-ocannl-760 rests on.
     """
-    try:
-        return run(cmd, env, timeout=timeout)
-    except subprocess.TimeoutExpired as ex:
-        return {"__failed__": True, "timeout_s": timeout, "timeout": str(ex)}
+    return run(label, cmd, env, timeout=timeout, workload=workload)
+
+
+def pass_label(arm, workload, repeat, which):
+    """A pass's cell label, and so its log's name under $GH675_OUT/cells: stamped with the time,
+    so a --rerun attempt of the same identity does not overwrite the earlier attempt's log."""
+    return f"{arm} {workload} rep{repeat} {which} {time.strftime('%Y%m%dT%H%M%S')}"
 
 
 def existing_keys():
@@ -420,11 +374,11 @@ def do_pair(arm, workload, repeat, mk1, mk2, pre1=None, pre2=None, timeout=None)
         if pre1:
             pre1()
         c, e = mk1()
-        p1 = timed_run(c, e, timeout)
+        p1 = timed_run(pass_label(arm, workload, repeat, "pass1"), c, e, timeout, workload)
         if pre2:
             pre2()
         c, e = mk2()
-        p2 = timed_run(c, e, timeout)
+        p2 = timed_run(pass_label(arm, workload, repeat, "pass2"), c, e, timeout, workload)
     except PreconditionFailed as ex:
         # Not a measurement that came out badly -- a measurement that was never set up. Recorded
         # so the gap is visible in the raw data, and loud so a sweep is not left to discover it.
@@ -561,13 +515,13 @@ def d_ocannl(w, rep):
 @arm("REF_cpu")
 def ref_cpu(w, rep):
     cmd = [str(VENV), str(HERE / "runners/pytorch/run.py"), "--fixture", FIXTURE[w], "--device", "cpu"]
-    r = timed_run(cmd, {}, 3600)
+    r = timed_run(pass_label("REF_cpu", w, rep, "pass1"), cmd, {}, 3600, w)
     emit(record("REF_cpu", w, rep, pass1=r, pass2={},
                 valid=not r.get("__failed__") and r.get("gate_ok") is not False))
 
 
 if __name__ == "__main__":
-    _cancellation.install()
+    o.install_termination_handler()
     ap = argparse.ArgumentParser()
     ap.add_argument("--arms", nargs="+", required=True)
     ap.add_argument("--workloads", nargs="+", default=["mlp_small"])
@@ -590,8 +544,12 @@ if __name__ == "__main__":
         sys.exit(f"unknown arm(s) {bad_arms} / workload(s) {bad_workloads}; "
                  f"arms are {sorted(ARMS)}, workloads are {sorted(FIXTURE)}")
     box_gate.require("gh675_cells.py", args, HERE / "fixtures", args.workloads,
-                     run=lambda cmd: run_managed(cmd, None, "box check")[0].returncode)
+                     run=lambda cmd: o.run_supporting(cmd).returncode)
     CACHES.mkdir(parents=True, exist_ok=True)
+    # Every pass's combined output, written as it runs (orchestrate's cell log), under GH675_OUT:
+    # what a failed record's `log` names, in place of the output tails it once carried.
+    o.CELL_LOG_DIR = SP / "cells"
+    SOURCE.update(o.source_identity(ROOT))
     DIGESTS.update(digests(args.workloads))
     print(f"records: {RECORDS}", flush=True)
     for w, d in sorted(DIGESTS.items()):
