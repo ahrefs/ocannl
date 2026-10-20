@@ -469,9 +469,10 @@ a symbolic axis is at least `e`, and the contract about those cells is (gh-ocann
   reach an in-extent result of this run, and a later run re-initializes before it reads. Today
   those cells are untouched: when lowering emits an initialization pass (the target is not covered
   one-to-one, e.g. a reduction onto the symbolic axis), that pass carries the body's
-  `iterator < extent` guard on every target axis a bound extent indexes, so it fills the in-extent
-  cells only and does work proportional to the extent. This is not promised: lowering to symbolic
-  loop bounds, or a schedule that rewrites the pass, may change it. Read the valid prefix on the
+  `iterator < extent` guard on every target axis a bound extent indexes, so it stores to the
+  in-extent cells only (the guarded loop itself still spans the maximum, as the body's does). This
+  is not promised: lowering to symbolic loop bounds, or a schedule that rewrites the pass, may
+  change it. Read the valid prefix on the
   host.
 - **A fill covers the materialized buffer.** A `Fetch` (constant fills, the `zero_grads` of every
   gradient, ranges) carries no projections and so no extent: it writes every cell up to the

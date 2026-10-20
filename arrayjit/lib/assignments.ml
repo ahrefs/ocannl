@@ -740,13 +740,15 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       (* The initialization fills only the cells the accumulation can reach. An lhs axis indexed by
          a product iterator with a bound symbolic extent gets the body's own [iterator < extent]
          guard, so a run at extent [e] initializes the in-extent cells -- every cell the guarded
-         body reads -- and leaves the cells past the extent untouched, with work proportional to the
-         extent rather than the declared maximum. Those cells are unspecified after an initializing
-         accumulation (docs/shape_inference.md, "Symbolic extents: cells past a bound extent"), so
-         this changes no promise. It is deliberately NOT a [Fetch]: a fill covers the materialized
-         buffer, a promise [zero_grads] keeps for gradient accumulation across extents, and the
-         guarded initialization must stay distinguishable from it. The margins of a padded target
-         are established by [padding_resets] above, which the unguarded [Fetch] path repeats. *)
+         body reads -- and leaves the cells past the extent untouched. Stores, and the loops nested
+         under a guarded axis, scale with the extent; the guarded axis's own loop still spans the
+         declared maximum (bounds are static), exactly as the body's does. Those cells are
+         unspecified after an initializing accumulation (docs/shape_inference.md, "Symbolic extents:
+         cells past a bound extent"), so this changes no promise. It is deliberately NOT a [Fetch]:
+         a fill covers the materialized buffer, a promise [zero_grads] keeps for gradient
+         accumulation across extents, and the guarded initialization must stay distinguishable from
+         it. The margins of a padded target are established by [padding_resets] above, which the
+         unguarded [Fetch] path repeats. *)
       let lhs_extents =
         Array.map projections.project_lhs ~f:(function
           | Indexing.Iterator iter -> bound_extent ~projections iter
