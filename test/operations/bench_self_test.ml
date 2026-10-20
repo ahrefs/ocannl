@@ -368,7 +368,7 @@ let () =
   in
   let stalled_labels =
     [
-      "a stalled kernel timing is cut short: the cell completes in a fraction of the stall";
+      "a stalled kernel timing is cut short: the instrument returns in a fraction of the stall";
       "and the instrument reports no-kernel, naming the budget it ran past";
       "the over-budget cell still emits its result line with its timings";
       "and with one loss per parity step";
@@ -379,12 +379,23 @@ let () =
   in
   if H.instrument_preemptible then (
     let stall_s = 120. in
-    let j, _, _, wall_s = run ~budget_s:0.5 ~stall_s () in
+    (* Timed from the instrument's own start, as the inherited-alarm leg below is: the cell's wall
+       time also holds the compile and the measured steps, which a loaded box stretches by seconds
+       (the race staging#1287 fixed for that leg). An instrument never reached leaves the start at
+       0., an instrument time of decades, so the claim fails rather than passing vacuously. *)
+    let instrument_t0 = ref 0. in
+    let j, _, _, wall_s =
+      run
+        ~before_instrument:(fun () -> instrument_t0 := Unix.gettimeofday ())
+        ~budget_s:0.5 ~stall_s ()
+    in
+    let instrument_s = Unix.gettimeofday () -. !instrument_t0 in
     let dk = Option.value (field j "dominant_kernel") ~default:`Null in
-    Stdio.eprintf "bench_self_test: over-budget dominant kernel %s after %.1f s\n%!"
-      (Yojson.Safe.to_string dk) wall_s;
+    Stdio.eprintf
+      "bench_self_test: over-budget dominant kernel %s; instrument %.1f s, cell %.1f s\n%!"
+      (Yojson.Safe.to_string dk) instrument_s wall_s;
     let label n = List.nth_exn stalled_labels n in
-    Verdict.p (label 0) Float.(wall_s < stall_s /. 4.);
+    Verdict.p (label 0) Float.(instrument_s < stall_s /. 4.);
     Verdict.p (label 1)
       (is_str dk "verdict" "no-kernel"
       && Option.value_map (string_field dk "note") ~default:false ~f:(fun note ->
@@ -422,7 +433,8 @@ let () =
        is reached (tuf-amd-linux's full-suite run compiled this step in 1.8 s), the alarm fires
        there, and the instrument meets no alarm at all. *)
     fired := false;
-    let fired_early = ref true and instrument_t0 = ref 0. in
+    instrument_t0 := 0.;
+    let fired_early = ref true in
     let before_instrument () =
       fired_early := !fired;
       instrument_t0 := Unix.gettimeofday ();
