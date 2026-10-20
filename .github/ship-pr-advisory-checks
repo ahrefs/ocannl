@@ -1,0 +1,16 @@
+# The checks that ship-pr's `pr-review.sh checks` and `merge` treat as advisory on this
+# repository's PRs, one ERE per line; a name any line matches is advisory. The lines replace the
+# script's default list, so the first spells the default names in. The second matches the macOS
+# legs of `ci` (per PR, `Build (macos-latest, 5.5.x, main)`): the maintainer's decision
+# (lukstafi/ludics-lite#720, 2026-10-20) is that a PR merges without waiting for the macOS runner
+# queue, and the wave gate's interim no longer holds behind an older merge's run going only on
+# them. The ubuntu legs already run every test the macOS leg runs (the `main` shards together build
+# the unsharded suite; `train` is ubuntu-only per PR), so what macOS adds is the platform: arm64,
+# Apple clang and the Metal queue probe. That stays on master's push runs, where the CI-red triage
+# routine owns a red, and on the development Macs, where workers homed on mac-studio run their
+# suites. Read from the default branch: a PR's edit to this file applies only once that PR has
+# merged. Re-check it when `ci`'s job names change. No job that runs on pull requests may `needs:`
+# the `run` matrix (the boundary in SHIP_PR_ADVISORY_CHECKS's entry in pr-review.sh's usage text);
+# today only `notify-triage-routine` does, and it never runs on a pull request.
+^(claude|Claude Code|github pages docs)$
+^Build \(macos-latest, .*\)$
