@@ -1422,7 +1422,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   this rule probed. Device properties (compute capability, device limits, the GPU's architecture)
   stay out: reading them opens a device, which a probe run on every dune invocation, CPU batches
   included, must not do. A new host-side probe belongs in its backend's `host_capabilities`, never
-  restated in a test or a stanza.
+  restated in a test or a stanza. The daily sweep copies the record into each full-suite unit's log
+  (`host-capability:` lines) and, through `tools/sweep-unit-state.sh`, says `HOST CAPABILITIES
+  CHANGED` with the lines that moved when a unit's record differs from its previous verdict's -- a
+  box that lost a capability shows up as a diff between sweeps, not only as a failing test.
 - **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
   run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
   `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one
