@@ -309,7 +309,7 @@ def measure(a):
         label = cell_label(workload, arm, repeat, stage)
         row, note, checkpoint = o.run_cell_kept(
             label, [*pin, *cmd], env=env, cwd=cwd,
-            # Interrupted: record what the cell completed before propagating.
+            # Interrupted: record the cell, and what it completed, before propagating.
             on_interrupted=lambda kept: fail(
                 workload, arm, repeat, stage, "interrupted mid-cell", env, regime, kept),
             # A zero cell cap disables only the cell's own cap, never the total.

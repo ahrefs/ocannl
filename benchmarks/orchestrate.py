@@ -1237,16 +1237,17 @@ def run_cell_kept(label, cmd, on_interrupted=None, **kwargs):
     The one way every sweep driver runs a cell and keeps what a failed one completed
     (gh-ocannl-1234): `checkpoint` is the cell's last checkpoint when it ended without a result
     (`last_checkpoint`), else None, and is what the driver's failure record carries
-    (`failure_record`). An interrupted cell raises out of here like out of `run_cell`; its
-    checkpoint is first handed to `on_interrupted(checkpoint)`, since the driver writes nothing else
-    for it before the cancellation propagates.
+    (`failure_record`). An interrupted cell raises out of here like out of `run_cell`; it is first
+    handed to `on_interrupted(checkpoint)` -- None when it was interrupted before its first
+    checkpoint -- since the driver writes nothing else for it before the cancellation propagates,
+    and an interrupted cell is a failed one whatever it had completed.
     """
     kept = []
     try:
         result, note = run_cell(label, cmd, on_checkpoint=kept.append, **kwargs)
     except BaseException:
-        if kept and on_interrupted:
-            on_interrupted(kept[-1])
+        if on_interrupted:
+            on_interrupted(kept[-1] if kept else None)
         raise
     return result, note, (kept[-1] if kept else None)
 
@@ -3242,8 +3243,9 @@ def main():
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
     def run_kept(label, cmd, regime=None, cell_stamp=None, **kwargs):
-        """`run_cell_kept` under the sweep's cap. An interrupted cell's checkpoint is recorded
-        before the cancellation propagates: the sweep writes nothing else for it."""
+        """`run_cell_kept` under the sweep's cap. An interrupted cell is recorded, with its
+        checkpoint when it left one, before the cancellation propagates: the sweep writes nothing
+        else for it."""
         return run_cell_kept(
             label,
             cmd,

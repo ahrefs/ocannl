@@ -191,12 +191,10 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
         with open(str(base) + ".out", "w") as o, open(str(base) + ".err", "w") as e:
             status = run_in_own_group(argv, env=env, stdout=o, stderr=e)
     except BaseException as exc:
-        # Interrupted, or a cleanup not proven complete: what the cell completed is recorded
-        # before the cancellation propagates, as orchestrate's sweep records it.
-        checkpoint = cell_checkpoint(base)
-        if checkpoint is not None:
-            why = str(exc) if isinstance(exc, cell_group.CleanupFailed) else "interrupted mid-cell"
-            record_failure(out, base, why, env, checkpoint)
+        # Interrupted, or a cleanup not proven complete: the cell, and what it completed, is
+        # recorded before the cancellation propagates, as orchestrate's sweep records it.
+        why = str(exc) if isinstance(exc, cell_group.CleanupFailed) else "interrupted mid-cell"
+        record_failure(out, base, why, env, cell_checkpoint(base))
         raise
     with open(str(base) + ".status", "w") as f:
         f.write(f"{status}\n")

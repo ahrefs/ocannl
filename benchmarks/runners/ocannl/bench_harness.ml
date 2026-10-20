@@ -129,10 +129,24 @@ let instrument_preemptible = not Stdlib.Sys.win32
 
 (** [with_deadline ~seconds f] runs [f], raising {!Instrument_over_budget} out of it once [seconds]
     have passed (where {!instrument_preemptible}). The raise is one-shot and is disarmed the moment
-    [f] returns, so it cannot land after [f] did; the previous [SIGALRM] disposition is restored. *)
+    [f] returns, so it cannot land after [f] did.
+
+    The process may already hold an interval timer: a driver's cap set as
+    [perl -e 'alarm N; exec ...'] survives the [exec], and its [SIGALRM] at the default disposition
+    is what ends a cell that outlives the cap. So that timer is read first and given back
+    afterwards, with its own disposition and the time it has left: the deadline here is the earlier
+    of the two, and a cap that came due meanwhile is re-armed to fire at once, so the cell still
+    ends at its cap rather than running on past it with no alarm left. *)
 let with_deadline ~seconds f =
   if not instrument_preemptible then f ()
   else
+    let set value interval =
+      Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = interval; it_value = value }
+    in
+    let started = Unix.gettimeofday () in
+    let outer = Unix.getitimer Unix.ITIMER_REAL in
+    let outer_left = outer.Unix.it_value in
+    let deadline = if Float.(outer_left > 0.) then Float.min seconds outer_left else seconds in
     let armed = ref true in
     let previous =
       Stdlib.Sys.signal Stdlib.Sys.sigalrm
@@ -142,14 +156,9 @@ let with_deadline ~seconds f =
                armed := false;
                raise Instrument_over_budget)))
     in
-    let timer value =
-      ignore
-        (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = 0.; it_value = value }
-          : Unix.interval_timer_status)
-    in
     let outcome =
       try
-        timer (Float.max seconds 0.001);
+        ignore (set (Float.max deadline 0.001) 0. : Unix.interval_timer_status);
         let v = f () in
         armed := false;
         Ok v
@@ -157,8 +166,11 @@ let with_deadline ~seconds f =
         armed := false;
         Error e
     in
-    timer 0.;
+    ignore (set 0. 0. : Unix.interval_timer_status);
     Stdlib.Sys.set_signal Stdlib.Sys.sigalrm previous;
+    (if Float.(outer_left > 0.) then
+       let left = outer_left -. (Unix.gettimeofday () -. started) in
+       ignore (set (Float.max left 0.001) outer.Unix.it_interval : Unix.interval_timer_status));
     match outcome with Ok v -> v | Error e -> raise e
 
 (** The step shapes of the training legs, before compilation. *)

@@ -4480,6 +4480,27 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0]["losses"], [10.375, 10.25, 10.125, 10.0, 9.875, 9.75])
 
+    def test_an_interrupted_cell_is_handed_over_with_or_without_a_checkpoint(self):
+        # Review round 2 (gh-ocannl-1234): an interrupt before the first checkpoint is a failed
+        # cell too, so `on_interrupted` hears of it with None rather than not at all.
+        checkpoint = orchestrate.last_checkpoint(self.golden_checkpoint("running"))
+
+        def interrupted(after_checkpoint):
+            def run_cell(label, cmd, on_checkpoint=None, **kwargs):
+                if after_checkpoint:
+                    on_checkpoint(checkpoint)
+                raise KeyboardInterrupt
+            return run_cell
+
+        for after_checkpoint, expected in ((False, [None]), (True, [checkpoint])):
+            with self.subTest(after_checkpoint=after_checkpoint):
+                heard = []
+                with unittest.mock.patch.object(
+                    orchestrate, "run_cell", side_effect=interrupted(after_checkpoint)
+                ), self.assertRaises(KeyboardInterrupt):
+                    orchestrate.run_cell_kept("cell", ["x"], on_interrupted=heard.append)
+                self.assertEqual(heard, expected)
+
     @unittest.skipUnless(os.name == "posix", "SIGALRM and process groups are POSIX here")
     def test_an_interrupted_cell_gets_the_same_cache_treatment_as_a_capped_one(self):
         # Ctrl-C on a wedged beam cell is the likeliest way anyone meets this bug by hand, and the

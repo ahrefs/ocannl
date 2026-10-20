@@ -371,6 +371,9 @@ let () =
       "and the instrument reports no-kernel, naming the budget it ran past";
       "the over-budget cell still emits its result line with its timings";
       "and with one loss per parity step";
+      "an inherited alarm due after the instrument keeps the time it had left";
+      "and its disposition: the inherited handler is the one that fires";
+      "an inherited alarm due before the budget still fires, cutting the instrument at it";
     ]
   in
   if H.instrument_preemptible then (
@@ -393,7 +396,34 @@ let () =
     Verdict.p (label 3)
       (match field j "losses" with
       | Some (`List l) -> List.length l = H.self_test_protocol.H.parity_steps
-      | _ -> false))
+      | _ -> false);
+    (* Review round 2: a driver's cap set with [alarm] before [exec] is an interval timer the runner
+       inherits. Stood in by one whose handler only records that it fired. *)
+    let fired = ref false in
+    let previous =
+      Stdlib.Sys.signal Stdlib.Sys.sigalrm (Stdlib.Sys.Signal_handle (fun _ -> fired := true))
+    in
+    let set value =
+      ignore
+        (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = 0.; it_value = value }
+          : Unix.interval_timer_status)
+    in
+    set 1000.;
+    ignore (run ~budget_s:0.5 ~stall_s);
+    let left = (Unix.getitimer Unix.ITIMER_REAL).Unix.it_value in
+    (* Whose handler is installed is read by firing it. *)
+    set 0.01;
+    Unix.sleepf 0.2;
+    Verdict.p (label 4) Float.(left > 900. && left <= 1000.);
+    Verdict.p (label 5) !fired;
+    fired := false;
+    set 1.;
+    let j, _, _, wall_s = run ~budget_s:60. ~stall_s in
+    Unix.sleepf 0.2;
+    let dk = Option.value (field j "dominant_kernel") ~default:`Null in
+    Verdict.p (label 6) (!fired && Float.(wall_s < stall_s /. 4.) && is_str dk "verdict" "no-kernel");
+    set 0.;
+    Stdlib.Sys.set_signal Stdlib.Sys.sigalrm previous)
   else
     List.iter stalled_labels ~f:(fun label ->
         Verdict.skipped ~aggregation:`Environment ~backend:"windows (no interval timer)" label);
