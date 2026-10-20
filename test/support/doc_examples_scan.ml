@@ -106,8 +106,11 @@ let unquote line =
         Option.value (String.chop_prefix rest ~prefix:" ") ~default:rest)
 
 (** The OCaml source files a caption line presents the fence below it as code from, lowercased: each
-    [from] followed by a file name ending in [.ml] or [.mli], possibly behind a link bracket, a code
-    span, a parenthesis, emphasis, a quote or an angle bracket. *)
+    [from] followed by a file name ending in [.ml] or [.mli]. The name is the first run of path
+    characters after the blanks, with the Markdown that may wrap it -- any punctuation outside
+    letters, digits, [/], [.], [-] and [_], and emphasis underscores at either end -- read as a
+    delimiter, so a link, a code span, a parenthesis, emphasis or a quote around it does not hide
+    it. *)
 let cited_sources caption =
   let caption = String.lowercase caption in
   let length = String.length caption in
@@ -118,11 +121,7 @@ let cited_sources caption =
     | Some at ->
         let word_start = at = 0 || not (Char.is_alphanum caption.[at - 1]) in
         let rec skip index =
-          if
-            index < length
-            && List.mem
-                 [ ' '; '['; '`'; '('; '*'; '"'; '\''; '<' ]
-                 caption.[index] ~equal:Char.equal
+          if index < length && not (is_name caption.[index] && not (Char.equal caption.[index] '_'))
           then skip (index + 1)
           else index
         in
@@ -131,7 +130,8 @@ let cited_sources caption =
           if index < length && is_name caption.[index] then name_end (index + 1) else index
         in
         let name =
-          String.rstrip ~drop:(Char.equal '.')
+          String.strip
+            ~drop:(fun c -> Char.equal c '.' || Char.equal c '_')
             (String.sub caption ~pos:name_start ~len:(name_end name_start - name_start))
         in
         let cited =
