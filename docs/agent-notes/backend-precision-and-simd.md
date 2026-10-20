@@ -389,7 +389,14 @@ files.
   storage where a later op left an update the decision does not widen (`Schedule.privatize_fallbacks`
   records it) — BEFORE `simplify_llc`, which visits every `Set` and so forces the tile's precision,
   after which `Tn.update_prec` can no longer change it; the finalized program is judged again and a
-  failure there is refused. Hardware levels between
+  failure there is refused. The fallback is a safety net: the only op sequences that trip it put a
+  hardware-typed loop (`Retype`) or a tensor-node write (`Stage`'s loads) inside the scope a
+  materializing `Unroll`/`Partition` minted around the tile's update, programs compilation refuses
+  anyway (the renderer's hardware-axis table never holds a loop inside a scope body, which
+  `validate_parallel` also rejects; `validate_scope_bodies`); `privatize_recheck` pins both through
+  `apply`. Every other op keeps the update a widening accumulation: index rewrites map the write
+  and its self-read alike, the scope mints emit the grammar the peel re-reads, and no op rewrites
+  a contribution to read the tile. Hardware levels between
   the privatized loop and the update are still refused outright, and an f32/f64 target never
   reaches any of this. Do not reintroduce a schedule-side reconstruction of codegen's input: the
   rebuilt peel nest this replaced disagreed with codegen one shape at a time through eight review

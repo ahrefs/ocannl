@@ -4855,10 +4855,13 @@ let with_transform_fault fault body =
 (* gh-ocannl-1151: whether a [Privatize] tile minted at the residency still holds an accumulation
    the shared decision widens, in the FINAL program of its [apply] — after every later op and the
    finalization passes. [apply_privatize] judged the program the schedule started from and the
-   update as it stood when the op ran; a later op of the same schedule rewrites the update again.
-   Every write of the tile must be either a transfer (it does not read the tile: the init-load, or a
-   zero) or a self-accumulating update whose base {!Low_level.accum_base_widens}; a [Tile_mma]
-   accumulates at its own precision, and its scalar fallback is judged like any statement. *)
+   update as it stood when the op ran; a later op of the same schedule rewrites the update again —
+   though only into a form this rejects by putting a hardware-typed loop or a tensor-node write into
+   a scope a materializing [Unroll] minted, which compilation refuses anyway (the interface gives
+   the argument; test/operations/privatize_recheck pins both). Every write of the tile must be
+   either a transfer (it does not read the tile: the init-load, or a zero) or a self-accumulating
+   update whose base {!Low_level.accum_base_widens}; a [Tile_mma] accumulates at its own precision,
+   and its scalar fallback is judged like any statement. *)
 let privatized_tile_widens ~tile (llc : Low_level.t) =
   let open Low_level in
   let rec ok (llc : t) =

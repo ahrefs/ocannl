@@ -325,7 +325,14 @@ type optop =
           against the program the ops left ({!privatized_tile_widens}) and falls it back to storage
           precision where a later op left an accumulation the decision does not widen
           ({!privatize_fallbacks}); the finalized program is judged once more, and a tile failing
-          there is refused. A [target] whose storage is already its residency (f32, f64) is
+          there is refused. The fallback is a safety net, not a path any compilable program takes:
+          index-rewriting ops map the update and its self-read alike, the materializing [Unroll] and
+          [Partition] mint exactly the scope grammar the decision reads back, and no op rewrites a
+          contribution to read the tile — the only sequences that trip it put a hardware-typed loop
+          ([Retype]) or a tensor-node write ([Stage]'s loads) into such a minted scope, which
+          compilation refuses (a hardware loop in a scope body is in no kernel's hardware-axis
+          table, and [Low_level.validate_parallel] rejects it; [Low_level.validate_scope_bodies]
+          rejects the write). A [target] whose storage is already its residency (f32, f64) is
           unaffected by all of this. A hardware-typed loop [target]'s cell does not mention, between
           [over] and the update, is rejected: it would split the accumulation across threads. Any
           other admissible value is an explicit numerics choice of the schedule, e.g. the storage
