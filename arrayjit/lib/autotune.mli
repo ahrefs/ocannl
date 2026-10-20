@@ -3063,8 +3063,9 @@ val lineage_accesses : Ir.Low_level.optimized -> Ir.Tnode.t -> string
 
 val compile_deferred : deferred -> Context.t * Context.routine
 (** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]
-    that call ran under, and like {!tune_deferred} itself inside {!exclusive_search}. At most once:
-    a second call returns the same context and routine, or raises the same exception. A [deferred]
+    that call ran under, and like {!tune_deferred} itself inside {!exclusive_search} -- the first
+    call only, which compiles; a later one returns the memoized outcome unguarded. At most once: a
+    second call returns the same context and routine, or raises the same exception. A [deferred]
     dropped without this call costs nothing on the device. *)
 
 val shipped_substitute : deferred -> bool

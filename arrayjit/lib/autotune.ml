@@ -5980,10 +5980,14 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
       | None -> (
           (* A failure is kept too: the compile runs once, and a caller catching its exception and
              asking again gets the same exception, not a second attempt's side effects. *)
-          match with_streams ~log ~progress compile with
+          (* The search's own compile, so it holds the search like the search did
+             (gh-ocannl-1352) -- only here, where it runs: a memoized outcome is returned unguarded. *)
+          match exclusive_search (fun () -> with_streams ~log ~progress compile) with
           | result ->
               compiled := Some (Ok result);
               result
+          (* The guard refused before anything ran: not an outcome, so a later turn compiles. *)
+          | exception (Concurrent_search _ as exn) -> raise exn
           | exception exn ->
               let backtrace = Stdlib.Printexc.get_raw_backtrace () in
               compiled := Some (Error (exn, backtrace));
@@ -6345,7 +6349,12 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                      phase = Outcome.Transform;
                      candidate = Some "lineage comparison";
                      cause = None;
-                   }))
+                   })
+          | exception exn ->
+              (* A process-level failure propagates as it is, but not past the linked baseline. *)
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              !release_baseline_hook ();
+              Stdlib.Printexc.raise_with_backtrace exn backtrace)
     in
     if Option.is_none lineage_refusal then refuse_if_device_memory baseline_decline;
     let cached =
@@ -8669,7 +8678,5 @@ let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block
             ?abandon ?report ctx comp bindings;
       })
 
-(* The deferred compile is the search's own compile, so it holds the search like the search did
-   (gh-ocannl-1352); nested inside [Train.tune_placements]' hold, it is a nesting. *)
-let compile_deferred d = exclusive_search d.compile
+let compile_deferred d = d.compile ()
 let shipped_substitute d = !(d.substituted)
