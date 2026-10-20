@@ -598,6 +598,66 @@ accepts a gated boolean whose condition, not its value, quantifies what the gate
 accepts a gated boolean comparing against the invariant its gate reads: true
 names a gated boolean claim it cannot complete instead of counting it clean: true
 reads a gated claim nothing binds as Verdict's, its name being Verdict's alone: true
+names a collection-module function the table does not list instead of guessing: true
+names an unlisted quantifier-position function of a gated boolean: true
+names an unlisted function handed a mutable container the population reads: true
+names an unlisted function the gate reaches: true
+refuses a gate read off the separator interspersed into the population: true
+refuses a gate that closes on the collection a gated membership claim ranges over: true
+refuses a gate that closes on the string a gated containment claim reads: true
+follows a collection module a local module exports through an open of it: true
+follows a collection module a local module exports through a path into it: true
+refuses a gate that closes on the labelled collection a gated subset claim reads: true
+refuses a gate read off the key a map update inserts into the population: true
+refuses a gate read off a field a matched record update gives: true
+refuses a gate read off the base of a matched record update for a field it leaves: true
+refuses a gate read off the value a merge's combining callback returns: true
+refuses a gate that closes on the string a gated validity claim reads: true
+refuses a gate read off the default of a callback's optional parameter: true
+refuses a gate read off the initializer of a qualified Stdlib reference: true
+follows a collection function through a value alias: true
+follows a collection function a local open of List brings in: true
+accepts a gate beside a helper bound inside an open of List under a listed name: true
+accepts a gate beside a helper an unknown open brings in after an open of List: true
+refuses a gate read off the increment a hash table counter is bumped by: true
+refuses a gate read off the key removed from the hash table the population reads: true
+refuses a gate read off the value a mutable field of a matched record is set to: true
+accepts a gate read off a value written into another field of the matched record: true
+names a writer partially applied to the container the population reads: true
+names a writer bound to a name after some of its arguments: true
+follows a quantifier of a gated boolean through a value alias: true
+refuses a gate read off a value pushed through a writer's value alias: true
+follows a Verdict alias a local module exports through an open of it: true
+follows a Verdict alias a local module exports past a later open of a same-named value: true
+accepts a gate beside an alias a local module exports past its own recursive List: true
+accepts a backend gate beside a population a match takes apart from a literal pair: true
+refuses a gate read off the component a match takes the population from: true
+refuses a gate read off the literal record field a match takes the population from: true
+accepts a backend gate beside a population a match takes from a constructor payload: true
+accepts a backend gate beside a gated boolean a match takes apart from a literal pair: true
+accepts a gate on a value written into the population only after the claim: true
+refuses a gate on a value written after the claim in the loop that repeats it: true
+refuses a gate on a value written between two calls of the function making the claim: true
+accepts a gate on a value written after the one call of the function making the claim: true
+refuses a gate on a value written after a once-called claim inside the loop calling it: true
+accepts a gate on a value written after the iteration whose callback makes the claim: true
+accepts a gate on a value written after an aliased iteration whose module is later shadowed: true
+accepts a gate on a value written after a claim in a for loop's bound: true
+accepts a gate on a value written after a claim in a binding operator's operand: true
+refuses a gate on a value written before a partially applied iteration's callback runs: true
+accepts a gate on a value written after a piped iteration whose callback makes the claim: true
+refuses a gate on a value written in an argument evaluated in unspecified order beside the claim: true
+refuses a gate on a value written in a top-level binding beside the claim's: true
+accepts a gate on a value written in the right operand of a conjunction after the claim: true
+refuses a gate on a value written in an operand of a rebound conjunction: true
+accepts a gate on a value a writer stores once its argument making the claim is evaluated: true
+refuses a gate on a value written by a writer whose callback makes the claim: true
+refuses a gate on a value written after a binding operator whose body makes the claim: true
+refuses a gate on a value written before a claim a collection stores is called: true
+refuses a gate on a value written before a claim a Stdlib collection stores is called: true
+refuses a gate on a value written before a lazy claim is forced: true
+refuses a gate on a value written after an expect test making the claim: true
+refuses a gate read off the set an in-place filter keeps the population's keys by: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true
@@ -768,6 +828,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:4b8222a751df16e2ca351f7bacca5583] claim readers raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
+  [scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate
   [scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into
   [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised
   [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict

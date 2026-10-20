@@ -4093,6 +4093,508 @@ let () =
     ( "reads a gated claim nothing binds as Verdict's, its name being Verdict's alone",
       {ocaml|let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
+    (* gh-ocannl-1303: the collection-module functions are a closed table; one it does not list is
+       reported rather than read by a guess. *)
+    ( "names a collection-module function the table does not list instead of guessing",
+      {ocaml|open Base
+let () =
+  let rows = List.permute raw in
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "unlisted List.permute" ] );
+    ( "names an unlisted quantifier-position function of a gated boolean",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:on_gpu ~on:"cc" "a sampled row passes" (List.random_element_exn rows)|ocaml},
+      [ "unlisted List.random_element_exn" ] );
+    ( "names an unlisted function handed a mutable container the population reads",
+      {ocaml|open Base
+let () =
+  let cells = Array.of_list raw in
+  Array.permute cells;
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all cells pass" (Array.to_list cells) ~f:Fn.id|ocaml},
+      [ "unlisted Array.permute" ] );
+    ( "names an unlisted function the gate reaches",
+      {ocaml|open Base
+let () =
+  Verdict.gated_all ~when_:(not (List.is_empty (List.permute flags))) ~on:"cc" "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [ "unlisted List.permute" ] );
+    ( "refuses a gate read off the separator interspersed into the population",
+      {ocaml|open Base
+let () =
+  let rows = List.intersperse raw ~sep:sample in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate that closes on the collection a gated membership claim ranges over",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" "the sample is present"
+    (List.mem rows sample ~equal:Int.equal)|ocaml},
+      [ "rows" ] );
+    ( "refuses a gate that closes on the string a gated containment claim reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (String.is_empty rows)) ~on:"cc" "the sample is present"
+    (String.contains rows sample)|ocaml},
+      [ "rows" ] );
+    ( "follows a collection module a local module exports through an open of it",
+      {ocaml|open Base
+module Collections = struct
+  module Rows = List
+end
+open Collections
+let () =
+  let rows = Rows.map raw ~f:Fn.id in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a collection module a local module exports through a path into it",
+      {ocaml|open Base
+module Collections = struct
+  module Rows = List
+end
+let () =
+  let rows = Collections.Rows.map raw ~f:Fn.id in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate that closes on the labelled collection a gated subset claim reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (Set.is_empty allowed)) ~on:"cc" "every requirement is allowed"
+    (Set.is_subset required ~of_:allowed)|ocaml},
+      [ "allowed" ] );
+    ( "refuses a gate read off the key a map update inserts into the population",
+      {ocaml|open Base
+let () =
+  let table = Map.update empty sample ~f:(fun _ -> 1) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all entries pass" (Map.to_alist table) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a field a matched record update gives",
+      {ocaml|open Base
+let () =
+  let probe = { defaults with found = raw } in
+  let rows = match probe with { found; _ } -> found in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off the base of a matched record update for a field it leaves",
+      {ocaml|open Base
+let () =
+  let probe = { defaults with found = raw } in
+  let rows = match probe with { kept; _ } -> kept in
+  Verdict.gated_all ~when_:(not (is_default defaults)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "defaults" ] );
+    ( "refuses a gate read off the value a merge's combining callback returns",
+      {ocaml|open Base
+let () =
+  let merged = Map.merge_skewed left right ~combine:(fun ~key:_ _ _ -> sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all entries pass" (Map.to_alist merged) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate that closes on the string a gated validity claim reads",
+      {ocaml|open Base
+let () =
+  Verdict.gated ~when_:(not (String.contains rows bad_byte)) ~on:"cc" "the text is UTF-8"
+    (String.is_valid_utf_8 rows)|ocaml},
+      [ "rows" ] );
+    ( "refuses a gate read off the default of a callback's optional parameter",
+      {ocaml|open Base
+let () =
+  let rows = Array.init 1 ~f:(fun ?(value = sample) _ -> value) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Array.to_list rows) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the initializer of a qualified Stdlib reference",
+      {ocaml|let () =
+  let rows = Stdlib.ref [ sample ] in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Stdlib.( ! ) rows) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "follows a collection function through a value alias",
+      {ocaml|open Base
+let () =
+  let map = List.map in
+  let rows = map raw ~f:run in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a collection function a local open of List brings in",
+      {ocaml|open Base
+let () =
+  let rows = List.(map raw ~f:Fn.id) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "accepts a gate beside a helper bound inside an open of List under a listed name",
+      {ocaml|open Base
+let () =
+  let rows =
+    let open List in
+    let map _ ~f:_ = fresh () in
+    map raw ~f:Fn.id
+  in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "accepts a gate beside a helper an unknown open brings in after an open of List",
+      {ocaml|open Base
+let () =
+  let rows =
+    let open List in
+    let open Custom in
+    map raw ~f:Fn.id
+  in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a gate read off the increment a hash table counter is bumped by",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.incr table "rows" ~by:sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all counts pass" (Hashtbl.data table) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the key removed from the hash table the population reads",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.remove table sample;
+  Verdict.gated_all ~when_:(String.is_empty sample) ~on:"cc" "all counts pass" (Hashtbl.data table)
+    ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the value a mutable field of a matched record is set to",
+      {ocaml|open Base
+type probe = { mutable found : int list }
+let () =
+  let probe = { found = raw } in
+  probe.found <- filtered;
+  let rows = match probe with { found } -> found in
+  Verdict.gated_all ~when_:(not (List.is_empty filtered)) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "filtered" ] );
+    ( "accepts a gate read off a value written into another field of the matched record",
+      {ocaml|open Base
+type probe = { mutable found : int list; mutable metadata : int }
+let () =
+  let probe = { found = raw; metadata = 0 } in
+  probe.metadata <- sample;
+  let rows = match probe with { found; _ } -> found in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [] );
+    ( "names a writer partially applied to the container the population reads",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let push = Queue.enqueue queue in
+  push sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
+      [ "unlisted Queue.enqueue (partially applied)" ] );
+    ( "names a writer bound to a name after some of its arguments",
+      {ocaml|open Base
+let () =
+  let rows = Array.create ~len:3 0 in
+  let put = Array.set rows 0 in
+  put sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Array.to_list rows) ~f:positive|ocaml},
+      [ "unlisted Array.set (partially applied)" ] );
+    ( "follows a quantifier of a gated boolean through a value alias",
+      {ocaml|open Base
+let () =
+  let all = List.for_all in
+  Verdict.gated ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" (all rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "refuses a gate read off a value pushed through a writer's value alias",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let push = Queue.enqueue in
+  push queue sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "follows a Verdict alias a local module exports through an open of it",
+      {ocaml|module Checks = struct
+  let gated_all = Verdict.gated_all
+end
+open Checks
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "follows a Verdict alias a local module exports past a later open of a same-named value",
+      {ocaml|module Local = struct
+  let gated_all _ = ()
+end
+module Checks = struct
+  let gated_all = Verdict.gated_all
+  open Local
+end
+open Checks
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "accepts a gate beside an alias a local module exports past its own recursive List",
+      {ocaml|open Base
+module M = struct
+  module rec List : sig
+    val map : 'a -> f:'b -> 'a
+  end = struct
+    let map x ~f:_ = x
+  end
+  let map = List.map
+end
+open M
+let () =
+  let rows = map raw ~f:run in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "accepts a backend gate beside a population a match takes apart from a literal pair",
+      {ocaml|open Base
+let () =
+  let pair = (on_gpu, raw) in
+  let rows = match pair with _, xs -> xs in
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a gate read off the component a match takes the population from",
+      {ocaml|open Base
+let () =
+  let rows = match (on_gpu, raw) with _, xs -> xs in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off the literal record field a match takes the population from",
+      {ocaml|open Base
+type probe = { enabled : bool; found : bool list }
+let () =
+  let probe = { enabled = on_gpu; found = raw } in
+  let rows = match probe with { found; _ } -> found in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "accepts a backend gate beside a population a match takes from a constructor payload",
+      {ocaml|open Base
+let () =
+  let rows = match Some (on_gpu, raw) with Some (_, xs) -> xs | None -> [] in
+  Verdict.gated_all ~when_:on_gpu ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "accepts a backend gate beside a gated boolean a match takes apart from a literal pair",
+      {ocaml|open Base
+let () =
+  let ok = match (on_gpu, rows) with _, xs -> List.for_all xs ~f:Fn.id in
+  Verdict.gated ~when_:on_gpu ~on:"cc" "all rows pass" ok|ocaml},
+      [] );
+    (* Only a write that may run before the claim shapes its population. *)
+    ( "accepts a gate on a value written into the population only after the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  Queue.enqueue queue first;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written after the claim in the loop that repeats it",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  for _ = 1 to 3 do
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+      ~f:positive;
+    Queue.enqueue queue sample
+  done|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written between two calls of the function making the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check () =
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+  in
+  check ();
+  Queue.enqueue queue sample;
+  check ()|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written after the one call of the function making the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check () =
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+  in
+  check ();
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written after a once-called claim inside the loop calling it",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check () =
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+  in
+  while more () do
+    check ();
+    Queue.enqueue queue sample
+  done|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written after the iteration whose callback makes the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  List.iter rows ~f:(fun row ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+        ~f:positive);
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "accepts a gate on a value written after an aliased iteration whose module is later shadowed",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let iter = List.iter in
+  let module List = Custom in
+  iter rows ~f:(fun row ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+        ~f:positive);
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "accepts a gate on a value written after a claim in a for loop's bound",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  for _ = 1 to (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive; 3) do
+    Queue.enqueue queue sample
+  done|ocaml},
+      [] );
+    ( "accepts a gate on a value written after a claim in a binding operator's operand",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let _ =
+    let+ x = (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive; source) in
+    x
+  in
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written before a partially applied iteration's callback runs",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let check =
+    List.iter ~f:(fun row ->
+        Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+          ~f:positive)
+  in
+  Queue.enqueue queue sample;
+  check rows|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written after a piped iteration whose callback makes the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  rows
+  |> List.iter ~f:(fun row ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "the row passes" (row :: Queue.to_list queue)
+        ~f:positive);
+  Queue.enqueue queue sample|ocaml},
+      [] );
+    ( "refuses a gate on a value written in an argument evaluated in unspecified order beside the \
+       claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  consume
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     ())
+    (Queue.enqueue queue sample)|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written in a top-level binding beside the claim's",
+      {ocaml|open Base
+let queue = Queue.create ()
+let _ = Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+and _ = Queue.enqueue queue sample|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value written in the right operand of a conjunction after the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  if
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     ready ())
+    && (Queue.enqueue queue sample; true)
+  then ()|ocaml},
+      [] );
+    ( "refuses a gate on a value written in an operand of a rebound conjunction",
+      {ocaml|open Base
+let () =
+  let ( && ) a b = a || b in
+  let queue = Queue.create () in
+  if
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     ready ())
+    && (Queue.enqueue queue sample; true)
+  then ()|ocaml},
+      [ "sample" ] );
+    ( "accepts a gate on a value a writer stores once its argument making the claim is evaluated",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  Queue.enqueue queue
+    (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive;
+     sample)|ocaml},
+      [] );
+    ( "refuses a gate on a value written by a writer whose callback makes the claim",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.update table "rows" ~f:(fun _ ->
+      Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Hashtbl.data table)
+        ~f:positive;
+      sample)|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written after a binding operator whose body makes the claim",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let _ =
+    let+ x = source in
+    Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (x :: Queue.to_list queue) ~f:positive
+  in
+  Queue.enqueue queue sample|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written before a claim a collection stores is called",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let checks =
+    List.singleton (fun () ->
+        Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+          ~f:positive)
+  in
+  Queue.enqueue queue sample;
+  List.iter checks ~f:(fun check -> check ())|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written before a claim a Stdlib collection stores is called",
+      {ocaml|let () =
+  let queue = Queue.create () in
+  let checks =
+    List.cons
+      (fun () ->
+        Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (List.of_seq (Queue.to_seq queue))
+          ~f:positive)
+      []
+  in
+  Queue.add sample queue;
+  List.iter (fun check -> check ()) checks|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written before a lazy claim is forced",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  let verdict =
+    lazy
+      (Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+         ~f:positive)
+  in
+  Queue.enqueue queue sample;
+  Lazy.force verdict|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate on a value written after an expect test making the claim",
+      {ocaml|open Base
+let queue = Queue.create ()
+let%expect_test "rows" =
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive
+let () = Queue.enqueue queue sample|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the set an in-place filter keeps the population's keys by",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.of_alist_exn (module String) raw in
+  Hashtbl.filter_keys_inplace table ~f:(Set.mem keep);
+  Verdict.gated_all ~when_:(not (Set.is_empty keep)) ~on:"cc" "all kept rows pass"
+    (Hashtbl.data table) ~f:Fn.id|ocaml},
+      [ "keep" ] );
   ]
 
 let gate_control_findings source =
@@ -4100,6 +4602,7 @@ let gate_control_findings source =
   List.map census.Scan.readings ~f:(fun (reading : Scan.gate_reading) ->
       String.concat ~sep:", " reading.reads ^ if reading.ambiguous then " [ambiguous]" else "")
   @ List.map census.Scan.unread ~f:(fun (form, _) -> "unread " ^ form)
+  @ List.map census.Scan.unlisted ~f:(fun (call : Scan.unlisted_call) -> "unlisted " ^ call.callee)
 
 let run_gate_population_controls () =
   List.map gate_population_controls ~f:(fun (label, source, expected) ->
@@ -4129,14 +4632,14 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
 let read_gates ~fail ~source ~census content =
   match Test_utils.Scan_attempt.run (fun () -> census content) with
   | Test_utils.Scan_attempt.Scanned gates -> gates
-  | Unparsed _ -> { Scan.readings = []; gated_sites = 0; unread = [] }
+  | Unparsed _ -> { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
   | Raised exn ->
       fail
         (Printf.sprintf
            "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, \
             not of the source, and the source's gated claims went uncompared"
            exn source);
-      { Scan.readings = []; gated_sites = 0; unread = [] }
+      { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
 
 (* The four claim readers over one source, their failures told apart (gh-ocannl-1292): a source that
    does not parse is reported by name, and an exception from one that parses is a reader defect,
@@ -4201,6 +4704,15 @@ let refuse_unread_gate ~fail ~source (form, line) =
         its label and population directly"
        source line form)
 
+let refuse_unlisted_gate ~fail ~source (call : Scan.unlisted_call) =
+  fail
+    (Printf.sprintf
+       "%s:%d applies `%s` to a population or gate that reaches `%s` (line %d), a \
+        collection-module function Verdict_scan.collection_functions does not list, so the gate \
+        reader cannot say which of its arguments carry the population or whether it writes into \
+        what it is handed. Add the function to that table with the role it plays"
+       source call.claim_line call.claim call.callee call.callee_line)
+
 (* The wiring from a finding to the failure, exercised on a refusing control of each kind: the
    controls above say what the reader finds, this says that a finding refuses the run. *)
 let run_gate_refusal_control () =
@@ -4214,12 +4726,17 @@ let run_gate_refusal_control () =
     "%s:%d applies `%s` in a form the gate reader cannot complete, so it cannot say whether the \
      gate reads the population. Apply the claim, or a `let`-bound partial application of it, to \
      its label and population directly"
+  and unlisted_format =
+    "%s:%d applies `%s` to a population or gate that reaches `%s` (line %d), a collection-module \
+     function Verdict_scan.collection_functions does not list, so the gate reader cannot say which \
+     of its arguments carry the population or whether it writes into what it is handed. Add the \
+     function to that table with the role it plays"
   in
   let fixture label =
     List.find_map_exn gate_population_controls ~f:(fun (found, source, _) ->
         if String.equal found label then Some source else None)
   in
-  let refused_reading = ref false and refused_unread = ref false in
+  let refused_reading = ref false and refused_unread = ref false and refused_unlisted = ref false in
   let census =
     Scan.gate_census (fixture "refuses a gate that tests its own population for emptiness")
   in
@@ -4236,6 +4753,15 @@ let run_gate_refusal_control () =
       (refuse_unread_gate ~source:"fixture.ml" ~fail:(fun _ ->
            refused_unread := true;
            Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unread_format));
+  let census =
+    Scan.gate_census
+      (fixture "names a collection-module function the table does not list instead of guessing")
+  in
+  List.iter census.Scan.unlisted
+    ~f:
+      (refuse_unlisted_gate ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_unlisted := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unlisted_format));
   let raised_format =
     "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, not of \
      the source, and the source's gated claims went uncompared"
@@ -4250,7 +4776,7 @@ let run_gate_refusal_control () =
        "let () = ()"
       : Scan.gate_census);
   ( "refuses a planted gate that reads its population, and a gated claim it cannot read",
-    !refused_reading && !refused_unread && !refused_raise )
+    !refused_reading && !refused_unread && !refused_unlisted && !refused_raise )
 
 (* {1 A gate is a skip, not a disjunct of the claim (gh-ocannl-1310)}
 
@@ -4841,6 +5367,9 @@ let () =
       List.iter gates.Scan.unread ~f:(fun unread ->
           Int.incr gate_offenders;
           refuse_unread_gate ~fail ~source unread);
+      List.iter gates.Scan.unlisted ~f:(fun call ->
+          Int.incr gate_offenders;
+          refuse_unlisted_gate ~fail ~source call);
       let folds = read_folded_gates ~fail ~source ~census:Scan.folded_gate_census content in
       folded_claim_sites := !folded_claim_sites + folds.Scan.folded_claim_sites;
       List.iter folds.Scan.folded ~f:(fun fold ->

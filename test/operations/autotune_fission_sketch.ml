@@ -98,8 +98,11 @@ let clean_cache dir =
    [@slow], where the GPU runs are the daily sweep's. *)
 let multi_site_keep_fraction = if is_cpu then Some Fissioned_chain.keep_fraction else None
 
+(* Before the first search, in an item of its own: a search seeds from the vector file as it is when
+   it starts (gh-ocannl-1368). *)
+let () = if is_cpu then Fissioned_chain.small_menu_envelope ()
+
 let () =
-  if is_cpu then Fissioned_chain.small_menu_envelope ();
   List.iter
     [ "autotune_cache_fission"; "autotune_cache_fission2"; "autotune_cache_sketch" ]
     ~f:clean_cache;

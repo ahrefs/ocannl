@@ -197,6 +197,8 @@
 ; the backend comes from the library's own --ocannl_* scan and must be pinned explicitly.
 
 (executable
+ ; cc-vector-width: independent -- its bin-smoke run is in seeds mode, which starts no search, and
+ ; its parity is exact.
  (package neural_nets_lib)
  (public_name projection_shape_bench)
  (name projection_shape_bench)

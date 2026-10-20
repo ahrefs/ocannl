@@ -27,9 +27,9 @@
    count the backend resolved beside the menu it reports, so a log names which menu it saw.
 
    The envelope overrides are read once per process, at the first pre-filter, so [small_menu] (or
-   [small_menu_envelope]) runs at a test's top level before its first search, at the config-file
-   level; the test's stanza declares the keys' environment variables, so an ambient override reruns
-   it rather than serving the previous result. *)
+   [small_menu_envelope], which pins the vector file too) runs at a test's top level before its
+   first search, at the config-file level; the test's stanza declares the keys' environment
+   variables, so an ambient override reruns it rather than serving the previous result. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -85,30 +85,33 @@ let keep_fraction = 0.2
 let state settings =
   List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)
 
-(* The envelope alone: what a test that prunes only some of its searches states. *)
-let small_menu_envelope () =
-  state [ ("model_peak_flops", "1e12"); ("model_peak_memory_bandwidth", "1e11") ]
-
 (* The cc vector file the small menu is pinned to (see the header): AVX2's, 32 bytes on 16
    registers, where each segment keeps more than the claims' floor. *)
 let vector_file = { Ir.Vector_file.bytes = 32; registers = 16 }
 
-(* The envelope, the keep fraction, the cc vector file and the pad-waste economy, for every search
-   of the process. The chain's 32-wide products sit below the CPU packed menu's 64- to 256-deep
-   blocks, so the pad-waste economy (gh-ocannl-740) would exclude most of each segment's sketches
-   and leave a menu other than the one the claims built on it were tuned against -- the round
-   expansion's positional control among them. These tests are about the playoff, the round and the
-   placement arms over a fixed menu, not about which geometries a pad makes worth proposing, so the
-   small menu proposes every pad ([inf]) and keeps its fifth from the menu it always had. *)
+(* The envelope and the vector file: what a test that prunes only some of its searches states. The
+   width goes with the envelope because the pre-filter it enables keeps a width-dependent count, so
+   a test pruning any search on cc would otherwise claim on the host's menu (gh-ocannl-1368). *)
+let small_menu_envelope () =
+  state
+    [
+      ("model_peak_flops", "1e12");
+      ("model_peak_memory_bandwidth", "1e11");
+      ("cc_vector_bytes", Int.to_string vector_file.bytes);
+      ("cc_vector_registers", Int.to_string vector_file.registers);
+    ]
+
+(* The envelope and vector file, the keep fraction and the pad-waste economy, for every search of
+   the process. The chain's 32-wide products sit below the CPU packed menu's 64- to 256-deep blocks,
+   so the pad-waste economy (gh-ocannl-740) would exclude most of each segment's sketches and leave
+   a menu other than the one the claims built on it were tuned against -- the round expansion's
+   positional control among them. These tests are about the playoff, the round and the placement
+   arms over a fixed menu, not about which geometries a pad makes worth proposing, so the small menu
+   proposes every pad ([inf]) and keeps its fifth from the menu it always had. *)
 let small_menu () =
   small_menu_envelope ();
   state
-    [
-      ("autotune_keep_fraction", Float.to_string keep_fraction);
-      ("cc_vector_bytes", Int.to_string vector_file.bytes);
-      ("cc_vector_registers", Int.to_string vector_file.registers);
-      ("autotune_pad_waste_max", "inf");
-    ]
+    [ ("autotune_keep_fraction", Float.to_string keep_fraction); ("autotune_pad_waste_max", "inf") ]
 
 (* A per-segment sketch label's focus (gh-ocannl-1138): what precedes [" | staff "], where a staffed
    single lists the running composite's choices for the other keys. A bare label is all focus. *)
