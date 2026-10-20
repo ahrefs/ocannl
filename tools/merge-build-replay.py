@@ -6,8 +6,10 @@ Usage: tools/merge-build-replay.py [--since DATE] [--until DATE] [--set NAME[=GL
                                    [--verbose] [REV...]
 
 For every first-parent two-parent merge `git log --first-parent --merges REV...` lists (REV
-defaults to HEAD; `--since`/`--until` pass through to git log, and a bare date there takes the
-current time of day, so spell a time to make a replay repeatable), it reads the paths each side
+defaults to HEAD; `--since`/`--until` filter by committer date as git log's `--since-as-filter`
+and `--until`, over the whole first-parent chain even where dates are not monotonic; git fills a
+bare date with the current time of day and a missing zone with the local one, so spell both, as
+in '2026-09-19 18:30 +0200', for a window that replays the same anywhere), it reads the paths each side
 changed since the merge base, as ship-pr's merge build does (`.github/ship-pr-merge-build`'s
 header): both names of a rename (git's -M detection), a path a rename on either side touched
 counting by its other name too. Then, per input set, it decides whether the merge build would
@@ -255,13 +257,15 @@ def main(argv: list[str]) -> int:
         if trigger not in TRIGGERS:
             raise Usage(f"{CONFIG_PATH}'s trigger `{trigger}` is neither {' nor '.join(TRIGGERS)}")
 
-    log_args = ["log", "--first-parent", "--merges", "--format=%H%x09%P%x09%s"]
+    # -z: NUL-terminated records, since a subject can hold any line boundary Python splits on.
+    log_args = ["log", "-z", "--first-parent", "--merges", "--format=%H%x09%P%x09%s"]
     if args.since:
-        log_args.append(f"--since={args.since}")
+        # --since stops the walk at the first older commit; the filter form visits them all.
+        log_args.append(f"--since-as-filter={args.since}")
     if args.until:
         log_args.append(f"--until={args.until}")
     log_args += [*(args.revs or ["HEAD"]), "--"]
-    listed = [line.split("\t", 2) for line in git(repo, *log_args).splitlines() if line]
+    listed = [record.split("\t", 2) for record in git(repo, *log_args).split("\0") if record]
 
     replayed = 0
     not_replayed: Counter[str] = Counter()

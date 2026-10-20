@@ -220,6 +220,33 @@ if harness_leg 'a merge base that cannot be read fails the replay #replay'; then
   fi
 fi
 
+# The listing is git's whole first-parent chain, filtered: merges dated 2001-10-10, 2001-01-04 and
+# 2001-10-20 in that order (dates need not be monotonic) give two merges from 2001-10-05, where
+# git log's plain --since stops at the older one and loses the first. The first's subject holds a
+# vertical tab, a line boundary to Python: records are NUL-delimited, and it prints escaped.
+if harness_leg 'since filters the whole chain, and a subject cannot split a record #replay'; then
+  W=$TMP/dates
+  rm -rf "$W" && mkdir -p "$W" && printf '1\n' >"$W/a.ml" && git -C "$W" init -q &&
+    git -C "$W" add -A && git -C "$W" commit -q -m init &&
+    tree=$(git -C "$W" rev-parse 'HEAD^{tree}') && base=$(git -C "$W" rev-parse HEAD) &&
+    s1=$(git -C "$W" commit-tree -p "$base" -m side "$tree") &&
+    at() { GIT_COMMITTER_DATE="$1T00:00:00Z" GIT_AUTHOR_DATE="$1T00:00:00Z" git -C "$W" commit-tree "${@:2}"; } &&
+    ma=$(at 2001-10-10 -p "$base" -p "$s1" -m $'ma\vtabbed' "$tree") &&
+    mb=$(at 2001-01-04 -p "$ma" -p "$s1" -m mb "$tree") &&
+    mc=$(at 2001-10-20 -p "$mb" -p "$s1" -m mc "$tree") &&
+    git -C "$W" update-ref refs/heads/main "$mc"
+  built=$?
+  rc=0
+  python3 "$SRC" --repo "$W" --since 2001-10-05T00:00:00Z --set 'ml=*.ml' --verbose main >"$out" 2>&1 || rc=$?
+  label='a window from 2001-10-05 lists both merges in it, the older one between them skipped'
+  if [ "$built" != 0 ]; then
+    report 1 "$label" 'the fixture did not build'
+  elif [ "$rc" = 0 ] && has "2 first-parent merge(s) of main --since '2001-10-05T00:00:00Z', 2 replayed" &&
+       grep -qE '^  [0-9a-f]{10} "ma\\vtabbed": -$' "$out" && grep -qE '^  [0-9a-f]{10} mc: -$' "$out"; then
+    report 0 "$label"
+  else report 1 "$label" "exit $rc; $(cat "$out")"; fi
+fi
+
 # Paths are bytes, and printing them is the replay's to make safe: both sides add odd<0xff>.ml,
 # which is not UTF-8, and new<LF>line.ml, whose newline would forge a report line. The replay
 # decodes both and lists them escaped as git quotes them, never raw. Built with plumbing, so no

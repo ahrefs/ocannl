@@ -199,15 +199,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   outside that boundary. To check a merge by hand, run the script at the root of a checkout whose
   HEAD is that merge; `--plan` prints the tiers it selects and why. To size a change to that
   boundary, replay the history rather than rebuilding a script for it:
-  `tools/merge-build-replay.py --since '2026-09-19 18:30' --until '2026-10-19 18:30'
+  `tools/merge-build-replay.py --since '2026-09-19 18:30 +0200' --until '2026-10-19 18:30 +0200'
   --set 'ocaml-sh=*.ml,*.mli,dune,*/dune,dune-project,*.opam,*.sh' --set 'md=@ocaml-sh,*.md'
   --set config --set shell-tier <remote>/master` (the staging repository's remote, whatever
-  `git remote -v` names it) reproduces the counts above (166, 238, 245, 6 of 474). Per named glob set it prints the merges replayed, the merges that would build, and the
-  paths that triggered the ones it adds over the set before it; with no `--set` it replays the
-  config's `input` lines and the shell tier's `SHELL_GLOB`, read from where each is defined.
-  Spell a time in `--since`/`--until`: a bare date takes git's current time of day.
-  `tools/test-merge-build-replay.sh` pins its shell-tier replay to the script's own `--plan`
-  merge by merge.
+  `git remote -v` names it) reproduces the counts above (166, 238, 245, 6 of 474). Per named
+  glob set it prints the merges replayed, the merges that would build, and the paths that
+  triggered the ones it adds over the set before it; with no `--set` it replays the config's
+  `input` lines and the shell tier's `SHELL_GLOB`, read from where each is defined. Spell a time
+  and a zone in `--since`/`--until`: git fills a bare date with the current time of day and a
+  zoneless one with the local zone. `tools/test-merge-build-replay.sh` pins its shell-tier replay
+  to the script's own `--plan` merge by merge.
 
 ### Scan corpora, goldens and floors
 
