@@ -1612,9 +1612,11 @@ let self_test_leg =
     dominant-kernel instrument — the protocol's last stage — and its result stands in for that
     column: it is how a test stands a stalled or killed diagnostic where the real one runs.
     [dominant_kernel_budget_s] and [time_kernel] are {!dominant_kernel}'s [budget_s] and
-    [time_kernel], for the real instrument. *)
+    [time_kernel], for the real instrument; [before_instrument] runs right before it, after every
+    measured stage -- where a test arms what the instrument must meet on entry (a timer), so that
+    how long compiling and the timed steps took on the box cannot decide the outcome. *)
 let run_self_test ?(out = Stdio.stdout) ?checkpoint_out ?(leg = self_test_leg) ?late_probe
-    ?dominant_kernel_budget_s ?time_kernel ?inspect_compiled ?inspect_step () =
+    ?dominant_kernel_budget_s ?time_kernel ?before_instrument ?inspect_compiled ?inspect_step () =
   let module TDSL = Operation.DSL_modules.TDSL in
   let module IDX = Train.IDX in
   let n_samples = 8 and n_features = 4 and n_hidden = 5 and n_classes = 3 in
@@ -1681,6 +1683,7 @@ let run_self_test ?(out = Stdio.stdout) ?checkpoint_out ?(leg = self_test_leg) ?
       ~storage_of:logits ~out ?checkpoint_out
       ~dominant_kernel:
         (Option.value late_probe ~default:(fun () ->
+             Option.iter before_instrument ~f:(fun f -> f ());
              dominant_kernel ?budget_s:dominant_kernel_budget_s ?time_kernel ~ctx:!ctx_ref ~bindings
                (step_routines routines)))
       ~run_step
