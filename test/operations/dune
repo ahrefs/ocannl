@@ -9174,7 +9174,14 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_staffed_singles)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  ll_test)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9199,7 +9206,14 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_budget)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9221,7 +9235,14 @@
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_CC_VECTOR_REGISTERS))
  (modules autotune_budget_unfloored)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_ocannl)))
 

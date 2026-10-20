@@ -836,6 +836,17 @@ files.
   clears candidate contention only; calibration, invalid readings and unresolved batching keep
   their admission rules. `flip_abandonment` pins production refusal, nesting and failure restoration
   with a majority-stalled window, then asserts search, placement and cache branches without skips.
+- A new scripted-ranking test takes the harness in `test/support/scripted_search.ml` (library
+  `scripted_search`) rather than hand-rolling it: `Scripted_search.scripted` is the scope (the
+  measurement script with each window's ordinal, label, digest and reading; the uncontended windows;
+  the attempts and admitted windows recorded; settings stated for the scope and restored after it;
+  `~attempt_clock` for a budget cut at a chosen attempt), and `search` is one `Autotune.tune` in it
+  with the cache I/O recorded and an output read; `with_stderr_captured` and `clear_cache_dir`
+  sit beside them. It sets only the attempt, measurement and budget-clock seams, and calls the
+  attempt hook in force when it starts, so the test scopes its other injections (`_preflight`,
+  `_timed`, `on_staffed_start`, an attempt-time raise) around the call. A test whose windows must
+  keep PRODUCTION admission (`autotune_measured_refusal`, `autotune_callback_release`,
+  `placement_store`'s ranking) stays hand-rolled: the harness's scope is uncontended.
 ## Render-time typed declines
 - This section is the inventory of every render-time typed decline (gh-ocannl-1351): a
   `Schedule_outcome.Cause_at` constructed at phase `Backend_codegen`, one candidate's decline
