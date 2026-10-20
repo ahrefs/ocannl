@@ -33,7 +33,7 @@ let%op mini_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) ()
 This is exactly a decoder-only block (masked self-attention + FFN, no cross-attention). Currently used only in a forward-pass test, not for training.
 
 **Causal mask pattern** from `test/operations/layer_norm_test.ml` (lines 44-49):
-```ocaml
+```ocaml doc-adapted=test/operations/layer_norm_test.ml
 let mask = NTDSL.init ~l:"mask" ~prec:Ir.Ops.single
     ~b:[ tgt_seq_len ] ~i:[ tgt_seq_len ] ~o:[]
     ~f:(function [| s; t |] -> if s >= t then 1. else 0. | ...)

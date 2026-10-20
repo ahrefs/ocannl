@@ -19,7 +19,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - Selected documentation compiles through `@test/operations/runtest-doc_examples` (gh-ocannl-660).
   `docs/executable_examples.md` owns the annotation grammar, proposal-history policy and coverage
   limits; `doc_examples.inventory` records unchecked blocks too. Compilation proves API/type/PPX
-  validity, while behavioral claims still owe source or executed-test evidence.
+  validity, while behavioral claims still owe source or executed-test evidence. Code shown as an
+  excerpt of a library file carries `doc-excerpt=<path>` and is held verbatim, up to whitespace, to
+  that file (gh-ocannl-1265); a fence captioned `from <file>.ml` must declare it or
+  `doc-adapted=<path>`.
 
 - A repository-wide scanning check (`config_dep_completeness`, `env_var_deps`, `cache_dir_ignores`)
   is only as good as the distance between what it asserts and what it claims, and a proxy that

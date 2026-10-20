@@ -25,6 +25,15 @@ let () =
         Examples.parse ~path:file.path (In_channel.read_all file.on_disk))
   in
   Examples.require_selected blocks;
+  (* Excerpts are held to the repository file they name (gh-ocannl-1265). *)
+  let read source =
+    List.find (Inventory.files inventory) ~f:(fun (file : Inventory.file) ->
+        String.equal file.path source)
+    |> Option.map ~f:(fun (file : Inventory.file) -> In_channel.read_all file.on_disk)
+  in
+  (match Examples.check_provenance ~read blocks with
+  | [] -> ()
+  | failures -> failwith (String.concat ~sep:"\n" failures));
   Out_channel.write_all "doc_examples.ml" ~data:(Examples.render blocks);
   Out_channel.write_all "doc_examples.coverage" ~data:(Examples.coverage blocks ^ "\n");
   Out_channel.write_all "doc_examples.inventory"
