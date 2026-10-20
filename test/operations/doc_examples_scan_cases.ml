@@ -114,7 +114,8 @@ let () =
     (List.length (failures "```ocaml doc-excerpt=lib/nn_blocks.ml\n```\n") = 1);
   p "a caption citing an OCaml source directly above a fence requires a declaration"
     (refuses "**OCANNL** (from train.ml):\n```ocaml\nlet x = 1\n```\n"
-    && refuses "> Code from [`nn_blocks.ml`](../lib/nn_blocks.ml):\n> ```text\nx\n> ```\n");
+    && refuses "> Code from [`nn_blocks.ml`](../lib/nn_blocks.ml):\n> ```text\nx\n> ```\n"
+    && refuses "Code from **nn_blocks.ml**:\n```ocaml\nlet x = 1\n```\n");
   p "a declaration must name the file its caption cites"
     (refuses "**OCANNL** (from train.ml):\n```ocaml doc-adapted=lib/nn_blocks.ml\nlet x = 1\n```\n"
     && not

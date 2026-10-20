@@ -240,6 +240,7 @@ errexit-negation fixture negation after an arithmetic substitution naming case i
 errexit-negation fixture negation after a substitution closer glued to a hash is classified as specified: true
 errexit-negation fixture negation after a quote glued to a hash inside a substitution is classified as specified: true
 errexit-negation fixture negation after an argument -p before case inside a substitution is classified as specified: true
+errexit-negation fixture negation after a finished time and a command named -p before case inside a substitution is classified as specified: true
 errexit-negation fixture negation after an esac argument inside a substitution's case arm is classified as specified: true
 errexit-negation fixture negation inside a case inside a command substitution is classified as specified: true
 errexit-negation fixture function's final negation, every call piped is classified as specified: true
@@ -256,6 +257,7 @@ errexit-negation fixture function's final negation, every call piped under pipef
 errexit-negation fixture function's final negation, called after a redefinition behind && (declared loud) is classified as specified: true
 errexit-negation fixture function's final negation, defined and piped in a subshell beside a parent definition is classified as specified: true
 errexit-negation fixture timed function's final negation, every call piped is classified as specified: true
+errexit-negation fixture function's final negation, every call piped behind an array assignment is classified as specified: true
 errexit-negation fixture function's final negation, run only as another command's argument is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture pair in multiline quote is classified as specified: true

@@ -107,7 +107,7 @@ let unquote line =
 
 (** The OCaml source files a caption line presents the fence below it as code from, lowercased: each
     [from] followed by a file name ending in [.ml] or [.mli], possibly behind a link bracket, a code
-    span or a parenthesis. *)
+    span, a parenthesis, emphasis, a quote or an angle bracket. *)
 let cited_sources caption =
   let caption = String.lowercase caption in
   let length = String.length caption in
@@ -118,7 +118,11 @@ let cited_sources caption =
     | Some at ->
         let word_start = at = 0 || not (Char.is_alphanum caption.[at - 1]) in
         let rec skip index =
-          if index < length && List.mem [ ' '; '['; '`'; '(' ] caption.[index] ~equal:Char.equal
+          if
+            index < length
+            && List.mem
+                 [ ' '; '['; '`'; '('; '*'; '"'; '\''; '<' ]
+                 caption.[index] ~equal:Char.equal
           then skip (index + 1)
           else index
         in

@@ -908,8 +908,11 @@ module Shell_lexer = struct
         | `None -> (
             let command = !at_command in
             if escaped then at_command := false
-            else if List.mem [ ';'; '&'; '|'; '('; ')'; '\n' ] character ~equal:Char.equal then
-              at_command := true
+            else if List.mem [ ';'; '&'; '|'; '('; ')'; '\n' ] character ~equal:Char.equal then (
+              (* A new command: nothing pending from the previous one's head carries over. *)
+              at_command := true;
+              after_time := false;
+              function_head := false)
             else if Char.is_whitespace character then ()
             else if word_start index then (
               let word = word_at index in
@@ -2309,6 +2312,12 @@ module Shell_context = struct
       match String.lsplit2 word ~on:'=' with
       | Some (name, _) ->
           let name = Option.value (String.chop_suffix name ~suffix:"+") ~default:name in
+          (* An array element, [A[0]=x], is an assignment word too. *)
+          let name =
+            match String.lsplit2 name ~on:'[' with
+            | Some (base, subscript) when String.is_suffix subscript ~suffix:"]" -> base
+            | _ -> name
+          in
           (not (String.is_empty name))
           && (Char.is_alpha name.[0] || Char.equal name.[0] '_')
           && String.for_all name ~f:(fun c -> Char.is_alphanum c || Char.equal c '_')
@@ -3047,6 +3056,9 @@ module Errexit_negation = struct
       ( "negation after an argument -p before case inside a substitution",
         "set -e\nx=$(echo -p case x in foo)\n! probe\n",
         [ 3 ] );
+      ( "negation after a finished time and a command named -p before case inside a substitution",
+        "set -e\nx=$(time; -p case x in foo)\n! probe\n",
+        [ 3 ] );
       ( "negation after an esac argument inside a substitution's case arm",
         "set -e\nx=$(case $y in a) echo esac ;; esac)\n! probe\n",
         [ 3 ] );
@@ -3094,6 +3106,9 @@ module Errexit_negation = struct
         [ 4 ] );
       ( "timed function's final negation, every call piped",
         "set -e\ntime f() {\n  ! probe\n}\nf | cat\n",
+        [ 3 ] );
+      ( "function's final negation, every call piped behind an array assignment",
+        "set -e\nf() {\n  ! probe\n}\nA[0]=x f | cat\n",
         [ 3 ] );
       ( "function's final negation, run only as another command's argument",
         "set -e\nabsent() {\n  ! grep -q x f\n}\nrun absent | cat\ncommand absent | cat\n",
