@@ -829,22 +829,31 @@ module Shell_lexer = struct
       in
       String.sub line ~pos:index ~len:(finish index - index)
     in
+    (* The last index a word continues past -- a closing quote, a nested substitution's or
+       expansion's closer -- so the character after it starts no word: [$(x)#y] holds no comment. *)
+    let glued = ref (-1) in
+    let glue finish =
+      glued := finish - 1;
+      finish
+    in
     (* A word starts after an unescaped blank or separator, as {!comment_starts} reads one: an
-       escaped space ([foo\ #bar]) continues its word. *)
+       escaped space ([foo\ #bar]) continues its word, and so does a glued closer. *)
     let word_start index =
       let rec backslashes index count =
         if index > body && Char.equal line.[index - 1] '\\' then backslashes (index - 1) (count + 1)
         else count
       in
       index = body
-      || (Char.is_whitespace line.[index - 1]
-         || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal)
+      || !glued <> index - 1
+         && (Char.is_whitespace line.[index - 1]
+            || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal)
          && backslashes (index - 1) 0 % 2 = 0
     in
     (* Whether the next word is in command position, tracked forward through the body: true at its
        start and after a separator or a parenthesis, kept across a reserved word a command follows,
        and false after any other word -- so [echo then case] holds no [case]. *)
     let at_command = ref true in
+    let function_head = ref false in
     let keeps_command_position =
       [ "then"; "do"; "else"; "elif"; "if"; "while"; "until"; "{"; "!"; "time" ]
     in
@@ -859,12 +868,12 @@ module Shell_lexer = struct
         let character = line.[index] in
         match quote with
         | `Single ->
-            if Char.equal character '\'' then loop (index + 1) `None false depth
+            if Char.equal character '\'' then loop (glue (index + 1)) `None false depth
             else loop (index + 1) `Single false depth
         | `Ansi_c ->
             if escaped then loop (index + 1) `Ansi_c false depth
             else if Char.equal character '\\' then loop (index + 1) `Ansi_c true depth
-            else if Char.equal character '\'' then loop (index + 1) `None false depth
+            else if Char.equal character '\'' then loop (glue (index + 1)) `None false depth
             else loop (index + 1) `Ansi_c false depth
         | `Double ->
             if escaped then loop (index + 1) `Double false depth
@@ -874,13 +883,14 @@ module Shell_lexer = struct
             else if starts_at line ~pos:index "${" then
               loop (skip_parameter_expansion line (index + 2)) `Double false depth
             else if Char.equal character '`' then loop (index + 1) `Backtick_double false depth
-            else if Char.equal character '"' then loop (index + 1) `None false depth
+            else if Char.equal character '"' then loop (glue (index + 1)) `None false depth
             else loop (index + 1) `Double false depth
         | (`Backtick_none | `Backtick_double) as backtick ->
             if escaped then loop (index + 1) backtick false depth
             else if Char.equal character '\\' then loop (index + 1) backtick true depth
             else if Char.equal character '`' then
-              loop (index + 1)
+              loop
+                (glue (index + 1))
                 (match backtick with `Backtick_double -> `Double | `Backtick_none -> `None)
                 false depth
             else loop (index + 1) backtick false depth
@@ -895,13 +905,21 @@ module Shell_lexer = struct
             loop (skip_command_substitution line (index + 1)) `None false depth
         | `None -> (
             let command = !at_command in
-            if escaped then at_command := false
-            else if List.mem [ ';'; '&'; '|'; '('; ')'; '\n' ] character ~equal:Char.equal then
-              at_command := true
-            else if Char.is_whitespace character then ()
-            else if word_start index then
-              at_command :=
-                command && List.mem keeps_command_position (word_at index) ~equal:String.equal;
+            (if escaped then at_command := false
+             else if List.mem [ ';'; '&'; '|'; '('; ')'; '\n' ] character ~equal:Char.equal then
+               at_command := true
+             else if Char.is_whitespace character then ()
+             else if word_start index then
+               let word = word_at index in
+               if !function_head then (
+                 (* [function NAME]: the body that follows starts in command position. *)
+                 function_head := false;
+                 at_command := true)
+               else if command && String.equal word "function" then (
+                 function_head := true;
+                 at_command := false)
+               else
+                 at_command := command && List.mem keeps_command_position word ~equal:String.equal);
             let frame =
               match !cases with (opened, where) :: _ when opened = depth -> Some where | _ -> None
             in
@@ -950,9 +968,9 @@ module Shell_lexer = struct
       else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c false depth
       else if starts_at line ~pos:index "$(" then
         (* A nested substitution is a body of its own, an arithmetic one included. *)
-        loop (skip_command_substitution line (index + 2)) `None false depth
+        loop (glue (skip_command_substitution line (index + 2))) `None false depth
       else if starts_at line ~pos:index "${" then
-        loop (skip_parameter_expansion line (index + 2)) `None false depth
+        loop (glue (skip_parameter_expansion line (index + 2))) `None false depth
       else if Char.equal character '\'' then loop (index + 1) `Single false depth
       else if Char.equal character '"' then loop (index + 1) `Double false depth
       else if Char.equal character '`' then loop (index + 1) `Backtick_none false depth
@@ -1760,14 +1778,15 @@ module Shell_context = struct
   (** What a [(] or [{] opens, judged by the operand text before it: a group when nothing precedes
       it but [!] or [time] ([-p], [--]); a function body after a function head in any spelling
       ([f()], [f ()], [function f], [function f()]); otherwise nothing ([arr=(], [<(]). *)
+  let rec drop_pipeline_prefix = function
+    | "!" :: rest -> drop_pipeline_prefix rest
+    | "time" :: "-p" :: "--" :: rest | "time" :: "--" :: rest -> drop_pipeline_prefix rest
+    | "time" :: "-p" :: rest -> drop_pipeline_prefix rest
+    | "time" :: rest -> drop_pipeline_prefix rest
+    | words -> words
+
   let opener text =
-    let rec drop = function
-      | "!" :: rest -> drop rest
-      | "time" :: "-p" :: "--" :: rest | "time" :: "--" :: rest -> drop rest
-      | "time" :: "-p" :: rest -> drop rest
-      | "time" :: rest -> drop rest
-      | words -> words
-    in
+    let drop = drop_pipeline_prefix in
     (* A function name is any word that is not an assignment and needs no quoting. *)
     let name word =
       (not (String.is_empty word))
@@ -2258,16 +2277,25 @@ module Shell_context = struct
             | Some compound -> List.concat_map compound.branches ~f:command_words))
 
   (** The functions [branch] defines anywhere, by name, with the offset each definition starts at,
-      and whether it certainly runs where it stands: a statement of the script's top level, not of
-      any compound (a branch, a loop, a function body). *)
+      and whether it certainly runs where it stands: at the script's top level, not in any compound
+      (a branch, a loop, a function body), as the first operand of a statement run in this shell. *)
   let rec definitions ?(nested = false) (branch : branch) =
     List.concat_map branch.statements ~f:(fun statement ->
-        List.concat_map statement.operands ~f:(fun operand ->
+        List.concat_mapi statement.operands ~f:(fun index operand ->
             match operand.compound with
             | None -> []
             | Some compound ->
+                (* Certain only as the first operand of a statement run in this shell: not behind an
+                   [&&]/[||], not a pipeline element, not a background job. *)
+                let certain =
+                  (not nested) && index = 0 && (not statement.async)
+                  && not
+                       (Option.value_map (List.hd statement.connectors) ~default:false ~f:(function
+                         | Pipe -> true
+                         | And | Or -> false))
+                in
                 let own =
-                  match (compound.kind, L.shell_words operand.text) with
+                  match (compound.kind, drop_pipeline_prefix (L.shell_words operand.text)) with
                   | ( Function _,
                       ([ head ] | [ "function"; head ] | [ head; "()" ] | [ "function"; head; "()" ])
                     ) ->
@@ -2275,7 +2303,7 @@ module Shell_context = struct
                         ( Option.value (String.chop_suffix head ~suffix:"()") ~default:head,
                           compound,
                           statement.start,
-                          not nested );
+                          certain );
                       ]
                   | _ -> []
                 in
@@ -2696,6 +2724,8 @@ module Shell_context = struct
         ( "multiline command substitution",
           "set -e\nx=$(\n  case $y in\n    (a) echo 1 ;;\n    @(b|c)) echo 2 ;&\n  esac\n)\n" );
         ("nested case", "set -e\nx=$(case $y in a) case $z in b) : ;; esac ;; esac)\n");
+        ( "function-keyword body in a command substitution",
+          "set -e\nx=$(function f { case x in a) : ;; esac; }; f)\n" );
         ("process substitution", "set -e\ncat <(case $y in a) echo 1 ;; esac) >/dev/null\n");
       ]
       ~f:(fun (name, text) ->
@@ -3038,6 +3068,12 @@ module Errexit_negation = struct
       ( "negation after an arithmetic substitution naming case",
         "set -e\nx=$((case + in))\n! probe\n",
         [ 3 ] );
+      ( "negation after a substitution closer glued to a hash",
+        "set -e\nx=$(echo $(echo x)#literal)\n! probe\n",
+        [ 3 ] );
+      ( "negation after a quote glued to a hash inside a substitution",
+        "set -e\nx=$(echo 'x'#literal)\n! probe\n",
+        [ 3 ] );
       ( "negation after an esac argument inside a substitution's case arm",
         "set -e\nx=$(case $y in a) echo esac ;; esac)\n! probe\n",
         [ 3 ] );
@@ -3077,6 +3113,12 @@ module Errexit_negation = struct
       ( "function's final negation, every call piped under pipefail",
         "set -eo pipefail\nf() {\n  ! probe\n}\nf | cat\n",
         [] );
+      ( "function's final negation, called after a redefinition behind &&",
+        "set -e\nf() { ! probe; }; f | cat; false && f() { :; }; f\n",
+        [] );
+      ( "timed function's final negation, every call piped",
+        "set -e\ntime f() {\n  ! probe\n}\nf | cat\n",
+        [ 3 ] );
       ( "function's final negation, run only as another command's argument",
         "set -e\nabsent() {\n  ! grep -q x f\n}\nrun absent | cat\ncommand absent | cat\n",
         [] );

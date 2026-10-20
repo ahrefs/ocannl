@@ -50,6 +50,7 @@ a script that never turns errexit on is not refused for its structure: true
 a case inside a command substitution keeps the structure readable: true
 a case inside a multiline command substitution keeps the structure readable: true
 a case inside a nested case keeps the structure readable: true
+a case inside a function-keyword body in a command substitution keeps the structure readable: true
 a case inside a process substitution keeps the structure readable: true
 a save-and-restore function is named as the reason for the whole-file reading: true
 a file whose functions leave errexit alone carries no whole-file note: true
@@ -235,6 +236,8 @@ errexit-negation fixture negation after an escaped space before a hash inside a 
 errexit-negation fixture negation after case and in as arithmetic variables inside a substitution is classified as specified: true
 errexit-negation fixture negation after an arithmetic command naming case inside a substitution is classified as specified: true
 errexit-negation fixture negation after an arithmetic substitution naming case is classified as specified: true
+errexit-negation fixture negation after a substitution closer glued to a hash is classified as specified: true
+errexit-negation fixture negation after a quote glued to a hash inside a substitution is classified as specified: true
 errexit-negation fixture negation after an esac argument inside a substitution's case arm is classified as specified: true
 errexit-negation fixture negation inside a case inside a command substitution is classified as specified: true
 errexit-negation fixture function's final negation, every call piped is classified as specified: true
@@ -248,6 +251,8 @@ errexit-negation fixture function's final negation, its only call before a same-
 errexit-negation fixture function's final negation, every real call piped beside a quoted assignment-shaped command is classified as specified: true
 errexit-negation fixture function's final negation, called after a conditional redefinition is classified as specified: true
 errexit-negation fixture function's final negation, every call piped under pipefail is classified as specified: true
+errexit-negation fixture function's final negation, called after a redefinition behind && is classified as specified: true
+errexit-negation fixture timed function's final negation, every call piped is classified as specified: true
 errexit-negation fixture function's final negation, run only as another command's argument is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture pair in multiline quote is classified as specified: true
