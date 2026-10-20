@@ -10,7 +10,9 @@ the backend name moves its own component: true
 and only components it reaches: true
 cc_grid_private_bytes_cap, stated in a child, moves the codegen component alone on a CPU backend, and nothing on a GPU one: true
 every child run of the pool-class flips completed: true
-no pool-class flip moves a component other than the pool: true
+no pool-class flip moves a component other than the pool and what follows from it: true
+with the chunk count auto, codegen beyond the pool tag moves exactly when the pool width does: true
+with the chunk count stated, a pool-class flip moves codegen only through the pool tag: true
 the pool component separates exactly the pool decisions that differ: true
 each settings-borne key outside Keyed is flipped by restore_settings: true
 and moves no component of the cache key: true
@@ -21,7 +23,7 @@ no such key changes the emitted kernel while leaving the cache key unchanged: tr
 
 Keyed keys this sweep cannot flip in-process:
   backend -- a parameter, not a lookup: backends are process-wide singletons, and the component is the backend name the caller passes -- varied through that argument
-  cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes -- varied in child processes, and held to separating every two pools of different widths
+  cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes -- varied in child processes, held to separating exactly the pool decisions that differ and to moving codegen only through that decision: its tag in the limits record, and the auto chunk count its width sets
   cc_grid_private_bytes_cap -- resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; the codegen tag hashes that resolved value -- varied in child processes
 
 Keys a compile reads that the codegen-diff oracle does not flip:

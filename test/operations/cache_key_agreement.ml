@@ -150,9 +150,15 @@ let keyed_flips =
 (* Components that move WITH a classified one by derivation, not by a second reading of the key: the
    codegen tag hashes what the numerics policy resolves to on this backend
    ([Backend_intf.codegen_capabilities_fingerprint], gh-ocannl-1117), so a policy flip may move it
-   too. Each listed pair is one fact under two views, which partitions the cache no finer than the
-   classified component alone. *)
-let derived_components = [ ("numerics", [ "codegen" ]) ]
+   too. And the codegen tag hashes the device description's Key-class projection
+   ([Backend_intf.limits_key]), whose [worker_pool_tag] field is the very pool decision the pool
+   component renders, and the cc tag hashes the parallel-grid chunk count, whose auto value is four
+   times the decided pool's width ([Cc_backend.parallel_grid_chunks_setting]) -- so a pool decision
+   that changes moves codegen too, by those two routes and no other, which the pool-class children
+   pin exactly (rog-nv-linux, a hybrid Core Ultra 9 275HX, is where both showed). Each listed pair
+   is one fact under two views, which partitions the cache no finer than the classified component
+   alone. *)
+let derived_components = [ ("numerics", [ "codegen" ]); ("pool", [ "codegen" ]) ]
 
 (* The [Keyed] keys no in-process flip reaches, each with how it is varied instead (Codex P2, round
    4): the backend name through [cache_key_components]' own argument, and the two lazily resolved cc
@@ -165,8 +171,9 @@ let unflippable =
        backend name the caller passes -- varied through that argument" );
     ( "cc_pool_core_class",
       "resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool \
-       tag it decides is what the component hashes -- varied in child processes, and held to \
-       separating every two pools of different widths" );
+       tag it decides is what the component hashes -- varied in child processes, held to \
+       separating exactly the pool decisions that differ and to moving codegen only through that \
+       decision: its tag in the limits record, and the auto chunk count its width sets" );
     ( "cc_grid_private_bytes_cap",
       "resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; \
        the codegen tag hashes that resolved value -- varied in child processes" );
@@ -416,6 +423,15 @@ let () =
         printf "component\t%s\t%s\n" name value);
     if not (Ir.Schedule.backend_is_gpu backend) then
       printf "pool-tag\t%s\n" (Context.Cc_backend.pool_tag ());
+    (* The codegen tag as it would read without the pool decision in the limits record: what must
+       not move across pool classes, if the decision is all a pool class changes. *)
+    if not (Ir.Schedule.backend_is_gpu backend) then
+      printf "pool-width\t%d\n" (Context.Cc_backend.effective_pool_width ());
+    printf "codegen-sans-pool\t%s\n"
+      (SC.codegen_tag ~backend
+         ~limits:{ (Context.hardware_limits ctx) with Ir.Backend_intf.worker_pool_tag = None }
+         ~capabilities:(Context.codegen_capabilities ctx)
+         ());
     Out_channel.flush stdout;
     Stdlib.exit 0)
 
@@ -608,7 +624,13 @@ let () =
           ( List.filter_map lines ~f:(function
               | [ "component"; name; value ] -> Some (name, value)
               | _ -> None),
-            List.find_map lines ~f:(function [ "pool-tag"; tag ] -> Some tag | _ -> None) )
+            List.find_map lines ~f:(function [ "pool-tag"; tag ] -> Some tag | _ -> None),
+            ( List.find_map lines ~f:(function
+                | [ "codegen-sans-pool"; tag ] -> Some tag
+                | _ -> None),
+              List.find_map lines ~f:(function
+                | [ "pool-width"; width ] -> Int.of_string_opt width
+                | _ -> None) ) )
     | _ ->
         Fresh_process.report ~label:"cache_key_agreement child" run;
         None
@@ -622,7 +644,7 @@ let () =
       ( child [ grid; "--ocannl_cc_grid_private_bytes_cap=4096" ],
         child [ grid; "--ocannl_cc_grid_private_bytes_cap=1024" ] )
     with
-    | Some (before, _), Some (after, _) -> Some (moved before after)
+    | Some (before, _, _), Some (after, _, _) -> Some (moved before after)
     | _ -> None
   in
   p
@@ -630,26 +652,52 @@ let () =
      backend, and nothing on a GPU one"
     (Option.value_map cap_flip ~default:false ~f:(fun moved ->
          if cpu then List.equal String.equal moved [ "codegen" ] else List.is_empty moved));
-  let pools =
+  (* Each pool class twice: with the chunk count left to its auto value, which follows the decided
+     pool's width, and with it stated, which takes that route away. *)
+  let pool_children chunks =
     List.filter_map [ "all"; "performance"; "efficiency" ] ~f:(fun cls ->
         Option.map
-          (child [ grid; "--ocannl_cc_pool_core_class=" ^ cls ])
-          ~f:(fun (components, width) -> (cls, components, width)))
+          (child ([ grid; "--ocannl_cc_pool_core_class=" ^ cls ] @ chunks))
+          ~f:(fun (components, decision, (sans_pool, width)) ->
+            (cls, components, (decision, sans_pool, width))))
   in
-  p "every child run of the pool-class flips completed" (List.length pools = 3);
-  let pairs =
+  (* Auto stated as such ([0]), so an ambient or configured count cannot stand in for it. *)
+  let pools = pool_children [ "--ocannl_cc_parallel_chunks=0" ] in
+  let pools_fixed_chunks = pool_children [ "--ocannl_cc_parallel_chunks=8" ] in
+  p "every child run of the pool-class flips completed"
+    (List.length pools = 3 && List.length pools_fixed_chunks = 3);
+  let pairs_of pools =
     List.concat_mapi pools ~f:(fun i a ->
         List.filteri pools ~f:(fun j _ -> j > i) |> List.map ~f:(fun b -> (a, b)))
   in
-  p_all "no pool-class flip moves a component other than the pool" pairs
-    ~f:(fun ((_, ca, _), (_, cb, _)) -> List.for_all (moved ca cb) ~f:(String.equal "pool"));
+  let pairs = pairs_of pools in
+  let pool_allowed =
+    "pool"
+    :: Option.value ~default:[] (List.Assoc.find derived_components "pool" ~equal:String.equal)
+  in
+  p_all "no pool-class flip moves a component other than the pool and what follows from it" pairs
+    ~f:(fun ((_, ca, _), (_, cb, _)) ->
+      List.for_all (moved ca cb) ~f:(List.mem pool_allowed ~equal:String.equal));
+  (* The two routes from the pool decision to codegen, each pinned: with [worker_pool_tag] blanked
+     from the limits record, the codegen tags of two classes differ exactly when their pools' widths
+     do (the auto chunk count); and with the chunk count stated as well, they are one tag. A pool
+     class that reached anything else the codegen tag reads would split it. *)
+  p_all ~min:3
+    "with the chunk count auto, codegen beyond the pool tag moves exactly when the pool width does"
+    pairs ~f:(fun ((_, _, (_, sa, wa)), (_, _, (_, sb, wb))) ->
+      Option.is_some sa
+      && Bool.equal (Option.equal String.equal sa sb) (Option.equal Int.equal wa wb));
+  p_all ~min:3
+    "with the chunk count stated, a pool-class flip moves codegen only through the pool tag"
+    (pairs_of pools_fixed_chunks) ~f:(fun ((_, _, (_, sa, _)), (_, _, (_, sb, _))) ->
+      Option.is_some sa && Option.equal String.equal sa sb);
   (* The pool component separates exactly the pools the cc backend decided apart: two classes whose
      decisions ([Cc_backend.pool_tag], what the restriction settled on) differ get different pool
      components, and two whose decisions agree share one. Which classes the host can tell apart is
      its own business -- a host without core classes to restrict to decides one pool for all three
      -- so the claim is over the pairs, whatever they decided. A GPU backend has no pool. *)
   p_all ~min:3 "the pool component separates exactly the pool decisions that differ" pairs
-    ~f:(fun ((_, ca, ta), (_, cb, tb)) ->
+    ~f:(fun ((_, ca, (ta, _, _)), (_, cb, (tb, _, _))) ->
       Bool.equal (Option.equal String.equal ta tb)
         (not (List.mem (moved ca cb) "pool" ~equal:String.equal)));
   (* 5. The keys a trace cannot see -- resolved once into [Utils.settings] -- flipped through their
