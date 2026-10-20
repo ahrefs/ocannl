@@ -232,6 +232,9 @@ errexit-negation fixture negation after a case inside a command substitution is 
 errexit-negation fixture negation after reserved-word spellings as arguments in a substitution is classified as specified: true
 errexit-negation fixture negation after a case spelled in a comment inside a substitution is classified as specified: true
 errexit-negation fixture negation after an escaped space before a hash inside a substitution is classified as specified: true
+errexit-negation fixture negation after case and in as arithmetic variables inside a substitution is classified as specified: true
+errexit-negation fixture negation after an arithmetic command naming case inside a substitution is classified as specified: true
+errexit-negation fixture negation after an arithmetic substitution naming case is classified as specified: true
 errexit-negation fixture negation after an esac argument inside a substitution's case arm is classified as specified: true
 errexit-negation fixture negation inside a case inside a command substitution is classified as specified: true
 errexit-negation fixture function's final negation, every call piped is classified as specified: true
@@ -243,6 +246,8 @@ errexit-negation fixture function's final negation, through a caller whose statu
 errexit-negation fixture function's final negation, its only call before a redefinition piped is classified as specified: true
 errexit-negation fixture function's final negation, its only call before a same-line redefinition piped is classified as specified: true
 errexit-negation fixture function's final negation, every real call piped beside a quoted assignment-shaped command is classified as specified: true
+errexit-negation fixture function's final negation, called after a conditional redefinition is classified as specified: true
+errexit-negation fixture function's final negation, every call piped under pipefail is classified as specified: true
 errexit-negation fixture function's final negation, run only as another command's argument is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture pair in multiline quote is classified as specified: true

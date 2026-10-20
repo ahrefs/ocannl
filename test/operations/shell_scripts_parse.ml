@@ -850,6 +850,9 @@ module Shell_lexer = struct
     in
     (* The open [case] frames, innermost first: the depth each opened at, and where it is. *)
     let cases : (int * [ `Subject | `Pattern of bool | `Arm ] ref) list ref = ref [] in
+    (* An arithmetic body ([$((], or [((] handed over from its second parenthesis) holds
+       expressions, not commands: its words are variables, so nothing in it opens a [case]. *)
+    let arithmetic = index < length && Char.equal line.[index] '(' in
     let rec loop index quote escaped depth =
       if index >= length then index
       else
@@ -881,11 +884,15 @@ module Shell_lexer = struct
                 (match backtick with `Backtick_double -> `Double | `Backtick_none -> `None)
                 false depth
             else loop (index + 1) backtick false depth
+        | `None when arithmetic -> plain index escaped depth
         | `None when (not escaped) && Char.equal character '#' && word_start index ->
             (* A comment, to its line's end: its words open no [case]. *)
             loop
               (Option.value (String.index_from line index '\n') ~default:length)
               `None false depth
+        | `None when (not escaped) && !at_command && starts_at line ~pos:index "((" ->
+            (* An arithmetic command, read as an arithmetic body. *)
+            loop (skip_command_substitution line (index + 1)) `None false depth
         | `None -> (
             let command = !at_command in
             if escaped then at_command := false
@@ -941,6 +948,9 @@ module Shell_lexer = struct
       if escaped then loop (index + 1) `None false depth
       else if Char.equal character '\\' then loop (index + 1) `None true depth
       else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c false depth
+      else if starts_at line ~pos:index "$(" then
+        (* A nested substitution is a body of its own, an arithmetic one included. *)
+        loop (skip_command_substitution line (index + 2)) `None false depth
       else if starts_at line ~pos:index "${" then
         loop (skip_parameter_expansion line (index + 2)) `None false depth
       else if Char.equal character '\'' then loop (index + 1) `Single false depth
@@ -1660,12 +1670,15 @@ end
     consumes it (each arm's rule), or when it is the LAST statement of a context that hands its
     status on:
     - a function body: its status is the return value the call site weighs -- unless the file shows
-      calls of the function and every one discards that status (gh-ocannl-1266): a pipe after it, a
-      background job, or a statement nothing consumes where errexit is certainly off. A call is a
-      simple command whose command word, past [!], [time], assignments and redirections, names a
-      function the file defines; one the scan cannot see -- another command's argument ([run f],
-      [command f], [trap f EXIT]), a substitution, another file -- discards nothing, and a function
-      with no visible call at all keeps the return value as read;
+      calls of the function and every one discards that status (gh-ocannl-1266): a pipe after it
+      (unless the file may turn [pipefail] on), a background job, or a statement nothing consumes
+      where errexit is certainly off. A call is a simple command whose command word, past [!],
+      [time], unquoted assignments and redirections, names a function the file defines; a name
+      defined more than once binds each call to the definitions that may be in effect there, in
+      source order (the latest certain one -- at the top level -- and any later conditional ones). A
+      call the scan cannot see -- another command's argument ([run f], [command f], [trap f EXIT]),
+      a substitution, another file -- discards nothing, and a function with no visible call at all
+      keeps the return value as read;
     - a subshell, whose nonzero exit is a failure of its own, unless a pipeline discards it or it
       runs in the background;
     - a brace group, [if] branch or [case] arm whose compound hands its status on in turn: as a
@@ -2244,9 +2257,10 @@ module Shell_context = struct
             | None -> List.map (L.shell_words operand.text) ~f:L.literal_shell_word
             | Some compound -> List.concat_map compound.branches ~f:command_words))
 
-  (** The functions [branch] defines anywhere, by name, with the offset each definition starts at.
-  *)
-  let rec definitions (branch : branch) =
+  (** The functions [branch] defines anywhere, by name, with the offset each definition starts at,
+      and whether it certainly runs where it stands: a statement of the script's top level, not of
+      any compound (a branch, a loop, a function body). *)
+  let rec definitions ?(nested = false) (branch : branch) =
     List.concat_map branch.statements ~f:(fun statement ->
         List.concat_map statement.operands ~f:(fun operand ->
             match operand.compound with
@@ -2260,13 +2274,14 @@ module Shell_context = struct
                       [
                         ( Option.value (String.chop_suffix head ~suffix:"()") ~default:head,
                           compound,
-                          statement.start );
+                          statement.start,
+                          not nested );
                       ]
                   | _ -> []
                 in
-                own @ List.concat_map compound.branches ~f:definitions))
+                own @ List.concat_map compound.branches ~f:(definitions ~nested:true)))
 
-  let defined_functions branch = List.map (definitions branch) ~f:(fun (name, _, _) -> name)
+  let defined_functions branch = List.map (definitions branch) ~f:(fun (name, _, _, _) -> name)
 
   (** The command name a simple command runs, past what can stand in front of it: [!], [time] ([-p],
       [--]), assignments and redirections. [command] and [builtin] are names of their own: neither
@@ -2479,8 +2494,16 @@ module Shell_context = struct
       List.filter_map (simple_commands top) ~f:(fun (text, statement, index) ->
           Option.bind (command_name text) ~f:(fun name ->
               Option.some_if
-                (List.exists definitions ~f:(fun (defined, _, _) -> String.equal defined name))
+                (List.exists definitions ~f:(fun (defined, _, _, _) -> String.equal defined name))
                 (name, (statement, index))))
+    in
+    (* [pipefail] may be on somewhere in the file: a [set]/[shopt] command naming it, read as on
+       wherever it may run, so a pipe after a call keeps the call's status. *)
+    let pipefail =
+      List.exists (simple_commands top) ~f:(fun (text, _, _) ->
+          match List.map (L.shell_words text) ~f:L.literal_shell_word with
+          | ("set" | "shopt") :: words -> List.mem words "pipefail" ~equal:String.equal
+          | _ -> false)
     in
     (* Whether a call's status reaches nothing: a pipe after it discards it, and so does a
        background job; as its statement's status, it reaches something when the statement's is
@@ -2488,27 +2511,34 @@ module Shell_context = struct
     let discards judgements (statement, index) =
       match List.nth statement.connectors index with
       | Some (And | Or) -> false
-      | Some Pipe -> true
+      | Some Pipe -> not pipefail
       | None ->
           statement.async
           || Option.value_map (Hashtbl.find judgements statement.id) ~default:false
                ~f:(fun { errexit; consumed; _ } -> not (errexit || consumed))
     in
-    (* The calls of one definition: a name defined more than once binds each call to the latest
-       definition starting before the call, in source order; a call above every definition of its
-       name (from a function body run later) is one of each of them. *)
-    let calls_of (name, _, start) =
-      let starts =
-        List.filter_map definitions ~f:(fun (defined, _, start) ->
-            Option.some_if (String.equal defined name) start)
-      in
+    (* The calls of one definition: a name defined more than once binds each call to the definitions
+       that may be in effect there, in source order -- the latest one starting before the call that
+       certainly ran, and every later one that may have run (inside a branch, a loop or a function
+       body); a call above every definition of its name (from a function body run later) is one of
+       each of them. *)
+    let calls_of (name, _, start, _) =
+      let same = List.filter definitions ~f:(fun (defined, _, _, _) -> String.equal defined name) in
       List.filter_map calls ~f:(fun (called, ((statement, _) as site)) ->
+          let preceding =
+            List.filter same ~f:(fun (_, _, defined, _) -> defined <= statement.start)
+          in
+          let floor =
+            List.filter_map preceding ~f:(fun (_, _, defined, certain) ->
+                Option.some_if certain defined)
+            |> List.max_elt ~compare:Int.compare
+          in
           let binds =
             String.equal called name
             &&
-            match List.filter starts ~f:(fun defined -> defined <= statement.start) with
+            match preceding with
             | [] -> true
-            | preceding -> start = Option.value_exn (List.max_elt preceding ~compare:Int.compare)
+            | _ -> start <= statement.start && Option.for_all floor ~f:(fun floor -> start >= floor)
           in
           Option.some_if binds site)
     in
@@ -2517,7 +2547,7 @@ module Shell_context = struct
     let rec settle unread =
       let judgements, _ = reading ~leaky ~unread in
       let found =
-        List.filter_map definitions ~f:(fun ((_, compound, _) as definition) ->
+        List.filter_map definitions ~f:(fun ((_, compound, _, _) as definition) ->
             let sites = calls_of definition in
             Option.some_if
               ((not (List.is_empty sites)) && List.for_all sites ~f:(discards judgements))
@@ -2534,7 +2564,7 @@ module Shell_context = struct
       |> List.sort ~compare:(fun a b -> Int.compare a.statement.id b.statement.id)
     in
     let leaking =
-      List.filter_map definitions ~f:(fun (name, compound, _) ->
+      List.filter_map definitions ~f:(fun (name, compound, _, _) ->
           Option.some_if (List.mem leaks compound ~equal:phys_equal) name)
       |> List.dedup_and_sort ~compare:String.compare
     in
@@ -2999,6 +3029,15 @@ module Errexit_negation = struct
       ( "negation after an escaped space before a hash inside a substitution",
         "set -e\nx=$(echo foo\\ #literal)\n! probe\n",
         [ 3 ] );
+      ( "negation after case and in as arithmetic variables inside a substitution",
+        "set -e\nx=$(echo $((case + in)))\n! probe\n",
+        [ 3 ] );
+      ( "negation after an arithmetic command naming case inside a substitution",
+        "set -e\nx=$( (( case = in )); echo 1 )\n! probe\n",
+        [ 3 ] );
+      ( "negation after an arithmetic substitution naming case",
+        "set -e\nx=$((case + in))\n! probe\n",
+        [ 3 ] );
       ( "negation after an esac argument inside a substitution's case arm",
         "set -e\nx=$(case $y in a) echo esac ;; esac)\n! probe\n",
         [ 3 ] );
@@ -3032,6 +3071,12 @@ module Errexit_negation = struct
       ( "function's final negation, every real call piped beside a quoted assignment-shaped command",
         "set -e\nf() {\n  ! probe\n}\nf | cat\nif 'X=1' f; then :; fi\n",
         [ 3 ] );
+      ( "function's final negation, called after a conditional redefinition",
+        "set -e\nf() { ! probe; }; f | cat; if false; then f() { :; }; fi; f\n",
+        [] );
+      ( "function's final negation, every call piped under pipefail",
+        "set -eo pipefail\nf() {\n  ! probe\n}\nf | cat\n",
+        [] );
       ( "function's final negation, run only as another command's argument",
         "set -e\nabsent() {\n  ! grep -q x f\n}\nrun absent | cat\ncommand absent | cat\n",
         [] );
