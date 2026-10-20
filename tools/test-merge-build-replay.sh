@@ -223,12 +223,13 @@ if harness_leg 'usage errors exit 2 #usage'; then
 fi
 
 # This repository's own definitions parse: a format change at either definition site that the
-# reader no longer follows fails here, not in the next replay someone runs. An empty date window
+# reader no longer follows fails here, not in the next replay someone runs. An empty revision range
 # reads no history.
 if harness_leg "this repository's built-in sets parse #definitions"; then
   rc=0
-  python3 "$SRC" --repo "$HERE/.." --since 2999-01-01 HEAD >"$out" 2>&1 || rc=$?
-  if [ "$rc" = 0 ] && grep -q '^set config: .*(.github/ship-pr-merge-build)$' "$out" &&
+  python3 "$SRC" --repo "$HERE/.." HEAD..HEAD >"$out" 2>&1 || rc=$?
+  if [ "$rc" = 0 ] && has 'merge-build-replay: 0 first-parent merge(s) of HEAD..HEAD, 0 replayed' &&
+     grep -q '^set config: .*(.github/ship-pr-merge-build)$' "$out" &&
      grep -q '^set shell-tier: .*(tools/merge-build-check.sh)$' "$out"; then
     report 0 "this repository's config and merge-build-check.sh give both built-in sets"
   else report 1 "this repository's config and merge-build-check.sh give both built-in sets" "exit $rc; $(cat "$out")"; fi
