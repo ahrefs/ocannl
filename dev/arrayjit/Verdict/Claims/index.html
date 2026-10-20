@@ -9,7 +9,7 @@
   <span><span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span>
   <span><span><span class="type-var">'a</span> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><span class="type-var">'b</span> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">f</span>:<span>(<span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'b</span> <span class="arrow">&#45;&gt;</span></span> bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">f</span>:<span>(<span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'b</span> <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
   <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pf_all2"><a href="#val-pf_all2" class="anchor"></a><code><span><span class="keyword">val</span> pf_all2 : 
   <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><span>(<span class="type-var">'a</span>,
@@ -17,7 +17,25 @@
     string,
     <span><span><span class="type-var">'b</span> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
     <span><span><span class="type-var">'c</span> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
-    <span><span class="label">f</span>:<span>(<span><span class="type-var">'b</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'c</span> <span class="arrow">&#45;&gt;</span></span> bool)</span> <span class="arrow">&#45;&gt;</span></span>
+    <span><span class="label">f</span>:<span>(<span><span class="type-var">'b</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'c</span> <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+    <span class="xref-unresolved">Base</span>.unit)</span>
+    <span class="xref-unresolved">Stdlib</span>.format4</span> <span class="arrow">&#45;&gt;</span></span>
+  <span class="type-var">'a</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-p_close"><a href="#val-p_close" class="anchor"></a><code><span><span class="keyword">val</span> p_close : 
+  <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?what_ran</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span class="xref-unresolved">Base__Float</span>.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span class="xref-unresolved">Base__Float</span>.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">tol</span>:<span>(<span><span class="xref-unresolved">Base__Float</span>.t <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.Float.t)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pf_close"><a href="#val-pf_close" class="anchor"></a><code><span><span class="keyword">val</span> pf_close : 
+  <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?what_ran</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span>(<span class="type-var">'a</span>,
+    unit,
+    string,
+    <span><span><span class="xref-unresolved">Base__Float</span>.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span><span><span class="xref-unresolved">Base__Float</span>.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span><span class="label">tol</span>:<span>(<span><span class="xref-unresolved">Base__Float</span>.t <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.Float.t)</span> <span class="arrow">&#45;&gt;</span></span>
     <span class="xref-unresolved">Base</span>.unit)</span>
     <span class="xref-unresolved">Stdlib</span>.format4</span> <span class="arrow">&#45;&gt;</span></span>
   <span class="type-var">'a</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-p_none"><a href="#val-p_none" class="anchor"></a><code><span><span class="keyword">val</span> p_none : 
@@ -86,5 +104,12 @@
   <span><span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span>
   <span><span><span class="type-var">'a</span> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><span class="type-var">'b</span> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">f</span>:<span>(<span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'b</span> <span class="arrow">&#45;&gt;</span></span> bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">f</span>:<span>(<span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'b</span> <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pass_fail_close"><a href="#val-pass_fail_close" class="anchor"></a><code><span><span class="keyword">val</span> pass_fail_close : 
+  <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?what_ran</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span class="xref-unresolved">Base__Float</span>.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span class="xref-unresolved">Base__Float</span>.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">tol</span>:<span>(<span><span class="xref-unresolved">Base__Float</span>.t <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.Float.t)</span> <span class="arrow">&#45;&gt;</span></span>
   <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-case"><a href="#val-case" class="anchor"></a><code><span><span class="keyword">val</span> case : <span><span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span> <span><span>(<span>unit <span class="arrow">&#45;&gt;</span></span> unit)</span> <span class="arrow">&#45;&gt;</span></span> unit</span></code></div></div></div></body></html>
