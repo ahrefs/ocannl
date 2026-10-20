@@ -37,6 +37,7 @@ test/operations/peel_dead_level.ml -- records=10 traversals=0
 test/operations/prelowered_seam.ml -- records=7 traversals=0
 test/operations/reduction_accumulator_residency.ml -- records=4 traversals=1
 test/operations/reduction_forms.ml -- records=19 traversals=2
+test/operations/rev_sides_width1_store.ml -- records=0 traversals=1
 test/operations/scan_loop.ml -- records=3 traversals=0
 test/operations/schedule_epilogue_fusion.ml -- records=4 traversals=3
 test/operations/schedule_partition.ml -- records=6 traversals=0

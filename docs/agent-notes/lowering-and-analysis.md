@@ -459,9 +459,9 @@ files.
   whole-node `Zero_out` for those targets; a target with no bound-extent axis keeps the `Fetch` path
   unchanged. Both initializing writers share it: `loop_accum`'s `needs_init` pass and each target
   of `loop_accum_rev` (the `Rev_sides` scatter). The scatter builds each target's view from
-  `project_rhs.(i)`/`rhs_dims.(i)` directly, NOT from `target_projections`: the selector drops a
-  target whose concatenation segment has dimension 1 (indexed at `Fixed_idx 0`, its symbol absent),
-  and such a target would silently fall back to the full fill. The `Fetch` also filled a padded
+  `project_rhs.(i)`/`rhs_dims.(i)` directly, NOT from `target_projections`: the selector can still
+  drop a target (one mentioning another segment of its component), which would then silently fall
+  back to the full fill. The `Fetch` also filled a padded
   target's margins, so the guarded nest of a scatter target is preceded by that target's margin
   resets (`~reset_margins`; `loop_accum`'s own `padding_resets` already cover its `lhs`, while
   `loop_accum_rev`'s cover the side it reads).
@@ -532,7 +532,11 @@ files.
   coordinates. A bounded segment-choice proof also requires a viable RHS for every target block;
   `Rev_sides` target queries carry the actual read map and retain inactive iterator identities.
   A selector target must select only its own segment before coverage can elide initialization;
-  deleting other segments would misclassify unavailable source iterators as static. Static/runtime
+  deleting other segments would misclassify unavailable source iterators as static. A width-1
+  segment's target indexes that axis at `Fixed_idx 0` and never mentions its symbol, so
+  `loop_accum_rev` attributes it by rewriting a dimension-1 `Fixed_idx 0` axis of its view to
+  `Iterator selected` (the same index, the symbol ranging over `[0]`); otherwise it was never proven
+  injective and got read-add-write plus an init (`test/operations/rev_sides_width1_store.ml`). Static/runtime
   extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
   scatters against explicit neutral initialization.
 

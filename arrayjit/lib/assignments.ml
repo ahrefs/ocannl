@@ -806,35 +806,58 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       | [| syms |] when List.length syms = Array.length lhses -> Some (Array.of_list syms)
       | _ -> None
     in
+    let segment_width sym =
+      Array.find_map projections.components
+        ~f:(List.find_map ~f:(fun (d, s) -> Option.some_if (Indexing.equal_symbol s sym) d))
+    in
     let target_projections =
       Array.mapi projections.project_rhs ~f:(fun i project_lhs ->
+          let target_dims = projections.rhs_dims.(i) in
           (* Keep inactive symbols in the domain: removing one would make the source availability
              proof mistake it for an always-available static parameter. *)
-          let selects_target =
+          let attributed =
             match selector with
-            | None -> true
+            | None -> Some project_lhs
             | Some syms ->
                 let selected = syms.(i) in
-                Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected)
-                && Array.for_all projections.components ~f:(fun comp ->
-                    if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s selected) then
-                      let others =
-                        List.filter_map comp ~f:(fun (_, s) ->
-                            if Indexing.equal_symbol s selected then None else Some s)
-                      in
-                      not (Array.exists project_lhs ~f:(Indexing.axis_index_mentions_any others))
-                    else true)
+                (* A segment of dimension 1 iterates its symbol over [0] alone, so the target
+                   indexes that axis at [Fixed_idx 0] and never mentions the symbol. [Iterator
+                   selected] at that axis is the same index -- the writes are unchanged -- and it
+                   lets the analyses below see that only the blocks choosing this segment write the
+                   target. Without it, every block of the component looked like a writer, so the
+                   target was never proven injective: a read-add-write plus an init where a store
+                   would do. Any dimension-1 [Fixed_idx 0] axis is the same index for a symbol
+                   ranging over [0]; with none, the target keeps the conservative path. *)
+                let project_lhs =
+                  if Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected) then
+                    Some project_lhs
+                  else if Option.equal Int.equal (segment_width selected) (Some 1) then
+                    Array.findi project_lhs ~f:(fun ax idx ->
+                        match idx with Indexing.Fixed_idx 0 -> target_dims.(ax) = 1 | _ -> false)
+                    |> Option.map ~f:(fun (ax, _) ->
+                        Array.mapi project_lhs ~f:(fun ax' idx ->
+                            if ax' = ax then Indexing.Iterator selected else idx))
+                  else None
+                in
+                Option.filter project_lhs ~f:(fun project_lhs ->
+                    Array.for_all projections.components ~f:(fun comp ->
+                        if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s selected) then
+                          let others =
+                            List.filter_map comp ~f:(fun (_, s) ->
+                                if Indexing.equal_symbol s selected then None else Some s)
+                          in
+                          not
+                            (Array.exists project_lhs ~f:(Indexing.axis_index_mentions_any others))
+                        else true))
           in
-          if not selects_target then None
-          else
-            Some
+          Option.map attributed ~f:(fun project_lhs ->
               {
                 projections with
-                lhs_dims = projections.rhs_dims.(i);
+                lhs_dims = target_dims;
                 project_lhs;
                 rhs_dims = [| projections.lhs_dims |];
                 project_rhs = [| projections.project_lhs |];
-              })
+              }))
     in
     let target_can_skip =
       Array.map target_projections ~f:(fun proj ->
@@ -918,10 +941,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                   raise @@ Utils.User_error "Rev_sides cannot initialize merge buffers"
             in
             (* The target's own view as the written side, built whether or not the selector
-               attributes the target ([target_projections] drops one whose concatenation symbol has
-               dimension 1, indexed at [Fixed_idx 0]): the initialization needs only its dims, its
-               index per axis and the extent table, and the body's writes to it are guarded by the
-               same bound extents. *)
+               attributes the target ([target_projections] drops one that mentions another segment
+               of its component, or whose width-1 segment has no dimension-1 [Fixed_idx 0] axis):
+               the initialization needs only its dims, its index per axis and the extent table, and
+               the body's writes to it are guarded by the same bound extents. *)
             let projections =
               {
                 projections with
