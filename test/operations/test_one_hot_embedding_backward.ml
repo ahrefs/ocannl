@@ -34,7 +34,7 @@ let positions = 3
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 module Generated = Test_utils.Generated
@@ -159,8 +159,8 @@ let () =
         TDSL.ndarray id_values ~label:[ "ids" ] ~batch_dims:[ positions ] ~output_dims:[] ()
       in
       let grads, update = run_backward ~name:"onehot_scatter_bwd" ids in
-      p_all2 "float ids: table gradient equals the dense one-hot gradient" grads
-        (expected_grads id_values) ~f:approx;
+      p_close "float ids: table gradient equals the dense one-hot gradient" grads
+        (expected_grads id_values) ~tol:approx_tol;
       let dyn, vocab_loops, guard_truncs = inspect update in
       p "optimized IR contains a Set_dynamic scatter" (dyn >= 1);
       p "vocabulary loop is eliminated from the whole update" (vocab_loops = 0);
@@ -187,8 +187,8 @@ let () =
         TDSL.ndarray id_oob ~label:[ "ids_oob" ] ~batch_dims:[ positions ] ~output_dims:[] ()
       in
       let grads_oob, _ = run_backward ids_oob in
-      p_all2 "OOB and fractional ids: untouched rows stay zero, in-range rows correct" grads_oob
-        (expected_grads id_oob) ~f:approx);
+      p_close "OOB and fractional ids: untouched rows stay zero, in-range rows correct" grads_oob
+        (expected_grads id_oob) ~tol:approx_tol);
 
   case "uint32 ids" (fun () ->
       Tensor.unsafe_reinitialize ();
@@ -217,8 +217,8 @@ let () =
       let c_int = param_by_label loss_int "c_int" in
       let grads_int = Context.get_values ctx (grad_of c_int) in
       let expected_int = expected_grads (Array.of_list_map id_ints ~f:Float.of_int) in
-      p_all2 "uint32 ids: table gradient equals the dense one-hot gradient (OOB id skipped)"
-        grads_int expected_int ~f:approx;
+      p_close "uint32 ids: table gradient equals the dense one-hot gradient (OOB id skipped)"
+        grads_int expected_int ~tol:approx_tol;
       let dyn_int, vocab_loops_int, guard_truncs_int = inspect update_int in
       p "uint32 ids: optimized IR contains a Set_dynamic scatter" (dyn_int >= 1);
       p "uint32 ids: vocabulary loop is eliminated" (vocab_loops_int = 0);

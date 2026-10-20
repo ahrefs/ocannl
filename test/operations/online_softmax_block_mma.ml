@@ -146,7 +146,7 @@ let pipeline ~limits =
   in
   (transform, emitted)
 
-let close ~tol g w = Float.(abs (g -. w) <= tol *. max 1. (abs w))
+let close_tol ~tol w = Float.(tol *. max 1. (abs w))
 
 let report label (got : float array) =
   eprintf "%s: %s (not part of the golden)\n%!" label
@@ -179,9 +179,9 @@ let () =
       gated ~when_:(not capable) ~on:backend_name
         (what ^ ": without f32 MMA units the scalar fold ships, no Tile_mma emitted")
         (fold.mma.Ir.C_syntax.statements = 0);
-      p_all2
+      p_close
         (what ^ ": matches the composed output within 1e-4 relative")
-        fold.values composed.values ~f:(close ~tol:1e-4));
+        fold.values composed.values ~tol:(close_tol ~tol:1e-4));
   printf "--- leg 2: what keeps the scalar fold ---\n";
   List.iter
     [
@@ -192,9 +192,9 @@ let () =
       let composed = forward ~name:"osbm_composed" ~on:false ~block:0 ~seq ~d_k () in
       let fold = forward ~name:"osbm_fold" ~on:true ~block ~seq ~d_k () in
       p (why ^ ": no Tile_mma emitted") (fold.mma.Ir.C_syntax.statements = 0);
-      p_all2
+      p_close
         (why ^ ": matches the composed output within 1e-4 relative")
-        fold.values composed.values ~f:(close ~tol:1e-4));
+        fold.values composed.values ~tol:(close_tol ~tol:1e-4));
   (* The transform's own refusal: a fold whose value tensor is indexed by the query. The scalar fold
      ships (the scan is there), no [Tile_mma], and the compile does not fail. *)
   (let why = "a value tensor indexed by the query (the block micro-kernel does not tensorize)" in
@@ -204,9 +204,9 @@ let () =
    let fold = forward ~model ~name:"osbm_qv_fold" ~on:true ~block ~seq ~d_k () in
    p (why ^ ": the scalar fold ships, one scan") (fold.scans = 1);
    p (why ^ ": no Tile_mma emitted") (fold.mma.Ir.C_syntax.statements = 0);
-   p_all2
+   p_close
      (why ^ ": matches the composed output within 1e-4 relative")
-     fold.values composed.values ~f:(close ~tol:1e-4));
+     fold.values composed.values ~tol:(close_tol ~tol:1e-4));
   (* The device's refusal: the same fold under a grid cap the folded launch (every row loop a [Grid]
      axis) exceeds. Read through the pipeline's own seam with the limits substituted: with the
      device's limits the preset emits the op where the units exist, under the cap never. *)
@@ -233,10 +233,10 @@ let () =
     (not !device_emitted);
   p "a grid cap of 1 keeps the scalar fold: no Fold_mma emitted, no Tile_mma"
     ((not !capped_emitted) && capped.mma.Ir.C_syntax.statements = 0 && capped.scans = 1);
-  p_all2 "under the grid cap the output matches the composed output within 1e-4 relative"
-    capped.values composed.values ~f:(close ~tol:1e-4);
-  p_all2 "under the device's limits the output matches the composed output within 1e-4 relative"
-    device.values composed.values ~f:(close ~tol:1e-4)
+  p_close "under the grid cap the output matches the composed output within 1e-4 relative"
+    capped.values composed.values ~tol:(close_tol ~tol:1e-4);
+  p_close "under the device's limits the output matches the composed output within 1e-4 relative"
+    device.values composed.values ~tol:(close_tol ~tol:1e-4)
 
 (* --- Leg 3: the training step (the fold forward under the fused backward, treatment F). --- *)
 
@@ -279,5 +279,5 @@ let () =
   gated ~when_:capable ~on:backend_name "the step's fold renders both contractions as intrinsics"
     (mma.Ir.C_syntax.statements = 2 && mma.Ir.C_syntax.scalar_fallbacks = 0);
   List.iter2_exn fused composed ~f:(fun gf gc ->
-      p_all2 "a parameter gradient agrees with the composed step within 1e-4 relative" gf gc
-        ~f:(close ~tol:1e-4))
+      p_close "a parameter gradient agrees with the composed step within 1e-4 relative" gf gc
+        ~tol:(close_tol ~tol:1e-4))

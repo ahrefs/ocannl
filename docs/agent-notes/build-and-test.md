@@ -2008,7 +2008,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   values and the tolerance there, max |want| and `?what_ran` -- what gh-ocannl-1217 needed a
   remote reproduction round to learn (5 ulps at magnitude 2e5 in every seed: reference rounding,
   not a seed). `p_all2`'s own value failure adds a count and first index there; neither detail
-  line carries the `FAIL: ` prefix `tools/mutation-run.sh` counts.
+  line carries the `FAIL: ` prefix `tools/mutation-run.sh` counts. An aggregate claim over
+  candidates whose count no golden pins (`p_all "every seed matches" runs ~f:…`) takes
+  `Verdict.within` as its predicate: `p_close`'s check and stderr line, no claim of its own
+  (`schedule_strided_1x1` is the exemplar). `verdict_ratchet` refuses the hand-rolled form
+  (`Verdict_scan.tolerance_census`): a parity predicate applying `abs` to a difference, inline or
+  through a name bound to such a function, partial applications included.
 - Guarantees that fire only on an empty collection are never exercised by a green suite, so
   `verdict_quantified` stages them: the satisfied forms run directly, and each refusal runs as a
   CHILD process whose streams the parent captures. Capturing is not tidiness — a refusal prints

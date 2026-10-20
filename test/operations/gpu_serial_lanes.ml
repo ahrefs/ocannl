@@ -410,10 +410,10 @@ let () =
               product)"
              form)
           gpu ~f:lane_under_serial;
-      let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
-      p_all2
+      let close_tol w = Float.(1e-4 *. max 1. (abs w)) in
+      p_close
         (Printf.sprintf "attention, %s: the rewritten forward agrees with the composed one" form)
-        rewritten composed ~f:close)
+        rewritten composed ~tol:close_tol)
 
 (* Leg 6: the training step's attention backward, fused and composed, at [train_seq] -- large enough
    that every backward nest's chain ([b x s] rows or [b x t] keys, 128 threads) clears
@@ -566,11 +566,11 @@ let () =
     ~f:lane_inside_serial;
   p_all "fused dK: every nest writing it computes dp as a Workgroup_reduce over the lanes" dk
     ~f:reduce_lane;
-  let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
+  let close_tol w = Float.(1e-4 *. max 1. (abs w)) in
   p "the fused step's parameter gradients are not identically zero"
     (Array.exists fused ~f:(fun v -> Float.(v <> 0.)));
-  p_all2 "the fused step's parameter gradients agree with the composed ones within 1e-4 relative"
-    fused composed ~f:close;
+  p_close "the fused step's parameter gradients agree with the composed ones within 1e-4 relative"
+    fused composed ~tol:close_tol;
   (* dV's preamble is loop-free ([p] alone), so the stage-1 rule alone gives it lanes. *)
   let writes_dk = String.is_suffix ~suffix:"k.grad"
   and writes_dv = String.is_suffix ~suffix:"v.grad" in

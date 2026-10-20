@@ -92,5 +92,5 @@ let () =
     Array.concat_map batch_vals ~f:(fun id ->
         Array.init vocab ~f:(fun k -> if k = Float.to_int id then 1. else 0.))
   in
-  Verdict.pf_all2 "one-hot of batch: dims %s, matches the token ids" (dims_str oh) oh_vals
-    oh_expected ~f:(fun a b -> Float.(abs (a - b) < 1e-6))
+  Verdict.pf_close "one-hot of batch: dims %s, matches the token ids" (dims_str oh) oh_vals
+    oh_expected ~tol:(fun _ -> 1e-6)

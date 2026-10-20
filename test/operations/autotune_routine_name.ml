@@ -27,7 +27,7 @@ module Asgns = Ir.Assignments
 module Cal = Ir.Cost_model.Calibration
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 
 (* Small, but wide enough that the preset candidates bind a hardware dimension and are therefore
    dispatched (and hence timed, and hence emit rows) on GPU backends too. *)
@@ -65,9 +65,9 @@ let () =
       ctx nameless Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
-  p_all2 "tune ~name searches and runs a comp with no block comment"
+  p_close "tune ~name searches and runs a comp with no block comment"
     (Context.get_values ctx c.Tensor.value)
-    expected ~f:approx;
+    expected ~tol:approx_tol;
   p "the tuned routine carries the name the search was given"
     (String.equal routine.Context.name tuned_name);
 
@@ -75,9 +75,9 @@ let () =
   let mctx = Context.auto () in
   let mctx, mroutine = Autotune.model_default ~name:md_name mctx nameless Ir.Indexing.Empty in
   let mctx = Context.run mctx mroutine in
-  p_all2 "model_default ~name compiles and runs the same comp"
+  p_close "model_default ~name compiles and runs the same comp"
     (Context.get_values mctx c.Tensor.value)
-    expected ~f:approx;
+    expected ~tol:approx_tol;
   p "model_default's routine carries the name it was given"
     (String.equal mroutine.Context.name md_name);
 
@@ -114,9 +114,9 @@ let () =
   let ectx = Context.run ectx eroutine in
   p "the overriding name wins over the block comment for the routine"
     (String.equal eroutine.Context.name passed_name);
-  p_all2 "the overridingly named search still computes correct values"
+  p_close "the overridingly named search still computes correct values"
     (Context.get_values ectx e.Tensor.value)
-    expected ~f:approx;
+    expected ~tol:approx_tol;
   let r = Option.value_exn ~here:[%here] !ereport in
   let tr = Option.value_exn ~here:[%here] !treport in
 

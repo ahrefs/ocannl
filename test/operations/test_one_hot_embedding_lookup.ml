@@ -37,7 +37,8 @@ let () = Generated.init ~backend_name
 
 (* Embedding table C with C[o,i] = o*vocab + i, so row i (over the input axis) is distinctive. *)
 let cvals = Array.init (embed * vocab) ~f:Float.of_int
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
+let approx a b = Float.(abs (a - b) < approx_tol b)
 
 (* Lower the (shape-forced) forward comp and report (#Get_dynamic, #For_loop, index-tensor-is-input,
    #Trunc). The [Trunc] count distinguishes the guard flavors: float-prec ids need the integrality
@@ -137,7 +138,7 @@ let () =
     Array.concat_map id_values ~f:(fun idf ->
         Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + Int.of_float idf)))
   in
-  p_all2 "forward equals direct gather of table rows" got expected ~f:approx;
+  p_close "forward equals direct gather of table rows" got expected ~tol:approx_tol;
   p "optimized IR contains a Get_dynamic gather" (dyn >= 1);
   (* The logical embedding nests batch x output x vocab loops; after the rewrite the vocabulary
      reduction loop is gone, leaving only the 2 batch/output loops (the small literals are inlined
@@ -215,7 +216,7 @@ let () =
     Array.concat_map (Array.of_list id_list) ~f:(fun idx ->
         Array.init vocab ~f:(fun k -> if k = idx then 1. else 0.))
   in
-  p_all2 "logical one_hot_of_int_list matches a dense one-hot" oh_vals oh_expected ~f:approx;
+  p_close "logical one_hot_of_int_list matches a dense one-hot" oh_vals oh_expected ~tol:approx_tol;
   let cids = Ocannl.Nn_blocks.class_ids_of_int_list id_list in
   let ctx5 = Context.cpu () in
   let ctx5 = Train.forward_once ctx5 cids in

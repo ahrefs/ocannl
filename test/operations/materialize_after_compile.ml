@@ -21,7 +21,7 @@ module LL = Ir.Low_level
 module SC = Ir.Schedule_cache
 open Verdict.Claims
 
-let approx a b = Float.(abs (a -. b) < 1e-4)
+let approx_tol _ = 1e-4
 let n = 8
 
 let () =
@@ -70,7 +70,7 @@ let () =
   let got_a = Context.get_values ctx_a t2.Tensor.value in
   let ctx_b = Context.run ctx_b routine_b in
   let got_b = Context.get_values ctx_b t2.Tensor.value in
-  p_all2 "A-arm and B-arm routines compute the same values" got_a got_b ~f:approx;
+  p_close "A-arm and B-arm routines compute the same values" got_a got_b ~tol:approx_tol;
   (* The autotune-cache identity must distinguish placements (Codex P1 on PR #140): optimized code
      can be identical while placements differ (Local scratch vs On_device buffer), and the A/B arms
      must not cache-hit each other's entries in that case. Pin the mechanism directly: flipping one

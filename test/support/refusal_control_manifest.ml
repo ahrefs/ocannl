@@ -652,6 +652,8 @@ let raw_entries =
         "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
+        "[scanner-refusal:ac1d55bdf5afdaf0a236eb7741190229] compares float readbacks";
+        "[scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
@@ -663,6 +665,8 @@ let raw_entries =
         "[scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail";
         "[scanner-refusal:df1860b788314bd677ee963aff3f8186] label literal carries";
         "[scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-break reader read";
+        "[scanner-refusal:b56027d13651cbbf21ae177b43426575] parity claim hand-rolls";
+        "[scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read";
         "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";

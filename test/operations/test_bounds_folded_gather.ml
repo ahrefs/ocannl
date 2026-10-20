@@ -29,7 +29,7 @@ let embed = 3
 let cvals = Array.init (embed * vocab) ~f:Float.of_int
 let id_ints = [ 1; 3; 0; 5 ]
 let batch = List.length id_ints
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 
 open Verdict.Claims
 
@@ -104,7 +104,7 @@ let () =
      proposing bounds [0, 5]), and runs. *)
   let ctx_a = Train.forward_once ctx_a guarded_emb in
   let got_a = Context.get_values ctx_a guarded_emb.Tensor.value in
-  p_all2 "guarded baseline executes the direct table gather" got_a expected ~f:approx;
+  p_close "guarded baseline executes the direct table gather" got_a expected ~tol:approx_tol;
   let has_guard_ternary c =
     (* [Where] renders as [(cond != 0 ? ... : ...)] (or [!= 0.0] at float guard precisions). *)
     String.is_substring c ~substring:"!= 0 ?" || String.is_substring c ~substring:"!= 0.0 ?"
@@ -120,8 +120,8 @@ let () =
   let got_b = Context.get_values ctx_b folded_emb.Tensor.value in
   (* Binding constraint 10: the bounds-folded kernel EXECUTES and its values match the unfolded
      baseline. *)
-  p_all2 "bounds-folded kernel values equal the guarded baseline" got_b got_a ~f:approx;
-  p_all2 "bounds-folded kernel values equal the host reference" got_b expected ~f:approx;
+  p_close "bounds-folded kernel values equal the guarded baseline" got_b got_a ~tol:approx_tol;
+  p_close "bounds-folded kernel values equal the host reference" got_b expected ~tol:approx_tol;
   let dyn_b, wheres_b, truncs_b = inspect folded_emb in
   p "folded IR keeps the Get_dynamic gather" (dyn_b >= 1);
   p "folded IR has no Where guard and no Trunc" (wheres_b = 0 && truncs_b = 0);
@@ -166,7 +166,8 @@ let () =
   let%op dev_emb = c_d * Nn_blocks.one_hot_of_ids ~num_classes:vocab ids_dev in
   let ctx_d = Train.forward_once ctx_d dev_emb in
   let got_d = Context.get_values ctx_d dev_emb.Tensor.value in
-  p_all2 "device-written ids kernel executes the direct table gather" got_d expected ~f:approx;
+  p_close "device-written ids kernel executes the direct table gather" got_d expected
+    ~tol:approx_tol;
   let dyn_d, wheres_d, _ = inspect dev_emb in
   p "device-written ids keep the Get_dynamic gather" (dyn_d >= 1);
   p "device-written ids keep the guard (bounds pinned to top)" (wheres_d >= 1)

@@ -29,7 +29,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let approx a b = Float.(abs (a -. b) < 1e-4)
+let approx_tol _ = 1e-4
 let n = 8
 let k = 2
 let ratio = Autotune.flip_abandon_ratio ~margin:1.25 ()
@@ -421,7 +421,7 @@ let executed_chain ?fail_arm_a_at ?(cache_dir = "") comp t2 expected ~flip_scrip
                 let ctx = Context.run ctx routine in
                 Context.get_values ctx t2.Tensor.value)))
   in
-  p_all2 "the shipped routine computes the plain compile's values" got expected ~f:approx;
+  p_close "the shipped routine computes the plain compile's values" got expected ~tol:approx_tol;
   let events name =
     List.filter lines ~f:(fun f -> Option.equal String.equal (field f "event") (Some name))
   in

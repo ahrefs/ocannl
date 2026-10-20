@@ -112,8 +112,7 @@ let () =
 
   let ctx_t = Context.run ctx_t routine_t in
   let got = Context.get_values ctx_t t2.Tensor.value in
-  p_all2 "the winner still ships and computes the right values" got expected ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-4));
+  p_close "the winner still ships and computes the right values" got expected ~tol:(fun _ -> 1e-4);
 
   (* And the exit: with the search over and its routine in hand, nothing else it compiled is still
      held — the returned routine is one context, whose pools are the only live ones the call added.

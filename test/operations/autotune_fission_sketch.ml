@@ -52,7 +52,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-2)
+let approx_tol _ = 1e-2
 
 (* Which candidates a search times is host-dependent (gh-ocannl-892): a timing window that is mostly
    host stalls is refused ([Autotune.admitted_timing_ms]) and grows [timings_contended] instead of
@@ -151,7 +151,8 @@ let () =
   let got_e = Context.get_values ctx e.Tensor.value in
   p "fission_scheduled splits the chain into two normal segments"
     (match !seg_kinds with [ `Normal; `Normal ] -> true | _ -> false);
-  p_all2 "fissioned segments through lowered_transform compute correctly" got_e expected_e ~f:approx;
+  p_close "fissioned segments through lowered_transform compute correctly" got_e expected_e
+    ~tol:approx_tol;
 
   (* --- a hand-crafted fissioned cache entry replays through tune's cache-hit path --- *)
   let cache_dir = "autotune_cache_fission" in
@@ -213,7 +214,7 @@ let () =
   | None ->
       cache_claim "hand-crafted fissioned entry hits the cache" false;
       cache_claim "cache-hit replay is fissioned" false);
-  p_all2 "fissioned cache-hit replay computes correctly" got_hit expected_e ~f:approx;
+  p_close "fissioned cache-hit replay computes correctly" got_hit expected_e ~tol:approx_tol;
 
   (* --- tune end-to-end on the fissionable chain (fresh cache dir: search, then hit) --- *)
   let cache_dir2 = "autotune_cache_fission2" in
@@ -235,7 +236,7 @@ let () =
   in
   accounting "chain search" r1;
   accounting "chain second call" r2;
-  p_all2 "tuned fissionable chain values correct" got_t1 expected_e ~f:approx;
+  p_close "tuned fissionable chain values correct" got_t1 expected_e ~tol:approx_tol;
   let cache_available = Option.is_some (Context.timing_identity bctx) in
   let chain_first_cacheable = cache_available && r1.Autotune.timings_contended = 0 in
   (* The load's own evidence, for the claims below that a refused search cannot satisfy — scoped to
@@ -338,7 +339,7 @@ let () =
     (r1.Autotune.candidates_timed + r1.Autotune.candidates_contended + not_dispatched r1 >= 2);
   p "chain tune: candidates refused as unparallelized exactly on GPU"
     (if is_gpu then not_dispatched r1 > 0 else not_dispatched r1 = 0);
-  p_all2 "chain cache-hit values correct" got_t2 expected_e ~f:approx;
+  p_close "chain cache-hit values correct" got_t2 expected_e ~tol:approx_tol;
 
   (* === The matmul sketch: 32x32 times 32x32 === *)
   let m = 32 in
@@ -413,11 +414,11 @@ let () =
     mr1.Autotune.mma_candidates mr1.Autotune.fiss_mma_candidates;
   mma_claim ~capability:mm_mma "whole-routine MMA candidates stay out of the fission-scoped counter"
     (mr1.Autotune.fiss_mma_candidates < mr1.Autotune.mma_candidates);
-  p_all2 "tuned matmul matches the serial twin" got_mm1 got_serial ~f:approx;
+  p_close "tuned matmul matches the serial twin" got_mm1 got_serial ~tol:approx_tol;
   p "matmul tune replays exactly after a contention-free search"
     (completed mr1
     && Bool.equal (replayed mr2) (cache_available && mr1.Autotune.timings_contended = 0));
-  p_all2 "matmul cache-hit values match the serial twin" got_mm2 got_serial ~f:approx;
+  p_close "matmul cache-hit values match the serial twin" got_mm2 got_serial ~tol:approx_tol;
   (* As in the split-reduce controls, Empty bindings and fatal CPU launch/sync failures make each
      observed family preflight a completed window at admission or normal return. Count all promised
      MMA specs, including per-segment sketches, so even all-refused whole seeds keep exact scope. *)
@@ -558,7 +559,7 @@ let () =
       p "per-segment sketch candidates seeded" false;
       p "per-segment tensorized sketch candidates seeded" false;
       p "per-segment sketch candidates timed" false);
-  p_all2 "tuned fissioned matmul matches the serial twin" got_fs got_fs_serial ~f:approx;
+  p_close "tuned fissioned matmul matches the serial twin" got_fs got_fs_serial ~tol:approx_tol;
 
   (* === Multi-site F_sketch enumeration: two matmul segments with different geometries in one
      fissioned chain. Each parameter set of each site must be proposed ALONE (the other segment
@@ -657,7 +658,8 @@ let () =
          its last accepted staffed single, not as a window of its own. *)
       timed_ab = cand_ab + if Autotune.staffed_singles_setting () then 0 else Bool.to_int eligible
     else timed_ab > 0);
-  p_all2 "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial ~f:approx;
+  p_close "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial
+    ~tol:approx_tol;
 
   (* A post-admission failure must not erase the window from the partial report. The attempt label
      identifies the coarse multi-entry candidate; the timed hook guarantees that the injection

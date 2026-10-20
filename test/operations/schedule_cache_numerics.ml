@@ -44,7 +44,7 @@ let replayed (r : Autotune.report) =
 let completed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Searched -> true | _ -> false
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -135,7 +135,7 @@ let () =
   Numerics.set_policy policy_a;
   let r, got = tune () in
   p "the cold call ran a search rather than replaying" (completed r);
-  p_all2 "the cold search computes correct values" got mm_expected ~f:approx;
+  p_close "the cold search computes correct values" got mm_expected ~tol:approx_tol;
   (* A search that timed nothing (gh-ocannl-532), or refused any window for contention
      (gh-ocannl-855), stores nothing, so the replay assertions are conditioned on an entry actually
      having been written. *)
@@ -145,7 +145,7 @@ let () =
        (cache_available && r.Autotune.candidates_timed > 0 && r.Autotune.timings_contended = 0));
   let r_a2, got = tune () in
   p "the entry replays under the policy that wrote it" (Bool.equal (replayed r_a2) stored_a);
-  p_all2 "the replayed routine computes correct values" got mm_expected ~f:approx;
+  p_close "the replayed routine computes correct values" got mm_expected ~tol:approx_tol;
   let stored_a_after_retry = cache_available && (stored_a || r_a2.Autotune.timings_contended = 0) in
 
   (* --- Regime B: the same code, the same directory, the other policy --- *)
@@ -154,7 +154,7 @@ let () =
   p "the entry does NOT replay under a different policy (gh-ocannl-568)" (not (replayed r));
   p "the cross-policy run searches instead of replaying"
     ((not stored_a) || r.Autotune.candidates_timed >= 1);
-  p_all2 "the cross-policy run computes correct values" got mm_expected ~f:approx;
+  p_close "the cross-policy run computes correct values" got mm_expected ~tol:approx_tol;
 
   (* --- The regimes coexist rather than overwriting each other --- *)
   Numerics.set_policy policy_a;

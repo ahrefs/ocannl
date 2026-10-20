@@ -148,7 +148,7 @@ let tune ~search =
   in
   (values, Option.value_exn ~here:[%here] !report, lookups)
 
-let approx x y = Float.(abs (x - y) < 1e-4)
+let approx_tol _ = 1e-4
 
 (* The report names the refusal, and it is the typed one [of_saved] raises for [check]. *)
 let refused_by ~check (r : Autotune.report) =
@@ -188,7 +188,8 @@ let () =
     (refused_by ~check:"Schedule_cache.of_saved" r);
   replay_claim ios "with search off, the call compiles the untuned default"
     (outcome_is "search-disabled" r);
-  p_all2 "with search off, the untuned default computes the right values" values expected ~f:approx;
+  p_close "with search off, the untuned default computes the right values" values expected
+    ~tol:approx_tol;
   (* Re-run, from a fresh plant, while the host refuses the relinked baseline's window. *)
   let rec re_search attempt =
     let planted_io = plant ~saved:dangling ~segments:None in
@@ -210,7 +211,7 @@ let () =
      resident together; the re-search a refused replay leads to relinks it, and on cc, where it is
      dispatched, times it. *)
   baseline_claim r ios "the re-search times the baseline the replay released" (baseline_timed r);
-  p_all2 "the re-searched routine computes the right values" values expected ~f:approx;
+  p_close "the re-searched routine computes the right values" values expected ~tol:approx_tol;
 
   (* --- 2. A split-reduce winner whose prelude names a tensor node the routine lacks. --- *)
   p "the routine numbers fewer than 100 tensor nodes"
@@ -227,8 +228,8 @@ let () =
   replay_claim ios "the corrupt split-reduce prelude's replay is refused with a typed cause"
     (refused_by ~check:"Schedule_cache.tn_of_ref" r);
   replay_claim ios "the refused prelude re-searches" (outcome_is "searched" r);
-  p_all2 "the routine re-searched past the refused prelude computes the right values" values
-    expected ~f:approx;
+  p_close "the routine re-searched past the refused prelude computes the right values" values
+    expected ~tol:approx_tol;
   (* --- 3. gh-ocannl-1326: the baseline a replay released is relinked when the replay is refused,
      and a device that refuses that relink for memory refuses the search, exactly as it refuses a
      base compile -- rather than declining every candidate in turn. The device is simulated: the

@@ -81,8 +81,8 @@ let () =
             in
             let ctx = Context.run ctx routine in
             let got = Context.get_values ctx product.Tensor.value in
-            p_all2 (name ^ ": completed search computes the reference") got expected ~f:(fun x y ->
-                Float.(abs (x - y) < 1e-4));
+            p_close (name ^ ": completed search computes the reference") got expected ~tol:(fun _ ->
+                1e-4);
             Context.release ctx;
             `Returned
           with Callback_failure -> `Injected)

@@ -571,6 +571,144 @@ let line_break_census content =
   in
   { broken; label_sites = List.length sites }
 
+(** {1 A float tolerance hand-rolled into a parity claim's predicate (gh-ocannl-1224)}
+
+    [Verdict.p_close name got want ~tol] compares two float readbacks under a tolerance and, when a
+    cell is out of it, names on stderr how many cells differ, the worst one with both values, and
+    the reference's magnitude. The same comparison written as
+    [p_all2 name got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3))] prints a bare [false]:
+    gh-ocannl-1217's sweep recorded exactly that for fifteen seeds and it took a reproduction round
+    on a remote box to learn that every seed was off by the same five ulps of reference rounding.
+    This reader keeps the hand-rolled spelling from regrowing.
+
+    What it reads is the [~f] predicate of every [Verdict] [p_all2], [pf_all2] and [pass_fail_all2]
+    call ({!parity_callees}), resolved as {!claim_calls} resolves the callee. The predicate is a
+    hand-rolled tolerance when it is a function whose body applies an [abs] (any path ending in it:
+    [Float.abs], or [abs] under [Float.( … )]) to a subtraction ([-] or [-.]) -- written in the
+    argument, or a name the predicate's lexical scope binds to such a function (directly, through a
+    chain of renamings, or partially applied: [~f:(close ~tol:1e-4)]).
+
+    What it cannot see: a predicate reaching the call as a function PARAMETER, a tolerance written
+    without [abs] ([a -. b < t && b -. a < t]), and a comparison routed through a helper of another
+    module. Those are spellings nobody in the tree uses; the remedy for each is the same [p_close].
+*)
+
+let parity_callees = [ "p_all2"; "pf_all2"; "pass_fail_all2" ]
+
+type tolerance_site = {
+  tolerance_callee : string;  (** The callee as written. *)
+  tolerance_line : int;
+  predicate : string;
+      (** ["an inline function"], or the name the predicate is bound to, as the source spells it. *)
+  tolerance_ambiguous : bool;  (** The callee reaches [Verdict]'s only past another [open]. *)
+}
+
+type tolerance_census = {
+  hand_rolled : tolerance_site list;
+  parity_sites : int;  (** Every [Verdict] (or ambiguous) parity call whose predicate was read. *)
+}
+
+(* Whether [expr] applies an [abs] to a subtraction anywhere inside it. *)
+let applies_abs_to_difference expr =
+  let is_subtraction e =
+    match e.pexp_desc with
+    | Pexp_apply (op, [ (Ppxlib.Asttypes.Nolabel, _); (Ppxlib.Asttypes.Nolabel, _) ]) -> (
+        match Read.longident_of op with
+        | Some path -> List.mem [ "-"; "-." ] (List.last_exn path) ~equal:String.equal
+        | None -> false)
+    | _ -> false
+  in
+  let found = ref false in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_apply (callee, [ (Ppxlib.Asttypes.Nolabel, argument) ]) -> (
+            match Read.longident_of callee with
+            | Some path when String.equal (List.last_exn path) "abs" ->
+                if is_subtraction argument then found := true
+            | _ -> ())
+        | _ -> ());
+        super#expression e
+    end
+  in
+  iterator#expression expr;
+  !found
+
+let tolerance_census content =
+  let ast = Read.structure_of content in
+  let owners = Verdict_callee.of_structure ast in
+  let rec peel expr =
+    match expr.pexp_desc with
+    | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
+    | _ -> expr
+  in
+  (* Whether an expression, in [env], is a hand-rolled tolerance predicate -- [None] when it is not
+     -- and how a diagnostic names it. *)
+  let tolerance env expr =
+    let expr = peel expr in
+    let bound name =
+      match Lexical_scope.lookup env name with Some true -> Some name | Some false | None -> None
+    in
+    match expr.pexp_desc with
+    | Pexp_function _ when applies_abs_to_difference expr -> Some "an inline function"
+    | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> bound name
+    | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }; _ }, _) ->
+        bound name
+    | _ -> None
+  in
+  let sites = ref [] and parity = ref 0 in
+  let iterator =
+    object (self)
+      inherit [bool, bool] Lexical_scope.scoped as super
+      method local = false
+      method module_path _ _ = None
+      method! attribute _ attr = attr
+
+      method! binding_denotes env binding =
+        match Read.pattern_name binding.pvb_pat with
+        | Some _ -> Option.is_some (tolerance env binding.pvb_expr)
+        | None -> self#local
+
+      method! expression env expr =
+        (match expr.pexp_desc with
+        | Pexp_apply (callee, arguments) -> (
+            let callee = peel callee in
+            match (callee.pexp_desc, Read.longident_of callee) with
+            | Pexp_ident _, Some path
+              when List.mem parity_callees (List.last_exn path) ~equal:String.equal -> (
+                let ownership =
+                  Option.value_map (Verdict_callee.resolve owners callee) ~default:Not_verdicts
+                    ~f:(fun resolution -> resolution.ownership)
+                in
+                match ownership with
+                | Free | Not_verdicts -> ()
+                | Verdicts | Ambiguous ->
+                    Int.incr parity;
+                    List.iter arguments ~f:(function
+                      | Ppxlib.Asttypes.Labelled "f", predicate ->
+                          Option.iter (tolerance env predicate) ~f:(fun predicate ->
+                              sites :=
+                                {
+                                  tolerance_callee = String.concat ~sep:"." path;
+                                  tolerance_line = expr.pexp_loc.loc_start.pos_lnum;
+                                  predicate;
+                                  tolerance_ambiguous = Poly.equal ownership Ambiguous;
+                                }
+                                :: !sites)
+                      | _ -> ()))
+            | _ -> ())
+        | _ -> ());
+        super#expression env expr
+    end
+  in
+  ignore
+    (iterator#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
+  { hand_rolled = List.rev !sites; parity_sites = !parity }
+
 (** {1 A gate that reads the population it quantifies (gh-ocannl-1289)}
 
     [Verdict.gated_all ~when_ ~on label xs ~f] (and [gated_alli], [gated_exists]) skips its claim

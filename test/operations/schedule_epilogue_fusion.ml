@@ -230,7 +230,7 @@ let () =
   in
   let got3, census3 = run_census "epf_mma" transform3 mc3 in
   p "staged fused: epilogue is a sibling of the fragment store-back" !has_epilogue_sibling;
-  p_all2 "staged fused values match two-kernel" got3 want ~f:(fun a b -> Float.(abs (a - b) < 1e-2));
+  p_close "staged fused values match two-kernel" got3 want ~tol:(fun _ -> 1e-2);
   (let label = "staged fused bitwise on C backends" in
    if on_gpu then Verdict.skipped ~backend:backend_name label
    else p_all2 label got3 want ~f:Float.equal);
@@ -294,8 +294,7 @@ let () =
         (r.Autotune.epilogue_sketch_candidates > 0
         && r.Autotune.epilogue_sketch_candidates * flavors = r.Autotune.sketch_candidates)
   | _ -> p "fused-epilogue sketch twins seeded" false);
-  p_all2 "tuned matmul+tail matches two-kernel" got_t want ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-2));
+  p_close "tuned matmul+tail matches two-kernel" got_t want ~tol:(fun _ -> 1e-2);
 
   (* --- Pattern discipline: targeted errors --- *)
   let ma4, _, prod4, mc4 = make_graph () in

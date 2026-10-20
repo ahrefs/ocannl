@@ -348,6 +348,26 @@ let p_close ?min ?what_ran name got want ~tol =
 let pf_close ?min ?what_ran fmt =
   Printf.ksprintf (fun label got want ~tol -> p_close ?min ?what_ran label got want ~tol) fmt
 
+(** [within name got want ~tol] answers whether {!p_close} would pass, WITHOUT making a claim: on a
+    [false] it prints {!p_close}'s stderr line (or the structural reason,
+    [<name>: empty (not part of the golden)]) and records nothing. It is the predicate of an
+    aggregate claim over candidates whose number is not the golden's to pin --
+    [p_all "every seed matches" runs ~f:(fun (seed, got) -> Verdict.within ~what_ran:seed "the
+     block" got want ~tol)] -- so that the claim stays one row while the candidate that failed it
+    still names its worst cell. A single readback goes through {!p_close}. Not a [Claims] member,
+    being no claim. *)
+let within ?min ?what_ran name got want ~tol =
+  match close_outcome ?min ~tol got want with
+  | Close_holds { differing = 0; _ } -> true
+  | Close_holds { differing; first; worst; magnitude; worst_tol } ->
+      report_close_failure ?what_ran name got want ~differing ~first ~worst ~magnitude ~worst_tol;
+      false
+  | Close_short reason ->
+      Stdio.eprintf "%s%s: %s (not part of the golden)\n%!" (one_line name)
+        (match what_ran with None -> "" | Some what -> " (" ^ one_line what ^ ")")
+        (one_line reason);
+      false
+
 (** [p_none name xs ~f] claims that no element of [xs] satisfies [f], and that there is an element —
     the guarded form of [p name (not (List.exists xs ~f))] and of
     [p name (List.is_empty (List.filter xs ~f))]. The mirror of {!p_all}, and the one the

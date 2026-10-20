@@ -58,7 +58,7 @@ let () =
   in
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx c1.Tensor.value in
-  p_all2 "tuned values match the serial twin" got want ~f:(fun x y -> Float.(abs (x - y) < 1e-4));
+  p_close "tuned values match the serial twin" got want ~tol:(fun _ -> 1e-4);
   match !reports with
   | [ r ] ->
       p "the search completed" (completed r);

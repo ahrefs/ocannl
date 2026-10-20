@@ -21,7 +21,7 @@ module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
-let approx a b = Float.(abs (a -. b) < 1e-4)
+let approx_tol _ = 1e-4
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -78,13 +78,15 @@ let () =
   (* --- Forced arm A: the default-placement artifact ships and is executed. --- *)
   let a_reports, a_shipped, a_materialized, a_got = run ~ship_arm:Train.Force_arm_a () in
   p "forcing arm A ships arm A" (Option.equal String.equal a_shipped (Some "A"));
-  p_all2 "the forced arm A routine executes and matches the plain compile" a_got expected ~f:approx;
+  p_close "the forced arm A routine executes and matches the plain compile" a_got expected
+    ~tol:approx_tol;
   p "the shipped arm A context leaves the intermediate virtual" (not a_materialized);
   p "forcing arm A still searched both arms" (List.length a_reports = 2);
   (* --- Forced arm B: the materialize-all artifact ships and is executed. --- *)
   let b_reports, b_shipped, b_materialized, b_got = run ~ship_arm:Train.Force_arm_b () in
   p "forcing arm B ships arm B" (Option.equal String.equal b_shipped (Some "B"));
-  p_all2 "the forced arm B routine executes and matches the plain compile" b_got expected ~f:approx;
+  p_close "the forced arm B routine executes and matches the plain compile" b_got expected
+    ~tol:approx_tol;
   p "the shipped arm B context materializes the intermediate" b_materialized;
   p "forcing arm B still searched both arms" (List.length b_reports = 2);
   p "the two forced runs ship different placements, so the arms are distinguishable artifacts"
@@ -93,7 +95,8 @@ let () =
   let _, f_shipped, _, f_got = run ~ship_arm:Train.Force_arm_a ~inline_flips:3 () in
   p "a flip budget under a forced arm still ships that arm, not a refined vector"
     (Option.equal String.equal f_shipped (Some "A"));
-  p_all2 "the flip-budgeted forced run also matches the plain compile" f_got expected ~f:approx;
+  p_close "the flip-budgeted forced run also matches the plain compile" f_got expected
+    ~tol:approx_tol;
   (* --- The default: [on_ship] describes what actually shipped, which the measured comparison
          decides. This is what a benchmark attributes its losses by (gh-ocannl-546's arms JSON). --- *)
   (* --- A raising [on_ship] is the caller's failure and propagates unchanged, like [report]'s: it is
@@ -140,7 +143,7 @@ let () =
   p "with both arms failed, forcing arm B propagates arm B's failure"
     (String.is_substring failed_b ~substring:"tsa arm B");
   let d_reports, d_shipped, _, d_got = run () in
-  p_all2 "the default run ships and matches the plain compile" d_got expected ~f:approx;
+  p_close "the default run ships and matches the plain compile" d_got expected ~tol:approx_tol;
   match d_reports with
   | [ a; b ] ->
       let measured = if Float.( <= ) a.Autotune.best_ms b.Autotune.best_ms then "A" else "B" in

@@ -139,7 +139,8 @@ let forward ?mask_fill ?dead ?(layers = 1) ?(d_k = 8) ?(prefix = 0) ~on ~block ~
         interface = Set.union routine.Context.inputs routine.Context.outputs;
       })
 
-let close ~tol g w = Float.(abs (g -. w) <= tol *. max 1. (abs w))
+let close_tol ~tol w = Float.(tol *. max 1. (abs w))
+let close ~tol g w = Float.(abs (g - w) <= close_tol ~tol w)
 
 let report label (got : float array) =
   eprintf "%s: %s (not part of the golden)\n%!" label
@@ -179,12 +180,12 @@ let () =
           p
             (what ^ ": no seq^2-sized node is written")
             (Set.is_empty (square_buffers ~extent:seq fold.optimized.LL.llc));
-          p_all2
+          p_close
             (what ^ ": matches the composed output within 1e-5 relative")
-            fold.values composed.values ~f:(close ~tol:1e-5);
-          p_all2
+            fold.values composed.values ~tol:(close_tol ~tol:1e-5);
+          p_close
             (what ^ ": matches the two-pass output within 1e-5 relative")
-            fold.values two_pass.values ~f:(close ~tol:1e-5)));
+            fold.values two_pass.values ~tol:(close_tol ~tol:1e-5)));
 
   printf "--- leg 2: head width above the recompute cap ---\n";
   let seq = 24 and d_k = 32 in
@@ -199,8 +200,8 @@ let () =
     (Set.length (square_buffers ~extent:seq two_pass.optimized.LL.llc) = 1);
   p "the fold reads the scores once, from its tile: no seq^2 buffer"
     (Set.is_empty (square_buffers ~extent:seq fold.optimized.LL.llc));
-  p_all2 "the fold matches the composed output within 1e-5 relative" fold.values composed.values
-    ~f:(close ~tol:1e-5);
+  p_close "the fold matches the composed output within 1e-5 relative" fold.values composed.values
+    ~tol:(close_tol ~tol:1e-5);
 
   printf "--- leg 3: special values of the masked scores, against the composed form ---\n";
   let lowest = -3.4028234663852886e38 in
@@ -242,8 +243,8 @@ let () =
   p "two scans" (scans_of fold.optimized.LL.llc = 2);
   p "no seq^2-sized node is written"
     (Set.is_empty (square_buffers ~extent:seq fold.optimized.LL.llc));
-  p_all2 "matches the composed output within 1e-5 relative" fold.values composed.values
-    ~f:(close ~tol:1e-5)
+  p_close "matches the composed output within 1e-5 relative" fold.values composed.values
+    ~tol:(close_tol ~tol:1e-5)
 
 (* --- Leg 5: rectangular attention on leaf tensors. --- *)
 
@@ -288,9 +289,9 @@ let () =
       p
         (Printf.sprintf "%s: one scan over the %d key blocks" what (ceil_div sk b))
         (Poly.equal (scan_list optimized.LL.llc) [ (ceil_div sk b - 1, 2) ]);
-      p_all2
+      p_close
         (what ^ ": matches the composed output within 1e-5 relative")
-        fold composed ~f:(close ~tol:1e-5))
+        fold composed ~tol:(close_tol ~tol:1e-5))
 
 (* --- Leg 6: the member contract, and what the fold declines. --- *)
 
@@ -636,8 +637,8 @@ let () =
   in
   let reference = forward ~on:false ~block:0 ~seq ~d_k:8 () in
   p "tiles past the stack threshold: no fold" (Set.is_empty (tiles small.optimized.LL.llc));
-  p_all2 "tiles past the stack threshold: the output matches the composed within 1e-5 relative"
-    small.values reference.values ~f:(close ~tol:1e-5);
+  p_close "tiles past the stack threshold: the output matches the composed within 1e-5 relative"
+    small.values reference.values ~tol:(close_tol ~tol:1e-5);
   (* Probabilities stored at a precision other than the scores': the composed value pass reads them
      rounded to their node, which the fold never stores, so it declines. *)
   let probs = Option.value_exn (Set.find (written raw) ~f:(label_is "softmax")) in
@@ -742,9 +743,9 @@ let () =
         (what ^ ": the same parameters carry gradients")
         (List.equal String.equal (List.map grads ~f:fst) (List.map grads_c ~f:fst));
       List.iter2_exn grads grads_c ~f:(fun (name, gf) (_, gc) ->
-          p_all2
+          p_close
             (Printf.sprintf "%s: %s.grad agrees within 1e-4 relative" what name)
-            gf gc ~f:(close ~tol:1e-4);
+            gf gc ~tol:(close_tol ~tol:1e-4);
           p
             (Printf.sprintf "%s: %s.grad is not identically zero" what name)
             (Array.exists gc ~f:(fun v -> Float.(v <> 0.)))));
