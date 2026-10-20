@@ -24,7 +24,10 @@ built-in one. `--set NAME` alone selects a built-in set, read from where it is d
 replayed repository's working tree, never copied here:
   config      the `input` lines of `.github/ship-pr-merge-build` (what triggers the merge build);
   shell-tier  `SHELL_GLOB` in `tools/merge-build-check.sh` (what selects its shell tier, which
-              that script decides on paths both sides changed: replay it under same-input).
+              that script decides on paths both sides changed: replay it under same-input);
+              as the script does, it also builds every merge where git would QUOTE a path either
+              side changed (a double quote, a backslash or a control character in
+              it), whatever the globs say.
 With no `--set`, both built-ins are replayed. `--trigger` defaults to the config's `trigger`
 line (same-input when it has none, or when there is no config).
 
@@ -168,6 +171,12 @@ def side(repo: str, a: str, b: str) -> tuple[set[str], dict[str, list[str]]]:
     return names, other
 
 
+def git_quotes(path: str) -> bool:
+    """Whether `git -c core.quotePath=false diff --name-status` would quote the path: a double
+    quote, a backslash or a control character in it."""
+    return any(c in '"\\' or ord(c) < 0x20 or ord(c) == 0x7F for c in path)
+
+
 def matching(paths, globs: list[str], other: dict[str, list[str]]) -> list[str]:
     return sorted(
         p for p in paths if any(fnmatch.fnmatchcase(n, g) for n in (p, *other.get(p, [])) for g in globs)
@@ -225,19 +234,27 @@ def main(argv: list[str]) -> int:
         if len(ps) != 2:
             not_replayed[f"{len(ps)} parents"] += 1
             continue
-        try:
-            mb = git(repo, "merge-base", ps[0], ps[1]).strip()
-        except GitFailed:
+        # Exit 1 with nothing said is "no common ancestor"; anything else (a missing object in a
+        # shallow or damaged clone, exit 128) is a failed read, not a merge to leave out.
+        found = subprocess.run(["git", "-C", repo, "merge-base", ps[0], ps[1]], capture_output=True, text=True)
+        if found.returncode == 1 and not found.stdout.strip() and not found.stderr.strip():
             not_replayed["no merge base"] += 1
             continue
+        if found.returncode != 0:
+            raise GitFailed(f"git merge-base {ps[0]} {ps[1]}: exit {found.returncode}: {found.stderr.strip()}")
+        mb = found.stdout.strip()
         replayed += 1
         base, base_other = side(repo, mb, ps[0])
         head, head_other = side(repo, mb, ps[1])
         other = {p: base_other.get(p, []) + head_other.get(p, []) for p in base | head}
+        quoted = sorted(p for p in base | head if git_quotes(p))
         built_by = []
         previous = None
-        for name, globs, _ in sets:
-            if trigger == "same-input":
+        for name, globs, src in sets:
+            if src == CHECK_PATH and quoted:
+                # merge-build-check.sh fails closed: a path git quotes on either side runs every tier.
+                hits, builds_here = quoted, True
+            elif trigger == "same-input":
                 hits = matching(base & head, globs, other)
                 builds_here = bool(hits)
             else:

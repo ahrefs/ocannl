@@ -4,7 +4,8 @@
 # any-input trigger; an octopus merge and a merge inside a side branch left out), the paths it
 # reports, the built-in sets read from where the fixture defines them (its own
 # .github/ship-pr-merge-build and tools/merge-build-check.sh), the shell-tier replay agreeing with
-# merge-build-check.sh's own selection merge by merge, and this repository's definitions parsing.
+# merge-build-check.sh's own selection merge by merge (its fail-closed quoted-path fallback
+# included), an unreadable merge base failing the run, and this repository's definitions parsing.
 # Needs git and python3; a host without either skips every leg.
 # Usage: tools/test-merge-build-replay.sh [--keep] [--only REGEX]
 set -u
@@ -135,13 +136,19 @@ if harness_leg 'since and until select merges by date #replay'; then
 fi
 
 # The replay's shell-tier set must decide as the gate itself does: run merge-build-check.sh --plan
-# on every merge the replay reports and compare. A clone, so HEAD moves outside the shared fixture.
+# on every merge the replay reports and compare. A clone, so HEAD moves outside the shared fixture,
+# extended by m8: main adds q"uote.txt, a name git quotes, while the side edits b.ml -- nothing
+# shared, but the gate fails closed on the quoted name and selects the shell tier.
 if harness_leg 'the shell-tier replay agrees with merge-build-check.sh on every merge #gate'; then
   if [ -z "$FIXTURE" ]; then report 1 'shell-tier agreement' 'no fixture'; else
     C=$TMP/gate
     rm -rf "$C" && git clone -q "$R" "$C" 2>/dev/null
-    replay --repo "$C" --set shell-tier --verbose origin/main
-    n=0 bad= selected=0
+    shared=$R R=$C
+    side f8 && first b.ml && commit f8 && git -C "$R" checkout -q main && printf 'x\n' >"$R/q\"uote.txt" &&
+      commit main8 && merge m8 f8 || bad=' (m8 could not be built)'
+    R=$shared
+    replay --repo "$C" --set shell-tier --verbose main
+    n=0 bad=${bad-} selected=0
     while read -r sha subject sets; do
       n=$((n + 1))
       git -C "$C" checkout -q --detach "$sha" 2>/dev/null || { bad+=" $sha(checkout)"; continue; }
@@ -155,22 +162,48 @@ if harness_leg 'the shell-tier replay agrees with merge-build-check.sh on every 
       selected=$((selected + gate))
       [ "$gate" = "$mine" ] || bad+=" $subject(gate $gate, replay $mine)"
     done < <(sed -n 's/^  \([0-9a-f]\{10\}\) \([^:]*\): \(.*\)$/\1 \2 \3/p' "$out")
-    if [ "$rc" = 0 ] && [ "$n" = 6 ] && [ "$selected" = 2 ] && [ -z "$bad" ]; then
-      report 0 'the replay and the gate select the shell tier on the same 2 of 6 merges'
-    else report 1 'the replay and the gate select the shell tier on the same 2 of 6 merges' \
+    if [ "$rc" = 0 ] && [ "$n" = 7 ] && [ "$selected" = 3 ] && [ -z "$bad" ]; then
+      report 0 'the replay and the gate select the shell tier on the same 3 of 7 merges'
+    else report 1 'the replay and the gate select the shell tier on the same 3 of 7 merges' \
       "exit $rc, $n merge(s) compared, gate selected $selected; disagreements:${bad:- none}; $(cat "$out")"; fi
-    # Negative control: a replay that ignores renames' other names loses m3, and the comparison
-    # must see it.
-    M=$TMP/mutant.py
-    sed 's/for n in (p, \*other.get(p, \[\]))/for n in (p,)/' "$SRC" >"$M"
-    if cmp -s "$SRC" "$M"; then
-      report 1 'negative control: a rename-blind replay disagrees with the gate on m3' 'the mutation matched nothing'
-    else
+    # Negative controls: a replay that ignores renames' other names loses m3, and one without the
+    # quoted-path fallback loses m8; the comparison must see each.
+    for control in 'rename-blind:m3:s/for n in (p, \*other.get(p, \[\]))/for n in (p,)/' \
+                   'quote-blind:m8:s/if src == CHECK_PATH and quoted:/if False:/'; do
+      what=${control%%:*} rest=${control#*:}
+      merge_name=${rest%%:*} program=${rest#*:}
+      label="negative control: a $what replay disagrees with the gate on $merge_name"
+      M=$TMP/$what.py
+      sed "$program" "$SRC" >"$M"
+      if cmp -s "$SRC" "$M"; then
+        report 1 "$label" 'the mutation matched nothing'
+        continue
+      fi
       rc=0
-      (cd "$C" && python3 "$M" --set shell-tier --verbose origin/main) >"$out" 2>&1 || rc=$?
-      if [ "$rc" = 0 ] && grep -qE '^  [0-9a-f]{10} m3: -$' "$out" && [ "$(row shell-tier)" = 61- ]; then
-        report 0 'negative control: a rename-blind replay disagrees with the gate on m3'
-      else report 1 'negative control: a rename-blind replay disagrees with the gate on m3' "exit $rc; $(cat "$out")"; fi
+      (cd "$C" && python3 "$M" --set shell-tier --verbose main) >"$out" 2>&1 || rc=$?
+      if [ "$rc" = 0 ] && grep -qE "^  [0-9a-f]{10} $merge_name: -\$" "$out" && [ "$(row shell-tier)" = 72- ]; then
+        report 0 "$label"
+      else report 1 "$label" "exit $rc; $(cat "$out")"; fi
+    done
+  fi
+fi
+
+# A merge base git cannot compute because an object is missing (a damaged or partial clone) is a
+# failed read, exit 1 -- never a merge quietly left out as having no merge base.
+if harness_leg 'a merge base that cannot be read fails the replay #replay'; then
+  if [ -z "$FIXTURE" ]; then report 1 'missing object' 'no fixture'; else
+    B=$TMP/broken
+    rm -rf "$B" && git clone -q --no-hardlinks "$R" "$B" 2>/dev/null
+    tip=$(git -C "$B" rev-parse origin/f1 2>/dev/null)
+    obj=$B/.git/objects/${tip:0:2}/${tip:2}
+    if [ -z "$tip" ] || [ ! -f "$obj" ]; then
+      report 1 'a missing side commit exits 1' "no loose object for f1's tip ($tip) in the clone"
+    else
+      rm -f "$obj"
+      replay --repo "$B" --set 'ml=*.ml' origin/main
+      if [ "$rc" = 1 ] && has 'merge-build-replay: git merge-base' && ! has 'no merge base'; then
+        report 0 'a missing side commit exits 1'
+      else report 1 'a missing side commit exits 1' "exit $rc; $(cat "$out")"; fi
     fi
   fi
 fi
