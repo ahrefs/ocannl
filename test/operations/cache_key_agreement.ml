@@ -232,10 +232,16 @@ let emitted_exemptions =
       "it moves the very artifacts this oracle reads, and Generated refuses a set prefix" );
   ]
 
-(* A kernel's text with its numbered identifiers renamed by first appearance: a fresh build of the
-   program numbers its tensors and loop indices afresh ([n62], [i110]), and two texts that differ
-   only there are one kernel. Number literals are copied whole, so a hex float's letters are not
-   read as an identifier. *)
+(* A kernel's text with its loop symbols renamed by first appearance: each lowering mints them
+   afresh ([i110], [Indexing.symbol_ident]), so two compiles of one graph differ there and nowhere
+   else. Only that shape is renamed -- a type or builtin whose name ends in a digit ([uint3],
+   [float4], [__half2]) stays as written, so a flip that changes one shows (Codex P2, round 3).
+   Number literals are copied whole, so a hex float's letters are not read as an identifier. *)
+let is_loop_symbol ident =
+  String.length ident > 1
+  && Char.equal ident.[0] 'i'
+  && String.for_all (String.drop_prefix ident 1) ~f:Char.is_digit
+
 let alpha_normalized text =
   let names = Hashtbl.create (module String) in
   let out = Buffer.create (String.length text) in
@@ -250,7 +256,7 @@ let alpha_normalized text =
           Int.incr j
         done;
         let ident = String.sub text ~pos:i ~len:(!j - i) in
-        if Char.is_digit ident.[String.length ident - 1] then
+        if is_loop_symbol ident then
           let fresh = Hashtbl.length names in
           Buffer.add_string out
             ("@" ^ Int.to_string (Hashtbl.find_or_add names ident ~default:(fun () -> fresh)))
@@ -353,6 +359,16 @@ let with_stated key value resolver f =
 
 let () =
   let ctx = Context.auto () in
+  (* A flip a commandline or environment statement outranks is not made, and says so as a skip
+     rather than leaving a claim that reads as if it had been (Codex P2, round 3): rerunning a test
+     under an [OCANNL_<KEY>] is supported, and the key it states is the one this run cannot flip. *)
+  let skip_outranked ~what key =
+    Verdict.skipped ~aggregation:`Environment ~backend:(Context.backend_name ctx)
+      (Printf.sprintf
+         "%s of %s: the key, or the regime it is flipped in, is stated on the commandline or in \
+          the environment"
+         what key)
+  in
   let backend = Context.backend_name ctx in
   (* A backend-uniform golden cannot say which backend the sweep ran on (gh-ocannl-622). *)
   eprintf "cache_key_agreement: sweeping on the %s backend (not part of the golden)\n%!" backend;
@@ -451,11 +467,7 @@ let () =
   let outcomes = List.map keyed_flips ~f:outcome in
   let took_effect =
     List.filter outcomes ~f:(fun (key, _, _, flips) ->
-        if List.is_empty flips then
-          eprintf
-            "%s: not flipped here -- it, or its regime, is stated on the commandline or in the \
-             environment\n"
-            key;
+        if List.is_empty flips then skip_outranked ~what:"the Keyed flip" key;
         not (List.is_empty flips))
   in
   let here, elsewhere =
@@ -532,6 +544,9 @@ let () =
                     moved before (components ()) )))
         in
         (key, flips))
+    |> List.filter ~f:(fun (key, flips) ->
+        if List.is_empty flips then skip_outranked ~what:"the settings flip" key;
+        not (List.is_empty flips))
   in
   p_all ~min:4 "each settings-borne key outside Keyed is flipped by restore_settings"
     settings_outcomes ~f:(fun (key, flips) ->
@@ -546,6 +561,15 @@ let () =
   let registered =
     List.filter Utils.config_key_defaults ~f:(fun (key, _) -> not (Set.mem keyed_names key))
   in
+  let registered =
+    List.filter registered ~f:(fun (key, (kind, default)) ->
+        let flippable =
+          List.exists (off_default kind default) ~f:(fun value ->
+              Option.is_some (with_stated key value Per_lookup (fun () -> ())))
+        in
+        if not flippable then skip_outranked ~what:"the registered flip" key;
+        flippable)
+  in
   p_none ~min:20 "no registered non-Keyed key moves the cache key when flipped off its default"
     registered ~f:(fun (key, (kind, default)) ->
       let before = components () in
@@ -559,9 +583,14 @@ let () =
               eprintf "%s=%s: the key computation read it and raised %s\n" key value
                 (Exn.to_string exn);
               true));
-  (* 7. Stage 2: the codegen-diff oracle. The program is rebuilt per compile (memory modes are
-     decided per tensor), under one routine name, with debug artifacts on so that [Generated] can
-     read the kernel each compile emits. *)
+  (* 7. Stage 2: the codegen-diff oracle. One graph, recompiled under one routine name with debug
+     artifacts on, so that [Generated] can read the kernel each compile emits. Not a fresh graph per
+     compile: two fresh builds of the same program bind Metal's pool slots in different orders, so
+     their kernels differ with nothing flipped. What a reused graph freezes is the front end's work
+     and the first compile's placements, and the canonical digest names both (the lowered code,
+     [with_placements]), so a key acting there moves the cache key and cannot be an under-keying.
+     The population is traced on a RE-compile, so it holds exactly the keys a recompile reads -- the
+     ones whose flips take effect here (Codex P2, round 3). *)
   let routine = "cka_probe" in
   let probe =
     let a =
@@ -630,7 +659,20 @@ let () =
         let ok = exempt key || Option.is_some (values key) in
         if not ok then eprintf "%s is read during a compile; give it values in emitted_flips\n" key;
         ok);
-    let flipped = List.filter population ~f:(Fn.non exempt) in
+    let flipped =
+      List.filter population ~f:(fun key ->
+          (not (exempt key))
+          &&
+          match values key with
+          | None -> true
+          | Some (resolver, candidates) ->
+              let flippable =
+                List.exists candidates ~f:(fun value ->
+                    Option.is_some (with_stated key value resolver (fun () -> ())))
+              in
+              if not flippable then skip_outranked ~what:"the codegen-diff flip" key;
+              flippable)
+    in
     p_none ~min:4 "no such key changes the emitted kernel while leaving the cache key unchanged"
       flipped ~f:(fun key ->
         match values key with
