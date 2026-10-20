@@ -150,9 +150,13 @@ let keyed_flips =
 (* Components that move WITH a classified one by derivation, not by a second reading of the key: the
    codegen tag hashes what the numerics policy resolves to on this backend
    ([Backend_intf.codegen_capabilities_fingerprint], gh-ocannl-1117), so a policy flip may move it
-   too. Each listed pair is one fact under two views, which partitions the cache no finer than the
-   classified component alone. *)
-let derived_components = [ ("numerics", [ "codegen" ]) ]
+   too. And the codegen tag hashes the device description's Key-class projection
+   ([Backend_intf.limits_key]), whose [worker_pool_tag] field is the very pool decision the pool
+   component renders, so a pool decision that changes moves codegen too -- which the pool-class
+   children pin exactly, by recomputing the codegen tag with that one field blanked. Each listed
+   pair is one fact under two views, which partitions the cache no finer than the classified
+   component alone. *)
+let derived_components = [ ("numerics", [ "codegen" ]); ("pool", [ "codegen" ]) ]
 
 (* The [Keyed] keys no in-process flip reaches, each with how it is varied instead (Codex P2, round
    4): the backend name through [cache_key_components]' own argument, and the two lazily resolved cc
@@ -165,8 +169,9 @@ let unflippable =
        backend name the caller passes -- varied through that argument" );
     ( "cc_pool_core_class",
       "resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool \
-       tag it decides is what the component hashes -- varied in child processes, and held to \
-       separating every two pools of different widths" );
+       tag it decides is what the component hashes -- varied in child processes, held to \
+       separating exactly the pool decisions that differ and to moving codegen only through that \
+       decision" );
     ( "cc_grid_private_bytes_cap",
       "resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; \
        the codegen tag hashes that resolved value -- varied in child processes" );
@@ -416,6 +421,13 @@ let () =
         printf "component\t%s\t%s\n" name value);
     if not (Ir.Schedule.backend_is_gpu backend) then
       printf "pool-tag\t%s\n" (Context.Cc_backend.pool_tag ());
+    (* The codegen tag as it would read without the pool decision in the limits record: what must
+       not move across pool classes, if the decision is all a pool class changes. *)
+    printf "codegen-sans-pool\t%s\n"
+      (SC.codegen_tag ~backend
+         ~limits:{ (Context.hardware_limits ctx) with Ir.Backend_intf.worker_pool_tag = None }
+         ~capabilities:(Context.codegen_capabilities ctx)
+         ());
     Out_channel.flush stdout;
     Stdlib.exit 0)
 
@@ -608,7 +620,9 @@ let () =
           ( List.filter_map lines ~f:(function
               | [ "component"; name; value ] -> Some (name, value)
               | _ -> None),
-            List.find_map lines ~f:(function [ "pool-tag"; tag ] -> Some tag | _ -> None) )
+            List.find_map lines ~f:(function [ "pool-tag"; tag ] -> Some tag | _ -> None),
+            List.find_map lines ~f:(function [ "codegen-sans-pool"; tag ] -> Some tag | _ -> None)
+          )
     | _ ->
         Fresh_process.report ~label:"cache_key_agreement child" run;
         None
@@ -622,7 +636,7 @@ let () =
       ( child [ grid; "--ocannl_cc_grid_private_bytes_cap=4096" ],
         child [ grid; "--ocannl_cc_grid_private_bytes_cap=1024" ] )
     with
-    | Some (before, _), Some (after, _) -> Some (moved before after)
+    | Some (before, _, _), Some (after, _, _) -> Some (moved before after)
     | _ -> None
   in
   p
@@ -634,22 +648,36 @@ let () =
     List.filter_map [ "all"; "performance"; "efficiency" ] ~f:(fun cls ->
         Option.map
           (child [ grid; "--ocannl_cc_pool_core_class=" ^ cls ])
-          ~f:(fun (components, width) -> (cls, components, width)))
+          ~f:(fun (components, decision, sans_pool) -> (cls, components, (decision, sans_pool))))
   in
   p "every child run of the pool-class flips completed" (List.length pools = 3);
   let pairs =
     List.concat_mapi pools ~f:(fun i a ->
         List.filteri pools ~f:(fun j _ -> j > i) |> List.map ~f:(fun b -> (a, b)))
   in
-  p_all "no pool-class flip moves a component other than the pool" pairs
-    ~f:(fun ((_, ca, _), (_, cb, _)) -> List.for_all (moved ca cb) ~f:(String.equal "pool"));
+  (* What a pool class may move: the pool component, and what [derived_components] says follows from
+     it -- codegen, through the limits record's [worker_pool_tag] (rog-nv-linux, a hybrid Core Ultra
+     9 275HX, decided different pools and moved both). *)
+  let pool_allowed =
+    "pool"
+    :: Option.value ~default:[] (List.Assoc.find derived_components "pool" ~equal:String.equal)
+  in
+  p_all "no pool-class flip moves a component other than the pool and what follows from it" pairs
+    ~f:(fun ((_, ca, _), (_, cb, _)) ->
+      List.for_all (moved ca cb) ~f:(List.mem pool_allowed ~equal:String.equal));
+  (* And codegen moves only THROUGH the pool decision: with [worker_pool_tag] blanked from the
+     limits record, every pool class's codegen tag is one tag. A pool class that changed anything
+     else the codegen tag reads would split it. *)
+  p_all ~min:3 "a pool-class flip moves codegen only through the pool decision" pairs
+    ~f:(fun ((_, _, (_, sa)), (_, _, (_, sb))) ->
+      Option.is_some sa && Option.equal String.equal sa sb);
   (* The pool component separates exactly the pools the cc backend decided apart: two classes whose
      decisions ([Cc_backend.pool_tag], what the restriction settled on) differ get different pool
      components, and two whose decisions agree share one. Which classes the host can tell apart is
      its own business -- a host without core classes to restrict to decides one pool for all three
      -- so the claim is over the pairs, whatever they decided. A GPU backend has no pool. *)
   p_all ~min:3 "the pool component separates exactly the pool decisions that differ" pairs
-    ~f:(fun ((_, ca, ta), (_, cb, tb)) ->
+    ~f:(fun ((_, ca, (ta, _)), (_, cb, (tb, _))) ->
       Bool.equal (Option.equal String.equal ta tb)
         (not (List.mem (moved ca cb) "pool" ~equal:String.equal)));
   (* 5. The keys a trace cannot see -- resolved once into [Utils.settings] -- flipped through their

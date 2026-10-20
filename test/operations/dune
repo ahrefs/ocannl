@@ -5159,7 +5159,9 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ; Its pool-class children rebuild the limits record, which carries the cc vector width.
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules cache_key_agreement)
  (action
   (run %{test} %{dep:../../arrayjit/lib/utils.ml}))
