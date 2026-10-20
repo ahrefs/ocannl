@@ -2382,17 +2382,19 @@ type loop_origin =
   | Covers of Indexing.symbol
       (** Every iteration of this loop of the entry program: the loop itself, the OUTER half of a
           [Split] of a loop that covers it — the outer loop runs the whole original range, with the
-          inner half nested inside it — or the loop a [Coalesce] merged from an outer loop that
-          covers it, whose one execution runs every iteration of that outer loop. *)
+          inner half nested inside it; a [Split_reduce]'s block loop is one — or the loop a
+          [Coalesce] merged from an outer loop that covers it, whose one execution runs every
+          iteration of that outer loop. *)
   | Part
       (** Only part of the iterations of a loop of the entry program, per execution: the INNER half
-          of a [Split] of a loop with a known origin, or a segment of a [Partition] of one. *)
+          of a [Split] of a loop with a known origin (a [Split_reduce]'s in-block loop is one), or a
+          segment of a [Partition] of one. *)
 
 (* The state one {!apply_typed} carries across its ops: the program the schedule started from
    ([Privatize] judges its tile width there, gh-ocannl-1151), the wide tiles its [Privatize]s minted
-   (re-checked after the ops), and the origin of each loop its [Split]s, [Coalesce]s and
-   [Partition]s minted ([Unroll] and [Pad] mint no binder). A loop minted by any other op has no
-   record. *)
+   (re-checked after the ops), and the origin of each loop its [Split]s, [Split_reduce]s (the pass-1
+   pair), [Coalesce]s and [Partition]s minted ([Unroll] and [Pad] mint no binder). A loop minted by
+   any other op has no record. *)
 type application = {
   entry : Low_level.t;
   entry_loops : Affine.Loop_ranges.t Lazy.t;
@@ -2423,7 +2425,11 @@ let record_minted app ~axis minted =
         List.fold (minted origin) ~init:!(app.minted_origins) ~f:(fun m (key, data) ->
             Map.set m ~key ~data)
 
-(* The halves of a [Split]: the outer covers what [axis] covered, the inner only part of it. *)
+(* The halves of a [Split]: the outer covers what [axis] covered, the inner only part of it. A
+   [Split_reduce]'s pass-1 pair is such a split — its block loop the outer half, its in-block loop
+   the inner — so it records through here too. Its combine nest's loops get no record: no
+   [Privatize] is admissible over one, as the only node the nest writes, the split target, is
+   indexed by each of them, and the partials it reads are not written there. *)
 let record_split app ~axis ~outer_index ~inner_index =
   record_minted app ~axis (fun origin -> [ (outer_index, origin); (inner_index, Part) ])
 
@@ -2842,11 +2848,12 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
             in
             (* The tile narrows once per execution of [over], which matches the serial rendering
                only where one execution of [over] covers exactly the level localizing the write:
-               [over] is that loop of [entry], the outer half of a [Split] of it, or the loop a
-               [Coalesce] merged from it as the outer of the pair. The inner half of a split, or a
-               segment of a [Partition], narrows once per execution of that part, where the serial
-               rendering narrows once per execution of the whole loop, so its tile stays at storage.
-               A loop another op minted carries no record and is judged by the decision alone. *)
+               [over] is that loop of [entry], the outer half of a [Split] of it (a [Split_reduce]'s
+               block loop), or the loop a [Coalesce] merged from it as the outer of the pair. The
+               inner half of a split (a [Split_reduce]'s in-block loop), or a segment of a
+               [Partition], narrows once per execution of that part, where the serial rendering
+               narrows once per execution of the whole loop, so its tile stays at storage. A loop
+               another op minted carries no record and is judged by the decision alone. *)
             let localizes_over =
               match loop_origin app over with
               | Some (Covers level) ->
@@ -4795,7 +4802,12 @@ let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optim
   | Fuse_epilogue { target; shared } -> apply_fuse_epilogue ~target ~shared opt
   | Split_reduce { axis; target; num_blocks; block_index; inner_index; combine_indices } -> (
       try
-        apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~combine_indices opt
+        let opt =
+          apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~combine_indices
+            opt
+        in
+        record_split app ~axis ~outer_index:block_index ~inner_index;
+        opt
       with Split_reduce_inner_cell syms ->
         refuse
           ("Schedule.Split_reduce: the accumulation cell mentions "

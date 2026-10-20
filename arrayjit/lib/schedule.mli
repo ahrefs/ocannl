@@ -314,23 +314,27 @@ type optop =
           is code generation's knowledge — where the two answers differ the op is rejected); and the
           tile narrows once per execution of [over], so where one execution of [over] covers a loop
           of that program — [over] is that loop, the outer half of a [Split] of a loop that covers
-          it, or the loop a [Coalesce] merged from an outer loop that covers it, by a record
-          {!apply} keeps of its own [Split]s, [Coalesce]s and [Partition]s — the serial rendering
-          must localize the write at that loop. The inner half of such a [Split], and a segment of a
-          [Partition] of such a loop, cover only part of it per execution, so a tile over either is
-          at storage: wide, it would narrow once per execution of that part, where the serial
-          rendering narrows once per execution of the whole loop. A loop any other op minted, or one
-          minted from a loop with no record, carries no record and is judged by the decision alone.
-          A widened scope-form update is re-keyed to the tile. So a [Stage] applied by an EARLIER
-          [apply] is part of the program this one judges: its loads are sibling statements of the
-          reduction, which code generation does not localize, and the tile stays at storage.
-          Likewise sibling statements of any kind, a reduction level the cell varies under, a
-          non-reduction or mixed-operator recurrence, an RNG-bearing contribution and routine
-          logging all get a storage-precision tile, which code generation renders exactly as it
-          would [target], so the narrowing points do not move. After all ops, and before the
-          finalization passes force its precision, {!apply} re-checks each wide tile against the
-          program the ops left ({!privatized_tile_widens}) and falls it back to storage precision
-          where a later op left an accumulation the decision does not widen
+          it (a {!constructor-Split_reduce}'s block loop is one), or the loop a [Coalesce] merged
+          from an outer loop that covers it, by a record {!apply} keeps of its own [Split]s,
+          [Split_reduce]s, [Coalesce]s and [Partition]s — the serial rendering must localize the
+          write at that loop. The inner half of such a [Split] (a [Split_reduce]'s in-block loop),
+          and a segment of a [Partition] of such a loop, cover only part of it per execution, so a
+          tile over either is at storage: wide, it would narrow once per execution of that part,
+          where the serial rendering narrows once per execution of the whole loop. A loop any other
+          op minted, or one minted from a loop with no record, carries no record and is judged by
+          the decision alone (a [Split_reduce]'s combine loops, over which no [Privatize] is
+          admissible). A [Split_reduce]'s own target accumulates into the minted partials node,
+          which that program lacks, so a [Privatize] of it is at storage; one of a node accumulated
+          beside it is judged as above. A widened scope-form update is re-keyed to the tile. So a
+          [Stage] applied by an EARLIER [apply] is part of the program this one judges: its loads
+          are sibling statements of the reduction, which code generation does not localize, and the
+          tile stays at storage. Likewise sibling statements of any kind, a reduction level the cell
+          varies under, a non-reduction or mixed-operator recurrence, an RNG-bearing contribution
+          and routine logging all get a storage-precision tile, which code generation renders
+          exactly as it would [target], so the narrowing points do not move. After all ops, and
+          before the finalization passes force its precision, {!apply} re-checks each wide tile
+          against the program the ops left ({!privatized_tile_widens}) and falls it back to storage
+          precision where a later op left an accumulation the decision does not widen
           ({!privatize_fallbacks}); the finalized program is judged once more, and a tile failing
           there is refused. The fallback is a safety net, not a path any compilable program takes:
           index-rewriting ops map the update and its self-read alike, the materializing [Unroll] and
