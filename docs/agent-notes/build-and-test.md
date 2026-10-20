@@ -371,7 +371,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its main loop, so "a rule running its test through `bash` is subject to the rule" could be argued
   and not asserted; `Scan.backend_rule_of` is that decision alone, with the diagnostics and tallies
   left in the check that owns their wording, and `dune_scan_cases` states the rule over stanzas the
-  repository does not contain.
+  repository does not contain. gh-ocannl-603 gave `config_dep_completeness` the same seam:
+  `Config_dep_resolution.analyze` takes a tree as data and returns typed verdicts, the main keeps
+  every diagnostic a literal (so the refusal catalogue still finds it), and `dune_scan_cases`
+  resolves synthetic trees. Its first run found what no live tree could show: a dune file's
+  directory went to `repo_relative` as ONE component, so a `..` popped all of `test/a` and a
+  `(chdir ../b …)` there ran in a top-level `b` -- split a directory (`Scan.split_path`) before
+  resolving a path against it.
   gh-ocannl-723 is the pattern's second instance and shows what a scanner rule costs once the seam
   exists: the rule is `Scan.artifact_subjects`, `dune_scan_cases` puts it to fifteen stanza/source
   pairs the repository has no member of, and `config_scan_lexing` does the same for the source side

@@ -1669,6 +1669,270 @@ let artifact_reader_cases =
       [] );
   ]
 
+(* gh-ocannl-603: the resolution half of config_dep_completeness -- which config each site's process
+   reads, whether its dependencies name that one, whether the ambient environment reaches the run,
+   and which exemptions were spent -- driven on synthetic trees with known verdicts. The cases above
+   pin how a stanza is READ; these pin what the check CONCLUDES from what was read, which used to be
+   tested only by a golden over the live repository: a golden that can say "today's tree is
+   consistent" and never "a tree where X is wrong gets rejected". Every case states the shape one
+   review round fixed by hand, so the fix stays fixed.
+
+   A tree is a list of repository-relative files: a [dune] file's text is read, an [ocannl_config]
+   only exists. Each rendered line is a site outside [test/config] (the ambient producer every tree
+   but one carries), as "<exemption key> (reads <the config dir its process finds>): <verdict>",
+   then the exemptions no site spent. *)
+let ambient_producer =
+  [
+    ("test/config/ocannl_config", "");
+    ( "test/config/dune",
+      {dune|(rule (target ocannl_ambient) (deps ocannl_config (universe))
+ (action (run %{exe:ocannl_ambient_env.exe})))
+(subdir ambient (rule (target ocannl_config) (deps ../ocannl_config ../ocannl_ambient)
+ (action (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))|dune}
+    );
+  ]
+
+(* A directory whose config is the copy that carries the ambient record, as the repository's test
+   directories have it. *)
+let configured dir extra =
+  let up = String.concat (List.map (List.tl_exn (String.split dir ~on:'/')) ~f:(fun _ -> "../")) in
+  (dir ^ "/dune", "(copy_files " ^ up ^ "config/ambient/ocannl_config)\n" ^ extra)
+
+let render_resolution_verdict = function
+  | Test_utils.Config_dep_resolution.Counted -> "counted"
+  | Exempt -> "exempt"
+  | No_config_in_reach -> "no config in reach"
+  | Unestablished_directory -> "directory cannot be established"
+  | Ambient_unreached dir -> "ambient environment unreached through " ^ dir
+  | Unreadable_undeclared -> "unreadable command, undeclared"
+  | Unclassified_undeclared -> "unclassified action, undeclared"
+  | Undeclared -> "undeclared"
+
+let render_resolution ~exemptions tree =
+  let module R = Test_utils.Config_dep_resolution in
+  let is name (path, _) = String.equal (Stdlib.Filename.basename path) name in
+  let report =
+    R.analyze ~exemption_keys:exemptions
+      ~config_files:(List.filter tree ~f:(is Scan.config_file) |> List.map ~f:fst)
+      (List.filter tree ~f:(is "dune"))
+  in
+  (if report.R.ambient_producer_ok then [] else [ "the ambient producer is missing" ])
+  @ List.concat_map report.R.files ~f:(fun file ->
+      if String.equal file.R.dune_file (R.ambient_home ^ "/dune") then []
+      else
+        List.map file.R.sites ~f:(fun r ->
+            Printf.sprintf "%s (reads %s): %s%s" r.R.key
+              (match r.R.nearest with None -> "nothing" | Some "" -> "." | Some dir -> dir)
+              (render_resolution_verdict r.R.verdict)
+              (if r.R.needs_isolating_sandbox then " [needs an isolating sandbox]" else "")))
+  @ List.map report.R.stale_exemptions ~f:(fun key -> "stale exemption: " ^ key)
+
+let resolution_cases =
+  [
+    ( "a site reading its own directory's config",
+      [ configured "test/a" "(rule (alias runtest-x) (deps ocannl_config) (action (run ./x.exe)))" ],
+      [],
+      [ "test/a:x.exe (reads test/a): counted" ] );
+    (* Codex P2, rounds 9 to 11 of PR #343: the config a process reads is the one where it RUNS. *)
+    ( "a sibling's config, reached by a chdir, is the one to name",
+      [
+        configured "test/a"
+          {dune|(rule (alias runtest-x) (deps ../b/ocannl_config) (action (chdir ../b (run ./x.exe))))
+(rule (alias runtest-y) (deps ocannl_config) (action (chdir ../b (run ./y.exe))))|dune};
+        configured "test/b" "";
+      ],
+      [],
+      [ "test/b:x.exe (reads test/b): counted"; "test/b:y.exe (reads test/b): undeclared" ] );
+    ( "a descendant's config, nearer than the stanza's own, is the one to name",
+      [
+        configured "test/a"
+          {dune|(rule (alias runtest-x) (deps sub/ocannl_config) (action (chdir sub (run ./x.exe))))
+(rule (alias runtest-y) (deps ocannl_config) (action (chdir sub (run ./y.exe))))|dune};
+        configured "test/a/sub" "";
+      ],
+      [],
+      [
+        "test/a/sub:x.exe (reads test/a/sub): counted";
+        "test/a/sub:y.exe (reads test/a/sub): undeclared";
+      ] );
+    (* An ancestor's config is the right one exactly while no nearer directory has its own. *)
+    ( "an ancestor's config serves where no nearer one exists",
+      [
+        configured "test/a"
+          {dune|(rule (alias runtest-x) (deps ocannl_config) (action (chdir deep (run ./x.exe))))|dune};
+      ],
+      [],
+      [ "test/a/deep:x.exe (reads test/a): counted" ] );
+    (* Codex P2, round 10 of PR #343: declaring SOME ancestor's config is not declaring the
+       nearest. *)
+    ( "an ancestor's config is not the one read once a nearer one exists",
+      [
+        ("test/ocannl_config", "");
+        configured "test/a"
+          "(rule (alias runtest-x) (deps ../ocannl_config) (action (run ./x.exe)))";
+      ],
+      [],
+      [ "test/a:x.exe (reads test/a): undeclared" ] );
+    (* Codex P2, round 14 of PR #343: the config may be materialized by a THIRD dune file. *)
+    ( "a config another dune file copies in counts",
+      [
+        ("test/dune", "(subdir q (copy_files ../config/ambient/ocannl_config))");
+        ( "test/p/dune",
+          {dune|(rule (alias runtest-x) (deps ../q/ocannl_config) (action (chdir ../q (run ./x.exe))))|dune}
+        );
+      ],
+      [],
+      [ "test/q:x.exe (reads test/q): counted" ] );
+    (* gh-ocannl-982's fixture guidance: the program a `%{dep:...}` names stays relative to its
+       stanza while a literal one resolves under the action's cwd, and neither moves where the
+       PROCESS runs -- both read the chdir's config. *)
+    ( "a dependency-expanded program and a literal runner under one chdir read one config",
+      [
+        configured "test/a"
+          {dune|(rule (alias runtest-x) (deps ../b/ocannl_config)
+ (action (chdir ../b (progn (run %{dep:x.exe}) (run ./y.exe)))))
+(rule (alias runtest-z) (deps ocannl_config)
+ (action (chdir ../b (progn (run %{dep:x.exe}) (run ./y.exe)))))|dune};
+        configured "test/b" "";
+      ],
+      [],
+      [
+        "test/b:y.exe, x.exe (reads test/b): counted";
+        "test/b:y.exe, x.exe (reads test/b): undeclared";
+      ] );
+    (* lukstafi/ocannl-staging#346: a root `ocannl_config` is gitignored personal settings, so a
+       dependency resolving to it satisfies nothing -- the developer's machine would pass what CI
+       fails. Restoring the root as a stop on the walk turns these lines "counted". *)
+    ( "the repository root's config is never in reach",
+      [
+        ("ocannl_config", "");
+        ( "test/r/dune",
+          {dune|(rule (alias runtest-x) (deps ../../ocannl_config) (action (run ./x.exe)))
+(test (name t) (deps ../../ocannl_config))|dune}
+        );
+        ("dune", "(test (name root_level) (deps ocannl_config))");
+      ],
+      [],
+      [
+        ":root_level (reads nothing): no config in reach";
+        "test/r:x.exe (reads nothing): no config in reach";
+        "test/r:t (reads nothing): no config in reach";
+      ] );
+    (* gh-ocannl-1149: a configuration checked in beside its tests carries no record of the ambient
+       environment, so the record itself, or `(universe)`, has to be depended on. *)
+    ( "a checked-in config needs the ambient record beside it",
+      [
+        ("test/k/ocannl_config", "");
+        ( "test/k/dune",
+          {dune|(copy_files ../config/ocannl_ambient)
+(rule (alias runtest-x) (deps ocannl_config) (action (run ./x.exe)))
+(rule (alias runtest-y) (deps ocannl_config ocannl_ambient) (action (run ./y.exe)))
+(rule (alias runtest-z) (deps ocannl_config (universe)) (action (run ./z.exe)))
+(rule (alias runtest-w) (deps ocannl_config ../elsewhere/ocannl_ambient) (action (run ./w.exe)))|dune}
+        );
+      ],
+      [],
+      [
+        "test/k:x.exe (reads test/k): ambient environment unreached through test/k";
+        "test/k:y.exe (reads test/k): counted";
+        "test/k:z.exe (reads test/k): counted";
+        "test/k:w.exe (reads test/k): ambient environment unreached through test/k";
+      ] );
+    ( "the shared configuration's own producer is checked",
+      [ configured "test/a" "(test (name t) (deps ocannl_config))" ],
+      [],
+      [ "test/a:t (reads test/a): counted" ] );
+    (* An exemption is spent only where the dep is absent, and only by the site it names: the
+       spending is what keeps the list from growing quietly (round 11 of PR #343 put availability
+       after it, so an exempt site in a directory with no config at all is still exempt). *)
+    ( "an exemption spent, one gone stale by declaring the dep, one naming nothing",
+      [
+        configured "test/e"
+          {dune|(rule (alias runtest-x) (action (run ./x.exe)))
+(rule (alias runtest-y) (deps ocannl_config) (action (run ./y.exe)))|dune};
+        ("test/bare/dune", "(rule (alias runtest-v) (action (run ./v.exe)))");
+      ],
+      [ "test/e:x.exe"; "test/e:y.exe"; "test/gone:z.exe"; "test/bare:v.exe" ],
+      [
+        "test/bare:v.exe (reads nothing): exempt";
+        "test/e:x.exe (reads test/e): exempt";
+        "test/e:y.exe (reads test/e): counted";
+        "stale exemption: test/e:y.exe";
+        "stale exemption: test/gone:z.exe";
+      ] );
+    (* lukstafi/ocannl-staging#981's canary controls, as this check keys them: by the directory a
+       process runs in and what it runs, never by alias -- so a configuration reader on the canary's
+       alias inherits nothing, and a canary that moves leaves its entry stale. *)
+    ( "a reader on an exempt canary's alias is not exempt",
+      [
+        configured "test/e"
+          {dune|(rule (alias bin-smoke) (action (run ./probe.exe)))
+(rule (alias bin-smoke) (action (run ./reader.exe)))|dune};
+      ],
+      [ "test/e:probe.exe" ],
+      [ "test/e:probe.exe (reads test/e): exempt"; "test/e:reader.exe (reads test/e): undeclared" ]
+    );
+    ( "a canary that moves directory leaves its exemption stale",
+      [ configured "test/moved" "(rule (alias bin-smoke) (action (run ./probe.exe)))" ],
+      [ "test/e:probe.exe" ],
+      [ "test/moved:probe.exe (reads test/moved): undeclared"; "stale exemption: test/e:probe.exe" ]
+    );
+    (* Codex P2, round 8 of PR #343, and gh-ocannl-1359: a shell line's directory is unknown, so a
+       declared dep settles nothing, and an exemption is the only way through -- which still owes an
+       isolating sandbox. *)
+    ( "a shell action needs an exemption and an isolating sandbox",
+      [
+        configured "test/s"
+          {dune|(rule (alias runtest-x) (deps ocannl_config) (action (system "./x.exe")))
+(rule (alias runtest-y) (action (system "./y.exe")))
+(rule (alias runtest-z) (deps (sandbox always preserve_file_kind)) (action (system "./z.exe")))|dune};
+      ],
+      [ "test/s:shell: ./y.exe"; "test/s:shell: ./z.exe" ],
+      [
+        "test/s:shell: ./x.exe (reads test/s): directory cannot be established [needs an isolating \
+         sandbox]";
+        "test/s:shell: ./y.exe (reads test/s): exempt [needs an isolating sandbox]";
+        "test/s:shell: ./z.exe (reads test/s): exempt";
+      ] );
+    ( "what the scan cannot read is accepted only with the dep",
+      [
+        configured "test/u"
+          {dune|(rule (alias runtest-x) (action (run %{env:TOOL=x})))
+(rule (alias runtest-y) (deps ocannl_config) (action (run %{env:TOOL=y})))
+(rule (alias runtest-z) (action (frobnicate ./z.exe)))
+(rule (alias runtest-w) (deps ocannl_config) (action (frobnicate ./w.exe)))|dune};
+      ],
+      [],
+      [
+        "test/u:%{env:TOOL=x} (reads test/u): unreadable command, undeclared";
+        "test/u:%{env:TOOL=y} (reads test/u): counted";
+        "test/u:frobnicate (reads test/u): unclassified action, undeclared";
+        "test/u:frobnicate (reads test/u): counted";
+      ] );
+    ( "inline tests and tests are held to the same dep",
+      [
+        configured "test/i"
+          {dune|(library (name l) (inline_tests (deps ocannl_config)))
+(library (name m) (inline_tests))
+(test (name t) (deps ocannl_config))
+(test (name u))|dune};
+      ],
+      [],
+      [
+        "test/i:l (reads test/i): counted";
+        "test/i:m (reads test/i): undeclared";
+        "test/i:t (reads test/i): counted";
+        "test/i:u (reads test/i): undeclared";
+      ] );
+  ]
+
+(* The one tree without [ambient_producer], which every case above is run with. *)
+let no_producer_case =
+  ( "a tree with no ambient producer is reported",
+    [ ("test/a/dune", "(copy_files ../config/ambient/ocannl_config)") ],
+    [],
+    [ "the ambient producer is missing" ] )
+
 (* gh-ocannl-1207: config_dep_completeness's own refusals, executed rather than vouched for by the
    cases above, which exercise the reading they rest on in process. The scanner runs as a child over
    a tree built to trip them -- a stanza head and an action head it cannot classify, a binaries
@@ -1836,6 +2100,11 @@ let () =
       | sites ->
           fail "refused -- %s: read the file as %d sites instead of refusing it" name
             (List.length sites));
+  List.iter resolution_cases ~f:(fun (name, tree, exemptions, expected) ->
+      check ("resolution -- " ^ name) expected
+        (render_resolution ~exemptions (ambient_producer @ tree)));
+  (let name, tree, exemptions, expected = no_producer_case in
+   check ("resolution -- " ^ name) expected (render_resolution ~exemptions tree));
   (match Stdlib.Sys.argv with
   | [| _; exe |] -> scanner_refusal_controls exe
   | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe>");

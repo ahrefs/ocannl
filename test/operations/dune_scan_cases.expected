@@ -310,6 +310,23 @@ Contained-marker refusal diagnostics exercised by the cases above:
 ok: refused -- a marker nested inside a stanza
 ok: refused -- a block comment
 ok: refused -- a datum comment
+ok: resolution -- a site reading its own directory's config
+ok: resolution -- a sibling's config, reached by a chdir, is the one to name
+ok: resolution -- a descendant's config, nearer than the stanza's own, is the one to name
+ok: resolution -- an ancestor's config serves where no nearer one exists
+ok: resolution -- an ancestor's config is not the one read once a nearer one exists
+ok: resolution -- a config another dune file copies in counts
+ok: resolution -- a dependency-expanded program and a literal runner under one chdir read one config
+ok: resolution -- the repository root's config is never in reach
+ok: resolution -- a checked-in config needs the ambient record beside it
+ok: resolution -- the shared configuration's own producer is checked
+ok: resolution -- an exemption spent, one gone stale by declaring the dep, one naming nothing
+ok: resolution -- a reader on an exempt canary's alias is not exempt
+ok: resolution -- a canary that moves directory leaves its exemption stale
+ok: resolution -- a shell action needs an exemption and an isolating sandbox
+ok: resolution -- what the scan cannot read is accepted only with the dep
+ok: resolution -- inline tests and tests are held to the same dep
+ok: resolution -- a tree with no ambient producer is reported
 config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true
 config_dep_completeness refuses a run handed no dune file, exiting 1: true
 
