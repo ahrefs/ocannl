@@ -1153,10 +1153,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   source order as a may-be-on bit (its imprecision can only refuse, never pass), and treats a
   condition and the LAST statement of a function body or subshell -- also through a final group,
   branch or arm -- as consuming the status: a function's last command is its return value
-  (gh-ocannl-1220). A status something can overwrite before its consumer is not consumed: a loop
-  body's tail (the next iteration) and a `;&`/`;;&` arm's (the arm it falls into). A function body
-  that may hand errexit back on to a caller that had it off -- also the `set +e … set -e`
-  save-and-restore -- makes the whole file read as errexit-on, since the scan does not follow calls. Its module header states what it reads, refuses and leaves out (loud and
+  (gh-ocannl-1220) -- unless every call of it the file shows discards that value (`f | cat`,
+  `f &`, or a statement nothing consumes with errexit certainly off; gh-ocannl-1266). A status
+  something can overwrite before its consumer is not consumed: a loop body's tail (the next
+  iteration) and a `;&`/`;;&` arm's (the arm it falls into). A function body that may hand errexit
+  back on to a caller that had it off -- also the `set +e … set -e` save-and-restore -- makes the
+  whole file read as errexit-on, since the scan does not follow errexit through calls; the golden
+  names such a file and its functions on a `read with errexit on from its first line` line. Inside
+  a function body capture a status with `|| rc=$?` rather than toggling errexit around it. Its module header states what it reads, refuses and leaves out (loud and
   silent). `Errexit_execution_controls` measures each context rule: it runs the script under the
   host's bash (3.2 on macOS, 5 on Linux) and again with a plain `false` in the assertion's place,
   and a rule bash disagrees with fails there -- add a row when the reader learns a context (a row

@@ -573,6 +573,9 @@ shell_scripts_parse.ml: [scanner-refusal:bf12194d221f2281dedd171e418892fa] hered
 shell_scripts_parse.ml: [scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical (claim) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:d06f79ba9c87a43873089eb160369d9c] unsupported shell execution (claim) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:f472d334deac706e33952da7e799b22a] never turns errexit (claim) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:1b6c2569972a33c6d8cdd0f5ea2c5752] a case inside (claim) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:77db671c892d42f5738f054827480452] save-and-restore function is (claim) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:b8ca55024e0a84b39a4011db683a7ba9] functions leave errexit (claim) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:88b12da9841dbf6131676bf4fb0f4686] statement-position ! command (direct failure) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:003eba7381c87352fb02cd374fa62ea9] errexit-negation fixture (claim) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:b67c631ab7ecd7df55fc002761cf99f6] reaches the absent()-style (claim) is catalogued beside shell_scripts_parse.expected: true

@@ -599,6 +599,9 @@ let raw_entries =
         "[scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical";
         "[scanner-refusal:d06f79ba9c87a43873089eb160369d9c] unsupported shell execution";
         "[scanner-refusal:f472d334deac706e33952da7e799b22a] never turns errexit";
+        "[scanner-refusal:1b6c2569972a33c6d8cdd0f5ea2c5752] a case inside";
+        "[scanner-refusal:77db671c892d42f5738f054827480452] save-and-restore function is";
+        "[scanner-refusal:b8ca55024e0a84b39a4011db683a7ba9] functions leave errexit";
         "[scanner-refusal:88b12da9841dbf6131676bf4fb0f4686] statement-position ! command";
         "[scanner-refusal:003eba7381c87352fb02cd374fa62ea9] errexit-negation fixture";
         "[scanner-refusal:b67c631ab7ecd7df55fc002761cf99f6] reaches the absent()-style";

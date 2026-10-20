@@ -585,10 +585,8 @@ substr($s, $at, length($anchor), q{open my $f, '>:raw', "$module/not-a-directory
 print $s;
 PERL
 inode_before=$(perl -e 'print((stat($ARGV[0]))[1])' module.ml)
-set +e
-bash tools/mutation-open-failure.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
-actual=$?
-set -e
+actual=0
+bash tools/mutation-open-failure.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
 [ "$actual" = 2 ]
 [ "$(perl -e 'print((stat($ARGV[0]))[1])' module.ml)" = "$inode_before" ]
 cmp module.ml "$fixture/pristine"
@@ -685,10 +683,8 @@ print $s;
 PERL
 export PROBE_MODE=pass
 rm -f "$fixture/observed"
-set +e
-bash tools/mutation-late-signal.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
-actual=$?
-set -e
+actual=0
+bash tools/mutation-late-signal.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
 [ "$actual" = 143 ] && [ ! -e "$fixture/observed" ] ||
   { cat "$fixture/result"; echo "late baseline signal: exit $actual, or the mutant ran"; exit 1; }
 cmp module.ml "$fixture/pristine"
@@ -732,10 +728,8 @@ export PROBE_MODE=pass
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Fault-inject exec failure into a scratch copy: only the parent restores.
 sed "s/exec('bash',/exec('\/no-such-mutation-run-shell',/" tools/mutation-run.sh > tools/mutation-no-shell.sh
-set +e
-bash tools/mutation-no-shell.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
-actual=$?
-set -e
+actual=0
+bash tools/mutation-no-shell.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
 [ "$actual" = 127 ]
 cmp module.ml "$fixture/pristine"
 grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
@@ -751,10 +745,8 @@ exit 1
 CMP
 chmod +x "$fixture/bin/cmp"
 export PROBE_MODE=pass
-set +e
-tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
-actual=$?
-set -e
+actual=0
+tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
 [ "$actual" = 3 ]
 if grep -q '^restored:' "$fixture/result"; then echo 'unexpected restoration confirmation'; exit 1; fi
 backup=$(sed -n 's/^recovery: //p' "$fixture/result")
@@ -769,10 +761,8 @@ leg_16() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Failure to publish the restoration also leaves the recovery bytes available.
 export PROBE_MODE=restore_error
-set +e
-tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
-actual=$?
-set -e
+actual=0
+tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
 [ "$actual" = 3 ]
 if grep -q '^restored:' "$fixture/result"; then echo 'unexpected restoration confirmation'; exit 1; fi
 backup=$(sed -n 's/^recovery: //p' "$fixture/result")
@@ -826,10 +816,8 @@ print {$id} "$run\n";
 close $id;
 die "expected deferred restoration, got $got\n" unless $got == 3;
 PERL
-  set +e
-  tools/test-run.sh idle > "$fixture/idle" 2>&1
-  actual=$?
-  set -e
+  actual=0
+  tools/test-run.sh idle > "$fixture/idle" 2>&1 || actual=$?
   [ "$actual" = 3 ]
   grep -q MUTATED module.ml
   backup=$(sed -n 's/^recovery: //p' "$fixture/result")
@@ -838,18 +826,14 @@ PERL
   # A competing mutation is refused without changing the live mutant.
   cp module.ml "$fixture/mutant"
   printf 'MUTATED@@@SECOND' > second.patch
-  set +e
-  tools/mutation-run.sh module.ml second.patch @runtest-probe > "$fixture/busy" 2>&1
-  actual=$?
-  set -e
+  actual=0
+  tools/mutation-run.sh module.ml second.patch @runtest-probe > "$fixture/busy" 2>&1 || actual=$?
   [ "$actual" = 2 ]
   cmp module.ml "$fixture/mutant"
   run=$(cat "$fixture/survivor-run")
   tools/test-run.sh stop "$run" > "$fixture/stop" 2>&1
   # The supervisor stop is asynchronous; wait for its completion when present.
-  set +e
-  tools/test-run.sh wait "$run" --timeout 10 > "$fixture/wait" 2>&1
-  set -e
+  tools/test-run.sh wait "$run" --timeout 10 > "$fixture/wait" 2>&1 || :
   tools/test-run.sh idle
   cp "$backup" module.ml
   cmp module.ml "$fixture/pristine"
@@ -868,10 +852,8 @@ set -- "$fixture"/runs/lock-*
 lock=$1
 mv "$lock" "$lock.saved"
 mkdir "$lock"
-set +e
-tools/test-run.sh idle > "$fixture/idle" 2>&1
-actual=$?
-set -e
+actual=0
+tools/test-run.sh idle > "$fixture/idle" 2>&1 || actual=$?
 [ "$actual" = 2 ]
 [ -d "$lock" ]
 rmdir "$lock"
