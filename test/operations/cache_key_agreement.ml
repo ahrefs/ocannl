@@ -661,7 +661,8 @@ let () =
           ~f:(fun (components, decision, (sans_pool, width)) ->
             (cls, components, (decision, sans_pool, width))))
   in
-  let pools = pool_children [] in
+  (* Auto stated as such ([0]), so an ambient or configured count cannot stand in for it. *)
+  let pools = pool_children [ "--ocannl_cc_parallel_chunks=0" ] in
   let pools_fixed_chunks = pool_children [ "--ocannl_cc_parallel_chunks=8" ] in
   p "every child run of the pool-class flips completed"
     (List.length pools = 3 && List.length pools_fixed_chunks = 3);
