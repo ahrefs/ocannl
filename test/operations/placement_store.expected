@@ -17,6 +17,8 @@ the control process replays nothing recorded: both arms report: true
 the control process leaves the entry recorded for the other problem untouched: true
 the problem digest is structural: a same-shape graph over other tensors has the same digest: true
 the problem digest is the same for a fresh lineage: true
+with a timing context, a same-shape graph over other tensors has the same digest: true
+with a timing context, how the timing lineage lowers the routine enters the digest: true
 a lineage that inherits a decision poses a different problem: true
 the same computation tuned against a different loss poses a different problem: true
 a timing context that inherits a decision poses a different problem: true
@@ -53,6 +55,8 @@ an entry that names a node the problem lacks is ignored and the placements re-tu
 an entry that names a node the problem lacks is overwritten by the re-tune, given clean evidence: true
 the caller's and the timing lineage lower the default placements differently: true
 with a timing context, the cold run's routine computes the right values: true
+with a timing context, no compared search failed: a schedule the caller's lineage cannot take is never compiled into it: true
+with a timing context, arm A -- whose lowering differs between the two lineages -- is refused before searching, and arm B, which materializes the intermediate in both, searches: true
 with a timing context, the cold run records a decision of its own, whenever its evidence was clean: true
 with a timing context, the recorded outcome digest is the shipped search's own source digest: true
 with a timing context, a fresh lowering of the recorded decision in the timing lineage reproduces it: true

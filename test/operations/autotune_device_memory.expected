@@ -10,16 +10,18 @@ a routine that does not fit is refused, not searched: true
 the refusal is a typed pre-search failure at link, with the device-memory decline: true
 only the base compile was attempted: true
 the device refused exactly one allocation: true
-the room holds the default compile alone: true
+nothing of arm A is resident when arm B's base compile starts: true
 both arms reported, in position: true
 arm A searched without a device-memory decline: true
-arm A's shipped routine holds at least the unscheduled footprint, leaving arm B no room: true
-arm B was refused for device memory before its search: true
-arm A shipped: true
+arm B searched too, without a device-memory decline: true
+nothing was refused for device memory: true
+exactly one arm shipped: true
 the shipped arm computes the right values: true
-the next call reports both arms again: true
-the next call replays arm A's winner, or its search was contended: true
-arm A's replayed routine holds at least the unscheduled footprint, leaving arm B no room: true
-and searches nothing: arm B is refused again: true
-arm A shipped again: true
+the next call replays the recorded decision in one cached search, or the arms were contended: true
+nothing was refused for device memory in the next call: true
+it shipped the recorded arm: true
 the replayed arm computes the right values: true
+both arms searched, and the device refused exactly one allocation after they reported: true
+the arm whose shipping compile was substituted did not ship: the other arm did: true
+the arm shipped instead computes the right values: true
+nothing was recorded: the next call compares both arms again: true

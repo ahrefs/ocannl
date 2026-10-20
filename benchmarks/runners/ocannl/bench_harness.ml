@@ -520,7 +520,8 @@ let collect_search t (r : Autotune.report) =
   | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ ->
       t.searches <- t.searches + 1
   | Autotune.Cache_replay | Autotune.Abandonment_replay _ -> t.replays <- t.replays + 1
-  | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> t.no_searches <- t.no_searches + 1
+  | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Lineage_refused _ ->
+      t.no_searches <- t.no_searches + 1
 
 let collect_arm t (r : Autotune.report) =
   collect_search t r;
@@ -621,7 +622,8 @@ let tune_json t =
           match r.Autotune.outcome with
           | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ -> (true, false)
           | Autotune.Cache_replay | Autotune.Abandonment_replay _ -> (false, true)
-          | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> (false, false)
+          | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Lineage_refused _ ->
+              (false, false)
         in
         Bench_json.tune_arm ~name
           ~state:(Autotune.outcome_name r.Autotune.outcome)

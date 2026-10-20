@@ -74,15 +74,10 @@ let replayed (r : Autotune.report) =
 let uncontended (r : Autotune.report) = r.Autotune.timings_contended = 0
 let source_digest (r : Autotune.report) = r.Autotune.source_digest
 
-(* The evidence a recording rests on, as [Train.tune_placements] judges it: every search the run
-   observed had no contention-refused window, did not fail, and timed something. A flip the
-   abandonment rule stopped early was measured, briefly, and lost: it does not spoil the
-   evidence. *)
-let clean_report (r : Autotune.report) =
-  uncontended r
-  && Option.is_none (Autotune.terminal_failure r)
-  && Float.is_finite r.Autotune.best_ms
-
+(* The evidence a recording rests on, as [Train.tune_placements] judges it: its own predicate, so
+   the test cannot disagree with the recorder (a flip the abandonment rule stopped early, or a
+   lineage-refused arm, does not spoil the evidence). *)
+let clean_report = Train.placement_evidence_clean
 let clean_evidence reports = List.for_all reports ~f:clean_report
 
 (* A search that failed outright: the evidence is unclean, but not by the load, so a retry would
@@ -187,24 +182,25 @@ let records_when_clean ~identity ~failed ~clean ops label b =
       ~on:(unrecorded_on ~identity ~failed ~clean (List.concat ops))
       ops label b
 
-(* gh-ocannl-1386: the measurement seam under [~rank_fissioned_last], which ranks every fissioned
-   candidate (the [F_] labels [Autotune.spec_label] gives them) one second behind its reading, so a
-   search crowns a whole-routine schedule whenever it timed one. The windows it sees are admitted
-   ones only: contention still refuses as in production. Counted, so stderr shows the ranking
-   reached candidates at all. *)
-let fissioned_ranked_last = ref 0
+(* gh-ocannl-1421: the measurement seam under [~rank_fissioned_first], which ranks every
+   whole-routine candidate (every label but the [F_] ones [Autotune.spec_label] gives fissioned
+   specs) one second behind its reading, so a search crowns a fissioned schedule whenever it timed
+   one -- the winner that used to die compiling into a caller lineage that lowers differently (run
+   6). The windows it sees are admitted ones only: contention still refuses as in production.
+   Counted, so stderr shows the ranking reached candidates at all. *)
+let whole_ranked_last = ref 0
 
-let fissioned_last_ranking ~label ~digest:_ ms =
-  if String.is_prefix label ~prefix:"F_" then (
-    Int.incr fissioned_ranked_last;
+let fissioned_first_ranking ~label ~digest:_ ms =
+  if String.is_prefix label ~prefix:"F_" then ms
+  else (
+    Int.incr whole_ranked_last;
     ms +. 1000.)
-  else ms
 
 (* One placement tune of [graph]'s routine from [ctx] (a fresh [Context.auto ()] by default) with
    [cache_dir] as the cache directory, run and read back: the arm and flip reports in order, what
    shipped, whether the intermediate shipped materialized, the values, and what its persistence came
-   to. [~rank_fissioned_last] runs it under {!fissioned_last_ranking}. *)
-let tune_in ?ship_arm ?placement_store ?timing_ctx ?(rank_fissioned_last = false) ?ctx ~cache_dir
+   to. [~rank_fissioned_first] runs it under {!fissioned_first_ranking}. *)
+let tune_in ?ship_arm ?placement_store ?timing_ctx ?(rank_fissioned_first = false) ?ctx ~cache_dir
     (mc, t2, comp) =
   let ctx = match ctx with Some ctx -> ctx | None -> Context.auto () in
   let identity = Option.is_some (Context.timing_identity ctx) in
@@ -218,8 +214,8 @@ let tune_in ?ship_arm ?placement_store ?timing_ctx ?(rank_fissioned_last = false
   in
   let (ctx_t, routine_t), io =
     SC.recording_cache_io (fun () ->
-        if rank_fissioned_last then
-          Autotune.Seam.with_value Autotune.on_candidate_measured fissioned_last_ranking tune
+        if rank_fissioned_first then
+          Autotune.Seam.with_value Autotune.on_candidate_measured fissioned_first_ranking tune
         else tune ())
   in
   let ctx_t = Context.run ctx_t routine_t in
@@ -528,6 +524,24 @@ let () =
     (String.equal d (problem_digest (Context.auto ()) t2' comp'));
   p "the problem digest is the same for a fresh lineage"
     (String.equal d (problem_digest (Context.auto ()) t2 comp));
+  (* gh-ocannl-1421: with a timing context the key also carries how each lineage's lowering accesses
+     every node, per node, so it is still free of process-local node ids. *)
+  let timed_digest ~decide loss comp =
+    SC.digest
+      (Train.placement_problem
+         ~timing_ctx:(decide (Context.auto ()))
+         (Context.auto ()) loss comp Ir.Indexing.Empty)
+  in
+  let materialize_mid mc c = Context.decide_materialized c [ mc.Tensor.value ] in
+  p "with a timing context, a same-shape graph over other tensors has the same digest"
+    (String.equal
+       (timed_digest ~decide:(materialize_mid mc) t2 comp)
+       (timed_digest ~decide:(materialize_mid mc') t2' comp'));
+  p "with a timing context, how the timing lineage lowers the routine enters the digest"
+    (not
+       (String.equal
+          (timed_digest ~decide:Fn.id t2 comp)
+          (timed_digest ~decide:(materialize_mid mc) t2 comp)));
   p "a lineage that inherits a decision poses a different problem"
     (not
        (String.equal d
@@ -546,14 +560,14 @@ let () =
           (SC.digest
              (Train.placement_problem ~timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty))));
   (* --- The runs. --- *)
-  let run ?ship_arm ?placement_store ?timing_ctx ?rank_fissioned_last ?(cache_dir = cache_dir) () =
-    tune_in ?ship_arm ?placement_store ?timing_ctx ?rank_fissioned_last ~cache_dir (mc, t2, comp)
+  let run ?ship_arm ?placement_store ?timing_ctx ?rank_fissioned_first ?(cache_dir = cache_dir) () =
+    tune_in ?ship_arm ?placement_store ?timing_ctx ?rank_fissioned_first ~cache_dir (mc, t2, comp)
   in
   (* A recording run, retried into a fresh [cache_dir] until an attempt records (gh-ocannl-1086):
      every attempt's run with the placement keys it left. Settled by a recording, by clean evidence
      (whose record claim then judges it), by a search that failed outright, or by a context with no
      timing identity to key on. *)
-  let recording_run ?timing_ctx ?rank_fissioned_last ~cache_dir () =
+  let recording_run ?timing_ctx ?rank_fissioned_first ~cache_dir () =
     attempts_until
       ~fresh:(fun () -> clean_cache cache_dir)
       ~settled:(fun ((arms, flips, _, _, _, persisted), keys) ->
@@ -562,7 +576,7 @@ let () =
         || failed_search (arms @ flips)
         || not persisted.identity)
       (fun () ->
-        let r = run ?timing_ctx ?rank_fissioned_last ~cache_dir () in
+        let r = run ?timing_ctx ?rank_fissioned_first ~cache_dir () in
         (r, placement_keys ~cache_dir ()))
   in
   (* --- Run 1: cold. --- *)
@@ -788,17 +802,18 @@ let () =
      differently (the precondition claim), a recorded default would never replay. A new problem,
      recorded with the same retries as run 1.
 
-     Its own directory, and fissioned candidates ranked last (gh-ocannl-1386). Every schedule these
+     Its own directory, and fissioned candidates ranked FIRST (gh-ocannl-1421). Every schedule these
      searches crown is tuned on the timing lineage's lowering, where the intermediate is
-     materialized, and compiled into the caller's lineage, where it is virtual. On cc a
-     whole-routine winner then fails to compile there, a classified decline, and the untuned default
-     ships; a FISSIONED winner instead dies promoting the virtual intermediate to a device buffer,
-     which strict classification makes fatal -- the replayed search with it, and the warm run goes
-     back to the arms, depending on whether the noise in the timings crowned a fissioned schedule.
-     That is a property of compiling a timing lineage's schedule into a caller's lineage that lowers
-     differently, not of the placement store; these two runs pin around it. (On Metal the
-     whole-routine compile failure is unclassified, hence fatal as well: there run 6 never records,
-     and its claims are skipped as a failed search.) The materialize-all lineage of run 1's arm B
+     materialized; in the caller's lineage it is virtual, so no arm-A schedule applies there, and
+     [Autotune.tune] refuses arm A up front ([Lineage_refused], their lowerings differ): it searches
+     nothing, ships the untuned default and ranks last, while arm B, which materializes the
+     intermediate in both lineages, searches and ships its own crown. A fissioned winner used to die
+     instead, promoting the virtual intermediate to a device buffer -- fatal under strict
+     classification, so the replayed search failed and the warm run went back to the arms
+     (gh-ocannl-1386's flake, whenever the timing noise crowned a fissioned schedule; on Metal a
+     whole-routine winner's compile failure was fatal too). Ranking fissioned candidates first makes
+     that winner deterministic, and the claim that no compared search failed -- which no environment
+     waives -- fails on the old behavior every time. The materialize-all lineage of run 1's arm B
      lowers to the same program as this timing lineage, so a shared directory would hand these
      searches run 1's unranked winner as a schedule-cache hit. --- *)
   let timing_ctx () = Context.decide_materialized (Context.auto ()) [ mc.Tensor.value ] in
@@ -810,7 +825,7 @@ let () =
              Ir.Indexing.Empty SC.Default)));
   let timing_cache_dir = "autotune_cache_placement_store_timing" in
   let attempts6 =
-    recording_run ~timing_ctx:(timing_ctx ()) ~rank_fissioned_last:true ~cache_dir:timing_cache_dir
+    recording_run ~timing_ctx:(timing_ctx ()) ~rank_fissioned_first:true ~cache_dir:timing_cache_dir
       ()
   in
   let (arms6, flips6, shipped6, _, got6, persisted6), keys6 = List.last_exn attempts6 in
@@ -822,10 +837,25 @@ let () =
   in
   Stdio.eprintf
     "run 6 (not part of the golden): shipped %s, clean %b, stored %b, after %d attempt(s); %d \
-     fissioned candidate timings ranked last\n\
+     whole-routine candidate timings ranked last\n\
      %!"
-    shipped6 clean6 (Option.is_some entry6) (List.length attempts6) !fissioned_ranked_last;
+    shipped6 clean6 (Option.is_some entry6) (List.length attempts6) !whole_ranked_last;
   let failed6 = failed_search (arms6 @ flips6) in
+  p_none
+    "with a timing context, no compared search failed: a schedule the caller's lineage cannot take \
+     is never compiled into it"
+    (arms6 @ flips6) ~f:(fun r -> Option.is_some (Autotune.terminal_failure r));
+  p
+    "with a timing context, arm A -- whose lowering differs between the two lineages -- is refused \
+     before searching, and arm B, which materializes the intermediate in both, searches"
+    (match arms6 with
+    | [ { Autotune.outcome = Autotune.Lineage_refused _; best_ms; _ }; rb ] -> (
+        Float.is_inf best_ms
+        &&
+        match rb.Autotune.outcome with
+        | Autotune.Searched | Autotune.Cache_replay -> true
+        | _ -> false)
+    | _ -> false);
   records_when_clean ~identity:persisted6.identity ~failed:failed6 ~clean:clean6
     [ placement_stores persisted6 ]
     "with a timing context, the cold run records a decision of its own, whenever its evidence was \
@@ -857,7 +887,7 @@ let () =
           (Train.placement_outcome_digest ~timing_ctx:(timing_ctx ()) (Context.auto ()) t2 comp
              Ir.Indexing.Empty e.SC.decision));
   let arms6w, flips6w, shipped6w, _, got6w, persisted6w =
-    run ~timing_ctx:(timing_ctx ()) ~rank_fissioned_last:true ~cache_dir:timing_cache_dir ()
+    run ~timing_ctx:(timing_ctx ()) ~rank_fissioned_first:true ~cache_dir:timing_cache_dir ()
   in
   p_all2 "with a timing context, the warm run's routine computes the right values" got6w expected
     ~f:approx;

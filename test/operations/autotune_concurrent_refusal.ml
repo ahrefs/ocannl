@@ -15,6 +15,11 @@
    [Train.tune_placements]' arms do, and that span exits by an exception: the spawned domain's later
    turn, a whole search admitted and completed, says both the nested and the outer release happened.
 
+   The deferred form takes the same turn (gh-ocannl-1408): [Autotune.tune_deferred] started during
+   this domain's search is refused like [tune], and so is [Autotune.compile_deferred] of a search
+   the spawned domain finished beforehand -- the compile is the search's own, made later -- which is
+   then admitted on the later turn.
+
    Pinned to cc: both searches run on an explicit [Context.cpu ()]; the property is the search
    entry's, not a backend's. *)
 open Base
@@ -41,6 +46,13 @@ let tune ~report ctx comp =
   Autotune.with_uncontended_test_windows (fun () ->
       Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1 ~timing:Autotune.Isolated
         ~cache_dir:"" ~log:false ~progress:false
+        ~report:(fun r -> report := Some r)
+        ctx comp Ir.Indexing.Empty)
+
+let tune_deferred ~report ctx comp =
+  Autotune.with_uncontended_test_windows (fun () ->
+      Autotune.tune_deferred ~search:true ~beam_width:1 ~rounds:0 ~repeats:1
+        ~timing:Autotune.Isolated ~cache_dir:"" ~log:false ~progress:false
         ~report:(fun r -> report := Some r)
         ctx comp Ir.Indexing.Empty)
 
@@ -74,23 +86,50 @@ let () =
   let ctx_spawned = Context.cpu () in
   let main_id = (Stdlib.Domain.self () :> int) in
   let main_searching = signal () and spawned_tried = signal () and main_done = signal () in
+  let spawned_prepared = signal () in
   let spawned =
     Stdlib.Domain.spawn (fun () ->
         let self = (Stdlib.Domain.self () :> int) in
         let seam_calls = ref 0 and report = ref None in
+        (* A deferred search finished before this domain's search starts: its compile is made during
+           it. *)
+        let prepared =
+          Exn.protect
+            ~finally:(fun () -> raise_signal spawned_prepared)
+            ~f:(fun () -> tune_deferred ~report:(ref None) (Context.cpu ()) comp_spawned)
+        in
         Autotune.Seam.set Autotune.on_candidate_attempt (fun _ -> Int.incr seam_calls);
         await_signal main_searching;
-        let attempt =
+        let attempt, deferred_attempt, compile_attempt =
           Exn.protect
             ~finally:(fun () -> raise_signal spawned_tried)
             ~f:(fun () ->
-              match tune ~report ctx_spawned comp_spawned with
-              | ctx, _ ->
-                  Context.release ctx;
-                  Admitted
-              | exception Autotune.Concurrent_search { holder; caller } ->
-                  Refused { holder; caller }
-              | exception exn -> Failed (Exn.to_string exn))
+              let attempt =
+                match tune ~report ctx_spawned comp_spawned with
+                | ctx, _ ->
+                    Context.release ctx;
+                    Admitted
+                | exception Autotune.Concurrent_search { holder; caller } ->
+                    Refused { holder; caller }
+                | exception exn -> Failed (Exn.to_string exn)
+              in
+              let deferred_attempt =
+                match tune_deferred ~report ctx_spawned comp_spawned with
+                | _ -> Admitted
+                | exception Autotune.Concurrent_search { holder; caller } ->
+                    Refused { holder; caller }
+                | exception exn -> Failed (Exn.to_string exn)
+              in
+              let compile_attempt =
+                match Autotune.compile_deferred prepared with
+                | ctx, _ ->
+                    Context.release ctx;
+                    Admitted
+                | exception Autotune.Concurrent_search { holder; caller } ->
+                    Refused { holder; caller }
+                | exception exn -> Failed (Exn.to_string exn)
+              in
+              (attempt, deferred_attempt, compile_attempt))
         in
         let refused_seam_calls = !seam_calls and refused_report = Option.is_some !report in
         (* The later turn, once this domain's search has returned. *)
@@ -104,7 +143,21 @@ let () =
           | exception Autotune.Concurrent_search { holder; caller } -> Refused { holder; caller }
           | exception exn -> Failed (Exn.to_string exn)
         in
-        (self, attempt, refused_seam_calls, refused_report, later, !later_report))
+        let later_compile =
+          match Autotune.compile_deferred prepared with
+          | ctx, _ ->
+              Context.release ctx;
+              Admitted
+          | exception Autotune.Concurrent_search { holder; caller } -> Refused { holder; caller }
+          | exception exn -> Failed (Exn.to_string exn)
+        in
+        ( self,
+          attempt,
+          refused_seam_calls,
+          refused_report,
+          later,
+          !later_report,
+          (deferred_attempt, compile_attempt, later_compile) ))
   in
   let main_report = ref None in
   let first_attempt = ref true in
@@ -116,6 +169,7 @@ let () =
       raise_signal main_searching;
       raise_signal main_done)
     ~f:(fun () ->
+      await_signal spawned_prepared;
       ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun _label ->
         if !first_attempt then (
           first_attempt := false;
@@ -127,7 +181,13 @@ let () =
             Context.release ctx;
             raise Span_exit)
       with Span_exit -> ());
-  let spawned_id, attempt, refused_seam_calls, refused_report, later, later_report =
+  let ( spawned_id,
+        attempt,
+        refused_seam_calls,
+        refused_report,
+        later,
+        later_report,
+        (deferred_attempt, compile_attempt, later_compile) ) =
     Stdlib.Domain.join spawned
   in
   let describe = function
@@ -148,4 +208,13 @@ let () =
   p "the refused search called no seam" (refused_seam_calls = 0);
   p "the refused search delivered no report" (not refused_report);
   p "the spawned domain's later turn is admitted" (match later with Admitted -> true | _ -> false);
-  p "the spawned domain's later search completed" (completed later_report)
+  p "the spawned domain's later search completed" (completed later_report);
+  let refused_by_main = function
+    | Refused { holder; caller } -> holder = main_id && caller = spawned_id
+    | Admitted | Failed _ -> false
+  in
+  p "a deferred search started during this domain's is refused too"
+    (refused_by_main deferred_attempt);
+  p "so is the compile of a deferred search finished before it" (refused_by_main compile_attempt);
+  p "that compile is admitted on the later turn"
+    (match later_compile with Admitted -> true | _ -> false)

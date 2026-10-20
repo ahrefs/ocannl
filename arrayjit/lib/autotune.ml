@@ -39,6 +39,10 @@ type outcome =
   | Abandoned of abandonment
       (** A search its caller's [?abandon] rule stopped after its first timed candidates
           (gh-ocannl-1110). Not a failure: nothing was compiled for the caller. *)
+  | Lineage_refused of { caller_digest : string; timing_digest : string }
+      (** The [timing_ctx] lowers the routine to another program than the caller's context does
+          (gh-ocannl-1421): no schedule tuned there applies to the caller, so nothing is searched or
+          replayed and the untuned default ships. *)
 
 (* gh-ocannl-755: what a timed candidate's number is a measurement OF. [Isolated] times one launch
    followed by a host synchronization, so the number is the latency of a lone dispatch — the kernel
@@ -410,6 +414,7 @@ let outcome_name = function
   | Pre_search_failure _ -> "pre-search-failure"
   | Abandoned _ -> "abandoned"
   | Abandonment_replay _ -> "abandonment-replay"
+  | Lineage_refused _ -> "lineage-refused"
 
 (** The fatal failure that ended the call, from whichever of the two failing states it was. A
     projection over the outcome, not a re-derivation of it: "did this call fail" is a question that
@@ -417,7 +422,9 @@ let outcome_name = function
 let terminal_failure (r : report) =
   match r.outcome with
   | Search_died tf | Pre_search_failure tf -> Some tf
-  | Searched | Cache_replay | Abandonment_replay _ | Search_disabled | Abandoned _ -> None
+  | Searched | Cache_replay | Abandonment_replay _ | Search_disabled | Abandoned _
+  | Lineage_refused _ ->
+      None
 
 (* gh-ocannl-1110: the flip chain's early abandonment. *)
 exception Search_abandoned of abandonment
@@ -3175,8 +3182,16 @@ let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimiz
    context's lineage): link-time buffer allocation consults that fork, so placement mutations by
    schedule ops — fission's Local promotions above all — must land there or the allocator would miss
    buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the lineage
-   table anew. The traced store is copied from the base (schedule ops register their tiles in
-   it). *)
+   table anew. The traced store is copied from the base (schedule ops register their tiles in it).
+
+   gh-ocannl-1421: that is sound only while the fresh lowering is the base's program up to that
+   drift. Within the lineage the base was lowered in it is. A compile into ANOTHER lineage -- the
+   caller's, after a search on a [timing_ctx] -- can lower to another program: a node the timing
+   lineage materialized and the caller's leaves virtual is inlined there, so the base's code reads a
+   buffer the caller's placements never allocate. [tune] refuses that case up front
+   ([Lineage_refused]), comparing the two lineages' lowerings taken together, so both see the same
+   value bounds ([lineage_identity]); a comparison here, with a lowering taken after the timing
+   runs, could not tell drift from a lineage difference. *)
 let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
     ~provenance ctx comp bindings spec : compiled Outcome.outcome =
   let candidate = match label with Some l -> l | None -> spec_label spec in
@@ -5714,9 +5729,43 @@ let resolve_cache_dir ?cache_dir ~search () =
   (* A search-less [tune] replays only a cache someone asked for. *)
   if search || cache_dir_chosen then cache_dir else ""
 
-let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
-    ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings
-    =
+(* gh-ocannl-1421: how a lowering's code accesses each tensor node -- ["r"], ["w"], ["rw"], or ["-"]
+   for not at all. Stable under the drift between two lowerings of one lineage (folding a gather
+   guard removes no accessed node), and per node, so a caller can tag nodes with it inside a
+   canonically numbered key. *)
+let lineage_accesses (opt : LL.optimized) =
+  let table = Hashtbl.create (module Ir.Tnode) in
+  List.iter (LL.affine_accesses opt.LL.llc) ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
+      Hashtbl.update table a.a_tn ~f:(fun prev ->
+          let r, w = Option.value prev ~default:(false, false) in
+          if a.a_write then (r, true) else (true, w)));
+  fun tn ->
+    match Hashtbl.find table tn with
+    | None -> "-"
+    | Some (r, w) -> (if r then "r" else "") ^ if w then "w" else ""
+
+(* gh-ocannl-1421: the identity two lowerings of the routine, from two lineages, must share for a
+   schedule tuned on the one to apply to the other: the code, with loop binders canonically numbered
+   and every tensor node anchored to its actual identity -- the canonical form alone alpha-renames
+   nodes, so [u := x] against [u := y], or [u := x - y] against [u := y - x], would compare equal
+   (review rounds 6-7). Process-local (node ids): for comparing two lowerings in one call, never for
+   a persisted key. The two are lowered together, at the same moment: the code drifts between
+   lowerings of one lineage taken at different times (a gather guard folds once a compile has
+   settled its index tensor's bounds, so a lowering taken after the base compile folds what the base
+   kept), but two lowerings taken together see the same bounds. *)
+let lineage_identity ~static_indices (opt : LL.optimized) =
+  SC.digest
+    (SC.canonicalize_code ~static_indices ~node_tag:(fun tn -> "#" ^ Ir.Tnode.id tn) opt.LL.llc)
+
+(* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk is
+   already forced (it returns the routine [tune] compiled before reporting); with it
+   (gh-ocannl-1408, {!tune_deferred}) the search has reported, released everything it compiled, and
+   the thunk compiles the shipped schedule on first call. [substituted] is set when that compile
+   ships the untuned default in place of the schedule the report named (a winner or cache replay
+   that failed or degenerated), which a deferred caller ranking by the report must hear about. *)
+let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?repeats ?timing
+    ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report
+    ctx comp bindings : unit -> Context.t * Context.routine =
   (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
      pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
      schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
@@ -5831,17 +5880,22 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
     (Printf.sprintf "backend=%s device=%d search=%b beam=%d rounds=%d budget_s=%s" backend device
        search beam_width rounds
        (Option.value_map budget ~default:"none" ~f:(Printf.sprintf "%g")));
+  (* gh-ocannl-1408: set once a deferred call has delivered its report. The deferred compile runs
+     after that, and its failure paths ([raise_pre_search], [emit_partial_and_raise]) would
+     otherwise report a second time. *)
+  let sealed = ref false in
   (* Every report goes through here, exactly once per call on every path (gh-ocannl-550), so this is
      where a search's closing progress line is written: before the callback, which may raise. *)
   let emit_report (r : report) =
-    progress_line "search_done"
-      (Printf.sprintf
-         "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d failed=%d rounds=%d \
-          budget_cut=%b %s best_ms=%s best=%S"
-         (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
-         r.timings_unbatched r.candidates_failed r.rounds_run r.budget_cut (progress_costs ())
-         (progress_ms r.best_ms) r.best_label);
-    Option.iter report ~f:(fun f -> f r)
+    if not !sealed then (
+      progress_line "search_done"
+        (Printf.sprintf
+           "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d failed=%d rounds=%d \
+            budget_cut=%b %s best_ms=%s best=%S"
+           (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
+           r.timings_unbatched r.candidates_failed r.rounds_run r.budget_cut (progress_costs ())
+           (progress_ms r.best_ms) r.best_label);
+      Option.iter report ~f:(fun f -> f r))
   in
   (* [tune] reports exactly once per call, on every path (gh-ocannl-550). The failures that happen
      before (or instead of) the search proper — the base compile failing before its lowering is
@@ -5911,6 +5965,55 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         release_quietly ~what:"the routine of a failed completion report" (fst result);
         Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
+  (* gh-ocannl-1408: the deferred compile of a {!tune_deferred} call. The report has been delivered
+     and sealed, so the compile's own failure paths raise without a second one; the streams this
+     call ran under are re-entered, since the compile runs after the call's scope has closed; and
+     the compile happens at most once, a second call returning the same routine. *)
+  let deferred_compile compile =
+    sealed := true;
+    let log = log_enabled () and progress = progress_enabled () in
+    let compiled = ref None in
+    let outcome () =
+      match !compiled with
+      | Some (Ok result) -> result
+      | Some (Error (exn, backtrace)) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
+      | None -> invalid_arg "Autotune.compile_deferred: no outcome recorded"
+    in
+    fun () ->
+      if Option.is_some !compiled then outcome ()
+      else
+        (* The search's own compile, so it holds the search like the search did (gh-ocannl-1352) --
+           only where it runs: a memoized outcome is returned unguarded. A failure is kept too: the
+           compile runs once, and a caller catching its exception and asking again gets the same
+           exception, not a second attempt's side effects. *)
+        match
+          exclusive_search (fun () ->
+              (* Rechecked under the guard: another domain may have compiled between the read above
+                 and the acquisition. *)
+              if Option.is_none !compiled then
+                compiled :=
+                  Some
+                    (match with_streams ~log ~progress compile with
+                    | result -> Ok result
+                    | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())))
+        with
+        | () -> outcome ()
+        (* The guard refused before anything ran: not an outcome, so a later turn compiles. *)
+        | exception (Concurrent_search _ as exn) -> raise exn
+  in
+  (* The end of every path that ships a routine: [compile] produces it. Eagerly, it is compiled
+     first and reported after -- a report is a record of what the call achieved, and a compile that
+     raises reports its own failure instead (gh-ocannl-550). Deferred, the report comes first and
+     the compile is handed back. *)
+  let finish r compile =
+    if defer then (
+      emit_report r;
+      deferred_compile compile)
+    else
+      let result = compile () in
+      report_or_release r ~result;
+      Fn.const result
+  in
   let raise_pre_search ?base (failure : Outcome.failure) =
     !release_baseline_hook ();
     (match failure with
@@ -5940,13 +6043,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
   if (not search) && String.is_empty cache_dir then (
     logf
       "search disabled (autotune_search=false) and no chosen cache: compiling the untuned default";
-    (* Report AFTER the fallback compile: a report is a record of what this call achieved, and the
-       base report says the untuned default shipped. Emitting it first would leave a consumer
-       holding a clean, non-partial report for a call that then raised (Codex P2 on PR #291); a
-       compile that raises reports its own failure instead (gh-ocannl-550). *)
-    let result = compile_untuned_default () in
-    report_or_release base_report ~result;
-    result)
+    (* Report AFTER the fallback compile ([finish]): a report is a record of what this call
+       achieved, and the base report says the untuned default shipped. Emitting it first would leave
+       a consumer holding a clean, non-partial report for a call that then raised (Codex P2 on PR
+       #291); a compile that raises reports its own failure instead (gh-ocannl-550). *)
+    finish base_report (fun () -> compile_untuned_default ()))
   else
     let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
     (* With [timing_ctx], the search (candidate compiles and timing runs) happens against that
@@ -6052,6 +6153,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              break the exactly-once contract for direct [tune] callers. *)
           Seam.get on_candidate_attempt "baseline";
           base_capture := Some (opt, SC.canonicalize ~static_indices opt);
+
           if is_gpu then base_pristine := Some (scratch_of opt);
           [ opt ])
         ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
@@ -6153,7 +6255,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         ~provenance:Outcome.Candidate search_ctx comp bindings
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
-       base lowering as the search's candidates. *)
+       base lowering as the search's candidates, the caller's lineage lowering to it
+       ([Lineage_refused] below). *)
     let compile_spec_real ?label provenance =
       compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
         ~provenance ctx comp bindings
@@ -6227,9 +6330,43 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             (Outcome.Classified classified)
       | Some _ | None -> ()
     in
-    refuse_if_device_memory baseline_decline;
+    (* gh-ocannl-1421: a timing lineage that lowers the routine to another program than the caller's
+       can tune nothing the caller can take: every candidate, cached entry and winner derives from
+       the timing lineage's base lowering. Decided here, before the cache and the search, so the
+       call reports what it ships -- the untuned default, timed at nothing -- rather than a crown
+       that a refused winner compile would leave a placement A/B ranking (and recording) by. And
+       before the device-memory refusal below: that is the TIMING lineage's base refused, which says
+       nothing about the caller's untuned routine, the one thing a refused lineage ships. *)
+    let lineage_refusal =
+      Option.bind timing_ctx ~f:(fun tctx ->
+          let identity c =
+            lineage_identity ~static_indices (Context.lowered_for_decisions ?name c comp bindings)
+          in
+          match (identity ctx, identity tctx) with
+          | caller_digest, timing_digest when String.equal caller_digest timing_digest -> None
+          | caller_digest, timing_digest -> Some (caller_digest, timing_digest)
+          | exception exn when not (process_fatal_exn exn) ->
+              (* A lineage that cannot lower the routine fails the winner's and the untuned
+                 fallback's compiles alike: said now, not after a search that cannot ship. *)
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              raise_pre_search ~base:(census ())
+                (Outcome.Fatal
+                   {
+                     exn;
+                     backtrace;
+                     phase = Outcome.Transform;
+                     candidate = Some "lineage comparison";
+                     cause = None;
+                   })
+          | exception exn ->
+              (* A process-level failure propagates as it is, but not past the linked baseline. *)
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              !release_baseline_hook ();
+              Stdlib.Printexc.raise_with_backtrace exn backtrace)
+    in
+    if Option.is_none lineage_refusal then refuse_if_device_memory baseline_decline;
     let cached =
-      if use_cache then
+      if use_cache && Option.is_none lineage_refusal then
         match SC.lookup ~dir:cache_dir ~key with
         (* The numerics and codegen checks are belt-and-braces: [key] already carries both tags
            (gh-ocannl-568, gh-ocannl-572), so a regime-mismatched entry normally lives in a
@@ -6293,7 +6430,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                       release_baseline ();
                       Stdlib.Printexc.raise_with_backtrace exn backtrace
                 in
-                emit_report
+                let hit_report =
                   {
                     outcome = Cache_replay;
                     (* The entry's times are the storing search's, but the objective is this call's:
@@ -6381,8 +6518,39 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                       (match entry.SC.best_steps with
                       | Some t when same_search_shape t.SC.search_shape -> t.SC.steps
                       | Some _ | None -> []);
-                  };
-                Some (c.cctx, c.routine)
+                  }
+                in
+                if not defer then (
+                  emit_report hit_report;
+                  Some (Fn.const (c.cctx, c.routine)))
+                else (
+                  (* gh-ocannl-1408: the replay above validated the entry -- a stale one goes on to
+                     search, which only a compile can tell -- and supplied the emission census the
+                     report carries. Its routine is not kept: a deferred call leaves nothing
+                     resident, so it is compiled again, from the same entry, when the caller asks. A
+                     replay is deterministic, so the second compile is the first one's code; one
+                     that fails anyway ships the untuned default rather than a search, which has
+                     already been reported as not needed. *)
+                  release_quietly ~what:"the validating cache replay of a deferred call" c.cctx;
+                  emit_report hit_report;
+                  Some
+                    (deferred_compile (fun () ->
+                         progress_stage "cache_replay_compile";
+                         match compile_spec_real Outcome.Cache_replay spec with
+                         | Ok c when dispatchable ~is_gpu c.all_opts -> (c.cctx, c.routine)
+                         | Ok c ->
+                             release_quietly ~what:"a degenerate deferred cache replay" c.cctx;
+                             substituted := true;
+                             compile_untuned_default ~base:(census ()) ()
+                         | Error (Outcome.Classified classified) ->
+                             logf
+                               "the deferred cache replay FAILED (%s), compiling the untuned \
+                                default"
+                               (Outcome.detail_of_cause classified.cause);
+                             substituted := true;
+                             compile_untuned_default ~base:(census ()) ()
+                         | Error (Outcome.Fatal _ as failure) ->
+                             raise_pre_search ~base:(census ()) failure)))
             | Error (Outcome.Classified classified) ->
                 (* Stale or corrupt entry: fall through to a fresh search, whose store then
                    overwrites the entry. A reference the canonical form cannot resolve
@@ -6408,7 +6576,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
        measured it and a current rule that still rejects it. A weaker incumbent, changed margin,
        absent rule or changed sampling cannot inherit yesterday's verdict. *)
     let replayed_abandonment =
-      if use_cache && Option.is_none cached then
+      if use_cache && Option.is_none cached && Option.is_none lineage_refusal then
         Option.bind abandon ~f:(fun rule ->
             Option.bind (SC.lookup_abandonment ~dir:cache_dir ~key) ~f:(fun entry ->
                 if
@@ -6421,11 +6589,23 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 else None))
       else None
     in
-    match (cached, replayed_abandonment) with
-    | Some result, _ ->
+    match (lineage_refusal, cached, replayed_abandonment) with
+    | Some (caller_digest, timing_digest), _, _ ->
+        Stdio.eprintf
+          "autotune: WARNING: routine %S: the caller's context lowers it differently from the \
+           timing context (structural digest %s vs %s), so no schedule tuned there can ship into \
+           it: not searching, compiling the untuned default (gh-ocannl-1421)\n\
+           %!"
+          (Lazy.force routine_name) caller_digest timing_digest;
+        release_baseline ();
+        let reached =
+          { (census ()) with outcome = Lineage_refused { caller_digest; timing_digest } }
+        in
+        finish reached (fun () -> compile_untuned_default ~base:reached ())
+    | None, Some result, _ ->
         release_baseline ();
         result
-    | None, Some (ab, entry) ->
+    | None, None, Some (ab, entry) ->
         release_baseline ();
         emit_report
           {
@@ -6436,7 +6616,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             best_steps = entry.SC.trajectory.SC.steps;
           };
         raise (Search_abandoned ab)
-    | None, None when not search ->
+    | None, None, None when not search ->
         logf
           "search disabled (autotune_search=false) and no cache entry: compiling the untuned \
            default";
@@ -6445,10 +6625,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         (* After the compile, as in the no-cache branch above. The census the base compile already
            produced is carried whether this succeeds or fails. *)
         let reached = census () in
-        let result = compile_untuned_default ~base:reached () in
-        report_or_release reached ~result;
-        result
-    | None, None ->
+        finish reached (fun () -> compile_untuned_default ~base:reached ())
+    | None, None, None ->
         let seen = Hash_set.create (module String) in
         Hash_set.add seen base_digest;
         (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it a
@@ -6941,17 +7119,17 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              timing call for the trace's decisions (gh-ocannl-1199). *)
           let progress_phase = ref "seeds" in
           (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
-             are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
-             compile, and the enumerated count alone reads as coverage it does not have. Both
-             counters are taken HERE rather than off [seed_specs], so they cover the same population
-             by construction: the cross-segment recombination composite and the beam-expansion
-             candidates also reach [try_spec] without appearing in the seed list, and counting only
-             seeds in the denominator would let [mma_timed] exceed [mma_candidates] on a
-             multi-segment routine. *)
+         are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
+         compile, and the enumerated count alone reads as coverage it does not have. Both
+         counters are taken HERE rather than off [seed_specs], so they cover the same population
+         by construction: the cross-segment recombination composite and the beam-expansion
+         candidates also reach [try_spec] without appearing in the seed list, and counting only
+         seeds in the denominator would let [mma_timed] exceed [mma_candidates] on a
+         multi-segment routine. *)
           (* gh-ocannl-1138: how the last attempt that returned no timing ended, for the staffed
-             sweep: a refusal ([`Declined], a compile or run decline that wrote nothing) is retried
-             without its staff, and a dedup carries the time its code was already measured at, if
-             it was. *)
+         sweep: a refusal ([`Declined], a compile or run decline that wrote nothing) is retried
+         without its staff, and a dedup carries the time its code was already measured at, if
+         it was. *)
           let last_attempt = ref `Other in
           let try_spec spec =
             last_attempt := `Other;
@@ -7023,31 +7201,31 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     Hash_set.add seen c.digest_after;
                     match
                       (* The backend's own classifier decides whether a launch or sync failure is this
-                   candidate's fault: the driver error is all the evidence there is, and only the
-                   backend can read it. With the always-[None] classifier this used to pass, no
-                   backend could ever declare one, so every launch failure was fatal by phase
-                   default and there was nowhere for a backend to plug one in (gh-ocannl-536; the
-                   HIP scratch-overflow arm of gh-ocannl-533 is what fills this seam). The phase
-                   reaching the report is the tagged one inside [time_routine], so a report
-                   distinguishes a launch refusal from an asynchronous failure at sync.
+               candidate's fault: the driver error is all the evidence there is, and only the
+               backend can read it. With the always-[None] classifier this used to pass, no
+               backend could ever declare one, so every launch failure was fatal by phase
+               default and there was nowhere for a backend to plug one in (gh-ocannl-536; the
+               HIP scratch-overflow arm of gh-ocannl-533 is what fills this seam). The phase
+               reaching the report is the tagged one inside [time_routine], so a report
+               distinguishes a launch refusal from an asynchronous failure at sync.
 
-                   And from the third case, which is not the backend's to judge: [time_routine]'s
-                   pre-dispatch validation carries [Preflight] and is contained without asking the
-                   classifier (gh-ocannl-564). Tagged [Launch] it was fatal on every C backend, so a
-                   scratch context missing one of the caller's initializations condemned the search
-                   instead of declining a candidate. *)
+               And from the third case, which is not the backend's to judge: [time_routine]'s
+               pre-dispatch validation carries [Preflight] and is contained without asking the
+               classifier (gh-ocannl-564). Tagged [Launch] it was fatal on every C backend, so a
+               scratch context missing one of the caller's initializations condemned the search
+               instead of declining a candidate. *)
                       (* The lineage-wide validation is OUTSIDE the boundary (gh-ocannl-569): a poisoned
-                   lineage, an uninitialized input and an unexecuted dependency are properties of
-                   the context and the computation, so a genuine one fails every candidate of every
-                   arm at once. Contained as a decline it is silent — on a backend whose serial
-                   baseline is not dispatched (every GPU backend) every candidate declines for the
-                   one reason, nothing is timed, and the search ships the untuned default out of an
-                   unusable lineage under a report that says it completed. It reaches the caller
-                   instead, which is the only party that can fix it.
+               lineage, an uninitialized input and an unexecuted dependency are properties of
+               the context and the computation, so a genuine one fails every candidate of every
+               arm at once. Contained as a decline it is silent — on a backend whose serial
+               baseline is not dispatched (every GPU backend) every candidate declines for the
+               one reason, nothing is timed, and the search ships the untuned default out of an
+               unusable lineage under a report that says it completed. It reaches the caller
+               instead, which is the only party that can fix it.
 
-                   Tagged, though not contained: the tag carries no boundary here, it only labels
-                   the phase so the fallback handler at the end of [search] reports a pre-dispatch
-                   validation failure as [Preflight] rather than as its [Transform] default. *)
+               Tagged, though not contained: the tag carries no boundary here, it only labels
+               the phase so the fallback handler at the end of [search] reports a pre-dispatch
+               validation failure as [Preflight] rather than as its [Transform] default. *)
                       Outcome.tag Outcome.Preflight (fun () ->
                           Context.check_lineage_runnable c.cctx c.routine);
                       Outcome.protect ~classify_backend:(Context.failure_classifier c.cctx)
@@ -8337,13 +8515,16 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               best_steps = List.rev !best_steps;
             }
           in
-          let result =
+          (* What ships, as the compile that produces it: run here unless the call is deferred
+             (gh-ocannl-1408). Every branch sweeps the candidates first, so a deferred call leaves
+             nothing of its search resident. *)
+          let ship =
             if floor_unmeasured && not nothing_timed then (
               logf
                 "the budget cut the search before it measured the untuned default: shipping the \
                  untuned default compile (gh-ocannl-1409)";
               release_all_candidates ();
-              untuned_default_or_raise ())
+              untuned_default_or_raise)
             else if nothing_timed then (
               (* Returning the incumbent here would hand the caller the very serial routine this
                  search refused to dispatch (gh-ocannl-532) — slower than not tuning at all, and on
@@ -8351,7 +8532,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                  would have compiled without the tuner, the seeded plan where there is one. *)
               logf "nothing was timed: falling back to the untuned default compile (gh-ocannl-532)";
               release_all_candidates ();
-              untuned_default_or_raise ())
+              untuned_default_or_raise)
             else
               (* [nothing_timed] is false, so the beam holds a timed winner. *)
               let best_c = Option.value_exn best_c ~message:timed_winner_exists in
@@ -8376,29 +8557,34 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                  schedule — so whatever the search still owns goes before the compile that
                  reproduces it (gh-ocannl-550). *)
               release_all_candidates ();
-              progress_stage "winner_compile";
-              match compile_spec_real ~label Outcome.Candidate spec with
-              | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
-                  (* Completes the invariant rather than fixing an observed bug: the winner was
-                     timed, so it was dispatchable when measured, and the replay is digest-guarded.
-                     But this is the last of the three ways [tune] hands back a routine, and none of
-                     them may return an unparallelized GPU routine (gh-ocannl-532). The default
-                     compile is the same fallback a failed replay takes. *)
-                  logf "winner replay produced an unparallelized routine, falling back: %s" label;
-                  (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
-                     memory. Same one-liner as the rejected cache replay above; the pre-replay sweep
-                     could not cover this context, which did not exist yet. *)
-                  release_quietly ~what:"the rejected winner replay" c.cctx;
-                  untuned_default_or_raise ()
-              | Ok c ->
-                  logf "winner replay ok: %s" label;
-                  (c.cctx, c.routine)
-              | Error (Outcome.Classified classified) ->
-                  logf "winner replay FAILED (%s), falling back to the default compile: %s" label
-                    (Outcome.detail_of_cause classified.cause);
-                  untuned_default_or_raise ()
-              | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+              fun () ->
+                progress_stage "winner_compile";
+                match compile_spec_real ~label Outcome.Candidate spec with
+                | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
+                    (* Completes the invariant rather than fixing an observed bug: the winner was
+                       timed, so it was dispatchable when measured, and the replay is
+                       digest-guarded. But this is the last of the three ways [tune] hands back a
+                       routine, and none of them may return an unparallelized GPU routine
+                       (gh-ocannl-532). The default compile is the same fallback a failed replay
+                       takes. *)
+                    logf "winner replay produced an unparallelized routine, falling back: %s" label;
+                    (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
+                       memory. Same one-liner as the rejected cache replay above; the pre-replay
+                       sweep could not cover this context, which did not exist yet. *)
+                    release_quietly ~what:"the rejected winner replay" c.cctx;
+                    substituted := true;
+                    untuned_default_or_raise ()
+                | Ok c ->
+                    logf "winner replay ok: %s" label;
+                    (c.cctx, c.routine)
+                | Error (Outcome.Classified classified) ->
+                    logf "winner replay FAILED (%s), falling back to the default compile: %s" label
+                      (Outcome.detail_of_cause classified.cause);
+                    substituted := true;
+                    untuned_default_or_raise ()
+                | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
           in
+          let result = if defer then ship else Fn.const (ship ()) in
           (* The report describes the routine returned (Codex P1 on PR #1234): a caller ranking arms
              by [best_ms] must not credit this one with a candidate it discarded, and the untuned
              default it ships was never timed -- the nothing-timed report's shape. *)
@@ -8465,8 +8651,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
            keeps rooting them (gh-ocannl-550) — one full winner's footprint per aborted report,
            which for a caller that retries would accumulate exactly like the candidates used to. The
            exit sweep above deliberately kept this one; nothing is keeping it now. *)
-        report_or_release completed_report ~result;
-        result
+        if defer then (
+          emit_report completed_report;
+          deferred_compile result)
+        else (
+          report_or_release completed_report ~result:(result ());
+          result)
 
 (* [?log] and [?progress] scope [autotune_log] and [autotune_progress] to this call: every
    diagnostic the search emits, the untuned control it gates, the cache-hit and fallback lines, and
@@ -8476,6 +8666,25 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     bindings =
   exclusive_search @@ fun () ->
   with_streams ?log ?progress (fun () ->
-      tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
-        ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp
-        bindings)
+      tune_in_stream_scope ~defer:false ~substituted:(ref false) ?name ?search ?beam_width ?rounds
+        ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites
+        ?timing_ctx ?abandon ?report ctx comp bindings ())
+
+type deferred = { compile : unit -> Context.t * Context.routine; substituted : bool ref }
+
+let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
+    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
+    bindings =
+  let substituted = ref false in
+  exclusive_search @@ fun () ->
+  with_streams ?log ?progress (fun () ->
+      {
+        substituted;
+        compile =
+          tune_in_stream_scope ~defer:true ~substituted ?name ?search ?beam_width ?rounds ?repeats
+            ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx
+            ?abandon ?report ctx comp bindings;
+      })
+
+let compile_deferred d = d.compile ()
+let shipped_substitute d = !(d.substituted)

@@ -476,8 +476,8 @@ val tune_placements :
     stays cached, and the failed arm's own report — [Autotune.Search_died], carrying the failure —
     still reaches [report] in position, so the failure is recorded rather than downgraded to "that
     arm merely lost". A failed arm's [best_ms] is deliberately {e not} shippable and not compared:
-    {!Autotune.tune} raised, so no routine was compiled from [ctx] for it. Only when every arm fails
-    does [tune_placements] propagate, with the first failure's original backtrace — with two
+    its search raised, so there is no routine to compile from [ctx] for it. Only when every arm
+    fails does [tune_placements] propagate, with the first failure's original backtrace — with two
     exceptions that are not the arm's to absorb and propagate at once: process-level failures
     ([Out_of_memory], [Sys.Break]) and compiler invariant violations ([Assert_failure],
     [Stack_overflow]), the same classes {!Ir.Schedule_outcome.classify_raw} refuses to classify. A
@@ -492,6 +492,17 @@ val tune_placements :
     carve-out: an argument-precondition violation (an incompatible [timing_ctx]) is detected before
     the call reaches any phase, so it reports nothing and propagates. Both arms are given the same
     contexts, so both raise it; there is no surviving arm to misattribute.
+
+    gh-ocannl-1408: every arm and flip searches through {!Autotune.tune_deferred}, so a search
+    leaves nothing it compiled on the device, and only the placement that ships is compiled from
+    [ctx] -- once, after every search. Arm A's routine is therefore not resident while arm B
+    searches: on a step over half the device it used to be, and arm B was refused at its base
+    compile, making every such A/B single-arm. A shipping compile that fails, or that ships the
+    untuned default in place of the reported schedule ({!Autotune.shipped_substitute}), falls back
+    to the next completed result -- the other arm, or after a flip refinement the A/B winner and
+    then the other arm -- which ships unrecorded; under a forced arm a failure propagates and a
+    substitute ships unrecorded. The replayed decision's one search compiles at once, so a replay
+    that does not compile is a failed replay like any other.
 
     The arms differ in which candidates {e exist}, not only in how they rank: a tensorized candidate
     is seeded only when the matmul site's operand and destination storage precisions resolve to a
@@ -630,6 +641,16 @@ val placement_outcome_digest :
     in the lineage the arms are searched in -- [timing_ctx] when given, else [ctx]. Exposed so a
     test can assert the recomputation agrees with the digest the shipped search tuned
     (gh-ocannl-1022). *)
+
+val placement_evidence_clean : Autotune.report -> bool
+(** Whether a search {!tune_placements} observed is evidence a recorded placement decision may rest
+    on (gh-ocannl-786's rule): it completed, with no contention-refused window, uncut by its budget
+    (gh-ocannl-1409), and measured something. A {!Autotune.Lineage_refused} search measured nothing
+    but spoils nothing either (gh-ocannl-1421): its placement can never ship into the caller under
+    this decision problem, whose key carries how both lineages' lowerings access each node
+    ({!placement_problem}), so the decision does not skip a competitor a later process could measure
+    -- up to lineage pairs that differ only in inherited arithmetic, which share a key. The
+    recorder's own predicate, exposed so a test judges evidence exactly as the recorder does. *)
 
 (** {2 Printing} *)
 

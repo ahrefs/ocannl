@@ -937,6 +937,16 @@ type outcome =
           {!tune} raised {!Search_abandoned}. Not a failure: the counters hold the work it reached,
           [best_ms] is a measurement of the search context, nothing was compiled for the caller and
           clean measured prefixes are cached for a later {!Abandonment_replay}. *)
+  | Lineage_refused of { caller_digest : string; timing_digest : string }
+      (** gh-ocannl-1421: the [timing_ctx] lowers this routine to another program than the caller's
+          context does -- the {!lineage_identity} digests of the two lowerings, taken together and
+          carried here, differ, as when the timing lineage materializes a node the caller's leaves
+          virtual. Every candidate derives from the timing lineage's base lowering, so no schedule
+          tuned or cached there can be compiled into the caller: nothing is searched or replayed,
+          and the caller gets the untuned default compile, as under {!Search_disabled}. Every time
+          is [infinity], so a caller ranking searches ([Train.tune_placements]) ranks it last; it is
+          no failure. Decided before the cache is consulted, from an analysis-only lowering of the
+          caller's context ({!Context.lowered_for_decisions}). *)
 
 type timing_mode =
   | Isolated
@@ -2994,6 +3004,76 @@ val tune :
     it, and one without a budget searches in full and overwrites it. The budget's value is part of
     the search trajectory's identity, so a cut search's [best_steps] serve early stopping only under
     the same budget. *)
+
+type deferred
+(** The outcome of a {!tune_deferred} search: the compile of what it ships, not yet run. Holds no
+    device resources. *)
+
+val tune_deferred :
+  ?name:string ->
+  ?search:bool ->
+  ?beam_width:int ->
+  ?rounds:int ->
+  ?repeats:int ->
+  ?timing:timing_mode ->
+  ?seed_block_sizes:int list ->
+  ?cache_dir:string ->
+  ?keep_fraction:float ->
+  ?max_split_reduce_sites:int ->
+  ?timing_ctx:Context.t ->
+  ?abandon:abandon_rule ->
+  ?log:bool ->
+  ?progress:bool ->
+  ?report:(report -> unit) ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  deferred
+(** {!tune}, except that the routine it ships is not compiled: {!compile_deferred} compiles it
+    (gh-ocannl-1408). The search, its cache store and its report happen here, with {!tune}'s
+    arguments, failures and reporting contract; then nothing the call compiled is left resident --
+    every candidate, the baseline and a validating cache replay are released -- so a caller running
+    several searches before choosing one, as [Train.tune_placements] does with its placement arms
+    and flips, holds no searched routine while the next one searches, and compiles only the one that
+    ships.
+
+    The difference from {!tune} is the order of the report and the compile: the report is delivered
+    before the compile, so a failure of {!compile_deferred} raises without a report of its own -- it
+    comes after the search has reported its outcome. What the compile runs is what {!tune} would
+    have: the winner's saved schedule replayed from [ctx] (falling back to the untuned default where
+    {!tune}'s winner replay would), the untuned default where the search shipped that, and for a
+    cache hit the entry's replay -- compiled twice in all, since the first replay (the one that
+    tells a stale entry from a sound one, and supplies the report's emission census) is released. *)
+
+val lineage_identity :
+  static_indices:Ir.Indexing.static_symbol list -> Ir.Low_level.optimized -> string
+(** gh-ocannl-1421: what a lowering of the routine in one lineage must share with one in another for
+    a schedule tuned on the first to apply to the second: its code, loop binders canonically
+    numbered and every tensor node anchored to its actual identity (the canonical form alone
+    alpha-renames nodes, so [u := x - y] and [u := y - x] would match). Process-local, by node ids:
+    {!tune} compares the caller's and the timing context's lowerings, taken together so they see the
+    same tensor-node value bounds -- a lowering taken after a compile has settled an index tensor's
+    bounds folds a gather guard an earlier one kept -- and refuses on a difference
+    ({!Lineage_refused}). *)
+
+val lineage_accesses : Ir.Low_level.optimized -> Ir.Tnode.t -> string
+(** How the lowering's code accesses the node: ["r"], ["w"], ["rw"], or ["-"] for not at all. Stable
+    under the bounds drift, and per node, so [Train.placement_problem] tags each node with it inside
+    its canonically numbered (process-independent) key. *)
+
+val compile_deferred : deferred -> Context.t * Context.routine
+(** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]
+    that call ran under, and like {!tune_deferred} itself inside {!exclusive_search} -- the first
+    call only, which compiles; a later one returns the memoized outcome unguarded. At most once: a
+    second call returns the same context and routine, or raises the same exception. A [deferred]
+    dropped without this call costs nothing on the device. *)
+
+val shipped_substitute : deferred -> bool
+(** Whether {!compile_deferred} shipped the untuned default IN PLACE of the schedule the call's
+    report named -- the winner's or the cache entry's replay failed or degenerated, the fallbacks
+    {!tune} takes too. The report, delivered before the compile, still describes that schedule, so a
+    caller that ranked or recorded by it reads this before relying on the routine: what it got was
+    never measured. [false] before the compile. *)
 
 val budget_setting : unit -> float option
 (** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
