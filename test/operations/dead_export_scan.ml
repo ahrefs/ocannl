@@ -217,7 +217,6 @@ let exempt_zero_reference_exports =
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";
     "Tnode.validate_padded_numel_contract";
-    "Utils.accessed_global_args";
     "Utils.artifacts_subdir";
     "Utils.captured_log_processors";
     "Utils.config_table_of_lines";
@@ -347,7 +346,6 @@ let exempt_unmentioned_types =
     "Utils.config_source";
     "Utils.env_var_class";
     "Utils.requirement";
-    "Utils.settings";
   ]
 
 let require_implementations ~fail implementations =

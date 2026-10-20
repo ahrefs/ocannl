@@ -85,6 +85,7 @@ arrayjit/test/test_vectorized_codegen.expected [c] markers c-align-attr c-decl-b
 arrayjit/test/test_zero_out_codegen.expected [c] markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast
 test/einsum/inline_permuted_view-c_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
 test/einsum/test_cse-cse_d_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
+test/operations/cache_key_agreement.expected [derived] beside test/operations/cache_key_agreement.ml
 test/operations/canonical_render.expected [ll] markers ll-assign
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml
@@ -143,6 +144,7 @@ test/operations/accum_width.ml
     "= single_to_bfloat16(v"
     "Vectorized reduction rendering"
     "single_to_bfloat16((bfloat16_to_single("
+test/operations/cache_key_agreement.ml
 test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
     "[b0,]:=0.;}"

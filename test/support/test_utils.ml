@@ -16,6 +16,10 @@ module Config_key_scan = Config_key_scan
 module Lifecycle_scan = Lifecycle_scan
 module Dune_stanza_scan = Dune_stanza_scan
 
+module Config_dep_resolution = Config_dep_resolution
+(** Which configuration each test-running site's process reads, and whether its dependencies name
+    it: [config_dep_completeness]'s resolution, over a tree handed in as data (gh-ocannl-603). *)
+
 (* Which backends a dune argv can reach a stanza naming (gh-ocannl-1004, gh-ocannl-1066): the
    reachability half of tools/batch-backends.sh's resolution of a batch's backends. *)
 module Slot_kind = Slot_kind

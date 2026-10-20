@@ -72,6 +72,7 @@
   scan_argv
   scan_floors
   dune_stanza_scan
+  config_dep_resolution
   lifecycle_scan
   slot_kind
   verdict_callee

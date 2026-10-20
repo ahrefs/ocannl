@@ -5149,6 +5149,24 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-596: every config key's classification agrees with what flipping it does to the cache
+; key -- the substance behind digest_completeness's shape checks. Its argument is the source the
+; settings-borne keys are derived from.
+
+(test
+ (name cache_key_agreement)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (modules cache_key_agreement)
+ (action
+  (run %{test} %{dep:../../arrayjit/lib/utils.ml}))
+ (libraries base ocannl stdio unix fresh_process test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name fission_equivalence)
  (package neural_nets_lib)

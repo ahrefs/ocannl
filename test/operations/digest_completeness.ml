@@ -22,7 +22,11 @@
    below so that a diff shows when one changes. One edge of them is (gh-ocannl-1331): the
    search-shaping class keys [Autotune.tune]'s cached trajectory, so each of its keys must be read
    within [tune]'s static reach, and each key of the two classes that left that identity because no
-   [tune] call reads them (placement-shaping, untimed-model) must not be -- check 4. *)
+   [tune] call reads them (placement-shaping, untimed-model) must not be -- check 4.
+
+   Whether a classification is TRUE of the cache key -- a [Keyed] key moves its own component, no
+   other key is read while the key is computed -- is [cache_key_agreement]'s sweep (gh-ocannl-596),
+   which needs a backend this scan does not link. *)
 
 open Base
 open Stdio

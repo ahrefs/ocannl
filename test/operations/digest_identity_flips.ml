@@ -12,7 +12,9 @@
 
    The issue's own caution applies: flips are calibration, not the mechanism. Absence of change is
    weak evidence in general, so this covers a handful of representatives rather than every key, and
-   the declarative registry stays the invariant. *)
+   the declarative registry stays the invariant. The cache-key half of the question is swept over
+   every key by [cache_key_agreement] (gh-ocannl-596); what stays here is the digest half, which
+   needs a compile per flip. *)
 
 open Base
 open Ocannl
