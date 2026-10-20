@@ -313,35 +313,38 @@ type optop =
           no hardware level and once for every one, since which hardware levels a backend serializes
           is code generation's knowledge — where the two answers differ the op is rejected); and the
           tile narrows once per execution of [over], so where one execution of [over] covers a loop
-          of that program — [over] is that loop, or the outer half of a [Split] of a loop that
-          covers it, by a record {!apply} keeps of its own [Split]s — the serial rendering must
-          localize the write at that loop. The inner half of such a [Split] covers only part of it
-          per execution, so its tile is at storage: wide, it would narrow once per outer iteration,
-          where the serial rendering narrows once per execution of the split loop. A loop any other
-          op minted carries no record and is judged by the decision alone. A widened scope-form
-          update is re-keyed to the tile. So a [Stage] applied by an EARLIER [apply] is part of the
-          program this one judges: its loads are sibling statements of the reduction, which code
-          generation does not localize, and the tile stays at storage. Likewise sibling statements
-          of any kind, a reduction level the cell varies under, a non-reduction or mixed-operator
-          recurrence, an RNG-bearing contribution and routine logging all get a storage-precision
-          tile, which code generation renders exactly as it would [target], so the narrowing points
-          do not move. After all ops, and before the finalization passes force its precision,
-          {!apply} re-checks each wide tile against the program the ops left
-          ({!privatized_tile_widens}) and falls it back to storage precision where a later op left
-          an accumulation the decision does not widen ({!privatize_fallbacks}); the finalized
-          program is judged once more, and a tile failing there is refused. The fallback is a safety
-          net, not a path any compilable program takes: index-rewriting ops map the update and its
-          self-read alike, the materializing [Unroll] and [Partition] mint exactly the scope grammar
-          the decision reads back, and no op rewrites a contribution to read the tile — the only
-          sequences that trip it put a hardware-typed loop ([Retype]) or a tensor-node write
-          ([Stage]'s loads) into such a minted scope, which compilation refuses (a hardware loop in
-          a scope body is in no kernel's hardware-axis table, and [Low_level.validate_parallel]
-          rejects it; [Low_level.validate_scope_bodies] rejects the write). A [target] whose storage
-          is already its residency (f32, f64) is unaffected by all of this. A hardware-typed loop
-          [target]'s cell does not mention, between [over] and the update, is rejected: it would
-          split the accumulation across threads. Any other admissible value is an explicit numerics
-          choice of the schedule, e.g. the storage precision reproduces per-step narrowing. Part of
-          the schedule's identity (the cache saves it). *)
+          of that program — [over] is that loop, the outer half of a [Split] of a loop that covers
+          it, or the loop a [Coalesce] merged from an outer loop that covers it, by a record
+          {!apply} keeps of its own [Split]s, [Coalesce]s and [Partition]s — the serial rendering
+          must localize the write at that loop. The inner half of such a [Split], and a segment of a
+          [Partition] of such a loop, cover only part of it per execution, so a tile over either is
+          at storage: wide, it would narrow once per execution of that part, where the serial
+          rendering narrows once per execution of the whole loop. A loop any other op minted, or one
+          minted from a loop with no record, carries no record and is judged by the decision alone.
+          A widened scope-form update is re-keyed to the tile. So a [Stage] applied by an EARLIER
+          [apply] is part of the program this one judges: its loads are sibling statements of the
+          reduction, which code generation does not localize, and the tile stays at storage.
+          Likewise sibling statements of any kind, a reduction level the cell varies under, a
+          non-reduction or mixed-operator recurrence, an RNG-bearing contribution and routine
+          logging all get a storage-precision tile, which code generation renders exactly as it
+          would [target], so the narrowing points do not move. After all ops, and before the
+          finalization passes force its precision, {!apply} re-checks each wide tile against the
+          program the ops left ({!privatized_tile_widens}) and falls it back to storage precision
+          where a later op left an accumulation the decision does not widen
+          ({!privatize_fallbacks}); the finalized program is judged once more, and a tile failing
+          there is refused. The fallback is a safety net, not a path any compilable program takes:
+          index-rewriting ops map the update and its self-read alike, the materializing [Unroll] and
+          [Partition] mint exactly the scope grammar the decision reads back, and no op rewrites a
+          contribution to read the tile — the only sequences that trip it put a hardware-typed loop
+          ([Retype]) or a tensor-node write ([Stage]'s loads) into such a minted scope, which
+          compilation refuses (a hardware loop in a scope body is in no kernel's hardware-axis
+          table, and [Low_level.validate_parallel] rejects it; [Low_level.validate_scope_bodies]
+          rejects the write). A [target] whose storage is already its residency (f32, f64) is
+          unaffected by all of this. A hardware-typed loop [target]'s cell does not mention, between
+          [over] and the update, is rejected: it would split the accumulation across threads. Any
+          other admissible value is an explicit numerics choice of the schedule, e.g. the storage
+          precision reproduces per-step narrowing. Part of the schedule's identity (the cache saves
+          it). *)
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
       (** Expand the unique [Zero_out tn] statement into an ordinary loop nest over the supplied
           symbols (one per axis of [tn]'s padded dims; see {!expand_zero}). Whole-node [Zero_out] of

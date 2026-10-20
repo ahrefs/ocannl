@@ -2380,22 +2380,24 @@ let privatize_index_vectors_refusal target =
    once per execution of [over]. *)
 type loop_origin =
   | Covers of Indexing.symbol
-      (** Every iteration of this loop of the entry program: the loop itself, or the OUTER half of a
+      (** Every iteration of this loop of the entry program: the loop itself, the OUTER half of a
           [Split] of a loop that covers it — the outer loop runs the whole original range, with the
-          inner half nested inside it. *)
+          inner half nested inside it — or the loop a [Coalesce] merged from an outer loop that
+          covers it, whose one execution runs every iteration of that outer loop. *)
   | Part
       (** Only part of the iterations of a loop of the entry program, per execution: the INNER half
-          of a [Split] of a loop with a known origin. *)
+          of a [Split] of a loop with a known origin, or a segment of a [Partition] of one. *)
 
 (* The state one {!apply_typed} carries across its ops: the program the schedule started from
    ([Privatize] judges its tile width there, gh-ocannl-1151), the wide tiles its [Privatize]s minted
-   (re-checked after the ops), and the origin of each loop its [Split]s minted. A loop minted by any
-   other op has no record. *)
+   (re-checked after the ops), and the origin of each loop its [Split]s, [Coalesce]s and
+   [Partition]s minted ([Unroll] and [Pad] mint no binder). A loop minted by any other op has no
+   record. *)
 type application = {
   entry : Low_level.t;
   entry_loops : Affine.Loop_ranges.t Lazy.t;
   wide_tiles : (Tn.t * Tn.t) list ref;
-  split_origins : loop_origin Map.M(Indexing.Symbol).t ref;
+  minted_origins : loop_origin Map.M(Indexing.Symbol).t ref;
 }
 
 let start_application entry =
@@ -2403,23 +2405,37 @@ let start_application entry =
     entry;
     entry_loops = lazy (Low_level.loop_ranges entry);
     wide_tiles = ref [];
-    split_origins = ref (Map.empty (module Indexing.Symbol));
+    minted_origins = ref (Map.empty (module Indexing.Symbol));
   }
 
 let loop_origin app sym =
   if Affine.Loop_ranges.mem (Lazy.force app.entry_loops) sym then Some (Covers sym)
-  else Map.find !(app.split_origins) sym
+  else Map.find !(app.minted_origins) sym
 
-(* Record the halves of a [Split] of [axis]. Only a loop whose own origin is known passes one on: a
-   split of a loop another op minted keeps no record, like that loop. *)
-let record_split app ~axis ~outer_index ~inner_index =
+(* Record the origins of the loops an op minted from the loop [axis]: [minted origin] lists each new
+   loop with its origin given [axis]'s. Only a loop whose own origin is known passes one on: a loop
+   minted from a loop with no record keeps none, like that loop. *)
+let record_minted app ~axis minted =
   match loop_origin app axis with
   | None -> ()
   | Some origin ->
-      app.split_origins :=
-        Map.set
-          (Map.set !(app.split_origins) ~key:outer_index ~data:origin)
-          ~key:inner_index ~data:Part
+      app.minted_origins :=
+        List.fold (minted origin) ~init:!(app.minted_origins) ~f:(fun m (key, data) ->
+            Map.set m ~key ~data)
+
+(* The halves of a [Split]: the outer covers what [axis] covered, the inner only part of it. *)
+let record_split app ~axis ~outer_index ~inner_index =
+  record_minted app ~axis (fun origin -> [ (outer_index, origin); (inner_index, Part) ])
+
+(* The loop a [Coalesce] merged: one execution runs every iteration of [outer] (and of the inner
+   loop within each), so it covers whatever [outer] covered. *)
+let record_coalesce app ~outer ~merged =
+  record_minted app ~axis:outer (fun origin -> [ (merged, origin) ])
+
+(* The segments of a [Partition]: each runs only part of [axis]'s range — at least two segments, as
+   the breakpoints are non-empty and strictly inside it. *)
+let record_partition app ~axis ~segment_indices =
+  record_minted app ~axis (fun _ -> List.map segment_indices ~f:(fun s -> (s, Part)))
 
 let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_level.optimized =
   let entry = app.entry in
@@ -2826,10 +2842,11 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
             in
             (* The tile narrows once per execution of [over], which matches the serial rendering
                only where one execution of [over] covers exactly the level localizing the write:
-               [over] is that loop of [entry], or the outer half of a [Split] of it. The inner half
-               of a split narrows once per outer iteration, where the serial rendering narrows once
-               per execution of the split loop, so its tile stays at storage. A loop another op
-               minted carries no record and is judged by the decision alone. *)
+               [over] is that loop of [entry], the outer half of a [Split] of it, or the loop a
+               [Coalesce] merged from it as the outer of the pair. The inner half of a split, or a
+               segment of a [Partition], narrows once per execution of that part, where the serial
+               rendering narrows once per execution of the whole loop, so its tile stays at storage.
+               A loop another op minted carries no record and is judged by the decision alone. *)
             let localizes_over =
               match loop_origin app over with
               | Some (Covers level) ->
@@ -4789,7 +4806,15 @@ let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optim
       let llc = apply_op opt.Low_level.llc op in
       record_split app ~axis ~outer_index ~inner_index;
       { opt with llc }
-  | (Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _) as op ->
+  | Coalesce { outer; merged; _ } ->
+      let llc = apply_op opt.Low_level.llc op in
+      record_coalesce app ~outer ~merged;
+      { opt with llc }
+  | Partition { axis; segment_indices; _ } ->
+      let llc = apply_op opt.Low_level.llc op in
+      record_partition app ~axis ~segment_indices;
+      { opt with llc }
+  | (Swap _ | Retype _ | Unroll _ | Pad _ | Expand_zero _) as op ->
       { opt with llc = apply_op opt.Low_level.llc op }
 
 (* One op applied on its own, outside {!apply_typed}: the legality probes and the zero-expansion

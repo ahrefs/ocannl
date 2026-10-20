@@ -24,7 +24,13 @@
    that loop does (258, on an f32 tile). The inner half narrows once per outer iteration -- 260,
    matching neither the entry program (258) nor the split schedule without [Privatize] (256) -- so
    its tile stays at storage and reproduces the latter; without the record it widened. So does the
-   outer half of a split of a loop INSIDE the localizing level. *)
+   outer half of a split of a loop INSIDE the localizing level.
+
+   3. Provenance for loops a [Coalesce] or a [Partition] mints. The loop a [Coalesce] merges from
+   the localizing loop and the one inside it covers that loop, and so does the outer half of a
+   [Split] of it (258, on an f32 tile); the inner half of that [Split] covers only part of it, and
+   keeps storage (256). A segment of a [Partition] of the localizing loop runs only part of it, and
+   keeps storage too (256). Without the record both storage legs widened (260 and 260). *)
 
 open Base
 module Tn = Ir.Tnode
@@ -92,6 +98,19 @@ let claim_split_inner =
 let claim_split_inside =
   "a Privatize over the outer half of a Split of a loop inside the localizing level keeps a bf16 \
    storage tile and the schedule's own narrowing (256, as without Privatize)"
+
+let claim_coalesce =
+  "a Privatize over the loop a Coalesce merged from the localizing loop and the loop inside it, \
+   and one over the outer half of a Split of that merged loop, widen like the localizing loop (258 \
+   with the serial rendering, on an f32 tile)"
+
+let claim_coalesce_inner =
+  "a Privatize over the inner half of that Split of the merged loop keeps a bf16 storage tile and \
+   the split schedule's own narrowing (256, as without Privatize)"
+
+let claim_partition =
+  "a Privatize over a segment of a Partition of the localizing loop keeps a bf16 storage tile and \
+   the partitioned schedule's own narrowing (256, as without Privatize)"
 
 (* === The final re-check === *)
 
@@ -360,9 +379,86 @@ let provenance_legs () =
     && List.equal Float.equal inside inside_twin
     && only_prec bf16 inside_llc)
 
+(* === Provenance for Coalesce- and Partition-minted loops === *)
+
+let minted_legs () =
+  (* [i { k { m { acc[i] += x[i, k, m] } } }] with [x] laid out as [build_ik]'s: coalescing [k] and
+     [m] gives [build_ik]'s [k] loop over the same cells in the same order, so the legs reproduce
+     the split legs' values. *)
+  let run_ikm name sched =
+    let o, acc, x, i, k, m = build_ikm name in
+    let scheduled = Sched.apply (sched ~acc ~i ~k ~m) o in
+    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+  in
+  (* As [swapped_split]: the [Swap] puts the cell's [i] inside the reduction, so code generation
+     localizes no level of the scheduled program, which narrows per step. *)
+  let coalesced ~i ~k ~m =
+    let co, km = Sched.coalesce ~outer:k ~inner:m in
+    ([ co; Sched.Swap { outer = i; inner = km } ], km)
+  in
+  let coalesced_split ~i ~k ~m =
+    let ops, km = coalesced ~i ~k ~m in
+    let sp, ko, ki = split ~factor:2 km in
+    (ops @ [ sp ], ko, ki)
+  in
+  let serial, _ = run_ikm "prc_ckm_serial" (fun ~acc:_ ~i:_ ~k:_ ~m:_ -> []) in
+  let twin, _ =
+    run_ikm "prc_ckm_twin" (fun ~acc:_ ~i ~k ~m ->
+        let ops, _, _ = coalesced_split ~i ~k ~m in
+        ops)
+  in
+  let merged, merged_llc =
+    run_ikm "prc_ckm_merged" (fun ~acc ~i ~k ~m ->
+        let ops, km = coalesced ~i ~k ~m in
+        ops @ [ pz ~target:acc ~over:km ])
+  in
+  let outer, outer_llc =
+    run_ikm "prc_ckm_outer" (fun ~acc ~i ~k ~m ->
+        let ops, ko, _ = coalesced_split ~i ~k ~m in
+        ops @ [ pz ~target:acc ~over:ko ])
+  in
+  let inner, inner_llc =
+    run_ikm "prc_ckm_inner" (fun ~acc ~i ~k ~m ->
+        let ops, _, ki = coalesced_split ~i ~k ~m in
+        ops @ [ pz ~target:acc ~over:ki ])
+  in
+  (* [build_ik]'s [k] partitioned at 2, with the same [Swap]. *)
+  let run_part name ~privatize =
+    let o, acc, x, i, k = build_ik name in
+    let pt, segments = Sched.partition ~axis:k ~breakpoints:[ 2 ] in
+    let ops =
+      [ Sched.Swap { outer = i; inner = k }; pt ]
+      @ if privatize then [ pz ~target:acc ~over:(List.hd_exn segments) ] else []
+    in
+    let scheduled = Sched.apply ops o in
+    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+  in
+  let part_twin, _ = run_part "prc_part_twin" ~privatize:false in
+  let part, part_llc = run_part "prc_part_priv" ~privatize:true in
+  Stdio.eprintf
+    "privatize_recheck: coalesced legs serial %s, twin %s, merged %s, outer %s, inner %s; \
+     partition twin %s, privatized %s (not part of the golden)\n\
+     %!"
+    (floats serial) (floats twin) (floats merged) (floats outer) (floats inner) (floats part_twin)
+    (floats part);
+  p claim_coalesce
+    (List.equal Float.equal serial [ 258.0; 258.0 ]
+    && List.equal Float.equal merged serial
+    && List.equal Float.equal outer serial
+    && only_prec Ir.Ops.single merged_llc
+    && only_prec Ir.Ops.single outer_llc);
+  p claim_coalesce_inner
+    (List.equal Float.equal twin [ 256.0; 256.0 ]
+    && List.equal Float.equal inner twin && only_prec bf16 inner_llc);
+  p claim_partition
+    (List.equal Float.equal part_twin [ 256.0; 256.0 ]
+    && List.equal Float.equal part part_twin
+    && only_prec bf16 part_llc)
+
 let () =
   Test_utils.with_policy
     (fun pol -> { pol with Numerics.bf16_arithmetic = Numerics.Bf16_wide })
     (fun () ->
       recheck_legs ();
-      provenance_legs ())
+      provenance_legs ();
+      minted_legs ())

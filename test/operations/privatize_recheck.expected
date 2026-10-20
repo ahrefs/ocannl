@@ -7,3 +7,6 @@ without a breaking op the privatized tile stays f32, passes the re-check, leaves
 a Privatize over the outer half of a Split of the localizing loop widens like that loop (258 with the serial rendering, on an f32 tile): true
 a Privatize over the inner half of that Split keeps a bf16 storage tile and the split schedule's own narrowing (256, as without Privatize): true
 a Privatize over the outer half of a Split of a loop inside the localizing level keeps a bf16 storage tile and the schedule's own narrowing (256, as without Privatize): true
+a Privatize over the loop a Coalesce merged from the localizing loop and the loop inside it, and one over the outer half of a Split of that merged loop, widen like the localizing loop (258 with the serial rendering, on an f32 tile): true
+a Privatize over the inner half of that Split of the merged loop keeps a bf16 storage tile and the split schedule's own narrowing (256, as without Privatize): true
+a Privatize over a segment of a Partition of the localizing loop keeps a bf16 storage tile and the partitioned schedule's own narrowing (256, as without Privatize): true
