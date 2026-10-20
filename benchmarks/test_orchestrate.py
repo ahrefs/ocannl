@@ -406,27 +406,11 @@ class NonFiniteResultLineReadersTest(unittest.TestCase):
         self.assertEqual(gh1002_cells.result_line(base)["step_ms"]["p50"], 1.0)
 
 
-def shipped_heredoc(script, tag, within=None):
-    """The Python a shell driver feeds to `python3 -` through its `<<'TAG'` heredoc, as it ships;
-    with `within`, the first such heredoc after that shell function's definition line (for a tag
-    the script reuses)."""
-    lines = (HERE / script).read_text().splitlines()
-    starts = [i for i, line in enumerate(lines) if f"<<'{tag}'" in line]
-    if within is not None:
-        found = [i for i, line in enumerate(lines) if line.startswith(f"{within}() {{")]
-        if len(found) != 1:
-            raise AssertionError(f"{script}: {len(found)} definitions of {within}, expected one")
-        starts = [i for i in starts if i > found[0]][:1]
-    if len(starts) != 1:
-        raise AssertionError(f"{script}: {len(starts)} heredocs tagged {tag}, expected one")
-    end = next(i for i in range(starts[0] + 1, len(lines)) if lines[i] == tag)
-    return "\n".join(lines[starts[0] + 1:end]) + "\n"
-
-
-class ShellResultLineReadersTest(unittest.TestCase):
-    """The inline Python result-line readers of the shell drivers, run from the shipping text:
-    each refuses NaN, Infinity and 1e999 through strict_json, which it imports from the directory
-    the driver names in STRICT_JSON_DIR (the scratch cwd here holds no copy)."""
+class DriverResultReaderModulesTest(unittest.TestCase):
+    """The shell drivers' result-line readers, run by path the way their drivers run them -- from a
+    scratch cwd holding no copy of their imports -- and their wiring into the drivers
+    (gh-ocannl-1365: they were heredocs these tests extracted from the shell text). Each refuses
+    NaN, Infinity and 1e999 through strict_json with a finding rather than a traceback."""
 
     SPELLINGS = ("NaN", "Infinity", "1e999")
 
@@ -435,45 +419,103 @@ class ShellResultLineReadersTest(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
-    def run_heredoc(self, script, tag, *argv, within=None):
+    def module(self, name, *argv):
         return subprocess.run(
-            [sys.executable, "-", *map(str, argv)],
-            input=shipped_heredoc(script, tag, within),
-            text=True,
-            capture_output=True,
-            cwd=self.dir,
-            env=dict(os.environ, STRICT_JSON_DIR=str(HERE)),
-            timeout=60,
-        )
+            [sys.executable, str(HERE / name), *map(str, argv)],
+            text=True, capture_output=True, cwd=self.dir, timeout=60)
+
+    def gh612_cell(self, root, label, rep, losses, kind="search.out"):
+        cell = root / label / f"r{rep}"
+        cell.mkdir(parents=True, exist_ok=True)
+        (cell / kind).write_text("noise\n" + '{"losses":[%s]}\n' % ",".join(losses))
 
     def test_gh612_parity_fails_on_the_line_not_with_a_traceback(self):
         for spelled in self.SPELLINGS:
             with self.subTest(spelled=spelled):
-                cell = self.dir / spelled / "cell" / "r1"
-                cell.mkdir(parents=True)
-                (cell / "search.out").write_text('{"losses":[2.5,%s]}\n' % spelled)
-                proc = self.run_heredoc(
-                    "gh612_cells.sh", "EOF", self.dir / spelled, 64, 0, "", 2, within="cmd_parity")
+                root = self.dir / spelled
+                self.gh612_cell(root, "cell", 1, ["2.5", spelled])
+                proc = self.module("gh612_parity.py", root, 64, 0, "", 2)
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertIn("the result line is not strict JSON", proc.stderr)
                 self.assertNotIn("Traceback", proc.stderr)
 
+    def test_gh612_parity_passes_agreeing_cells_and_fails_a_divergent_one(self):
+        root = self.dir / "agree"
+        losses = ["2.5", "2.25"]
+        for label in ("base", "treat"):
+            self.gh612_cell(root, label, 1, losses)
+            self.gh612_cell(root, label, 1, losses, kind="replay2.out")
+        proc = self.module("gh612_parity.py", root, 64, 2, "base/r1 treat/r1", 2)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("4 records (2 search + 2 pass-2 replay), 1 distinct loss sequences", proc.stdout)
+        self.assertIn("parity gate PASSED", proc.stdout)
+        # Two-sided: the same tree with one cell a whole unit off, and one required cell absent.
+        self.gh612_cell(root, "treat", 1, ["3.5", "2.25"])
+        proc = self.module("gh612_parity.py", root, 64, 2, "base/r1 treat/r1 extra/r1", 2)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("PARITY GATE FAILED: loss divergence", proc.stderr)
+        self.assertIn("PARITY GATE FAILED: missing required cells: extra/r1", proc.stderr)
+        self.assertNotIn("parity gate PASSED", proc.stdout)
+
+    def test_gh612_parity_subcommand_runs_the_module(self):
+        # The driver end to end: `parity` touches no tree, fixture or device, so it runs here.
+        root = self.dir / "driven"
+        for label in ("a", "b"):
+            self.gh612_cell(root, label, 1, ["2.5", "2.25"])
+        proc = subprocess.run(
+            ["bash", str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            cwd=self.dir, timeout=120,
+            env=dict(os.environ, OUT_ROOT=str(root), EXPECT_STEPS="2"))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("parity gate PASSED", proc.stdout)
+        # Negative control: the step count the driver passes through is the gate's.
+        proc = subprocess.run(
+            ["bash", str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            cwd=self.dir, timeout=120, env=dict(os.environ, OUT_ROOT=str(root)))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("expected EXPECT_STEPS=8", proc.stderr)
+
+    GH728_LINE = ('{"framework":"ocannl","searched":%s,"step_ms":{"p50":%s},'
+                  '"tune":{"searches":%d,"replays":%d,"no_searches":0,"arms":[]}}\n')
+
     def test_gh728_protocol_check_refuses_the_line(self):
-        line = ('{"framework":"ocannl","searched":true,"step_ms":{"p50":%s},'
-                '"tune":{"searches":1,"replays":0,"no_searches":0,"arms":[]}}\n')
         for spelled in self.SPELLINGS:
             with self.subTest(spelled=spelled):
                 path = self.dir / f"gh728-{spelled}.out"
-                path.write_text(line % spelled)
-                proc = self.run_heredoc("gh728_cells.sh", "VERIFY", path, "search")
+                path.write_text(self.GH728_LINE % ("true", spelled, 1, 0) + "exit: 0\n")
+                proc = self.module("gh728_protocol.py", path, "search")
                 self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
                 self.assertIn("a result line is not strict JSON", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
         # Negative control: the same line with a finite timing is a search pass.
         path = self.dir / "gh728-finite.out"
-        path.write_text(line % "1.5")
-        proc = self.run_heredoc("gh728_cells.sh", "VERIFY", path, "search")
+        path.write_text(self.GH728_LINE % ("true", "1.5", 1, 0) + "exit: 0\n")
+        proc = self.module("gh728_protocol.py", path, "search")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("protocol: search pass", proc.stdout)
+
+    def test_gh728_a_replay_that_searched_is_no_replay(self):
+        replay = self.dir / "replay.out"
+        replay.write_text(self.GH728_LINE % ("false", "1.5", 0, 2))
+        proc = self.module("gh728_protocol.py", replay, "replay")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("NOT A", proc.stdout)
+        searched = self.dir / "searched.out"
+        searched.write_text(self.GH728_LINE % ("true", "1.5", 1, 1))
+        proc = self.module("gh728_protocol.py", searched, "replay")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("-- NOT A REPLAY PASS", proc.stdout)
+
+    def test_gh728_driver_checks_each_tuned_leg_through_the_module(self):
+        # The leg loop runs only after a build and on a device, so its wiring is read, not driven:
+        # the check is the module, handed each tuned leg's output and its pass, with its verdict
+        # failing the run.
+        text = (HERE / "gh728_cells.sh").read_text()
+        self.assertIn(
+            'python3 "$TREE/benchmarks/gh728_protocol.py" "$OUT/gpt_${profile}_$pass.out" "$pass"',
+            text)
+        self.assertIn(") || FAILED=1", text)
+        self.assertNotIn("python3 -", text)
 
 
 class Gh1003SummaryTest(unittest.TestCase):
@@ -553,8 +595,8 @@ class Gh1003SummaryTest(unittest.TestCase):
         self.assertNotIn("MISSING RESULT", proc.stdout)
 
     def test_the_driver_summary_step_writes_the_module_matrix(self):
-        # OUT must start empty, so the driver's own step can only be driven to its empty matrix: it
-        # proves the step reaches the module (summary.md holds its header and verdict) and fails.
+        # A fresh OUT: the step reaches the module (summary.md holds its header and verdict) and
+        # fails on the empty matrix.
         out = self.dir / "driven"
         proc = subprocess.run(
             ["bash", str(HERE / "gh1003_fold_cells.sh"), str(out), "60", "summary"],
@@ -564,6 +606,60 @@ class Gh1003SummaryTest(unittest.TestCase):
         self.assertIn("NO MEASUREMENT: no numbered cell produced a result line", summary)
         self.assertIn("| vs composed | vs two-pass |", summary)
         self.assertNotIn("Traceback", proc.stdout + proc.stderr)
+
+    def driver(self, *steps, env=None):
+        return subprocess.run(
+            ["bash", str(HERE / "gh1003_fold_cells.sh"), str(self.out), "60", *steps],
+            text=True, capture_output=True, cwd=self.dir, timeout=120,
+            env=dict(os.environ, **(env or {})))
+
+    def recorded_run(self, blocks):
+        """self.out as an earlier invocation left it: its driver.log header and a filled matrix."""
+        (self.out / "driver.log").write_text(
+            "gh1003: 2026-10-18T00:00:00Z root=/r out=/o cap=60 repeats=1\n"
+            f"gh1003: fold blocks: {blocks}; train fixtures: t; kernel table: 1; fixture dir: d; "
+            "steps: build provenance metal\n")
+        self.cell("metal-gpt2_mini-composed-r1.out", 10.0)
+        self.cell("metal-gpt2_mini-two-pass-r1.out", 8.0)
+        self.cell("metal-gpt2_mini-fold-64-r1.out", 5.0)
+
+    def test_a_lone_summary_step_re_renders_an_earlier_out(self):
+        # The filled matrix driven end to end (gh-ocannl-1365), under the fold blocks the earlier
+        # run recorded: fold-64 is in no default list, so a re-summary under the defaults would
+        # drop its row without a word.
+        self.recorded_run("8 64")
+        (self.out / "summary.md").write_text("the earlier rendering\n")
+        proc = self.driver("summary")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        expected = self.summary("composed two-pass fold-8 fold-64 composed two-pass-bwd fold-8-bwd fold-64-bwd")
+        self.assertEqual(expected.returncode, 0, expected.stdout + expected.stderr)
+        self.assertEqual((self.out / "summary.md").read_text(), expected.stdout)
+        self.assertIn("| metal | gpt2_mini | fold-64 | 5.0 | 5.0 | 0.500x | 0.625x |", expected.stdout)
+        log = (self.out / "driver.log").read_text()
+        self.assertIn("re-summarizing an existing OUT under its recorded fold blocks", log)
+        # The earlier header still leads, so a second re-summary reads the same blocks.
+        self.assertIn("gh1003: fold blocks: 8 64;", log.splitlines()[1])
+        self.assertEqual(self.driver("summary").returncode, 0)
+
+    def test_a_re_summary_refuses_what_it_cannot_render_faithfully(self):
+        self.recorded_run("8 64")
+        cases = [
+            # A measuring step would mix a new run's cells into the old one's.
+            (("metal",), {}, "is not empty"),
+            (("summary", "summary"), {"FOLD_BLOCKS": "8 16 32"}, "differs from the '8 64'"),
+        ]
+        for steps, env, why in cases:
+            with self.subTest(steps=steps, env=env):
+                proc = self.driver(*steps, env=env)
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn(why, proc.stderr)
+        # Agreeing FOLD_BLOCKS is no refusal (the control for the disagreeing one).
+        self.assertEqual(self.driver("summary", env={"FOLD_BLOCKS": "8 64"}).returncode, 0)
+        # A non-empty directory this driver did not write.
+        (self.out / "driver.log").unlink()
+        proc = self.driver("summary")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("holds no driver.log", proc.stderr)
 
 
 # Every `json.load`/`json.loads` call in the benchmark drivers, runners and their inline shell

@@ -331,10 +331,10 @@ files.
   suspect the emitter's spelling before the framework. Every Python reader of a runner's result or
   checkpoint line therefore parses it with `benchmarks/strict_json.py`'s `loads`, which refuses all
   three spellings (`NonFinite`, a `ValueError`), so a regressed emitter fails its cell by name instead
-  of reaching only the Python consumers. A new reader uses it too — a driver's inline `python3 -`
-  heredoc imports it from `STRICT_JSON_DIR`, and a script run under `python3 -I` puts its own
-  directory on `sys.path` first (`gh834_session.py`) — and test_orchestrate's inventory scan fails
-  any other `json.loads` in the drivers that is not exempted with a reason.
+  of reaching only the Python consumers. A new reader uses it too — a module a driver runs by path
+  finds it beside itself, and a script run under `python3 -I` puts its own directory on `sys.path`
+  first (`gh834_session.py`) — and test_orchestrate's inventory scan fails any other `json.loads`
+  in the drivers that is not exempted with a reason.
 - A shell driver reads that line by PARSING it (stdlib `python3`), never with a `sed`/`grep`
   pattern over its text: a scan from `"arm":"A"` to the first `}` read a nested object placed
   before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it --
@@ -344,10 +344,14 @@ files.
   fails a driver line that greps a quoted JSON key (gh-ocannl-1355). For a whole verdict,
   `benchmarks/gh834_session.py` is the shape; its harness `benchmarks/test-gh834-cells.sh` renders
   `Bench_json`'s own templates, so a renamed field fails there rather than in a box's session.
-  A driver's summary matrix lives in a module the driver runs by path, not in an inline heredoc
-  that a test can reach only by extracting it from the script's text: `gh1133_summary.py` owns
-  reading the numbered cells (`read_cells`), which `gh1003_summary.py` shares, so a change to how a
-  result line is read or refused lands once.
+  A shell driver's result reader -- a summary matrix, a gate, a protocol check -- lives in a module
+  the driver runs by path, not in an inline `python3 -` heredoc that a test can reach only by
+  extracting it from the script's text (gh-ocannl-1365: `gh612_parity.py`, `gh728_protocol.py`,
+  `gh1003_summary.py`): the test imports or runs it directly, and drives the driver's step where it
+  needs no device. `gh1133_summary.py` owns reading the numbered cells (`read_cells`), which
+  `gh1003_summary.py` shares, so a change to how a result line is read or refused lands once.
+  `gh1003_fold_cells.sh OUT CAP summary` over an earlier OUT re-renders its matrix under the fold
+  blocks its driver.log recorded -- the one invocation a non-empty OUT is accepted for.
 - Every report-writing script in `benchmarks/` -- `orchestrate.py`, the `gh*_cells.py`/`_summary.py`
   drivers, `gpt2_bucket.py`, `kernel_attribution.py`, and the shell drivers' inline Python --
   writes each Markdown table row through `benchmarks/display_safe.py`'s `table_row`/`table_lines`,
