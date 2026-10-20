@@ -146,40 +146,34 @@ let is_seeded label = String.is_prefix label ~prefix:"F_seeded["
 (* A search whose admitted windows are scripted: [reading ~index ~label ms] is what the [index]th
    admitted window (from 0) records, [nan] refusing it. *)
 let scripted_search ~reading =
-  let windows = ref [] and attempts = ref [] and timed = ref [] and report = ref None in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
-  and old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
-  let ctx, routine =
-    Exn.protect
-      ~finally:(fun () ->
-        Autotune.Seam.set Autotune.on_candidate_measured old_measured;
-        Autotune.Seam.set Autotune.on_candidate_attempt old_attempt)
-      ~f:(fun () ->
-        ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
-          if not (String.equal label "baseline") then attempts := label :: !attempts );
-        (* Each timing call that returns, under the attempt it timed: a window the host refused
-           still returns one, a candidate that failed before timing never does. *)
-        Autotune.with_timing_call_observer (fun (_ : Autotune.timing_call) ->
-            Option.iter (List.hd !attempts) ~f:(fun label -> timed := label :: !timed))
-        @@ fun () ->
-        ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
-          let ms = reading ~index:(List.length !windows) ~label ms in
-          windows := (label, digest, ms) :: !windows;
-          ms );
-        Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~search:true ~beam_width:2 ~rounds:0 ~repeats:1 ~seed_block_sizes:[]
-              ~cache_dir:"" ~log:false
-              ~report:(fun r -> report := Some r)
-              (Context.auto ()) comp Ir.Indexing.Empty))
+  let latest = ref None and timed = ref [] and report = ref None in
+  let (ctx, routine), (record : Scripted_search.record) =
+    Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
+        if not (String.equal label "baseline") then latest := Some label)
+    @@ fun () ->
+    (* Each timing call that returns, under the attempt it timed: a window the host refused still
+       returns one, a candidate that failed before timing never does. *)
+    Autotune.with_timing_call_observer (fun (_ : Autotune.timing_call) ->
+        Option.iter !latest ~f:(fun label -> timed := label :: !timed))
+    @@ fun () ->
+    Scripted_search.scripted
+      ~measure:(fun w -> reading ~index:(w.ordinal - 1) ~label:w.label w.reading)
+      (fun () ->
+        Autotune.tune ~search:true ~beam_width:2 ~rounds:0 ~repeats:1 ~seed_block_sizes:[]
+          ~cache_dir:"" ~log:false
+          ~report:(fun r -> report := Some r)
+          (Context.auto ()) comp Ir.Indexing.Empty)
   in
   let report = Option.value_exn ~here:[%here] !report in
-  let windows = List.rev !windows in
+  let windows = List.map record.windows ~f:(fun (w, ms) -> (w.label, w.digest, ms)) in
   (* Every attempt of the seeded plan must compile and reach a timing window ([reached], a claim: a
      candidate failure is a failure), and a window the host refuses (queued calibration that
      measured no batch, routine on a shared box) never reaches the seam: what the window claims read
      is the seeded plan's, so they are gated on the host having refused none of its windows
      ([quiet]). *)
-  let attempts = List.rev !attempts in
+  let attempts =
+    List.filter record.attempts ~f:(fun label -> not (String.equal label "baseline"))
+  in
   let seeded_timed = List.count !timed ~f:is_seeded in
   let reached = List.count attempts ~f:is_seeded = seeded_timed && seeded_timed > 0 in
   let quiet = seeded_timed = List.count windows ~f:(fun (label, _, _) -> is_seeded label) in

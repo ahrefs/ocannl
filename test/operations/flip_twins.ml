@@ -38,33 +38,11 @@ open Verdict.Claims
    scans. *)
 let k = 1
 
-(* One [Autotune.on_candidate_measured] script: the [i]-th admitted window measures [script i]. *)
+(* One measurement script: the [i]-th admitted window measures [script i]. *)
 let with_clock script f =
-  let measured = ref 0 in
-  Autotune.Seam.with_value Autotune.on_candidate_measured
-    (fun ~label:_ ~digest:_ _ms ->
-      Int.incr measured;
-      script !measured)
-    (fun () -> Autotune.with_uncontended_test_windows f)
+  fst (Scripted_search.scripted ~measure:(fun w -> script w.Scripted_search.ordinal) f)
 
-let with_stderr_captured f =
-  let file = Stdlib.Filename.temp_file "flip_twins" ".stderr" in
-  Stdio.Out_channel.flush Stdio.stderr;
-  let saved = Unix.dup Unix.stderr in
-  let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  Unix.dup2 fd Unix.stderr;
-  Unix.close fd;
-  let restore () =
-    Stdio.Out_channel.flush Stdio.stderr;
-    Unix.dup2 saved Unix.stderr;
-    Unix.close saved
-  in
-  let result = Exn.protect ~f ~finally:restore in
-  let text = Stdio.In_channel.read_all file in
-  Stdlib.Sys.remove file;
-  (* Echoed, so nothing the run wrote is hidden. *)
-  Stdio.eprintf "%s%!" text;
-  (result, String.split_lines text)
+let with_stderr_captured = Scripted_search.with_stderr_captured
 
 (* The value of [key="..."] on an [autotune-progress:] line of the given event. Arm labels carry
    spaces, so the fields are read by their quotes rather than split on spaces. *)
@@ -140,10 +118,7 @@ let run_chain ?(cache_dir = "") ?ctx ?timing_ctx ~budget comp loss ~flip_script 
     shipped = !shipped;
   }
 
-let clean_cache dir =
-  if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
-    Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
-        Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
+let clean_cache = Scripted_search.clear_cache_dir
 
 (* An arm label names its node as [flip <reading> <debug name> (cost ...)]. *)
 let names (t : Tensor.t) label =

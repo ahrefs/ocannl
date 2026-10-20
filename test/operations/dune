@@ -7468,7 +7468,14 @@
  ; width, and every timing is synthetic.
  (name flip_abandonment)
  (modules flip_abandonment)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test bench_harness)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  bench_harness
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9149,7 +9156,13 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_composite_playoff)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9174,7 +9187,14 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_staffed_singles)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  ll_test)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9199,7 +9219,14 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_budget)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9221,7 +9248,14 @@
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_CC_VECTOR_REGISTERS))
  (modules autotune_budget_unfloored)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9267,7 +9301,13 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_round_expansion)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9902,7 +9942,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules autotune_labels)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9915,7 +9955,7 @@
  ; prints never reads the width.
  (name flip_twins)
  (modules flip_twins)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9987,7 +10027,14 @@
   ; Whether the GPU search also seeds tensorized singles for the chain's f32 sites.
   (env_var OCANNL_TF32_MATMULS))
  (modules autotune_sketch_placements)
- (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10121,7 +10168,7 @@
   (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
   (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
  (modules autotune_seeded_seed)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

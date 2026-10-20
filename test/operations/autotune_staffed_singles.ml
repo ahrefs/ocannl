@@ -101,20 +101,7 @@ let entry_of key p =
   |> String.chop_prefix_exn ~prefix:"F_sketch["
   |> String.chop_suffix_exn ~suffix:"]"
 
-type observed = {
-  report : Autotune.report;
-  measured : string list;
-      (** Every admitted window's label, in attempt order, the baseline's first. *)
-  attempts : string list;  (** Every candidate attempt's label, in order. *)
-  output : float array;  (** What the crowned routine computed. *)
-}
-
-let untuned (qg, comp) =
-  let ctx, routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
-  let ctx = Context.run ctx routine in
-  let values = Context.get_values ctx qg.Tensor.value in
-  Context.release ctx;
-  values
+type observed = Scripted_search.observed
 
 (* One search under the additive script [cost]. [?staffed] and [?width] state
    [autotune_staffed_singles] and [autotune_composite_playoff_width] for this search only; [?start]
@@ -123,85 +110,36 @@ let untuned (qg, comp) =
 let search ?(staffed = true) ?(log = false) ?(progress = false) ?keyed ?width ?start ?refuse
     ?(cache_dir = "") ?chain ~tag ~cost () =
   let qg, comp = match chain with Some c -> c | None -> Fissioned_chain.chain_with_output () in
-  let report = ref None and measured = ref [] and attempts = ref [] and current = ref "" in
+  let current = ref "" in
   let settings =
     (staffed_key, Bool.to_string staffed)
     :: Option.value_map width ~default:[] ~f:(fun w -> [ (width_key, Int.to_string w) ])
   in
-  let output =
-    Exn.protect
-      ~finally:(fun () ->
-        List.iter settings ~f:(fun (key, _) -> Hashtbl.remove Utils.config_file_args key))
-      ~f:(fun () ->
-        List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
-        Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
-            measured := label :: !measured;
-            routine_ms ?keyed ~cost label)
-        @@ fun () ->
-        Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
-            current := label;
-            attempts := label :: !attempts)
-        @@ fun () ->
-        Autotune.Seam.with_value Autotune.on_candidate_preflight (fun _routine ->
-            match refuse with
-            | Some refused when refused !current -> failwith ("injected refusal of " ^ !current)
-            | Some _ | None -> ())
-        @@ fun () ->
-        Autotune.Seam.with_value Autotune.on_staffed_start (fun ~menu seeded ->
-            match start with Some f -> f ~menu | None -> seeded)
-        @@ fun () ->
-        let ctx, routine =
-          Autotune.with_uncontended_test_windows (fun () ->
-              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~log ~progress
-                ~report:(fun r -> report := Some r)
-                (Context.cpu ()) comp Ir.Indexing.Empty)
-        in
-        let ctx = Context.run ctx routine in
-        let values = Context.get_values ctx qg.Tensor.value in
-        Context.release ctx;
-        values)
+  let (o : observed) =
+    Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label -> current := label)
+    @@ fun () ->
+    Autotune.Seam.with_value Autotune.on_candidate_preflight (fun _routine ->
+        match refuse with
+        | Some refused when refused !current -> failwith ("injected refusal of " ^ !current)
+        | Some _ | None -> ())
+    @@ fun () ->
+    Autotune.Seam.with_value Autotune.on_staffed_start (fun ~menu seeded ->
+        match start with Some f -> f ~menu | None -> seeded)
+    @@ fun () ->
+    Scripted_search.search ~settings ~output:qg ~cache_dir ~log ~progress ~tag
+      ~measure:(fun w -> routine_ms ?keyed ~cost w.label)
+      comp
   in
-  match !report with
-  | Some report ->
-      Stdio.eprintf
-        "%s (not part of the golden): timed %d, staffed %d, fallbacks %d, playoff %d, crown %s \
-         %.2f ms\n\
-         %!"
-        tag report.Autotune.candidates_timed report.Autotune.fiss_sketch_staffed_timed
-        report.Autotune.fiss_sketch_backdrop_fallbacks report.Autotune.fiss_sketch_playoff_timed
-        report.Autotune.best_label report.Autotune.best_ms;
-      { report; measured = List.rev !measured; attempts = List.rev !attempts; output }
-  | None -> failwith (tag ^ ": the search delivered no report")
+  let report = o.report in
+  Stdio.eprintf
+    "%s (not part of the golden): timed %d, staffed %d, fallbacks %d, playoff %d, crown %s %.2f ms\n\
+     %!"
+    tag report.Autotune.candidates_timed report.Autotune.fiss_sketch_staffed_timed
+    report.Autotune.fiss_sketch_backdrop_fallbacks report.Autotune.fiss_sketch_playoff_timed
+    report.Autotune.best_label report.Autotune.best_ms;
+  o
 
-(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote; the text
-   is echoed back to stderr afterwards, whether [f] returned or raised, and the file removed. *)
-let with_stderr_captured f =
-  let file = Stdlib.Filename.temp_file "autotune_staffed_singles" ".stderr" in
-  Exn.protect
-    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
-    ~f:(fun () ->
-      Stdio.Out_channel.flush Stdio.stderr;
-      let saved = Unix.dup Unix.stderr in
-      let outcome =
-        Exn.protect
-          ~finally:(fun () -> Unix.close saved)
-          ~f:(fun () ->
-            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
-            let outcome =
-              match f () with
-              | result -> Ok result
-              | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())
-            in
-            Stdio.Out_channel.flush Stdio.stderr;
-            Unix.dup2 saved Unix.stderr;
-            outcome)
-      in
-      let text = Stdio.In_channel.read_all file in
-      Stdio.eprintf "%s%!" text;
-      match outcome with
-      | Ok result -> (result, String.split_lines text)
-      | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
+let with_stderr_captured = Scripted_search.with_stderr_captured
 
 (* The keys in sweep order, by their singles' first appearance among [measured]. *)
 let keys measured =
@@ -233,13 +171,9 @@ let cost = hashed
 let cache_dir = "autotune_cache_staffed"
 
 (* An earlier run's entries would turn the staffed search into a replay. *)
-let () =
-  if Stdlib.Sys.file_exists cache_dir && Stdlib.Sys.is_directory cache_dir then
-    Array.iter (Stdlib.Sys.readdir cache_dir) ~f:(fun f ->
-        Stdlib.Sys.remove (Stdlib.Filename.concat cache_dir f))
-
+let () = Scripted_search.clear_cache_dir cache_dir
 let chain = Fissioned_chain.chain_with_output ()
-let reference = untuned chain
+let reference = Scripted_search.untuned (fst chain) (snd chain)
 let off = search ~staffed:false ~width:0 ~tag:"off" ~cost ()
 let on = search ~width:0 ~cache_dir ~chain ~tag:"on" ~cost ()
 
@@ -629,15 +563,13 @@ let () =
    does for an explicit composite's window. *)
 let () =
   let report = ref None and staffed_attempt = ref false and injected = ref false in
-  Exn.protect
-    ~finally:(fun () -> Hashtbl.remove Utils.config_file_args staffed_key)
-    ~f:(fun () ->
-      Hashtbl.set Utils.config_file_args ~key:staffed_key ~data:"true";
-      Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
-          routine_ms ~cost label)
-      @@ fun () ->
-      Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
+  ignore
+    ( Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
           staffed_attempt := is_staffed label)
+    @@ fun () ->
+      Scripted_search.scripted
+        ~settings:[ (staffed_key, "true") ]
+        ~measure:(fun w -> routine_ms ~cost w.label)
       @@ fun () ->
       Autotune.Seam.with_value Autotune.on_candidate_timed (fun _ ~timed_so_far:_ ->
           if !staffed_attempt then (
@@ -645,14 +577,12 @@ let () =
             raise Stdlib.Exit))
       @@ fun () ->
       match
-        Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false
-              ~progress:false
-              ~report:(fun r -> report := Some r)
-              (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty)
+        Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false ~progress:false
+          ~report:(fun r -> report := Some r)
+          (Context.cpu ()) (Fissioned_chain.chain ()) Ir.Indexing.Empty
       with
       | ctx, _ -> Context.release ctx
-      | exception Stdlib.Exit when !injected -> ());
+      | exception Stdlib.Exit when !injected -> () );
   match !report with
   | Some r when !injected ->
       p "partial: the cut search's report says the staffed composite was timed"
@@ -748,7 +678,7 @@ let () =
   let comp =
     { comp with Ir.Assignments.asgns = Ir.Assignments.Block_comment ("ss_pair", comp.asgns) }
   in
-  let reference = untuned (z, comp) in
+  let reference = Scripted_search.untuned z comp in
   let is_split label = String.is_prefix label ~prefix:"F_split[" in
   let split_parts label =
     let body =
@@ -777,29 +707,14 @@ let () =
       +. (preset_ms *. Float.of_int (2 - List.length (f @ s)))
     else 1000.
   in
-  let measured = ref [] and report = ref None in
-  let output =
-    Exn.protect
-      ~finally:(fun () -> Hashtbl.remove Utils.config_file_args staffed_key)
-      ~f:(fun () ->
-        Hashtbl.set Utils.config_file_args ~key:staffed_key ~data:"true";
-        Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
-            measured := label :: !measured;
-            split_ms label)
-        @@ fun () ->
-        let ctx, routine =
-          Autotune.with_uncontended_test_windows (fun () ->
-              Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false
-                ~progress:false
-                ~report:(fun r -> report := Some r)
-                (Context.cpu ()) comp Ir.Indexing.Empty)
-        in
-        let ctx = Context.run ctx routine in
-        let values = Context.get_values ctx z.Tensor.value in
-        Context.release ctx;
-        values)
+  let (o : observed) =
+    Scripted_search.search
+      ~settings:[ (staffed_key, "true") ]
+      ~output:z ~log:false ~progress:false ~tag:"split"
+      ~measure:(fun w -> split_ms w.label)
+      comp
   in
-  let measured = List.rev !measured in
+  let measured = o.measured and output = o.output in
   let singles =
     List.filter measured ~f:(fun l -> is_split l && List.length (fst (split_parts l)) = 1)
   in
@@ -816,8 +731,9 @@ let () =
     List.map (of_site s) ~f:(fun l -> List.hd_exn (fst (split_parts l)))
     |> List.min_elt ~compare:(fun a b -> Float.compare (cost a) (cost b))
   in
-  match (sites, !report) with
-  | [ first; second ], Some r ->
+  match sites with
+  | [ first; second ] ->
+      let r = o.report in
       p_all "split: the first site is swept bare" (of_site first) ~f:(fun l ->
           List.is_empty (snd (split_parts l)));
       p_all "split: every single of the second site is staffed with the first site's fastest"

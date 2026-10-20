@@ -7,13 +7,12 @@
    through [Autotune.budget_elapsed]: the attempts so far, the baseline's included. A budget of [n]
    "seconds" then lets the first [n] attempts start. The timings are scripted
    ([Autotune.on_candidate_measured]) so which candidate wins is the script's choice, not the
-   machine's; the crowned routines are still compiled, run and compared with the untuned output.
-   Searched on cc, over [Fissioned_chain]'s small menu so the one full search here stays cheap. *)
+   machine's; the crowned routines are still compiled, run and compared with the untuned output. The
+   seams are [Scripted_search]'s. Searched on cc, over [Fissioned_chain]'s small menu so the one
+   full search here stays cheap. *)
 
 open Base
-open Ocannl.Operation.DSL_modules
 open Verdict.Claims
-module SC = Ir.Schedule_cache
 module Cache_plant = Test_utils.Cache_plant
 
 let () = Fissioned_chain.small_menu ()
@@ -31,113 +30,52 @@ let cost label =
   else 2. +. (Float.of_int (Stdlib.Hashtbl.hash label % 1000) /. 100.)
 
 let chain = Fissioned_chain.chain_with_output ()
-
-let untuned (qg, comp) =
-  let ctx, routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
-  let ctx = Context.run ctx routine in
-  let values = Context.get_values ctx qg.Tensor.value in
-  Context.release ctx;
-  values
-
-let reference = untuned chain
-
-type observed = {
-  report : Autotune.report;
-  attempts : string list;  (** Every attempt's label, in order, the baseline's first. *)
-  measured : string list;  (** Every admitted window's label, in order. *)
-  output : float array;  (** What the shipped routine computed. *)
-  ios : SC.cache_io list;  (** The call's schedule-cache operations. *)
-  identity : bool;  (** Whether the search's context had a timing identity to key the cache on. *)
-}
+let reference = Scripted_search.untuned (fst chain) (snd chain)
 
 (* One search, with [budget] stated as [autotune_budget_seconds] for it alone (none when absent). *)
 let search ?budget ?(rounds = 0) ~cache_dir ~tag () =
   let qg, comp = chain in
-  let report = ref None and attempts = ref [] and measured = ref [] in
-  let observed =
-    Exn.protect
-      ~finally:(fun () -> Hashtbl.remove Utils.config_file_args budget_key)
-      ~f:(fun () ->
-        Option.iter budget ~f:(fun data -> Hashtbl.set Utils.config_file_args ~key:budget_key ~data);
-        Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
-            measured := label :: !measured;
-            cost label)
-        @@ fun () ->
-        Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
-            attempts := label :: !attempts)
-        @@ fun () ->
-        Autotune.Seam.with_value Autotune.budget_elapsed (fun _real ->
-            Float.of_int (List.length !attempts))
-        @@ fun () ->
-        let ctx = Context.cpu () in
-        let identity = Option.is_some (Context.timing_identity ctx) in
-        let (ctx, routine), ios =
-          SC.recording_cache_io (fun () ->
-              Autotune.with_uncontended_test_windows (fun () ->
-                  Autotune.tune ~beam_width:2 ~rounds ~repeats:1 ~cache_dir
-                    ~report:(fun r -> report := Some r)
-                    ctx comp Ir.Indexing.Empty))
-        in
-        let ctx = Context.run ctx routine in
-        let output = Context.get_values ctx qg.Tensor.value in
-        Context.release ctx;
-        (output, ios, identity))
+  let (o : Scripted_search.observed) =
+    Scripted_search.search
+      ~settings:(Option.value_map budget ~default:[] ~f:(fun data -> [ (budget_key, data) ]))
+      ~attempt_clock:true ~output:qg ~rounds ~cache_dir ~tag
+      ~measure:(fun w -> cost w.label)
+      comp
   in
-  let output, ios, identity = observed in
-  match !report with
-  | Some report ->
-      Stdio.eprintf "%s attempts (not part of the golden): %s | measured: %s | default %s\n%!" tag
-        (String.concat ~sep:"; " (List.rev !attempts))
-        (String.concat ~sep:"; " (List.rev !measured))
-        (Option.value default_label ~default:"none");
-      Stdio.eprintf
-        "%s (not part of the golden): %s, budget_cut %b, %d attempts, timed %d, rounds %d, crown \
-         %s %.2f ms\n\
-         %!"
-        tag
-        (Autotune.outcome_name report.Autotune.outcome)
-        report.Autotune.budget_cut (List.length !attempts) report.Autotune.candidates_timed
-        report.Autotune.rounds_run report.Autotune.best_label report.Autotune.best_ms;
-      {
-        report;
-        attempts = List.rev !attempts;
-        measured = List.rev !measured;
-        output;
-        ios;
-        identity;
-      }
-  | None -> failwith (tag ^ ": the search delivered no report")
-
-(* An earlier run's entries would turn a cold search into a replay. *)
-let clear dir =
-  if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
-    Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
-        Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
+  Stdio.eprintf "%s attempts (not part of the golden): %s | measured: %s | default %s\n%!" tag
+    (String.concat ~sep:"; " o.attempts)
+    (String.concat ~sep:"; " o.measured)
+    (Option.value default_label ~default:"none");
+  Stdio.eprintf
+    "%s (not part of the golden): %s, budget_cut %b, %d attempts, timed %d, rounds %d, crown %s \
+     %.2f ms\n\
+     %!"
+    tag
+    (Autotune.outcome_name o.report.Autotune.outcome)
+    o.report.Autotune.budget_cut (List.length o.attempts) o.report.Autotune.candidates_timed
+    o.report.Autotune.rounds_run o.report.Autotune.best_label o.report.Autotune.best_ms;
+  o
 
 let cut_cache_dir = "autotune_cache_budget_cut"
 let replay_cache_dir = "autotune_cache_budget_replay"
 let floor_cache_dir = "autotune_cache_budget_floor"
-let () = List.iter [ cut_cache_dir; replay_cache_dir; floor_cache_dir ] ~f:clear
 
-let searched (o : observed) =
+let () =
+  List.iter [ cut_cache_dir; replay_cache_dir; floor_cache_dir ] ~f:Scripted_search.clear_cache_dir
+
+let searched (o : Scripted_search.observed) =
   match o.report.Autotune.outcome with Autotune.Searched -> true | _ -> false
 
-let replayed (o : observed) =
+let replayed (o : Scripted_search.observed) =
   match o.report.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
-let fastest_measured (o : observed) =
+let fastest_measured (o : Scripted_search.observed) =
   List.map o.measured ~f:cost |> List.min_elt ~compare:Float.compare
 
 (* --- the setting --- *)
 
 let () =
-  let parse v =
-    Exn.protect
-      ~finally:(fun () -> Hashtbl.remove Utils.config_file_args budget_key)
-      ~f:(fun () ->
-        Hashtbl.set Utils.config_file_args ~key:budget_key ~data:v;
-        Autotune.budget_setting ())
-  in
+  let parse v = Scripted_search.with_settings [ (budget_key, v) ] Autotune.budget_setting in
   p "setting: a positive number of seconds is a budget"
     (Option.equal Float.equal (parse "2.5") (Some 2.5));
   p_all "setting: empty, zero and negative mean no budget" [ ""; "0"; "-3" ] ~f:(fun v ->

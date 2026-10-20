@@ -132,3 +132,13 @@
  (libraries base stdio ocannl arrayjit.utils arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_ocannl)))
+
+; The scripted-search harness of the autotune tests: the measurement, attempt and budget-clock
+; seams, per-search settings, cache-I/O recording and stderr capture around a search whose ranking
+; the test scripts. [unix] is the stderr capture's.
+
+(library
+ (name scripted_search)
+ (package neural_nets_lib)
+ (modules scripted_search)
+ (libraries base stdio unix ocannl arrayjit.utils))
