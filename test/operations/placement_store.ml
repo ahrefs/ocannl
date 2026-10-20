@@ -805,8 +805,8 @@ let () =
      Its own directory, and fissioned candidates ranked FIRST (gh-ocannl-1421). Every schedule these
      searches crown is tuned on the timing lineage's lowering, where the intermediate is
      materialized; in the caller's lineage it is virtual, so no arm-A schedule applies there, and
-     [Autotune.tune] refuses arm A up front ([Lineage_refused], their lowerings differ): it
-     searches nothing, ships the untuned default and ranks last, while arm B, which materializes the
+     [Autotune.tune] refuses arm A up front ([Lineage_refused], their lowerings differ): it searches
+     nothing, ships the untuned default and ranks last, while arm B, which materializes the
      intermediate in both lineages, searches and ships its own crown. A fissioned winner used to die
      instead, promoting the virtual intermediate to a device buffer -- fatal under strict
      classification, so the replayed search failed and the warm run went back to the arms
