@@ -29,7 +29,11 @@ let dims = [| 4 |]
 let region_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec
 
 let () =
-  let device = B.get_device ~ordinal:0 in
+  (* The implementation module is below the backend singletons that carry the device-init deadline
+     (gh-ocannl-1281), so a direct caller takes it itself. *)
+  let device =
+    Utils.with_device_init_deadline ~backend_name:B.name (fun () -> B.get_device ~ordinal:0)
+  in
   (* Deterministic, test-managed pool ids (pool 0 is the device's reserved merge buffer). *)
   let next_pool = ref 1 in
   let fresh_pool ?mode ~size_in_bytes () =

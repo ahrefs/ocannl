@@ -6,6 +6,7 @@
 #include <caml/alloc.h>
 #include <caml/memory.h>
 #include <caml/mlvalues.h>
+#include <caml/signals.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -359,6 +360,314 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
 #else
   return Val_false;
 #endif
+}
+
+/* --- A deadline on GPU device initialization (gh-ocannl-1281) ---
+
+   A faulted GPU leaves its driver wedged: every later process that touches the runtime spins in
+   device initialization and never returns (gh-ocannl-1211's tuf fault). Nothing on the stuck
+   thread can bound that -- it is inside a C runtime call and reaches no OCaml poll point -- so the
+   bound is a WATCHDOG THREAD of this library's own. [arm] gives it a due time on the monotonic
+   clock; [disarm] takes it back. When a due time passes while still armed, the watchdog writes the
+   diagnostic prepared before arming to fd 2 and kills the process by SIGALRM (status 142 in a
+   shell), so harnesses can classify it.
+
+   Being a thread rather than a signal handler is what keeps the host program's own signal state
+   out of it: the real-time timer is never touched (an [alarm] or [setitimer] the program set, or
+   sets meanwhile, fires exactly when it would have), no handler is installed, and no signal mask
+   is changed outside the watchdog itself. A SIGALRM anything else sends during a region meets the
+   program's own disposition, as it always would. The line is written only by the watchdog and
+   only after its own due time passed while armed, so it always means the deadline. [arm] refuses
+   when SIGALRM does not have its default disposition -- a program with its own handler, or an
+   ignore, gets no deadline, since killing by SIGALRM would have to override it -- and on Windows.
+   One region is armed at a time: an [arm] while another thread's region is armed WAITS for it
+   (outside the OCaml runtime lock), so it is bounded by that region's deadline and then by its
+   own; an [arm] from inside the thread's own armed region returns false, and the outer deadline
+   covers the nested region. The serialization lives here rather than in an OCaml lock so that a
+   fork child, whose other threads did not come along, can reset all of it (an OCaml mutex held by
+   a vanished thread would stay locked). Once the watchdog has committed to the death, no [arm]
+   proceeds: the diagnostic it is about to write is never overwritten.
+
+   The death never waits on the diagnostic for more than 2 s: the write runs on a thread of its
+   own, so a blocking fd 2 that is full, or that another writer fills meanwhile, cannot hold it.
+   The watchdog then puts
+   SIGALRM's default disposition back, unblocks SIGALRM in its own thread (it blocks every signal
+   otherwise, so it never takes the program's) and raises it there. */
+
+#if !defined(_WIN32)
+#include <pthread.h>
+#include <time.h>
+
+#define OCANNL_DEADLINE_MSG_MAX 1024
+static pthread_mutex_t ocannl_deadline_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ocannl_deadline_cond = PTHREAD_COND_INITIALIZER; /* wakes the watchdog */
+static pthread_cond_t ocannl_deadline_free = PTHREAD_COND_INITIALIZER; /* wakes waiting [arm]s */
+static int ocannl_deadline_thread_started; /* under the lock */
+static int ocannl_deadline_writer_started; /* under the lock */
+static int ocannl_deadline_armed;          /* under the lock */
+static int ocannl_deadline_dying;          /* under the lock: the watchdog committed to the death */
+static pthread_t ocannl_deadline_owner;    /* under the lock: the armed region's thread */
+static int64_t ocannl_deadline_due_ns;     /* under the lock; monotonic */
+static char ocannl_deadline_msg[OCANNL_DEADLINE_MSG_MAX];
+static size_t ocannl_deadline_msg_len;
+static pthread_mutex_t ocannl_deadline_write_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ocannl_deadline_write_go = PTHREAD_COND_INITIALIZER;
+static int ocannl_deadline_write_requested; /* under the write lock */
+static int ocannl_deadline_written;         /* under the write lock */
+
+static int64_t ocannl_monotonic_ns(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+  return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+
+/* The process this one forked off is not this one: its watchdog thread did not come along. */
+static void ocannl_deadline_atfork_child(void) {
+  pthread_mutex_t fresh_lock = PTHREAD_MUTEX_INITIALIZER;
+  pthread_cond_t fresh_cond = PTHREAD_COND_INITIALIZER;
+  pthread_cond_t fresh_free = PTHREAD_COND_INITIALIZER;
+  ocannl_deadline_lock = fresh_lock;
+  ocannl_deadline_cond = fresh_cond;
+  ocannl_deadline_free = fresh_free;
+  ocannl_deadline_thread_started = 0;
+  ocannl_deadline_writer_started = 0;
+  ocannl_deadline_armed = 0;
+  ocannl_deadline_dying = 0;
+  {
+    pthread_mutex_t fresh_write_lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t fresh_write_go = PTHREAD_COND_INITIALIZER;
+    ocannl_deadline_write_lock = fresh_write_lock;
+    ocannl_deadline_write_go = fresh_write_go;
+    ocannl_deadline_write_requested = 0;
+    ocannl_deadline_written = 0;
+  }
+}
+
+/* The diagnostic's write runs on a thread of its own, so the death never waits on it: a blocking
+   fd 2 that is full, or that another writer fills between a readiness check and the write, can
+   hold that thread forever, and the process dies regardless. The writer is started together with
+   the watchdog and waits for the death, so the death needs no thread creation, which could fail
+   under the very resource pressure that comes with a wedged process. */
+
+static void *ocannl_deadline_writer(void *arg) {
+  const char *p = ocannl_deadline_msg;
+  size_t n;
+  (void)arg;
+  pthread_mutex_lock(&ocannl_deadline_write_lock);
+  while (!ocannl_deadline_write_requested)
+    pthread_cond_wait(&ocannl_deadline_write_go, &ocannl_deadline_write_lock);
+  pthread_mutex_unlock(&ocannl_deadline_write_lock);
+  /* The diagnostic is final: the watchdog committed to the death before requesting the write. */
+  n = ocannl_deadline_msg_len;
+  while (n > 0) {
+    ssize_t w = write(2, p, n);
+    if (w < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    p += w;
+    n -= (size_t)w;
+  }
+  pthread_mutex_lock(&ocannl_deadline_write_lock);
+  ocannl_deadline_written = 1;
+  pthread_mutex_unlock(&ocannl_deadline_write_lock);
+  return NULL;
+}
+
+static void ocannl_deadline_die(void) {
+  struct sigaction dfl;
+  sigset_t alrm;
+  struct timespec nap = {0, 10000000};
+  int i, done = 0;
+  int64_t until = ocannl_monotonic_ns();
+  if (until >= 0) until += 2000000000;
+  pthread_mutex_lock(&ocannl_deadline_write_lock);
+  ocannl_deadline_write_requested = 1;
+  pthread_cond_signal(&ocannl_deadline_write_go);
+  pthread_mutex_unlock(&ocannl_deadline_write_lock);
+  /* At most 2 s, measured on the monotonic clock, in relative 10 ms naps: no wall-clock wait. A nap
+     may oversleep by far (timer slack on a loaded macOS VM stretched 200 counted naps to 10 s), so
+     the naps are not what is counted; the count bounds the wait only if the clock cannot be read. */
+  for (i = 0; !done; i++) {
+    pthread_mutex_lock(&ocannl_deadline_write_lock);
+    done = ocannl_deadline_written;
+    pthread_mutex_unlock(&ocannl_deadline_write_lock);
+    if (done) break;
+    if (until >= 0 ? ocannl_monotonic_ns() >= until : i >= 200) break;
+    nanosleep(&nap, NULL);
+  }
+  memset(&dfl, 0, sizeof dfl);
+  dfl.sa_handler = SIG_DFL;
+  sigemptyset(&dfl.sa_mask);
+  sigaction(SIGALRM, &dfl, NULL);
+  sigemptyset(&alrm);
+  sigaddset(&alrm, SIGALRM);
+  pthread_sigmask(SIG_UNBLOCK, &alrm, NULL);
+  raise(SIGALRM);
+  /* Not reached: the default action of SIGALRM terminates the process. */
+  _exit(128 + SIGALRM);
+}
+
+static void *ocannl_deadline_watchdog(void *arg) {
+  (void)arg;
+  pthread_mutex_lock(&ocannl_deadline_lock);
+  for (;;) {
+    if (!ocannl_deadline_armed) {
+      pthread_cond_wait(&ocannl_deadline_cond, &ocannl_deadline_lock);
+      continue;
+    }
+    {
+      int64_t now = ocannl_monotonic_ns();
+      int64_t left = ocannl_deadline_due_ns - now;
+      struct timespec nap;
+      int64_t step;
+      if (now >= 0 && left <= 0) {
+        /* Still armed past the due time: the deadline. Committed under the lock, so no [arm]
+           can proceed, nor rewrite the diagnostic, from here on. */
+        ocannl_deadline_dying = 1;
+        break;
+      }
+      /* Sleeps relative steps of at most 100 ms with the lock released, re-reading the monotonic
+         clock after each: no wait anywhere is pinned to the wall clock, so stepping it moves no
+         deadline. An arm or disarm meanwhile is seen at the next step. */
+      step = (now < 0 || left > 100000000) ? 100000000 : left;
+      nap.tv_sec = 0;
+      nap.tv_nsec = (long)step;
+      pthread_mutex_unlock(&ocannl_deadline_lock);
+      nanosleep(&nap, NULL);
+      pthread_mutex_lock(&ocannl_deadline_lock);
+    }
+  }
+  pthread_mutex_unlock(&ocannl_deadline_lock);
+  ocannl_deadline_die();
+  return NULL;
+}
+
+/* Registered when the library is loaded, before the deadline's lock can ever be taken: a fork
+   racing the first arm must already run the child reset. */
+static int ocannl_deadline_atfork_registered;
+__attribute__((constructor)) static void ocannl_deadline_register_atfork(void) {
+  ocannl_deadline_atfork_registered =
+      pthread_atfork(NULL, NULL, ocannl_deadline_atfork_child) == 0;
+}
+
+/* Whether SIGALRM has its default disposition. The handler slot alone decides it: [sa_handler] and
+   [sa_sigaction] share it, so an [SA_SIGINFO] handler is never [SIG_DFL]. [sa_flags] must not be
+   consulted: macOS keeps a caught signal's [SA_SIGINFO] across [exec], which resets the handler
+   to [SIG_DFL], so every descendant of a process that once caught SIGALRM that way -- GitHub's
+   macOS runner agent is one -- reads [SIG_DFL] with [SA_SIGINFO] set, and a flag check refused
+   the deadline in all of them. */
+static int ocannl_sigalrm_is_default(void) {
+  struct sigaction cur;
+  return sigaction(SIGALRM, NULL, &cur) == 0 && cur.sa_handler == SIG_DFL;
+}
+
+/* Under the lock. */
+static int ocannl_deadline_start_thread(void) {
+  pthread_t thread;
+  pthread_attr_t attr;
+  sigset_t all, saved;
+  int rc;
+  if (ocannl_deadline_thread_started) return 1;
+  if (!ocannl_deadline_atfork_registered) return 0;
+  /* Created with every signal blocked, which it inherits: it must never take the program's. */
+  sigfillset(&all);
+  pthread_sigmask(SIG_SETMASK, &all, &saved);
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  /* The writer first: a watchdog without it would have nothing to write the diagnostic with. A
+     writer whose watchdog could not be created is kept, and reused by the retry. */
+  rc = 0;
+  if (!ocannl_deadline_writer_started) {
+    rc = pthread_create(&thread, &attr, ocannl_deadline_writer, NULL);
+    if (rc == 0) ocannl_deadline_writer_started = 1;
+  }
+  if (rc == 0) rc = pthread_create(&thread, &attr, ocannl_deadline_watchdog, NULL);
+  pthread_attr_destroy(&attr);
+  pthread_sigmask(SIG_SETMASK, &saved, NULL);
+  if (rc != 0) return 0;
+  ocannl_deadline_thread_started = 1;
+  return 1;
+}
+#endif
+
+/* Whether this build can arm the deadline at all: the predicate [arm] is compiled under, published
+   so a test gates on it rather than on [arm]'s report of success. */
+CAMLprim value ocannl_device_init_deadline_supported(value unit) {
+  (void)unit;
+#if defined(_WIN32)
+  return Val_false;
+#else
+  return Val_true;
+#endif
+}
+
+/* [ocannl_device_init_deadline_arm seconds message]: 1 when the deadline is now armed (and must be
+   disarmed); 0 when disabled, refused, nested in this thread's own armed region, or on Windows; 2
+   when it should have been armed and the watchdog thread could not be started (or the monotonic
+   clock read), which the caller must not take as "no deadline". Waits, outside the OCaml runtime
+   lock, while another thread's region is armed. */
+CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
+#if defined(_WIN32)
+  (void)v_seconds;
+  (void)v_msg;
+  return Val_int(0);
+#else
+  double seconds = Double_val(v_seconds);
+  char msg[OCANNL_DEADLINE_MSG_MAX];
+  size_t len;
+  int armed = 2;
+  pthread_t self = pthread_self();
+  if (!(seconds > 0.0)) return Val_int(0);
+  /* A bound past three years is a bound all the same, never "disabled". */
+  if (seconds > 1e8) seconds = 1e8;
+  if (!ocannl_sigalrm_is_default())
+    return Val_int(0);
+  /* Copied before the runtime lock is released: the OCaml string may move meanwhile. */
+  len = caml_string_length(v_msg);
+  if (len > OCANNL_DEADLINE_MSG_MAX) len = OCANNL_DEADLINE_MSG_MAX;
+  memcpy(msg, String_val(v_msg), len);
+  caml_enter_blocking_section();
+  pthread_mutex_lock(&ocannl_deadline_lock);
+  if (ocannl_deadline_armed && pthread_equal(ocannl_deadline_owner, self))
+    armed = 0;
+  else {
+    while (ocannl_deadline_armed || ocannl_deadline_dying)
+      pthread_cond_wait(&ocannl_deadline_free, &ocannl_deadline_lock);
+    /* Checked again after the wait, right before committing: another thread may have installed
+       its own SIGALRM handler meanwhile, and a program with its own handler gets no deadline. */
+    if (!ocannl_sigalrm_is_default())
+      armed = 0;
+    else if (ocannl_deadline_start_thread()) {
+      int64_t now = ocannl_monotonic_ns();
+      if (now >= 0) {
+        memcpy(ocannl_deadline_msg, msg, len);
+        ocannl_deadline_msg_len = len;
+        ocannl_deadline_due_ns = now + (int64_t)(seconds * 1e9);
+        ocannl_deadline_owner = self;
+        ocannl_deadline_armed = 1;
+        armed = 1;
+        pthread_cond_signal(&ocannl_deadline_cond);
+      }
+    }
+  }
+  pthread_mutex_unlock(&ocannl_deadline_lock);
+  caml_leave_blocking_section();
+  return Val_int(armed);
+#endif
+}
+
+/* Take the deadline [ocannl_device_init_deadline_arm] gave back. A no-op when nothing is armed. */
+CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
+  (void)unit;
+#if !defined(_WIN32)
+  pthread_mutex_lock(&ocannl_deadline_lock);
+  ocannl_deadline_armed = 0;
+  pthread_cond_signal(&ocannl_deadline_cond);
+  pthread_cond_broadcast(&ocannl_deadline_free);
+  pthread_mutex_unlock(&ocannl_deadline_lock);
+#endif
+  return Val_unit;
 }
 
 /* --- CPU topology facts (gh-ocannl-530) ---

@@ -3936,6 +3936,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   pins them in a sweep unit, its serial rerun and its completion pass (a local and a remote unit),
   and `tools/test-machine-verify.sh` in a trip (`test-cap-*`, `probe-*` cases; a fake `uname`
   stands for a Linux far side).
+- **Inside every process, a GPU backend's device discovery and device opening have a deadline
+  too** (`device_init_deadline`, 120 s, gh-ocannl-1281): `Backends.With_device_init_deadline`
+  guards every call of the cuda, hip and metal entry points that ask the driver about devices or
+  open one, serialized process-wide, and past the bound a watchdog thread of `utils_stubs.c`
+  writes one line opening `OCANNL device_init_deadline:` and kills the process by SIGALRM (142),
+  reaching bare `dune`, `bin/` tools and user programs the harness bounds never see. A thread,
+  not a SIGALRM handler on the real-time timer: seven review rounds of staging#1244 hardened a handler
+  (signal masks, pending and external signals, async-signal safety, a shared timer) before the
+  thread removed the whole class. Under dune that death is a red action whose signal the default
+  display does not name, so the digest reads the line itself, at a line's start, in the whole log,
+  as `WEDGED DEVICE` (leg 84). A program with its own SIGALRM handler gets no deadline, and none
+  exists on Windows; `test/operations/device_init_deadline` pins all of it through a test stall
+  hook. "Its own handler" is read from the handler slot alone, never `sa_flags`: macOS keeps a
+  caught signal's `SA_SIGINFO` across `exec`, so under GitHub's macOS runner agent every
+  descendant reads `SIG_DFL` with `SA_SIGINFO` set, and a flag check silently disarmed the deadline
+  there while bare-metal Macs passed. Every bound in it is measured on `CLOCK_MONOTONIC`, never
+  counted in naps: on that loaded VM 200 "10 ms" naps took 10 s (`taskpolicy -b`, or the test's
+  in-process throttle, reproduces it on a bare-metal Mac).
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
   dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
   batch's into the run directory and keeps only the five slowest, below) and

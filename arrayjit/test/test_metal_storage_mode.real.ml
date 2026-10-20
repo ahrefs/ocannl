@@ -21,7 +21,11 @@ let string_of_storage_mode = function
   | SM.Memoryless -> "Memoryless"
 
 let () =
-  let device = B.get_device ~ordinal:0 in
+  (* The implementation module is below the backend singletons that carry the device-init deadline
+     (gh-ocannl-1281), so a direct caller takes it itself. *)
+  let device =
+    Utils.with_device_init_deadline ~backend_name:B.name (fun () -> B.get_device ~ordinal:0)
+  in
   let next_pool =
     ref 1
     (* pool 0 is the reserved merge buffer *)

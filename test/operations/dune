@@ -269,6 +269,7 @@
   (alias runtest-config_var_spellings)
   (alias runtest-foreign_c_stderr)
   (alias runtest-foreign_c_stderr_noise)
+  (alias runtest-device_init_deadline)
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
@@ -2969,6 +2970,51 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff foreign_c_stderr_noise.expected foreign_c_stderr_noise.actual)))
+
+; gh-ocannl-1281: a GPU backend's device discovery and device opening run under a deadline that
+; kills a stuck process by SIGALRM with a diagnostic. The child simulates a stuck initialization
+; through Utils' test stall hook, which raises before any driver contact; the parent observes each
+; child's death or survival, pinning `device_init_deadline` on the child's COMMANDLINE, so an
+; ambient `OCANNL_DEVICE_INIT_DEADLINE` cannot change what it sees.
+
+(executables
+ (names device_init_deadline device_init_deadline_child)
+ (modules device_init_deadline device_init_deadline_child)
+ (foreign_stubs
+  (language c)
+  (names device_init_deadline_stubs))
+ (libraries
+  base
+  stdio
+  unix
+  mtime
+  mtime.clock.os
+  arrayjit.utils
+  arrayjit.ir
+  arrayjit.context
+  fresh_process
+  arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: cc -- the child names each backend singleton itself: on the cuda, hip and metal
+ ; ones the stall hook raises before any driver contact, and only cc's entry points really run.
+ (target device_init_deadline.actual)
+ (deps ocannl_config ../../tools/test-run.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:device_init_deadline.exe}
+    %{dep:device_init_deadline_child.exe}
+    %{dep:../../tools/test-run.sh}))))
+
+(rule
+ (alias runtest-device_init_deadline)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff device_init_deadline.expected device_init_deadline.actual)))
 
 ;; gh-ocannl-1036: device streams torn down at process exit, observed from a parent process --
 ;; the ROCm runtime reports a leaked stream on the exiting child's stderr, which nothing inside the

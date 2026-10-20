@@ -356,6 +356,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cost_model_selection
   test/operations/dune                     @runtest-dead_export_scan
   test/operations/dune                     @runtest-dead_export_scan_control
+  test/operations/dune                     @runtest-device_init_deadline
   test/operations/dune                     @runtest-digest_completeness
   test/operations/dune                     @runtest-doc_examples
   test/operations/dune                     @runtest-env_spelling_gate
