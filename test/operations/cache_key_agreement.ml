@@ -205,7 +205,6 @@ let off_default (kind : Utils.config_value_kind) default =
 let emitted_flips =
   [
     ("cc_backend_post_compile_timeout", [ "2.5" ]);
-    ("cc_backend_verify_codesign", flag);
     ("fp_contract", flag);
     ("fp_reassociate", flag);
     ("fp_finite_math", flag);
@@ -224,6 +223,10 @@ let emitted_exemptions =
       "identifier spelling: the canonical rendering alpha-renames identifiers away, and code that \
        differs only in their names compiles to the same kernel -- a changed text is what the key \
        is right to ignore" );
+    ( "cc_backend_verify_codesign",
+      "a check on the compiled library, which signs it or refuses it and never touches the source: \
+       stated on a host without codesign (every Linux CI box) it refuses every compile, so no \
+       kernel comes back to compare" );
     ( "build_files_prefix",
       "it moves the very artifacts this oracle reads, and Generated refuses a set prefix" );
   ]
