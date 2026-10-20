@@ -322,8 +322,17 @@ let read ?(source = "") content =
                   | Cache | Ir | Ocannl | Autotune -> true
                   | _ -> false)
               in
+              (* What an include brings in joins the structure's module names: a structure's
+                 exports, or the one module each namespace the scan names holds (review round 6), so
+                 that opening the structure brings [Schedule_cache] in and a literal signature
+                 filters it like any other module name. (An include cannot redefine a module name
+                 the structure already binds -- ocamlc refuses the duplicate.) *)
               let exports =
-                match included with Some (Exports e) -> overlay exports e.names | _ -> exports
+                match included with
+                | Some (Exports e) -> overlay exports e.names
+                | Some Ir -> Map.set exports ~key:"Schedule_cache" ~data:Cache
+                | Some Ocannl -> Map.set exports ~key:"Ir" ~data:Ir
+                | _ -> exports
               in
               (* A named module may define any of the names bound so far, and its own then win. *)
               (* Ir and Ocannl are namespaces of modules alone, so only an include of the cache or of
@@ -351,19 +360,11 @@ let read ?(source = "") content =
          any other open. *)
       method! opened ~top:_ ~include_:_ env =
         function
-        | Some (Exports { names; bases; _ }) ->
-            (* The module members a structure inherits from its bases come into scope too: opening
-               [struct include Ir end] brings [Schedule_cache] (review round 5). Oldest base first,
-               so a later include wins, and the structure's own names over all of them. *)
-            let inherited =
-              List.concat_map (List.rev bases) ~f:(function
-                | Ir -> [ ("Schedule_cache", Cache) ]
-                | Ocannl -> [ ("Ir", Ir) ]
-                | _ -> [])
-              |> Map.of_alist_reduce (module String) ~f:(fun _ later -> later)
-            in
+        | Some (Exports { names; _ }) ->
+            (* [names] holds the modules an include of Ir or Ocannl brought in too (review rounds 5
+               and 6), so opening [struct include Ir end] brings [Schedule_cache]. *)
             let certain = Map.filter names ~f:(function May_be_hidden _ -> false | _ -> true) in
-            { env with modules = overlay env.modules (overlay inherited certain) }
+            { env with modules = overlay env.modules certain }
         | _ -> env
 
       val mutable resolver_seen = false

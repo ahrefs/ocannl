@@ -294,6 +294,12 @@ module M = struct include Ir end
 open M
 let () = Schedule_cache.store ~dir:"autotune_cache_inherited" key value|ocaml},
       [ "~dir names autotune_cache_inherited" ] );
+    ( "a literal signature hides the modules an include brought in",
+      {ocaml|module Schedule_cache = Other
+module M : sig end = struct include Ir end
+open M
+let () = Schedule_cache.store ~dir:"scratch" key value|ocaml},
+      [] );
     (* The forwarding resolver is certified only through the library's own module: a structure that
        includes it may define a [resolve_cache_dir] of its own (review round 3). *)
     ( "a resolver reached through a structure including Autotune certifies nothing",

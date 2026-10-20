@@ -1228,7 +1228,16 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
            much as a cell operator (review round 4). *)
         let written =
           match expr.pexp_desc with
-          | Pexp_setfield (_, _, rhs) | Pexp_setinstvar (_, rhs) -> of_expr rhs
+          | Pexp_setfield (target, _, rhs) ->
+              (* The target is computed too, and may itself store (review round 6). *)
+              let target = of_expr target in
+              if
+                carries_text target
+                && (List.mem target.because Mutation ~equal:Poly.equal
+                   || not (Set.is_empty target.stored))
+              then join_provenance (of_expr rhs) target
+              else of_expr rhs
+          | Pexp_setinstvar (_, rhs) -> of_expr rhs
           | Pexp_apply (_, args) ->
               List.fold args ~init:no_provenance ~f:(fun acc (_, arg) ->
                   join_provenance acc (of_expr arg))
