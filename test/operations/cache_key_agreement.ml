@@ -80,7 +80,15 @@ type resolver =
 
 (* The regime a flip is compared in: what is set before the baseline and the flipped key are
    computed alike. A gate's own keys bite only behind it, so they are flipped behind it. *)
-type setup = Routine_logs of bool | Log_level of int
+type setup =
+  | Routine_logs of bool
+  | Log_level of int
+  | Stated of string * string
+      (** a key stated in the config file for the comparison: a gate that is itself a setting *)
+
+(* A [Stated] setup that a commandline or environment statement outranks: the regime cannot be
+   established in this process, so the flips that need it are not made. *)
+exception Setup_outranked of string
 
 type flip = {
   resolver : resolver;
@@ -116,10 +124,11 @@ let keyed_flips =
     ("cc_vector_registers", config ~scope:Cpu [ "7"; "8" ]);
     ("cc_fp16_arithmetic", config ~scope:Cpu [ "none"; "promoted" ]);
     ("cc_parallel_grid", config ~scope:Cpu [ "none"; "openmp" ]);
-    (* The chunk count reaches the emitted code only through a parallel grid, so it is hashed only
-       where the box's own grid resolution is one: [cc_parallel_grid=auto] is dispatch on macOS and
-       OpenMP where libgomp links. *)
-    ("cc_parallel_chunks", config ~scope:Cpu [ "3"; "5" ]);
+    (* The chunk count reaches the emitted code only through a parallel grid, so it is flipped
+       behind one: stating the mode probes nothing, and nothing is compiled here, so OpenMP serves
+       on a box whose own [auto] resolves to no grid. *)
+    ( "cc_parallel_chunks",
+      config ~scope:Cpu ~under:[ Stated ("cc_parallel_grid", "openmp") ] [ "3"; "5" ] );
     ("large_models", { (config flag) with resolver = Settings });
     ("big_models", { (config flag) with resolver = Settings });
     ( "log_level",
@@ -265,14 +274,37 @@ let canonical_of ctx =
   in
   Option.value_exn ~here:[%here] !canon
 
+(* Whether the config file is where [key] now resolves from, stating [value]: a commandline or
+   environment statement outranks it, and one that happens to state the same value is still not the
+   flip (it was the baseline too). *)
+let stated_in_file key value =
+  match Utils.profile_key_source key with
+  | Some (v, Utils.From_config_file) -> String.equal v value
+  | Some _ | None -> false
+
 let with_setup setups f =
   let level0 = Utils.settings.log_level and logs0 = Utils.settings.debug_log_from_routines in
-  List.iter setups ~f:(function
-    | Routine_logs on -> Utils.settings.debug_log_from_routines <- on
-    | Log_level level -> Utils.settings.log_level <- level);
-  Exn.protect ~f ~finally:(fun () ->
-      Utils.settings.log_level <- level0;
-      Utils.settings.debug_log_from_routines <- logs0)
+  let stated =
+    List.filter_map setups ~f:(function
+      | Stated (key, value) -> Some (key, value, Hashtbl.find Utils.config_file_args key)
+      | Routine_logs _ | Log_level _ -> None)
+  in
+  let restore () =
+    Utils.settings.log_level <- level0;
+    Utils.settings.debug_log_from_routines <- logs0;
+    List.iter stated ~f:(fun (key, _, previous) ->
+        match previous with
+        | None -> Hashtbl.remove Utils.config_file_args key
+        | Some data -> Hashtbl.set Utils.config_file_args ~key ~data)
+  in
+  Exn.protect ~finally:restore ~f:(fun () ->
+      List.iter setups ~f:(function
+        | Routine_logs on -> Utils.settings.debug_log_from_routines <- on
+        | Log_level level -> Utils.settings.log_level <- level
+        | Stated (key, value) ->
+            Hashtbl.set Utils.config_file_args ~key ~data:value;
+            if not (stated_in_file key value) then raise (Setup_outranked key));
+      f ())
 
 let resync = function
   | Per_lookup -> ()
@@ -297,12 +329,7 @@ let with_stated key value resolver f =
         | Some data -> Hashtbl.set Utils.config_file_args ~key ~data);
         resync resolver
       in
-      if
-        not
-          (Option.equal String.equal
-             (Option.map (Utils.profile_key_source key) ~f:fst)
-             (Some value))
-      then (
+      if not (stated_in_file key value) then (
         restore ();
         None)
       else
@@ -388,15 +415,21 @@ let () =
     (* The regime is set inside the flip as well: re-resolving the settings record resets the log
        level the regime raised. *)
     let in_regime () = with_setup flip.under components in
-    let before = in_regime () in
     let flips =
-      List.filter_map flip.candidates ~f:(fun value ->
-          match with_stated key value flip.resolver in_regime with
-          | None -> None
-          | Some after -> Some (value, moved before after)
-          | exception exn ->
-              eprintf "%s=%s: computing the key raised %s\n" key value (Exn.to_string exn);
-              Some (value, [ "<raised>" ]))
+      match in_regime () with
+      | exception Setup_outranked gate ->
+          eprintf
+            "%s: its regime needs %s, which is stated on the commandline or in the environment\n"
+            key gate;
+          []
+      | before ->
+          List.filter_map flip.candidates ~f:(fun value ->
+              match with_stated key value flip.resolver in_regime with
+              | None -> None
+              | Some after -> Some (value, moved before after)
+              | exception exn ->
+                  eprintf "%s=%s: computing the key raised %s\n" key value (Exn.to_string exn);
+                  Some (value, [ "<raised>" ]))
     in
     (key, component, flip.scope, flips)
   in
@@ -404,7 +437,10 @@ let () =
   let took_effect =
     List.filter outcomes ~f:(fun (key, _, _, flips) ->
         if List.is_empty flips then
-          eprintf "%s: stated on the commandline or in the environment, so not flipped here\n" key;
+          eprintf
+            "%s: not flipped here -- it, or its regime, is stated on the commandline or in the \
+             environment\n"
+            key;
         not (List.is_empty flips))
   in
   let here, elsewhere =
