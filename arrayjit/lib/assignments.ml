@@ -239,22 +239,29 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      symbolic-extent axis AND the extent's symbol is among the routine's bindings (so the value is a
      kernel parameter). An unbound extent symbol keeps the maximum-extent semantics: the loop covers
      the whole (max-sized) buffer, exactly as if the extent were written concretely. *)
-  let extent_guard ~(projections : Indexing.projections) ~index ~iter body =
+  let bound_extent ~(projections : Indexing.projections) iter =
     match
       List.Assoc.find projections.extent_syms
         ~equal:(Option.equal Indexing.equal_symbol)
         (Some iter)
     with
-    | Some sym when List.mem static_indices sym ~equal:Indexing.equal_static_symbol ->
-        let iprec = Ops.index_prec () in
-        let cond =
-          Low_level.Binop
-            ( Ops.Cmplt,
-              (Low_level.Embed_index (Indexing.Iterator index), iprec),
-              (Low_level.Embed_index (Indexing.Iterator sym.Indexing.static_symbol), iprec) )
-        in
-        Low_level.If { cond = (cond, iprec); body }
-    | _ -> body
+    | Some sym when List.mem static_indices sym ~equal:Indexing.equal_static_symbol -> Some sym
+    | _ -> None
+  in
+  let guard_below_extent ~index (sym : Indexing.static_symbol) body =
+    let iprec = Ops.index_prec () in
+    let cond =
+      Low_level.Binop
+        ( Ops.Cmplt,
+          (Low_level.Embed_index (Indexing.Iterator index), iprec),
+          (Low_level.Embed_index (Indexing.Iterator sym.Indexing.static_symbol), iprec) )
+    in
+    Low_level.If { cond = (cond, iprec); body }
+  in
+  let extent_guard ~(projections : Indexing.projections) ~index ~iter body =
+    match bound_extent ~projections iter with
+    | Some sym -> guard_below_extent ~index sym body
+    | None -> body
   in
   (* Apply left padding offsets to convert from semantic to buffer indices. Semantic indices can be
      negative (e.g., -1 for convolution padding), but buffer indices must be non-negative. Adding
@@ -730,9 +737,50 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       else Low_level.unflat_lines (padding_resets @ [ for_loops ])
     in
     if needs_init then
-      let dims = lazy projections.lhs_dims in
-      let fetch_op = Constant neutral_value in
-      Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops_with_resets)
+      (* The initialization fills only the cells the accumulation can reach. An lhs axis indexed by
+         a product iterator with a bound symbolic extent gets the body's own [iterator < extent]
+         guard, so a run at extent [e] initializes the in-extent cells -- every cell the guarded
+         body reads -- and leaves the cells past the extent untouched. Stores, and the loops nested
+         under a guarded axis, scale with the extent; the guarded axis's own loop still spans the
+         declared maximum (bounds are static), exactly as the body's does. Those cells are
+         unspecified after an initializing accumulation (docs/shape_inference.md, "Symbolic extents:
+         cells past a bound extent"), so this changes no promise. It is deliberately NOT a [Fetch]:
+         a fill covers the materialized buffer, a promise [zero_grads] keeps for gradient
+         accumulation across extents, and the guarded initialization must stay distinguishable from
+         it. The margins of a padded target are established by [padding_resets] above, which the
+         unguarded [Fetch] path repeats. *)
+      let lhs_extents =
+        Array.map projections.project_lhs ~f:(function
+          | Indexing.Iterator iter -> bound_extent ~projections iter
+          | _ -> None)
+      in
+      let init =
+        if Array.for_all lhs_extents ~f:Option.is_none then
+          let dims = lazy projections.lhs_dims in
+          loop (Fetch { array = lhs; fetch_op = Constant neutral_value; dims })
+        else
+          let rec init_loop rev_idcs = function
+            | [] -> set lhs (Array.of_list_rev rev_idcs) (Low_level.Constant neutral_value)
+            | (d, _) :: axes when not (Indexing.iterated d) ->
+                init_loop (Indexing.Fixed_idx 0 :: rev_idcs) axes
+            | (d, extent) :: axes ->
+                let index = Indexing.get_symbol () in
+                let body = init_loop (Indexing.Iterator index :: rev_idcs) axes in
+                Low_level.For_loop
+                  {
+                    index;
+                    from_ = 0;
+                    to_ = d - 1;
+                    body =
+                      Option.value_map extent ~default:body ~f:(fun sym ->
+                          guard_below_extent ~index sym body);
+                    axis = Serial;
+                  }
+          in
+          init_loop []
+            (List.zip_exn (Array.to_list projections.lhs_dims) (Array.to_list lhs_extents))
+      in
+      Low_level.Seq (init, for_loops_with_resets)
     else for_loops_with_resets
   and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections : Low_level.t
       =

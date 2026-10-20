@@ -467,14 +467,17 @@ a symbolic axis is at least `e`, and the contract about those cells is (gh-ocann
 - **An initializing accumulation leaves them unspecified.** An initializing accumulation (`=:`,
   `=:+`, ...) never reads its target's prior content, so whatever it leaves past the extent cannot
   reach an in-extent result of this run, and a later run re-initializes before it reads. Today
-  those cells hold the accumulation's neutral element when lowering emits an initialization pass
-  (the target is not covered one-to-one, e.g. a reduction onto the symbolic axis), because that
-  pass fills the whole materialized buffer, and are untouched otherwise. Neither is promised:
-  guarding the initialization pass, or lowering to symbolic loop bounds, may change it. Read the
-  valid prefix on the host.
+  those cells are untouched: when lowering emits an initialization pass (the target is not covered
+  one-to-one, e.g. a reduction onto the symbolic axis), that pass carries the body's
+  `iterator < extent` guard on every target axis a bound extent indexes, so it stores to the
+  in-extent cells only (the guarded loop itself still spans the maximum, as the body's does). This
+  is not promised: lowering to symbolic loop bounds, or a schedule that rewrites the pass, may
+  change it. Read the valid prefix on the
+  host.
 - **A fill covers the materialized buffer.** A `Fetch` (constant fills, the `zero_grads` of every
   gradient, ranges) carries no projections and so no extent: it writes every cell up to the
-  maximum. This half IS promised, because the second rule relies on it: `zero_grads` clears every
+  maximum, even in a routine whose extent is bound. The guarded initialization pass above is not a
+  `Fetch`. This half IS promised, because the second rule relies on it: `zero_grads` clears every
   gradient row, including the rows a later, larger extent brings into scope.
 - **A maximum-one axis cannot be guarded, so it is refused.** The guard is per iterator, and a
   dimension-1 axis has none (it is indexed at `Fixed_idx 0`, see above), so lowering refuses a bound
