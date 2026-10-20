@@ -461,7 +461,10 @@ files.
   of `loop_accum_rev` (the `Rev_sides` scatter). The scatter builds each target's view from
   `project_rhs.(i)`/`rhs_dims.(i)` directly, NOT from `target_projections`: the selector drops a
   target whose concatenation segment has dimension 1 (indexed at `Fixed_idx 0`, its symbol absent),
-  and such a target would silently fall back to the full fill.
+  and such a target would silently fall back to the full fill. The `Fetch` also filled a padded
+  target's margins, so the guarded nest of a scatter target is preceded by that target's margin
+  resets (`~reset_margins`; `loop_accum`'s own `padding_resets` already cover its `lhs`, while
+  `loop_accum_rev`'s cover the side it reads).
   `docs/shape_inference.md` ("Symbolic extents: cells past a bound extent", gh-ocannl-928) makes
   what the init leaves past the extent unspecified and the `Fetch` coverage a promise: keep `Fetch`
   unguarded, because `zero_grads` clearing the whole buffer is what keeps gradient accumulation

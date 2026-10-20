@@ -737,7 +737,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       else Low_level.unflat_lines (padding_resets @ [ for_loops ])
     in
     if needs_init then
-      let init = neutral_init ~projections lhs neutral_value in
+      let init = neutral_init ~reset_margins:false ~projections lhs neutral_value in
       Low_level.Seq (init, for_loops_with_resets)
     else for_loops_with_resets
   (* An initialization pass fills only the cells the accumulation can reach. An axis of [tn] indexed
@@ -752,9 +752,12 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      the guarded initialization must stay distinguishable from it. A [tn] with no bound-extent axis
      keeps the [Fetch]. [projections] is [tn]'s view as the written side: [lhs_dims] its dims and
      [project_lhs] its index per axis -- for a [Rev_sides] target, that target's own projections.
-     [loop_accum] establishes a padded target's margins with [padding_resets], which the unguarded
-     [Fetch] path repeats. *)
-  and neutral_init ~(projections : Indexing.projections) tn neutral_value : Low_level.t =
+     The unguarded [Fetch] also establishes a padded target's margins; the guarded nest stores only
+     semantic cells, so [~reset_margins] prepends [tn]'s margin resets to it. [loop_accum] passes
+     [false]: its [padding_resets] already reset the margins of the [lhs] it initializes, whereas
+     [loop_accum_rev]'s reset the side it reads, not its targets. *)
+  and neutral_init ~reset_margins ~(projections : Indexing.projections) tn neutral_value :
+      Low_level.t =
     let extents =
       Array.map projections.project_lhs ~f:(function
         | Indexing.Iterator iter -> bound_extent ~projections iter
@@ -782,7 +785,15 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                 axis = Serial;
               }
       in
-      init_loop [] (List.zip_exn (Array.to_list projections.lhs_dims) (Array.to_list extents))
+      let nest =
+        init_loop [] (List.zip_exn (Array.to_list projections.lhs_dims) (Array.to_list extents))
+      in
+      let margins =
+        if not reset_margins then []
+        else
+          match Lazy.force tn.padding with Some (_, v) -> reset_padding_regions tn v | None -> []
+      in
+      if List.is_empty margins then nest else Low_level.unflat_lines (margins @ [ nest ])
   and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
@@ -918,7 +929,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                 project_lhs = projections.project_rhs.(i);
               }
             in
-            Some (neutral_init ~projections array neutral_value))
+            Some (neutral_init ~reset_margins:true ~projections array neutral_value))
       |> Array.to_list
     in
     if List.is_empty init_ops then for_loops_with_resets
