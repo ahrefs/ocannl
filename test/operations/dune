@@ -2296,6 +2296,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; The Rev_sides scatter attributes a width-1 concatenation segment's target to that segment, so an
+; initializing scatter writes it with a plain store; executed against a materialized reference.
+
+(test
+ (name rev_sides_width1_store)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rev_sides_width1_store)
+ (libraries base ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-929: the gradient half of that contract -- grad_update, gradient accumulation across
 ; extents, and the Rev_sides scatter executed and refused.
 

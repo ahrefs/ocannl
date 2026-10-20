@@ -750,12 +750,13 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      extent"), so this changes no promise. It is deliberately NOT a [Fetch]: a fill covers the
      materialized buffer, a promise [zero_grads] keeps for gradient accumulation across extents, and
      the guarded initialization must stay distinguishable from it. A [tn] with no bound-extent axis
-     keeps the [Fetch]. [projections] is [tn]'s view as the written side: [lhs_dims] its dims and
-     [project_lhs] its index per axis -- for a [Rev_sides] target, that target's own projections.
-     The unguarded [Fetch] also establishes a padded target's margins; the guarded nest stores only
-     semantic cells, so [~reset_margins] prepends [tn]'s margin resets to it. [loop_accum] passes
-     [false]: its [padding_resets] already reset the margins of the [lhs] it initializes, whereas
-     [loop_accum_rev]'s reset the side it reads, not its targets. *)
+     keeps the [Fetch], unless it is a slice-alias view. [projections] is [tn]'s view as the written
+     side: [lhs_dims] its dims and [project_lhs] its index per axis -- for a [Rev_sides] target,
+     that target's own projections. The unguarded [Fetch] also establishes a padded target's
+     margins; the guarded nest stores only semantic cells, so [~reset_margins] prepends [tn]'s
+     margin resets to it. [loop_accum] passes [false]: its [padding_resets] already reset the
+     margins of the [lhs] it initializes, whereas [loop_accum_rev]'s reset the side it reads, not
+     its targets. *)
   and neutral_init ~reset_margins ~(projections : Indexing.projections) tn neutral_value :
       Low_level.t =
     let extents =
@@ -763,7 +764,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
         | Indexing.Iterator iter -> bound_extent ~projections iter
         | _ -> None)
     in
-    if Array.for_all extents ~f:Option.is_none then
+    (* A slice-alias view owns no buffer: a [Fetch] would lower to a whole-node [Zero_out] of the
+       view itself, which leaves the parent's slice untouched, whereas the nest's stores go through
+       [set] and [resolve_alias] to that slice, like the body's. *)
+    if Array.for_all extents ~f:Option.is_none && not (Tn.is_alias tn) then
       let dims = lazy projections.lhs_dims in
       loop (Fetch { array = tn; fetch_op = Constant neutral_value; dims })
     else
@@ -806,35 +810,70 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       | [| syms |] when List.length syms = Array.length lhses -> Some (Array.of_list syms)
       | _ -> None
     in
+    let segment_width sym =
+      Array.find_map projections.components
+        ~f:(List.find_map ~f:(fun (d, s) -> Option.some_if (Indexing.equal_symbol s sym) d))
+    in
     let target_projections =
       Array.mapi projections.project_rhs ~f:(fun i project_lhs ->
+          let target_dims = projections.rhs_dims.(i) in
           (* Keep inactive symbols in the domain: removing one would make the source availability
              proof mistake it for an always-available static parameter. *)
-          let selects_target =
+          (* Each target's queries judge that target's writes alone, so they are sound only when no
+             other target writes the same storage: [(t, t) ++^ ...] scatters both segments into one
+             gradient, and two plain stores would keep only the later contribution. Storage is
+             compared after [resolve_alias], as [set] and [get] resolve it, so two slice-alias
+             views of one parent count as one. A storage named by more than one target keeps the
+             read-add-write form and its init. *)
+          let storage = function Node tn | Merge_buffer tn -> fst (resolve_alias tn [||]) in
+          let shared =
+            Array.existsi lhses ~f:(fun j buf ->
+                j <> i && Tn.equal (storage buf) (storage lhses.(i)))
+          in
+          let attributed =
             match selector with
-            | None -> true
+            | _ when shared -> None
+            | None -> Some project_lhs
             | Some syms ->
                 let selected = syms.(i) in
-                Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected)
-                && Array.for_all projections.components ~f:(fun comp ->
-                    if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s selected) then
-                      let others =
-                        List.filter_map comp ~f:(fun (_, s) ->
-                            if Indexing.equal_symbol s selected then None else Some s)
-                      in
-                      not (Array.exists project_lhs ~f:(Indexing.axis_index_mentions_any others))
-                    else true)
+                (* A segment of dimension 1 iterates its symbol over [0] alone, so the target
+                   indexes that axis at [Fixed_idx 0] and never mentions the symbol. [Iterator
+                   selected] at that axis is the same index -- the writes are unchanged -- and it
+                   lets the analyses below see that only the blocks choosing this segment write the
+                   target. Without it, every block of the component looked like a writer, so the
+                   target was never proven injective: a read-add-write plus an init where a store
+                   would do. Any dimension-1 [Fixed_idx 0] axis is the same index for a symbol
+                   ranging over [0]; with none, the target keeps the conservative path. *)
+                let project_lhs =
+                  if Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected) then
+                    Some project_lhs
+                  else if Option.equal Int.equal (segment_width selected) (Some 1) then
+                    Array.findi project_lhs ~f:(fun ax idx ->
+                        match idx with Indexing.Fixed_idx 0 -> target_dims.(ax) = 1 | _ -> false)
+                    |> Option.map ~f:(fun (ax, _) ->
+                        Array.mapi project_lhs ~f:(fun ax' idx ->
+                            if ax' = ax then Indexing.Iterator selected else idx))
+                  else None
+                in
+                Option.filter project_lhs ~f:(fun project_lhs ->
+                    Array.for_all projections.components ~f:(fun comp ->
+                        if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s selected) then
+                          let others =
+                            List.filter_map comp ~f:(fun (_, s) ->
+                                if Indexing.equal_symbol s selected then None else Some s)
+                          in
+                          not
+                            (Array.exists project_lhs ~f:(Indexing.axis_index_mentions_any others))
+                        else true))
           in
-          if not selects_target then None
-          else
-            Some
+          Option.map attributed ~f:(fun project_lhs ->
               {
                 projections with
-                lhs_dims = projections.rhs_dims.(i);
+                lhs_dims = target_dims;
                 project_lhs;
                 rhs_dims = [| projections.lhs_dims |];
                 project_rhs = [| projections.project_lhs |];
-              })
+              }))
     in
     let target_can_skip =
       Array.map target_projections ~f:(fun proj ->
@@ -909,7 +948,18 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     let init_ops =
       Array.filter_mapi lhses ~f:(fun i buf ->
-          if not target_needs_init.(i) then None
+          if not target_needs_init.(i) then
+            (* An initializing scatter that elides a target's init writes only its semantic cells,
+               and this record's [padding_resets] cover the side it reads: a padded target's margins
+               are established here, as [neutral_init] would have (device buffers are allocated
+               raw). A non-initializing scatter accumulates into a target its own writer already
+               established. *)
+            match buf with
+            | Node tn when initialize_neutral -> (
+                match Lazy.force tn.padding with
+                | Some (_, v) -> Some (Low_level.unflat_lines (reset_padding_regions tn v))
+                | None -> None)
+            | _ -> None
           else
             let array =
               match buf with
@@ -918,10 +968,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                   raise @@ Utils.User_error "Rev_sides cannot initialize merge buffers"
             in
             (* The target's own view as the written side, built whether or not the selector
-               attributes the target ([target_projections] drops one whose concatenation symbol has
-               dimension 1, indexed at [Fixed_idx 0]): the initialization needs only its dims, its
-               index per axis and the extent table, and the body's writes to it are guarded by the
-               same bound extents. *)
+               attributes the target ([target_projections] drops one that mentions another segment
+               of its component, or whose width-1 segment has no dimension-1 [Fixed_idx 0] axis):
+               the initialization needs only its dims, its index per axis and the extent table, and
+               the body's writes to it are guarded by the same bound extents. *)
             let projections =
               {
                 projections with

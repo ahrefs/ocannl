@@ -1,0 +1,42 @@
+concrete: the concatenation's gradient scatter is emitted non-initializing: true
+concrete: v's projection indexes its width-1 concatenation axis at Fixed_idx 0: true
+concrete: v's projection mentions no symbol of the concatenation's component: true
+concrete: the initializing scatter writes u with a plain store, never reading it: true
+concrete: u gets no init pass: true
+concrete: the initializing scatter writes v with a plain store, never reading it: true
+concrete: v gets no init pass: true
+concrete at extent 3: the reference u gradient is its slice of cat's: true
+concrete at extent 3: the reference v gradient is its slice of cat's: true
+concrete at extent 3, unscheduled initializing scatter: u equals the reference: true
+concrete at extent 3, unscheduled initializing scatter: v equals the reference: true
+concrete at extent 3, scheduled initializing scatter: u equals the reference: true
+concrete at extent 3, scheduled initializing scatter: v equals the reference: true
+symbolic: the concatenation's gradient scatter is emitted non-initializing: true
+symbolic: v's projection indexes its width-1 concatenation axis at Fixed_idx 0: true
+symbolic: v's projection mentions no symbol of the concatenation's component: true
+symbolic: the initializing scatter writes u with a plain store, never reading it: true
+symbolic: u keeps an init pass (a symbolic extent is never proven surjective): true
+symbolic: the initializing scatter writes v with a plain store, never reading it: true
+symbolic: v keeps an init pass (a symbolic extent is never proven surjective): true
+symbolic at extent 2: the reference u gradient is its slice of cat's: true
+symbolic at extent 2: the reference v gradient is its slice of cat's: true
+symbolic at extent 2, unscheduled initializing scatter: u equals the reference: true
+symbolic at extent 2, unscheduled initializing scatter: v equals the reference: true
+symbolic at extent 2, scheduled initializing scatter: u equals the reference: true
+symbolic at extent 2, scheduled initializing scatter: v equals the reference: true
+symbolic at extent 4: the reference u gradient is its slice of cat's: true
+symbolic at extent 4: the reference v gradient is its slice of cat's: true
+symbolic at extent 4, unscheduled initializing scatter: u equals the reference: true
+symbolic at extent 4, unscheduled initializing scatter: v equals the reference: true
+symbolic at extent 4, scheduled initializing scatter: u equals the reference: true
+symbolic at extent 4, scheduled initializing scatter: v equals the reference: true
+shared: the initializing scatter accumulates into the shared node, with no plain store: true
+shared: the shared node keeps an init pass: true
+shared: the reference sums both columns of cat's gradient: true
+shared: the initializing scatter equals the reference: true
+alias: the initializing scatter accumulates into the shared parent, with no plain store: true
+alias: no statement of the scatter touches an alias view itself: true
+alias: slice 0 keeps its sentinel, slice 1 sums both columns: true
+padded: the padded width-1 target gets a plain store and no init: true
+padded: its margin is still reset to the padding value: true
+padded: the physical buffer holds the margin value, then cat's second column: true
