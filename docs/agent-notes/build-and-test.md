@@ -2790,6 +2790,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   closed): Metal is the development Macs' everyday backend and a leg of `tools/sweep.sh`, while a
   hosted leg on the paravirtual device would have to skip simdgroup matrix work and would inherit
   the macOS runners' contention — runner time for a subset of what the reference Mac already runs.
+- The per-PR macOS leg is advisory at merge (`.github/ship-pr-advisory-checks`,
+  lukstafi/ludics-lite#720): `pr-review.sh merge` does not wait for it, and the wave gate does not
+  hold behind an older merge's run going only on it. Every test it runs, the ubuntu shards run too,
+  so its unique coverage is the platform (arm64, Apple clang, the Metal queue probe above). In a
+  ~20-PR wave its queue held merges and launches for about two hours, while the reds it alone
+  would catch are rare. A macOS-only red therefore lands on master, where the push run's macOS leg
+  finds it and the CI-red triage routine owns it. A change that is macOS-specific runs its suites
+  on a development Mac before merging (or waits for the PR's own macOS leg on purpose).
 - The benchmark tests' torch legs run in ONE job, `torch-runner`. The main legs run
   `benchmarks/test_orchestrate.py` through dune on runners without torch, where the tests that
   drive `benchmarks/runners/pytorch/run.py` for real skip. `torch-runner` (ubuntu, no OCaml
