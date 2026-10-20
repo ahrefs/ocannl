@@ -829,10 +829,17 @@ module Shell_lexer = struct
       in
       String.sub line ~pos:index ~len:(finish index - index)
     in
+    (* A word starts after an unescaped blank or separator, as {!comment_starts} reads one: an
+       escaped space ([foo\ #bar]) continues its word. *)
     let word_start index =
+      let rec backslashes index count =
+        if index > body && Char.equal line.[index - 1] '\\' then backslashes (index - 1) (count + 1)
+        else count
+      in
       index = body
-      || Char.is_whitespace line.[index - 1]
-      || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal
+      || (Char.is_whitespace line.[index - 1]
+         || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal)
+         && backslashes (index - 1) 0 % 2 = 0
     in
     (* Whether the next word is in command position, tracked forward through the body: true at its
        start and after a separator or a parenthesis, kept across a reserved word a command follows,
@@ -1707,6 +1714,8 @@ module Shell_context = struct
   type statement = {
     id : int;
     line : int;  (** The physical line of the logical line it starts on. *)
+    start : int;
+        (** The offset it starts at in the joined logical lines: source order, finer than [line]. *)
     operands : operand list;
     connectors : connector list;  (** Between consecutive operands. *)
     async : bool;  (** Ended by a lone [&]. *)
@@ -1841,6 +1850,7 @@ module Shell_context = struct
             {
               id = !ids;
               line = line_of (Option.value !statement_start ~default:finish);
+              start = Option.value !statement_start ~default:finish;
               operands = List.rev !operands;
               connectors = List.rev !connectors;
               async;
@@ -2234,7 +2244,8 @@ module Shell_context = struct
             | None -> List.map (L.shell_words operand.text) ~f:L.literal_shell_word
             | Some compound -> List.concat_map compound.branches ~f:command_words))
 
-  (** The functions [branch] defines anywhere, by name, with the line each definition starts on. *)
+  (** The functions [branch] defines anywhere, by name, with the offset each definition starts at.
+  *)
   let rec definitions (branch : branch) =
     List.concat_map branch.statements ~f:(fun statement ->
         List.concat_map statement.operands ~f:(fun operand ->
@@ -2249,7 +2260,7 @@ module Shell_context = struct
                       [
                         ( Option.value (String.chop_suffix head ~suffix:"()") ~default:head,
                           compound,
-                          statement.line );
+                          statement.start );
                       ]
                   | _ -> []
                 in
@@ -2261,11 +2272,21 @@ module Shell_context = struct
       [--]), assignments and redirections. [command] and [builtin] are names of their own: neither
       runs a function. *)
   let command_name text =
+    (* Only an assignment as written: a quoted [ 'X=1' ] is the command it names, not a prefix. *)
+    let syntactic_assignment word =
+      match String.lsplit2 word ~on:'=' with
+      | Some (name, _) ->
+          let name = Option.value (String.chop_suffix name ~suffix:"+") ~default:name in
+          (not (String.is_empty name))
+          && (Char.is_alpha name.[0] || Char.equal name.[0] '_')
+          && String.for_all name ~f:(fun c -> Char.is_alphanum c || Char.equal c '_')
+      | None -> false
+    in
     let rec drop = function
       | "!" :: rest -> drop rest
       | "time" :: "-p" :: "--" :: rest | "time" :: ("-p" | "--") :: rest | "time" :: rest ->
           drop rest
-      | word :: rest when L.assignment_prefix word -> drop rest
+      | word :: rest when syntactic_assignment word -> drop rest
       | word :: rest -> (
           match L.redirection_prefix word with
           | Some true -> drop rest
@@ -2474,20 +2495,20 @@ module Shell_context = struct
                ~f:(fun { errexit; consumed; _ } -> not (errexit || consumed))
     in
     (* The calls of one definition: a name defined more than once binds each call to the latest
-       definition starting on or before the call's line, read in source order; a call above every
-       definition of its name (from a function body run later) is one of each of them. *)
-    let calls_of (name, _, line) =
-      let lines =
-        List.filter_map definitions ~f:(fun (defined, _, line) ->
-            Option.some_if (String.equal defined name) line)
+       definition starting before the call, in source order; a call above every definition of its
+       name (from a function body run later) is one of each of them. *)
+    let calls_of (name, _, start) =
+      let starts =
+        List.filter_map definitions ~f:(fun (defined, _, start) ->
+            Option.some_if (String.equal defined name) start)
       in
       List.filter_map calls ~f:(fun (called, ((statement, _) as site)) ->
           let binds =
             String.equal called name
             &&
-            match List.filter lines ~f:(fun defined -> defined <= statement.line) with
+            match List.filter starts ~f:(fun defined -> defined <= statement.start) with
             | [] -> true
-            | preceding -> line = Option.value_exn (List.max_elt preceding ~compare:Int.compare)
+            | preceding -> start = Option.value_exn (List.max_elt preceding ~compare:Int.compare)
           in
           Option.some_if binds site)
     in
@@ -2975,6 +2996,9 @@ module Errexit_negation = struct
       ( "negation after a case spelled in a comment inside a substitution",
         "set -e\nx=$( # ; case x in\n  echo 1\n)\n! probe\n",
         [ 5 ] );
+      ( "negation after an escaped space before a hash inside a substitution",
+        "set -e\nx=$(echo foo\\ #literal)\n! probe\n",
+        [ 3 ] );
       ( "negation after an esac argument inside a substitution's case arm",
         "set -e\nx=$(case $y in a) echo esac ;; esac)\n! probe\n",
         [ 3 ] );
@@ -3001,6 +3025,12 @@ module Errexit_negation = struct
         [ 3 ] );
       ( "function's final negation, its only call before a redefinition piped",
         "set -e\nf() {\n  ! grep -q x f\n}\nf | cat\nf() {\n  :\n}\nf\n",
+        [ 3 ] );
+      ( "function's final negation, its only call before a same-line redefinition piped",
+        "set -e\nf() { ! probe; }; f | cat; f() { :; }; f\n",
+        [ 2 ] );
+      ( "function's final negation, every real call piped beside a quoted assignment-shaped command",
+        "set -e\nf() {\n  ! probe\n}\nf | cat\nif 'X=1' f; then :; fi\n",
         [ 3 ] );
       ( "function's final negation, run only as another command's argument",
         "set -e\nabsent() {\n  ! grep -q x f\n}\nrun absent | cat\ncommand absent | cat\n",
