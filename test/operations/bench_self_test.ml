@@ -347,7 +347,7 @@ let () =
    names one. Where the platform cannot interrupt a kernel in progress ([H.instrument_preemptible]:
    no interval timer on Windows) the stalled leg is skipped -- it would only wait out the stall. *)
 let () =
-  let run ~budget_s ~stall_s =
+  let run ?before_instrument ~budget_s ~stall_s () =
     let started = ref [] and kernels = ref 0 in
     let time_kernel ~i timing =
       started := i :: !started;
@@ -357,6 +357,7 @@ let () =
     let t0 = Unix.gettimeofday () in
     let line =
       H.run_self_test ~out:Stdio.stderr ~dominant_kernel_budget_s:budget_s ~time_kernel
+        ?before_instrument
         ~inspect_compiled:(fun _ routines ->
           kernels := List.length (H.shipped_kernels (H.compiled_step_routines routines)))
         ()
@@ -378,7 +379,7 @@ let () =
   in
   if H.instrument_preemptible then (
     let stall_s = 120. in
-    let j, _, _, wall_s = run ~budget_s:0.5 ~stall_s in
+    let j, _, _, wall_s = run ~budget_s:0.5 ~stall_s () in
     let dk = Option.value (field j "dominant_kernel") ~default:`Null in
     Stdio.eprintf "bench_self_test: over-budget dominant kernel %s after %.1f s\n%!"
       (Yojson.Safe.to_string dk) wall_s;
@@ -409,25 +410,38 @@ let () =
           : Unix.interval_timer_status)
     in
     set 1000.;
-    ignore (run ~budget_s:0.5 ~stall_s);
+    ignore (run ~budget_s:0.5 ~stall_s ());
     let left = (Unix.getitimer Unix.ITIMER_REAL).Unix.it_value in
     (* Whose handler is installed is read by firing it. *)
     set 0.01;
     Unix.sleepf 0.2;
     Verdict.p (label 4) Float.(left > 900. && left <= 1000.);
     Verdict.p (label 5) !fired;
+    (* The alarm due before the budget is armed as the instrument starts, not before the run: armed
+       ahead of compiling and the timed steps, a loaded box spends its second before the instrument
+       is reached (tuf-amd-linux's full-suite run compiled this step in 1.8 s), the alarm fires
+       there, and the instrument meets no alarm at all. *)
     fired := false;
-    set 1.;
-    let j, _, _, wall_s = run ~budget_s:60. ~stall_s in
+    let fired_early = ref true and instrument_t0 = ref 0. in
+    let before_instrument () =
+      fired_early := !fired;
+      instrument_t0 := Unix.gettimeofday ();
+      set 1.
+    in
+    let j, _, _, _ = run ~before_instrument ~budget_s:60. ~stall_s () in
+    let instrument_s = Unix.gettimeofday () -. !instrument_t0 in
     Unix.sleepf 0.2;
     let dk = Option.value (field j "dominant_kernel") ~default:`Null in
-    Verdict.p (label 6) (!fired && Float.(wall_s < stall_s /. 4.) && is_str dk "verdict" "no-kernel");
+    Verdict.p (label 6)
+      ((not !fired_early) && !fired
+      && Float.(instrument_s < stall_s /. 4.)
+      && is_str dk "verdict" "no-kernel");
     set 0.;
     Stdlib.Sys.set_signal Stdlib.Sys.sigalrm previous)
   else
     List.iter stalled_labels ~f:(fun label ->
         Verdict.skipped ~aggregation:`Environment ~backend:"windows (no interval timer)" label);
-  let j, started, kernels, _ = run ~budget_s:3600. ~stall_s:0. in
+  let j, started, kernels, _ = run ~budget_s:3600. ~stall_s:0. () in
   Verdict.p "under a budget nothing reaches, the instrument starts every kernel"
     (kernels >= 1 && List.equal Int.equal started (List.init kernels ~f:Fn.id));
   Verdict.p "and names a dominant kernel"
