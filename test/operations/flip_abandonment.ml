@@ -363,19 +363,13 @@ let cache_replay comp =
   p "a replay under other repeats abandons nothing, where the same shape's replay would"
     (replays_no_record other_repeats)
 
-(* An [autotune-progress:] line's [key=value] fields; values are unquoted words here. *)
-let progress_fields line =
-  Option.map (String.chop_prefix line ~prefix:"autotune-progress: ") ~f:(fun rest ->
-      String.split rest ~on:' '
-      |> List.filter_map ~f:(fun w ->
-          Option.map (String.lsplit2 w ~on:'=') ~f:(fun (k, v) ->
-              (k, String.strip ~drop:(Char.equal '"') v))))
+let field = Stderr_capture.Progress.field
 
-let field fields key = List.Assoc.find fields key ~equal:String.equal
-
+(* Runs [f] with stderr captured (and echoed back), answering its result with the progress lines it
+   wrote. *)
 let with_stderr_captured f =
-  let result, lines = Scripted_search.with_stderr_captured f in
-  (result, List.filter_map lines ~f:progress_fields)
+  let result, lines = Stderr_capture.lines f in
+  (result, Stderr_capture.Progress.of_lines lines)
 
 (* [Train.tune_placements] with one flip: arm A's windows measure 4 ms, arm B's 50 ms, and the
    flip's per [flip_script] (1-based within the flip's search). The searches are told apart by how

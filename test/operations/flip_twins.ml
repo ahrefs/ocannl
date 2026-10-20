@@ -42,26 +42,10 @@ let k = 1
 let with_clock script f =
   fst (Scripted_search.scripted ~measure:(fun w -> script w.Scripted_search.ordinal) f)
 
-let with_stderr_captured = Scripted_search.with_stderr_captured
-
-(* The value of [key="..."] on an [autotune-progress:] line of the given event. Arm labels carry
-   spaces, so the fields are read by their quotes rather than split on spaces. *)
-let quoted line key =
-  let open String in
-  Option.bind
-    (substr_index line ~pattern:(key ^ "=\""))
-    ~f:(fun i ->
-      let start = i + length key + 2 in
-      Option.map (index_from line start '"') ~f:(fun j -> sub line ~pos:start ~len:(j - start)))
-
-let events lines name =
-  List.filter lines ~f:(fun l ->
-      String.is_prefix l ~prefix:"autotune-progress: "
-      && String.is_substring l ~substring:(" event=" ^ name ^ " "))
-
-let plain lines name key =
-  List.filter_map (events lines name) ~f:(fun l ->
-      List.find_map (String.split l ~on:' ') ~f:(fun w -> String.chop_prefix w ~prefix:(key ^ "=")))
+(* The progress lines of event [name], and one field of each that has it. *)
+let events = Stderr_capture.Progress.events
+let field = Stderr_capture.Progress.field
+let plain lines name key = List.filter_map (events lines name) ~f:(fun l -> field l key)
 
 type chain = {
   flip_reports : Autotune.report list;
@@ -92,7 +76,7 @@ let run_chain ?(cache_dir = "") ?ctx ?timing_ctx ~budget comp loss ~flip_script 
         flip_script ~flip:(d - 1) !flip_window
   in
   let (), lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         with_clock script (fun () ->
             let _ctx, _routine =
               Train.tune_placements ~beam_width:k ~rounds:0 ~repeats:1 ~cache_dir
@@ -106,13 +90,13 @@ let run_chain ?(cache_dir = "") ?ctx ?timing_ctx ~budget comp loss ~flip_script 
             in
             ()))
   in
-  let flip_label l = Option.filter (quoted l "arm") ~f:(String.is_prefix ~prefix:"flip ") in
+  let flip_label l = Option.filter (field l "arm") ~f:(String.is_prefix ~prefix:"flip ") in
   {
     flip_reports = List.rev !flip_reports;
     measured_arms = List.filter_map (events lines "arm_start") ~f:flip_label;
     twins =
       List.filter_map (events lines "flip_twin") ~f:(fun l ->
-          Option.both (quoted l "arm") (quoted l "twin_of"));
+          Option.both (field l "arm") (field l "twin_of"));
     done_measured = plain lines "flips_done" "measured";
     done_twinned = plain lines "flips_done" "twinned";
     shipped = !shipped;

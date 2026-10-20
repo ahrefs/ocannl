@@ -365,7 +365,7 @@ let () =
     else 1000.
   in
   let ((), _), lines =
-    Scripted_search.with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         Scripted_search.scripted ~measure (fun () ->
             let ctx = Context.cpu () in
             let ctx, _routine =

@@ -148,36 +148,3 @@ let clear_cache_dir dir =
   if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
     Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
         Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
-
-(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote, for a
-   claim on a search's [autotune:] or [autotune-progress:] lines. The captured text is echoed back
-   to stderr once stderr is restored, whether [f] returned or raised (an exception is re-raised with
-   its original backtrace after the echo), so nothing the run wrote is hidden; the file is removed
-   on every path. *)
-let with_stderr_captured f =
-  let file = Stdlib.Filename.temp_file "scripted_search" ".stderr" in
-  Exn.protect
-    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
-    ~f:(fun () ->
-      Stdio.Out_channel.flush Stdio.stderr;
-      let saved = Unix.dup Unix.stderr in
-      let outcome =
-        Exn.protect
-          ~finally:(fun () -> Unix.close saved)
-          ~f:(fun () ->
-            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
-            let outcome =
-              match f () with
-              | result -> Ok result
-              | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())
-            in
-            Stdio.Out_channel.flush Stdio.stderr;
-            Unix.dup2 saved Unix.stderr;
-            outcome)
-      in
-      let text = Stdio.In_channel.read_all file in
-      Stdio.eprintf "%s%!" text;
-      match outcome with
-      | Ok result -> (result, String.split_lines text)
-      | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)

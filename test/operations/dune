@@ -328,6 +328,17 @@
   (alias runtest-sweep_components)
   (alias runtest-sweep_harness)))
 
+; gh-ocannl-1296: the shared stderr capture and autotune-progress reader, including the path out of
+; a capture whose function raised.
+
+(test
+ ; ocannl-backend: none -- links no backend: it captures its own stderr and parses fixed lines.
+ (name stderr_capture_cases)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules stderr_capture_cases)
+ (libraries base stdio unix stderr_capture fresh_process arrayjit.verdict))
+
 (test
  ; ocannl-backend: none -- links no backend: it reads synthetic Benchmark records through PrintBox_utils.table as text.
  (name printbox_utils_test)
@@ -2909,7 +2920,7 @@
  (foreign_stubs
   (language c)
   (names foreign_c_stderr_stubs))
- (libraries base arrayjit.utils stdio unix arrayjit.verdict))
+ (libraries base arrayjit.utils stdio stderr_capture arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- the subject is a file descriptor of the C runtime; it links no backend
@@ -6967,7 +6978,7 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules seeding_census)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio stderr_capture arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (action
@@ -6983,7 +6994,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_progress)
- (libraries base ocannl stdio unix arrayjit.verdict)
+ (libraries base ocannl stdio stderr_capture arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (action
@@ -7472,6 +7483,7 @@
   base
   ocannl
   stdio
+  stderr_capture
   arrayjit.verdict
   ll_test
   bench_harness
@@ -9160,6 +9172,7 @@
   base
   ocannl
   stdio
+  stderr_capture
   arrayjit.verdict
   fissioned_chain
   scripted_search)
@@ -9191,6 +9204,7 @@
   base
   ocannl
   stdio
+  stderr_capture
   arrayjit.verdict
   fissioned_chain
   scripted_search
@@ -9942,7 +9956,14 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules autotune_labels)
- (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9955,7 +9976,14 @@
  ; prints never reads the width.
  (name flip_twins)
  (modules flip_twins)
- (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

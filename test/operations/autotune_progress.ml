@@ -18,46 +18,7 @@ open Verdict.Claims
 (* One progress line: its event and its [key=value] fields, values unquoted. [None] when the line
    does not have the documented shape. *)
 let parse_line line =
-  match String.chop_prefix line ~prefix:"autotune-progress: " with
-  | None -> None
-  | Some rest -> (
-      let len = String.length rest in
-      let fields = ref [] and ok = ref true and i = ref 0 in
-      while !ok && !i < len do
-        match String.index_from rest !i '=' with
-        | None -> ok := false
-        | Some eq ->
-            let key = String.sub rest ~pos:!i ~len:(eq - !i) in
-            if String.is_empty key || String.exists key ~f:(fun c -> Char.equal c ' ') then
-              ok := false
-            else if eq + 1 < len && Char.equal rest.[eq + 1] '"' then (
-              (* An OCaml [%S] string: ends at the first unescaped quote. *)
-              let j = ref (eq + 2)
-              and buf = Buffer.create 16 in
-              while !j < len && not (Char.equal rest.[!j] '"') do
-                if Char.equal rest.[!j] '\\' && !j + 1 < len then (
-                  Buffer.add_char buf rest.[!j + 1];
-                  j := !j + 2)
-                else (
-                  Buffer.add_char buf rest.[!j];
-                  Int.incr j)
-              done;
-              if !j >= len then ok := false
-              else (
-                fields := (key, Buffer.contents buf) :: !fields;
-                i := !j + 2))
-            else
-              let stop = Option.value (String.index_from rest eq ' ') ~default:len in
-              let value = String.sub rest ~pos:(eq + 1) ~len:(stop - eq - 1) in
-              if String.is_empty value then ok := false
-              else (
-                fields := (key, value) :: !fields;
-                i := stop + 1)
-      done;
-      match List.rev !fields with
-      | ("wall_s", w) :: ("event", e) :: rest when !ok && Option.is_some (Float.of_string_opt w) ->
-          Some (e, ("wall_s", w) :: rest)
-      | _ -> None)
+  Option.map (Stderr_capture.Progress.parse line) ~f:(fun { event; fields; _ } -> (event, fields))
 
 let field fields key = List.Assoc.find fields key ~equal:String.equal
 let float_field fields key = Option.bind (field fields key) ~f:Float.of_string_opt
@@ -96,30 +57,14 @@ let () =
   (* Every report, arms and flips alike, in arrival order. *)
   let reports = ref [] in
   let capture r = reports := r :: !reports in
-  let file = Stdlib.Filename.temp_file "autotune_progress" ".stderr" in
-  Stdio.Out_channel.flush Stdio.stderr;
-  let saved = Unix.dup Unix.stderr in
-  let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  Unix.dup2 fd Unix.stderr;
-  Unix.close fd;
-  let restore () =
-    Stdio.Out_channel.flush Stdio.stderr;
-    Unix.dup2 saved Unix.stderr;
-    Unix.close saved
+  let (), lines =
+    Stderr_capture.lines (fun () ->
+        ignore
+          (Train.tune_placements ~beam_width:1 ~rounds:1 ~repeats:1 ~cache_dir:"" ~report:capture
+             ~flip_report:capture ~inline_flips:1 (Context.auto ()) c comp Ir.Indexing.Empty
+            : _ * _))
   in
-  (match
-     Train.tune_placements ~beam_width:1 ~rounds:1 ~repeats:1 ~cache_dir:"" ~report:capture
-       ~flip_report:capture ~inline_flips:1 (Context.auto ()) c comp Ir.Indexing.Empty
-   with
-  | _ -> restore ()
-  | exception exn ->
-      restore ();
-      raise exn);
-  let text = Stdio.In_channel.read_all file in
-  Stdlib.Sys.remove file;
-  let lines = String.split_lines text in
-  List.iter lines ~f:(fun l -> Stdio.eprintf "%s\n" l);
-  let progress = List.filter lines ~f:(String.is_prefix ~prefix:"autotune-progress:") in
+  let progress = List.filter lines ~f:Stderr_capture.Progress.is_progress in
   let reports = List.rev !reports in
   let parsed = List.map progress ~f:parse_line in
   p_all "every progress line has the documented shape" parsed ~f:Option.is_some;

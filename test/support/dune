@@ -36,6 +36,16 @@
  (modules fresh_process)
  (libraries base stdio unix))
 
+; A test's own stderr, captured exception-safely, and the tuner's `autotune-progress:` lines read off
+; it (gh-ocannl-1296). The same dependency floor as [fresh_process]: reading stderr is no reason to
+; link a backend.
+
+(library
+ (name stderr_capture)
+ (package neural_nets_lib)
+ (modules stderr_capture)
+ (libraries base stdio unix))
+
 (library
  (name test_utils)
  (package neural_nets_lib)
@@ -134,11 +144,11 @@
   (pps ppx_ocannl)))
 
 ; The scripted-search harness of the autotune tests: the measurement, attempt and budget-clock
-; seams, per-search settings, cache-I/O recording and stderr capture around a search whose ranking
-; the test scripts. [unix] is the stderr capture's.
+; seams, per-search settings and cache-I/O recording around a search whose ranking the test scripts.
+; A test reading the search's stderr captures it through [stderr_capture].
 
 (library
  (name scripted_search)
  (package neural_nets_lib)
  (modules scripted_search)
- (libraries base stdio unix ocannl arrayjit.utils))
+ (libraries base ocannl arrayjit.utils))

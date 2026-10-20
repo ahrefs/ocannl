@@ -4444,6 +4444,14 @@ box.
   and `FAILED:` markers cannot be read as the parent's Verdict report by `tools/mutation-run.sh`.
   Deadline, custom-environment and concurrent-process harnesses keep their own contracts.
 
+- `Stderr_capture` (gh-ocannl-1296) owns a test's capture of its OWN stderr (`capture`, `lines`:
+  fd 2 dup'ed onto a temporary file, the redirection ppx_expect performs) and the reading of the
+  tuner's `autotune-progress:` lines (`Progress`). The capture's contract is the path out: fd 2
+  restored, the captured text echoed back, the file removed and the descriptors closed whether the
+  function returned or raised, the exception re-raised afterwards with its backtrace -- what the
+  hand-rolled copies it replaced mostly lacked, leaving a crash's report on a deleted file.
+  `stderr_capture_cases` pins the raising paths, in process and in a child.
+
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm
   relationships), and constructor names from
