@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Hermetic loopback tests for the working-tree machine-verify.sh, its
 # verification procedure machine-verify-far.sh and the remote-verify.sh shim.
-# Usage: tools/test-machine-verify.sh [--keep] [--help]
+# Usage: tools/test-machine-verify.sh [--keep] [--help] [--only REGEX] [--list-legs]
+# Each leg is a function run by `harness_leg_run 'N: ...' leg_N`
+# (scripts/harness-support.sh) over the shared fixtures built below, and
+# passes run alone: the helpers a later leg reuses (the credential oracles)
+# are defined outside the legs.
 # Real Git repositories exercise fetch, detached worktrees and source status;
 # fake SSH, opam and Dune require no network, compiler or backend hardware.
 # BOX placement is driven through the fake `ssh -G`: 192.0.2.1 (TEST-NET-1,
@@ -416,6 +420,7 @@ check_refusal() { # NAME DIAGNOSTIC [args]
   if grep -qE '^machine-verify: (verified |exit: |(ssh|local) exit: )' "$TMP/runs/$name/stdout"; then ok=1; fi
   report "$ok" "$name: refused before any trip" "$TMP/runs/$name"
 }
+leg_1() {
 check_case success success 0 "verified .*commit=$SHA backend=cc" --test @fixture \
   --run 'test -z "$(cat)" && printf "probe quote: '\'' preserved\n"'
 if grep -q "resolved commit: $SHA" "$TMP/runs/success/stdout" &&
@@ -445,7 +450,10 @@ else report 1 'golden: apply-ready patch and restored source'; fi
 check_case nongolden-refusal nongolden 2 'produced a non-golden correction: source.ml' --record-golden @golden
 check_case golden-mutation golden-source-change 2 'non-golden source change during golden recording:  M source.ml' --record-golden @golden
 check_case golden-rerun-failure rerun-fail 38 'fixture: unrelated rerun failure' --record-golden @golden
+}
+harness_leg_run '1: each outcome'\''s verdict, reason, transport and checkout cleanup' leg_1
 
+leg_2() {
 # The commit form of BRANCH: certified exactly when a branch of the remote,
 # fetched now, contains it; the provenance names one, preferring master.
 REF=$SHA check_case commit-success success 0 "verified .*commit=$SHA backend=cc" --test @fixture
@@ -467,7 +475,10 @@ report $? 'commit: a leftover heads namespace was planted and did not certify' "
 REF=$SHA check_case commit-failed-fetch fetch-fail 2 'cannot fetch the branch heads of origin'
 REF=$SHA ENDPOINT=127.0.0.1 TRANSPORT=local check_case local-commit success 0 \
   "verified .*commit=$SHA backend=cc" --test @fixture
+}
+harness_leg_run '2: the commit form of BRANCH' leg_2
 
+leg_3() {
 # The local transport: BOX's endpoint is an address of this machine, so the
 # same procedure runs here with no SSH session, from a cleared environment
 # (the caller's OPAMSWITCH/DUNE_BUILD_DIR would otherwise fail the fakes).
@@ -498,7 +509,10 @@ ENDPOINT=127.0.0.1 ENDPOINT_PORT=2222 check_refusal forwarded-port \
 ENDPOINT=127.0.0.1 ENDPOINT_PROXY=jump.example.invalid check_refusal local-proxied \
   '^machine-verify: --local refused: .* via proxy jump\.example\.invalid$' --local
 check_refusal exclusive-flags '^machine-verify: --local and --ssh are mutually exclusive$' --local --ssh
+}
+harness_leg_run '3: the local transport, and placement refused before any trip' leg_3
 
+leg_4() {
 # Optional-backend provenance: the vendor library's objects, the `select` arm
 # that names it, and the other two GPU backends' objects absent on that build.
 BACKEND=metal ENDPOINT=127.0.0.1 TRANSPORT=local check_case lib-metal lib-ok 0 \
@@ -551,7 +565,10 @@ BACKEND=metal check_case lib-mma-unparsed lib-mma-unparsed 2 \
   'printed neither a limits\.mma\.mma_tile line nor limits\.mma = \(\); the tile-MMA capability is unreadable, not none$' \
   --expect-lib metal
 BACKEND=cc check_refusal lib-backend-conflict '^machine-verify: --expect-lib metal conflicts with --backend cc$' --expect-lib metal
+}
+harness_leg_run '4: optional-backend library provenance and the tile-MMA capability' leg_4
 
+leg_5() {
 # The dune width (gh-ocannl-986): with no -j, the far side runs every build at
 # the tightest width tools/box-jobs.sh gives the box it probes for any backend
 # the trip can hold -- the pinned one, any a reached stanza names, every one
@@ -611,7 +628,10 @@ grep -q '|cc|build ./test/config/ocannl_read_config.exe ./test/config/ocannl_slo
 report $? 'width-readers-built: the readers were built in the pushed worktree' "$TMP/runs/width-readers-built"
 check_refusal width-zero '^machine-verify: jobs must be a positive integer$' -j 0
 check_refusal width-word '^machine-verify: jobs must be a positive integer$' --jobs auto
+}
+harness_leg_run '5: the dune width' leg_5
 
+leg_6() {
 # Whether a process is still running: a zombie is not. Where PID 1 reaps no orphans, a test its
 # fake dune killed stays a zombie, which `kill -0` still answers for (Codex review round 2 on PR
 # #1172).
@@ -688,7 +708,10 @@ BACKEND=hip UNAME=Linux check_case probe-answer success 0 'verified .*backend=hi
 grep -q '^machine-verify: device probe: hip: answered in [0-9.]*s$' "$TMP/runs/probe-answer/stdout" &&
   grep -q '|hip|build -j 4 @fixture$' "$TMP/runs/probe-answer/audit"
 report $? 'probe-answer: an answering device is recorded and the trip runs' "$TMP/runs/probe-answer"
+}
+harness_leg_run '6: the per-test cap and the device probe' leg_6
 
+leg_7() {
 # The deprecated name forwards every argument and says so on stderr.
 shim_case() { # NAME
   local ok=0
@@ -703,32 +726,18 @@ shim_case shim-ssh
 ENDPOINT=127.0.0.1 shim_case shim-local
 [ "$(used_transport shim-local)" = local ] && [ "$(used_transport shim-ssh)" = ssh ]
 report $? 'shim: placement is decided by machine-verify.sh, not by the old name'
+}
+harness_leg_run '7: the deprecated remote-verify.sh name forwards' leg_7
 
-# Credentials in BOX's login environment reach neither dune nor a --run probe (gh-ocannl-1280),
-# while a plain variable of that environment reaches both. The fake dune refuses a credential on
-# every build of every case; this one is where the far side has some to remove.
+# The credential probe and its oracles: leg 8 runs them, and the negative
+# controls (leg 9) run them against mutants.
 credential_probe='test -z "${GH_TOKEN+x}${FOO_API_KEY+x}" && test "${FIXTURE_REMOTE_PLAIN:-}" = kept && echo "probe credentials: absent, plain variable kept"'
-REMOTE_CREDS=1 check_case credentials-ssh success 0 "verified .*commit=$SHA backend=cc" --test @fixture \
-  --run "$credential_probe"
-grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/credentials-ssh/stdout" &&
-  grep -qx 'credential variables: removed inside every opam exec (tools/credential-env.sh)' \
-    "$TMP/runs/credentials-ssh/stdout" &&
-  grep -q '|cc|build -j 4 @fixture' "$TMP/runs/credentials-ssh/audit"
-report $? 'credentials-ssh: the probe and every build ran without the box credentials' "$TMP/runs/credentials-ssh"
 credential_oracle() {
   local subject=$1 name=$2
   REMOTE_CREDS=1 run_case "$subject" "$name" success --test @fixture --run "$credential_probe" || return 1
   [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
     grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/$name/stdout"
 }
-# And where the opam switch's own environment sets them: `opam exec` rebuilds the environment, so
-# the far side scrubs inside it.
-REMOTE_CREDS=1 SWITCH_CREDS=1 check_case credentials-switch success 0 "verified .*commit=$SHA backend=cc" \
-  --test @fixture --run "$credential_probe"
-grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/credentials-switch/stdout" &&
-  grep -q '|cc|build -j 4 @fixture' "$TMP/runs/credentials-switch/audit"
-report $? 'credentials-switch: credentials the opam switch sets reach neither the probe nor a build' \
-  "$TMP/runs/credentials-switch"
 switch_credential_oracle() {
   local subject=$1 name=$2
   REMOTE_CREDS=1 SWITCH_CREDS=1 run_case "$subject" "$name" success --test @fixture \
@@ -737,6 +746,29 @@ switch_credential_oracle() {
     grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/$name/stdout"
 }
 
+leg_8() {
+# Credentials in BOX's login environment reach neither dune nor a --run probe (gh-ocannl-1280),
+# while a plain variable of that environment reaches both. The fake dune refuses a credential on
+# every build of every case; this one is where the far side has some to remove.
+REMOTE_CREDS=1 check_case credentials-ssh success 0 "verified .*commit=$SHA backend=cc" --test @fixture \
+  --run "$credential_probe"
+grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/credentials-ssh/stdout" &&
+  grep -qx 'credential variables: removed inside every opam exec (tools/credential-env.sh)' \
+    "$TMP/runs/credentials-ssh/stdout" &&
+  grep -q '|cc|build -j 4 @fixture' "$TMP/runs/credentials-ssh/audit"
+report $? 'credentials-ssh: the probe and every build ran without the box credentials' "$TMP/runs/credentials-ssh"
+# And where the opam switch's own environment sets them: `opam exec` rebuilds the environment, so
+# the far side scrubs inside it.
+REMOTE_CREDS=1 SWITCH_CREDS=1 check_case credentials-switch success 0 "verified .*commit=$SHA backend=cc" \
+  --test @fixture --run "$credential_probe"
+grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/credentials-switch/stdout" &&
+  grep -q '|cc|build -j 4 @fixture' "$TMP/runs/credentials-switch/audit"
+report $? 'credentials-switch: credentials the opam switch sets reach neither the probe nor a build' \
+  "$TMP/runs/credentials-switch"
+}
+harness_leg_run '8: credentials reach neither dune nor a probe' leg_8
+
+leg_9() {
 # Negative controls run the same shipping oracle with one guard disabled. They
 # must reach certification (or the leak the guard exists for) erroneously,
 # rather than merely fail to parse/start. The pair is copied so the driver finds
@@ -757,7 +789,8 @@ mutation_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
     grep -q 'source changed after @check' "$TMP/runs/$name/stdout"
 }
-mutated=$(mutant_pair no-source-assertion far '/^assert_source_state\(\) \{/ { print; print "  return 0"; next } { print }') || exit 2
+mutated=$(mutant_pair no-source-assertion far '/^assert_source_state\(\) \{/ { print; print "  return 0"; next } { print }') ||
+  { harness_abandon "cannot build the no-source-assertion mutant"; return; }
 expect_rejected 'source assertion removed' "$mutated" mutation_oracle '^machine-verify: verified '
 golden_mutation_oracle() {
   local subject=$1 name=$2
@@ -773,7 +806,8 @@ containment_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
     grep -q 'is not reachable from any branch of origin' "$TMP/runs/$name/stdout"
 }
-mutated=$(mutant_pair no-containment far '/^  \[ -n "\$containing" \] \|\|$/ { getline; next } { print }') || exit 2
+mutated=$(mutant_pair no-containment far '/^  \[ -n "\$containing" \] \|\|$/ { getline; next } { print }') ||
+  { harness_abandon "cannot build the no-containment mutant"; return; }
 expect_rejected 'commit containment removed' "$mutated" containment_oracle "^machine-verify: verified .*commit=$UNPUSHED "
 # The namespace not emptied before the fetch: a leftover head from a killed
 # verifier with the same PID certifies a commit no live branch contains.
@@ -783,9 +817,11 @@ stale_heads_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
     grep -q 'is not reachable from any branch of origin' "$TMP/runs/$name/stdout"
 }
-mutated=$(mutant_pair no-namespace-clear far '/^  drop_heads \|\| fail "cannot clear leftover refs/ { next } { print }') || exit 2
+mutated=$(mutant_pair no-namespace-clear far '/^  drop_heads \|\| fail "cannot clear leftover refs/ { next } { print }') ||
+  { harness_abandon "cannot build the no-namespace-clear mutant"; return; }
 expect_rejected 'leftover heads namespace kept' "$mutated" stale_heads_oracle "^machine-verify: verified .*commit=$UNPUSHED "
-mutated=$(mutant_pair no-golden-scope far '/^assert_only_promoted_goldens\(\) \{/ { print; print "  return 0"; next } { print }') || exit 2
+mutated=$(mutant_pair no-golden-scope far '/^assert_only_promoted_goldens\(\) \{/ { print; print "  return 0"; next } { print }') ||
+  { harness_abandon "cannot build the no-golden-scope mutant"; return; }
 expect_rejected 'golden scope removed' "$mutated" golden_mutation_oracle '^machine-verify: verified '
 # The capability assertion dropped: an eligible device beside a complete
 # rocWMMA tree certifies a scalar-only backend, the gh-ocannl-1070 blind spot.
@@ -795,7 +831,8 @@ tile_mma_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
     grep -q 'tile-MMA capability missing' "$TMP/runs/$name/stdout"
 }
-mutated=$(mutant_pair no-tile-mma-assertion far '/^    \[ "\$tile_mma" != none \] \|\|$/ { getline; next } { print }') || exit 2
+mutated=$(mutant_pair no-tile-mma-assertion far '/^    \[ "\$tile_mma" != none \] \|\|$/ { getline; next } { print }') ||
+  { harness_abandon "cannot build the no-tile-mma-assertion mutant"; return; }
 expect_rejected 'tile-MMA assertion removed' "$mutated" tile_mma_oracle '^machine-verify: verified .*tile_mma=none$'
 # Every address counted as this machine's: --local then runs on the wrong box.
 mismatch_oracle() {
@@ -804,7 +841,8 @@ mismatch_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
     grep -q '^machine-verify: --local refused' "$TMP/runs/$name/stdout"
 }
-mutated=$(mutant_pair no-address-check driver '/print "\$ip ", \(bind/ { print "    print \"$ip here\\n\";"; next } { print }') || exit 2
+mutated=$(mutant_pair no-address-check driver '/print "\$ip ", \(bind/ { print "    print \"$ip here\\n\";"; next } { print }') ||
+  { harness_abandon "cannot build the no-address-check mutant"; return; }
 expect_rejected 'local-address check removed' "$mutated" mismatch_oracle '^machine-verify: verified '
 # The caller's environment passed through: its opam switch outranks the
 # checkout's, which an SSH session would never have seen.
@@ -814,7 +852,8 @@ leak_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
     grep -q '^machine-verify: verified ' "$TMP/runs/$name/stdout"
 }
-mutated=$(mutant_pair no-env-clear driver '/^  local_env=\(env -i\)$/ { print "  local_env=(env)"; next } { print }') || exit 2
+mutated=$(mutant_pair no-env-clear driver '/^  local_env=\(env -i\)$/ { print "  local_env=(env)"; next } { print }') ||
+  { harness_abandon "cannot build the no-env-clear mutant"; return; }
 expect_rejected 'local environment clearing removed' "$mutated" leak_oracle 'fixture: wrong opam switch: --switch=caller-switch'
 # The box's width dropped for the former flat default: a GPU leg run without
 # -j goes back to running above the box's cap, the case this issue was filed on.
@@ -824,7 +863,8 @@ width_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
     grep -q '|cuda|build -j 8 @fixture$' "$TMP/runs/$name/audit"
 }
-mutated=$(mutant_pair no-box-width far '/^if \[ -n "\$jobs" \]; then$/ { print "jobs=${jobs:-4}" } { print }') || exit 2
+mutated=$(mutant_pair no-box-width far '/^if \[ -n "\$jobs" \]; then$/ { print "jobs=${jobs:-4}" } { print }') ||
+  { harness_abandon "cannot build the no-box-width mutant"; return; }
 expect_rejected 'box width ignored' "$mutated" width_oracle '^dune jobs:     4 \(explicit -j\)$'
 # The width judged over the pinned backend alone: a reached stanza's GPU runs
 # above the bridge's cap again.
@@ -835,7 +875,8 @@ reached_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
     grep -q '|cc|build -j 2 @fixture$' "$TMP/runs/$name/audit"
 }
-mutated=$(mutant_pair pinned-backend-only far '/batch_resolve dune "\$log" build/ { print "      :"; next } { print }') || exit 2
+mutated=$(mutant_pair pinned-backend-only far '/batch_resolve dune "\$log" build/ { print "      :"; next } { print }') ||
+  { harness_abandon "cannot build the pinned-backend-only mutant"; return; }
 expect_rejected 'reached backends ignored' "$mutated" reached_oracle '^dune jobs:     4 \(default; '
 # The width withheld from a --run probe: its bare dune runs at dune's default.
 probe_width_oracle() {
@@ -844,12 +885,17 @@ probe_width_oracle() {
     --run 'printf "probe width: %s\n" "${DUNE_JOBS:-unset}"' || return 1
   [ "$(cat "$TMP/runs/$name/rc")" = 0 ] && grep -qx 'probe width: 8' "$TMP/runs/$name/stdout"
 }
-mutated=$(mutant_pair no-probe-width far '{ sub(/ "DUNE_JOBS=\$jobs" sh -c/, " sh -c"); print }') || exit 2
+mutated=$(mutant_pair no-probe-width far '{ sub(/ "DUNE_JOBS=\$jobs" sh -c/, " sh -c"); print }') ||
+  { harness_abandon "cannot build the no-probe-width mutant"; return; }
 expect_rejected 'probe width withheld' "$mutated" probe_width_oracle '^probe width: unset$'
 # The credential scrub cut out of opam_exec: BOX's own token, and one its switch sets, reach dune.
-mutated=$(mutant_pair no-credential-scrub far '{ sub(/ -- sh -c "\$switch_scrub" machine-verify-switch "\$@"$/, " -- env \"$@\""); print }') || exit 2
+mutated=$(mutant_pair no-credential-scrub far '{ sub(/ -- sh -c "\$switch_scrub" machine-verify-switch "\$@"$/, " -- env \"$@\""); print }') ||
+  { harness_abandon "cannot build the no-credential-scrub mutant"; return; }
 expect_rejected 'credential scrub removed (login environment)' "$mutated" credential_oracle \
   '^fixture: credentials reached dune$'
 expect_rejected 'credential scrub removed (switch environment)' "$mutated" switch_credential_oracle \
   '^fixture: credentials reached dune$'
+}
+harness_leg_run '9: negative controls: each guard removed loses its oracle' leg_9
+
 finish

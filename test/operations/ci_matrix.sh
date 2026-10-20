@@ -119,13 +119,28 @@ def matrix(text, event, windows=False, compiler=''):
     # them from the workflow, so a new job that lacks the guard is refused.
     side = [job for job in job_keys(text) if job not in ('run', 'notify-triage-routine')]
     assert side, 'no side jobs found'
-    selected = {}
+    selected, scheduled = {}, {}
     for job in side:
         guard = re.search(r'^  ' + re.escape(job) + r':\n    if: (.*)$', text, re.M)
         assert guard, job + ' selection missing'
-        selected[job] = bool(expression(guard[1], event, windows, compiler))
+        # A guard opening with the schedule names a SCHEDULED side job, too
+        # costly per PR (gh-ocannl-1367): it must select exactly where the
+        # ordinary side jobs do AND the event is the schedule or a dispatch.
+        if guard[1].startswith(SCHEDULED_GUARD):
+            scheduled[job] = bool(expression(guard[1], event, windows, compiler))
+        else:
+            selected[job] = bool(expression(guard[1], event, windows, compiler))
+    assert selected, 'no ordinary side jobs found'
     assert len(set(selected.values())) == 1, 'side jobs select differently: %s' % selected
-    return unshard(sorted(jobs))[0], selected[side[0]]
+    ordinary = next(iter(selected.values()))
+    want = ordinary and event in ('schedule', 'workflow_dispatch')
+    assert all(value == want for value in scheduled.values()), \
+        'scheduled side jobs select differently from the ordinary ones on %s: %s, ordinary %s' % (
+            event, scheduled, ordinary)
+    return unshard(sorted(jobs))[0], ordinary
+
+
+SCHEDULED_GUARD = "github.event_name == 'schedule' || "
 
 
 # The suites ubuntu's 5.5 jobs may shard: tools/ci-shard.sh knows how to cut
@@ -266,11 +281,16 @@ controls(source)
 # guard joins the selection unremarked (its unguarded twin is a mutant below).
 fallback_guard = re.search(r'^  fmt:\n(    if: .*\n)', source, re.M)[1]
 controls(extra_job('new-side-job', fallback_guard))
+# A scheduled side job: the schedule, or a dispatch the fallback guard admits.
+scheduled_guard = re.search(r'^  harness-legs-alone:\n(    if: .*\n)', source, re.M)[1]
+assert scheduled_guard.startswith('    if: ' + SCHEDULED_GUARD), 'scheduled side-job guard moved'
+controls(extra_job('new-scheduled-job', scheduled_guard))
 print('PASS documentation compiler inputs are unfiltered on push and PR')
 print('PASS normal, scheduled and explicit Windows fallback matrix selections')
 print('PASS every ocaml_compiler option: the default is the ordinary matrix, another is one ubuntu job')
 print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
 print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
+print('PASS a scheduled side job runs on the schedule and an ordinary dispatch, never per PR or in the fallback')
 print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
 print('PASS per PR and on master macOS runs one job, main; the schedule adds its train job')
 print('PASS every build step piping into tee has pipefail; the PowerShell one exits with dune\'s status')
@@ -306,6 +326,12 @@ for label, mutant in (
     ('compiler input defaults to the floor', source.replace('          - 5.3.x\n        default: 5.5.x\n', '          - 5.3.x\n        default: 5.3.x\n', 1)),
     ('compiler input as free text', source.replace('        type: choice\n', '        type: string\n', 1)),
     ('a new side job without the Windows-fallback guard', extra_job('new-side-job')),
+    ('a scheduled side job in the Windows fallback',
+     extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n")),
+    ('a scheduled side job per PR',
+     extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name != 'never'\n")),
+    ('a scheduled side job off the schedule',
+     extra_job('new-scheduled-job', "    if: github.event_name == 'schedule' || github.event_name == 'never'\n")),
     ('per-PR shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
     ('scheduled shard dropped', source.replace(second, '', 1)),
     ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),

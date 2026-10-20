@@ -5,6 +5,11 @@
 #
 #   tools/test-promote.sh          # run every leg
 #   tools/test-promote.sh --keep   # keep the temp dir for inspection
+#   tools/test-promote.sh --only '^7:'   # only the legs whose names match
+#
+# Each leg is a function run by `harness_leg_run 'N: what it pins' leg_N`
+# (scripts/harness-support.sh) on a scratch repository of its own, so any one
+# passes run alone (tools/harness-legs-alone.sh checks that).
 #
 # It is the sibling of tools/test-test-run.sh, and is deliberately NOT wired
 # into any dune alias for the same shape of reason: every leg runs `dune` on a
@@ -42,6 +47,12 @@
 #      is the same trap wearing a different hat.
 #   6. CRLF stripping survives the guard, on the same new-file path: what
 #      reaches the INDEX is LF, not merely what reaches the working tree.
+#   7. a failed `dune promotion list` still promotes, exits 0, and says it
+#      staged nothing rather than passing quietly.
+#   8. Dune 3.20/3.21 print the promotion list on stderr: the shipping guard
+#      reads it there, and a stdout-only twin loses the promotion.
+#   9. promote.sh's dune runs without the caller's credentials, and a copy
+#      with the scrub cut out hands dune both (gh-ocannl-1280).
 
 set -u
 
@@ -163,6 +174,7 @@ blob() { # blob REPO REV:PATH -- the committed content, or empty
 
 # ---------------------------------------------------------------- leg 1
 # Negative control: the trap is real in this scenario.
+leg_1() {
 repo="$(scenario trap)"
 if [ -z "$repo" ] || ! resolve_and_test "$repo"; then
   report 1 "leg 1 setup: conflicted scenario with a pending promotion"
@@ -179,9 +191,12 @@ else
       "expected committed != built and worktree == built; got committed='$committed' built='$built' worktree='$worktree'"
   fi
 fi
+}
+harness_leg_run '1: a bare dune promotion apply mid-merge drops the promotion from the commit' leg_1
 
 # ---------------------------------------------------------------- leg 2
 # The guard: same scenario, through promote.sh.
+leg_2() {
 repo="$(scenario guard)"
 if [ -z "$repo" ] || ! resolve_and_test "$repo"; then
   report 1 "leg 2 setup: conflicted scenario with a pending promotion"
@@ -201,9 +216,12 @@ else
     *) report 1 "leg 2b promote.sh names what it staged" "said: $out" ;;
   esac
 fi
+}
+harness_leg_run '2: promote.sh mid-merge commits the promoted golden and names it' leg_2
 
 # ---------------------------------------------------------------- leg 3
 # A promoted golden still unmerged in the index: warned about, not staged.
+leg_3() {
 repo="$(scenario unmerged)"
 if [ -z "$repo" ]; then
   report 1 "leg 3 setup: conflicted scenario"
@@ -244,9 +262,12 @@ else
     esac
   fi
 fi
+}
+harness_leg_run '3: a promoted golden still unmerged is warned about, not staged' leg_3
 
 # ---------------------------------------------------------------- leg 4
 # Outside a merge the guard does nothing: a promotion stays out of the index.
+leg_4() {
 repo="$TMP/nomerge"
 stage_promote "$repo"
 ok=1
@@ -296,12 +317,15 @@ else
     *) report 0 "leg 4b outside a merge promote.sh says nothing about staging" ;;
   esac
 fi
+}
+harness_leg_run '4: outside a merge the guard leaves the index alone' leg_4
 
 # ---------------------------------------------------------------- legs 5, 6
 # A golden created mid-merge is absent from the index, so `git commit` -- with
 # or without -a -- would not carry it. It is staged too. And what lands in the
 # INDEX is LF: leg 6 promotes CRLF output, which is the Windows case, and reads
 # the staged blob rather than the file.
+leg_5_6() {
 repo="$(scenario newfile)"
 if [ -z "$repo" ]; then
   report 1 "leg 5 setup: conflicted scenario"
@@ -357,6 +381,8 @@ DUNE
     esac
   fi
 fi
+}
+harness_leg_run '5-6: a golden new mid-merge is staged, and LF in the index' leg_5_6
 
 # ---------------------------------------------------------------- leg 7
 # The guard learns what to stage from `dune promotion list`. If that call
@@ -365,6 +391,7 @@ fi
 # injection, since nothing about a repository makes `list` fail on its own: a
 # `dune` earlier on PATH that refuses `promotion list` and delegates the rest,
 # so `apply` still promotes and only the guard's input is lost.
+leg_7() {
 repo="$(scenario listfails)"
 if [ -z "$repo" ] || ! resolve_and_test "$repo"; then
   report 1 "leg 7 setup: conflicted scenario with a pending promotion"
@@ -401,9 +428,12 @@ SHIM
       ;;
   esac
 fi
+}
+harness_leg_run '7: a failed promotion list still promotes, and says it staged nothing' leg_7
 
 # Floor stream control: real Dune builds/apply; a shim moves only the list to
 # stderr, as Dune 3.20/3.21 do. The stdout-only guard must lose the promotion.
+leg_8() {
 for control in shipping stdout-only; do
   repo="$(scenario "floor-$control")"
   if [ -z "$repo" ] || ! resolve_and_test "$repo"; then
@@ -433,6 +463,8 @@ SHIM
     report 0 "floor stderr list: $control guard commits the expected blob"
   else report 1 "floor stderr list: $control guard commits the expected blob" "$out"; fi
 done
+}
+harness_leg_run '8: the Dune floor'\''s stderr promotion list' leg_8
 
 # ------------------------------------------------------- credentials (gh-ocannl-1280)
 # promote.sh's dune calls run without the caller's credentials, which dune would record in
@@ -456,6 +488,7 @@ SHIM
   [ -s "$TMP/$1.names" ]
 }
 names_have() { grep -qx "$1" "$2"; }
+leg_9() {
 cred_cut="$TMP/promote-no-scrub.sh"
 awk '/^eval "\$\(credential_env_scrub_text\)" \|\| die / { next } { print }' "$SRC" >"$cred_cut"
 if cmp -s "$SRC" "$cred_cut"; then
@@ -475,5 +508,7 @@ else
     report 1 "negative control: without the scrub, promote.sh's dune sees both credentials" "see $TMP/cred-cut.out"
   fi
 fi
+}
+harness_leg_run '9: promote.sh'\''s dune runs without the caller'\''s credentials' leg_9
 
 finish

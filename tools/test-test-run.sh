@@ -14,7 +14,7 @@
 # below and closed by the one group it belongs to (gh-ocannl-1202):
 # #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-85),
 # #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36,
-# 68-69, 71-73, 80), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
+# 68-69, 71-73, 80, 87), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
 # #source (59-63, 66), #slot (53-58, 78), #device (75-77), #credentials (79),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
@@ -3716,13 +3716,13 @@ fi
 }
 harness_leg_run '36: a red run still digests as FAIL #digest' leg_36
 
-# Leg 84 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
+# Leg 87 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
 # line a GPU backend's device-init deadline writes before its process dies by
 # SIGALRM is WEDGED DEVICE, keeping dune's 1 and quoting the line -- also when
 # 11MB of output follows it, past the digest's 10MB tail; the same
 # line indented (a test quoting a child's stderr) leaves the run an ordinary
 # FAIL.
-if harness_leg '84: a device-init deadline death is WEDGED DEVICE #digest'; then
+if harness_leg '87: a device-init deadline death is WEDGED DEVICE #digest'; then
 wedged_label="a red run carrying the device-init deadline's line is WEDGED DEVICE (exit 1), an indented one is FAIL"
 wedged_detail=
 argv_mode=wedged_init argv_probe wedged-init run build @cheap
@@ -3751,7 +3751,7 @@ if [ -z "$wedged_detail" ]; then
 else
   report 1 "$wedged_label" "$wedged_detail"
 fi
-fi # leg 84
+fi # leg 87
 
 # Legs 68-69 (gh-ocannl-1055): promotion is offered only on a diff dune printed.
 # A rule whose action failed names its `.corrected` file in the quoted stanza,
@@ -4633,7 +4633,10 @@ else
   printf '(rule\n (with-stdout-to slow.txt (run sh -c "touch %s; sleep 4; echo slow")))\n(rule\n (with-stdout-to quick.txt (run sh -c "echo quick")))\n' \
     "$TMP/live-trace.started" >"$live_root/dune"
   live_detail=
-  (cd "$live_root" && exec "$live_real" build --cache=disabled ./slow.txt) >"$TMP/live-manual.out" 2>&1 &
+  # Both builds get dune's own directory first on PATH: a dune found only
+  # through tools/opam-env.sh finds its switch's ocamlc there and nowhere else.
+  (cd "$live_root" && PATH=$(dirname "$live_real"):$PATH exec "$live_real" build --cache=disabled ./slow.txt) \
+    >"$TMP/live-manual.out" 2>&1 &
   live_pid=$!
   if ! await_fixture_ready "$TMP/live-trace.started" 300; then
     live_detail="the manual build never started its slow rule: $(tail -5 "$TMP/live-manual.out")"
@@ -4660,7 +4663,7 @@ else
   fi
 fi
 }
-harness_leg_run '80: a manual dune beside a managed run keeps its live trace #digest' leg_80_live
+harness_leg_run '80b: a manual dune beside a managed run keeps its live trace #digest' leg_80_live
 
 # The guard from leg 26 is not made redundant by the digest: it knows the
 # correct order and refuses without spawning dune. With a fixture that WOULD
@@ -5172,7 +5175,7 @@ lifecycle_cleanup
 leg_40_47_signals() {
 lifecycle_signals || lifecycle_abandoned '40-47 (signals, publication window, legacy lock)'
 }
-harness_leg_run '40-47: run/start lifecycle (signals, publication window, legacy lock) #lifecycle' leg_40_47_signals
+harness_leg_run '40-47b: run/start lifecycle (signals, publication window, legacy lock) #lifecycle' leg_40_47_signals
 
 # ---------------------------------------------------------------------------
 # Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)

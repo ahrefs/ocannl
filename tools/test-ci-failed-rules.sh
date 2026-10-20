@@ -129,8 +129,12 @@ listing_ok() { # OUTPUT RC
 }
 
 write_fixture 3
-build "$TMP/red.log" @runtest; brc=$?
+build "$TMP/red.log" @runtest; red_brc=$?
+# Dune's locationless error, which two legs read: built here, outside both
+# gates, so each passes run alone (tools/harness-legs-alone.sh).
+build "$TMP/alias.log" @t/runtest-nonesuch; alias_brc=$?
 if harness_leg 'a red build lists exactly the failing rule #dune'; then
+  brc=$red_brc
   out=$(cd "$proj" && subject "$TMP/red.log" 2>&1); rc=$?
   if [ "$brc" = 1 ] && listing_ok "$out" "$rc"; then
     report 0 'a red build lists exactly the failing rule'
@@ -182,7 +186,7 @@ if harness_leg 'a log from another revision names nothing it cannot see #dune'; 
   else report 1 'a log from another revision names nothing it cannot see' "exit $rc; $out"; fi
 fi
 if harness_leg 'a dune error without a location is listed #dune'; then
-  build "$TMP/alias.log" @t/runtest-nonesuch; brc=$?
+  brc=$alias_brc
   out=$(cd "$proj" && subject "$TMP/alias.log" 2>&1); rc=$?
   if [ "$brc" = 1 ] && [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | sed -n '1p')" = 'dune errors without a location (1):' ] &&
      printf '%s\n' "$out" | sed -n '2p' | grep -q '^  Error: .*runtest-nonesuch'; then

@@ -5,10 +5,13 @@
 harness_args() {
   KEEP=0 failures=0 skipped=0 harness_finished=0
   harness_only= harness_only_set=0 legs_selected=0 legs_filtered=0
-  harness_ran=() harness_skips=() harness_leg_running=
+  harness_ran=() harness_skips=() harness_leg_running= harness_leg_current=
+  harness_list=0 harness_listed=0 harness_leg_names=$'\n' harness_group_seen=$'\n'
+  harness_number_keys=() harness_number_legs=()
   while [ $# -gt 0 ]; do
     case $1 in
       --keep) KEEP=1 ;;
+      --list-legs) harness_list=1 ;;
       --only=*) harness_only=${1#--only=} harness_only_set=1 ;;
       --only)
         [ $# -ge 2 ] || { echo "${0##*/}: --only needs a regular expression" >&2; exit 2; }
@@ -25,14 +28,137 @@ harness_args() {
     local rc=0
     [[ '' =~ $harness_only ]] || rc=$?
     [ "$rc" != 2 ] || { echo "${0##*/}: --only '$harness_only' is not a valid extended regular expression" >&2; exit 2; }
+    [ "$harness_list" = 0 ] || { echo "${0##*/}: --list-legs lists every leg; it takes no --only" >&2; exit 2; }
   fi
+  harness_groups=$(harness_header_groups)
+}
+# A harness that groups its legs declares each group in its header (the
+# comment block --help prints) as `#NAME (LEGS)`: LEGS a comma-separated list
+# of leg numbers and ranges, a piece of prose after a colon allowed
+# (`#lifecycle (40-47, 65, 74: the run/start lifecycle)`). Prints one line per
+# group: NAME, then each leg number it lists.
+harness_header_groups() {
+  sed -n '2,${/^#/!q;p;}' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' | tr '\n' ' ' | awk '{
+    s = $0
+    while (match(s, /#[A-Za-z0-9_-]+ \([^)]*\)/)) {
+      d = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
+      out = d; sub(/ .*/, "", out); sub(/^[^(]*\(/, "", d)
+      n = split(d, piece, ",")
+      for (i = 1; i <= n; i++) {
+        p = piece[i]; sub(/^ +/, "", p)
+        if (!match(p, /^[0-9]+(-[0-9]+)?/)) continue
+        p = substr(p, 1, RLENGTH); lo = p; hi = p
+        if (index(p, "-")) { lo = substr(p, 1, index(p, "-") - 1); hi = substr(p, index(p, "-") + 1) }
+        for (k = lo + 0; k <= hi + 0; k++) out = out " " k
+      }
+      print out
+    }
+  }'
+}
+# The leg numbers a leg name's LABEL (the text before its first colon) claims,
+# one `N SUFFIX` line each: `2-3` claims 2 and 3, `59-63, 66` six numbers,
+# `55a` 55 with suffix a. A label that is not of that form claims none.
+harness_label_numbers() { # LABEL
+  awk -v l="$1" 'BEGIN {
+    if (l !~ /^[0-9]+[a-z]?(-[0-9]+[a-z]?)?(, ?[0-9]+[a-z]?(-[0-9]+[a-z]?)?)*$/) exit
+    n = split(l, piece, ",")
+    for (i = 1; i <= n; i++) {
+      p = piece[i]; sub(/^ /, "", p); sfx = p; gsub(/[0-9-]/, "", sfx); gsub(/[a-z]/, "", p)
+      lo = p; hi = p
+      if (index(p, "-")) { lo = substr(p, 1, index(p, "-") - 1); hi = substr(p, index(p, "-") + 1) }
+      for (k = lo + 0; k <= hi + 0; k++) print k, sfx
+    }
+  }'
+}
+# Leg naming, checked at every gate whether or not the leg is selected
+# (gh-ocannl-1367): a name selects one leg, so `--only` and
+# tools/harness-legs-alone.sh can run it alone; a leg number (with its
+# suffix letter: 80 and 80b are two legs) numbers one leg; and in a harness
+# whose header declares groups, every leg closes with ` #GROUP` of a declared
+# group that lists its numbers. finish checks the other direction: every
+# number a group lists is carried by a leg of that group.
+harness_leg_lint() { # NAME
+  local name=$1 tag= nums= label pairs n sfx i line clash=0
+  case $harness_leg_names in
+    *$'\n'"$name"$'\n'*)
+      report 1 "leg naming: two legs are named '$name'" "a leg's name is what selects it alone; give each leg its own"
+      return 0 ;;
+  esac
+  harness_leg_names=$harness_leg_names$name$'\n'
+  case $name in *'#'*) tag=${name##*#} ;; esac
+  [[ $tag =~ ^[A-Za-z0-9_-]+$ ]] || tag=
+  if [ -n "$harness_groups" ]; then
+    line=
+    if [ -n "$tag" ]; then
+      while IFS= read -r line; do
+        case $line in "$tag"|"$tag "*) break ;; esac
+        line=
+      done <<<"$harness_groups"
+    fi
+    if [ -z "$line" ]; then
+      report 1 "leg naming: '$name' does not close with a group its header declares" \
+        "declared: $(printf '%s\n' "$harness_groups" | sed 's/ .*//; s/^/#/' | tr '\n' ' ')"
+      tag=
+    else
+      nums=" ${line#"$tag"} "
+    fi
+  else
+    tag= # tags are free where the header declares no group
+  fi
+  label=${name%%:*}
+  [ "$label" != "$name" ] || return 0
+  pairs=$(harness_label_numbers "$label")
+  [ -n "$pairs" ] || return 0
+  while read -r n sfx; do
+    for ((i = 0; i < ${#harness_number_keys[@]}; i++)); do
+      [ "$clash" = 0 ] && [ "${harness_number_keys[i]}" = "$n$sfx" ] || continue
+      report 1 "leg naming: '$name' numbers leg $n$sfx, as '${harness_number_legs[i]}' does" \
+        "a leg number names one leg; a further leg beside it takes a suffix letter (${label}b)"
+      clash=1
+    done
+    harness_number_keys+=("$n$sfx") harness_number_legs+=("$name")
+    [ -n "$tag" ] || continue
+    harness_group_seen=$harness_group_seen$tag:$n$'\n'
+    case $nums in
+      '  ') ;;
+      *" $n "*) ;;
+      *) report 1 "leg naming: '$name' numbers leg $n, which the header does not list under #$tag" ;;
+    esac
+  done <<<"$pairs"
+  return 0
+}
+harness_header_unclaimed() { # finish: a number a declared group lists that no leg of it carries
+  local line tag n
+  [ -n "$harness_groups" ] && [ "$harness_leg_names" != $'\n' ] || return 0
+  while IFS= read -r line; do
+    tag=${line%% *}
+    for n in ${line#"$tag"}; do
+      case $harness_group_seen in
+        *$'\n'"$tag:$n"$'\n'*) ;;
+        *) report 1 "leg naming: the header lists leg $n under #$tag, and no leg of #$tag numbers it" ;;
+      esac
+    done
+  done <<<"$harness_groups"
+  return 0
 }
 # Gate one leg's body: `if harness_leg 'NAME'; then ... fi`. Without --only
 # every leg runs; with it, a leg whose NAME does not match the extended
 # regular expression is reported FILTERED and its body is not run. Keep a
-# leg's shared setup (helpers, fixtures later legs read) outside the gate.
+# leg's shared setup (helpers, fixtures later legs read) outside the gate:
+# a leg must pass run alone, which tools/harness-legs-alone.sh checks.
 # A NAME may end in a `#group` tag, which `--only '#group'` selects whole.
+# Under --list-legs every gate prints `LEG  NAME` and runs no body.
 harness_leg() { # NAME
+  # The leg a later skip is charged to (OCANNL_TOOL_HARNESS_SKIP_LEGS): the
+  # last gate reached, selected or not, so shared code between two gates is
+  # charged alike in a full run and a filtered one.
+  harness_leg_current=$1
+  harness_leg_lint "$1"
+  if [ "$harness_list" = 1 ]; then
+    harness_listed=$((harness_listed + 1))
+    printf 'LEG  %s\n' "$1"
+    return 1
+  fi
   if [ "${harness_only_set:-0}" != 1 ] || [[ $1 =~ $harness_only ]]; then
     legs_selected=$((legs_selected + 1))
     harness_ran+=("$1")
@@ -85,6 +211,10 @@ skip() { # LABEL REASON
   fi
   skipped=$((skipped + 1))
   harness_skips+=("$1 -- $2")
+  # tools/harness-legs-alone.sh compares each leg's skips alone with the
+  # same leg's in the full run, so it asks which leg each skip came from.
+  [ -z "${OCANNL_TOOL_HARNESS_SKIP_LEGS:-}" ] ||
+    printf '%s\t%s\n' "${harness_leg_current:-(before any gate)}" "$1" >>"$OCANNL_TOOL_HARNESS_SKIP_LEGS"
   printf 'SKIP  %s\n      %s%s\n' "$1" "$2" "$expected"
 }
 # Whether a strict run's list of expected platform skips names this skip.
@@ -98,8 +228,13 @@ harness_skip_expected() { # LABEL
 }
 finish() {
   harness_finished=1
+  harness_header_unclaimed
   echo
-  if [ "${harness_only_set:-0}" = 1 ]; then
+  if [ "$harness_list" = 1 ]; then
+    # A listing ran no leg body: it reports only the gates it reached, and
+    # fails only on a naming defect or a shared fixture's own FAIL.
+    echo "listed $harness_listed leg(s); no leg ran ($failures failure(s) outside the legs, $skipped skipped)"
+  elif [ "${harness_only_set:-0}" = 1 ]; then
     # A filtered run never prints the full-pass line, and one that selected
     # nothing tested nothing: that is a usage error, not a green run.
     if [ "$legs_selected" -eq 0 ] && [ "$legs_filtered" -eq 0 ]; then

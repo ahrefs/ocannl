@@ -4,6 +4,11 @@
 #
 #   scripts/test-setup-ocaml-env.sh          # run every leg
 #   scripts/test-setup-ocaml-env.sh --keep   # keep the temp dir for inspection
+#   scripts/test-setup-ocaml-env.sh --only '^2:'   # only the legs whose names match
+#
+# Each leg below is a function run by `harness_leg_run 'N: ...' leg_N`
+# (scripts/harness-support.sh), and passes run alone: what a leg needs is
+# either its own or a shared fixture built outside the legs.
 #
 # Run it after editing that section. It takes about 90 seconds, nearly all of it
 # spent sitting out watchdog timeouts. It is deliberately not a dune test
@@ -164,32 +169,6 @@ cleanup_fixture() {
 # never runs — which is how an interrupted run left a stopped zombie maker
 # behind. Exiting from the handler is what gets EXIT to fire.
 
-# ---------------------------------------------------------------------------
-# Leg 1: bounded
-# ---------------------------------------------------------------------------
-# Extract the predicate from the working-tree shared helper and the bound from
-# the working-tree hook, then source that exact pair.
-sed -n '/^group_alive() {/,/^}/p' "$GROUP_SRC" >"$TMP/bounded.sh"
-sed -n '/^bounded() {/,/^}/p' "$HOOK_SRC" >>"$TMP/bounded.sh"
-# Checked structurally — opens with the header, closes with the brace, has a
-# body — rather than by grepping for one line of it: this guard exists to catch
-# a sed that matched nothing, and must still hold while a leg under test is
-# being mutated to see the assertion fail.
-b_lines="$(wc -l <"$TMP/bounded.sh" | tr -d ' ')"
-case "$(head -n1 "$TMP/bounded.sh")" in
-  "group_alive() {"*) group_head_ok=1 ;;
-  *) group_head_ok=0 ;;
-esac
-if [ "$group_head_ok" = 0 ] || ! grep -qx 'bounded() {' "$TMP/bounded.sh" \
-   || [ "$(tail -n1 "$TMP/bounded.sh")" != "}" ] || [ "$b_lines" -lt 10 ]; then
-  report 1 "bounded: extracted" \
-    "sed did not capture group_alive from $GROUP_SRC and bounded from $HOOK_SRC"
-else
-  report 0 "bounded: extracted ($b_lines lines)"
-fi
-# shellcheck disable=SC1090
-. "$TMP/bounded.sh"
-
 # Survivors are counted by EXACT duration: matching `sleep` alone would also
 # catch the watchdog's own `sleep 3` / `sleep 1`, and a substring match would
 # additionally catch this harness's command line. The durations also carry this
@@ -271,6 +250,33 @@ settled_survivors() { # settled_survivors DURATION -- allow for asynchronous rea
 }
 
 BOUND=3
+
+# ---------------------------------------------------------------------------
+# Leg 1: bounded
+# ---------------------------------------------------------------------------
+leg_1() {
+# Extract the predicate from the working-tree shared helper and the bound from
+# the working-tree hook, then source that exact pair.
+sed -n '/^group_alive() {/,/^}/p' "$GROUP_SRC" >"$TMP/bounded.sh"
+sed -n '/^bounded() {/,/^}/p' "$HOOK_SRC" >>"$TMP/bounded.sh"
+# Checked structurally — opens with the header, closes with the brace, has a
+# body — rather than by grepping for one line of it: this guard exists to catch
+# a sed that matched nothing, and must still hold while a leg under test is
+# being mutated to see the assertion fail.
+b_lines="$(wc -l <"$TMP/bounded.sh" | tr -d ' ')"
+case "$(head -n1 "$TMP/bounded.sh")" in
+  "group_alive() {"*) group_head_ok=1 ;;
+  *) group_head_ok=0 ;;
+esac
+if [ "$group_head_ok" = 0 ] || ! grep -qx 'bounded() {' "$TMP/bounded.sh" \
+   || [ "$(tail -n1 "$TMP/bounded.sh")" != "}" ] || [ "$b_lines" -lt 10 ]; then
+  report 1 "bounded: extracted" \
+    "sed did not capture group_alive from $GROUP_SRC and bounded from $HOOK_SRC"
+else
+  report 0 "bounded: extracted ($b_lines lines)"
+fi
+# shellcheck disable=SC1090
+. "$TMP/bounded.sh"
 
 # Not "is there a `ps`" but "does this `ps`, parsed this way, actually find a
 # process we know is running" — the macOS `pgrep -a` trap was invisible exactly
@@ -455,6 +461,8 @@ else
     fi
   fi
 fi
+}
+harness_leg_run '1: bounded, the watchdog' leg_1
 
 # ---------------------------------------------------------------------------
 # Shared machinery for the hook-invoking legs
@@ -528,6 +536,7 @@ git_q() { env -i PATH="$PATH" HOME="$FAKEHOME" TMPDIR="$TMP" \
 # ---------------------------------------------------------------------------
 # Leg 2: counting
 # ---------------------------------------------------------------------------
+leg_2() {
 ORIGIN="$TMP/origin"
 mkdir -p "$ORIGIN"
 git_q -C "$ORIGIN" init -q
@@ -658,10 +667,13 @@ else
   report 1 "count (g): no origin remote -> the section prints nothing" \
     "$(tr '\n' '|' <"$TMP/out-noremote")"
 fi
+}
+harness_leg_run '2: counting behind and ahead of origin/master' leg_2
 
 # ---------------------------------------------------------------------------
 # Leg 3: SSH launcher gating
 # ---------------------------------------------------------------------------
+leg_3() {
 # A logging fake launcher over an ssh:// origin answers two questions per case:
 # WHICH program git ended up invoking, and whether the OpenSSH options were
 # appended to it. The options are only correct where OpenSSH is certain.
@@ -721,7 +733,8 @@ fi
 
 SSH_BASE="$TMP/ssh-base"
 mkdir -p "$SSH_BASE/scripts"
-stage_sourced "$HOOK_SRC" "$SSH_BASE" || exit 2
+stage_sourced "$HOOK_SRC" "$SSH_BASE" ||
+  { harness_abandon "cannot stage the hook's sources into $SSH_BASE"; return; }
 git_q -C "$SSH_BASE" init -q
 git_q -C "$SSH_BASE" commit -q --allow-empty -m base
 git_q -C "$SSH_BASE" remote add origin ssh://git@example.invalid/x.git
@@ -924,6 +937,8 @@ else
     "took ${el}s — the group check is counting the ssh child's zombie as work again"
 fi
 fi
+}
+harness_leg_run '3: SSH launcher gating' leg_3
 
 # ---------------------------------------------------------------------------
 finish
