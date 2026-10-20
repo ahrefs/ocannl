@@ -277,10 +277,10 @@ let () =
 
 let () =
   List.iter runs ~f:(fun (shape, run) ->
-      p_all2
+      p_close
         (Printf.sprintf "%s: the nest computes its reference sum" (shape_name shape))
         run.values run.want
-        ~f:(fun got want -> Float.(abs (got - want) < 1e-4));
+        ~tol:(fun _ -> 1e-4);
       p
         (Printf.sprintf "%s: the routine's census equals the one a bracket around it collects"
            (shape_name shape))

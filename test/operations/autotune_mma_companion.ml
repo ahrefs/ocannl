@@ -135,8 +135,7 @@ let () =
   in
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx y.Tensor.value in
-  p_all2 "mc: tuned classifier head matches the reference" got expected ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-3));
+  p_close "mc: tuned classifier head matches the reference" got expected ~tol:(fun _ -> 1e-3);
   match !reports with
   | [ r ] ->
       (* The assertion the arc was missing: SEEDED is not TIMED. Every GPU backend used to seed

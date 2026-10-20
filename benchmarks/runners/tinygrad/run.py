@@ -50,7 +50,7 @@ _drop_runners_from_path()
 
 import numpy as np
 from safetensors.numpy import load_file
-from tinygrad import Tensor, TinyJit
+from tinygrad import Tensor, TinyJit, dtypes
 from tinygrad.nn.optim import SGD
 
 # After the tinygrad import: this directory is runners/tinygrad, so with runners/ on
@@ -64,6 +64,7 @@ from bench_common import (
     read_st_metadata,
     run_protocol,
     tinygrad_peak_memory,
+    tinygrad_precision_fields,
     tinygrad_searched,
 )
 
@@ -234,9 +235,9 @@ def build_gpt(meta, data):
         for i in range(n_layer)
     ]
     gf, bf = leaf(data["lnf_g"]), leaf(data["lnf_b"])
-    flat = (
-        [wte, wpe, gf, bf] + [p for layer in layers for p in layer.values()] if training else []
-    )
+    # Every weight, parameter or constant: the SGD step's list under training, and what the result
+    # line reads its parameter dtypes from in either mode (gh-ocannl-1262).
+    flat = [wte, wpe, gf, bf] + [p for layer in layers for p in layer.values()]
     mask = Tensor(np.tril(np.ones((seq, seq), np.bool_)))  # [s, t]
     # The embedding table is the transpose of the tied lm_head weight; under training it is
     # recomputed inside forward so its gradient reaches wte, instead of being realized once.
@@ -356,6 +357,13 @@ def main():
         # this one cell in the approximate regime whenever it runs one (gh-ocannl-719).
         "regime_settings": "tinygrad defaults (no exact pin; reassociates freely)",
         "version": pkg_version("tinygrad"),
+        # What the run's tensors were and the default float in force, read back from the run
+        # (gh-ocannl-1262): every weight's dtype after the steps, the first batch's, and tinygrad's
+        # `dtypes.default_float`. The sweep compares them against the precision it labels the row
+        # with (`precision_check`), as it does a torch row's.
+        **tinygrad_precision_fields(
+            dtypes, flat, {"input": batches[0][0], "target": batches[0][1]}
+        ),
         **measured,
     }
     if tokens_per_step:

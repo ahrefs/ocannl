@@ -27,7 +27,7 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_gpu = Sched.backend_is_gpu backend_name
 
@@ -76,7 +76,7 @@ let () =
         let op, _, _ = Sched.split ~axis:sym ~factor:2 ~outer:LL.Grid ~inner:LL.Workgroup in
         Sched.apply [ op ] opt)
   in
-  p_all2 "split (dividing factor) values correct" got_div expected_c ~f:approx;
+  p_close "split (dividing factor) values correct" got_div expected_c ~tol:approx_tol;
   (let src = Generated.read "split_div" in
    let has s = String.is_substring src ~substring:s in
    let ok =
@@ -95,7 +95,7 @@ let () =
         let op, _, _ = Sched.split ~axis:sym ~factor:3 ~outer:LL.Grid ~inner:LL.Workgroup in
         Sched.apply [ op ] opt)
   in
-  p_all2 "split (remainder) values correct" got_rem expected_c ~f:approx;
+  p_close "split (remainder) values correct" got_rem expected_c ~tol:approx_tol;
   Generated.assert_emits ~routine:"split_rem" ~contains:"if (" "split (remainder) guard survives";
 
   (* --- Swap of the perfectly nested elementwise pair --- *)
@@ -105,7 +105,7 @@ let () =
         let j, _ = first_loop_exn body in
         Sched.apply [ Sched.Swap { outer = i; inner = j } ] opt)
   in
-  p_all2 "swap values correct" got_swap expected_c ~f:approx;
+  p_close "swap values correct" got_swap expected_c ~tol:approx_tol;
   (let src = Generated.read "swap_ij" in
    (* After the interchange the extent-8 loop is outermost: [<= 7] appears before [<= 3]. *)
    let idx7 = String.substr_index src ~pattern:"<= 7" in
@@ -122,7 +122,7 @@ let () =
         let j, _ = first_loop_exn body in
         Sched.apply [ Sched.Retype { axis = j; ty = LL.Vectorized } ] opt)
   in
-  p_all2 "vectorized retype values correct" got_vec expected_c ~f:approx;
+  p_close "vectorized retype values correct" got_vec expected_c ~tol:approx_tol;
   (let src = Generated.read "vec_inner" in
    let has s = String.is_substring src ~substring:s in
    let ok =
@@ -159,8 +159,8 @@ let () =
   let ctx = Context.run ctx routine in
   let got_c1 = Context.get_values ctx c1.Tensor.value in
   let got_c2 = Context.get_values ctx c2.Tensor.value in
-  p_all2 "default annotator add-nest values correct" got_c1 expected_c ~f:approx;
-  p_all2 "default annotator multiply-nest values correct" got_c2 expected_c2 ~f:approx;
+  p_close "default annotator add-nest values correct" got_c1 expected_c ~tol:approx_tol;
+  p_close "default annotator multiply-nest values correct" got_c2 expected_c2 ~tol:approx_tol;
   p "default annotator schedules both nests" (!sched_len = 4);
   (let src = Generated.read "combo_default" in
    let has s = String.is_substring src ~substring:s in
@@ -197,7 +197,7 @@ let () =
     run_mm ~name:"mm_default" ~transform:(fun opt ->
         Sched.apply (Sched.default_gpu ~min_parallel:1 opt) opt)
   in
-  p_all2 "default annotator matmul values match the serial twin" mm_sched mm_serial ~f:approx;
+  p_close "default annotator matmul values match the serial twin" mm_sched mm_serial ~tol:approx_tol;
 
   (* --- Privatize under If guards (PR #91 review; gh-ocannl-730): a lane-guarded accumulation [if
      (w == 0) c += va[k]] must carry the guard onto the synthesized init-load and store-back (stale
@@ -345,7 +345,7 @@ let () =
         clamp_sched := sched;
         Sched.apply sched opt)
   in
-  p_all2 "device-limit clamp values correct" got_clamp expected_c ~f:approx;
+  p_close "device-limit clamp values correct" got_clamp expected_c ~tol:approx_tol;
   p "device-limit clamp splits by the max-threads limit"
     (List.exists !clamp_sched ~f:(function
       | Sched.Split { factor; inner = LL.Workgroup; _ } -> factor = 4

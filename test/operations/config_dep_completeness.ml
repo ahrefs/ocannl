@@ -139,14 +139,24 @@ let () =
       ~config_files:(List.map (of_basename Scan.config_file) ~f:fst)
       dune_files
   in
-  if not report.Resolution.ambient_producer_ok then
-    fail
-      (Printf.sprintf
-         "%s/dune no longer produces the ambient record its tests depend on: it needs a rule \
-          targeting `%s` that depends on `(universe)`, and one in `(subdir %s …)` targeting `%s` \
-          that depends on `../%s` (gh-ocannl-1149)"
-         Resolution.ambient_home Scan.ambient_file Resolution.ambient_subdir Scan.config_file
-         Scan.ambient_file);
+  (match report.Resolution.ambient_producer with
+  | Resolution.Producer_ok -> ()
+  | Resolution.Environment_unrecorded ->
+      fail
+        (Printf.sprintf
+           "%s/dune no longer produces the ambient record its tests depend on: it needs a rule \
+            targeting `%s` that depends on `(universe)`, and one in `(subdir %s …)` targeting `%s` \
+            that depends on `../%s` (gh-ocannl-1149)"
+           Resolution.ambient_home Scan.ambient_file Resolution.ambient_subdir Scan.config_file
+           Scan.ambient_file)
+  | Resolution.Host_unrecorded ->
+      fail
+        (Printf.sprintf
+           "%s/dune records the ambient environment but not the host: it needs a rule targeting \
+            `%s` that depends on `(universe)`, and the rule producing `%s` must read it, or a \
+            capability a backend probes on the host can move without rerunning a test \
+            (gh-ocannl-1038)"
+           Resolution.ambient_home Resolution.host_record_file Scan.ambient_file));
   let counts = Hashtbl.create (module String) in
   let bump kind = Hashtbl.update counts kind ~f:(fun n -> 1 + Option.value n ~default:0) in
   (* The per-directory tallies, reported on stderr rather than in the golden, and how many of them

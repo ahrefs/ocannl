@@ -20,7 +20,7 @@ module LL = Ir.Low_level
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
-let approx a b = Float.(abs (a -. b) < 1e-4)
+let approx_tol _ = 1e-4
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -76,7 +76,7 @@ let () =
   in
   let ctx_t = Context.run ctx_t routine_t in
   let got = Context.get_values ctx_t t2.Tensor.value in
-  p_all2 "tuned routine values match the plain compile" got expected ~f:approx;
+  p_close "tuned routine values match the plain compile" got expected ~tol:approx_tol;
   p "the public report callback keeps the positional A/B contract" (List.length !arm_reports = 2);
   let arm_a =
     match List.last !arm_reports with

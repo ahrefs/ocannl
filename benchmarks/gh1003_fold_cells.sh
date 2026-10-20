@@ -12,7 +12,12 @@
 #         partial run).
 #   OUT   results directory, created, and refused unless empty. OUT/driver.log records everything
 #         this script prints (provenance, each cell's command, exit and wall); each cell also writes
-#         OUT/<cell>.out and OUT/<cell>.err, and `summary` writes OUT/summary.md.
+#         OUT/<cell>.out and OUT/<cell>.err, and `summary` writes OUT/summary.md. The one exception
+#         is re-summarizing: when `summary` is the only STEP, OUT may be an earlier invocation's
+#         results directory (it must hold that run's driver.log), and the matrix is rendered again
+#         from its cells -- under the fold blocks that run recorded, so FOLD_BLOCKS may be left unset
+#         and is refused when it disagrees. summary.md is replaced; the earlier rendering stays in
+#         driver.log, where every summary step also prints its matrix.
 #   CAP   wall cap in seconds per build and per cell; a capped cell's process group is terminated
 #         and the cell counts as failed.
 #   STEP  build | provenance | dry | metal | seg | cc | train | summary
@@ -78,9 +83,27 @@ for b in $fold_blocks; do
   case $b in '' | *[!0-9]* | 0*) echo "gh1003: FOLD_BLOCKS must list positive decimal integers, got '$b'" >&2; exit 2 ;; esac
 done
 [ -n "$fold_blocks" ] || { echo "gh1003: FOLD_BLOCKS is empty" >&2; exit 2; }
+# Re-summarizing an earlier OUT: the only invocation a non-empty OUT is accepted for. Its cells are
+# that run's, so the treatments they are read under are that run's too -- the fold blocks its
+# driver.log recorded -- or a block the default list lacks would leave its cells out of the matrix
+# without a word.
+resummarize=0
 if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
-  echo "gh1003: OUT $out is not empty; give each invocation a fresh directory" >&2
-  exit 2
+  for step in "$@"; do
+    [ "$step" = summary ] || {
+      echo "gh1003: OUT $out is not empty; give each invocation a fresh directory (only a lone summary step re-renders an existing OUT)" >&2
+      exit 2
+    }
+  done
+  [ -f "$out/driver.log" ] || { echo "gh1003: OUT $out is not empty and holds no driver.log: not a results directory of this driver" >&2; exit 2; }
+  recorded=$(sed -n 's/^gh1003: fold blocks: \([^;]*\);.*/\1/p' "$out/driver.log" | head -1)
+  [ -n "$recorded" ] || { echo "gh1003: $out/driver.log records no fold blocks; cannot tell which treatments its cells are" >&2; exit 2; }
+  if [ -n "${FOLD_BLOCKS:-}" ] && [ "$FOLD_BLOCKS" != "$recorded" ]; then
+    echo "gh1003: FOLD_BLOCKS='$FOLD_BLOCKS' differs from the '$recorded' that $out was measured with" >&2
+    exit 2
+  fi
+  fold_blocks=$recorded
+  resummarize=1
 fi
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 fixture_dir=${FIXTURE_DIR:-$root/benchmarks/fixtures}
@@ -117,6 +140,7 @@ for b in $fold_blocks; do treatments="$treatments fold-$b"; done
 train_treatments="composed two-pass-bwd"
 for b in $fold_blocks; do train_treatments="$train_treatments fold-$b-bwd"; done
 echo "gh1003: $(date -u +%FT%TZ) root=$root out=$out cap=$cap repeats=$repeats"
+[ "$resummarize" = 0 ] || echo "gh1003: re-summarizing an existing OUT under its recorded fold blocks"
 echo "gh1003: fold blocks: $fold_blocks; train fixtures: $train_fixtures; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
 

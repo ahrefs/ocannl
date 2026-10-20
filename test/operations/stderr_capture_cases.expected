@@ -1,0 +1,14 @@
+a progress line reads its leading wall_s and event: true
+a quoted value keeps its spaces and is unescaped as an OCaml string: true
+a bare value ends at the next space: true
+a line breaking the documented shape reads as none: true
+events and count select the progress lines by their fields: true
+a capture answers the function's result and the text it wrote to stderr: true
+a capture that returned leaves fd 2 what it was: true
+an exception inside a capture reaches its caller unchanged: true
+a capture that raised restored fd 2 before re-raising: true
+a capture that raised wrote its captured text back to the restored stderr: true
+a capture that raised removed its temporary file: true
+a capture that raised leaves fd 2 what it was: true
+a capture whose temporary file cannot be created raises without moving fd 2: true
+an exception escaping a capture is reported on the real stderr, after the text the capture caught: true

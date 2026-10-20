@@ -326,32 +326,17 @@ let segment_of label =
   if String.is_empty move then None else Some (i, segs)
 
 let () =
-  let attempts = ref [] and report = ref None in
-  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt
-  and old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
-      Autotune.Seam.set Autotune.on_candidate_measured old_measured)
-    ~f:(fun () ->
-      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
-        attempts := label :: !attempts );
-      (* The fissioned presets lead the seeds, so the beam holds a fissioned parent; everything
-         else, this round's candidates included, is slower, so the search stops after one round. *)
-      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest:_ _ms ->
-        if String.is_prefix label ~prefix:"F_preset[" then 1. else 1000. );
-      let ctx, _routine =
-        Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
-              ~progress:false
-              ~report:(fun r -> report := Some r)
-              (Context.cpu ()) (chain ()) Ir.Indexing.Empty)
-      in
-      Context.release ctx);
-  let rounds = List.rev !attempts |> List.filter ~f:is_saved in
+  (* The fissioned presets lead the seeds, so the beam holds a fissioned parent; everything else,
+     this round's candidates included, is slower, so the search stops after one round. *)
+  let (o : Scripted_search.observed) =
+    Scripted_search.search ~rounds:1 ~log:false ~progress:false ~tag:"round labels"
+      ~measure:(fun w -> if String.is_prefix w.label ~prefix:"F_preset[" then 1. else 1000.)
+      (chain ())
+  in
+  let rounds = List.filter o.attempts ~f:is_saved in
   Stdio.eprintf "round candidates (not part of the golden): %d\n" (List.length rounds);
   List.iter rounds ~f:(fun l -> Stdio.eprintf "  %s\n" l);
-  p "the search ran its round" (Option.exists !report ~f:(fun r -> r.Autotune.rounds_run >= 1));
+  p "the search ran its round" (o.report.Autotune.rounds_run >= 1);
   p_exists "a round candidate extends a segment of a fissioned parent" rounds ~f:(fun l ->
       Option.is_some (segment_of l));
   p_all "every fissioned round candidate names a segment of its parent"
@@ -366,30 +351,6 @@ let () =
 
 (* --- Part 3: a winner replay keeps the label its winner was timed under --- *)
 
-(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote; the
-   captured text is echoed back once stderr is restored, so nothing the run wrote is hidden. *)
-let with_stderr_captured f =
-  let file = Stdlib.Filename.temp_file "autotune_labels" ".stderr" in
-  Exn.protect
-    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
-    ~f:(fun () ->
-      Stdio.Out_channel.flush Stdio.stderr;
-      let saved = Unix.dup Unix.stderr in
-      let result =
-        Exn.protect
-          ~finally:(fun () ->
-            Stdio.Out_channel.flush Stdio.stderr;
-            Unix.dup2 saved Unix.stderr;
-            Unix.close saved)
-          ~f:(fun () ->
-            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
-            f ())
-      in
-      let text = Stdio.In_channel.read_all file in
-      Stdio.eprintf "%s%!" text;
-      (result, String.split_lines text))
-
 (* With a [timing_ctx] the search times against a scratch lineage and the winner is rebuilt from its
    saved schedule in the caller's context. That rebuilt spec carries no round move, so the replay
    used to print -- and a failed one to be reported -- as the bare [F_saved[N segs]] every round
@@ -398,21 +359,20 @@ let with_stderr_captured f =
    to name exactly the crowned label. *)
 let () =
   let report = ref None in
-  let measured ~label ~digest:_ _ms =
-    if String.is_prefix label ~prefix:"F_preset[" then 1.
-    else if is_saved label && String.is_substring label ~substring:" from " then 0.5
+  let measure (w : Scripted_search.window) =
+    if String.is_prefix w.label ~prefix:"F_preset[" then 1.
+    else if is_saved w.label && String.is_substring w.label ~substring:" from " then 0.5
     else 1000.
   in
-  let (), lines =
-    with_stderr_captured (fun () ->
-        Autotune.Seam.with_value Autotune.on_candidate_measured measured (fun () ->
+  let ((), _), lines =
+    Stderr_capture.lines (fun () ->
+        Scripted_search.scripted ~measure (fun () ->
             let ctx = Context.cpu () in
             let ctx, _routine =
-              Autotune.with_uncontended_test_windows (fun () ->
-                  Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:true
-                    ~progress:false ~timing_ctx:ctx
-                    ~report:(fun r -> report := Some r)
-                    ctx (chain ()) Ir.Indexing.Empty)
+              Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:true
+                ~progress:false ~timing_ctx:ctx
+                ~report:(fun r -> report := Some r)
+                ctx (chain ()) Ir.Indexing.Empty
             in
             Context.release ctx))
   in

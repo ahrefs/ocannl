@@ -163,6 +163,21 @@ let cuda_include_options () =
       then [ "-I/usr/local/cuda/include" ]
       else []
 
+(* The prelude every kernel starts with. Top level rather than in [Impl] so [host_capabilities]
+   fingerprints exactly the headers it names. *)
+let cuda_header_prelude =
+  {|#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+#include <cuda_fp8.h>
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __int_as_float(0x7f800000)
+#endif
+#ifndef NAN
+#define NAN __int_as_float(0x7fffffff)
+#endif|}
+
 module Impl : Ir.Backend_impl.Lowered_backend = struct
   include Backend_impl.Device (Device_stream) (Slab)
 
@@ -1495,17 +1510,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     C_syntax.codegen_capabilities (module Config)
 
   let cuda_includes () =
-    {|#include <cuda_fp16.h>
-#include <cuda_bf16.h>
-#include <cuda_fp8.h>
-
-/* Define math constants that would normally come from <math.h> */
-#ifndef INFINITY
-#define INFINITY __int_as_float(0x7f800000)
-#endif
-#ifndef NAN
-#define NAN __int_as_float(0x7fffffff)
-#endif|}
+    cuda_header_prelude
     ^
     if Utils.debug_log_from_routines () then "\n__device__ int printf (const char * format, ... );"
     else ""
@@ -2031,3 +2036,18 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     Sexp.message "cuda_stream_debug"
       [ ("total_events", i2s tot); ("unreleased_events", i2s unr); ("unfinished_events", i2s unf) ]
 end
+
+(* gh-ocannl-1038: what this backend probes on the host without opening a device, in the form
+   {!Context.host_capabilities} records. Only the toolkit include tree: everything else this backend
+   decides on -- compute capability, the device limits -- is a device query. *)
+let host_capabilities () =
+  [
+    ( "cuda_include",
+      (* The headers kernels include, read off the text that includes them. *)
+      Utils.capability_dir
+        ~requires:
+          (Utils.included_headers cuda_header_prelude
+          @ List.concat_map Cuda_like_config.Cuda.conditional_includes ~f:(fun (_, directive) ->
+              Utils.included_headers directive))
+        (List.find_map (cuda_include_options ()) ~f:(String.chop_prefix ~prefix:"-I")) );
+  ]

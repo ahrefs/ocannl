@@ -202,7 +202,7 @@ SKIP_CELLS = set(
 )
 
 sys.path.insert(0, str(HERE / "runners"))
-from bench_common import read_st_metadata  # noqa: E402
+from bench_common import PRECISION_LABELS, read_st_metadata  # noqa: E402
 
 
 def cell_skipped(workload, backend, variant, precision, skips=None):
@@ -882,26 +882,39 @@ def shadowing_check(results):
 
 
 def precision_check(results):
-    """Rows whose runner ran tensors or an autocast context other than the row's precision label.
+    """Rows whose run contradicts the row's precision label, in any framework.
 
-    The row's `precision` is what the sweep labels it with (f32 for every torch cell); the runner
-    reports what its run's tensors were (`effective_precision`, from the parameter and floating
-    input dtypes it read back) and whether autocast was on inside the step (gh-ocannl-1208). A
-    label the run contradicts -- a weight cast on load, an autocast context, a requested precision
-    the runner did not apply -- is a number quoted at a precision it was not measured at, and the
-    parity reference is such a row too. `precision_mismatch` says what ran, in words the report
-    prints. Rows whose runner reports no `effective_precision` (OCANNL's, tinygrad's, and torch
-    rows predating the field) are not checked; an autocast state torch could not read (None) is
-    not a mismatch, and the row's `autocast` says it is unknown.
+    The row's `precision` is what the sweep labels it with (f32 for every torch and tinygrad cell,
+    the dispatched precision for an OCANNL one); each runner reports what its run actually used,
+    read back from the run rather than echoed from a flag:
+
+    - torch and tinygrad: what the run's tensors were (`effective_precision`, from the parameter
+      and floating input dtypes); torch also whether autocast was on inside the step
+      (gh-ocannl-1208), tinygrad the default float in force (`default_float`, gh-ocannl-1262) --
+      the dtype of every float it creates without a stated one;
+    - OCANNL: the storage precision its model body was compiled at (`storage_precision`, read off
+      the logits node; gh-ocannl-1262), which a `BENCH_PRECISION` the runner ignored leaves at f32.
+
+    A label the run contradicts -- a weight cast on load, an autocast context, a requested
+    precision the runner did not apply -- is a number quoted at a precision it was not measured
+    at, and the parity reference is such a row too. `precision_mismatch` says what ran, in words
+    the report prints. A field a row does not carry (a runner predating it) is not checked; an
+    autocast state torch could not read (None) is not a mismatch, and the row's `autocast` says it
+    is unknown.
     """
     mismatched = []
     for r in results:
-        ran = r.get("effective_precision")
-        if ran is None:
-            continue
+        base = precision_base(r.get("precision", "f32"))
         found = []
-        if ran != precision_base(r.get("precision", "f32")):
+        ran = r.get("effective_precision")
+        if ran is not None and ran != base:
             found.append(f"{ran} tensors")
+        default_float = r.get("default_float")
+        if default_float is not None and PRECISION_LABELS.get(default_float, default_float) != base:
+            found.append(f"default float {default_float}")
+        storage = r.get("storage_precision")
+        if storage is not None and storage != base:
+            found.append(f"{storage} storage")
         autocast = r.get("autocast")
         if autocast and autocast.get("enabled"):
             found.append(f"autocast to {autocast.get('dtype')}")
@@ -1044,10 +1057,26 @@ def _group_observation(proc, allow_zombie_gone=False):
     return proc.observe(allow_zombie_gone=allow_zombie_gone)
 
 
+# What a failure note says when a cell's group was not proven gone after SIGKILL: one phrase per
+# observation, and the only spelling `group_unproven` reads.
+_REMAINING_NOTES = {
+    cell_group.SURVIVORS: "A MEMBER SURVIVED SIGKILL",
+    cell_group.UNKNOWN: "GROUP LIVENESS IS UNKNOWN AFTER SIGKILL",
+}
+
+
 def _remaining_note(observation):
-    if observation is cell_group.SURVIVORS:
-        return "A MEMBER SURVIVED SIGKILL"
-    return "GROUP LIVENESS IS UNKNOWN AFTER SIGKILL"
+    return _REMAINING_NOTES.get(observation, _REMAINING_NOTES[cell_group.UNKNOWN])
+
+
+def group_unproven(note):
+    """Whether a `run_cell` failure note says the cell's process group was not proven gone.
+
+    `run_cell` records such a cell and returns, which is the matrix's policy: the sweep goes on and
+    the note says which later rows to disbelieve. A focused driver that would rather stop than time
+    the next cell beside a survivor (gh1181_cells.py, gh675_cells.py) asks this of the note.
+    """
+    return note is not None and any(phrase in note for phrase in _REMAINING_NOTES.values())
 
 
 def kill_cell_group(proc):
@@ -1200,6 +1229,27 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None, o
     """
     with _cancellation.deferring():
         return _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint)
+
+
+def run_cell_kept(label, cmd, on_interrupted=None, **kwargs):
+    """`run_cell`, plus the last checkpoint a failed cell left: `(result, note, checkpoint)`.
+
+    The one way every sweep driver runs a cell and keeps what a failed one completed
+    (gh-ocannl-1234): `checkpoint` is the cell's last checkpoint when it ended without a result
+    (`last_checkpoint`), else None, and is what the driver's failure record carries
+    (`failure_record`). An interrupted cell raises out of here like out of `run_cell`; it is first
+    handed to `on_interrupted(checkpoint)` -- None when it was interrupted before its first
+    checkpoint -- since the driver writes nothing else for it before the cancellation propagates,
+    and an interrupted cell is a failed one whatever it had completed.
+    """
+    kept = []
+    try:
+        result, note = run_cell(label, cmd, on_checkpoint=kept.append, **kwargs)
+    except BaseException:
+        if on_interrupted:
+            on_interrupted(kept[-1] if kept else None)
+        raise
+    return result, note, (kept[-1] if kept else None)
 
 
 # The longest a cell log's file name may be, in bytes: below the 255-byte component limit of
@@ -3193,19 +3243,18 @@ def main():
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
     def run_kept(label, cmd, regime=None, cell_stamp=None, **kwargs):
-        """`run_cell` under the sweep's cap, plus the last checkpoint a failed cell left. An
-        interrupted cell's checkpoint is recorded before the cancellation propagates: the sweep
-        writes nothing else for it."""
-        kept = []
-        try:
-            r, note = run_cell(
-                label, cmd, timeout=args.cell_timeout, on_checkpoint=kept.append, **kwargs
-            )
-        except BaseException:
-            if kept:
-                record_failure(label, "interrupted mid-cell", kept[-1], regime, cell_stamp)
-            raise
-        return r, note, (kept[-1] if kept else None)
+        """`run_cell_kept` under the sweep's cap. An interrupted cell is recorded, with its
+        checkpoint when it left one, before the cancellation propagates: the sweep writes nothing
+        else for it."""
+        return run_cell_kept(
+            label,
+            cmd,
+            on_interrupted=lambda checkpoint: record_failure(
+                label, "interrupted mid-cell", checkpoint, regime, cell_stamp
+            ),
+            timeout=args.cell_timeout,
+            **kwargs,
+        )
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
@@ -3368,7 +3417,10 @@ def main():
                         f"{shown} tinygrad/{device}/{'jit' if jit else 'nojit'}"
                         f"{regime_label(tiny_regime)}",
                         [str(VENV_PY), str(HERE / "runners/tinygrad/run.py"), "--fixture", str(fx), "--device", device, "--jit", str(jit)],
-                        override={"regime": tiny_regime},
+                        # An f32 cell, stamped as such so the row states the precision it was
+                        # requested at beside the one its runner read back (`precision_check`,
+                        # gh-ocannl-1262).
+                        override={"regime": tiny_regime, "precision": "f32"},
                     )
                 if args.beam:
                     # PARALLEL sizes tinygrad's candidate-compile pool (its own knob, read where
@@ -3394,6 +3446,7 @@ def main():
                             "beam": args.beam,
                             "beam_parallel": args.beam_parallel,
                             "regime": tiny_regime,
+                            "precision": "f32",
                         },
                         env=beam_env,
                         # The one cell whose cache a kill can tear: the beam search writes its

@@ -514,8 +514,8 @@ let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
         (what ^ ": the producers discriminate: a unit-stride read of A changes the result")
         (List.zip_exn (Array.to_list want) (Array.to_list (oracle s ~stride:1)))
         ~f:(fun (a, b) -> Float.(a <> b));
-      p_all2 (what ^ ": the unscheduled form matches the host oracle") unscheduled want
-        ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
+      p_close (what ^ ": the unscheduled form matches the host oracle") unscheduled want
+        ~tol:(fun _ -> 1e-3)
   | `Resnet_block ->
       Stdio.eprintf "%s: max |unscheduled| %.6g over %d cells (not part of the golden)\n%!" tag
         (Array.fold unscheduled ~init:0. ~f:(fun m a -> Float.max m (Float.abs a)))
@@ -535,26 +535,14 @@ let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
   let rounding b = 1e-3 +. (1e-5 *. Float.abs b) in
   let matches_ref ~want got = close ~tol:exact ~want got in
   let matches got = matches_ref ~want:unscheduled got in
-  (* Which run diverged from which form and by how much, so a red claim names its seed. *)
+  (* Which run diverged from which form and by how much, so a red claim names its seed: the
+     differing cells, the worst one with both values, and the form's magnitude, on stderr. *)
   let report ?(tol = exact) ~against ~want name what_ran got =
-    if Array.length got <> Array.length want then
-      Stdio.eprintf "%s (%s): %d cells, the %s form %d (not part of the golden)\n%!" name what_ran
-        (Array.length got) against (Array.length want)
-    else if not (close ~tol ~want got) then (
-      let worst = ref 0 and bad = ref 0 in
-      Array.iteri got ~f:(fun i a ->
-          let d = Float.abs (a -. want.(i)) in
-          if Float.(d >= tol want.(i)) then Int.incr bad;
-          if Float.(d > abs (got.(!worst) -. want.(!worst))) then worst := i);
-      let i = !worst in
-      Stdio.eprintf
-        "%s (%s): %d of %d cells differ from the %s form; worst at %d: %.9g vs %.9g (|diff| %.3g); \
-         max |%s| %.6g (not part of the golden)\n\
-         %!"
-        name what_ran !bad (Array.length got) against i got.(i) want.(i)
-        (Float.abs (got.(i) -. want.(i)))
-        against
-        (Array.fold want ~init:0. ~f:(fun m a -> Float.max m (Float.abs a))))
+    ignore
+      (Verdict.within ~what_ran
+         (Printf.sprintf "%s, against the %s form" name against)
+         got want ~tol
+        : bool)
   in
   let seg_seeds =
     Option.value_map o.segs ~default:[] ~f:(fun l ->

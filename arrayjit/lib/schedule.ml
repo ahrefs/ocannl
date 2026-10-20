@@ -2375,8 +2375,54 @@ let privatize_index_vectors_refusal target =
   "Schedule.Privatize: v1 requires all accesses of " ^ Tn.debug_name target
   ^ " under the loop to use identical index vectors"
 
-let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.optimized) :
-    Low_level.optimized =
+(* What one execution of a loop covers, relative to the loops of the program an {!apply} started
+   from — the record [Privatize]'s width judgment needs of its [over] loop, since its tile narrows
+   once per execution of [over]. *)
+type loop_origin =
+  | Covers of Indexing.symbol
+      (** Every iteration of this loop of the entry program: the loop itself, or the OUTER half of a
+          [Split] of a loop that covers it — the outer loop runs the whole original range, with the
+          inner half nested inside it. *)
+  | Part
+      (** Only part of the iterations of a loop of the entry program, per execution: the INNER half
+          of a [Split] of a loop with a known origin. *)
+
+(* The state one {!apply_typed} carries across its ops: the program the schedule started from
+   ([Privatize] judges its tile width there, gh-ocannl-1151), the wide tiles its [Privatize]s minted
+   (re-checked after the ops), and the origin of each loop its [Split]s minted. A loop minted by any
+   other op has no record. *)
+type application = {
+  entry : Low_level.t;
+  entry_loops : Affine.Loop_ranges.t Lazy.t;
+  wide_tiles : (Tn.t * Tn.t) list ref;
+  split_origins : loop_origin Map.M(Indexing.Symbol).t ref;
+}
+
+let start_application entry =
+  {
+    entry;
+    entry_loops = lazy (Low_level.loop_ranges entry);
+    wide_tiles = ref [];
+    split_origins = ref (Map.empty (module Indexing.Symbol));
+  }
+
+let loop_origin app sym =
+  if Affine.Loop_ranges.mem (Lazy.force app.entry_loops) sym then Some (Covers sym)
+  else Map.find !(app.split_origins) sym
+
+(* Record the halves of a [Split] of [axis]. Only a loop whose own origin is known passes one on: a
+   split of a loop another op minted keeps no record, like that loop. *)
+let record_split app ~axis ~outer_index ~inner_index =
+  match loop_origin app axis with
+  | None -> ()
+  | Some origin ->
+      app.split_origins :=
+        Map.set
+          (Map.set !(app.split_origins) ~key:outer_index ~data:origin)
+          ~key:inner_index ~data:Part
+
+let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_level.optimized =
+  let entry = app.entry in
   let open Low_level in
   let acc_prec = exact_widening ~what:"Schedule.Privatize: acc_prec" target acc_prec in
   let iprec = Ops.index_prec () in
@@ -2778,17 +2824,22 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
               | Some (k, _) when List.length current = List.length bound -> [ List.nth_exn bound k ]
               | _ -> bound
             in
-            (* Where [over] is a loop of [entry] itself, the tile narrows once per execution of it,
-               which matches the serial rendering only where that is the level localizing the write;
-               a loop a [Split] minted carries no such record. *)
-            let over_in_entry = Affine.Loop_ranges.mem (loop_ranges entry) over in
+            (* The tile narrows once per execution of [over], which matches the serial rendering
+               only where one execution of [over] covers exactly the level localizing the write:
+               [over] is that loop of [entry], or the outer half of a [Split] of it. The inner half
+               of a split narrows once per outer iteration, where the serial rendering narrows once
+               per execution of the split loop, so its tile stays at storage. A loop another op
+               minted carries no record and is judged by the decision alone. *)
+            let localizes_over =
+              match loop_origin app over with
+              | Some (Covers level) ->
+                  fun sa -> Option.equal Indexing.equal_symbol sa.sa_level (Some level)
+              | Some Part -> fun _ -> false
+              | None -> fun _ -> true
+            in
             match judged with
             | [] -> false
-            | _ ->
-                List.for_all judged ~f:(fun sa ->
-                    sa.sa_widens
-                    && ((not over_in_entry)
-                       || Option.equal Indexing.equal_symbol sa.sa_level (Some over))))
+            | _ -> List.for_all judged ~f:(fun sa -> sa.sa_widens && localizes_over sa))
         | _ -> false
       in
       let widened_scopes =
@@ -2808,7 +2859,7 @@ let apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec (opt : Low_level.
       Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local
         (Site "176:tensorize-acc-tile");
       ignore (get_node opt.traced_store tile : traced_array);
-      if wide then wide_tiles := (target, tile) :: !wide_tiles;
+      if wide then app.wide_tiles := (target, tile) :: !(app.wide_tiles);
       let tile_read_idcs =
         if scalar_acc then [| Indexing.Fixed_idx 0 |]
         else
@@ -4705,7 +4756,7 @@ let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_
   let llc = rewrite_loop ~what:"Schedule.Fold_mma" ~sym:outer opt.llc ~f:(fun _ -> nest) in
   { opt with llc; workgroup_shared = Set.add (Set.add opt.workgroup_shared s2) u2 }
 
-let apply_opt_op ~entry ~wide_tiles (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
+let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
   match op with
   | Stage
       {
@@ -4721,8 +4772,7 @@ let apply_opt_op ~entry ~wide_tiles (opt : Low_level.optimized) (op : optop) : L
       } ->
       apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_stride
         ~pipeline_depth ~tile_prec opt
-  | Privatize { target; over; acc_prec } ->
-      apply_privatize ~entry ~wide_tiles ~target ~over ~acc_prec opt
+  | Privatize { target; over; acc_prec } -> apply_privatize ~app ~target ~over ~acc_prec opt
   | Tensorize _ -> apply_tensorize op opt
   | Fold_mma { query; lane; block; width } -> apply_fold_mma ~query ~lane ~block ~width opt
   | Fuse_epilogue { target; shared } -> apply_fuse_epilogue ~target ~shared opt
@@ -4735,15 +4785,18 @@ let apply_opt_op ~entry ~wide_tiles (opt : Low_level.optimized) (op : optop) : L
           ^ String.concat ~sep:", " (List.map syms ~f:Indexing.symbol_ident)
           ^ ", which is not bound by a loop enclosing the reduction loop in this statement — Swap \
              it outside " ^ Indexing.symbol_ident axis ^ " first"))
-  | (Split _ | Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _) as
-    op ->
+  | Split { axis; outer_index; inner_index; _ } ->
+      let llc = apply_op opt.Low_level.llc op in
+      record_split app ~axis ~outer_index ~inner_index;
+      { opt with llc }
+  | (Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _) as op ->
       { opt with llc = apply_op opt.Low_level.llc op }
 
 (* One op applied on its own, outside {!apply_typed}: the legality probes and the zero-expansion
    check. [Privatize] judges its tile width on the program the op is given, and there is no final
    re-check — a probe's result is discarded, or (zero expansion) mints no tile. *)
 let probe_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
-  apply_opt_op ~entry:opt.Low_level.llc ~wide_tiles:(ref []) opt op
+  apply_opt_op ~app:(start_application opt.Low_level.llc) opt op
 
 (* gh-ocannl-537: the recognizer's answer to "which loops would have to enclose the reduction for
    this site to be splittable". Probed hermetically like [op_legality]'s [Split_reduce] arm — the
@@ -4855,10 +4908,13 @@ let with_transform_fault fault body =
 (* gh-ocannl-1151: whether a [Privatize] tile minted at the residency still holds an accumulation
    the shared decision widens, in the FINAL program of its [apply] — after every later op and the
    finalization passes. [apply_privatize] judged the program the schedule started from and the
-   update as it stood when the op ran; a later op of the same schedule rewrites the update again.
-   Every write of the tile must be either a transfer (it does not read the tile: the init-load, or a
-   zero) or a self-accumulating update whose base {!Low_level.accum_base_widens}; a [Tile_mma]
-   accumulates at its own precision, and its scalar fallback is judged like any statement. *)
+   update as it stood when the op ran; a later op of the same schedule rewrites the update again —
+   though only into a form this rejects by putting a hardware-typed loop or a tensor-node write into
+   a scope a materializing [Unroll] minted, which compilation refuses anyway (the interface gives
+   the argument; test/operations/privatize_recheck pins both). Every write of the tile must be
+   either a transfer (it does not read the tile: the init-load, or a zero) or a self-accumulating
+   update whose base {!Low_level.accum_base_widens}; a [Tile_mma] accumulates at its own precision,
+   and its scalar fallback is judged like any statement. *)
 let privatized_tile_widens ~tile (llc : Low_level.t) =
   let open Low_level in
   let rec ok (llc : t) =
@@ -4922,13 +4978,13 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
     Low_level.optimized =
   if List.is_empty sched then opt
   else
-    let entry = opt.Low_level.llc and wide_tiles = ref [] in
+    let app = start_application opt.Low_level.llc in
     let opt =
       List.fold sched ~init:opt ~f:(fun opt op ->
           Stdlib.Domain.DLS.get transform_fault op;
-          apply_opt_op ~entry ~wide_tiles opt op)
+          apply_opt_op ~app opt op)
     in
-    let wide_tiles = recheck_privatized_tiles ~wide_tiles:!wide_tiles opt.Low_level.llc in
+    let wide_tiles = recheck_privatized_tiles ~wide_tiles:!(app.wide_tiles) opt.Low_level.llc in
     let opt = elide_staged_barriers opt in
     let llc = opt.Low_level.llc in
     (* Transforms fold their own guards (schedule-ir-optops §2): the pipeline's simplify already
@@ -5754,7 +5810,7 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
   in
   (* Applied the way {!apply_typed} applies it: every op sees the program the schedule started from
      as its [entry] ([Privatize] judges its tile width there). *)
-  let entry = opt.Low_level.llc and wide_tiles = ref [] in
+  let app = start_application opt.Low_level.llc in
   let rec go opt acc = function
     | [] -> List.rev acc
     | op :: tl -> (
@@ -5762,7 +5818,7 @@ let schedule_legality (opt : Low_level.optimized) (sched : schedule) : (optop * 
         match v with
         | Op_illegal _ -> List.rev ((op, v) :: acc)
         | _ -> (
-            match apply_opt_op ~entry ~wide_tiles opt op with
+            match apply_opt_op ~app opt op with
             | opt' -> go opt' ((op, v) :: acc) tl
             | exception Schedule_outcome.Cause_at (_, cause) ->
                 (* Rendered as the exception {!apply} raises for it, so the message reads as before

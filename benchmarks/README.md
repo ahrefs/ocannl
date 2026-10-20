@@ -396,6 +396,15 @@ cell is the step: cite the step cell. Each issue's cell:
   `runners/` from `sys.path` again right after importing `bench_common`: left there, the worker's
   own `import tinygrad` resolves `runners/tinygrad/` as a namespace package, every worker dies,
   the pool respawns them forever, and the search hangs rather than failing (gh-ocannl-675).
+  Every result line carries the torch runner's `param_dtypes`, `input_dtypes` and
+  `effective_precision` (tinygrad dtypes under torch's names) and, in place of autocast, the
+  `default_float` in force (`DEFAULT_FLOAT`; gh-ocannl-1262); the sweep stamps every tinygrad cell
+  `precision: f32` and fails a row whose tensors or default float contradict it, as for torch.
+- OCANNL result lines carry `storage_precision` beside the requested `precision`: the storage
+  precision the model body (its logits node) was compiled at, read back from the graph rather than
+  echoed from the parsed `BENCH_PRECISION` leg (gh-ocannl-1262). The sweep fails a row whose
+  read-back contradicts the precision it dispatched, so a precision request the runner ignored is
+  a **`PRECISION MISMATCH`** rather than a quoted number.
 - `orchestrate.py` — runs the matrix (dispatching the OCANNL executable on the fixture's
   `model`), enforces the parity gate, writes `results/results.jsonl` and
   `results/report.md` (`BENCH_RESULTS_DIR=<dir>` writes them, and the `partial*.jsonl`
@@ -1030,7 +1039,13 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
     against it, since the kernel is timed with its launch.
   The Python runners carry `"dominant_kernel": null` (they expose no per-kernel counts), printed
   `—`. `BENCH_DOMINANT_KERNEL=0` turns the instrument off for an OCANNL cell — it costs one compile
-  per kernel of the step — and its row then prints `—` too.
+  per kernel of the step — and its row then prints `—` too. The instrument has a wall-clock budget
+  of its own, `BENCH_DOMINANT_KERNEL_BUDGET_S` (default 600 s; gh-ocannl-1260): past it the column
+  is `no-kernel`, "instrument over budget", and the cell keeps its result line instead of losing it
+  to the cell's cap. On POSIX a kernel still compiling or timing is interrupted at the budget; on
+  Windows the instrument stops between kernels (a last kernel that started inside the budget runs
+  to its end, and the then-complete column is reported). A sweep with a cell cap near the workload's own
+  time sets the budget below the cap's slack.
 - Losses are recorded per step *before* that step's SGD update (forward runs first in every
   framework's step). The first step doubles as the compile probe in the Python runners; for
   OCANNL, `compile_s` wraps `Context.compile` (or `Autotune.tune`).

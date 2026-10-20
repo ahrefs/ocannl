@@ -328,6 +328,17 @@
   (alias runtest-sweep_components)
   (alias runtest-sweep_harness)))
 
+; gh-ocannl-1296: the shared stderr capture and autotune-progress reader, including the path out of
+; a capture whose function raised.
+
+(test
+ ; ocannl-backend: none -- links no backend: it captures its own stderr and parses fixed lines.
+ (name stderr_capture_cases)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules stderr_capture_cases)
+ (libraries base stdio unix stderr_capture fresh_process arrayjit.verdict))
+
 (test
  ; ocannl-backend: none -- links no backend: it reads synthetic Benchmark records through PrintBox_utils.table as text.
  (name printbox_utils_test)
@@ -2909,7 +2920,7 @@
  (foreign_stubs
   (language c)
   (names foreign_c_stderr_stubs))
- (libraries base arrayjit.utils stdio unix arrayjit.verdict))
+ (libraries base arrayjit.utils stdio stderr_capture arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- the subject is a file descriptor of the C runtime; it links no backend
@@ -4417,16 +4428,20 @@
 
 (test
  ; ocannl-backend: metal -- `Context.metal ()`, then asserts on the guarded gather in the emitted
- ; MSL; the off-platform `select` arm replays the golden.
+ ; MSL, read through `Test_utils.Generated`; the off-platform `select` arm replays the golden.
  (name test_metal_guarded_gather_codegen)
  (package neural_nets_lib)
  (modules test_metal_guarded_gather_codegen)
- (deps ocannl_config test_metal_guarded_gather_codegen.expected)
+ (deps
+  ocannl_config
+  test_metal_guarded_gather_codegen.expected
+  (env_var OCANNL_BUILD_FILES_PREFIX))
  (libraries
   base
   stdio
   ocannl
   arrayjit.utils
+  test_utils
   (select
    test_metal_guarded_gather_codegen.ml
    from
@@ -4438,16 +4453,21 @@
 
 (test
  ; ocannl-backend: metal -- `Context.metal ()`, then asserts on the `__pool_slots` declaration in
- ; the emitted MSL; the off-platform `select` arm replays the golden.
+ ; the emitted MSL, read through `Test_utils.Generated`; the off-platform `select` arm replays the
+ ; golden.
  (name test_metal_pool_slot_width)
  (package neural_nets_lib)
  (modules test_metal_pool_slot_width)
- (deps ocannl_config test_metal_pool_slot_width.expected)
+ (deps
+  ocannl_config
+  test_metal_pool_slot_width.expected
+  (env_var OCANNL_BUILD_FILES_PREFIX))
  (libraries
   base
   stdio
   ocannl
   arrayjit.utils
+  test_utils
   (select
    test_metal_pool_slot_width.ml
    from
@@ -4667,6 +4687,21 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name privatize_recheck)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL))
+ (modules privatize_recheck)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 (test
  ; ocannl-backend: none -- pure assembly parsing; no emission, runtime context or toolchain.
@@ -5739,25 +5774,12 @@
  (deps
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_BUILD_FILES_PREFIX)
+  ; The HIP arms branch on the ADVERTISED tile-MMA capability (gh-ocannl-1032), whose host half --
+  ; the rocWMMA header tree -- reaches this rule through the host record `ocannl_config` carries
+  ; (gh-ocannl-1038), so a tree appearing at a path already searched reruns it.
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_BF16_ARITHMETIC)
-  ; gh-ocannl-1032: this test's HIP arms branch on the ADVERTISED tile-MMA capability, so the three
-  ; variables Hip_backend's rocWMMA-header probe reads are inputs to its verdict -- undeclared, a
-  ; run that newly points at (or away from) a header tree is served the previous run's result as a
-  ; pass, which is how a verification run of this very fix came back green without re-executing.
-  ;
-  ; These three close the vector that has actually fired; they do NOT close the other one, a tree
-  ; appearing or disappearing at a path already being searched (an install under an unchanged
-  ; HIP_PATH). Nothing dune can depend on tracks that: a dep must live in the workspace, and
-  ; `(universe)` is not available here -- in this repository `(universe)` plus an alias IS the
-  ; ambient-gate marker (`env_var_deps.is_gate`), so putting it on a test makes that test the
-  ; directory's gate and forces it under `ocannl_training_test`. The residual is the rocWMMA-header
-  ; provenance gap gh-ocannl-1026 already records, and it belongs to every capability-probing test
-  ; rather than to this one; a shared probe rule is the fix, filed rather than special-cased here.
-  (env_var ROCWMMA_PATH)
-  (env_var LOCALAPPDATA)
-  (env_var HIP_PATH)
   (env_var OCANNL_BACKEND)
   ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
   (env_var OCANNL_CC_VECTOR_BYTES)
@@ -6480,13 +6502,8 @@
  (deps
   ocannl_config
   ; The census claims are gated on the tensorized capability (Ll_test.tensorized_capability): on a
-  ; GPU the ADVERTISED tile-MMA formats, so the rocWMMA-header probe's three variables are inputs to
-  ; its verdict (the rationale, and the residual: schedule_mma_matmul's stanza, gh-ocannl-1032); on
-  ; the C backends the register tiling's vector file. The numerics policy is pinned in the test
-  ; instead; routine logging is declared below.
-  (env_var ROCWMMA_PATH)
-  (env_var LOCALAPPDATA)
-  (env_var HIP_PATH)
+  ; GPU the ADVERTISED tile-MMA formats, on the C backends the register tiling's vector file. The
+  ; numerics policy is pinned in the test instead; routine logging is declared below.
   (env_var OCANNL_CC_VECTOR_BYTES)
   ; Every configuration key the two modules its seeding and segmentation run through read --
   ; schedule.ml (default presets, zero expansion, fission) and sketch_families.ml (seeding) -- so a
@@ -6932,6 +6949,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name stored_template_elision)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules stored_template_elision)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (executable
  ; cc-vector-width: independent -- claims are about arm selection, checked against the run's own
  ; measurements.
@@ -6985,11 +7013,32 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules seeding_census)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio stderr_capture arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (action
   (run %{test} "--ocannl_autotune_log_seeding=true")))
+
+(test
+ ; The scalar-blocktile seeding rule prices workgroup memory with the capabilities it is handed
+ ; (post-wave task wave-20261018o p1-3, after gh-ocannl-1330).
+ (name seeded_params_capabilities)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules seeded_params_capabilities)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
 
 (test
  ; cc-vector-width: independent -- a lone pointwise sum seeds no sketch family; claims compare
@@ -7001,7 +7050,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_progress)
- (libraries base ocannl stdio unix arrayjit.verdict)
+ (libraries base ocannl stdio stderr_capture arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (action
@@ -7486,7 +7535,15 @@
  ; width, and every timing is synthetic.
  (name flip_abandonment)
  (modules flip_abandonment)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test bench_harness)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  bench_harness
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9167,7 +9224,14 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_composite_playoff)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9192,7 +9256,15 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_staffed_singles)
- (libraries base ocannl stdio unix arrayjit.verdict fissioned_chain ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  ll_test)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9217,7 +9289,14 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_budget)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9239,7 +9318,14 @@
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_CC_VECTOR_REGISTERS))
  (modules autotune_budget_unfloored)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain test_utils)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -9285,7 +9371,13 @@
   (env_var OCANNL_CC_VECTOR_REGISTERS)
   (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
  (modules autotune_round_expansion)
- (libraries base ocannl stdio arrayjit.verdict fissioned_chain)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9920,7 +10012,14 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules autotune_labels)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9933,7 +10032,14 @@
  ; prints never reads the width.
  (name flip_twins)
  (modules flip_twins)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10005,7 +10111,14 @@
   ; Whether the GPU search also seeds tensorized singles for the chain's f32 sites.
   (env_var OCANNL_TF32_MATMULS))
  (modules autotune_sketch_placements)
- (libraries base ocannl stdio arrayjit.verdict ll_test fissioned_chain)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10139,7 +10252,7 @@
   (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
   (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
  (modules autotune_seeded_seed)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

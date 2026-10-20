@@ -83,7 +83,39 @@ def kill_the_group_on_cleanup(case, pidfile):
 
 # Short read-only probes a driver may run directly: they finish in moments and fork no workers of
 # their own, unlike a benchmark cell or a build, which go through `cell_group`.
-READ_ONLY_PROBES = ("git", "ps")
+READ_ONLY_PROBES = ("git", "ps", "sysctl")
+
+
+def imported_modules(source, filename="<source>"):
+    """The top-level names of every module `source` imports, at any depth (a driver may import
+    orchestrate inside the function that needs it)."""
+    names = set()
+    for node in ast.walk(ast.parse(source, filename=filename)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def sweep_drivers(directory):
+    """The benchmark scripts in `directory` that run children through `cell_group`: every
+    non-test `*.py` there importing it, directly or through another script of the directory that
+    does (gh1181_cells.py reaches it only through orchestrate). Derived, so a new driver is scanned
+    without anyone adding it to a list (gh-ocannl-1234)."""
+    sources = {
+        path: path.read_text()
+        for path in sorted(Path(directory).glob("*.py"))
+        if not path.name.startswith("test")
+    }
+    imports = {path: imported_modules(text, str(path)) for path, text in sources.items()}
+    managed = {"cell_group"}
+    while True:
+        grown = managed | {path.stem for path, names in imports.items() if names & managed}
+        if grown == managed:
+            break
+        managed = grown
+    return sorted(path for path in sources if path.stem in managed and path.stem != "cell_group")
 
 
 def unmanaged_spawn_sites(source, filename="<source>"):
@@ -571,20 +603,38 @@ class CellGroupTest(unittest.TestCase):
                 'subprocess.run(["dune", "build", "x.exe"], cwd=ROOT)\n'
                 'subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT)\n'
                 'subprocess.run(["ps", "-Ao", "pcpu,pid,comm", "-r"])\n'
+                "subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'])\n"
             ),
             ["1 subprocess.run"],
         )
+        drivers = sweep_drivers(HERE)
+        # The population is derived (gh-ocannl-1234); these are the drivers it must reach, the
+        # orchestrate-only one included, so a derivation that found nothing cannot pass.
+        for name in ("orchestrate.py", "gh675_cells.py", "gh998_cells.py", "gh1002_cells.py",
+                     "gh1181_cells.py"):
+            self.assertIn(HERE / name, drivers)
         offenders = [
             f"{path.name}:{site}"
-            for path in (
-                HERE / "orchestrate.py",
-                HERE / "gh675_cells.py",
-                HERE / "gh1181_cells.py",
-                HERE / "gh1002_cells.py",
-            )
+            for path in drivers
             for site in unmanaged_spawn_sites(path.read_text(), str(path))
         ]
         self.assertEqual(offenders, [], "unmanaged benchmark child sites: " + ", ".join(offenders))
+
+    def test_a_new_driver_is_scanned_without_editing_the_test(self):
+        # A driver that imports cell_group directly, one that reaches it through another script,
+        # and a script that reaches neither: only the first two are drivers.
+        sources = {
+            "cell_group.py": "import os\n",
+            "fresh_cells.py": "import subprocess\nimport cell_group\n",
+            "via_fresh.py": "def main():\n    import fresh_cells\n",
+            "helper.py": "import json\n",
+            "test_fresh.py": "import cell_group\n",
+        }
+        for name, text in sources.items():
+            (self.dir / name).write_text(text)
+        self.assertEqual(
+            [path.name for path in sweep_drivers(self.dir)], ["fresh_cells.py", "via_fresh.py"]
+        )
 
     def test_a_published_pid_file_never_exists_without_its_pid(self):
         # The property the pollers rely on, observed at the one moment it could fail: when the
@@ -745,15 +795,22 @@ class CellGroupTest(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "spawn-window signal fixture uses POSIX delivery")
     def test_the_gh675_spawn_window_defers_cancellation_until_cleanup_is_owned(self):
+        # gh675's passes run through orchestrate's cell runner (gh-ocannl-1234), so its spawn
+        # window is orchestrate's: a cancellation landing between the spawn and its cleanup owner
+        # is held, and the cell is collected before it is delivered.
+        import orchestrate
+
         spawned = []
         real_popen = cell_group.subprocess.Popen
-        cancellation = gh675_cells._cancellation
+        cancellation = orchestrate._cancellation
         cancellation.depth = 0
         cancellation.held_signal = None
         previous_term = signal.getsignal(signal.SIGTERM)
         previous_int = signal.getsignal(signal.SIGINT)
         self.addCleanup(signal.signal, signal.SIGTERM, previous_term)
         self.addCleanup(signal.signal, signal.SIGINT, previous_int)
+        if hasattr(signal, "SIGHUP"):
+            self.addCleanup(signal.signal, signal.SIGHUP, signal.getsignal(signal.SIGHUP))
         self.addCleanup(setattr, cancellation, "depth", 0)
         self.addCleanup(setattr, cancellation, "held_signal", None)
         # The child sleeps 300 s in a session of its own; when the cancellation this test pins
@@ -762,7 +819,7 @@ class CellGroupTest(unittest.TestCase):
         self.addCleanup(lambda: [kill_the_group(pid) for pid in spawned])
         pidfile = self.dir / "spawn-window.pid"
         kill_the_group_on_cleanup(self, pidfile)
-        cancellation.install()
+        orchestrate.install_termination_handler()
 
         def popen_then_cancel(*args, **kwargs):
             proc = real_popen(*args, **kwargs)
@@ -772,9 +829,14 @@ class CellGroupTest(unittest.TestCase):
 
         with unittest.mock.patch.object(
             cell_group.subprocess, "Popen", side_effect=popen_then_cancel
-        ):
+        ), unittest.mock.patch.object(gh675_cells, "gate", return_value=True), \
+                unittest.mock.patch.object(gh675_cells, "TASKSET", []), \
+                unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 0.5), \
+                contextlib.redirect_stdout(open(os.devnull, "w")) as quiet:
+            self.addCleanup(quiet.close)
             with self.assertRaises(SystemExit):
-                gh675_cells.run_managed(
+                gh675_cells.run(
+                    "cancelled pass",
                     self.python(
                         "import sys, time\n"
                         + publish_pid("sys.argv[1]", "os.getpid()")
@@ -782,7 +844,6 @@ class CellGroupTest(unittest.TestCase):
                         pidfile,
                     ),
                     timeout=60,
-                    context="cancelled probe",
                 )
 
         self.assertEqual(len(spawned), 1)

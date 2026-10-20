@@ -1685,8 +1685,9 @@ let ambient_producer =
   [
     ("test/config/ocannl_config", "");
     ( "test/config/dune",
-      {dune|(rule (target ocannl_ambient) (deps ocannl_config (universe))
- (action (run %{exe:ocannl_ambient_env.exe})))
+      {dune|(rule (target ocannl_host_capabilities) (deps (universe)) (action (run ./host.exe)))
+(rule (target ocannl_ambient) (deps ocannl_config (universe))
+ (action (run %{exe:ocannl_ambient_env.exe} --host-record=%{dep:ocannl_host_capabilities})))
 (subdir ambient (rule (target ocannl_config) (deps ../ocannl_config ../ocannl_ambient)
  (action (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))|dune}
     );
@@ -1716,7 +1717,10 @@ let render_resolution ~exemptions tree =
       ~config_files:(List.filter tree ~f:(is Scan.config_file) |> List.map ~f:fst)
       (List.filter tree ~f:(is "dune"))
   in
-  (if report.R.ambient_producer_ok then [] else [ "the ambient producer is missing" ])
+  (match report.R.ambient_producer with
+    | R.Producer_ok -> []
+    | R.Environment_unrecorded -> [ "the ambient producer is missing" ]
+    | R.Host_unrecorded -> [ "the host record is missing" ])
   @ List.concat_map report.R.files ~f:(fun file ->
       if String.equal file.R.dune_file (R.ambient_home ^ "/dune") then []
       else
@@ -1926,6 +1930,21 @@ let resolution_cases =
       ] );
   ]
 
+(* gh-ocannl-1038: a producer recording the environment but not the host, run without
+   [ambient_producer] like the case below. *)
+let hostless_resolution_case =
+  ( "a producer that records the environment but not the host is reported",
+    [
+      ("test/config/ocannl_config", "");
+      ( "test/config/dune",
+        {dune|(rule (target ocannl_ambient) (deps ocannl_config (universe)) (action (run ./env.exe)))
+(subdir ambient (rule (target ocannl_config) (deps ../ocannl_config ../ocannl_ambient)
+ (action (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))|dune}
+      );
+    ],
+    [],
+    [ "the host record is missing" ] )
+
 (* The one tree without [ambient_producer], which every case above is run with. *)
 let no_producer_case =
   ( "a tree with no ambient producer is reported",
@@ -1959,6 +1978,38 @@ let refusal_tree =
     ("unconfigured/dune", "(test (name a) (modules a))\n");
   ]
 
+(* gh-ocannl-1038: a test/config/dune that records the ambient environment -- both producers the
+   check above asks for, intact -- and not the host. The refusal it must draw is the host record's
+   own, which the environment's producers passing leaves as the only producer refusal possible. *)
+let hostless_tree =
+  [
+    ("test/config/ocannl_config", "");
+    ( "test/config/dune",
+      {dune|(rule (target ocannl_ambient) (deps ocannl_config (universe)) (action (run ./env.exe)))
+(subdir ambient
+ (rule (target ocannl_config) (deps ../ocannl_config ../ocannl_ambient)
+  (action (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))
+|dune}
+    );
+  ]
+
+(* The same producers with a host rule beside them that the record's producer DEPENDS on and never
+   reads: the dependency reruns the action, which writes the same bytes, so dune's early cutoff
+   still serves every test's cached verdict. *)
+let host_unread_tree =
+  [
+    ("test/config/ocannl_config", "");
+    ( "test/config/dune",
+      {dune|(rule (target ocannl_host_capabilities) (deps (universe)) (action (run ./host.exe)))
+(rule (target ocannl_ambient) (deps ocannl_config (universe) ocannl_host_capabilities)
+ (action (run ./env.exe)))
+(subdir ambient
+ (rule (target ocannl_config) (deps ../ocannl_config ../ocannl_ambient)
+  (action (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))
+|dune}
+    );
+  ]
+
 let scanner_refusal_controls exe =
   let source = "test/operations/config_dep_completeness.ml" in
   let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
@@ -1967,7 +2018,36 @@ let scanner_refusal_controls exe =
         (refuses
            (root :: List.map refusal_tree ~f:(fun (path, _) -> Stdlib.Filename.concat root path)));
       Verdict.p "config_dep_completeness refuses a run handed no dune file, exiting 1"
-        (refuses [ root ]))
+        (refuses [ root ]));
+  (* Run from inside the tree, handed `.` and relative paths: the scanner places a dune file
+     relative to the workspace root it is given, and the producer check asks for `test/config/dune`
+     by that path -- an absolute temporary path is never it, which would leave the environment's
+     refusal firing in place of the one this control is for. The scanner's own source goes into the
+     tree too, where its closing manifest looks for it from a workspace root
+     (`Refusal_control_manifest.print`); this directory has it as a dependency. *)
+  let scanner_source = "config_dep_completeness.ml" in
+  let here = Stdlib.Sys.getcwd () in
+  let exe = if Stdlib.Filename.is_relative exe then Stdlib.Filename.concat here exe else exe in
+  List.iter
+    [
+      ("an ambient record that leaves out the host", hostless_tree);
+      ( "an ambient record whose producer depends on the host record and never reads it",
+        host_unread_tree );
+    ]
+    ~f:(fun (what, files) ->
+      let tree =
+        ("test/operations/" ^ scanner_source, Stdio.In_channel.read_all scanner_source) :: files
+      in
+      Test_utils.Refusal_control_manifest.with_tree tree (fun root ->
+          let refused =
+            Stdlib.Sys.chdir root;
+            Exn.protect
+              ~f:(fun () ->
+                Test_utils.Refusal_control_manifest.refuses ~source ~exe
+                  ("." :: List.map files ~f:fst))
+              ~finally:(fun () -> Stdlib.Sys.chdir here)
+          in
+          Verdict.p ("config_dep_completeness refuses " ^ what ^ ", exiting 1") refused))
 
 let () =
   let check name expected found =
@@ -2103,8 +2183,9 @@ let () =
   List.iter resolution_cases ~f:(fun (name, tree, exemptions, expected) ->
       check ("resolution -- " ^ name) expected
         (render_resolution ~exemptions (ambient_producer @ tree)));
-  (let name, tree, exemptions, expected = no_producer_case in
-   check ("resolution -- " ^ name) expected (render_resolution ~exemptions tree));
+  List.iter [ no_producer_case; hostless_resolution_case ]
+    ~f:(fun (name, tree, exemptions, expected) ->
+      check ("resolution -- " ^ name) expected (render_resolution ~exemptions tree));
   (match Stdlib.Sys.argv with
   | [| _; exe |] -> scanner_refusal_controls exe
   | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe>");

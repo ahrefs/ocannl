@@ -54,7 +54,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-3 *. (1. +. abs b))
+let approx_tol b = Float.(1e-3 *. (1. +. abs b))
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -218,7 +218,7 @@ let () =
   | None ->
       p "split-reduce candidates seeded" false;
       p "split-reduce candidates timed" false);
-  p_all2 "tuned skinny matvec matches the serial reference" got want ~f:approx
+  p_close "tuned skinny matvec matches the serial reference" got want ~tol:approx_tol
 
 (* === Leg 4: a hand-crafted split-reduce cache entry replays (the F_split_saved path). === *)
 
@@ -280,7 +280,7 @@ let () =
   | None ->
       cache_claim "split-reduce entry hits the cache" false;
       cache_claim "split-reduce cache-hit replay is fissioned" false);
-  p_all2 "split-reduce cache-hit replay computes correctly" got want ~f:approx
+  p_close "split-reduce cache-hit replay computes correctly" got want ~tol:approx_tol
 
 (* === Leg 5: multi-site — per-site singles plus the recombined composite. === *)
 
@@ -341,7 +341,7 @@ let () =
   | None ->
       p "multi-site split-reduce singles seeded" false;
       p "best-timed singles recombined into a composite" false);
-  p_all2 "tuned multi-site routine matches the serial reference" got want ~f:approx;
+  p_close "tuned multi-site routine matches the serial reference" got want ~tol:approx_tol;
   (* Cut immediately after admission and count family windows separately. These CPU fixtures have
      Empty static bindings, so their preflight binding validation cannot decline; CPU launch/sync
      failures are fatal. Every observed family preflight therefore completes a window before the
@@ -518,7 +518,7 @@ let () =
   | None ->
       p "conv-gradient split-reduce candidates seeded" false;
       p "the interchanged bias-gradient candidate reaches timing" false);
-  p_all2 "tuned bias gradient matches the serial reference" got want ~f:approx
+  p_close "tuned bias gradient matches the serial reference" got want ~tol:approx_tol
 
 (* === Leg 7: cost ranking and the eviction census (gh-ocannl-541). ===
 
@@ -603,5 +603,5 @@ let () =
       p "only the top-cost site is seeded under the cap" false;
       p "the two evicted sites appear in the decline census" false;
       p "the census still sums to candidates_failed" false);
-  p_all2 "the capped tuned routine matches the serial reference" got want ~f:approx;
+  p_close "the capped tuned routine matches the serial reference" got want ~tol:approx_tol;
   Stdio.printf "\nDone.\n%!"

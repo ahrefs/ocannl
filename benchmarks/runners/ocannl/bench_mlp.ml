@@ -339,7 +339,7 @@ let () =
             (gh-ocannl-539). They are independent axes, and folding a reduced precision into the
             variant made a tuned bf16 cell unnameable. *)
          (if tune then "tuned" else if materialize then "materialized" else "default")
-       ~precision:leg.H.label ~compile_s ~tune:arms
+       ~precision:leg.H.label ~storage_of:logits ~compile_s ~tune:arms
        ~dominant_kernel:(fun () ->
          H.dominant_kernel ~ctx:!ctx_ref ~bindings (H.step_routines routines))
        ~run_step

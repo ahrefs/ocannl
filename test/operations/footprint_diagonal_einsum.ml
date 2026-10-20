@@ -63,6 +63,6 @@ let () =
   in
   let got = run ctx in
   let mat = run (Context.decide_materialized ctx [ a.Tensor.value ]) in
-  let close a b = Float.(abs (a -. b) <= 1e-6 *. Float.max 1. (abs b)) in
-  p_all2 "einsum: executed values are the diagonal of the product" got expected ~f:close;
-  p_all2 "einsum: footprint and materialized readings agree" got mat ~f:close
+  let close_tol b = Float.(1e-6 *. Float.max 1. (abs b)) in
+  p_close "einsum: executed values are the diagonal of the product" got expected ~tol:close_tol;
+  p_close "einsum: footprint and materialized readings agree" got mat ~tol:close_tol

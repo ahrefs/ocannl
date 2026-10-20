@@ -89,7 +89,7 @@ let () =
     (H.measure_and_emit ~routines:(H.Plain routine) ~protocol:(H.protocol_of_st ~fixture st)
        ~backend
        ~variant:(if tune then "tuned" else if materialize then "materialized" else "default")
-       ~compile_s ~tune:arms
+       ~storage_of:logits ~compile_s ~tune:arms
        ~dominant_kernel:(fun () -> H.dominant_kernel ~ctx ~bindings [ routine ])
        ~run_step
        ~read_loss:(fun () -> (ctx, batch_loss).@[0])

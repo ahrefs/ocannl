@@ -30,6 +30,22 @@ let ambient_config_source =
 
 let ambient_record_source = ambient_home ^ "/" ^ Scan.ambient_file
 
+(** gh-ocannl-1038: the host half of the ambient record -- what the backends' own probes found,
+    written under [(universe)] by [tools/host_caps.exe] and read by the rule producing
+    [ocannl_ambient]. *)
+let host_record_file = "ocannl_host_capabilities"
+
+(** What [test/config/dune] produces of the ambient record. *)
+type producer =
+  | Producer_ok
+  | Environment_unrecorded
+      (** no rule targeting [ocannl_ambient] under [(universe)], or none in [(subdir ambient …)]
+          appending it to the shared configuration (gh-ocannl-1149) *)
+  | Host_unrecorded
+      (** the environment is recorded but not the host: no [(universe)] rule targeting
+          {!host_record_file}, or the record's producer does not read it IN ITS ACTION
+          (gh-ocannl-1038) *)
+
 (** The repository root in one spelling: [""], where [Filename.dirname] says ["."]. *)
 let root_normalized directory = match directory with "." -> "" | directory -> directory
 
@@ -124,8 +140,9 @@ type file_report = {
 }
 
 type report = {
-  ambient_producer_ok : bool;
-      (** [test/config/dune] still produces the ambient record and the configuration carrying it *)
+  ambient_producer : producer;
+      (** whether [test/config/dune] still produces the ambient record, the host's half of it, and
+          the configuration carrying it *)
   ambient_config_dirs : string list;  (** where a copy of {!ambient_config_source} lands *)
   ambient_record_dirs : string list;
       (** where {!ambient_record_source} is in reach, [ambient_home] included *)
@@ -138,8 +155,8 @@ let string_set = Set.of_list (module String)
 (** The ambient producer (gh-ocannl-1149): [test/config/dune] records the ambient [OCANNL_*]
     environment in [ocannl_ambient], under [(universe)], and appends that record to the shared
     configuration as [test/config/ambient/ocannl_config]. The whole guarantee rests on both rules,
-    so they are checked rather than trusted. *)
-let ambient_producer_ok dune_files =
+    so they are checked rather than trusted -- and, since gh-ocannl-1038, the host record too. *)
+let ambient_producer dune_files =
   let producer =
     List.find dune_files ~f:(fun (path, _) -> String.equal path (ambient_home ^ "/dune"))
   in
@@ -159,11 +176,33 @@ let ambient_producer_ok dune_files =
         && Option.equal String.equal (target_of stanza) (Some target)
         && deps_ok (Scan.field stanza "deps"))
   in
-  produces ~subdir:"" ~target:Scan.ambient_file ~deps_ok:Scan.depends_on_universe
-  && produces ~subdir:ambient_subdir ~target:Scan.config_file ~deps_ok:(fun deps ->
-      List.mem
-        (Scan.declared_config_paths ~name:Scan.ambient_file deps)
-        ("../" ^ Scan.ambient_file) ~equal:String.equal)
+  let environment_ok =
+    produces ~subdir:"" ~target:Scan.ambient_file ~deps_ok:Scan.depends_on_universe
+    && produces ~subdir:ambient_subdir ~target:Scan.config_file ~deps_ok:(fun deps ->
+        List.mem
+          (Scan.declared_config_paths ~name:Scan.ambient_file deps)
+          ("../" ^ Scan.ambient_file) ~equal:String.equal)
+  in
+  (* The host half: its own [(universe)] rule, and the record's producer naming it IN ITS ACTION. A
+     dependency alone is not enough: it reruns the producer when the host moves, but an action that
+     never reads the host record writes the same bytes, and dune's early cutoff then serves every
+     test's cached verdict. Asked only of a producer whose environment half passed, so a tree
+     lacking both reports the environment's refusal alone. *)
+  let rec mentions sexp =
+    match sexp with
+    | Sexp.Atom atom -> String.is_substring atom ~substring:host_record_file
+    | Sexp.List items -> List.exists items ~f:mentions
+  in
+  let host_ok () =
+    produces ~subdir:"" ~target:host_record_file ~deps_ok:Scan.depends_on_universe
+    && List.exists rules ~f:(fun (at, stanza) ->
+        String.is_empty at
+        && Option.equal String.equal (target_of stanza) (Some Scan.ambient_file)
+        && Option.exists (Scan.field stanza "action") ~f:(List.exists ~f:mentions))
+  in
+  if not environment_ok then Environment_unrecorded
+  else if not (host_ok ()) then Host_unrecorded
+  else Producer_ok
 
 let tally_of keys =
   List.fold keys
@@ -363,7 +402,7 @@ let analyze ~exemption_keys ~config_files dune_files =
         })
   in
   {
-    ambient_producer_ok = ambient_producer_ok dune_files;
+    ambient_producer = ambient_producer dune_files;
     ambient_config_dirs = Set.to_list ambient_config_dirs;
     ambient_record_dirs = Set.to_list ambient_record_dirs;
     files;

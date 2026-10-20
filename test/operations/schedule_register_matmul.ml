@@ -37,7 +37,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-2)
+let approx_tol _ = 1e-2
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
 let has_shared = Sched.backend_is_gpu backend_name
@@ -138,8 +138,8 @@ let () =
     in
     let ctx_a = Context.run ctx_a routine_a in
     let got_reg = Context.get_values ctx_a mc1.Tensor.value in
-    p_all2 "register-tiled matmul parity (GPU) or clean rejection (CPU)" got_reg got_serial
-      ~f:approx;
+    p_close "register-tiled matmul parity (GPU) or clean rejection (CPU)" got_reg got_serial
+      ~tol:approx_tol;
     let src = Generated.read "mmr_tiled" in
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length

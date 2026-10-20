@@ -1540,8 +1540,13 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   in
   loop_proc ~loop_ranges:(Map.empty (module Indexing.Symbol)) ~scope_reads:None llc
 
-let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_scan ~enclosing
-    traced static_indices top_llc =
+(* [elide_stored] is {!elide_unevaluated_operands} (defined below the interval machinery it needs),
+   applied to what is stored once the candidate is accepted (gh-ocannl-625). The legality walk
+   judges the computation as captured: the elision changes what the table's readers see, not which
+   candidates are accepted. *)
+let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
+    ~(elide_stored : opaque:(Indexing.symbol -> bool) -> t -> t) ~guarded ~in_scan ~enclosing traced
+    static_indices top_llc =
   let exception Non_virtual of string in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
@@ -1771,8 +1776,14 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
     let current_computations =
       Hashtbl.find optim_ctx.computations traced.tn |> Option.value ~default:[]
     in
+    let stored =
+      elide_stored
+        ~opaque:(fun s ->
+          Option.exists !at_idcs ~f:(Array.exists ~f:(axis_index_mentions_symbol s)))
+        top_llc
+    in
     Hashtbl.set optim_ctx.computations ~key:traced.tn
-      ~data:((!at_idcs, top_llc) :: current_computations)
+      ~data:((!at_idcs, stored) :: current_computations)
   with Non_virtual i -> Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i)
 
 (* Loop symbols a scalar expression's value depends on, syntactically, resolving scalar scope-locals
@@ -2107,7 +2118,10 @@ let statement_effects (llc : t) : Tn.t Affine.statement_effect list = snd (affin
 (* Whether the computation stored for [self] would replay a merge-buffer read when inlined: a
    shared-loop stored body carries SIBLING setters that [inline_computation] filters out, so only
    [self]'s own setters' right-hand sides (and shared control scalars — [If] conditions — which
-   inlining keeps) can taint (review round 6). *)
+   inlining keeps) can taint (review round 6). The body is the one [check_and_store_virtual] stored,
+   with the operands that never evaluate elided there (gh-ocannl-625), so a merge read in an arm its
+   condition never selects is gone before this scan, and before [record_spliced_reads] walks its
+   instantiation. *)
 let computation_reads_merge ~self code =
   (* gh-ocannl-1016: a query over the body's relations — a live merge-buffer read that no sibling
      setter's statement encloses ({!Affine.within_statement}: its right-hand side, [Local_scope]
@@ -2785,7 +2799,7 @@ let fresh_footprint_id =
     !c
 
 let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope) ?only_store
-    (optim_ctx : optimize_ctx) traced_store reverse_node_map static_indices
+    ~elide_stored (optim_ctx : optimize_ctx) traced_store reverse_node_map static_indices
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
     ~(footprint_retracted : Tnode.t Hash_set.t) (llc : t) : t * Tnode.t Hash_set.t =
   let plc = optim_ctx.placements in
@@ -3128,8 +3142,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                     in
                     (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing'])
                        is what it fails to contain. *)
-                    check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing node
-                      static_indices stored);
+                    check_and_store_virtual optim_ctx ~elide_stored ~guarded ~in_scan ~enclosing
+                      node static_indices stored);
               (* Phase 2 -- emit. Candidates are NOT in [process_for], so surviving readers
                  (materialized siblings, and later virtual siblings, all now stored) inline the
                  provider; [owned'] still suppresses candidate auto-store; each candidate setter
@@ -3150,7 +3164,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
           && stores tn
         then
-          check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices llc;
+          check_and_store_virtual optim_ctx ~elide_stored ~guarded ~in_scan ~enclosing traced
+            static_indices llc;
         llc
     | Set { tn; idcs; llsc; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -3182,8 +3197,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
           && stores tn
         then
-          check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices
-            result;
+          check_and_store_virtual optim_ctx ~elide_stored ~guarded ~in_scan ~enclosing traced
+            static_indices result;
         result
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -3215,7 +3230,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         then
           (* gh-509 task 4: store the raw statement (argument not rewritten), see
              [proc_contains_set_from_vec]. The emitted statement remains [result]. *)
-          check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices llc;
+          check_and_store_virtual optim_ctx ~elide_stored ~guarded ~in_scan ~enclosing traced
+            static_indices llc;
         result
     | Set_local (id, llsc) ->
         Set_local
@@ -3804,6 +3820,11 @@ end)
 type ienv = {
   sym_env : Interval.t Map.M(Indexing.Symbol).t;
   memo : (Ops.prec * interval_result) list Phys_memo.t;
+  node_bounds : bool;
+      (** Whether a tensor read's interval may use the node's bounds candidate. Off only where a
+          stored template's unselected operands are elided ({!elide_unevaluated_operands},
+          gh-ocannl-625): a decision resting on a candidate settles it, and a template is stored
+          long before -- and possibly without -- any read that would consume it. *)
 }
 
 let interval_of_symbol ienv s =
@@ -3814,7 +3835,7 @@ let interval_of_symbol ienv s =
 let interval_of_loop_range ~from_ ~to_ =
   if from_ <= to_ then Interval.of_int_range from_ to_ else Interval.of_int from_
 
-let ienv_of_static_indices (static_indices : Indexing.static_symbol list) =
+let ienv_of_static_indices ?(node_bounds = true) (static_indices : Indexing.static_symbol list) =
   let sym_env =
     List.fold static_indices
       ~init:(Map.empty (module Indexing.Symbol))
@@ -3830,10 +3851,11 @@ let ienv_of_static_indices (static_indices : Indexing.static_symbol list) =
         in
         Map.set env ~key:static_symbol ~data:iv)
   in
-  { sym_env; memo = Phys_memo.create 64 }
+  { sym_env; memo = Phys_memo.create 64; node_bounds }
 
 let ienv_extend ienv sym ~from_ ~to_ =
   {
+    ienv with
     sym_env = Map.set ienv.sym_env ~key:sym ~data:(interval_of_loop_range ~from_ ~to_);
     memo = Phys_memo.create 16;
   }
@@ -3995,7 +4017,7 @@ let ienv_narrow_from_cond ienv ~(cprec : Ops.prec) (cond : scalar_t) : ienv =
   (* The memo is scoped to a symbol environment (binding constraint 8): keep it only when nothing
      narrowed. *)
   if Map.equal Interval.equal sym_env ienv.sym_env then ienv
-  else { sym_env; memo = Phys_memo.create 16 }
+  else { ienv with sym_env; memo = Phys_memo.create 16 }
 
 (* Exact integral intervals of index expressions; machine validity (the unsigned index precision,
    binding constraint 7's crosses-zero widening) is applied by [interval_of] via [Interval.at_prec
@@ -4068,12 +4090,12 @@ let index_comparisons_total ~ienv ~prec (sc : scalar_t) =
 (* Bounds of a tensor-node read: the machine range of the stored precision, narrowed by the node's
    bounds candidate when one exists. The node becomes a source only when the candidate actually
    narrows -- folds justified by the dtype range alone are static facts requiring no settlement. *)
-let interval_of_node ~prec (tn : Tn.t) : interval_result =
+let interval_of_node ~node_bounds ~prec (tn : Tn.t) : interval_result =
   let stored_prec = Lazy.force tn.Tn.storage_prec in
   let dtype = Interval.dtype_range stored_prec in
   let ival, srcs =
     match Tn.bounds_candidate tn with
-    | Some c when not (Interval.is_top c) ->
+    | Some c when node_bounds && not (Interval.is_top c) ->
         let narrowed = Interval.inter c dtype in
         if Interval.equal narrowed dtype then (dtype, no_srcs)
         else (narrowed, Set.singleton (module Tn) tn)
@@ -4114,7 +4136,8 @@ and interval_of_uncached ~ienv ~(prec : Ops.prec) (llsc : scalar_t) : interval_r
       (* The symbol crosses from the index world into the value world: computed at the index
          precision, then converted to the consumer's precision. *)
       pure (Interval.at_prec (Ops.index_prec ()) (interval_of_index ienv idx))
-  | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } -> interval_of_node ~prec tn
+  | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } ->
+      interval_of_node ~node_bounds:ienv.node_bounds ~prec tn
   | Get_local _ | Local_scope _ -> pure Interval.top (* Phase A: locals are unanalyzed. *)
   | Binop (Arg1, (v1, _), _) -> interval_of ~ienv ~prec v1
   | Binop (Arg2, _, (v2, _)) -> interval_of ~ienv ~prec v2
@@ -4236,6 +4259,110 @@ let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
         Some (Constant r.ival.Interval.lo))
       else None
   | _ -> None
+
+(* gh-ocannl-625: a stored template with its UNEVALUATED operands elided -- the arm of a [Where]
+   whose condition is decided, the second operand of an [And] / [Or] / [Relu_gate] whose first
+   decides the gate shut -- each replaced by the constant [0.] at the operand's own precision. That
+   is the whole rewrite: every operand that is evaluated, conditions and gates included, stays as
+   captured, and an elided operand is never evaluated, so the template computes the same value in
+   the same representation wherever it replays. The routine's simplify is NOT that: it enters no
+   threefry operand ([simplify_llc]'s arm for them), its constant folds round in double, and its
+   [Embed_index (Fixed_idx _)]-to-[Constant] fold changes the source a [uint4x32] conversion is
+   keyed on ([int32_to_uint4x32] against [double_to_uint4x32]), so storing a simplified template
+   changed test_block_tensor's random stream where the template replays beneath a threefry operand.
+   What this buys is the readers of the computations table -- the merge-taint and spliced-read
+   scans, the fan-in guard, footprint eligibility, flip pricing -- not seeing reads that never
+   execute. Decisions are what hold wherever the template replays: the loops of the write index's
+   symbols ([~opaque]) do not extend the interval environment, since the inliner substitutes the
+   read site's index for them and it need not lie in the producer's extent (a kept loop keeps its
+   extent, freshened); and no bounds candidate is consulted ([node_bounds = false]). *)
+let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool) (llc : t) : t =
+  (* Review round 1: a test is decided only if it comes out the same at every precision it may be
+     EVALUATED at. That is the precision of its slot as the renderer reads it -- a homogeneous
+     operator's operands at the operator's result precision, a [Where] condition at its own
+     annotation (C_syntax.pp_scalar_op) -- mapped through the backend's [compute_prec], which may
+     widen a float, unknown at store time; so a float slot asks every float precision, an integer
+     slot only itself. A half gate of [1e-8] is shut where a single one is open. *)
+  let candidates prec = if Ops.is_float prec then Ops.float_precs else [ prec ] in
+  let decided ~ienv ~prec (c : scalar_t) =
+    let verdict q =
+      let r = interval_of ~ienv ~prec:q c in
+      if Interval.definitely_true r.ival then Some true
+      else if Interval.definitely_false r.ival then Some false
+      else None
+    in
+    match List.map (candidates prec) ~f:verdict with
+    | Some v :: rest when List.for_all rest ~f:(Option.equal Bool.equal (Some v)) -> Some v
+    | _ -> None
+  in
+  let elided ((_, prec) : scalar_arg) : scalar_arg = (Constant 0., prec) in
+  let extend ienv index ~from_ ~to_ =
+    if opaque index then ienv else ienv_extend ienv index ~from_ ~to_
+  in
+  let tn_prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  let rec stmt ~ienv (c : t) : t =
+    match c with
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
+        c
+    | Seq (a, b) -> Seq (stmt ~ienv a, stmt ~ienv b)
+    | For_loop ({ index; from_; to_; body; _ } as fc) ->
+        For_loop { fc with body = stmt ~ienv:(extend ienv index ~from_ ~to_) body }
+    | Scan_loop ({ index; from_; to_; carried; body; _ } as sc) ->
+        Scan_loop
+          {
+            sc with
+            carried =
+              List.map carried ~f:(fun cr ->
+                  { cr with init = scalar ~ienv ~prec:(tn_prec cr.prev.tn) cr.init });
+            body = stmt ~ienv:(extend ienv index ~from_ ~to_) body;
+          }
+    | Set ({ tn; llsc; _ } as set) -> Set { set with llsc = scalar ~ienv ~prec:(tn_prec tn) llsc }
+    | Set_dynamic ({ tn; dyn_value; llsc; _ } as set) ->
+        Set_dynamic
+          { set with dyn_value = own ~ienv dyn_value; llsc = scalar ~ienv ~prec:(tn_prec tn) llsc }
+    | Set_from_vec ({ arg = a; _ } as set) -> Set_from_vec { set with arg = own ~ienv a }
+    | Set_local (id, v) -> Set_local (id, scalar ~ienv ~prec:(tn_prec id.tn) v)
+    | If { cond; body } -> If { cond = own ~ienv cond; body = stmt ~ienv body }
+    | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = stmt ~ienv fallback }
+  (* An operand evaluated at its own annotation (a heterogeneous slot). *)
+  and own ~ienv ((sc, ann) : scalar_arg) : scalar_arg = (scalar ~ienv ~prec:ann sc, ann)
+  (* An operand evaluated at the enclosing result precision (a homogeneous slot). *)
+  and at ~ienv ~prec ((sc, ann) : scalar_arg) : scalar_arg = (scalar ~ienv ~prec sc, ann)
+  and scalar ~ienv ~prec (sc : scalar_t) : scalar_t =
+    match sc with
+    | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_local _ | Get_merge_buffer _ -> sc
+    | Get_dynamic ({ dyn_value; _ } as g) -> Get_dynamic { g with dyn_value = own ~ienv dyn_value }
+    | Local_scope ({ body; _ } as scope) -> Local_scope { scope with body = stmt ~ienv body }
+    | Ternop (Ops.Where, ((cnd, cprec) as cond), a, b) -> (
+        match decided ~ienv ~prec:cprec cnd with
+        | Some true -> Ternop (Ops.Where, own ~ienv cond, at ~ienv ~prec a, elided b)
+        | Some false -> Ternop (Ops.Where, own ~ienv cond, elided a, at ~ienv ~prec b)
+        | None -> Ternop (Ops.Where, own ~ienv cond, at ~ienv ~prec a, at ~ienv ~prec b))
+    | Ternop (((Ops.FMA | Ops.Mul3) as op), a, b, d) ->
+        Ternop (op, at ~ienv ~prec a, at ~ienv ~prec b, at ~ienv ~prec d)
+    | Binop (op, ((g, _) as gate), x) when Ops.is_homogeneous_prec_binop op ->
+        (* The renderings: [g && x], [g || x], [(g > 0.0 ? x : 0.0)]. [Satur01_gate]'s rendering
+           tests [floor] of its gate, not the interval this would decide, so it is left alone. *)
+        let shut =
+          match op with
+          | Ops.And -> Option.equal Bool.equal (decided ~ienv ~prec g) (Some false)
+          | Ops.Or -> Option.equal Bool.equal (decided ~ienv ~prec g) (Some true)
+          | Ops.Relu_gate ->
+              Option.equal Bool.equal
+                (decided ~ienv ~prec (Binop (Ops.Cmplt, (Constant 0., prec), gate)))
+                (Some false)
+          | Ops.Satur01_gate | Ops.Arg1 | Ops.Arg2 | Ops.Add | Ops.Sub | Ops.Mul | Ops.Div
+          | Ops.ToPowOf | Ops.Max | Ops.Min | Ops.Mod | Ops.Cmplt | Ops.Cmple | Ops.Cmpeq
+          | Ops.Cmpne | Ops.Threefry4x32_crypto | Ops.Threefry4x32_light
+          | Ops.Uint4x32_to_prec_uniform_lane ->
+              false
+        in
+        Binop (op, at ~ienv ~prec gate, if shut then elided x else at ~ienv ~prec x)
+    | Binop (op, a, b) -> Binop (op, own ~ienv a, own ~ienv b)
+    | Unop (op, a) when Ops.is_homogeneous_prec_unop op -> Unop (op, at ~ienv ~prec a)
+    | Unop (op, a) -> Unop (op, own ~ienv a)
+  in
+  stmt ~ienv:(ienv_of_static_indices ~node_bounds:false static_indices) llc
 
 module Fp_licence = struct
   type t = { contract : bool; reassociate : bool; finite_math : bool }
@@ -6515,7 +6642,12 @@ let unseparated_thread_write ~(active : thread_slot list)
         None
   in
   go
-    ~env:{ sym_env = Map.empty (module Indexing.Symbol); memo = Phys_memo.create 16 }
+    ~env:
+      {
+        sym_env = Map.empty (module Indexing.Symbol);
+        memo = Phys_memo.create 16;
+        node_bounds = true;
+      }
     ~threads:[] ~excused:[] kernel
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
@@ -9171,6 +9303,7 @@ let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse
       guarded ~tag:(fun m -> `Store m) @@ fun () ->
       ignore
         (virtual_llc ~fresh_symbol:pricing_symbol ~fresh_scope:pricing_scope ~only_store:self
+           ~elide_stored:(elide_unevaluated_operands static_indices)
            scratch (copy_traced_store traced_store) reverse_node_map static_indices
            ~footprint_scoped:(Hashtbl.copy footprint_scoped)
            ~footprint_retracted:(Hash_set.create (module Tnode))
@@ -9346,7 +9479,9 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
   let input_scopes = input_scope_ids llc in
 
   let virtual_llc_result, spliced_reads =
-    virtual_llc input_ctx traced_store an.an_reverse_node_map static_indices ~footprint_scoped
+    virtual_llc
+      ~elide_stored:(elide_unevaluated_operands static_indices)
+      input_ctx traced_store an.an_reverse_node_map static_indices ~footprint_scoped
       ~footprint_retracted llc
   in
   (* gh-ocannl-1011: the placements as the walk left them, before cleanup commits its own reading of

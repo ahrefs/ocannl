@@ -36,22 +36,11 @@ let ocaml_marker = "OCAML-STDERR-LINE"
 let arm_on_claim = "a foreign C library's stderr escapes a capture of fd 2"
 let arm_off_claim = "without the setting, a foreign C library's stderr is captured with fd 2"
 
-(* The capture, written out rather than borrowed from a library, because it is the mechanism under
-   test: the temp file becomes fd 2, both kinds of write happen, fd 2 is restored. *)
-let capture_fd2 f =
-  let path = Stdlib.Filename.temp_file "ocannl-fd2-" ".txt" in
-  let captured_fd = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  let saved_fd2 = Unix.dup Unix.stderr in
-  Stdlib.flush Stdlib.stderr;
-  Unix.dup2 captured_fd Unix.stderr;
-  Exn.protect ~f ~finally:(fun () ->
-      Stdlib.flush Stdlib.stderr;
-      Unix.dup2 saved_fd2 Unix.stderr;
-      Unix.close saved_fd2;
-      Unix.close captured_fd);
-  let contents = In_channel.read_all path in
-  (try Stdlib.Sys.remove path with _ -> ());
-  contents
+(* The capture is the mechanism under test: [Stderr_capture.capture] dups a temporary file onto fd
+   2, performs the writes, and points fd 2 back -- the redirection ppx_expect performs, which is
+   what that module promises to keep doing. It echoes what it caught once fd 2 is restored, so the
+   markers it captured still reach the run's log. *)
+let capture_fd2 f = snd (Stderr_capture.capture f)
 
 let () =
   let captured =

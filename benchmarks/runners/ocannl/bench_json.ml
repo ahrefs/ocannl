@@ -382,10 +382,16 @@ let profile_value = function Some p -> Printf.sprintf {|"%s"|} (string p) | None
     somewhere; [source] is the long description the legend expands that tag into.
 
     [dominant_kernel] is the already-built {!dominant_kernel_object}, or [None] — [null] on the wire
-    — for a cell that did not run the instrument, which the report prints as a dash. *)
-let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~ambient_resolved ~workload
-    ~compile_s ~searched ?tokens_per_step ?tune ?shipped_mma ?fp_licences ~p10 ~p50 ~p90 ~queued_ms
-    ~timed_steps ~peak_memory ?dominant_kernel ~losses () =
+    — for a cell that did not run the instrument, which the report prints as a dash.
+
+    [storage_precision] is the storage precision the cell's model actually ran at, read back from
+    the compiled graph ([Bench_harness.storage_precision]), as against [precision], the leg the
+    runner was asked for: the sweep fails a row whose read-back contradicts its label, so a
+    [BENCH_PRECISION] the runner ignored is caught rather than quoted (gh-ocannl-1262). [None] is
+    [null] on the wire: not read back. *)
+let result_line ~backend ~variant ~precision ?storage_precision ~profile ~regime_knobs
+    ~ambient_resolved ~workload ~compile_s ~searched ?tokens_per_step ?tune ?shipped_mma
+    ?fp_licences ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~peak_memory ?dominant_kernel ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
@@ -409,8 +415,10 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~ambient_res
           Printf.sprintf {|"%s"|} (string source) )
   in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"ambient_ocannl_resolved":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"shipped_mma":%s,"losses":[%s]}|}
-    (string backend) (string variant) (string precision) (profile_value profile)
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","storage_precision":%s,"profile":%s,"regime_knobs":%s,"ambient_ocannl_resolved":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"shipped_mma":%s,"losses":[%s]}|}
+    (string backend) (string variant) (string precision)
+    (match storage_precision with Some p -> Printf.sprintf {|"%s"|} (string p) | None -> "null")
+    (profile_value profile)
     (regime_knobs_object regime_knobs)
     (ambient_resolved_object ambient_resolved)
     (string workload) (fixed compile_s) searched tokens_field tune_field algebra_field (num p10)

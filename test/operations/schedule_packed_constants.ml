@@ -40,7 +40,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-3)
+let approx_tol _ = 1e-3
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 module Generated = Test_utils.Generated
@@ -131,7 +131,7 @@ let () =
   in
   let ctx = run_forward ~transform (named "mmh_hoisted" (Train.forward mc1)) in
   let got_hoisted = Context.get_values ctx mc1.Tensor.value in
-  p_all2 "hoisted-packed matmul matches the naive twin" got_hoisted got_naive ~f:approx;
+  p_close "hoisted-packed matmul matches the naive twin" got_hoisted got_naive ~tol:approx_tol;
   let src = Generated.read "mmh_hoisted" in
   let has sub = String.is_substring src ~substring:sub in
   p "no in-kernel scratch or copy nests; packed constants are buffer params"
@@ -158,8 +158,8 @@ let () =
   in
   let ctx = run_forward ~transform (named "mme_mixed" (Train.forward mc1)) in
   let got_mixed = Context.get_values ctx mc1.Tensor.value in
-  p_all2 "mixed hoisted + in-kernel packing on edge tiles matches the naive twin" got_mixed
-    got_naive ~f:approx
+  p_close "mixed hoisted + in-kernel packing on edge tiles matches the naive twin" got_mixed
+    got_naive ~tol:approx_tol
 
 (* --- 3. Non-constant sources are rejected --- *)
 let () =

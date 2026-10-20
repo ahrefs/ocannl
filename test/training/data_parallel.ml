@@ -206,8 +206,7 @@ let () =
   let expected_w = 5.0 in
   Verdict.pf "1-shard step lands w on the closed-form %g (within 1e-4)" expected_w
     (Array.length p1 = 1 && Float.(abs (p1.(0) - expected_w) < 1e-4));
-  Verdict.p_all2 "data-parallel parity with single-shard baseline" p1 p2 ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-4));
+  Verdict.p_close "data-parallel parity with single-shard baseline" p1 p2 ~tol:(fun _ -> 1e-4);
   let optimizer_baseline = run ~steps:2 ~print_loss:false ~n_shards:1 () |> only_value in
   optimizer_option_case "momentum" ~momentum:0.9 ~weight_decay:0.0 ~baseline:optimizer_baseline;
   optimizer_option_case "weight decay" ~momentum:0.0 ~weight_decay:0.1 ~baseline:optimizer_baseline;

@@ -67,8 +67,9 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-2)
-let approx_rel a b = Float.(abs (a - b) <= 1e-2 * max 1. (abs b))
+let approx_tol _ = 1e-2
+let approx a b = Float.(abs (a - b) < approx_tol b)
+let approx_rel_tol b = Float.(1e-2 * max 1. (abs b))
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
 
@@ -435,8 +436,8 @@ let () =
     let want_on = compile_serial ~name:"mm_tf32_on_serial" c_on_serial in
     let got_on, census_on = compile_mma_with_census ~name:"mm_tf32_on_mma" c_on_mma in
     let src_on = Generated.read "mm_tf32_on_mma" in
-    p_all2 "tf32 policy-on matmul matches the serial twin within tolerance" got_on want_on
-      ~f:approx_rel;
+    p_close "tf32 policy-on matmul matches the serial twin within tolerance" got_on want_on
+      ~tol:approx_rel_tol;
     p "tf32 policy-on renders and records wmma tf32"
       (Ll_test.all_rendered ~what:"tf32 policy-on" Ir.C_syntax.Mma_intrinsics census_on
       && String.is_substring src_on ~substring:tf32_marker
@@ -454,7 +455,7 @@ let () =
         ~name:"mm_tf32_k24_mma" c_k24_mma
     in
     let src_k24 = Generated.read "mm_tf32_k24_mma" in
-    p_all2 "tf32 k=24 divergent tile matches the serial twin" got_k24 want_k24 ~f:approx_rel;
+    p_close "tf32 k=24 divergent tile matches the serial twin" got_k24 want_k24 ~tol:approx_rel_tol;
     p "tf32 k=24 divergent tile emits the wmma intrinsic"
       (List.exists census_k24 ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
       && String.is_substring src_k24 ~substring:("tile_mma 16x32x24 " ^ tf32_marker));
@@ -477,7 +478,7 @@ let () =
     let want_t = compile_serial ~name:"mm_tf32_ta_serial" ct_serial in
     let got_t, census_t = compile_mma_with_census ~name:"mm_tf32_ta_mma" ct_mma in
     let src_t = Generated.read "mm_tf32_ta_mma" in
-    p_all2 "tf32 transposed-A matmul matches the serial twin" got_t want_t ~f:approx_rel;
+    p_close "tf32 transposed-A matmul matches the serial twin" got_t want_t ~tol:approx_rel_tol;
     p "tf32 transposed-A matmul emits the expected wmma layout"
       (List.exists census_t ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
       && String.is_substring src_t ~substring:"matrix_a, 16, 16, 8"
@@ -505,7 +506,7 @@ let () =
   in
   let ctx_a = Context.run ctx_a routine_a in
   let got_mma = Context.get_values ctx_a mc1.Tensor.value in
-  p_all2 "tensorized matmul values match the serial twin" got_mma got_serial ~f:approx;
+  p_close "tensorized matmul values match the serial twin" got_mma got_serial ~tol:approx_tol;
   (let label = "C-backend fallback matches bitwise" in
    if on_gpu then skipped label else p_all2 label got_mma got_serial ~f:Float.equal);
   (let src = Generated.read "mm_mma" in
@@ -1649,8 +1650,8 @@ let () =
     in
     let ctx_c = Context.run ctx_c routine_c in
     let got_staged = Context.get_values ctx_c mc3.Tensor.value in
-    p_all2 "staged+tensorized matmul parity (GPU) or clean rejection (CPU)" got_staged got_serial
-      ~f:approx;
+    p_close "staged+tensorized matmul parity (GPU) or clean rejection (CPU)" got_staged got_serial
+      ~tol:approx_tol;
     let src = Generated.read "mm_staged_mma" in
     let has s = String.is_substring src ~substring:s in
     let count_sub sub =
@@ -2522,7 +2523,9 @@ let () =
     in
     let ctx1 = Context.run ctx1 routine1 in
     let got = Context.get_values ctx1 tensorized.Tensor.value in
-    p_all2 (Printf.sprintf "%s tensorized matmul matches the serial twin" tag) got want ~f:approx;
+    p_close
+      (Printf.sprintf "%s tensorized matmul matches the serial twin" tag)
+      got want ~tol:approx_tol;
     (let label = Printf.sprintf "%s C-backend fallback matches bitwise" tag in
      if on_gpu then skipped label else p_all2 label got want ~f:Float.equal);
     let src = Generated.read ("mm_" ^ tag ^ "_mma") in

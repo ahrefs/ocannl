@@ -37,7 +37,7 @@ module Cache_plant = Test_utils.Cache_plant
 let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -172,7 +172,7 @@ let () =
        separate this from the gh-552 regression of never proposing or attributing the seed (Codex P2
        on PR #608). *)
     | None -> r.Autotune.default_refused);
-  p_all2 "tuned routine values correct" got mm_expected ~f:approx;
+  p_close "tuned routine values correct" got mm_expected ~tol:approx_tol;
 
   (* --- The same rule on the cache-replay path. A cache entry written before the rule can name the
      serial baseline as the winner: it was timed then, and it wins by default whenever every
@@ -227,5 +227,5 @@ let () =
     (if is_gpu || not cache_available then
        Option.is_some r.Autotune.default_ms || r.Autotune.default_refused
      else Option.is_none r.Autotune.default_ms);
-  p_all2 "the routine from the poisoned-cache path computes correct values" got mm_expected
-    ~f:approx
+  p_close "the routine from the poisoned-cache path computes correct values" got mm_expected
+    ~tol:approx_tol

@@ -481,11 +481,13 @@ jobs:
     # took a post-wave task to trace to that, because nothing in the log said
     # which kind of host a run had. One line -- the CPU, the ISA the cc
     # backend's probes find under the kernel flags, the resolved vector width
-    # and register count, the worker pool, the compiler and flags those were
-    # resolved under -- from `Cc_backend.host_capabilities`, the functions the
-    # renderer itself reads. Run from test/config so it resolves under the
-    # configuration every test copies (`dune exec` keeps the working
-    # directory); it also saves the line for the failure listing at the end of
+    # and register count, the worker pool, the parallel-Grid runtime, the
+    # compiler and flags those were resolved under, then any linked GPU
+    # backend's host-side probes -- from `Context.host_capabilities`, the
+    # functions the renderers themselves read; the same record every test's
+    # configuration carries (gh-ocannl-1038). Run from test/config so it
+    # resolves under the configuration every test copies (`dune exec` keeps
+    # the working directory); it also saves the line for the failure listing at the end of
     # the job. Errors continue: a compile break here is the build step's to
     # report, with its rule named, and this step only loses its line. The
     # command is one line that bash and PowerShell read alike.

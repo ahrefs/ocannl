@@ -127,7 +127,8 @@ let forward ?mask_fill ~on ~layers ~d_k ~prefix () =
   Online_softmax.set_enabled None;
   { values; optimized; raw }
 
-let close ~tol g w = Float.(abs (g -. w) <= tol *. max 1. (abs w))
+let close_tol ~tol w = Float.(tol *. max 1. (abs w))
+let close ~tol g w = Float.(abs (g - w) <= close_tol ~tol w)
 
 let report label (got : float array) =
   eprintf "%s: %s (not part of the golden)\n%!" label
@@ -159,8 +160,8 @@ let () =
   p "the pass is idempotent on its own output" (LL.equal (Online_softmax.rewrite once) once);
   p "rewritten: no seq^2-sized node is written at all"
     (Set.is_empty (square_buffers fused.optimized));
-  p_all2 "rewritten output matches the composed output within 1e-5 relative" fused.values
-    composed.values ~f:(close ~tol:1e-5);
+  p_close "rewritten output matches the composed output within 1e-5 relative" fused.values
+    composed.values ~tol:(close_tol ~tol:1e-5);
 
   printf "--- leg 3: head width above the recompute cap -- the cap owns the scores ---\n";
   let d_k = 32 in
@@ -172,16 +173,16 @@ let () =
     n_fused;
   p "rewritten: the scores are the one seq^2 buffer left (the probabilities are gone)"
     (n_fused = 1 && Set.length (square_buffers composed.optimized) > 1);
-  p_all2 "rewritten output matches the composed output within 1e-5 relative" fused.values
-    composed.values ~f:(close ~tol:1e-5);
+  p_close "rewritten output matches the composed output within 1e-5 relative" fused.values
+    composed.values ~tol:(close_tol ~tol:1e-5);
   let cap = LL.virtualize_settings.LL.max_inline_reduction in
   LL.virtualize_settings.LL.max_inline_reduction <- d_k;
   let recomputed = forward ~on:true ~layers:1 ~d_k ~prefix:0 () in
   LL.virtualize_settings.LL.max_inline_reduction <- cap;
   p "a cap admitting the head width recomputes the scores: no seq^2 buffer at all"
     (Set.is_empty (square_buffers recomputed.optimized));
-  p_all2 "recomputed scores give the same output within 1e-5 relative" recomputed.values
-    composed.values ~f:(close ~tol:1e-5);
+  p_close "recomputed scores give the same output within 1e-5 relative" recomputed.values
+    composed.values ~tol:(close_tol ~tol:1e-5);
 
   printf "--- leg 4: masked key prefixes -- the recurrence survives -inf scores ---\n";
   let composed = forward ~on:false ~layers:1 ~d_k:8 ~prefix:3 () in
@@ -189,16 +190,16 @@ let () =
   report "composed" composed.values;
   report "rewritten" fused.values;
   p_all "rewritten: every output is finite" (Array.to_list fused.values) ~f:Float.is_finite;
-  p_all2 "rewritten output matches the composed output within 1e-5 relative" fused.values
-    composed.values ~f:(close ~tol:1e-5);
+  p_close "rewritten output matches the composed output within 1e-5 relative" fused.values
+    composed.values ~tol:(close_tol ~tol:1e-5);
 
   printf "--- leg 5: two stacked blocks -- one scan each ---\n";
   let composed = forward ~on:false ~layers:2 ~d_k:8 ~prefix:0 () in
   let fused = forward ~on:true ~layers:2 ~d_k:8 ~prefix:0 () in
   p "rewritten: two scans" (scans fused.optimized = 2);
   p "rewritten: no seq^2-sized node is written" (Set.is_empty (square_buffers fused.optimized));
-  p_all2 "rewritten output matches the composed output within 1e-5 relative" fused.values
-    composed.values ~f:(close ~tol:1e-5)
+  p_close "rewritten output matches the composed output within 1e-5 relative" fused.values
+    composed.values ~tol:(close_tol ~tol:1e-5)
 
 (* --- Leg 6: training -- the rewritten forward under the composed backward. --- *)
 
@@ -242,7 +243,7 @@ let () =
       let scale = Array.fold gc ~init:0. ~f:(fun acc b -> Float.max acc (Float.abs b)) in
       eprintf "%s.grad: worst relative difference %.3g at scale %.3g (not part of the golden)\n%!"
         name worst scale;
-      p_all2 (name ^ ".grad agrees within 1e-4 relative") gf gc ~f:(close ~tol:1e-4);
+      p_close (name ^ ".grad agrees within 1e-4 relative") gf gc ~tol:(close_tol ~tol:1e-4);
       p (name ^ ".grad is not identically zero") (Array.exists gc ~f:(fun v -> Float.(v <> 0.))))
 
 (* --- Leg 7: what the recognizer declines, on hand-built raw lowerings. --- *)
@@ -722,10 +723,10 @@ let grads_agree ~tol ~what (fused : (string * float array) list) composed =
       eprintf
         "%s %s.grad: worst relative difference %.3g at scale %.3g (not part of the golden)\n%!" what
         name (worst_relative gf gc) scale;
-      p_all2
+      p_close
         (Printf.sprintf "%s: %s.grad agrees within %s relative" what name
            (Utils.normalize_exponent (Printf.sprintf "%g" tol)))
-        gf gc ~f:(close ~tol);
+        gf gc ~tol:(close_tol ~tol);
       p
         (Printf.sprintf "%s: %s.grad is not identically zero" what name)
         (Array.exists gc ~f:(fun v -> Float.(v <> 0.))))
@@ -869,8 +870,8 @@ let () =
   p "the step with the SGD update is fused too" (d_nests = 1);
   p "the loss moves across the steps"
     (not (Float.equal (List.hd_exn composed) (List.last_exn composed)));
-  p_all2 "every step's loss agrees within 1e-5 relative" (Array.of_list fused)
-    (Array.of_list composed) ~f:(close ~tol:1e-5);
+  p_close "every step's loss agrees within 1e-5 relative" (Array.of_list fused)
+    (Array.of_list composed) ~tol:(close_tol ~tol:1e-5);
   printf "--- leg 9d: two stacked blocks -- one D each ---\n";
   let composed = training ~layers:2 ~d_k:8 ~on:false ~bwd:false () in
   let fused = training ~layers:2 ~d_k:8 ~on:true ~bwd:true () in

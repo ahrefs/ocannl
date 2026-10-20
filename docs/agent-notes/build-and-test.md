@@ -1413,6 +1413,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the two-`cat` shape. `env_var_deps`' per-key derivations below (named schedule values, the cc
   width, guards, `Generated.init`) predate the record and still ask for their declarations, which
   are redundant for any rule the record reaches.
+- **The host reaches a test the same way** (gh-ocannl-1038). A verdict can read a capability a
+  backend probes on the HOST -- the rocWMMA header tree HIP's tile-MMA support requires, the
+  dispatch/OpenMP runtime the cc backend's Grid loops link, the ISA and vector width its SIMD probes
+  find, the CUDA toolkit tree -- and none of those is a file dune sees: a declared `(env_var
+  ROCWMMA_PATH)` closed only the vector that had fired (gh-ocannl-1032), not a tree appearing at a
+  path already searched. So `test/config/dune` also runs `tools/host_caps.ml`'s `--record` under
+  `(universe)`, writing `ocannl_host_capabilities` -- `Context.host_capabilities`, each backend's own
+  device-free probes, the same list CI prints as its host line -- and `ocannl_ambient_env` appends
+  it to `ocannl_ambient`. It therefore reaches every rule the environment record reaches, with
+  nothing declared per stanza; `config_dep_completeness` checks this producer beside the other two.
+  It costs about a quarter second per invocation (mac-studio): dune gives each invocation a fresh
+  `TMPDIR`, so the cc probe cache starts empty there, and the invocation's tests then reuse what
+  this rule probed. Device properties (compute capability, device limits, the GPU's architecture)
+  stay out: reading them opens a device, which a probe run on every dune invocation, CPU batches
+  included, must not do. A new host-side probe belongs in its backend's `host_capabilities`, never
+  restated in a test or a stanza. The daily sweep copies the record into each full-suite unit's log
+  (`host-capability:` lines) and, through `tools/sweep-unit-state.sh`, says `HOST CAPABILITIES
+  CHANGED` with the lines that moved when a unit's record differs from its previous verdict's -- a
+  box that lost a capability shows up as a diff between sweeps, not only as a failing test.
 - **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
   run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
   `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one
@@ -2006,6 +2025,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   combinator, `p_pairwise_distinct name xs ~equal ~to_string`: it refuses fewer than two source
   values, since distinctness over one element is as vacuous as `for_all` over none, and reports the
   first collision by `to_string` on stderr.
+- A float readback compared under a tolerance goes through `p_close name got want ~tol` (and
+  `pf_close`, `pass_fail_close`; gh-ocannl-1224), `tol` answering the admitted difference for a
+  reference value (`fun _ -> 1e-3`, `fun w -> 1e-3 +. (1e-5 *. Float.abs w)`), never `p_all2` with
+  a hand-rolled `Float.(abs (a - b) < …)` predicate. Its value failure keeps `p`'s bare `false`
+  line and adds, on stderr only, the differing-cell count, the first and worst cell with both
+  values and the tolerance there, max |want| and `?what_ran` -- what gh-ocannl-1217 needed a
+  remote reproduction round to learn (5 ulps at magnitude 2e5 in every seed: reference rounding,
+  not a seed). `p_all2`'s own value failure adds a count and first index there; neither detail
+  line carries the `FAIL: ` prefix `tools/mutation-run.sh` counts. An aggregate claim over
+  candidates whose count no golden pins (`p_all "every seed matches" runs ~f:…`) takes
+  `Verdict.within` as its predicate: `p_close`'s check and stderr line, no claim of its own
+  (`schedule_strided_1x1` is the exemplar). `verdict_ratchet` refuses the hand-rolled form
+  (`Verdict_scan.tolerance_census`): a parity predicate applying `abs` to a difference, inline or
+  through a name bound to such a function, partial applications included.
 - Guarantees that fire only on an empty collection are never exercised by a green suite, so
   `verdict_quantified` stages them: the satisfied forms run directly, and each refusal runs as a
   CHILD process whose streams the parent captures. Capturing is not tidiness — a refusal prints
@@ -2170,7 +2203,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   must declare `(env_var OCANNL_BUILD_FILES_PREFIX)` — otherwise dune serves the previous run's
   result when the variable changes, which is gh-ocannl-628's hole one key over. `env_var_deps`
   requires it of every stanza whose `(modules …)` name a source that calls the initializer, and
-  reports a declaration with no caller behind it as well (gh-ocannl-723). Where the declaration goes
+  reports a declaration with no caller behind it as well (gh-ocannl-723); a module built through a
+  `(select …)` answers for its arms too (`Dune_stanza_scan.select_arms`), so a `.real.ml` caller is
+  its stanza's (gh-ocannl-1294). The other way round is closed by `codegen_text_inventory`, which
+  refuses a test source that reads `Utils.build_files_dir`/`Utils.build_file` itself. Where the declaration goes
   is dune's semantics and not one rule: a `(test)` runs under its own `(deps …)`, an inline-test
   library under `(inline_tests (deps …))`, and an `(executable)` has no `deps` field at all, so it is
   the rule that RUNS it that carries the declaration — the same placement as the `ocannl_config` dep
@@ -3045,9 +3081,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/test-ci-failed-rules.sh` (the `promotion` harness group, so current Dune and the floor)
   builds a fixture project red and green.
 - **Each build job prints the host it drew** (gh-ocannl-1371), before building: `tools/host_caps.exe`
-  (run from `test/config`) prints `Cc_backend.host_capabilities` -- CPU, CPU count and pool tag, the
+  (run from `test/config`) prints `Context.host_capabilities` -- CPU, CPU count and pool tag, the
   ISA the cc probes find under the kernel flags (`avx2+fma`, `avx512f+bw+vl`, `neon`), the resolved
-  `cc_vector_bytes` beside the auto width, the register count, fp16 support, compiler and flags.
+  `cc_vector_bytes` beside the auto width, the register count, fp16 support, the parallel-Grid
+  runtime, compiler and flags, the codegen tag, then any linked GPU backend's host-side probes
+  (gh-ocannl-1038, where the same list became a dune input).
   GitHub's ubuntu runners come with or without AVX-512, and the auto width (64 or 32) changes what
   the autotune pre-filter keeps (gh-ocannl-1363's flake). The line is repeated above the failure
   listing. Read it first when a red reproduces on one runner and not another.
@@ -4435,6 +4473,14 @@ box.
   and exception cleanup. `report` prefixes every echoed child line, so its `STOPPED EARLY`, `FAIL:`
   and `FAILED:` markers cannot be read as the parent's Verdict report by `tools/mutation-run.sh`.
   Deadline, custom-environment and concurrent-process harnesses keep their own contracts.
+
+- `Stderr_capture` (gh-ocannl-1296) owns a test's capture of its OWN stderr (`capture`, `lines`:
+  fd 2 dup'ed onto a temporary file, the redirection ppx_expect performs) and the reading of the
+  tuner's `autotune-progress:` lines (`Progress`). The capture's contract is the path out: fd 2
+  restored, the captured text echoed back, the file removed and the descriptors closed whether the
+  function returned or raised, the exception re-raised afterwards with its backtrace -- what the
+  hand-rolled copies it replaced mostly lacked, leaving a crash's report on a deleted file.
+  `stderr_capture_cases` pins the raising paths, in process and in a child.
 
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm

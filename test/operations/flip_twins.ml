@@ -38,52 +38,14 @@ open Verdict.Claims
    scans. *)
 let k = 1
 
-(* One [Autotune.on_candidate_measured] script: the [i]-th admitted window measures [script i]. *)
+(* One measurement script: the [i]-th admitted window measures [script i]. *)
 let with_clock script f =
-  let measured = ref 0 in
-  Autotune.Seam.with_value Autotune.on_candidate_measured
-    (fun ~label:_ ~digest:_ _ms ->
-      Int.incr measured;
-      script !measured)
-    (fun () -> Autotune.with_uncontended_test_windows f)
+  fst (Scripted_search.scripted ~measure:(fun w -> script w.Scripted_search.ordinal) f)
 
-let with_stderr_captured f =
-  let file = Stdlib.Filename.temp_file "flip_twins" ".stderr" in
-  Stdio.Out_channel.flush Stdio.stderr;
-  let saved = Unix.dup Unix.stderr in
-  let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  Unix.dup2 fd Unix.stderr;
-  Unix.close fd;
-  let restore () =
-    Stdio.Out_channel.flush Stdio.stderr;
-    Unix.dup2 saved Unix.stderr;
-    Unix.close saved
-  in
-  let result = Exn.protect ~f ~finally:restore in
-  let text = Stdio.In_channel.read_all file in
-  Stdlib.Sys.remove file;
-  (* Echoed, so nothing the run wrote is hidden. *)
-  Stdio.eprintf "%s%!" text;
-  (result, String.split_lines text)
-
-(* The value of [key="..."] on an [autotune-progress:] line of the given event. Arm labels carry
-   spaces, so the fields are read by their quotes rather than split on spaces. *)
-let quoted line key =
-  let open String in
-  Option.bind
-    (substr_index line ~pattern:(key ^ "=\""))
-    ~f:(fun i ->
-      let start = i + length key + 2 in
-      Option.map (index_from line start '"') ~f:(fun j -> sub line ~pos:start ~len:(j - start)))
-
-let events lines name =
-  List.filter lines ~f:(fun l ->
-      String.is_prefix l ~prefix:"autotune-progress: "
-      && String.is_substring l ~substring:(" event=" ^ name ^ " "))
-
-let plain lines name key =
-  List.filter_map (events lines name) ~f:(fun l ->
-      List.find_map (String.split l ~on:' ') ~f:(fun w -> String.chop_prefix w ~prefix:(key ^ "=")))
+(* The progress lines of event [name], and one field of each that has it. *)
+let events = Stderr_capture.Progress.events
+let field = Stderr_capture.Progress.field
+let plain lines name key = List.filter_map (events lines name) ~f:(fun l -> field l key)
 
 type chain = {
   flip_reports : Autotune.report list;
@@ -114,7 +76,7 @@ let run_chain ?(cache_dir = "") ?ctx ?timing_ctx ~budget comp loss ~flip_script 
         flip_script ~flip:(d - 1) !flip_window
   in
   let (), lines =
-    with_stderr_captured (fun () ->
+    Stderr_capture.lines (fun () ->
         with_clock script (fun () ->
             let _ctx, _routine =
               Train.tune_placements ~beam_width:k ~rounds:0 ~repeats:1 ~cache_dir
@@ -128,22 +90,19 @@ let run_chain ?(cache_dir = "") ?ctx ?timing_ctx ~budget comp loss ~flip_script 
             in
             ()))
   in
-  let flip_label l = Option.filter (quoted l "arm") ~f:(String.is_prefix ~prefix:"flip ") in
+  let flip_label l = Option.filter (field l "arm") ~f:(String.is_prefix ~prefix:"flip ") in
   {
     flip_reports = List.rev !flip_reports;
     measured_arms = List.filter_map (events lines "arm_start") ~f:flip_label;
     twins =
       List.filter_map (events lines "flip_twin") ~f:(fun l ->
-          Option.both (quoted l "arm") (quoted l "twin_of"));
+          Option.both (field l "arm") (field l "twin_of"));
     done_measured = plain lines "flips_done" "measured";
     done_twinned = plain lines "flips_done" "twinned";
     shipped = !shipped;
   }
 
-let clean_cache dir =
-  if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
-    Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
-        Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
+let clean_cache = Scripted_search.clear_cache_dir
 
 (* An arm label names its node as [flip <reading> <debug name> (cost ...)]. *)
 let names (t : Tensor.t) label =

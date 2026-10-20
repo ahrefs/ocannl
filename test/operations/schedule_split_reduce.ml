@@ -44,7 +44,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-3 *. (1. +. abs b))
+let approx_tol b = Float.(1e-3 *. (1. +. abs b))
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_cpu = Sched.backend_is_cpu backend_name
 
@@ -234,7 +234,7 @@ let () =
   p "split-reduce on a read-only operand is Op_illegal"
     (match !illegal_target with Some (Sched.Op_illegal _) -> true | _ -> false);
   p "schedule-cache round-trip re-mints an applicable Split_reduce" !cache_ok;
-  p_all2 "split-schedule serial twin approximates the unsplit reference" twin want ~f:approx;
+  p_close "split-schedule serial twin approximates the unsplit reference" twin want ~tol:approx_tol;
 
   (* -- The same schedule, fissioned and annotated: must match the serial twin BITWISE. -- *)
   let seg_pins = ref (false, false) in
@@ -274,7 +274,7 @@ let () =
   in
   let ifs6, _, _ = !stats in
   p "non-dividing split-reduce keeps the remainder guard" (ifs6 > 0);
-  p_all2 "non-dividing serial twin approximates the reference" twin6 want ~f:approx;
+  p_close "non-dividing serial twin approximates the reference" twin6 want ~tol:approx_tol;
   let y4, _ = make_matvec "4" in
   let par6 =
     run_forward

@@ -20,7 +20,8 @@ module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-4)
+let approx_tol _ = 1e-4
+let approx a b = Float.(abs (a - b) < approx_tol b)
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -134,8 +135,8 @@ let () =
   p "pruned search timed fewer candidates than the full search"
     (r_cut.Autotune.candidates_timed <= r_all.Autotune.candidates_timed);
   p "baseline still timed under aggressive pruning" (r_cut.Autotune.candidates_timed >= 1);
-  p_all2 "tuned values correct without the pre-filter" got_all mm_expected ~f:approx;
-  p_all2 "tuned values correct with the pre-filter" got_cut mm_expected ~f:approx
+  p_close "tuned values correct without the pre-filter" got_all mm_expected ~tol:approx_tol;
+  p_close "tuned values correct with the pre-filter" got_cut mm_expected ~tol:approx_tol
 
 let () =
   (* --- The model-picked untuned default --- *)
@@ -150,7 +151,8 @@ let () =
   in
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx dc.Tensor.value in
-  p_all2 "model_default returns a working routine with correct values" got mm_expected ~f:approx;
+  p_close "model_default returns a working routine with correct values" got mm_expected
+    ~tol:approx_tol;
   let r = Option.value_exn ~here:[%here] !choice in
   p "model_default scored candidates (default pipeline included)" (r.Autotune.mc_scored >= 1);
   p "model_default reports a choice with its model score"
@@ -199,8 +201,7 @@ let () =
   p "some candidates are excluded as unbuildable" (r.Autotune.mc_rejected >= 1);
   p "the surviving argmin is a schedule, not the default fallback"
     (not (String.equal r.Autotune.mc_label "default"));
-  p_all2 "the picked schedule computes correct values" got expected ~f:(fun a b ->
-      Float.(abs (a - b) < 1e-2))
+  p_close "the picked schedule computes correct values" got expected ~tol:(fun _ -> 1e-2)
 
 let () =
   (* --- The ranking score past and below capacity (gh-ocannl-1253) ---

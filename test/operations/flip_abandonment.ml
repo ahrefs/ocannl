@@ -29,7 +29,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let approx a b = Float.(abs (a -. b) < 1e-4)
+let approx_tol _ = 1e-4
 let n = 8
 let k = 2
 let ratio = Autotune.flip_abandon_ratio ~margin:1.25 ()
@@ -61,23 +61,19 @@ let verdicts () =
     (Float.equal (Autotune.best_after [ (1, 4.0) ] k) 4.0);
   p "an incumbent with no timed record abandons nothing" (not (abandons [] [ (1, 1e9) ]))
 
-(* One [Autotune.on_candidate_measured] script: the [i]-th admitted window (1-based) measures
-   [script i]. Counts the admitted windows through [on_candidate_timed], the tuner's own count. *)
+(* One measurement script: the [i]-th admitted window (1-based) measures [script i]. Counts the
+   admitted windows through [on_candidate_timed], the tuner's own count. *)
 let with_clock script f =
-  let measured = ref 0 and timed = ref 0 in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
-  and old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
-      Autotune.Seam.set Autotune.on_candidate_timed old_timed)
-    ~f:(fun () ->
-      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ms ->
-        Int.incr measured;
-        script !measured );
-      (Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ -> Int.incr timed);
-      let r = Autotune.with_uncontended_test_windows f in
-      (r, !timed))
+  let timed = ref 0 in
+  let r, _ =
+    Scripted_search.scripted
+      ~measure:(fun w -> script w.Scripted_search.ordinal)
+      (fun () ->
+        Autotune.Seam.with_value Autotune.on_candidate_timed
+          (fun _ ~timed_so_far:_ -> Int.incr timed)
+          f)
+  in
+  (r, !timed)
 
 (* Opposing controls use the production dispersion rule to manufacture a refused physical window.
    They are deterministic even on a quiet host, and exercise the same admission function every
@@ -190,10 +186,7 @@ let executed_tune comp =
   p "a flip far behind the incumbent's final best but not at equal depth is not abandoned"
     (match late with Completed r -> Float.equal r.Autotune.best_ms 5.0 | Abandoned _ -> false)
 
-let clean_cache dir =
-  if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
-    Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
-        Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
+let clean_cache = Scripted_search.clear_cache_dir
 
 (* The keys come from inside the entries: a filename is a digest of its key (gh-ocannl-1228). *)
 let abandonment_entry ~cache_dir =
@@ -370,34 +363,13 @@ let cache_replay comp =
   p "a replay under other repeats abandons nothing, where the same shape's replay would"
     (replays_no_record other_repeats)
 
-(* An [autotune-progress:] line's [key=value] fields; values are unquoted words here. *)
-let progress_fields line =
-  Option.map (String.chop_prefix line ~prefix:"autotune-progress: ") ~f:(fun rest ->
-      String.split rest ~on:' '
-      |> List.filter_map ~f:(fun w ->
-          Option.map (String.lsplit2 w ~on:'=') ~f:(fun (k, v) ->
-              (k, String.strip ~drop:(Char.equal '"') v))))
+let field = Stderr_capture.Progress.field
 
-let field fields key = List.Assoc.find fields key ~equal:String.equal
-
+(* Runs [f] with stderr captured (and echoed back), answering its result with the progress lines it
+   wrote. *)
 let with_stderr_captured f =
-  let file = Stdlib.Filename.temp_file "flip_abandonment" ".stderr" in
-  Stdio.Out_channel.flush Stdio.stderr;
-  let saved = Unix.dup Unix.stderr in
-  let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  Unix.dup2 fd Unix.stderr;
-  Unix.close fd;
-  let restore () =
-    Stdio.Out_channel.flush Stdio.stderr;
-    Unix.dup2 saved Unix.stderr;
-    Unix.close saved
-  in
-  let result = Exn.protect ~f ~finally:restore in
-  let text = Stdio.In_channel.read_all file in
-  Stdlib.Sys.remove file;
-  (* Echoed, so nothing the run wrote is hidden. *)
-  Stdio.eprintf "%s%!" text;
-  (result, List.filter_map (String.split_lines text) ~f:progress_fields)
+  let result, lines = Stderr_capture.lines f in
+  (result, Stderr_capture.Progress.of_lines lines)
 
 (* [Train.tune_placements] with one flip: arm A's windows measure 4 ms, arm B's 50 ms, and the
    flip's per [flip_script] (1-based within the flip's search). The searches are told apart by how
@@ -443,7 +415,7 @@ let executed_chain ?fail_arm_a_at ?(cache_dir = "") comp t2 expected ~flip_scrip
                 let ctx = Context.run ctx routine in
                 Context.get_values ctx t2.Tensor.value)))
   in
-  p_all2 "the shipped routine computes the plain compile's values" got expected ~f:approx;
+  p_close "the shipped routine computes the plain compile's values" got expected ~tol:approx_tol;
   let events name =
     List.filter lines ~f:(fun f -> Option.equal String.equal (field f "event") (Some name))
   in

@@ -34,7 +34,7 @@ let phase name = Stdio.eprintf "cpu_parallel phase: %s\n%!" name
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-2)
+let approx_tol _ = 1e-2
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_cpu = Sched.backend_is_cpu backend_name
 
@@ -71,7 +71,7 @@ let () =
   phase "auto: first run";
   let ctx = Context.run ctx routine in
   let got1 = Context.get_values ctx c.Tensor.value in
-  p_all2 "automatic schedule values correct" got1 expected ~f:approx;
+  p_close "automatic schedule values correct" got1 expected ~tol:approx_tol;
   phase "auto: second run";
   let ctx = Context.run ctx routine in
   let got2 = Context.get_values ctx c.Tensor.value in
@@ -95,7 +95,9 @@ let () =
   let ctx_sm, routine_sm = Context.compile ctx_sm comp_small Ir.Indexing.Empty in
   let ctx_sm = Context.run ctx_sm routine_sm in
   let got_small = Context.get_values ctx_sm s2.Tensor.value in
-  p_all2 "small kernel values correct" got_small (Array.map sv ~f:(fun x -> x *. x)) ~f:approx;
+  p_close "small kernel values correct" got_small
+    (Array.map sv ~f:(fun x -> x *. x))
+    ~tol:approx_tol;
   (let src = Generated.read "cpu_par_small" in
    p "small kernel stays serial" (not (has_parallel_construct src)));
 
@@ -154,7 +156,7 @@ let () =
         private_opt)
       mc1
   in
-  p_all2 "privatized matmul values match the twin" mm_priv mm_twin ~f:approx;
+  p_close "privatized matmul values match the twin" mm_priv mm_twin ~tol:approx_tol;
   let src = Generated.read "cpu_par_privatized" in
   (* The covering zero is forwarded into the private accumulator. Its sole closing-store nest keeps
      the accumulator per chunk inside the parallel construct. CPU emits one parallel construct; GPU
@@ -224,7 +226,7 @@ let () =
      holds its ma row's first element (scratch[0] is rewritten at x = 0 before any read of it in the
      same grid iteration). *)
   let want_hz = Array.init (k * k) ~f:(fun idx -> mav.(idx / k * k)) in
-  p_all2 "interleaved-write hazard values correct" got_hz want_hz ~f:approx;
+  p_close "interleaved-write hazard values correct" got_hz want_hz ~tol:approx_tol;
   (let src = Generated.read "cpu_par_hazard" in
    p "interleaved covering write keeps the grid loop serial" (not (has_parallel_construct src)));
   (* Repeated inner Grid regions: the enclosing dimensions do not amortize a launch. All values

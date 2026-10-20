@@ -98,6 +98,81 @@ let precision_leg ~runner ~training ?st () =
   if Float.(init_scale <= 0.) then failwith (runner ^ ": loss scale must be positive");
   { label; base; prec; static_scale; gate_interval; init_scale }
 
+(** The report's label of a storage precision: [f32], [bf16], [f16], [f64], else
+    {!Ir.Ops.prec_string}. *)
+let precision_label prec =
+  match prec with
+  | Ir.Ops.Single_prec _ -> "f32"
+  | Ir.Ops.Bfloat16_prec _ -> "bf16"
+  | Ir.Ops.Half_prec _ -> "f16"
+  | Ir.Ops.Double_prec _ -> "f64"
+  | _ -> Ir.Ops.prec_string prec
+
+(** The storage precision [t]'s value node was compiled at, as {!precision_label} spells it — the
+    result line's [storage_precision] (gh-ocannl-1262). A runner hands {!measure_and_emit} its model
+    body's output (the logits): every precision leg's storage policy re-precisions that subtree and
+    pins only the loss head, so a [BENCH_PRECISION] the runner never applied reads back as the
+    precision the cell did run at, where echoing the leg it parsed would agree with the request
+    whatever ran. Read once the graph is compiled, when the precision is settled. *)
+let storage_precision (t : Tensor.t) = precision_label (Lazy.force t.Tensor.value.Tn.storage_prec)
+
+(** {1 The dominant-kernel instrument's deadline (gh-ocannl-1260)} *)
+
+exception Instrument_over_budget
+
+(** Whether {!with_deadline} can stop work in progress on this platform: POSIX's interval timer
+    delivers [SIGALRM], whose handler raises at the next point the runtime polls -- in a sleep, a
+    [waitpid] on a compiler, an OCaml loop; not inside a long foreign call, which it interrupts only
+    once that call returns. Windows has no interval timer, and there the instrument stops only
+    between kernels. *)
+let instrument_preemptible = not Stdlib.Sys.win32
+
+(** [with_deadline ~seconds f] runs [f], raising {!Instrument_over_budget} out of it once [seconds]
+    have passed (where {!instrument_preemptible}). The raise is one-shot and is disarmed the moment
+    [f] returns, so it cannot land after [f] did.
+
+    The process may already hold an interval timer: a driver's cap set as
+    [perl -e 'alarm N; exec ...'] survives the [exec], and its [SIGALRM] at the default disposition
+    is what ends a cell that outlives the cap. So that timer is read first and given back
+    afterwards, with its own disposition and the time it has left: the deadline here is the earlier
+    of the two, and a cap that came due meanwhile is re-armed to fire at once, so the cell still
+    ends at its cap rather than running on past it with no alarm left. *)
+let with_deadline ~seconds f =
+  if not instrument_preemptible then f ()
+  else
+    let set value interval =
+      Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = interval; it_value = value }
+    in
+    let started = Unix.gettimeofday () in
+    let outer = Unix.getitimer Unix.ITIMER_REAL in
+    let outer_left = outer.Unix.it_value in
+    let deadline = if Float.(outer_left > 0.) then Float.min seconds outer_left else seconds in
+    let armed = ref true in
+    let previous =
+      Stdlib.Sys.signal Stdlib.Sys.sigalrm
+        (Stdlib.Sys.Signal_handle
+           (fun _ ->
+             if !armed then (
+               armed := false;
+               raise Instrument_over_budget)))
+    in
+    let outcome =
+      try
+        ignore (set (Float.max deadline 0.001) 0. : Unix.interval_timer_status);
+        let v = f () in
+        armed := false;
+        Ok v
+      with e ->
+        armed := false;
+        Error e
+    in
+    ignore (set 0. 0. : Unix.interval_timer_status);
+    Stdlib.Sys.set_signal Stdlib.Sys.sigalrm previous;
+    (if Float.(outer_left > 0.) then
+       let left = outer_left -. (Unix.gettimeofday () -. started) in
+       ignore (set (Float.max left 0.001) outer.Unix.it_interval : Unix.interval_timer_status));
+    match outcome with Ok v -> v | Error e -> raise e
+
 (** The step shapes of the training legs, before compilation. *)
 type train_parts =
   | Plain_step of Asgns.comp  (** One fused routine: f32, bf16, and the f16 static-scale leg. *)
@@ -1020,6 +1095,30 @@ let time_segments ?promote_locals ?(repeats = 20) ~backend ~limits ~static_indic
 let dominant_kernel_enabled () =
   match Stdlib.Sys.getenv_opt "BENCH_DOMINANT_KERNEL" with Some "0" -> false | _ -> true
 
+(** The dominant-kernel instrument's wall-clock budget, in seconds (gh-ocannl-1260):
+    [BENCH_DOMINANT_KERNEL_BUDGET_S], a positive number, default
+    {!default_dominant_kernel_budget_s}.
+
+    The instrument runs after the whole measurement has been paid for, and on a many-kernel step (a
+    C compile per kernel on [cc], a seq-1024 training step anywhere) it can outlast the workload --
+    long enough to eat the cell's cap, which the driver then reports as a timed-out cell with no
+    result line at all. Past its budget it stops and reports ["no-kernel"], instrument over budget,
+    and the cell keeps its result. The default is generous next to a typical instrument (seconds on
+    a GPU, a minute or two for a cc kernel table) and well inside the sweeps' 1800 s cell caps; a
+    driver with a tighter cap sets it lower. A malformed value fails the cell before it measures
+    anything ({!measure_and_emit} reads it up front), never after. *)
+let default_dominant_kernel_budget_s = 600.
+
+let dominant_kernel_budget_s () =
+  match Stdlib.Sys.getenv_opt "BENCH_DOMINANT_KERNEL_BUDGET_S" with
+  | None | Some "" -> default_dominant_kernel_budget_s
+  | Some s -> (
+      match Float.of_string_opt s with
+      | Some b when Float.(is_finite b && b > 0.) -> b
+      | _ ->
+          failwith ("BENCH_DOMINANT_KERNEL_BUDGET_S must be a positive number of seconds, got " ^ s)
+      )
+
 (** [BENCH_KERNEL_TABLE=1] (gh-ocannl-1002): {!dominant_kernel} also prints every kernel it timed on
     stderr -- one line per shipped segment with its min-of-N time, launch geometry, tensorization
     census and written nodes. *)
@@ -1076,35 +1175,48 @@ let print_shipped_census ?(out = Stdio.stdout) routines =
 
 (** One timing loop and row format for both the standalone diagnostic and the benchmark's
     dominant-kernel column. Results retain refused rows in census order; fatal failures propagate
-    (the benchmark caller catches them to preserve its already-paid-for result line). *)
-let time_shipped_kernels ?out ?(repeats = 20) ~ctx ~bindings routines =
+    (the benchmark caller catches them to preserve its already-paid-for result line).
+
+    [stop], asked before each kernel, ends the loop there: the rows returned are then the kernels
+    timed before it said so, fewer than the census. [time_kernel ~i timing] runs kernel [i]'s
+    compile-and-time [timing] (default: just runs it) -- the seam a test stands a slow kernel in. *)
+let time_shipped_kernels ?out ?(repeats = 20) ?(stop = fun () -> false)
+    ?(time_kernel = fun ~i:_ timing -> timing ()) ~ctx ~bindings routines =
   let kernels = shipped_kernels routines in
   let n = List.length kernels in
-  List.mapi kernels ~f:(fun i (shipped, seg) ->
-      let bind, compile = compile_shipped_kernel ~ctx ~bindings ~i shipped seg in
-      let result = time_hermetic ~repeats ~bind compile in
-      let row_out =
-        match (out, result) with
-        | Some out, _ -> Some out
-        | None, Error _ -> Some Stdio.stderr
-        | None, Ok _ -> None
-      in
-      Option.iter row_out ~f:(fun out ->
-          let ws =
-            String.concat ~sep:" " (List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name)
-          in
-          (match result with
-          | Error detail ->
-              Stdio.Out_channel.fprintf out "bench: kernel %d/%d %s DECLINED (%s) w: %s\n" i n
-                (segment_geometry seg) detail ws
-          | Ok (ms, routine) ->
-              Stdio.Out_channel.fprintf out "bench: kernel %d/%d %.4f ms %s mma:%s vol:%s w: %s\n" i
-                n ms (segment_geometry seg)
-                (Ir.C_syntax.mma_summary_string routine.Context.mma)
-                (Ir.C_syntax.volatility_summary_string routine.Context.volatility)
-                ws);
-          Stdio.Out_channel.flush out);
-      (i, seg, result))
+  let rec attempted i = function
+    | [] -> []
+    | _ when stop () -> []
+    | k :: rest ->
+        let row = time_one i k in
+        row :: attempted (i + 1) rest
+  and time_one i (shipped, seg) =
+    let bind, compile = compile_shipped_kernel ~ctx ~bindings ~i shipped seg in
+    let result = time_kernel ~i (fun () -> time_hermetic ~repeats ~bind compile) in
+    let row_out =
+      match (out, result) with
+      | Some out, _ -> Some out
+      | None, Error _ -> Some Stdio.stderr
+      | None, Ok _ -> None
+    in
+    Option.iter row_out ~f:(fun out ->
+        let ws =
+          String.concat ~sep:" " (List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name)
+        in
+        (match result with
+        | Error detail ->
+            Stdio.Out_channel.fprintf out "bench: kernel %d/%d %s DECLINED (%s) w: %s\n" i n
+              (segment_geometry seg) detail ws
+        | Ok (ms, routine) ->
+            Stdio.Out_channel.fprintf out "bench: kernel %d/%d %.4f ms %s mma:%s vol:%s w: %s\n" i n
+              ms (segment_geometry seg)
+              (Ir.C_syntax.mma_summary_string routine.Context.mma)
+              (Ir.C_syntax.volatility_summary_string routine.Context.volatility)
+              ws);
+        Stdio.Out_channel.flush out);
+    (i, seg, result)
+  in
+  attempted 0 kernels
 
 (** Full-step controls precede this: isolated backward/SGD mutates gradients/weights. Minima include
     a launch/sync floor per kernel and their sum is not step latency. *)
@@ -1142,8 +1254,27 @@ let label_writes = 3
     and [bindings] the ones the step was compiled with; call after the timed steps, since timing a
     kernel alone mutates its outputs. Never raises: the instrument runs after the whole measurement
     has been paid for, and a cell must not lose its result line to a diagnostic column, so any
-    failure is reported on stderr and as a ["no-kernel"] verdict naming it. *)
-let dominant_kernel ?(repeats = 20) ~ctx ~bindings routines =
+    failure is reported on stderr and as a ["no-kernel"] verdict naming it.
+
+    Nor may it eat the cell: past [budget_s] seconds (default {!dominant_kernel_budget_s}) it stops
+    and reports ["no-kernel"], instrument over budget (gh-ocannl-1260). It is stopped mid-kernel
+    where {!instrument_preemptible} ({!with_deadline}), and in any case starts no kernel once the
+    budget has passed. A kernel that started inside the budget and is not interrupted (Windows, or a
+    long foreign call) may finish past it; when that was the last one, every kernel was timed and
+    the column is the full answer, so it is reported -- the budget bounds the instrument's cost, and
+    discarding a completed measurement would recover none of it. [time_kernel] is
+    {!time_shipped_kernels}'. *)
+let dominant_kernel ?(repeats = 20) ?budget_s ?(time_kernel = fun ~i:_ timing -> timing ()) ~ctx
+    ~bindings routines =
+  let budget_s = Option.value_or_thunk budget_s ~default:dominant_kernel_budget_s in
+  let clock = Mtime_clock.counter () in
+  let elapsed_s () = Mtime.Span.to_float_ns (Mtime_clock.count clock) /. 1e9 in
+  let over_budget () = Float.(elapsed_s () > budget_s) in
+  let started = ref 0 in
+  let time_kernel ~i timing =
+    started := i + 1;
+    time_kernel ~i timing
+  in
   let limits = Context.hardware_limits ctx in
   let backend = Context.backend_name ctx in
   let gpu = Ir.Schedule.backend_is_gpu backend in
@@ -1162,54 +1293,67 @@ let dominant_kernel ?(repeats = 20) ~ctx ~bindings routines =
     Stdio.eprintf "bench: dominant kernel: %s\n%!" note;
     Bench_json.dominant_kernel_object ~note ~ceiling:(Error note) None
   in
+  let over_budget_note () =
+    Printf.sprintf
+      "instrument over budget: stopped after %.1f s with %d of %d kernels started, past its %g s \
+       budget (BENCH_DOMINANT_KERNEL_BUDGET_S)"
+      (elapsed_s ()) !started n budget_s
+  in
   match
-    time_shipped_kernels
-      ?out:(if kernel_table_enabled () then Some Stdio.stderr else None)
-      ~repeats ~ctx ~bindings routines
-    |> List.filter_map ~f:(fun (i, seg, result) ->
-        Result.ok result |> Option.map ~f:(fun (ms, routine) -> (i, seg, ms, routine.Context.mma)))
+    with_deadline ~seconds:budget_s (fun () ->
+        time_shipped_kernels
+          ?out:(if kernel_table_enabled () then Some Stdio.stderr else None)
+          ~repeats ~stop:over_budget ~time_kernel ~ctx ~bindings routines)
   with
+  | exception Instrument_over_budget -> no_kernel (over_budget_note ())
   | exception exn -> no_kernel ("instrument failed: " ^ Exn.to_string exn)
-  | [] when n = 0 -> no_kernel "the step shipped no kernel segments"
-  | [] -> no_kernel (Printf.sprintf "all %d kernels declined to compile on their own" n)
-  | timed ->
-      let segments_ms = List.sum (module Float) timed ~f:(fun (_, _, ms, _) -> ms) in
-      let i, seg, seg_ms, mma =
-        List.max_elt timed ~compare:(fun (_, _, a, _) (_, _, b, _) -> Float.compare a b)
-        |> Option.value_exn ~here:[%here]
-      in
-      let s = Ir.Cost_model.analyze seg.Ir.Low_level.llc in
-      let writes =
-        let names = List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name in
-        let shown = List.take names label_writes in
-        String.concat ~sep:" " shown
-        ^
-        if List.length names > label_writes then
-          Printf.sprintf " +%d" (List.length names - label_writes)
-        else ""
-      in
-      let tensorization = Ir.C_syntax.tensorization_name mma.Ir.C_syntax.tensorization in
-      let kernel =
-        {
-          Bench_json.segment = i;
-          segments = n;
-          declined = n - List.length timed;
-          writes;
-          seg_ms;
-          segments_ms;
-          tensorization;
-          flops = s.Ir.Cost_model.flops;
-          bytes = Ir.Cost_model.total_bytes s;
-          flops_exact = not s.Ir.Cost_model.flops_approx;
-          bytes_exact = not (Ir.Cost_model.footprint_approximate s);
-          opaque = s.Ir.Cost_model.opaque;
-        }
-      in
-      let ceiling =
-        Bench_json.choose_ceiling ~gpu ~tensorization ~narrow_native:(narrow_native ~limits s)
-          ~peak_flops ~peak_memory_bandwidth
-      in
-      Bench_json.dominant_kernel_object ~ceiling (Some kernel)
+  | rows when List.length rows < n -> no_kernel (over_budget_note ())
+  | rows -> (
+      match
+        List.filter_map rows ~f:(fun (i, seg, result) ->
+            Result.ok result
+            |> Option.map ~f:(fun (ms, routine) -> (i, seg, ms, routine.Context.mma)))
+      with
+      | [] when n = 0 -> no_kernel "the step shipped no kernel segments"
+      | [] -> no_kernel (Printf.sprintf "all %d kernels declined to compile on their own" n)
+      | timed ->
+          let segments_ms = List.sum (module Float) timed ~f:(fun (_, _, ms, _) -> ms) in
+          let i, seg, seg_ms, mma =
+            List.max_elt timed ~compare:(fun (_, _, a, _) (_, _, b, _) -> Float.compare a b)
+            |> Option.value_exn ~here:[%here]
+          in
+          let s = Ir.Cost_model.analyze seg.Ir.Low_level.llc in
+          let writes =
+            let names = List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name in
+            let shown = List.take names label_writes in
+            String.concat ~sep:" " shown
+            ^
+            if List.length names > label_writes then
+              Printf.sprintf " +%d" (List.length names - label_writes)
+            else ""
+          in
+          let tensorization = Ir.C_syntax.tensorization_name mma.Ir.C_syntax.tensorization in
+          let kernel =
+            {
+              Bench_json.segment = i;
+              segments = n;
+              declined = n - List.length timed;
+              writes;
+              seg_ms;
+              segments_ms;
+              tensorization;
+              flops = s.Ir.Cost_model.flops;
+              bytes = Ir.Cost_model.total_bytes s;
+              flops_exact = not s.Ir.Cost_model.flops_approx;
+              bytes_exact = not (Ir.Cost_model.footprint_approximate s);
+              opaque = s.Ir.Cost_model.opaque;
+            }
+          in
+          let ceiling =
+            Bench_json.choose_ceiling ~gpu ~tensorization ~narrow_native:(narrow_native ~limits s)
+              ~peak_flops ~peak_memory_bandwidth
+          in
+          Bench_json.dominant_kernel_object ~ceiling (Some kernel))
 
 (** The compiled routines of a step shape, for {!dominant_kernel}. *)
 let step_routines = function
@@ -1274,6 +1418,9 @@ let protocol_of_st ~fixture st =
     Keep the protocol here rather than in a caller (gh-ocannl-702): {!run_self_test} is what stands
     behind this function in a fresh checkout, and it stands behind exactly what this function does.
 
+    [storage_of] is the model body's output, whose compiled storage precision the line reports as
+    [storage_precision] beside the requested [precision] ({!storage_precision}).
+
     [dominant_kernel] measures the report's %-of-peak column (see {!dominant_kernel}); it is called
     once, after the timed steps and the memory reading, unless [BENCH_DOMINANT_KERNEL=0]. Without it
     the line carries [null] there.
@@ -1305,12 +1452,14 @@ let protocol_of_st ~fixture st =
     (the [tune] object's [no_searches] is what tells that apart from a replay — a count of arms
     whose {!Autotune.outcome} was one of the two states that search nothing, rather than an
     inference from two counters that are both zero). *)
-let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
-    ?tokens_per_step ?tune ?(out = Stdio.stdout) ?(checkpoint_out = Stdio.stderr) ?dominant_kernel
-    ~run_step ~read_loss ~sync () =
+let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") ?storage_of
+    ~compile_s ?tokens_per_step ?tune ?(out = Stdio.stdout) ?(checkpoint_out = Stdio.stderr)
+    ?dominant_kernel ~run_step ~read_loss ~sync () =
   let { workload; parity_steps; warmup_steps; timed_steps; fixture } = protocol in
   Stdio.eprintf "bench: compiled in %.1fs, starting %d parity steps\n%!" compile_s parity_steps;
   let dominant_kernel = if dominant_kernel_enabled () then dominant_kernel else None in
+  (* Read now, so a malformed budget fails the cell before it measures anything. *)
+  if Option.is_some dominant_kernel then ignore (dominant_kernel_budget_s () : float);
   let profile = Option.map Utils.active_profile ~f:(fun (_, name, _) -> name) in
   (* Resolved once, so every checkpoint and the result line carry the same record of the regime. *)
   let regime_knobs =
@@ -1393,8 +1542,10 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
   let dominant_kernel = Option.map dominant_kernel ~f:(fun measure -> measure ()) in
   Array.sort synced ~compare:Float.compare;
   let line =
-    Bench_json.result_line ~backend ~variant ~precision ~profile ~regime_knobs ~ambient_resolved
-      ~fp_licences:(fp_licence_record ()) ~workload ~compile_s
+    Bench_json.result_line ~backend ~variant ~precision
+      ?storage_precision:(Option.map storage_of ~f:storage_precision)
+      ~profile ~regime_knobs ~ambient_resolved ~fp_licences:(fp_licence_record ()) ~workload
+      ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
       ~shipped_mma:(mma_wire (step_census routines))
       ?tokens_per_step ?tune:(Option.bind tune ~f:tune_json) ~p10:(percentile synced 10.)
@@ -1459,9 +1610,11 @@ let self_test_leg =
 
     [checkpoint_out] is {!measure_and_emit}'s. [late_probe], when given, runs in place of the
     dominant-kernel instrument — the protocol's last stage — and its result stands in for that
-    column: it is how a test stands a stalled or killed diagnostic where the real one runs. *)
+    column: it is how a test stands a stalled or killed diagnostic where the real one runs.
+    [dominant_kernel_budget_s] and [time_kernel] are {!dominant_kernel}'s [budget_s] and
+    [time_kernel], for the real instrument. *)
 let run_self_test ?(out = Stdio.stdout) ?checkpoint_out ?(leg = self_test_leg) ?late_probe
-    ?inspect_compiled ?inspect_step () =
+    ?dominant_kernel_budget_s ?time_kernel ?inspect_compiled ?inspect_step () =
   let module TDSL = Operation.DSL_modules.TDSL in
   let module IDX = Train.IDX in
   let n_samples = 8 and n_features = 4 and n_hidden = 5 and n_classes = 3 in
@@ -1525,10 +1678,11 @@ let run_self_test ?(out = Stdio.stdout) ?checkpoint_out ?(leg = self_test_leg) ?
      What the self-test guards is the protocol and the emitter, not the search. *)
   let line =
     measure_and_emit ~routines ~protocol:self_test_protocol ~backend ~variant:"self-test" ~compile_s
-      ~out ?checkpoint_out
+      ~storage_of:logits ~out ?checkpoint_out
       ~dominant_kernel:
         (Option.value late_probe ~default:(fun () ->
-             dominant_kernel ~ctx:!ctx_ref ~bindings (step_routines routines)))
+             dominant_kernel ?budget_s:dominant_kernel_budget_s ?time_kernel ~ctx:!ctx_ref ~bindings
+               (step_routines routines)))
       ~run_step
       ~read_loss:(fun () -> (!ctx_ref, loss).@[0])
       ~sync:(fun () -> Context.sync !ctx_ref)
