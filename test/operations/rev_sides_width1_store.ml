@@ -11,20 +11,22 @@
    The concatenation is [(u, v) ++^ "s, b; s, c => s, b^c"] with [b = 2] and [c = 1], so [v] is the
    width-1 operand. The front end emits its gradient scatter only NON-initializing (a backprop
    [=+]), so the initializing flavour is that record with [initialize_neutral] set: same
-   projections. Two cases: - [s] concrete: both targets are proven injective and surjective, so
-   neither gets an init and both get a plain store; - [s] a bound gh-490 symbolic extent: no
-   projection carrying a symbolic extent is proven surjective, so both keep their (guarded) init,
-   but each is still proven injective and gets a plain store.
+   projections. With [s] concrete, both targets are proven injective and surjective, so neither gets
+   an init and both get a plain store. With [s] a bound gh-490 symbolic extent, no projection
+   carrying a symbolic extent is proven surjective, so both keep their (guarded) init, but each is
+   still proven injective and gets a plain store.
 
    Each case is executed three ways, all seeded with the same [cat] gradient, whose every in-extent
    cell [1 + 10 s + j] varies with every symbol of the iteration, and with a per-cell negative
    sentinel in both targets (distinct from every result, so a cell the plain store missed stays
-   visible): - the REFERENCE: an explicit zero [Fetch] of both targets ahead of the NON-initializing
+   visible). The REFERENCE is an explicit zero [Fetch] of both targets ahead of the NON-initializing
    record (the read-add-write form), lowered and linked with every node materialized and no
-   schedule; - the initializing record, the same way (unscheduled); - the initializing record
-   through the real compile path ([Context.compile], the backend's default schedule). Every
-   in-extent target cell of the two initializing runs equals the reference's, which equals the
-   target's slice of [cat]'s gradient. *)
+   schedule. The initializing record runs the same way (unscheduled), and through the real compile
+   path ([Context.compile], the backend's default schedule). Every in-extent target cell of the two
+   initializing runs equals the reference's, which equals the target's slice of [cat]'s gradient.
+
+   A last case keeps the attribution from overreaching: two width-1 targets naming ONE node must
+   still accumulate. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -186,7 +188,63 @@ let case ~label ~rows ~symbolic =
                   how name (Array.sub got ~pos:0 ~len) (Array.sub reference ~pos:0 ~len)
                   ~f:Float.equal)))
 
+(* {1 Two width-1 targets naming one node.} A [Rev_sides] whose two width-1 segments both write the
+   same node: the gradient record of [(a, b) ++^ "s, c; s, d => s, c^d"] with [c = d = 1], its
+   targets replaced by [a]'s gradient twice. (The front end cannot emit it: the gradient of [(w, w)
+   ++^ ...] is refused at lowering as ambiguous.) Each target alone is injective and surjective, but
+   both write every cell: plain stores would keep only the later column, so a node named by more
+   than one target keeps the read-add-write form and its init. *)
+let shared_case () =
+  let label = "shared" and rows = 3 in
+  let%op a = { a = 0.5 } in
+  let%op b = { b = 0.5 } in
+  let%op cat = (a, b) ++^ "s, c; s, d => s, c^d" [ "s"; "c"; "d" ] in
+  Shape.set_dim s rows;
+  Shape.set_dim c 1;
+  Shape.set_dim d 1;
+  let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad in
+  let ga = grad_of a and gcat = grad_of cat in
+  let non_initializing, initializing =
+    match
+      find_rev_sides (Option.value_exn ~here:[%here] cat.Tensor.diff).Tensor.backprop.Asgns.asgns
+    with
+    | Some (Asgns.Accum_op ({ rhs = Asgns.Rev_sides { op; _ }; _ } as r)) ->
+        let rhs = Asgns.Rev_sides { op; lhses = [| Asgns.Node ga; Asgns.Node ga |] } in
+        (Asgns.Accum_op { r with rhs }, Asgns.Accum_op { r with rhs; initialize_neutral = true })
+    | _ -> failwith "expected the concatenation's Rev_sides gradient"
+  in
+  let wr = writes_of ~tn:ga (Asgns.to_low_level initializing) in
+  p
+    (label ^ ": the initializing scatter accumulates into the shared node, with no plain store")
+    (wr.read_add_writes > 0 && wr.plain_stores = 0);
+  p (label ^ ": the shared node keeps an init pass") (wr.inits > 0);
+  List.iter [ ga; gcat ] ~f:Ll_test.materialize;
+  let materialized = [ ga; gcat ] in
+  let link ~name asgns =
+    Ll_test.link ~name (Ll_test.optimize ~materialized ~name (Asgns.to_low_level asgns))
+  in
+  let zero = Asgns.Fetch { array = ga; fetch_op = Asgns.Constant 0.; dims = ga.Tn.dims } in
+  let run linked =
+    let ctx =
+      Ll_test.run_linked linked
+        ~seed:
+          [
+            (gcat, Array.init (rows * 2) ~f:(fun i -> in_extent_cell (i / 2) (i % 2)));
+            (ga, prior rows);
+          ]
+    in
+    Context.get_values ctx ga
+  in
+  let reference = run (link ~name:"shared_reference" (Asgns.Seq (zero, non_initializing))) in
+  pf_all2 "%s: the reference sums both columns of cat's gradient" label reference
+    (Array.init rows ~f:(fun s -> in_extent_cell s 0 +. in_extent_cell s 1))
+    ~f:Float.equal;
+  pf_all2 "%s: the initializing scatter equals the reference" label
+    (run (link ~name:"shared_unscheduled" initializing))
+    reference ~f:Float.equal
+
 let () =
   Tensor.unsafe_reinitialize ();
   case ~label:"concrete" ~rows:3 ~symbolic:false;
-  case ~label:"symbolic" ~rows:4 ~symbolic:true
+  case ~label:"symbolic" ~rows:4 ~symbolic:true;
+  shared_case ()

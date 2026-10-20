@@ -536,7 +536,10 @@ files.
   segment's target indexes that axis at `Fixed_idx 0` and never mentions its symbol, so
   `loop_accum_rev` attributes it by rewriting a dimension-1 `Fixed_idx 0` axis of its view to
   `Iterator selected` (the same index, the symbol ranging over `[0]`); otherwise it was never proven
-  injective and got read-add-write plus an init (`test/operations/rev_sides_width1_store.ml`). Static/runtime
+  injective and got read-add-write plus an init (`test/operations/rev_sides_width1_store.ml`).
+  Each target's queries see only that target's writes, so a node named by two targets (a
+  hand-built `lhses = [| Node t; Node t |]`) is never attributed: two plain stores would drop one
+  contribution. Static/runtime
   extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
   scatters against explicit neutral initialization.
 

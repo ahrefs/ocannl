@@ -815,8 +815,14 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           let target_dims = projections.rhs_dims.(i) in
           (* Keep inactive symbols in the domain: removing one would make the source availability
              proof mistake it for an always-available static parameter. *)
+          (* Each target's queries judge that target's writes alone, so they are sound only when no
+             other target writes the same node: [(t, t) ++^ ...] scatters both segments into one
+             gradient, and two plain stores would keep only the later contribution. A node named
+             by more than one target keeps the read-add-write form and its init. *)
+          let shared = Array.existsi lhses ~f:(fun j buf -> j <> i && equal_buffer buf lhses.(i)) in
           let attributed =
             match selector with
+            | _ when shared -> None
             | None -> Some project_lhs
             | Some syms ->
                 let selected = syms.(i) in

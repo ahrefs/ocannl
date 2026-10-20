@@ -30,3 +30,7 @@ symbolic at extent 4, unscheduled initializing scatter: u equals the reference: 
 symbolic at extent 4, unscheduled initializing scatter: v equals the reference: true
 symbolic at extent 4, scheduled initializing scatter: u equals the reference: true
 symbolic at extent 4, scheduled initializing scatter: v equals the reference: true
+shared: the initializing scatter accumulates into the shared node, with no plain store: true
+shared: the shared node keeps an init pass: true
+shared: the reference sums both columns of cat's gradient: true
+shared: the initializing scatter equals the reference: true
