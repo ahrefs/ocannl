@@ -115,18 +115,27 @@ shift 2
 export GH_TOKEN=fixture-switch-token FOO_API_KEY=fixture-switch-key
 exec "$@"
 EOF
+# The default command's two dune builds, the formatter and the repository scans (gh-ocannl-1321),
+# each recorded in FAKE_DUNE_LOG; FAKE_FMT_EXIT and FAKE_SCANS_EXIT make either one fail.
 cat >"$fake_switch/dune" <<'EOF'
 #!/usr/bin/env bash
-[ "$*" = "build @fmt --force" ] || { echo "unexpected dune argv: $*" >&2; exit 5; }
+case "$*" in
+  "build @fmt --force") step=fmt status=${FAKE_FMT_EXIT:-0} ;;
+  "build @test/operations/scans") step=scans status=${FAKE_SCANS_EXIT:-0} ;;
+  *) echo "unexpected dune argv: $*" >&2; exit 5 ;;
+esac
 [ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo "credentials reached dune" >&2; exit 3; }
 [ "${FMT_CHECK_PLAIN:-}" = kept ] || { echo "the plain variable did not reach dune" >&2; exit 4; }
+[ -z "${FAKE_DUNE_LOG:-}" ] || echo "$step" >>"$FAKE_DUNE_LOG"
+exit "$status"
 EOF
 chmod +x "$fake_switch/opam" "$fake_switch/dune"
-awk '/^  set -- opam exec -- sh -c / { print "  set -- opam exec -- dune build @fmt --force"; getline; next } { print }' \
+awk '/^  scrubbed_command=\(opam exec -- sh -c / { print "  scrubbed_command=(opam exec -- \"$@\")"; getline; next } { print }' \
   "$subject" >"$fixture_dir/fmt-check-bare.sh"
 chmod +x "$fixture_dir/fmt-check-bare.sh"
 got=0
-FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" "$subject" >"$fixture_dir/switch.log" 2>&1 || got=$?
+OCANNL_TOOL_FMT_CHECK_SCANS=1 FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" "$subject" \
+  >"$fixture_dir/switch.log" 2>&1 || got=$?
 if [ "$got" -eq 0 ]; then
   report 0 "the default command's dune runs without credentials the opam switch sets"
 else
@@ -138,14 +147,70 @@ if cmp -s "$subject" "$fixture_dir/fmt-check-bare.sh"; then
   report 1 "negative control: a bare opam exec hands dune the switch's credentials" \
     "the default command could not be replaced in $subject"
 else
-  FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" "$fixture_dir/fmt-check-bare.sh" \
-    >"$fixture_dir/switch-bare.log" 2>&1 || got=$?
+  OCANNL_TOOL_FMT_CHECK_SCANS=1 FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" \
+    "$fixture_dir/fmt-check-bare.sh" >"$fixture_dir/switch-bare.log" 2>&1 || got=$?
   if [ "$got" -eq 3 ]; then
     report 0 "negative control: a bare opam exec hands dune the switch's credentials"
   else
     report 1 "negative control: a bare opam exec hands dune the switch's credentials" \
       "exited $got; see $fixture_dir/switch-bare.log"
   fi
+fi
+
+# The repository scans are the default command's second step (gh-ocannl-1321): built after a clean
+# formatter run, their failure is the verdict, OCANNL_TOOL_FMT_CHECK_SCANS=0 skips them and says
+# so, any other value is refused, a formatter failure stops before them, and a command given as
+# arguments runs alone. FAKE_DUNE_LOG records which builds ran, in order.
+scans_leg() { # LABEL WANT_RC WANT_STEPS VERDICT_PREFIX [env ARG...] -- runs the default command
+  local label=$1 want=$2 steps=$3 prefix=$4 got=0 ran last
+  shift 4
+  : >"$fixture_dir/dune-steps.log"
+  # The caller's words first: `env` reads its `-u` options only before the first assignment.
+  env "$@" FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" \
+    FAKE_DUNE_LOG="$fixture_dir/dune-steps.log" "$subject" >"$fixture_dir/scans-leg.log" 2>&1 \
+    || got=$?
+  ran=$(tr '\n' ' ' <"$fixture_dir/dune-steps.log")
+  last=$(sed -n '$p' "$fixture_dir/scans-leg.log")
+  if [ "$got" -eq "$want" ] && [ "$ran" = "$steps" ]; then
+    case $last in
+      "$prefix"*) report 0 "$label" ;;
+      *) report 1 "$label" "last line: $last" ;;
+    esac
+  else
+    report 1 "$label" \
+      "exited $got (want $want), dune ran [$ran] (want [$steps]); see $fixture_dir/scans-leg.log"
+  fi
+}
+scans_leg "the default command builds the scans after the formatter, and passes" \
+  0 "fmt scans " "fmt-check: PASSED" OCANNL_TOOL_FMT_CHECK_SCANS=1
+if grep -Eq '^fmt-check: the repository scans took [0-9]+ s$' "$fixture_dir/scans-leg.log"; then
+  report 0 "the scans step reports its cost"
+else
+  report 1 "the scans step reports its cost" "see $fixture_dir/scans-leg.log"
+fi
+scans_leg "unset, the scans setting defaults to building them" \
+  0 "fmt scans " "fmt-check: PASSED" -u OCANNL_TOOL_FMT_CHECK_SCANS
+scans_leg "a scan failure is the verdict" \
+  1 "fmt scans " "fmt-check: FAILED (exit 1): the repository scans failed" \
+  OCANNL_TOOL_FMT_CHECK_SCANS=1 FAKE_SCANS_EXIT=1
+scans_leg "OCANNL_TOOL_FMT_CHECK_SCANS=0 skips the scans, and says so" \
+  0 "fmt " "fmt-check: PASSED (repository scans skipped" \
+  OCANNL_TOOL_FMT_CHECK_SCANS=0 FAKE_SCANS_EXIT=1
+scans_leg "any other scans setting is refused before dune runs" \
+  2 "" "fmt-check: FAILED (exit 2): OCANNL_TOOL_FMT_CHECK_SCANS is 0" OCANNL_TOOL_FMT_CHECK_SCANS=yes
+scans_leg "a formatter failure stops before the scans" \
+  7 "fmt " "fmt-check: FAILED (exit 7): the formatter command failed" \
+  OCANNL_TOOL_FMT_CHECK_SCANS=1 FAKE_FMT_EXIT=7
+got=0
+: >"$fixture_dir/dune-steps.log"
+env OCANNL_TOOL_FMT_CHECK_SCANS=1 FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" \
+  FAKE_DUNE_LOG="$fixture_dir/dune-steps.log" "$subject" dune build @fmt --force \
+  >"$fixture_dir/explicit.log" 2>&1 || got=$?
+if [ "$got" -eq 0 ] && [ "$(tr '\n' ' ' <"$fixture_dir/dune-steps.log")" = "fmt " ]; then
+  report 0 "a command given as arguments runs alone, without the scans"
+else
+  report 1 "a command given as arguments runs alone, without the scans" \
+    "exited $got; see $fixture_dir/explicit.log"
 fi
 
 # A real project whose only fault is an invalid doc comment in otherwise

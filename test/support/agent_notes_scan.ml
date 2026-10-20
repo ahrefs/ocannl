@@ -69,6 +69,9 @@
       there strands a reader mid-run (gh-ocannl-1111). A bare basename is a notes file; a path
       through [docs/agent-notes/] is resolved the same way, and a path anywhere else, or a name a
       shell expansion builds (one carrying [$]), is not a pointer into the notes and is not read.
+      The OCaml sources under [test/] are a third source, read through their string literals only
+      (gh-ocannl-1358): a scanner prints its refusals from them, and a refusal pointing at a renamed
+      heading strands whoever trips it exactly as a script's message does.
 
     {1 What it deliberately does not read}
 
@@ -1965,6 +1968,59 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
                       them)"
                      p.path p.anchor ("docs/" ^ target) ("docs/" ^ target))))
 
+(** The string literals of an OCaml source, each with the line it opens on, as the compiler decodes
+    them: a continuation spelled over two lines arrives joined, and [{|…|}] and ["…"] alike
+    (gh-ocannl-1358). What a scanner under [test/] prints, it prints from these, so a pointer in a
+    refusal is read whole even where its literal is continued across source lines inside the
+    pointer, which a reading of the raw text would see cut short and refuse.
+
+    Literals only. Comments and attributes, docstrings included, are not read: their pointers reach
+    no one running the scan, and the scan's own sources would have to be told apart from their
+    commentary about pointers (this file's comments quote cut and placeholder pointers on purpose).
+    Raises when [contents] does not parse; {!check_source} turns that into a finding. *)
+let source_literals contents =
+  let found = ref [] in
+  let collector =
+    object
+      inherit Ppxlib.Ast_traverse.iter as super
+      method! attribute _ = ()
+
+      method! constant c =
+        (match c with
+        | Ppxlib.Pconst_string (value, loc, _) ->
+            found := (loc.Ppxlib.loc_start.Ppxlib.pos_lnum, value) :: !found
+        | _ -> ());
+        super#constant c
+    end
+  in
+  collector#structure (Ppxlib.Parse.implementation (Stdlib.Lexing.from_string contents));
+  List.rev !found
+
+(** Every pointer in [contents]'s string literals, as {!guide_pointers} reads each literal. *)
+let source_pointers contents =
+  List.concat_map (source_literals contents) ~f:(fun (_, text) -> guide_pointers text)
+
+(** Rule 7 over one OCaml source: each string literal is a pointer source of its own, and a finding
+    names the line the literal opens on. A source that does not parse is a finding too, since a scan
+    that cannot read a file must not report it clean. *)
+let check_source ~source_file ~source_contents ~index_file ~index_contents
+    ~(files : (string * string) list) =
+  match source_literals source_contents with
+  | exception exn ->
+      [
+        file_finding ~file:source_file ~rule:rule_guide_anchors
+          (Printf.sprintf
+             "does not parse as OCaml, so its string literals cannot be read for pointers into the \
+              notes: %s"
+             (Exn.to_string exn));
+      ]
+  | literals ->
+      List.concat_map literals ~f:(fun (line, text) ->
+          check_guide ~guide_file:source_file ~guide_contents:text ~index_file ~index_contents
+            ~files
+          |> List.map ~f:(fun (f : finding) ->
+              { f with line = Some line; where = Printf.sprintf "%s:%d" source_file line }))
+
 (* ------------------------------------------------------------------ *)
 (* The whole scan *)
 (* ------------------------------------------------------------------ *)
@@ -1985,11 +2041,12 @@ let in_rule_order found =
   @ unnamed
 
 (** Every rule, over an index and the files it indexes, and over the pointers into them from each of
-    [guides] — [(name, contents)] pairs: the agent guide and the [tools/] scripts. Findings come
-    back in {!in_rule_order} -- grouped by rule in {!rules} order, and within a rule in file and
-    line order, with any finding carrying an unnamed rule last. [files] is keyed as {!check_index}
-    describes. *)
-let check_all ?(guides = []) ~index_file ~index_contents ~(files : (string * string) list) () =
+    [guides] — [(name, contents)] pairs: the agent guide and the [tools/] scripts — and from the
+    string literals of each of [sources], OCaml sources as [(name, contents)]. Findings come back in
+    {!in_rule_order} -- grouped by rule in {!rules} order, and within a rule in file and line order,
+    with any finding carrying an unnamed rule last. [files] is keyed as {!check_index} describes. *)
+let check_all ?(guides = []) ?(sources = []) ~index_file ~index_contents
+    ~(files : (string * string) list) () =
   let all = (index_file, index_contents) :: files in
   let structure = List.concat_map all ~f:(fun (file, c) -> check_structure ~file c) in
   let table = List.concat_map all ~f:(fun (file, c) -> check_tables ~file c) in
@@ -2000,6 +2057,8 @@ let check_all ?(guides = []) ~index_file ~index_contents ~(files : (string * str
   let guide =
     List.concat_map guides ~f:(fun (guide_file, guide_contents) ->
         check_guide ~guide_file ~guide_contents ~index_file ~index_contents ~files)
+    @ List.concat_map sources ~f:(fun (source_file, source_contents) ->
+        check_source ~source_file ~source_contents ~index_file ~index_contents ~files)
   in
   let found = structure @ table @ index @ repetition @ citations @ guide in
   (bullets, in_rule_order found)

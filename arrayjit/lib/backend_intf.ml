@@ -96,7 +96,7 @@ type mma_input_format =
       (** OCANNL's single fp8 today ([Ops.Fp8_prec], e5m2). An e4m3 constructor slots in here when
           the precision exists (gh-ocannl-481 item 2); descriptor entries are keyed per operand
           pair, so mixed e5m2×e4m3 combinations need no interface change. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 
 (** A physical layout the backend's tensor-core loads can consume for a cooperatively staged operand
     tile, beyond the plain row-major one (gh-ocannl-481 item 3, D3). *)
@@ -106,7 +106,7 @@ type mma_staged_layout =
           [ldmatrix.sync.aligned.m8n8] or swizzle-aware byte gathers where [ldmatrix.b16] cannot
           form the register. Metal banks too but has no [ldmatrix] analogue; a later [simdgroup]-era
           entry would reuse this type. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 
 (** Where a tensor-unit rendering keeps its accumulator. The distinction is observable whenever a
     reduction is split into outer [k] blocks: {!Mma_per_statement} crosses only the intrinsic's own
@@ -189,7 +189,7 @@ type mma_capability = {
           sm_80+, phase 2, the [cp.async] arm); HIP stays empty until its LDS async-copy arm lands.
           Empty on CPU backends (cooperative staging is not renderable there). *)
 }
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 (** Tensor-core capability descriptor (docs/proposals/tensorize-mma.md §6). Which operand precisions
     are supported is decided per call by the backend's [mma_syntax] hook (the emission is the source
     of truth); this record carries what schedule construction needs. *)
@@ -277,21 +277,21 @@ type hardware_limits = {
   mma : mma_capability option;
       (** Tile-MMA units ([simdgroup_matrix] / tensor cores); [None] when the backend has none wired
           — [Tile_mma] statements then render their scalar fallback. *)
-  simd_vector_bytes : int;
-      (** Vector register width in bytes used by the C backends' explicit vector-extension
-          renderings ([Vectorized] loops, the register-tiled [Tile_mma] micro-kernel); [0] when the
-          backend does no such rendering (GPU backends bind hardware axes instead). Carried here so
-          schedule construction (autotune's seeding pre-filter, gh-ocannl-479) can statically rule
-          out candidates the renderer must decline, e.g. a micro-kernel column extent below one
-          vector's lane count. *)
-  simd_vector_registers : int;
-      (** How many vector registers that file has: 32 on AArch64 and on AVX-512 targets (at every
-          [simd_vector_bytes], since AVX-512VL gives the narrower forms the same 32), 16 on other
-          x86 targets (SSE, AVX2) -- the target the kernels are compiled for, probed under their
-          flags. [0] wherever [simd_vector_bytes] is [0]. Keyed separately from the width because a
-          16-byte file is 32 registers on NEON and 16 on SSE: {!Register_tile.rn_cap} fits the
-          register tile's columns to this count (gh-ocannl-1285), and the seeding and the renderer
-          must read the same one. *)
+  simd_vector : Vector_file.t;
+      (** The vector register file of the C backends' explicit vector-extension renderings
+          ([Vectorized] loops, the register-tiled [Tile_mma] micro-kernel): its width in bytes and
+          its register count, one value so that neither can be stated without the other
+          (gh-ocannl-1399). {!Vector_file.none} when the backend does no such rendering (GPU
+          backends bind hardware axes instead). Carried here so schedule construction (autotune's
+          seeding pre-filter, gh-ocannl-479) can statically rule out candidates the renderer must
+          decline, e.g. a micro-kernel column extent below one vector's lane count.
+
+          The count is 32 on AArch64 and on AVX-512 targets (at every width, since AVX-512VL gives
+          the narrower forms the same 32), 16 on other x86 targets (SSE, AVX2) -- the target the
+          kernels are compiled for, probed under their flags. It is not a function of the width: a
+          16-byte file is 32 registers on NEON and 16 on SSE, and {!Register_tile.rn_cap} fits the
+          register tile's columns to the count (gh-ocannl-1285), so the seeding and the renderer
+          must read the same file. *)
   peak_flops : float option;
       (** Advisory peak arithmetic throughput in FLOP/s (single-precision, FMA counted as two), the
           hardware envelope of the analytic cost model (gh-ocannl-491): rough documented constants
@@ -404,7 +404,7 @@ type hardware_limits = {
           ["auto"] resolves to is a per-machine fact, and crowns do not transfer across machines
           either. [None] where the backend has no such knobs. *)
 }
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of]
 
 (** Equality of the [(a-operand, b-operand, accumulator)] format triple that keys
     {!field-mma_capability.mma_format_tiles} and {!field-mma_capability.mma_staged_layouts}. All
@@ -714,8 +714,7 @@ let no_hardware_limits =
     max_workgroup_dims = None;
     max_grid_yz = None;
     mma = None;
-    simd_vector_bytes = 0;
-    simd_vector_registers = 0;
+    simd_vector = Vector_file.none;
     peak_flops = None;
     peak_memory_bandwidth = None;
     cache_capacity_bytes = None;
@@ -761,8 +760,7 @@ module Limits_key = struct
     max_workgroup_dims : (int * int * int) option;
     max_grid_yz : int option;
     mma : mma_capability option;
-    simd_vector_bytes : int;
-    simd_vector_registers : int;
+    simd_vector : Vector_file.t;
     peak_flops : float option;
     peak_memory_bandwidth : float option;
     native_fp16_arithmetic : bool;
@@ -790,8 +788,7 @@ let limits_key
        max_workgroup_dims;
        max_grid_yz;
        mma;
-       simd_vector_bytes;
-       simd_vector_registers;
+       simd_vector;
        peak_flops;
        peak_memory_bandwidth;
        cache_capacity_bytes = _;
@@ -814,8 +811,7 @@ let limits_key
     max_workgroup_dims;
     max_grid_yz;
     mma;
-    simd_vector_bytes;
-    simd_vector_registers;
+    simd_vector;
     peak_flops;
     peak_memory_bandwidth;
     native_fp16_arithmetic;

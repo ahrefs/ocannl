@@ -68,7 +68,7 @@ let bm, bk = (16, 16)
    wider than the ones it lists. GPU backends report 0 bytes and never reach this. *)
 let half_vec_typ =
   let simd_vector_bytes =
-    (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.simd_vector_bytes
+    (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.simd_vector.bytes
   in
   Printf.sprintf "ocannl_vec%dh"
     (Option.value ~default:0

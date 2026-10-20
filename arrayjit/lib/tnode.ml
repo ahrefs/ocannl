@@ -35,7 +35,7 @@ type memory_mode =
           function calls. It is available for merging across devices (for devices that support
           merging / P2P). CPU-side access (printing, persistence, inspection) is on-demand via
           context-mediated device-to-host transfers; no host copy is stored on the node. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of, equal]
 
 (** Why a memory mode was requested or decided (gh-ocannl-609).
 
@@ -100,7 +100,7 @@ let rec leading_provenance = function
       p
 
 type delayed_prec = Default of Ops.prec | Inferred of Ops.prec Lazy.t | Specified of Ops.prec
-[@@deriving sexp, equal]
+[@@deriving sexp_of]
 
 (** Per-tensor scalar value bounds: the interprocedural layer of the interval analysis
     (docs/proposals/interval-analysis-scalar-t.md), the third instance of the {!delayed_prec}
@@ -120,7 +120,7 @@ type bounds_state =
   | Bounds_proposed of Interval.t  (** Join of all proposals so far. *)
   | Bounds_settled of Interval.t
       (** Consumed by a guard fold; subsequent proposals must fit or raise. *)
-[@@deriving sexp, equal]
+[@@deriving sexp_of]
 
 let default_namespace = "ocannl"
 

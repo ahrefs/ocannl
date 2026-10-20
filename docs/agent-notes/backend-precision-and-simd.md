@@ -1123,7 +1123,7 @@ files.
   `Mma_scalar_fallback` plus a warning naming it — it is never approximated, so the "read the
   bracket, not the variant name" rule above answers the flag too. **Three ways a timing can be
   recorded under a geometry that did not produce it, and the three guards**: the backend has no
-  register-tiled rendering at all (`simd_vector_bytes = 0`, every GPU backend) or the run's variants
+  register-tiled rendering at all (a 0-byte `simd_vector`, every GPU backend) or the run's variants
   do not carry `?tile` (`schedule_bench`'s shared branch) — both refused before the header prints;
   the geometry reached the renderer and was declined — the census bracket plus the fallback warning;
   and every tile-bearing variant was SKIPPED (an unschedulable `n`, a degenerate extent) — a
@@ -1749,11 +1749,10 @@ files.
   render at 32 (AVX2) or 64 (AVX-512). A claim that silently depends on the width agrees with the
   device by coincidence on ARM and meets the disagreement first in CI. staging#1094 is
   the worked case: on cc, `schedule_strided_1x1` adds a seed population minted under a pinned
-  `simd_vector_bytes = 16` record, codegen renders those seeds at the configured width, and at 32
-  bytes their widest register tiles (128x128x128, 64x128x256) decline to the scalar fallback. Its
-  new census claim (every tensorized seed renders tensorized) passed locally and failed four claims
-  on the ubuntu leg; rerun on ARM at that pre-fix commit (18307f22b), it passes unforced and fails
-  the same four at `OCANNL_CC_VECTOR_BYTES=32` (whether the decline is intended: gh-ocannl-1317).
+  16-byte width, and codegen renders those seeds at the configured one. Its census claim (every
+  tensorized seed renders tensorized) passed on ARM and failed four claims on the ubuntu leg, where
+  a 16-byte geometry was not then a width the 32-byte file rendered; the same four failed on ARM at
+  `OCANNL_CC_VECTOR_BYTES=32`. (Since gh-ocannl-1317 it is, and the claim covers that population.)
   So a change to a cc mma or register-tile census claim, a `Register_tile` geometry claim or a SIMD
   rendering test gets one more targeted run of the affected aliases at 32. Pinning a
   `hardware_limits` record in the test does not make it width-independent, as staging#1094 shows:
@@ -1780,18 +1779,26 @@ files.
   cosmetic — degrading below the machine's pre-widening width would newly vectorize loops that
   render serially today, and a vector accumulation reassociates, so that is a numerics change
   rather than a scheduling one. Autotune's seeding pre-filter calls the same function, or it would
-  withhold candidates the renderer would in fact tile.
+  withhold candidates the renderer would in fact tile. The ladder is what the MODEL ranks; a
+  register-tile geometry a schedule REQUESTS may name any narrower file's width too
+  (`Register_tile.renderable_lanes`, gh-ocannl-1317): a seed or a tuned schedule minted at 16 bytes
+  keeps its tile on a 32- or 64-byte machine instead of declining to the scalar fallback, under
+  the same register budget, since a narrower vector is the low part of the same register. The
+  converse declines: a wider width than the file's is no width it renders.
 - **The register tile's column cap is fitted to the register COUNT, by the resident floor**
   (gh-ocannl-1285). `Register_tile.live_registers` (`rm*rn + rm + rn`) is the model's pressure
   proxy and over-counts: no allocation holds every A splat and every B row of a k step at once.
   `resident_floor` (`rm*rn + min rm rn + 1`) is the physical count, the one the census's resident
   claim holds, and `rn_cap` takes the widest 4-row tile it fits into
-  `hardware_limits.simd_vector_registers` (cc: `Cc_backend.vector_registers_setting`, probed under
+  `hardware_limits.simd_vector.registers` (cc: `Cc_backend.vector_file_setting`, probed under
   the kernel flags and divided where `cc_vector_bytes` is wider than a native register; the
-  renderer reads the same count through `C_syntax_config.vector_registers`). So 4x6's "34" on a
+  renderer reads the same file through `C_syntax_config.vector_file`). So 4x6's "34" on a
   32-register file is not a spill: at tail-free AVX-512 sites (f32 n = 96/192/384) 4x6 beat 4x5
-  and 4x4 in 75/100 serial pairs on Zen 5, 67/100 on NEON. A synthetic limits record that sets
-  `simd_vector_bytes` must set the register count too, or the register tile seeds nothing.
+  and 4x4 in 75/100 serial pairs on Zen 5, 67/100 on NEON. Width and count are one value,
+  `Ir.Vector_file.t` (gh-ocannl-1399), in the limits record, the config module and every
+  `Register_tile` entry point that reads both: as two fields, a record or config module that set
+  the width inherited a count of 0 from its base, and `rn_cap 0 = 0` silently seeded and rendered
+  no register tile. Keep it that way: a new reader of both takes the file, not two ints.
 - **The register tile's edges are register tiles, never scalar code** (gh-ocannl-620). Until then
   `try_register_tile` peeled the columns `rn * lanes` did not cover, and the rows `rm` did not, to
   scalar `fmaf` loops: a scalar column cost about a vector slot per k step, so a 48-wide fp16 tile

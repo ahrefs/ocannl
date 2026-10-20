@@ -201,14 +201,19 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
   let min_compute_capability =
     let cc =
       lazy
-        (let n = num_devices () in
-         if n = 0 then 0
-         else
-           Array.init n ~f:(fun ordinal ->
-               let a : Cu.Device.attributes = Cu.Device.get_attributes (Cu.Device.get ~ordinal) in
-               (a.compute_capability_major * 10) + a.compute_capability_minor)
-           |> Array.min_elt ~compare:Int.compare
-           |> Option.value ~default:0)
+        ((* Device discovery a compile can force first: under the device-init deadline
+            (gh-ocannl-1281, [Backends.With_device_init_deadline]). *)
+         Utils.with_device_init_deadline ~backend_name:name (fun () ->
+             let n = num_devices () in
+             if n = 0 then 0
+             else
+               Array.init n ~f:(fun ordinal ->
+                   let a : Cu.Device.attributes =
+                     Cu.Device.get_attributes (Cu.Device.get ~ordinal)
+                   in
+                   (a.compute_capability_major * 10) + a.compute_capability_minor)
+               |> Array.min_elt ~compare:Int.compare
+               |> Option.value ~default:0))
     in
     fun () -> Lazy.force cc
 
@@ -1839,8 +1844,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               [Cuda_mma.capability], whose cutoffs are tested against the arm floors of the hooks
               below on both sides of each one (gh-ocannl-1214). *)
            mma = Cuda_mma.capability ~cc:(min_compute_capability ());
-           simd_vector_bytes = 0;
-           simd_vector_registers = 0;
+           simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)

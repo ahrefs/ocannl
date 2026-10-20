@@ -1,0 +1,22 @@
+stats: the matmul's accumulation nest is Grid-typed: true
+stats: the statistics stay scratch: true
+stats: the statistics' consumer keeps its Grid: true
+stats: every Grid loop renders on the pool: true
+stats: values equal the unscheduled compile's, bit for bit: true
+rowstats: the statistics are scratch: true
+rowstats: the statistics' nest is Grid-typed: true
+rowstats: their consumer keeps its Grid: true
+rowstats: every Grid loop renders on the pool: true
+rowstats: values equal the unscheduled compile's, bit for bit: true
+chain: every product's accumulation nest is Grid-typed: true
+chain: the first two products stay scratch: true
+chain: every Grid loop renders on the pool: true
+chain: values equal the unscheduled compile's, bit for bit: true
+transposed: the product is scratch: true
+transposed: the consumer keeps its Grid: true
+transposed: the scratch producer stays serial: true
+transposed: every Grid loop renders on the pool: true
+transposed: values equal the unscheduled compile's, bit for bit: true
+solo: the accumulated node is scratch: true
+solo: the preceding nest keeps its Grid: true
+solo: the serial unit stays serial: true

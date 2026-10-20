@@ -193,6 +193,8 @@
 ; The complete bigram training/generation tutorial belongs beside the other toy integrations.
 
 (executable
+ ; cc-vector-width: independent -- at rounds:0 the width reshapes only register tiles, which keep
+ ; each cell's summation order.
  (name bigram)
  (modules bigram)
  (libraries ocannl dataprep arrayjit.verdict)
@@ -321,6 +323,8 @@
 ; dispatches).
 
 (executable
+ ; cc-vector-width: independent -- loss thresholds well inside the trained regime; the golden prints
+ ; no computed number.
  (name circles_conv)
  (modules circles_conv)
  (libraries ocannl dataprep arrayjit.verdict training_golden)
@@ -414,6 +418,8 @@
 ; (materialized intermediates + Autotune.tune).
 
 (executable
+ ; cc-vector-width: independent -- loss and accuracy thresholds; the golden prints no computed
+ ; number.
  (name fsm_transformer)
  (modules fsm_transformer)
  (libraries ocannl arrayjit.verdict training_golden)
@@ -458,6 +464,8 @@
 ; the diff passing, since a wrong backend would pass against the same golden.
 
 (executable
+ ; cc-vector-width: independent -- at rounds:0 the width reshapes only register tiles, which keep
+ ; each cell's summation order.
  (name transformer_names)
  (modules transformer_names)
  (libraries ocannl dataprep arrayjit.verdict training_golden)
@@ -505,6 +513,18 @@
  (name bench_circles_step)
  (modules bench_circles_step)
  (libraries ocannl dataprep unix ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; bench_mlp_bn_step is a manual diagnostic (not a test): the mlp_bn_names training step through the
+; untuned default pipeline, its segment census and steady-state per-step timing
+; (benchmarks/gh1343_ab.sh drives it before/after gh-ocannl-1343). Run from test/config or
+; benchmarks/.
+
+(executable
+ (name bench_mlp_bn_step)
+ (modules bench_mlp_bn_step)
+ (libraries base ocannl stdio dataprep unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

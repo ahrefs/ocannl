@@ -2,16 +2,17 @@
    through the actual backend codegen path ([C_syntax.compile_proc]).
 
    - A [Vectorized] loop renders as the backend's vectorization pragmas followed by a plain serial
-   [for] under [Pure_C_config] (whose [vector_bytes = 0] disables explicit SIMD); with
+   [for] under [Pure_C_config] (whose 0-byte [vector_file] disables explicit SIMD); with
    [vectorize_pragma = []] (the GPU configs' choice) it renders as the plain serial loop — the legal
-   fallback. - With [vector_bytes > 0] (the cc backend's default), an eligible [Vectorized] body
-   renders via GCC/Clang vector extensions: typedef + vector loads/arithmetic/stores in lanes-sized
-   chunks, a splat for lane-uniform stores, and a serial remainder loop; ineligible bodies (e.g. a
-   non-contiguous access) keep the pragma rendering. - Materialized kernel parameters carry the
-   [restrict] qualifier; local stack arrays carry the SIMD alignment attribute. - A slice-alias
-   tnode reaching the parameter list is rejected loudly: with [restrict] an aliased parent+view
-   parameter pair would be a miscompile, not just a redundant pointer. Assignments lowering never
-   produces one, but hand-built IR (schedule layer, tests) could. *)
+   fallback. - With a nonzero [vector_file] width (the cc backend's default), an eligible
+   [Vectorized] body renders via GCC/Clang vector extensions: typedef + vector
+   loads/arithmetic/stores in lanes-sized chunks, a splat for lane-uniform stores, and a serial
+   remainder loop; ineligible bodies (e.g. a non-contiguous access) keep the pragma rendering. -
+   Materialized kernel parameters carry the [restrict] qualifier; local stack arrays carry the SIMD
+   alignment attribute. - A slice-alias tnode reaching the parameter list is rejected loudly: with
+   [restrict] an aliased parent+view parameter pair would be a miscompile, not just a redundant
+   pointer. Assignments lowering never produces one, but hand-built IR (schedule layer, tests)
+   could. *)
 
 open Base
 module Tn = Ir.Tnode
@@ -113,8 +114,8 @@ let () =
   PPrint.ToChannel.pretty 0.9 100 Stdio.stdout doc3;
   Stdio.printf "\n";
 
-  (* --- Explicit SIMD emission with [vector_bytes = 32]: an eligible elementwise body renders as
-     vector-extension code (8 float lanes); the lane-uniform constant store splats. --- *)
+  (* --- Explicit SIMD emission with a 32-byte [vector_file]: an eligible elementwise body renders
+     as vector-extension code (8 float lanes); the lane-uniform constant store splats. --- *)
   let compile_with_vector_config ~name optimized =
     let module Syntax = Ir.C_syntax.C_syntax (struct
       include Ir.C_syntax.Pure_C_config (struct
@@ -122,8 +123,7 @@ let () =
         let full_printf_support = true
       end)
 
-      let vector_bytes = 32
-      let vector_registers = 16
+      let vector_file = { Ir.Vector_file.bytes = 32; registers = 16 }
     end) in
     let _kparams, doc, _launch = Syntax.compile_proc ~name [] optimized in
     doc

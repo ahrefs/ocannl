@@ -187,6 +187,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test cost_model_reuse: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test cpu_parallel: Ir.Schedule.apply
+  test/operations/dune, test cpu_scratch_matmul_grid: Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules
   test/operations/dune, test cpu_simd_reduction: Ir.Schedule.apply
   test/operations/dune, test cpu_vectorized: Ir.Schedule.apply
   test/operations/dune, test epilogue_fusion_mma_seeds: Ir.Schedule.apply
@@ -255,28 +256,82 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
 
 Programs reading the cc vector width, every rule running which declares or pins `OCANNL_CC_VECTOR_BYTES`
 (gh-ocannl-1320):
-  (the `Cc_backend` values reaching `cc_vector_bytes`: codegen_tag, host_capabilities, vector_bytes_setting, vector_registers_setting)
-  (the device-limits fields they fill in arrayjit/lib/schedulers.ml: codegen_tag, simd_vector_bytes, simd_vector_registers)
+  (the `Cc_backend` values reaching `cc_vector_bytes`: codegen_tag, host_capabilities, vector_bytes_setting, vector_file_setting)
+  (the device-limits fields they fill in arrayjit/lib/schedulers.ml: codegen_tag, simd_vector)
   (the record type of those fields, whose every label marks a limits update, in arrayjit/lib/backend_intf.ml: hardware_limits)
-  bin/dune, executable narrow_gebp_bench: narrow_gebp_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
-  bin/dune, executable schedule_bench: schedule_bench.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
-  test/operations/dune, executable autotune_fission_sketch: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, executable limits_field_classes: limits_field_classes.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
-  test/operations/dune, test autotune_budget: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, test autotune_budget_unfloored: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, test autotune_staffed_singles: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_bytes_setting`, `Cc_backend.vector_registers_setting`
-  test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector_bytes`
-  test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
-  test/operations/dune, test schedule_cache_device: schedule_cache_device.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_bytes` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
-  test/operations/dune, test schedule_conv_gemm: schedule_conv_gemm.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
-  test/operations/dune, test schedule_mma_matmul: schedule_mma_matmul.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
-  test/operations/dune, test schedule_strided_1x1: schedule_strided_1x1.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector_registers` to its base
-  test/operations/dune, test tile_mma_geometry: tile_mma_geometry.ml reads `.simd_vector_bytes`, `.simd_vector_registers`
-  test/operations/dune, test tile_mma_narrow: tile_mma_narrow.ml reads `.simd_vector_bytes`
+  bin/dune, executable narrow_gebp_bench: narrow_gebp_bench.ml reads `.simd_vector`
+  bin/dune, executable schedule_bench: schedule_bench.ml reads `.simd_vector`
+  test/operations/dune, executable autotune_fission_sketch: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
+  test/operations/dune, executable limits_field_classes: limits_field_classes.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector` to its base, `.simd_vector`
+  test/operations/dune, test autotune_budget: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
+  test/operations/dune, test autotune_budget_unfloored: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
+  test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
+  test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
+  test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
+  test/operations/dune, test autotune_staffed_singles: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
+  test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_file_setting`
+  test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector`
+  test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector` to its base
+  test/operations/dune, test schedule_cache_device: schedule_cache_device.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector` to its base
+  test/operations/dune, test schedule_conv_gemm: schedule_conv_gemm.ml reads `{ … with … }` leaving `codegen_tag` to its base, `.simd_vector`
+  test/operations/dune, test schedule_mma_matmul: schedule_mma_matmul.ml reads `.simd_vector`
+  test/operations/dune, test schedule_strided_1x1: schedule_strided_1x1.ml reads `{ … with … }` leaving `codegen_tag` to its base, `.simd_vector`
+  test/operations/dune, test tile_mma_geometry: tile_mma_geometry.ml reads `.simd_vector`
+  test/operations/dune, test tile_mma_narrow: tile_mma_narrow.ml reads `.simd_vector`
+
+Programs starting a search with a run that can select cc, each pinning the cc vector file
+(`cc_vector_bytes`, `cc_vector_registers`) or saying why its claims hold at every width (gh-ocannl-1368):
+  (the search's entry points: Autotune.tune, Ocannl.Calibrate.stream, Ocannl.Train.tune_placements)
+  (the blessed support values pinning the file: Fissioned_chain.small_menu, Fissioned_chain.small_menu_envelope)
+  bin/dune, executable projection_shape_bench (Autotune.tune): independent, by its marker
+  test/operations/dune, executable autotune_arm_containment (Train.tune_placements): independent, by its marker
+  test/operations/dune, executable autotune_batched_companion (Autotune.tune): independent, by its marker
+  test/operations/dune, executable autotune_bound_pruning (Autotune.tune): independent, by its marker
+  test/operations/dune, executable autotune_fission_sketch (Autotune.tune): pinned: autotune_fission_sketch.ml calls `Fissioned_chain.small_menu_envelope` at initialization, before any search
+  test/operations/dune, executable autotune_mma_companion (Autotune.tune): independent, by its marker
+  test/operations/dune, executable autotune_routine_name (Autotune.tune): independent, by its marker
+  test/operations/dune, executable bandwidth_calibration (Calibrate.stream): independent, by its marker
+  test/operations/dune, executable cc_dlopen_cause (Autotune.tune): independent, by its marker
+  test/operations/dune, executable cost_model_selection (Autotune.tune): independent, by its marker
+  test/operations/dune, executable flip_abandonment (Autotune.tune, Train.tune_placements): independent, by its marker
+  test/operations/dune, executable flip_bound_pruning (Train.tune_placements): independent, by its marker
+  test/operations/dune, executable flip_twins (Train.tune_placements): independent, by its marker
+  test/operations/dune, executable hip_scratch_tune_survives (Autotune.tune): independent, by its marker
+  test/operations/dune, executable tune_ship_arm (Train.tune_placements): independent, by its marker
+  test/operations/dune, test autotune_budget (Autotune.tune): pinned: autotune_budget.ml calls `Fissioned_chain.small_menu` at initialization, before any search
+  test/operations/dune, test autotune_budget_unfloored (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_callback_release (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_candidate_release (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_composite_playoff (Autotune.tune, Train.tune_placements): pinned: autotune_composite_playoff.ml calls `Fissioned_chain.small_menu` at initialization, before any search
+  test/operations/dune, test autotune_concurrent_refusal (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_device_memory (Autotune.tune, Train.tune_placements): independent, by its marker
+  test/operations/dune, test autotune_labels (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_measured_refusal (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_progress (Train.tune_placements): independent, by its marker
+  test/operations/dune, test autotune_replay_refusal (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_round_expansion (Autotune.tune): pinned: autotune_round_expansion.ml calls `Fissioned_chain.small_menu` at initialization, before any search
+  test/operations/dune, test autotune_seam_domains (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_seeded_seed (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_serial_baseline (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_sketch_placements (Autotune.tune): pinned: autotune_sketch_placements.ml calls `Fissioned_chain.small_menu` at initialization, before any search
+  test/operations/dune, test autotune_smoke (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_split_reduce (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_staffed_fine (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_staffed_singles (Autotune.tune): pinned: autotune_staffed_singles.ml calls `Fissioned_chain.small_menu` at initialization, before any search
+  test/operations/dune, test fission_replay_segmentation (Autotune.tune): independent, by its marker
+  test/operations/dune, test inline_flip_tune (Train.tune_placements): independent, by its marker
+  test/operations/dune, test padded_conv_cache (Autotune.tune): independent, by its marker
+  test/operations/dune, test placement_store (Train.tune_placements): independent, by its marker
+  test/operations/dune, test schedule_cache_device (Autotune.tune): independent, by its marker
+  test/operations/dune, test schedule_cache_numerics (Autotune.tune): independent, by its marker
+  test/operations/dune, test schedule_conv_gemm (Autotune.tune): independent, by its marker
+  test/operations/dune, test schedule_epilogue_fusion (Autotune.tune): independent, by its marker
+  test/operations/dune, test seeding_census (Autotune.tune): independent, by its marker
+  test/operations/dune, test symbolic_extent_launch (Autotune.tune): independent, by its marker
+  test/training/dune, executable bigram (Autotune.tune): independent, by its marker
+  test/training/dune, executable circles_conv (Autotune.tune): independent, by its marker
+  test/training/dune, executable fsm_transformer (Autotune.tune): independent, by its marker
+  test/training/dune, executable transformer_names (Autotune.tune): independent, by its marker
 
 Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @lifecycle
@@ -355,6 +410,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cost_model_selection
   test/operations/dune                     @runtest-dead_export_scan
   test/operations/dune                     @runtest-dead_export_scan_control
+  test/operations/dune                     @runtest-device_init_deadline
   test/operations/dune                     @runtest-digest_completeness
   test/operations/dune                     @runtest-doc_examples
   test/operations/dune                     @runtest-env_spelling_gate
@@ -396,6 +452,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-shell_scripts_parse
   test/operations/dune                     @runtest-sweep_components
   test/operations/dune                     @runtest-sweep_harness
+  test/operations/dune                     @runtest-tensorized_census_ratchet
   test/operations/dune                     @runtest-test_config_consistency
   test/operations/dune                     @runtest-test_log_stmt_format
   test/operations/dune                     @runtest-test_threefry4x32

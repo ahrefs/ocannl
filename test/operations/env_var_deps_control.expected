@@ -205,6 +205,47 @@ a `Cc_backend` value reached through an alias of its parent module is a read: tr
 a linked library with dune's default module set in a directory the globs never reach is refused: true
 a value re-exported by `include` through two module aliases is a width value: true
 
+The cc search rule (gh-ocannl-1368) is put to a tree of one `(test)` whose module starts a
+search of a stand-in `Autotune`, directly or through a stand-in framework or support wrapper,
+beside a stand-in `Fissioned_chain` stating `cc_vector_bytes` and `cc_vector_registers`
+the way the small menu does. The arms differ in where the program pins the file, in what its
+stanza says, in one renamed entry point, and in what the stand-in helpers state.
+
+a program starting a search with a run that can select cc is reported when it neither pins the width nor carries the marker: true
+the same stanza carrying `; cc-vector-width: independent -- <reason>` passes: true
+and so does one pinning the variable with `setenv` around its run: true
+and so does a program whose initialization calls a support helper stating the width: true
+a program's own statements of the keys are no pin: only a blessed helper or a run's is: true
+nor does a read of the key, or a helper printing its name: true
+a search started through a framework wrapper of the entry point is a search too: true
+a program whose only run names a backend other than cc is not asked: true
+a marker on a program that starts no search is refused as stale: true
+a marker on a program that pins the width is refused as contradictory: true
+a marker declaring anything but `independent` is refused: true
+two markers on one stanza are refused: true
+the marker's sentinel outside a comment is refused: true
+a marker on a rule, which names no program's modules, is refused: true
+a marker between stanzas is refused rather than attributed: true
+an entry point renamed away is refused as a lost anchor, not read as no search: true
+a helper that only reads the configuration table pins nothing: true
+nor a `setenv` of `-1` or of the empty string, which reads as unset: true
+a call through another module's or a local module's namesake of the helper pins nothing: true
+while one through an alias of the helper's module does: true
+a program pinning the width but not the register count is reported: true
+a `setenv` of `-1` around a run undoes an initializer's statement of the width: true
+a helper spelling that a later namesake module rebinds is not credited at the rebinding: true
+in a plural `(tests)` stanza, one program's pin is not another's, while a program pinning itself passes: true
+a helper called after the first search pins nothing: true
+nor does one under a command-line `--ocannl_cc_vector_bytes=-1`: true
+a search started through a support value reaching the entry point is a search too: true
+a command-line setting in another spelling the runtime reads unpins too: true
+a helper in a closure the initializer builds but never calls pins nothing: true
+nor does one whose key a later item spells again before the first search: true
+while a call under a condition, the `if is_cpu` shape, does: true
+a bare call under an `open` of the helper's module, which a value can shadow, pins nothing: true
+a `setenv` of `-1` around one of a run's invocations undoes the helper's pin: true
+a blessed helper that stops stating a key, and a support value stating every key unblessed, are both refused: true
+
 Synthetic controls: ambient gates derive identity from the program actually run.
 a renamed direct-utils universe test and its resolved runner are gates: true
 a universe-dependent compiler census and backend-free test are not ambient gates: true
@@ -255,6 +296,12 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value
   [scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names
   [scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost
+  [scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost
+  [scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose
+  [scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does
+  [scanner-refusal:e96ac262e859176f6f0ec05d6f2f30cb] the wrong stanza
+  [scanner-refusal:0a10ab654cc394b5f797d88ea889d086] inside the parentheses
+  [scanner-refusal:be4bb5e070f7c1653c2f7236cb2e6a18] times and only
   [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does
   [scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend
   [scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker
@@ -289,10 +336,14 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration
   [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration
   [scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width
+  [scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than
+  [scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file
+  [scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search
   [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
   [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests
+  [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts
   [scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from
   [scanner-refusal:96e2132b9ea14b4c19e7573b7725b9ec] omits the declaration
@@ -432,6 +483,40 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone
   [scanner-refusal:1980131e56fcd4b8e4810ba218228fe7] whose rule depends
   [scanner-refusal:a6af1a4eabd80e213ebd285160652900] argument stays ungated
+  [scanner-refusal:4bff8c4ce57f4125cd336ce630eaf5bb] a program starting
+  [scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent
+  [scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable
+  [scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization
+  [scanner-refusal:720484df63c40ad6dd2418d4cfa706cc] program's own statements
+  [scanner-refusal:6454f0cfc83773267ad5cf7695226069] helper printing its
+  [scanner-refusal:be7654cb2fedf501f96178ab18687738] search started through
+  [scanner-refusal:7fbb55a505a047a588bcf2bfe6df0f36] program whose only
+  [scanner-refusal:c6749493265651edae753b4d91b6057f] program that starts
+  [scanner-refusal:297ca2b13030714ee532288bcdea6931] refused as contradictory
+  [scanner-refusal:008feff3fd3ac8bf0aa213425ccab973] marker declaring anything
+  [scanner-refusal:f73bf9597915d82e0263c79001cade55] stanza are refused
+  [scanner-refusal:46430b0f534e84dda590f0e5cb983438] marker's sentinel outside
+  [scanner-refusal:d3576c4f9152f9f5a8f7b5bd17bc7e39] no program's modules
+  [scanner-refusal:435bce2f838f426728b540ba5f6c905f] marker between stanzas
+  [scanner-refusal:3956653315998753df29070b7b38ae6c] entry point renamed
+  [scanner-refusal:eb27e7f56b8d3460a37076b391593d9e] configuration table pins
+  [scanner-refusal:22825750e1b48f737f60249e27047e28] empty string which
+  [scanner-refusal:d3f1d0e95f110142f78dbbfade3eec72] through another module's
+  [scanner-refusal:90ead9391fc487dfbe2cd91e0b0f7288] helper's module does
+  [scanner-refusal:8bda63bc4c91bc8f3c9f625a9c7f7f44] program pinning the
+  [scanner-refusal:cccad474843811a2756fc4f505d927f0] an initializer's statement
+  [scanner-refusal:d65197a8a018021b4c7aa22fcf90c773] namesake module rebinds
+  [scanner-refusal:593b4e2508d631a9f42d0d6fe061b2e6] program pinning itself
+  [scanner-refusal:e1e7c11bf8ecfecb20b9031955b16937] helper called after
+  [scanner-refusal:63423f2793604647b96a315b851f1859] ocannl_cc_vector_bytes=-1
+  [scanner-refusal:48335fe342f8e4b1cdf081db8783e475] search started through
+  [scanner-refusal:0876bfabcf2ed9abc14e936d4ebd9018] command-line setting in
+  [scanner-refusal:25394c54f621666e9eb6b4419cee87fd] closure the initializer
+  [scanner-refusal:3d6b57503b5fac620375759535912df9] spells again before
+  [scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu
+  [scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which
+  [scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes
+  [scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating
   [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks
   [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):

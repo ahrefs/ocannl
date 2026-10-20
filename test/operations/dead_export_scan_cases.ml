@@ -488,8 +488,8 @@ let () =
 
 (* The derived half of a type's mentions, held equal to the derivers' own expansion rather than to a
    restatement of their naming rules. Referencing each registration links it, so [Driver] expands
-   the fixture with the real derivers; [hash] registers nothing a program can reference, so its
-   expander is called directly. *)
+   the fixture with the real derivers; [ppx_hash] exports nothing a program can reference, but its
+   archive is force-linked, so listing the library registers it. *)
 let _registered =
   ( Ppx_sexp_conv.sexp,
     Ppx_compare.compare,
@@ -532,15 +532,8 @@ let () =
         | Ptype_abstract | Ptype_open -> []
       in
       let structure = Test_utils.Config_key_scan.structure_of source in
-      let hashed =
-        if String.is_substring source ~substring:"hash" then
-          let rec_flag, _ = single_type_declaration source in
-          Ppx_hash_expander.str_type_decl ~loc:declaration.ptype_loc ~path:"Fixture"
-            (rec_flag, [ declaration ])
-        else []
-      in
       let expanded =
-        generated_names (Ppxlib.Driver.map_structure structure @ hashed)
+        generated_names (Ppxlib.Driver.map_structure structure)
         |> List.filter ~f:(fun name ->
             (* What [fields] names after a label and [variants] after a constructor falls under the
                member boundary: crediting it would credit the member's name. *)
@@ -560,3 +553,295 @@ let () =
         Stdio.eprintf "%s\n  expansion: %s\n  mentions:  %s\n" source
           (String.concat ~sep:" " expanded) (String.concat ~sep:" " mentions);
       equal)
+
+(* gh-ocannl-913: the value census over [hash], [enumerate], [fields] and [variants]. Each export
+   set is held equal to what the installed derivers generate -- values and modules alike,
+   member-named ones included -- rather than to a restatement of their naming rules. *)
+let () =
+  let fixtures =
+    [
+      "type t = A | B of int [@@deriving hash]";
+      "type named = A | B of int [@@deriving hash]";
+      "type ('a, 'b) param = 'a * 'b [@@deriving hash]";
+      "type alias = int [@@deriving hash]";
+      "type t = A | B of bool [@@deriving enumerate]";
+      "type poly = [ `One | `Two of bool ] [@@deriving enumerate]";
+      "type t = { label_a : int; mutable label_b : string } [@@deriving fields]";
+      "type record = { label_a : int; mutable label_b : string } [@@deriving fields]";
+      "type t = Open | RHS1 | Undet of int [@@deriving variants]";
+      "type poly = [ `Method | `B of int ] [@@deriving variants]";
+      "type named = A [@@deriving sexp, compare, equal, hash, enumerate, variants]";
+    ]
+  in
+  Verdict.p_all "every derived export set is exactly what the installed derivers generate" fixtures
+    ~f:(fun source ->
+      let _, declaration = single_type_declaration source in
+      let expanded =
+        generated_names
+          (Ppxlib.Driver.map_structure (Test_utils.Config_key_scan.structure_of source))
+        |> List.filter ~f:(fun name -> not (Scan.is_sexp_of_converter name))
+      in
+      let derivers = Scan.derivers_of_type_declaration declaration in
+      let model = Scan.derived_names ~derivers declaration in
+      let equal = List.equal String.equal expanded model in
+      if not equal then
+        Stdio.eprintf "%s\n  expansion: %s\n  model:     %s\n" source
+          (String.concat ~sep:" " expanded) (String.concat ~sep:" " model);
+      equal);
+  let gen =
+    {|
+type h = H [@@deriving hash]
+type e = E [@@deriving enumerate]
+type r = { field_a : int } [@@deriving fields]
+type v = Va [@@deriving variants]
+type unused = U [@@deriving hash, enumerate]
+type r2 = { other_field : int } [@@deriving fields]
+|}
+  in
+  let exports = Scan.exports_of_source ~source:"arrayjit/lib/gen.ml" gen in
+  let count sources key =
+    let sources = ("arrayjit/lib/gen.ml", gen) :: sources in
+    Hashtbl.find_exn (Scan.counts ~exports (Scan.references ~exports ~sources)) ("Gen." ^ key)
+  in
+  let through_extensions =
+    [
+      ( "user.ml",
+        "let a = [%hash: Gen.h]\n\
+         let b = [%hash_fold: Gen.h list]\n\
+         let c = [%all: Gen.e option]\n\
+         let d = Gen.Fields_of_r.names\n\
+         open Gen\n\
+         let e = Variants_of_v.to_rank\n" );
+    ]
+  in
+  Verdict.p_all
+    "a generated helper referenced only through an extension point, or held by a used generated \
+     module, is live"
+    [ "hash_h"; "hash_fold_h"; "all_of_e"; "Fields_of_r"; "field_a"; "Variants_of_v"; "va" ]
+    ~f:(fun key -> count through_extensions key > 0);
+  Verdict.p_all "a genuinely unused generated helper is reported"
+    [
+      "hash_unused";
+      "hash_fold_unused";
+      "all_of_unused";
+      "is_va";
+      "va_val";
+      "other_field";
+      "Fields_of_r2";
+    ] ~f:(fun key -> count through_extensions key = 0);
+  let bare_hash =
+    Scan.references ~exports ~sources:[ ("user.ml", "let a = [%hash: Gen.unused]\n") ]
+    |> List.map ~f:(fun (reference : Scan.reference) -> reference.value)
+  in
+  Verdict.p "a [%hash] of a bare constructor calls hash_<type>, not its fold"
+    (List.equal String.equal bare_hash [ "hash_unused" ]);
+  Verdict.p "a deriving with arguments the census does not model is refused"
+    (match
+       Scan.exports_of_source ~source:"arrayjit/lib/args.ml"
+         "type r = { a : int } [@@deriving sexp_of, fields ~getters]"
+     with
+    | _ -> false
+    | exception Scan.Unmodelled_deriving_arguments { deriver = "fields"; line = 1 } -> true)
+
+(* gh-ocannl-914: the differential corpus. For each fixture, what the scanner infers from the
+   unexpanded source is held equal to what the installed PPX expansion actually calls: the
+   [Sample.x] paths the expanded consumer spells, and, inside the expanded [Sample] itself, which
+   generated value calls which (the support references). A PPX that changes a name or a call fails
+   here as contract drift, before the census can miscount. *)
+let flatten longident = try Some (Longident.flatten_exn longident) with _ -> None
+
+(* The values and modules of [Sample] an expanded consumer spells, qualified. *)
+let sample_spellings structure =
+  let found = ref [] in
+  let spell txt =
+    match flatten txt with Some ("Sample" :: name :: _) -> found := name :: !found | _ -> ()
+  in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expression =
+        (match expression.pexp_desc with Pexp_ident { txt; _ } -> spell txt | _ -> ());
+        super#expression expression
+
+      method! module_expr module_expr =
+        (match module_expr.pmod_desc with Pmod_ident { txt; _ } -> spell txt | _ -> ());
+        super#module_expr module_expr
+    end
+  in
+  iterator#structure structure;
+  !found
+
+(* [(caller, callee)] for every generated value or module of an expansion (what sits in the [include
+   struct ... end] a deriving emits) whose body names [callee] unqualified. *)
+let generated_calls structure =
+  let callees body_iter =
+    let found = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression expression =
+          (match expression.pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } -> found := name :: !found
+          | _ -> ());
+          super#expression expression
+      end
+    in
+    body_iter iterator;
+    !found
+  in
+  List.concat_map structure ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure generated; _ }; _ } ->
+          List.concat_map generated ~f:(fun item ->
+              match item.pstr_desc with
+              | Pstr_value (_, bindings) ->
+                  List.concat_map bindings ~f:(fun binding ->
+                      match Scan.pattern_names binding.pvb_pat with
+                      | [ caller ] ->
+                          List.map
+                            (callees (fun it -> it#expression binding.pvb_expr))
+                            ~f:(fun callee -> (caller, callee))
+                      | _ -> [])
+              | Pstr_module { pmb_name = { txt = Some caller; _ }; pmb_expr; _ } ->
+                  List.map
+                    (callees (fun it -> it#module_expr pmb_expr))
+                    ~f:(fun callee -> (caller, callee))
+              | _ -> [])
+      | _ -> [])
+
+let pairs_equal = List.equal (fun (a, b) (c, d) -> String.equal a c && String.equal b d)
+
+let sorted_pairs pairs =
+  List.dedup_and_sort pairs ~compare:(fun (a, b) (c, d) ->
+      match String.compare a c with 0 -> String.compare b d | ordering -> ordering)
+
+let () =
+  let corpus =
+    [
+      ( "every family over a plain and a [t] type, through derivings and extensions",
+        "type named = Named [@@deriving sexp, compare, equal, hash, enumerate]\n\
+         type t = Root [@@deriving sexp, compare, equal, hash, enumerate]\n",
+        "type c = { n : Sample.named; r : Sample.t } [@@deriving sexp, compare, equal, hash, \
+         enumerate]\n\
+         let a = [%compare: Sample.named]\n\
+         let b = [%equal: Sample.t]\n\
+         let c = [%of_sexp: Sample.named list]\n\
+         let d = [%hash: Sample.named]\n\
+         let e = [%hash: Sample.t]\n\
+         let f = [%hash: Sample.named list]\n\
+         let g = [%hash_fold: Sample.t]\n\
+         let h = [%all: Sample.named option]\n\
+         let i = [%compare.equal: Sample.t]\n" );
+      ( "an alias of a primitive reached through a tuple in an option in a record field \
+         (staging#740)",
+        "type provenance = string [@@deriving sexp, compare, equal, hash]\n\
+         type record = { intent : (int * provenance) option } [@@deriving sexp, compare, equal, \
+         hash]\n",
+        "type a = Sample.provenance [@@deriving hash, compare]\n\
+         type b = (int * Sample.provenance) option [@@deriving sexp, equal]\n" );
+      ( "inherited polymorphic rows",
+        "type poly = [ `One | `Two ] [@@deriving sexp, compare, equal, hash, enumerate]\n\
+         type wider = [ poly | `Three ] [@@deriving sexp, compare, hash, enumerate]\n",
+        "type c = [ Sample.poly | `Four ] [@@deriving sexp, equal, hash, enumerate]\n\
+         let f = [%of_sexp: [ Sample.poly | `Five ]]\n" );
+      (* Each ignored component is the only carrier of its type, so a misread attribute shows. *)
+      ( "ignored and opaque components",
+        "type u1 = U1 [@@deriving sexp, compare, equal, hash]\n\
+         type u2 = U2 [@@deriving sexp, compare, equal, hash]\n\
+         type u3 = U3 [@@deriving sexp, compare, equal, hash]\n\
+         type u4 = U4 [@@deriving sexp, compare, equal, hash]\n\
+         type r = { a : u1 [@compare.ignore]; b : (u2[@sexp.opaque]); c : u3 [@hash.ignore];\n\
+        \  d : (u4[@compare.ignore]) } [@@deriving sexp, compare, hash]\n\
+         type q = { e : u1 [@equal.ignore]; f : u2 } [@@deriving equal]\n",
+        "type c = { a : Sample.u1 [@compare.ignore]; b : (Sample.u2[@sexp.opaque]);\n\
+        \  c : Sample.u3 [@hash.ignore]; d : Sample.u4 } [@@deriving sexp, compare, hash]\n\
+         type e = { e : Sample.u1 [@equal.ignore]; f : Sample.u4 } [@@deriving equal]\n" );
+      ( "a GADT's result index, which no deriving calls",
+        "type u = U [@@deriving hash]\n\
+         type v = V [@@deriving hash]\n\
+         type _ g = G : u -> v g [@@deriving hash]\n",
+        "type _ c = C : Sample.u -> Sample.v c [@@deriving hash]\n" );
+      ( "a mutually recursive group",
+        "type a = A of b option | A0 and b = B of a list [@@deriving sexp, compare, hash]\n",
+        "type c = Sample.a * Sample.b [@@deriving sexp, compare, hash]\n" );
+      ( "hash aliases, inside the module and out",
+        "type base = B [@@deriving hash]\n\
+         type al = base [@@deriving hash]\n\
+         type pal = base list [@@deriving hash]\n",
+        "type t = Sample.al [@@deriving hash]\ntype u = Sample.pal [@@deriving hash]\n" );
+      ( "the modules fields and variants generate",
+        "type r = { x : int; mutable y : int } [@@deriving fields]\n\
+         type v = Va | Vb of int [@@deriving variants]\n",
+        "let a = Sample.Fields_of_r.names\nmodule V = Sample.Variants_of_v\n" );
+    ]
+  in
+  let exercised = ref [] in
+  Verdict.p_all "the scanner's derived references are exactly the expansion's calls" corpus
+    ~f:(fun (label, sample, consumer) ->
+      let sample_path = "arrayjit/lib/sample.ml" in
+      let exports = Scan.exports_of_source ~source:sample_path sample in
+      let names = Set.of_list (module String) (List.map exports ~f:(fun e -> e.Scan.value)) in
+      let references =
+        Scan.references ~exports ~sources:[ (sample_path, sample); ("consumer.ml", consumer) ]
+      in
+      let external_model =
+        List.filter_map references ~f:(fun (r : Scan.reference) ->
+            Option.some_if (Option.is_none r.via) r.value)
+        |> List.dedup_and_sort ~compare:String.compare
+      in
+      let external_truth =
+        sample_spellings
+          (Ppxlib.Driver.map_structure (Test_utils.Config_key_scan.structure_of consumer))
+        |> List.filter ~f:(Set.mem names)
+        |> List.dedup_and_sort ~compare:String.compare
+      in
+      let support_model =
+        List.filter_map references ~f:(fun (r : Scan.reference) ->
+            Option.map r.via ~f:(fun caller -> (caller, r.value)))
+        |> sorted_pairs
+      in
+      let support_truth =
+        generated_calls
+          (Ppxlib.Driver.map_structure (Test_utils.Config_key_scan.structure_of sample))
+        |> List.filter ~f:(fun (caller, callee) ->
+            Set.mem names caller && Set.mem names callee && not (String.equal caller callee))
+        |> sorted_pairs
+      in
+      let show pairs = String.concat ~sep:" " (List.map pairs ~f:(fun (a, b) -> a ^ "->" ^ b)) in
+      if (not (List.is_empty external_truth)) && not (List.is_empty support_truth) then
+        exercised := label :: !exercised;
+      let external_ok = List.equal String.equal external_model external_truth in
+      let support_ok = pairs_equal support_model support_truth in
+      if not external_ok then
+        Stdio.eprintf "%s: consumer\n  scanner:   %s\n  expansion: %s\n" label
+          (String.concat ~sep:" " external_model)
+          (String.concat ~sep:" " external_truth);
+      if not support_ok then
+        Stdio.eprintf "%s: support\n  scanner:   %s\n  expansion: %s\n" label (show support_model)
+          (show support_truth);
+      external_ok && support_ok);
+  Verdict.p_all "every corpus fixture exercises both consumer calls and support calls" corpus
+    ~f:(fun (label, _, _) -> List.mem !exercised label ~equal:String.equal);
+  (* The synthetic controls the corpus exists for: a helper only a sibling deriving needs is kept
+     alive by that sibling's liveness, and by nothing else. *)
+  let sample =
+    "type scope = Local | Global [@@deriving sexp, compare, equal]\n\
+     type entry = { scope : scope } [@@deriving sexp, compare, equal]\n"
+  in
+  let exports = Scan.exports_of_source ~source:"arrayjit/lib/sample.ml" sample in
+  let count consumer key =
+    Hashtbl.find_exn
+      (Scan.counts ~exports
+         (Scan.references ~exports
+            ~sources:[ ("arrayjit/lib/sample.ml", sample); ("user.ml", consumer) ]))
+      ("Sample." ^ key)
+  in
+  let user = "let a = Sample.compare_entry\nlet b = [%of_sexp: Sample.entry]\n" in
+  Verdict.p_all "a helper a live sibling deriving calls is live (gh-ocannl-836)"
+    [ "compare_scope"; "scope_of_sexp" ] ~f:(fun key -> count user key > 0);
+  Verdict.p_all "a helper whose calling sibling is dead stays dead" [ "equal_scope"; "equal_entry" ]
+    ~f:(fun key -> count user key = 0);
+  Verdict.p "with no outside reference, support alone keeps nothing alive"
+    (count "let unrelated = ()\n" "compare_scope" = 0)

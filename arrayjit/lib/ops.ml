@@ -491,7 +491,7 @@ type binop =
           minted by the virtualizer to inline packed-uniform results per cell; not exposed in the
           user-facing syntaxes. Heterogeneous: the arguments must not be converted to the result
           precision. *)
-[@@deriving sexp, compare, equal, enumerate]
+[@@deriving sexp_of, compare, equal, enumerate]
 
 type unop =
   | Identity
@@ -515,7 +515,7 @@ type unop =
           single value of the output precision. Less bit-efficient but operates poitwise. For random
           bits, the result is uniform over the range of the precision for integer precisions, and
           over the range \[0.0, 1.0) for floating point precisions. *)
-[@@deriving sexp, compare, equal, enumerate]
+[@@deriving sexp_of, compare, equal, enumerate]
 
 type vec_unop =
   | Uint4x32_to_prec_uniform
@@ -525,15 +525,15 @@ type vec_unop =
           pattern, the indices are converted to a byte offset depending on the given precision.
           NOTE: this operation, unlike any others, impacts projections and shape inference (one
           input cell corresponds to a few output cells). *)
-[@@deriving sexp, compare, equal, enumerate]
+[@@deriving sexp_of, compare, equal, enumerate]
 
 type ternop =
   | Where  (** Where(a,b,c): if a then b else c *)
   | FMA  (** FMA(a,b,c): (a * b) + c, non-accumulating *)
   | Mul3  (** Mul3(a,b,c): a * b * c, non-accumulating *)
-[@@deriving sexp, compare, equal, enumerate]
+[@@deriving sexp_of, compare, equal, enumerate]
 
-type op = Ternop of ternop | Binop of binop | Unop of unop [@@deriving sexp, compare, equal]
+type op = Ternop of ternop | Binop of binop | Unop of unop [@@deriving sexp_of]
 
 (** {2 Operand evaluation}
 
@@ -563,7 +563,7 @@ type binop_conditionality =
       (** A projection: the operator {e is} its first operand, and the second one is never rendered,
           hence never evaluated — it costs nothing and accesses nothing under any bound. *)
   | Only_second  (** A projection onto the second operand; the first is never rendered. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of]
 
 type ternop_conditionality =
   | All_three  (** All three operands are always evaluated. *)
@@ -572,7 +572,7 @@ type ternop_conditionality =
           third: the renderings are short-circuiting [?:] on every backend, deliberately so — MSL's
           [select] would evaluate both arms and defeat the range guards that lower to [Where] (see
           {!Metal_backend}'s [ternop_syntax]). *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp_of]
 
 let binop_conditionality = function
   | Arg1 -> Only_first
@@ -1038,9 +1038,7 @@ let c_convert_precision ~from ~to_ =
 
 type voidptr = unit Ctypes.ptr
 
-let sexp_of_voidptr p = Sexp.Atom Ctypes.(string_of (ptr void) p)
-let compare_voidptr = Ctypes.ptr_compare
-let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
+let sexp_of_voidptr (p : voidptr) = Sexp.Atom Ctypes.(string_of (ptr void) p)
 
 let c_rawptr_to_string (ptr : nativeint) prec =
   "(" ^ c_typ_of_prec prec ^ "*)" ^ Nativeint.Hex.to_string ptr

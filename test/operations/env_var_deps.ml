@@ -1022,12 +1022,12 @@ let pipeline_module = [ "Ir"; "Schedule" ]
    [width_limits_type_home], gives the labels that mark a limits update. A program reads the width
    when its own modules, or a program-local library it links, name such a value
    (`Context.Cc_backend.vector_bytes_setting`, under an alias or an `open` too), project such a
-   field off a record (`limits.simd_vector_bytes`, or a record pattern), or update a limits record
-   leaving such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits
-   with simd_vector_bytes = 16 }` keeps the device's register count, which the width scales --
-   staging#1094's worked case). Every rule running it declares or pins [width_key]'s variable; a
-   library with inline tests answers for itself, through its `(inline_tests (deps …))` and each
-   per-module rule running its runner.
+   field off a record (`limits.simd_vector`, or a record pattern), or update a limits record leaving
+   such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits with
+   native_fp16_arithmetic = false }` keeps the device's vector file; staging#1094's worked case
+   pinned the width alone and kept the device's register count, which the width scales). Every rule
+   running it declares or pins [width_key]'s variable; a library with inline tests answers for
+   itself, through its `(inline_tests (deps …))` and each per-module rule running its runner.
 
    Asked for is the width key alone. The auto width also follows the SIMD and arch flags and the
    compiler the probe runs through, but those reach it only through the auto probe, as they reach
@@ -1042,6 +1042,92 @@ let width_key = "cc_vector_bytes"
 let width_module = "Cc_backend"
 let width_limits_home = "arrayjit/lib/schedulers.ml"
 let width_limits_type_home = "arrayjit/lib/backend_intf.ml"
+
+(* gh-ocannl-1368: a search on cc runs at the width the host auto-probes, unless the program pins
+   it.
+
+   CI's x86 runners draw AVX2 or AVX-512 CPUs at random, and the width changes which sketches the
+   autotune search seeds and which its roofline pre-filter keeps: a claim built on the menu passed
+   at 32 bytes and failed at 64 (gh-ocannl-1363, staging#1162). The rule above makes a rerun at
+   another width happen; this one asks that the default run not depend on the host at all. Every
+   program that starts a search and has a run that can select cc either PINS the vector file
+   ([vector_file_keys]: the width and the register count) for the whole process -- per key, every
+   such run either sets it on the command line or with `(setenv …)` to a value that pins, or runs a
+   program whose initialization calls a blessed helper ([vector_file_pin_values]) before any search
+   -- or its stanza carries the marker `; cc-vector-width: independent -- <reason>`, saying at the
+   site why its claims hold at every width.
+
+   The rule guards against a program that forgets the width, not against one written to deceive a
+   lint: what it credits is narrow on purpose -- a reviewed helper, called in plain sight before the
+   first search, or a literal in the stanza -- and everything else needs the marker (Codex P2,
+   rounds 1-3 of staging#1263, where proving arbitrary statements of a setting kept finding new ways
+   to write one).
+
+   "Starts a search" is derived from the search's entry point [search_value] of [search_home] and
+   the values of the framework library ([search_wrapper_root]) that reach it, transitively
+   (`Train.tune_placements`): the paths a program names them by, under an alias or an `open` too, or
+   any path ending in one, whatever qualifies it. "Can select cc" is the backend rule's own answer
+   for the run: `(env_var OCANNL_BACKEND)`, or a backend marker naming cc or multidev_cc, the two
+   backends rendering through `Cc_backend`. *)
+let search_home = "arrayjit/lib/autotune.ml"
+let search_value = [ "Autotune"; "tune" ]
+let search_wrapper_root = "lib/"
+let search_wrapper_library = "Ocannl"
+
+(* The test support libraries, each an unwrapped one-module library a program names by its module: a
+   value of one that reaches the search is a search too (Codex P2, round 3). *)
+let search_support_root = "test/support/"
+
+(* The support values blessed as pinning the whole vector file (round 3). A program pins at
+   initialization only by calling one of them -- its own statements of the keys are no pin -- so the
+   recognition stays one reviewed helper wide rather than a proof over every way a program can write
+   a setting. Held equal to the derivation: the values outside the compiler whose bodies state every
+   key are exactly these, so a new pinning helper is blessed here in review, and a blessed one that
+   stops stating a key is refused. *)
+let vector_file_pin_home = "test/support/fissioned_chain.ml"
+let vector_file_pin_values = [ "small_menu"; "small_menu_envelope" ]
+let width_marker_sentinel = "cc-vector-width:"
+let width_marker_declaration = "independent"
+let width_cc_backends = [ "cc"; "multidev_cc" ]
+
+(* What makes a literal a statement rather than a mention: a write into the configuration-file table
+   a program states a key into, or into the environment a child process inherits
+   ([Sources.stating_reach]; a read of either states nothing, Codex P2 round 1). *)
+let width_pin_tables = [ "config_file_args" ]
+let width_pin_table_writes = [ "set"; "add"; "add_exn"; "replace" ]
+let width_pin_env_writes = [ "putenv" ]
+
+(* What a search's seeding reads of the cc vector FILE, each key with the values that pin it: the
+   width, and the register count the register tile is capped to -- at a pinned 32 bytes AVX2 has 16
+   registers and AVX-512 32, so pinning the width alone leaves the menu on the host (Codex P2, round
+   2). `Cc_backend.vector_bytes_setting` takes a non-negative integer and `vector_registers_setting`
+   one up to 256; anything else that parses -- [-1] is the auto spelling -- goes to the host's
+   probe, and an empty variable reads as unset, so a statement or a `(setenv …)` of any other
+   literal pins nothing (round 1). A deliberately independent restatement of those two guards: the
+   scan reads no compiled library behavior. *)
+let registers_key = "cc_vector_registers"
+
+let vector_file_keys =
+  [ (width_key, fun n -> n >= 0); (registers_key, fun n -> n >= 0 && n <= 256) ]
+
+let vector_file_pins key value =
+  match
+    ( List.Assoc.find vector_file_keys key ~equal:String.equal,
+      Int.of_string_opt (String.strip value) )
+  with
+  | Some accepts, Some n -> accepts n
+  | _ -> false
+
+let vector_file_literals key = [ key; Utils.env_var_name key ]
+
+let vector_file_stating_reach ~key content =
+  Sources.stating_reach ~literals:(vector_file_literals key) ~tables:width_pin_tables
+    ~table_writes:width_pin_table_writes ~env_writes:width_pin_env_writes
+    ~pins:(vector_file_pins key) content
+
+(* A value named by its module and its name. *)
+let compare_names (m, v) (m', v') =
+  match String.compare m m' with 0 -> String.compare v v' | c -> c
 
 (* The library's synthetic limits, by its home module and name. *)
 let width_constant_base = ([ "Ir"; "Backend_intf" ], "no_hardware_limits")
@@ -1523,6 +1609,203 @@ let main () =
                   (String.concat ~sep:", " spellings))))
   in
   let width_table = ref [] in
+  (* gh-ocannl-1368: the search's entry points, derived. The anchor is refused when it moves, as the
+     width's are: a renamed `tune` would otherwise retire the rule with an empty population. *)
+  let search_anchor_found =
+    match List.Assoc.find source_files ~equal:String.equal search_home with
+    | None -> false
+    | Some on_disk ->
+        List.exists
+          (Sources.definitions (In_channel.read_all on_disk))
+          ~f:(fun d ->
+            d.Sources.top_level
+            && Option.equal String.equal d.Sources.name (Some (List.last_exn search_value)))
+  in
+  (* The framework library's values reaching the search, by module and name: a value reaches it when
+     it names a qualified path ending in the entry point or in an earlier-found wrapper, or a value
+     of its own module that does, closed to its fixpoint across the library's modules. A call
+     spelled bare under an `open` of another module is not followed -- the golden's entry-point line
+     is where a missing wrapper shows. *)
+  let search_wrappers =
+    let library =
+      List.filter_map source_files ~f:(fun (path, on_disk) ->
+          let dir = Stdlib.Filename.dirname path ^ "/" in
+          if
+            String.equal dir search_wrapper_root
+            && not (String.equal (Stdlib.Filename.basename path) "ocannl.ml")
+            || String.equal dir search_support_root
+          then
+            Some
+              ( String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)),
+                In_channel.read_all on_disk )
+          else None)
+    in
+    let tag = "<search>" in
+    let rec close found =
+      let tails = search_value :: List.map found ~f:(fun (m, v) -> m :: String.split v ~on:'.') in
+      let next =
+        List.concat_map library ~f:(fun (module_name, content) ->
+            if
+              not
+                (List.exists tails ~f:(fun tail ->
+                     String.is_substring content ~substring:(List.last_exn tail)))
+            then []
+            else
+              (Sources.top_level_key_reach ~fields:false
+                 ~external_keys:(fun path ->
+                   if
+                     List.exists tails ~f:(fun tail ->
+                         List.length path >= List.length tail
+                         && List.equal String.equal tail
+                              (List.drop path (List.length path - List.length tail)))
+                   then [ tag ]
+                   else [])
+                 content)
+                .reach
+              |> List.filter_map ~f:(fun (name, keys) ->
+                  Option.some_if (List.mem keys tag ~equal:String.equal) (module_name, name)))
+        |> List.dedup_and_sort ~compare:compare_names
+      in
+      if List.length next = List.length found then found else close next
+    in
+    if search_anchor_found then close [] else []
+  in
+  (* Every spelling a program names a search by: the entry point, and each wrapper through the
+     library's wrapper module; and the tails any qualification of them ends in. *)
+  let wrapper_path (m, v) =
+    (if
+       List.exists source_files ~f:(fun (path, _) ->
+           String.equal path (search_wrapper_root ^ String.uncapitalize m ^ ".ml"))
+     then [ search_wrapper_library ]
+     else [])
+    @ (m :: String.split v ~on:'.')
+  in
+  let search_paths = search_value :: List.map search_wrappers ~f:wrapper_path in
+  let search_tails =
+    search_value :: List.map search_wrappers ~f:(fun (m, v) -> m :: String.split v ~on:'.')
+  in
+  let search_reach =
+    List.filter_map source_files ~f:(fun (path, on_disk) ->
+        let content = In_channel.read_all on_disk in
+        if
+          String.equal path search_home
+          || not
+               (List.exists search_tails ~f:(fun tail ->
+                    String.is_substring content ~substring:(List.last_exn tail)))
+        then None
+        else
+          let named =
+            List.map (Sources.module_references_in_source content ~paths:search_paths)
+              ~f:(fun spelling ->
+                Option.value
+                  (String.chop_prefix spelling ~prefix:(search_wrapper_library ^ "."))
+                  ~default:spelling)
+          in
+          let suffixed =
+            List.filter_map (Sources.value_paths_in_source content) ~f:(fun path ->
+                List.find search_tails ~f:(fun tail ->
+                    List.length path >= List.length tail
+                    && List.equal String.equal tail
+                         (List.drop path (List.length path - List.length tail))))
+            |> List.map ~f:(String.concat ~sep:".")
+          in
+          match List.dedup_and_sort (named @ suffixed) ~compare:String.compare with
+          | [] -> None
+          | spellings -> Some (String.lowercase path, spellings))
+    |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
+  in
+  (* The helpers that pin each key of the vector file: top-level values of a program's own code by
+     extension -- every source outside [width_compiler_roots] -- whose body states the key, by
+     module and name. *)
+  let could_state ~key content =
+    List.exists (vector_file_literals key) ~f:(fun l -> String.is_substring content ~substring:l)
+  in
+  let vector_file_helpers =
+    List.map vector_file_keys ~f:(fun (key, _) ->
+        ( key,
+          List.concat_map source_files ~f:(fun (path, on_disk) ->
+              if
+                List.exists width_compiler_roots ~f:(fun root -> String.is_prefix path ~prefix:root)
+              then []
+              else
+                let content = In_channel.read_all on_disk in
+                if not (could_state ~key content) then []
+                else
+                  let m =
+                    String.capitalize
+                      (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
+                  in
+                  List.map (vector_file_stating_reach ~key content) ~f:(fun v -> (m, v))) ))
+  in
+  (* The derived side of the blessing: the values stating every key of the vector file. *)
+  let vector_file_pinners =
+    match vector_file_helpers with
+    | [] -> []
+    | (_, first) :: rest ->
+        List.filter first ~f:(fun helper ->
+            List.for_all rest ~f:(fun (_, helpers) ->
+                List.mem helpers helper ~equal:(fun a b -> compare_names a b = 0)))
+        |> List.dedup_and_sort ~compare:compare_names
+  in
+  let vector_file_pin_module =
+    String.capitalize
+      (Stdlib.Filename.remove_extension (Stdlib.Filename.basename vector_file_pin_home))
+  in
+  let vector_file_blessed =
+    List.map vector_file_pin_values ~f:(fun v -> (vector_file_pin_module, v))
+    |> List.dedup_and_sort ~compare:compare_names
+  in
+  (* Per source: its top-level items in order, and how to read a path in it -- as a call of a
+     blessed helper, or as a search. A helper is followed by what the reference RESOLVES to under
+     the source's aliases, opens and shadowing ([Sources.module_reference_sites]), never by its last
+     two components: a `Vendor.Fissioned_chain.small_menu` or a local `module Fissioned_chain = …`
+     is not the helper (Codex P2, round 1). And a spelling is credited only where EVERY occurrence
+     of it resolves to the helper, so one that means the helper in one scope and a namesake in
+     another is not followed (round 2). *)
+  let vector_file_init_order =
+    List.filter_map source_files ~f:(fun (path, on_disk) ->
+        let content = In_channel.read_all on_disk in
+        if
+          not
+            (List.exists vector_file_pin_values ~f:(fun v ->
+                 String.is_substring content ~substring:v))
+        then None
+        else
+          let items = Sources.initialization_items content in
+          let paths = List.map vector_file_blessed ~f:(fun (m, v) -> [ m; v ]) in
+          let sites = Sources.module_reference_sites content ~paths in
+          let all_paths = List.concat_map items ~f:(fun item -> item.Sources.paths) in
+          let resolves spelled =
+            let resolved =
+              List.count sites ~f:(fun (components, _) ->
+                  List.equal String.equal components spelled)
+            in
+            resolved > 0 && resolved >= List.count all_paths ~f:(List.equal String.equal spelled)
+          in
+          (* Qualified only: a bare `small_menu ()` under `open Fissioned_chain` could name a value
+             a later binding shadows, which the module-level resolver does not track (Codex P2,
+             round 6), while a module path cannot be rebound by a value. *)
+          let helper_of spelled =
+            List.find_map sites ~f:(fun (components, helper) ->
+                Option.some_if
+                  (List.length spelled >= 2
+                  && resolves spelled
+                  && List.equal String.equal components spelled)
+                  helper)
+          in
+          let search_sites = Sources.module_reference_sites content ~paths:search_paths in
+          let is_search path =
+            List.exists search_tails ~f:(fun tail ->
+                List.length path >= List.length tail
+                && List.equal String.equal tail
+                     (List.drop path (List.length path - List.length tail)))
+            || List.exists search_sites ~f:(fun (components, _) ->
+                List.equal String.equal components path)
+          in
+          Some (String.lowercase path, (items, helper_of, is_search)))
+    |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
+  in
+  let search_table = ref [] in
   (* Whether this run was handed the repository, established the way the sibling scans establish it:
      every scan root the globs are written for contributed its floor of sources. The relationship
      below is about whatever tree is in front of the scan and is checked either way; the CENSUS
@@ -1553,6 +1836,41 @@ let main () =
              and pass every stanza; follow the rename in `width_module`, `width_limits_home` or \
              `width_limits_type_home`, or extend the rule's globs"
             (String.concat ~sep:"; " missing)));
+  (* gh-ocannl-1368's anchors, on the same terms: the search's entry point, and the helper that pins
+     the width for the searches whose claims depend on it. *)
+  (if repository_census || List.Assoc.mem source_files ~equal:String.equal search_home then
+     let missing =
+       List.filter_map
+         (( not search_anchor_found,
+            Printf.sprintf "%s defines no top-level `%s`" search_home (List.last_exn search_value)
+          )
+         :: List.map vector_file_helpers ~f:(fun (key, helpers) ->
+             (List.is_empty helpers, Printf.sprintf "no helper outside the library states `%s`" key))
+         )
+         ~f:(fun (absent, what) -> Option.some_if absent what)
+     in
+     if not (List.is_empty missing) then
+       fail
+         (Printf.sprintf
+            "the cc search derivation lost an anchor: %s -- the rule would find no search, or no \
+             pin, and pass or fail every program for the wrong reason; follow the rename in \
+             `search_home`/`search_value`, or extend the rule's globs"
+            (String.concat ~sep:"; " missing)));
+  (* The blessing, held equal to the derivation (see [vector_file_pin_values]). *)
+  (if repository_census || List.Assoc.mem source_files ~equal:String.equal vector_file_pin_home then
+     let show helpers =
+       match helpers with
+       | [] -> "none"
+       | _ -> String.concat ~sep:", " (List.map helpers ~f:(fun (m, v) -> m ^ "." ^ v))
+     in
+     if not (List.equal (fun a b -> compare_names a b = 0) vector_file_pinners vector_file_blessed)
+     then
+       fail
+         (Printf.sprintf
+            "the support values whose bodies state every key of the cc vector file (%s) are not \
+             the blessed pin helpers (%s) -- bless a new helper in `vector_file_pin_values` once \
+             review has seen it pin every key, or restore the statement a blessed one lost"
+            (show vector_file_pinners) (show vector_file_blessed)));
   let artifact_claimed = ref (Set.empty (module String)) in
   let artifact_violations = ref 0 in
   (* One line per subject for stderr, and per dune file for the golden: what the golden holds is
@@ -1632,6 +1950,79 @@ let main () =
       let marker_contract = Scan.backend_marker_contract content in
       let marked =
         List.map marker_contract.Scan.contract_stanzas ~f:(fun m -> m.Scan.marker_stanza)
+      in
+      (* gh-ocannl-1368: whether a run can select cc, by the backend rule's own reading of the
+         stanza running it. *)
+      let runs_cc runner =
+        List.exists marker_contract.Scan.contract_stanzas ~f:(fun m ->
+            Sexp.equal m.Scan.marker_stanza.Scan.marked_sexp runner
+            &&
+            match Scan.backend_rule_of m with
+            | Scan.Declares_variable -> true
+            | Scan.Names_backend (_, body) ->
+                List.exists (String.split body.Scan.backend ~on:',') ~f:(fun word ->
+                    List.mem width_cc_backends word ~equal:String.equal)
+            | _ -> false)
+      in
+      (* And the width marker, on the stanza naming the program's modules. *)
+      let width_contract =
+        Scan.contained_marker_contract content ~sentinel:width_marker_sentinel
+          ~parse_declaration:(fun _ ~declaration ~reason ->
+            if String.equal declaration width_marker_declaration then Ok reason
+            else
+              Error
+                [
+                  Printf.sprintf "`%s` is not `%s` -- a program that depends on the width pins it"
+                    declaration width_marker_declaration;
+                ])
+          ~belongs:(fun stanza _ ->
+            match stanza.Scan.marked_head with
+            | "test" | "tests" | "executable" | "executables" -> Ok ()
+            | head ->
+                Error
+                  [
+                    Printf.sprintf
+                      "a `%s` stanza names no program's modules -- the width marker goes on the \
+                       `(test)` or `(executable)` whose modules start the search"
+                      head;
+                  ])
+      in
+      let width_marker_where line = Printf.sprintf "%s:%d" dune_file line in
+      List.iter width_contract.Scan.contract_issues ~f:(function
+        | Scan.Malformed_marker { issue_line; issue_text; issue_malformed } ->
+            fail
+              (Printf.sprintf
+                 "%s has a `%s` comment that does not parse as a marker: %s. The line reads `;%s`"
+                 (width_marker_where issue_line) width_marker_sentinel
+                 (Scan.marker_malformed_reason ~sentinel:width_marker_sentinel
+                    ~separator_subject:"declaration"
+                    ~grammar:
+                      (Printf.sprintf "%s %s -- <reason>" width_marker_sentinel
+                         width_marker_declaration)
+                    issue_malformed)
+                 issue_text)
+        | Scan.Marker_in_wrong_stanza { issue_line; issue_why; _ } ->
+            fail
+              (Printf.sprintf "%s carries a width marker on the wrong stanza: %s"
+                 (width_marker_where issue_line) issue_why)
+        | Scan.Marker_outside_stanza { issue_line; _ } ->
+            fail
+              (Printf.sprintf
+                 "%s has a width marker that sits inside no stanza -- move it inside the \
+                  parentheses of the program it is about"
+                 (width_marker_where issue_line))
+        | Scan.Marker_outside_comment
+            { issue_text_occurrences = in_text; issue_comment_occurrences = in_comments } ->
+            fail
+              (Printf.sprintf
+                 "%s spells `%s` %d times and only %d of them are in a comment -- a width marker \
+                  outside a comment declares nothing"
+                 dune_file width_marker_sentinel in_text in_comments));
+      let width_markers_used = ref [] in
+      let width_markers_of stanza =
+        List.concat_map width_contract.Scan.contract_stanzas ~f:(fun m ->
+            if Sexp.equal m.Scan.marker_stanza.Scan.marked_sexp stanza then m.Scan.stanza_markers
+            else [])
       in
       let words = ref (Set.empty (module String)) in
       let any_declared = ref false in
@@ -2659,17 +3050,22 @@ let main () =
                                  a `setenv` around a helper beside the subject pins nothing here,
                                  and one around the subject is not undone by an unpinned helper
                                  (Codex P1 round 1, P2 round 4). *)
-                              List.map runners ~f:(fun (r, pins) -> (Scan.field r "deps", pins)) ))
+                              List.map runners ~f:(fun (r, pins) -> (Scan.field r "deps", pins)),
+                              List.map runners ~f:(fun (r, pins) -> (r, pins)) ))
                     (* Against an EMPTY runner list, which is the same shape an executable nothing
                        runs gets and says the same thing: there is no `deps` field in reach that a
                        change of the variable could invalidate for every process that links it. *)
-                    | "library" -> [ (named (), modules, "whatever links it", []) ]
+                    | "library" -> [ (named (), modules, "whatever links it", [], []) ]
                     | _ ->
                         [
-                          (named (), modules, "it", [ (Scan.field stanza "deps", own_pins stanza) ]);
+                          ( named (),
+                            modules,
+                            "it",
+                            [ (Scan.field stanza "deps", own_pins stanza) ],
+                            [ (stanza, own_pins stanza) ] );
                         ]
                   in
-                  List.iter programs ~f:(fun (name, own_modules, program, runners) ->
+                  List.iter programs ~f:(fun (name, own_modules, program, runners, run_stanzas) ->
                       let where =
                         Printf.sprintf "%s%s, %s %s" dune_file
                           (if String.is_empty subdir then "" else " (subdir " ^ subdir ^ ")")
@@ -2865,6 +3261,204 @@ let main () =
                                  an ARM box owes the ubuntu leg, replays the previous width's \
                                  result as a pass. Add (env_var %s) to every rule that runs %s"
                                 where via width_program var var width_program));
+                      (* gh-ocannl-1368: a program starting a search, with a run that can select cc,
+                         pins the vector file or says at its stanza why its claims hold at every
+                         width. *)
+                      (let in_here module_name =
+                         String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))
+                       in
+                       (* One subject per program: a `(tests (names a b))` stanza builds a separate
+                          executable per name, linking each one's main module and the shared ones
+                          but not its siblings' mains (Codex P2, round 2). *)
+                       let subjects =
+                         match (kind, Scan.names_of stanza) with
+                         | "tests", (_ :: _ :: _ as names) ->
+                             List.map names ~f:(fun n ->
+                                 ( Printf.sprintf "%s (%s)" where n,
+                                   Scan.program_modules stanza ~modules:own_modules ~name:n ))
+                         | _ -> [ (where, own_modules) ]
+                       in
+                       let cc_runs = List.filter run_stanzas ~f:(fun (r, _) -> runs_cc r) in
+                       (* The pin set names the variable a `setenv` fixes, not the value it fixes it
+                          to, and `""` or `-1` leaves the key on the host's probe: every `setenv` of
+                          it in the run's stanza has to set a value (Codex P2, round 1). *)
+                       let sets_a_value runner ~key =
+                         let var = Utils.env_var_name key in
+                         let rec values = function
+                           | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest)
+                             when String.equal (String.uppercase name) var ->
+                               value :: List.concat_map rest ~f:values
+                           | Sexp.List items -> List.concat_map items ~f:values
+                           | Sexp.Atom _ -> []
+                         in
+                         List.for_all (values runner) ~f:(function
+                           | Sexp.Atom value -> vector_file_pins key value
+                           | Sexp.List _ -> false)
+                       in
+                       (* A command-line setting outranks both the environment and the configuration
+                          file (Codex P2, round 3), under any spelling the runtime reads
+                          ([Utils.cmdline_var_prefixes], round 4). The scan credits none: one
+                          anywhere in the run's stanza leaves the key to the command line, which
+                          needs the marker. *)
+                       let on_command_line runner ~key =
+                         let prefixes = Utils.cmdline_var_prefixes key in
+                         let rec atoms = function
+                           | Sexp.Atom atom -> [ atom ]
+                           | Sexp.List items -> List.concat_map items ~f:atoms
+                         in
+                         List.exists (atoms runner) ~f:(fun atom ->
+                             List.exists prefixes ~f:(fun prefix -> String.is_prefix atom ~prefix))
+                       in
+                       (* Whether a program's initialization pins the file: one of its modules CALLS
+                          a blessed helper in statement position of a top-level item that runs at
+                          initialization (a helper in a closure or an argument is not a call, round
+                          4), every item before it names neither a search nor another of the
+                          program's modules -- a search seeds from whatever the file is when it
+                          starts, so a pin after it is no pin (round 3) -- and no item from the
+                          pinning one up to the first search spells a key of the file, which could
+                          reset it (round 4). No other module of the program names a search at all,
+                          since its initializers may run before the pinning one. *)
+                       let init_pin modules =
+                         let names_search m = Map.mem search_reach (in_here m) in
+                         let key_literals =
+                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
+                               vector_file_literals key)
+                         in
+                         List.find_map modules ~f:(fun m ->
+                             let others =
+                               List.filter modules ~f:(fun m' -> not (String.equal m m'))
+                             in
+                             match Map.find vector_file_init_order (in_here m) with
+                             | Some (items, helper_of, is_search)
+                               when not (List.exists others ~f:names_search) ->
+                                 let barrier = function
+                                   | path when is_search path -> true
+                                   | first :: _ :: _ -> List.mem others first ~equal:String.equal
+                                   | _ -> false
+                                 in
+                                 let rec scan pinned = function
+                                   | [] -> pinned
+                                   | item :: _ when List.exists item.Sources.paths ~f:barrier ->
+                                       pinned
+                                   | item :: rest ->
+                                       let pinned =
+                                         match
+                                           if item.Sources.runs then
+                                             List.filter_map item.Sources.called ~f:helper_of
+                                           else []
+                                         with
+                                         | [] -> pinned
+                                         | helpers -> Some helpers
+                                       in
+                                       let pinned =
+                                         if
+                                           List.exists item.Sources.literals ~f:(fun literal ->
+                                               List.mem key_literals literal ~equal:String.equal)
+                                         then None
+                                         else pinned
+                                       in
+                                       scan pinned rest
+                                 in
+                                 Option.map (scan None items) ~f:(fun helpers ->
+                                     Printf.sprintf
+                                       "%s.ml calls %s at initialization, before any search"
+                                       (String.lowercase m)
+                                       (String.concat ~sep:", "
+                                          (List.map
+                                             (List.dedup_and_sort helpers ~compare:String.compare)
+                                             ~f:(fun helper -> "`" ^ helper ^ "`"))))
+                             | _ -> None)
+                       in
+                       (* How a subject pins the whole file on every cc run, or [None]. Per key and
+                          run, by precedence: a command-line setting leaves it unpinned, then a
+                          `setenv` around the run decides -- a `-1` there undoes the initializer's
+                          pin (round 2) -- and only without either, the initializer. *)
+                       let pinned_by modules =
+                         let init = init_pin modules in
+                         let answers =
+                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
+                               let var = Utils.env_var_name key in
+                               List.map cc_runs ~f:(fun (r, pins) ->
+                                   (* A `setenv` of the key anywhere in the stanza that sets no
+                                      pinning value leaves this run unpinned, even one wrapping only
+                                      some of its invocations: the pin set it is read from
+                                      intersects them (Codex P2, round 7). *)
+                                   if on_command_line r ~key || not (sets_a_value r ~key) then None
+                                   else if Set.mem pins var then
+                                     Some
+                                       (Printf.sprintf "every run that can select cc pins `%s`" var)
+                                   else init))
+                         in
+                         Option.map (Option.all answers) ~f:(fun hows ->
+                             String.concat ~sep:"; "
+                               (List.dedup_and_sort hows ~compare:String.compare))
+                       in
+                       let searching =
+                         List.filter_map subjects ~f:(fun (subject, modules) ->
+                             match
+                               List.filter_map modules ~f:(fun m ->
+                                   Map.find search_reach (in_here m))
+                               |> List.concat
+                               |> List.dedup_and_sort ~compare:String.compare
+                             with
+                             | [] -> None
+                             | searches ->
+                                 Some (subject, String.concat ~sep:", " searches, pinned_by modules))
+                       in
+                       let markers = width_markers_of stanza in
+                       if not (List.is_empty searching || List.is_empty cc_runs) then (
+                         List.iter markers ~f:(fun m ->
+                             width_markers_used := m.Scan.contained_line :: !width_markers_used);
+                         let record subject via answer =
+                           search_table := (subject, via, answer) :: !search_table
+                         in
+                         match markers with
+                         | _ :: second :: _ ->
+                             fail
+                               (Printf.sprintf
+                                  "%s carries more than one width marker (the second at line %d) \
+                                   -- say it once"
+                                  where second.Scan.contained_line)
+                         | [ marker ] -> (
+                             match List.filter_map searching ~f:(fun (_, _, pinned) -> pinned) with
+                             | hows when List.length hows = List.length searching ->
+                                 fail
+                                   (Printf.sprintf
+                                      "%s pins the cc vector file (%s) and carries a width marker \
+                                       at line %d saying its claims hold at every width -- a \
+                                       pinned program's runs see one width, so keep whichever is \
+                                       true"
+                                      where (String.concat ~sep:"; " hows)
+                                      marker.Scan.contained_line)
+                             | _ ->
+                                 List.iter searching ~f:(fun (subject, via, pinned) ->
+                                     record subject via
+                                       (match pinned with
+                                       | Some how -> "pinned: " ^ how
+                                       | None -> "independent, by its marker")))
+                         | [] ->
+                             List.iter searching ~f:(fun (subject, via, pinned) ->
+                                 match pinned with
+                                 | Some how -> record subject via ("pinned: " ^ how)
+                                 | None ->
+                                     fail
+                                       (Printf.sprintf
+                                          "%s starts a search (%s) with a run that can select cc, \
+                                           at the width the host auto-probes -- 16 bytes on ARM, \
+                                           32 or 64 on the x86 runners CI draws at random, with a \
+                                           register count that differs again -- so a claim on what \
+                                           the search seeds or keeps passes on one host and fails \
+                                           on the next. Pin the vector file (%s) by calling \
+                                           `Fissioned_chain.small_menu` or `small_menu_envelope` \
+                                           in a top-level item before the first search, or with \
+                                           `(setenv …)` of each on every such run, or add `; %s %s \
+                                           -- <why its claims hold at every width>` inside the \
+                                           stanza"
+                                          subject via
+                                          (String.concat ~sep:", "
+                                             (List.map vector_file_keys ~f:(fun (key, _) ->
+                                                  Printf.sprintf "`%s`" key)))
+                                          width_marker_sentinel width_marker_declaration))));
                       (* gh-ocannl-1149: the keys the program reaches by naming the schedule
                          pipeline, asked of every run of it exactly as a guard's keys are. Not of a
                          library: one naming the pipeline is the route every compiled program takes,
@@ -3009,6 +3603,16 @@ let main () =
       (* Every directory-scoped check above plugs into this one traversal. Keep the reverse: checks
          run in source order, so diagnostics and tables remain stable while the seam changes. *)
       per_directory file_stanzas ~checks:(List.rev !directory_checks);
+      (* A width marker no program of its stanza needs: it says something about a search that is not
+         there, or that cannot run on cc, and the next reader copies it as if it did. *)
+      List.iter width_contract.Scan.contract_stanzas ~f:(fun m ->
+          List.iter m.Scan.stanza_markers ~f:(fun marker ->
+              if not (List.mem !width_markers_used marker.Scan.contained_line ~equal:Int.equal) then
+                fail
+                  (Printf.sprintf
+                     "%s carries a width marker, and no program of its stanza starts a search with \
+                      a run that can select cc -- drop the marker"
+                     (width_marker_where marker.Scan.contained_line))));
       check_family_members ();
       artifact_by_file := (dune_file, !artifact_subjects) :: !artifact_by_file);
   (* Every static format a repository scanner hands to a Verdict refusal or claim, related to all
@@ -3132,6 +3736,21 @@ let main () =
     (String.concat ~sep:", " (List.map width_record_types ~f:fst));
   List.sort !width_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
   |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
+  printf
+    "\n\
+     Programs starting a search with a run that can select cc, each pinning the cc vector file\n\
+     (%s) or saying why its claims hold at every width (gh-ocannl-1368):\n"
+    (String.concat ~sep:", " (List.map vector_file_keys ~f:(fun (key, _) -> "`" ^ key ^ "`")));
+  (* The derivations, so an entry point or a pinning helper that appears or vanishes is a reviewable
+     diff. *)
+  printf "  (the search's entry points: %s)\n"
+    (String.concat ~sep:", "
+       (String.concat ~sep:"." search_value
+       :: List.map search_wrappers ~f:(fun w -> String.concat ~sep:"." (wrapper_path w))));
+  printf "  (the blessed support values pinning the file: %s)\n"
+    (String.concat ~sep:", " (List.map vector_file_blessed ~f:(fun (m, v) -> m ^ "." ^ v)));
+  List.sort !search_table ~compare:(fun (a, _, _) (b, _, _) -> String.compare a b)
+  |> List.iter ~f:(fun (where, via, answer) -> printf "  %s (%s): %s\n" where via answer);
   let stale_gateless =
     List.concat_map gateless_dirs ~f:(fun (file, (aliases, _)) ->
         Option.value_map aliases
@@ -6421,6 +7040,318 @@ let malformed_tree_sources =
       "(library (name far) (modules far) (preprocessor_deps (env_var OCANNL_LOG_LEVEL_PROBE)))\n" );
   ]
 
+(* gh-ocannl-1368's control. Every program in the repository answers for the width once this rule
+   lands, so a control drawn from the corpus would pass whether the rule decides anything or not;
+   put to a tree of its own, one `(test)` starts a search -- or does not -- under each way of
+   answering for the width.
+
+   The stand-in `autotune.ml` defines the entry point, the stand-in `train.ml` a framework value
+   reaching it through a helper of its own, and a stand-in `Fissioned_chain` at the blessed helpers'
+   home states the vector file the way the real one does: a literal in a list its local helper
+   writes into the configuration table. It also starts a search of its own, as a support value
+   reaching the entry point. The probe's arms differ in how it starts the search, whether and where
+   it pins the file, and what its stanza says. *)
+let search_wrapper_home = search_wrapper_root ^ "train.ml"
+
+let search_helper_stub ?(envelope_keys = [ (width_key, "32"); (registers_key, "16") ]) ?(extra = "")
+    () =
+  Printf.sprintf
+    "let state settings =\n\
+    \  List.iter settings ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)\n\
+     let small_menu_envelope () = state [ %s ]\n\
+     let small_menu () = small_menu_envelope ()\n\
+     let report () = Printf.printf \"%s=%%d\\n\" 16\n\
+     let peek () = Hashtbl.mem Utils.config_file_args %S\n\
+     let search () = Autotune.tune ()\n\
+     %s"
+    (String.concat ~sep:"; "
+       (List.map envelope_keys ~f:(fun (key, value) -> Printf.sprintf "(%S, %S)" key value)))
+    width_key width_key extra
+
+(* How the probe's stanza answers. *)
+let search_subject ?(marker = "") ?(action = "") ?(backend = `Selects) ?(rule_marker = "")
+    ?(preamble = "") ?(head = "test") ?(programs = "(name probe)\n (modules probe)") () =
+  Printf.sprintf
+    "%s(%s\n\
+    \ %s\n\
+    \ %s\n\
+    \ (deps ocannl_config%s)\n\
+    \ (libraries arrayjit.ir)%s)\n\n\
+     (rule\n\
+    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
+    \ %s\n\
+    \ (alias runtest)\n\
+    \ (deps ocannl_config (universe))\n\
+    \ (action\n\
+    \  (run %%{dep:ambient.exe})))\n\n\
+     (executable\n\
+    \ (name ambient)\n\
+    \ (modules ambient)\n\
+    \ (link_flags -linkall)\n\
+    \ (libraries arrayjit.utils))\n"
+    preamble head
+    (match backend with
+    | `Selects -> marker
+    | `None -> "; ocannl-backend: none -- the probe runs on no device at all.\n " ^ marker)
+    programs
+    (match backend with `Selects -> " (env_var OCANNL_BACKEND)" | `None -> "")
+    action rule_marker
+
+let search_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_search" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  write_file (Stdlib.Filename.concat root "t/ambient.ml") "let () = ()\n";
+  write_file
+    (Stdlib.Filename.concat root search_wrapper_home)
+    "let arm () = Autotune.tune ()\nlet tune_placements () = arm ()\n";
+  let paths =
+    "t/dune" :: "t/ambient.ml" :: "t/probe.ml" :: search_home :: search_wrapper_home
+    :: vector_file_pin_home :: List.map context ~f:fst
+  in
+  let run ?(home = "let tune () = ()\n") ?(stub = search_helper_stub ()) ?marker ?action ?backend
+      ?rule_marker ?preamble ?head ?programs ?(extra = []) ~probe () =
+    write_file (Stdlib.Filename.concat root search_home) home;
+    write_file (Stdlib.Filename.concat root vector_file_pin_home) stub;
+    write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
+    List.iter extra ~f:(fun (file, content) ->
+        write_file (Stdlib.Filename.concat root file) content);
+    write_file
+      (Stdlib.Filename.concat root "t/dune")
+      (search_subject ?marker ?action ?backend ?rule_marker ?preamble ?head ?programs ());
+    let result = run_checker ~root ~exe (("." :: paths) @ List.map extra ~f:fst) in
+    List.iter extra ~f:(fun (file, _) -> Stdlib.Sys.remove (Stdlib.Filename.concat root file));
+    result
+  in
+  let marker = "; cc-vector-width: independent -- the probe makes no claim on the menu." in
+  let var = Utils.env_var_name width_key in
+  let registers_var = Utils.env_var_name registers_key in
+  let tune = "let () = Autotune.tune ()\n" in
+  let named = tune in
+  let wrapped = "open Ocannl\nlet () = Train.tune_placements ()\n" in
+  let pin = "let () = Fissioned_chain.small_menu ()\n" in
+  let helper = pin ^ tune in
+  let state key value =
+    Printf.sprintf "let () = Hashtbl.set Utils.config_file_args ~key:%S ~data:%S\n" key value
+  in
+  let direct = state width_key "16" ^ state registers_key "32" ^ tune in
+  (* The width set to [value], the register count to a pin. *)
+  let setenv value =
+    Printf.sprintf "\n (action (setenv %s %s (setenv %s 16 (run %%{test}))))" var value
+      registers_var
+  in
+  let read =
+    Printf.sprintf
+      "let width () = Utils.get_global_arg ~arg_name:%S ~default:\"-1\"\n\
+       let () = ignore (width ()); Fissioned_chain.report (); Autotune.tune ()\n"
+      width_key
+  in
+  let report label (status, text) =
+    eprintf "the search control's %s run %s. Its captured output:\n%s\n" label
+      (describe_status status) text
+  in
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let says substring (_, text) = String.is_substring text ~substring in
+  let diagnostic = "at the width the host auto-probes" in
+  let refused ?(why = diagnostic) result = (result, exited 1 result && says why result) in
+  let passed result = (result, exited 0 result && not (says diagnostic result)) in
+  let unblessed = "are not the blessed pin helpers" in
+  let arms =
+    [
+      ("unanswered", refused (run ~probe:named ()));
+      ("marked", passed (run ~marker ~probe:named ()));
+      ("setenv", passed (run ~action:(setenv "32") ~probe:named ()));
+      ("helper", passed (run ~probe:helper ()));
+      ("direct", refused (run ~probe:direct ()));
+      ("read", refused (run ~probe:read ()));
+      ("wrapped", refused (run ~probe:wrapped ()));
+      ("deviceless", passed (run ~backend:`None ~probe:named ()));
+      ("stale", refused ~why:"drop the marker" (run ~marker ~probe:"let () = ()\n" ()));
+      ("both", refused ~why:"keep whichever is true" (run ~marker ~probe:helper ()));
+      ( "malformed",
+        refused ~why:"does not parse as a marker"
+          (run ~marker:"; cc-vector-width: unrelated -- the probe makes no claim." ~probe:named ())
+      );
+      ( "twice",
+        refused ~why:"more than one width marker"
+          (run ~marker:(marker ^ "\n " ^ marker) ~probe:named ()) );
+      ( "argument",
+        refused ~why:"outside a comment"
+          (run ~marker ~action:"\n (action (run %{test} cc-vector-width:))" ~probe:named ()) );
+      ( "on_rule",
+        refused ~why:"on the wrong stanza" (run ~marker ~rule_marker:marker ~probe:named ()) );
+      ( "between",
+        refused ~why:"sits inside no stanza"
+          (run ~marker ~preamble:(marker ^ "\n\n") ~probe:named ()) );
+      ( "anchor",
+        refused ~why:"lost an anchor" (run ~home:"let tuned () = ()\n" ~marker ~probe:named ()) );
+      (* Codex P2, rounds 1-3 of staging#1263. *)
+      ( "peek",
+        refused
+          (run ~probe:"let () = ignore (Fissioned_chain.peek ())\nlet () = Autotune.tune ()\n" ())
+      );
+      ("setenv_auto", refused (run ~action:(setenv "-1") ~probe:named ()));
+      ("setenv_empty", refused (run ~action:(setenv "\"\"") ~probe:named ()));
+      ("vendor", refused (run ~probe:("let () = Vendor.Fissioned_chain.small_menu ()\n" ^ tune) ()));
+      ( "shadowed",
+        refused
+          (run
+             ~probe:("module Fissioned_chain = struct let small_menu () = () end\n" ^ pin ^ tune)
+             ()) );
+      ( "aliased",
+        passed (run ~probe:("module M = Fissioned_chain\nlet () = M.small_menu ()\n" ^ tune) ()) );
+      ( "registers",
+        refused
+          (run
+             ~action:(Printf.sprintf "\n (action (setenv %s 32 (run %%{test})))" var)
+             ~probe:named ()) );
+      ("override", refused (run ~action:(setenv "-1") ~probe:helper ()));
+      ( "scoped",
+        refused
+          (run
+             ~probe:
+               ("let leg () = Fissioned_chain.small_menu ()\n\
+                 module Fissioned_chain = struct let small_menu () = () end\n" ^ pin ^ tune)
+             ()) );
+      ( "plural",
+        refused
+          (run ~head:"tests" ~programs:"(names probe pin)\n (modules probe pin)"
+             ~extra:[ ("t/pin.ml", pin) ]
+             ~probe:named ()) );
+      ( "plural_own",
+        passed
+          (run ~head:"tests" ~programs:"(names probe pin)\n (modules probe pin)"
+             ~extra:[ ("t/pin.ml", "let () = ()\n") ]
+             ~probe:helper ()) );
+      ("late", refused (run ~probe:(tune ^ pin) ()));
+      ( "command_line",
+        refused
+          (run ~action:"\n (action (run %{test} --ocannl_cc_vector_bytes=-1))" ~probe:helper ()) );
+      (* Round 4: any spelling the runtime reads, a call rather than a mention, and no reset before
+         the search; a conditional call is the supported `if is_cpu` shape. *)
+      ( "command_line_dashed",
+        refused
+          (run ~action:"\n (action (run %{test} --ocannl-cc-vector-bytes=-1))" ~probe:helper ()) );
+      ( "closure",
+        refused
+          (run ~probe:("let () = ignore (fun () -> Fissioned_chain.small_menu ())\n" ^ tune) ()) );
+      ( "reset",
+        refused
+          (run
+             ~probe:
+               (pin
+               ^ Printf.sprintf "let () = Hashtbl.set Utils.config_file_args ~key:%S ~data:\"-1\"\n"
+                   width_key
+               ^ tune)
+             ()) );
+      (* Round 6: a bare call under an `open` is not credited, since a value binding could shadow
+         it. *)
+      ( "opened",
+        refused
+          (run
+             ~probe:("open Fissioned_chain\nlet small_menu () = ()\nlet () = small_menu ()\n" ^ tune)
+             ()) );
+      (* Round 7: a non-pinning `setenv` around one invocation of several unpins the run. *)
+      ( "setenv_partial",
+        refused
+          (run
+             ~action:
+               (Printf.sprintf "\n (action (progn (run %%{test}) (setenv %s -1 (run %%{test}))))"
+                  var)
+             ~probe:helper ()) );
+      ( "conditional",
+        passed (run ~probe:("let () = if is_cpu then Fissioned_chain.small_menu ()\n" ^ tune) ()) );
+      ("support_search", refused (run ~probe:"let () = Fissioned_chain.search ()\n" ()));
+      ( "lapsed",
+        refused ~why:unblessed
+          (run
+             ~stub:(search_helper_stub ~envelope_keys:[ (width_key, "32") ] ())
+             ~marker ~probe:named ()) );
+      ( "unblessed",
+        refused ~why:unblessed
+          (run
+             ~stub:(search_helper_stub ~extra:"let other_pin () = small_menu_envelope ()\n" ())
+             ~marker ~probe:named ()) );
+    ]
+  in
+  List.iter arms ~f:(fun (label, (result, ok)) -> if not ok then report label result);
+  let ok label = snd (List.Assoc.find_exn arms label ~equal:String.equal) in
+  printf
+    "\n\
+     The cc search rule (gh-ocannl-1368) is put to a tree of one `(test)` whose module starts a\n\
+     search of a stand-in `Autotune`, directly or through a stand-in framework or support wrapper,\n\
+     beside a stand-in `Fissioned_chain` stating `%s` and `%s`\n\
+     the way the small menu does. The arms differ in where the program pins the file, in what its\n\
+     stanza says, in one renamed entry point, and in what the stand-in helpers state.\n\n"
+    width_key registers_key;
+  Verdict.p
+    "a program starting a search with a run that can select cc is reported when it neither pins \
+     the width nor carries the marker"
+    (ok "unanswered");
+  Verdict.p "the same stanza carrying `; cc-vector-width: independent -- <reason>` passes"
+    (ok "marked");
+  Verdict.p "and so does one pinning the variable with `setenv` around its run" (ok "setenv");
+  Verdict.p "and so does a program whose initialization calls a support helper stating the width"
+    (ok "helper");
+  Verdict.p "a program's own statements of the keys are no pin: only a blessed helper or a run's is"
+    (ok "direct");
+  Verdict.p "nor does a read of the key, or a helper printing its name" (ok "read");
+  Verdict.p "a search started through a framework wrapper of the entry point is a search too"
+    (ok "wrapped");
+  Verdict.p "a program whose only run names a backend other than cc is not asked" (ok "deviceless");
+  Verdict.p "a marker on a program that starts no search is refused as stale" (ok "stale");
+  Verdict.p "a marker on a program that pins the width is refused as contradictory" (ok "both");
+  Verdict.p "a marker declaring anything but `independent` is refused" (ok "malformed");
+  Verdict.p "two markers on one stanza are refused" (ok "twice");
+  Verdict.p "the marker's sentinel outside a comment is refused" (ok "argument");
+  Verdict.p "a marker on a rule, which names no program's modules, is refused" (ok "on_rule");
+  Verdict.p "a marker between stanzas is refused rather than attributed" (ok "between");
+  Verdict.p "an entry point renamed away is refused as a lost anchor, not read as no search"
+    (ok "anchor");
+  Verdict.p "a helper that only reads the configuration table pins nothing" (ok "peek");
+  Verdict.p "nor a `setenv` of `-1` or of the empty string, which reads as unset"
+    (ok "setenv_auto" && ok "setenv_empty");
+  Verdict.p
+    "a call through another module's or a local module's namesake of the helper pins nothing"
+    (ok "vendor" && ok "shadowed");
+  Verdict.p "while one through an alias of the helper's module does" (ok "aliased");
+  Verdict.p "a program pinning the width but not the register count is reported" (ok "registers");
+  Verdict.p "a `setenv` of `-1` around a run undoes an initializer's statement of the width"
+    (ok "override");
+  Verdict.p
+    "a helper spelling that a later namesake module rebinds is not credited at the rebinding"
+    (ok "scoped");
+  Verdict.p
+    "in a plural `(tests)` stanza, one program's pin is not another's, while a program pinning \
+     itself passes"
+    (ok "plural" && ok "plural_own");
+  Verdict.p "a helper called after the first search pins nothing" (ok "late");
+  Verdict.p "nor does one under a command-line `--ocannl_cc_vector_bytes=-1`" (ok "command_line");
+  Verdict.p "a search started through a support value reaching the entry point is a search too"
+    (ok "support_search");
+  Verdict.p "a command-line setting in another spelling the runtime reads unpins too"
+    (ok "command_line_dashed");
+  Verdict.p "a helper in a closure the initializer builds but never calls pins nothing"
+    (ok "closure");
+  Verdict.p "nor does one whose key a later item spells again before the first search" (ok "reset");
+  Verdict.p "while a call under a condition, the `if is_cpu` shape, does" (ok "conditional");
+  Verdict.p
+    "a bare call under an `open` of the helper's module, which a value can shadow, pins nothing"
+    (ok "opened");
+  Verdict.p "a `setenv` of `-1` around one of a run's invocations undoes the helper's pin"
+    (ok "setenv_partial");
+  Verdict.p
+    "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
+     are both refused"
+    (ok "lapsed" && ok "unblessed");
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 let malformed_tree_control () =
   let exe =
     let name = Stdlib.Sys.executable_name in
@@ -6456,6 +7387,7 @@ let () =
       inline_alias_control ();
       pipeline_control ();
       width_control ();
+      search_control ();
       ambient_gate_control ();
       repository_inventory_control ();
       gateless_scope_control ();

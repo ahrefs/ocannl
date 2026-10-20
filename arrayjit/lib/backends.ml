@@ -1470,11 +1470,48 @@ let finalize (type dev runner event)
    use. Either failure mode surfaces at [get_device], where [Context.auto]'s fallback catches it per
    call, as with the retired per-call instantiation. *)
 
+(* gh-ocannl-1281: a faulted GPU leaves its driver wedged, and every later process that touches the
+   runtime then spins in device initialization forever (gh-ocannl-1211). The guarded class is every
+   device backend entry point that ASKS the driver about devices or opens one: discovery
+   ([num_devices]), the per-backend properties and limits ([static_properties], [hardware_limits],
+   each of which enumerates the devices), a device's identity ([timing_identity]: attributes, and on
+   HIP the runtime and compiler versions) and opening a device ([get_device]). Each runs under
+   {!Utils.with_device_init_deadline} on every call: [num_devices], [static_properties] and
+   [timing_identity] query the driver again each time, and a GPU that faults after its first
+   discovery is exactly the wedge this bounds; where a call is a cache read the guard costs a few
+   system calls. Outside the class, deliberately: everything that WAITS on device work ([await],
+   [sync], the copies and launches), where a long wait is a legitimate long computation and the
+   harnesses' per-test caps are the bound. Applied to the three device backends only; the cc
+   backends, which [Raise_backend] also builds, touch no driver. A missing backend's stub is guarded
+   too, harmlessly: it answers at once. The implementation modules themselves ([Cuda_backend.Impl],
+   ...) are below this boundary: code that drives one directly, as the arrayjit backend tests do,
+   wraps its own device opening in {!Utils.with_device_init_deadline}; and so does a backend's own
+   device discovery reached from outside these entry points, while compiling or linking
+   ([min_compute_capability] on CUDA; [all_rdna_wave32], [hiprtc_target_archs] and the scratch
+   budget on HIP). A region entered from inside another on the same thread runs under the outer
+   one's deadline. *)
+module With_device_init_deadline (Device : Lowered_backend) = struct
+  include Device
+
+  let guarded f = Utils.with_device_init_deadline ~backend_name:Device.name f
+  let num_devices () = guarded Device.num_devices
+  let static_properties () = guarded Device.static_properties
+  let hardware_limits () = guarded Device.hardware_limits
+  let timing_identity device = guarded (fun () -> Device.timing_identity device)
+  let get_device ~ordinal = guarded (fun () -> Device.get_device ~ordinal)
+end
+
 module Cc_b : Backend = Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend)
 module Multidev_cc_b : Backend = Make_device_backend_from_lowered (Schedulers.Multidev) (Cc_backend)
-module Cuda_b : Backend = Raise_backend (Cuda_backend_impl.Impl : Lowered_backend)
-module Hip_b : Backend = Raise_backend (Hip_backend_impl.Impl : Lowered_backend)
-module Metal_b : Backend = Raise_backend (Metal_backend_impl.Impl : Lowered_backend)
+
+module Cuda_b : Backend = Raise_backend (With_device_init_deadline (
+  Cuda_backend_impl.Impl : Lowered_backend))
+
+module Hip_b : Backend = Raise_backend (With_device_init_deadline (
+  Hip_backend_impl.Impl : Lowered_backend))
+
+module Metal_b : Backend = Raise_backend (With_device_init_deadline (
+  Metal_backend_impl.Impl : Lowered_backend))
 
 type backend = Cc | Multidev_cc | Cuda | Hip | Metal [@@deriving sexp, equal, enumerate]
 

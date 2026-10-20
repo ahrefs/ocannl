@@ -238,13 +238,19 @@ end = struct
      initialization at module init: the "HIP Library Path" banner then goes to the runner's own
      stdout instead of the first [%expect] block (no ppx_expect capture is active yet, so the banner
      cannot corrupt or pollute test output). Failures are swallowed — an unusable driver/GPU
-     surfaces at [get_device], where [Context.auto]'s fallback can catch it. *)
+     surfaces at [get_device], where [Context.auto]'s fallback can catch it. This is the one driver
+     entry that runs before [Backends.With_device_init_deadline] wraps the module, so it takes the
+     same deadline itself (gh-ocannl-1281): a wedged driver would otherwise hang every inline-test
+     runner in [H.init] with no bound. *)
   let () =
     if
       am_running_inline_tests
       && String.equal "hip"
            (String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:""))
-    then try Lazy.force ensure_initialized with _ -> ()
+    then
+      try
+        Utils.with_device_init_deadline ~backend_name:name (fun () -> Lazy.force ensure_initialized)
+      with _ -> ()
 
   let num_devices () =
     Lazy.force ensure_initialized;
@@ -288,13 +294,16 @@ end = struct
     || String.is_prefix a.gcn_arch_name ~prefix:"gfx12")
     && a.warp_size = 32
 
+  (* Device discovery a compile can force first: under the device-init deadline like the guarded
+     entry points (gh-ocannl-1281, [Backends.With_device_init_deadline]). *)
   let all_rdna_wave32 =
     lazy
-      (let n = num_devices () in
-       n > 0
-       && Array.for_all
-            (Array.init n ~f:(fun ordinal -> H.Device.get_attributes (H.Device.get ~ordinal)))
-            ~f:tile_mma_eligible)
+      (Utils.with_device_init_deadline ~backend_name:name (fun () ->
+           let n = num_devices () in
+           n > 0
+           && Array.for_all
+                (Array.init n ~f:(fun ordinal -> H.Device.get_attributes (H.Device.get ~ordinal)))
+                ~f:tile_mma_eligible))
 
   (* A directory containing a COMPLETE rocWMMA header tree, if any: [ROCWMMA_PATH] variants, a clone
      under [%LOCALAPPDATA%/rocwmma], or the HIP include tree (rocWMMA installs there on Linux).
@@ -332,9 +341,11 @@ end = struct
      different ordinal. Querying attributes does not switch that current target. The cache uses this
      same set and option selector. *)
   let hiprtc_target_archs () =
-    Array.init (num_devices ()) ~f:(fun ordinal ->
-        (H.Device.get_attributes (H.Device.get ~ordinal)).gcn_arch_name)
-    |> Array.to_list
+    (* Device discovery on every compile: under the device-init deadline (gh-ocannl-1281). *)
+    Utils.with_device_init_deadline ~backend_name:name (fun () ->
+        Array.init (num_devices ()) ~f:(fun ordinal ->
+            (H.Device.get_attributes (H.Device.get ~ordinal)).gcn_arch_name)
+        |> Array.to_list)
 
   let%diagn2_sexp hip_to_code ~name hip_src =
     let name_hip = name ^ ".hip" in
@@ -1211,7 +1222,10 @@ end = struct
                (let attrs = H.Device.get_attributes (H.Device.get ~ordinal) in
                 (attrs, scratch_limit_per_work_item attrs))))
     in
-    fun (device : device) -> Lazy.force (Lazy.force cache).(device.ordinal)
+    fun (device : device) ->
+      (* Discovery a link can force first: under the device-init deadline (gh-ocannl-1281). *)
+      Utils.with_device_init_deadline ~backend_name:name (fun () ->
+          Lazy.force (Lazy.force cache).(device.ordinal))
 
   let validate_scratch_budget ~(device : device) ~name func =
     if Lazy.force hip_scratch_validation then
@@ -1577,8 +1591,7 @@ end = struct
               device qualifies: limits are min-over-devices, so code compiled once must be valid
               wherever it links. Precision combinations are decided per call by [mma_syntax]. *)
            mma = (if mma_supported () then Some Hip_mma.capability else None);
-           simd_vector_bytes = 0;
-           simd_vector_registers = 0;
+           simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured false on gfx1151; see the field. *)

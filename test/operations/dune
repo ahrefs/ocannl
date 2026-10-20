@@ -146,6 +146,8 @@
   (alias runtest-ll_test_ratchet)
   (alias runtest-ll_test_scan_cases)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-tensorized_census_ratchet)
+  (alias runtest-tensorized_census_scan_cases)
   (alias runtest-operand_key_scan_cases)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
@@ -267,6 +269,7 @@
   (alias runtest-config_var_spellings)
   (alias runtest-foreign_c_stderr)
   (alias runtest-foreign_c_stderr_noise)
+  (alias runtest-device_init_deadline)
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
@@ -313,6 +316,7 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
@@ -742,6 +746,8 @@
 ; cc_dlopen_cause.ml has the mechanism).
 
 (executable
+ ; cc-vector-width: independent -- the search fails at the untuned baseline's link, before any
+ ; candidate is seeded.
  (name cc_dlopen_cause)
  (modules cc_dlopen_cause)
  (libraries base ocannl stdio unix arrayjit.verdict)
@@ -2967,6 +2973,51 @@
  (action
   (diff foreign_c_stderr_noise.expected foreign_c_stderr_noise.actual)))
 
+; gh-ocannl-1281: a GPU backend's device discovery and device opening run under a deadline that
+; kills a stuck process by SIGALRM with a diagnostic. The child simulates a stuck initialization
+; through Utils' test stall hook, which raises before any driver contact; the parent observes each
+; child's death or survival, pinning `device_init_deadline` on the child's COMMANDLINE, so an
+; ambient `OCANNL_DEVICE_INIT_DEADLINE` cannot change what it sees.
+
+(executables
+ (names device_init_deadline device_init_deadline_child)
+ (modules device_init_deadline device_init_deadline_child)
+ (foreign_stubs
+  (language c)
+  (names device_init_deadline_stubs))
+ (libraries
+  base
+  stdio
+  unix
+  mtime
+  mtime.clock.os
+  arrayjit.utils
+  arrayjit.ir
+  arrayjit.context
+  fresh_process
+  arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: cc -- the child names each backend singleton itself: on the cuda, hip and metal
+ ; ones the stall hook raises before any driver contact, and only cc's entry points really run.
+ (target device_init_deadline.actual)
+ (deps ocannl_config ../../tools/test-run.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:device_init_deadline.exe}
+    %{dep:device_init_deadline_child.exe}
+    %{dep:../../tools/test-run.sh}))))
+
+(rule
+ (alias runtest-device_init_deadline)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff device_init_deadline.expected device_init_deadline.actual)))
+
 ;; gh-ocannl-1036: device streams torn down at process exit, observed from a parent process --
 ;; the ROCm runtime reports a leaked stream on the exiting child's stderr, which nothing inside the
 ;; child can read. The child's modes are listed in its header; the marker module is what both link.
@@ -3482,6 +3533,9 @@
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
+  tensorized_census_ratchet.ml
+  tensorized_census_ratchet.expected
+  tensorized_census_scan_cases.expected
   provenance_tag_inventory.ml
   provenance_tag_inventory.expected
   provenance_tag_scan_cases.expected
@@ -3542,6 +3596,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
+   tensorized_census_ratchet.ml
+   tensorized_census_ratchet.expected,tensorized_census_scan_cases.expected
    provenance_tag_inventory.ml
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
    render_decline_inventory.ml
@@ -3865,7 +3921,10 @@
 ; against external qualified, aliased, opened, or included references, and (gh-ocannl-1009) every
 ; top-level type declaration against a mention of its name anywhere but its own declaration. The matching policy is pure in
 ; test/support/dead_export_scan.ml, so these cases exercise it against synthetic violations and
-; near misses rather than trusting today's usually-clean repository as its own control.
+; near misses rather than trusting today's usually-clean repository as its own control. They also
+; hold every modelled derived name and inferred call equal to the installed PPX expansion of a
+; fixture corpus (gh-ocannl-913/914), hence the linked derivers: listing [ppx_hash] registers it,
+; its archive being force-linked.
 
 (test
  ; ocannl-backend: none -- reads synthetic OCaml sources through ppxlib and links no backend.
@@ -3880,7 +3939,7 @@
   ppx_compare.expander
   ppx_enumerate
   ppx_fields_conv
-  ppx_hash.expander
+  ppx_hash
   ppx_sexp_conv
   ppx_sexp_conv.expander
   ppx_variants_conv
@@ -4723,6 +4782,42 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1343: the default CPU pipeline parallelizes a matmul whose product is a non-materialized
+; intermediate (fission keeps a scratch zero with its accumulation; default_cpu takes chains from
+; scratch writes), with parity against the unscheduled compile.
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
+ (name cpu_scratch_matmul_grid)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules cpu_scratch_matmul_grid)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1003 stage 1: the default GPU annotator's lane geometry for the online-softmax hoist's
 ; value pass, executed against exact references and pinned in the emitted kernel.
 
@@ -4870,6 +4965,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- claims relate fields of one report and replay identity, over
+ ; exact halves-and-integers values.
  (name autotune_smoke)
  (package neural_nets_lib)
  (deps
@@ -4888,6 +4985,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- claims are cache-key completeness and search/replay outcomes,
+ ; gradients within 1e-4.
  (name padded_conv_cache)
  (package neural_nets_lib)
  (deps
@@ -4899,6 +4998,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- claims concern the baseline and accounting, and best <= default
+ ; holds by construction.
  (name autotune_serial_baseline)
  (package neural_nets_lib)
  (deps
@@ -4930,6 +5031,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- the regimes differ only in numerics policy; claims compare
+ ; outcomes and keys.
  (name schedule_cache_numerics)
  (package neural_nets_lib)
  (deps
@@ -4950,6 +5053,8 @@
  (libraries base ocannl stdio arrayjit.verdict))
 
 (test
+ ; cc-vector-width: independent -- a pointwise add seeds no sketch, and the key claims are
+ ; self-consistent within one run.
  ; ocannl-lifecycle: schedule_cache_device -- checks allocation and cleanup across resource seams
  (name schedule_cache_device)
  (package neural_nets_lib)
@@ -5223,6 +5328,8 @@
     (diff autotune_fission_sketch.expected autotune_fission_sketch.actual)))))
 
 (executable
+ ; cc-vector-width: independent -- on cc the GPU claims are skipped, and the rest needs one timed
+ ; CPU candidate.
  (name autotune_mma_companion)
  (modules autotune_mma_companion)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -5257,6 +5364,8 @@
     (diff autotune_mma_companion.expected autotune_mma_companion.actual)))))
 
 (executable
+ ; cc-vector-width: independent -- the GPU seed lists ignore the cc width, and no CPU pipeline
+ ; Grid-splits j at any width.
  (name autotune_batched_companion)
  (modules autotune_batched_companion)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -6237,6 +6346,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- the tune claim is a fused-to-unfused ratio, which the width moves
+ ; symmetrically.
  (name schedule_epilogue_fusion)
  (package neural_nets_lib)
  (deps
@@ -6316,6 +6427,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- the conv family's seed counts read the width only through gates
+ ; passing at 16, 32 and 64 bytes.
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps
@@ -6452,6 +6565,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- an elementwise scale and a sum of exact ones, with no matmul or
+ ; conv site to seed.
  (name symbolic_extent_launch)
  (package neural_nets_lib)
  (deps
@@ -6536,6 +6651,8 @@
 ; dwarfs any measured time, pruning every sketch deterministically on any machine.
 
 (executable
+ ; cc-vector-width: independent -- its 1e3 envelope bound-prunes every sketch, and the width-free
+ ; blocktile family seeds one to prune at any width.
  (name autotune_bound_pruning)
  (modules autotune_bound_pruning)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -6571,6 +6688,8 @@
 ; the pass is backend-generic and the printed facts are structural (timings never appear).
 
 (executable
+ ; cc-vector-width: independent -- the stream kernels are pointwise, so no sketch family reads the
+ ; width; claims relate rows to timings.
  (name bandwidth_calibration)
  (modules bandwidth_calibration)
  (libraries base ocannl stdio arrayjit.verdict)
@@ -6602,6 +6721,8 @@
 ; calibration TSV is pinned on the command line; only names are printed, never timings.
 
 (executable
+ ; cc-vector-width: independent -- a pointwise add seeds no sketch family; its claims are about
+ ; routine and calibration-row names.
  (name autotune_routine_name)
  (modules autotune_routine_name)
  (libraries base ocannl stdio arrayjit.verdict)
@@ -6680,6 +6801,8 @@
 ; makes the roofline-scoring output deterministic across the backend test matrix.
 
 (executable
+ ; cc-vector-width: independent -- its claims are existence and inequalities every width's menu
+ ; meets: all leaves fit at 16, 32 and 64 bytes.
  (name cost_model_selection)
  (modules cost_model_selection)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -6792,6 +6915,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (executable
+ ; cc-vector-width: independent -- claims are about arm selection, checked against the run's own
+ ; measurements.
  (name tune_ship_arm)
  (modules tune_ship_arm)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -6817,6 +6942,8 @@
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
 
 (test
+ ; cc-vector-width: independent -- every seeding judgment runs on synthetic limits, and the host
+ ; tune has no sketch family.
  ; gh-ocannl-1407: the seeding census, on synthetic device limits, and its config key's stream.
  (name seeding_census)
  (package neural_nets_lib)
@@ -6847,6 +6974,8 @@
   (run %{test} "--ocannl_autotune_log_seeding=true")))
 
 (test
+ ; cc-vector-width: independent -- a lone pointwise sum seeds no sketch family; claims compare
+ ; progress lines with the reports.
  ; gh-ocannl-1061: the tuner's progress lines, with a candidate line at every attempt.
  (name autotune_progress)
  (package neural_nets_lib)
@@ -6861,6 +6990,8 @@
   (run %{test} "--ocannl_autotune_progress=true")))
 
 (test
+ ; cc-vector-width: independent -- a pointwise graph with no matmul site; its flips come from
+ ; placement analysis.
  (name inline_flip_tune)
  (package neural_nets_lib)
  (deps
@@ -6872,6 +7003,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- claims compare a replay with what the same width recorded, over
+ ; exact matmul values.
  (name placement_store)
  (package neural_nets_lib)
  (deps
@@ -6909,6 +7042,8 @@
   (pps ppx_here)))
 
 (executable
+ ; cc-vector-width: independent -- the claims need only a few candidates per arm, which every width
+ ; seeds.
  (name autotune_arm_containment)
  (modules autotune_arm_containment)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -6996,6 +7131,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- split-reduce menus come from a fixed sweep and the site's
+ ; extents, values within 1e-3.
  (name autotune_split_reduce)
  (package neural_nets_lib)
  (deps
@@ -7108,6 +7245,7 @@
 ; above — HIP-meaningful, and it runs a (small) autotune search.
 
 (executable
+ ; cc-vector-width: independent -- no matmul site for the width to reshape, and its sums are exact.
  (name hip_scratch_tune_survives)
  (modules hip_scratch_tune_survives)
  (libraries base ocannl stdio arrayjit.verdict test_utils)
@@ -7138,6 +7276,8 @@
 ; host-observable through Ir.Alloc_census on cc, even though the out-of-memory it caused is not.
 
 (test
+ ; cc-vector-width: independent -- release claims hold per candidate, and the hoist claim is an
+ ; equivalence over what was seeded.
  ; ocannl-lifecycle: autotune_candidate_release -- checks allocation and cleanup across resource seams
  (name autotune_candidate_release)
  (package neural_nets_lib)
@@ -7152,6 +7292,8 @@
 ; gh-ocannl-1326: a search on a simulated device with room for one and a half routine footprints.
 
 (test
+ ; cc-vector-width: independent -- its claims are outcomes and footprints; the 1.5x room holds every
+ ; width's candidates (run at 16, 32, 64 bytes).
  ; ocannl-lifecycle: autotune_device_memory -- drives the allocator seam to simulate device capacity
  (name autotune_device_memory)
  (package neural_nets_lib)
@@ -7281,6 +7423,8 @@
 ; deterministically on any machine; inline flips are never floor-pruned and still search.
 
 (executable
+ ; cc-vector-width: independent -- the 1e3 envelope's floors sit orders of magnitude above any
+ ; incumbent the width could crown.
  (name flip_bound_pruning)
  (modules flip_bound_pruning)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -7320,6 +7464,8 @@
 ; reach, so no schedule changes -- for the identity to be seen carrying it.
 
 (executable
+ ; cc-vector-width: independent -- a pointwise graph on a scripted clock: no sketch family reads the
+ ; width, and every timing is synthetic.
  (name flip_abandonment)
  (modules flip_abandonment)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test bench_harness)
@@ -7617,8 +7763,10 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
- ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md and the tools scripts as text and links no backend.
- (target agent_notes_structure.actual)
+ ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md, the tools scripts and the test sources as text and links no backend.
+ ; The test sources are read for the agent-note pointers their string literals print (gh-ocannl-1358);
+ ; with them the argument list outgrows Windows' command line, so it goes over as a response file.
+ (targets agent_notes_structure.actual agent_notes_structure.filelist)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
@@ -7626,11 +7774,19 @@
   ../../AGENTS.md
   ../../docs/agent-notes.md
   (glob_files_rec ../../docs/agent-notes/*.md)
-  (glob_files ../../tools/*.sh))
+  (glob_files ../../tools/*.sh)
+  (glob_files_rec ../../test/*.ml))
  (action
-  (with-stdout-to
-   %{target}
-   (run %{dep:agent_notes_structure.exe} %{deps}))))
+  (progn
+   (with-stdout-to
+    agent_notes_structure.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    agent_notes_structure.actual
+    (run
+     %{dep:agent_notes_structure.exe}
+     %{workspace_root}
+     @agent_notes_structure.filelist)))))
 
 (rule
  (alias runtest-agent_notes_structure)
@@ -8305,24 +8461,22 @@
   (diff config_usage_scan_control.expected config_usage_scan_control.actual)))
 
 (rule
- ; ocannl-backend: none -- drives every direct config-usage refusal through injected state, and
- ; resolves the agent-note pointers those refusals print against the notes' headings.
+ ; ocannl-backend: none -- drives every direct config-usage refusal through injected state.
+ ; The agent-note pointers those refusals print are resolved by agent_notes_structure (gh-ocannl-1358).
  (target config_usage_scan_refusal_control.actual)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
   config_usage_scan.ml
-  config_usage_scan_token_grammar.fixture
-  (glob_files ../../docs/agent-notes/*.md))
+  config_usage_scan_token_grammar.fixture)
  (action
   (with-stdout-to
    %{target}
    (run
     %{dep:config_usage_scan.exe}
     --refusal-control
-    %{dep:config_usage_scan_token_grammar.fixture}
-    ../../docs/agent-notes))))
+    %{dep:config_usage_scan_token_grammar.fixture}))))
 
 ; A tool-invented name in a *.sh or *.py source is refused with a hint naming the fix; the same
 ; names in an OCaml source keep the general message. Each <name>.fixture is scanned as <name>.
@@ -8730,6 +8884,50 @@
  (action
   (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
 
+; gh-ocannl-1309: an executed claim about a tensorized routine whose item judges no mma census --
+; parity alone also passes for a Tile_mma that declined to the scalar fallback (gh-ocannl-1283).
+; The reader states its closed lists of recognised forms. Same arrangement as ll_test_ratchet.
+
+(executable
+ (name tensorized_census_ratchet)
+ (modules tensorized_census_ratchet)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target tensorized_census_ratchet.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:tensorized_census_ratchet.exe}
+    %{workspace_root}
+    %{dep:tensorized_census_ratchet.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-tensorized_census_ratchet)
+ (package neural_nets_lib)
+ (action
+  (diff tensorized_census_ratchet.expected tensorized_census_ratchet.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic source cases and child scanner invocations.
+ (name tensorized_census_scan_cases)
+ (package neural_nets_lib)
+ (modules tensorized_census_scan_cases)
+ (libraries base stdio unix fresh_process test_utils arrayjit.verdict)
+ (deps ocannl_config tensorized_census_ratchet.exe)
+ (action
+  (run %{test} %{dep:tensorized_census_ratchet.exe})))
+
 ; gh-ocannl-1056: a census total printed in a repository-scan golden -- hand-fixed three times
 ; (gh-ocannl-665, gh-ocannl-701, gh-ocannl-1046) -- is refused on the PR that adds it. The scanner
 ; derives the goldens from the `scans` alias above and allows a number only through a named entry
@@ -8873,6 +9071,8 @@
  (libraries base ocannl stdio ll_test arrayjit.verdict))
 
 (test
+ ; cc-vector-width: independent -- the scripted clock fixes the winner, and a 16x16 matmul seeds the
+ ; two windows it needs at any width.
  ; ocannl-lifecycle: autotune_callback_release -- checks allocation and cleanup across resource seams
  (name autotune_callback_release)
  (package neural_nets_lib)
@@ -8888,6 +9088,8 @@
 ; with its own value in every seam, and each observer sees only its own domain's search.
 
 (test
+ ; cc-vector-width: independent -- every window reads a scripted constant; the claims are about
+ ; where seam events come from.
  ; ocannl-backend: cc -- both searches run on an explicit Context.cpu (); the property is the seams', not a backend's.
  (name autotune_seam_domains)
  (package neural_nets_lib)
@@ -8902,6 +9104,8 @@
 ; second domain's later turn is admitted.
 
 (test
+ ; cc-vector-width: independent -- its claims are which search is admitted or refused; completion
+ ; needs one timed candidate of a matmul, which every width's menu has.
  ; ocannl-backend: cc -- both searches run on an explicit Context.cpu (); the property is the search entry's, not a backend's.
  (name autotune_concurrent_refusal)
  (package neural_nets_lib)
@@ -9003,6 +9207,8 @@
 ; read once per process, hence its own executable) ships the untuned default and stores nothing.
 
 (test
+ ; cc-vector-width: independent -- the budget cuts the search after the baseline, before any sketch
+ ; is compiled.
  (name autotune_budget_unfloored)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
@@ -9023,6 +9229,7 @@
 ; the search runs on a GPU backend and every claim is skipped elsewhere.
 
 (test
+ ; cc-vector-width: independent -- every claim is gated on a GPU backend, and on cc no search runs.
  (name autotune_staffed_fine)
  (package neural_nets_lib)
  (deps
@@ -9065,6 +9272,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- the refused seed is tracked by its code fingerprint, whatever
+ ; else the width seeds.
  (name autotune_measured_refusal)
  (package neural_nets_lib)
  (deps
@@ -9192,6 +9401,16 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; Host-only controls for the benchmark driver's report validator.
+;
+; The three Python controls below hand-list the benchmark modules their scripts import, and run in
+; a copying sandbox (gh-ocannl-1359): unsandboxed, an import of an unlisted module passes whenever
+; another rule happened to copy that module into _build/default/benchmarks (gh1002_kernels went
+; without `box_gate.py` that way, which gh1002_cells.py imports at its top). `(sandbox always)`
+; alone would pick the symlink sandbox, where Python resolves the script back into _build/default
+; and finds the neighbours anyway; `preserve_file_kind` rules that out. `config_dep_completeness`
+; requires the setting of every rule whose program it cannot place, these among them
+; (build-and-test.md#dune-mechanics). Each stays an alias-only action that diffs its own output:
+; a target-producing rule running an opaque command is one `bin_smoke_membership_scan` refuses.
 
 (rule
  ; ocannl-backend: none -- runs Python report controls and launches no OCANNL executable.
@@ -9202,7 +9421,8 @@
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9228,7 +9448,8 @@
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9250,9 +9471,11 @@
   gh1002_kernels.py
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
-  ../../benchmarks/display_safe.py)
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
  (action
   (no-infer
    (progn
@@ -9593,6 +9816,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- winners are planted, not searched, and every code or key
+ ; comparison is within one process.
  (name fission_replay_segmentation)
  (package neural_nets_lib)
  (deps
@@ -9670,6 +9895,8 @@
 ; under. Scripted ranking, pinned to cc; unix captures the replay's log line.
 
 (test
+ ; cc-vector-width: independent -- a pointwise workload ranked by a label script; no sketch family
+ ; reads the width.
  (name autotune_labels)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
@@ -9684,6 +9911,8 @@
 ; on because the twins and the budget are claimed in the progress record.
 
 (executable
+ ; cc-vector-width: independent -- a pointwise fixture on a scripted clock; the placement surface it
+ ; prints never reads the width.
  (name flip_twins)
  (modules flip_twins)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
@@ -9713,6 +9942,8 @@
   (diff flip_twins.expected flip_twins.actual)))
 
 (test
+ ; cc-vector-width: independent -- the refusals happen at cache replay and at the baseline, before
+ ; any sketch is seeded.
  (name autotune_replay_refusal)
  ; ocannl-backend: cc -- Context.cpu (); a corrupt cache entry's refusal is backend-independent
  (package neural_nets_lib)
@@ -9876,6 +10107,8 @@
 ; but the seeding gate, which the test pins at threshold 32 so the plan seeds on every device.
 
 (test
+ ; cc-vector-width: independent -- on cc no search runs: the seeded plan is CUDA/HIP-only, gated on
+ ; the backend name.
  (name autotune_seeded_seed)
  (package neural_nets_lib)
  (deps

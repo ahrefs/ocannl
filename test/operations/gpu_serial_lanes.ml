@@ -27,7 +27,10 @@
    where per-lane recompute is costly (HIP) a lane nest alone in its kernel still takes its lanes --
    the hoisted value pass, alone and in the pipeline -- but fission no longer cuts the fused dV from
    dK to keep them: the two share a kernel on the plain plan; [~lanes:false] keeps the plain plan,
-   values exact; [auto] resolves per device, the run's own included. *)
+   values exact; [auto] resolves per device, the run's own included; 8. a row statistic sharing the
+   value pass's plain chain, before or after it, costs the value pass no lanes at either economics
+   (gh-ocannl-1239): the plain-plan probe alone would merge the two into a kernel declining them,
+   and the run's own pipeline, executed, keeps them, values exact. *)
 
 open Base
 open Stdio
@@ -83,16 +86,21 @@ type lane_case = {
   expected : float array list;
 }
 
+let r_dims = [| b_n; s_n; h_n |]
+let r_seed b s h = Float.of_int (1000 + (((((b * s_n) + s) * h_n) + h) * 3))
+
 (* The hoisted value pass over [P], [V] into [O], with the lane body [body] (given the local [p] and
-   the symbols), optionally followed by a plain elementwise nest writing [Q]. *)
-let hoisted ~name ~lane_body ~reference ?(with_plain = false) () =
+   the symbols), optionally followed by a plain elementwise nest writing [Q], and optionally beside
+   ([`Before] or [`After] it) a row statistic [R[b, s, h] += P[b, s, h, t]] (leg 8). *)
+let hoisted ~name ~lane_body ~reference ?(with_plain = false) ?row_statistic () =
   let p_tn = node ~dims:p_dims (name ^ "_p")
   and v_tn = node ~dims:v_dims (name ^ "_v")
   and o_tn = node ~dims:o_dims (name ^ "_o")
   and q_tn = node ~dims:o_dims (name ^ "_q")
+  and r_tn = node ~dims:r_dims (name ^ "_r")
   and p_local = node ~dims:[| 1 |] (name ^ "_prob") in
   L.virtualize p_local;
-  List.iter [ p_tn; v_tn; o_tn; q_tn ] ~f:L.materialize;
+  List.iter [ p_tn; v_tn; o_tn; q_tn; r_tn ] ~f:L.materialize;
   let p = LL.get_scope p_local in
   let b = L.sym () and s = L.sym () and h = L.sym () and t = L.sym () and e = L.sym () in
   let value_pass =
@@ -111,8 +119,24 @@ let hoisted ~name ~lane_body ~reference ?(with_plain = false) () =
          [| L.iter b; L.iter s; L.iter h; L.iter e |]
          (L.add (L.mul (L.c 100.) (L.tag b s)) (L.tag h e))
   in
+  let row =
+    let b = L.sym () and s = L.sym () and h = L.sym () and t = L.sym () in
+    let r_idx = [| L.iter b; L.iter s; L.iter h |] in
+    L.loop_n b b_n @@ L.loop_n s s_n @@ L.loop_n h h_n @@ L.loop_n t t_n
+    @@ L.set r_tn r_idx
+         (L.add (L.get r_tn r_idx) (L.get p_tn [| L.iter b; L.iter s; L.iter h; L.iter t |]))
+  in
   let llc = if with_plain then L.seq value_pass plain else value_pass in
-  let materialized = [ p_tn; v_tn; o_tn ] @ if with_plain then [ q_tn ] else [] in
+  let llc =
+    match row_statistic with
+    | None -> llc
+    | Some `Before -> L.seq row llc
+    | Some `After -> L.seq llc row
+  in
+  let with_row = Option.is_some row_statistic in
+  let materialized =
+    [ p_tn; v_tn; o_tn ] @ (if with_plain then [ q_tn ] else []) @ if with_row then [ r_tn ] else []
+  in
   let opt = L.optimize ~materialized ~name llc in
   let seed =
     [
@@ -120,6 +144,13 @@ let hoisted ~name ~lane_body ~reference ?(with_plain = false) () =
       (v_tn, fill ~dims:v_dims (fun i -> v_value i.(0) i.(1) i.(2) i.(3)));
       (o_tn, fill ~dims:o_dims (fun i -> o_seed i.(0) i.(1) i.(2) i.(3)));
     ]
+    @ if with_row then [ (r_tn, fill ~dims:r_dims (fun i -> r_seed i.(0) i.(1) i.(2))) ] else []
+  in
+  let expected_r =
+    fill ~dims:r_dims (fun i ->
+        List.fold (List.range 0 t_n)
+          ~init:(r_seed i.(0) i.(1) i.(2))
+          ~f:(fun acc t -> acc +. p_value i.(0) i.(1) i.(2) t))
   in
   let expected_o = reference () in
   let expected_q =
@@ -131,8 +162,10 @@ let hoisted ~name ~lane_body ~reference ?(with_plain = false) () =
     name;
     opt;
     seed;
-    read = o_tn :: (if with_plain then [ q_tn ] else []);
-    expected = expected_o :: (if with_plain then [ expected_q ] else []);
+    read = ((o_tn :: (if with_plain then [ q_tn ] else [])) @ if with_row then [ r_tn ] else []);
+    expected =
+      ((expected_o :: (if with_plain then [ expected_q ] else []))
+      @ if with_row then [ expected_r ] else []);
   }
 
 (* [O[b, s, h, e] += p * V[b, t, h, e]], in the serial order: t ascending per cell. *)
@@ -591,7 +624,7 @@ let () =
      gh-ocannl-1167 -- leaves dV in a kernel without dK. *)
   let cut =
     S.fission_scheduled ~promote_locals:true
-      ~keep_mapping:(fun o -> S.default_gpu ~limits:costly o)
+      ~keep_mapping:(S.mapping_probe (fun o -> S.default_gpu ~limits:costly o))
       ~preset:(fun o -> S.default_gpu ~limits:costly o)
       ~zero_sched:(S.zero_expansion ~limits:costly) ~static_indices:[] (copy fused_opt)
     |> List.map ~f:(fun (_, _, _, (post : LL.optimized)) -> LL.flat_lines [ post.LL.llc ])
@@ -631,3 +664,81 @@ let () =
         match measured with
         | S.Lanes_cut -> List.for_all (dv @ dk) ~f:lane_inside_serial
         | _ -> not (List.exists dv ~f:lane_inside_serial))
+
+(* Leg 8 (gh-ocannl-1239): a row statistic -- [R[b, s, h] += P[b, s, h, t]], whose chain is the
+   value pass's plain one, [(b, s, h)], and whose path has no lane extension -- beside the hoisted
+   value pass, in either order. The two are conflict-free and their plain plans match, so the
+   plain-plan probe alone merges them, and [lane_geometry] declines the merged kernel (a plain nest
+   beside a lane nest): the value pass would lose its lanes to a neighbour lanes could never
+   reach. *)
+
+(* The run's own default pipeline on the run's device -- [admitted] on HIP, [cut] on Metal and CUDA
+   -- compiled and executed: the executed segments' top-level statements and the values read. *)
+let execute_pipeline case =
+  let ctx = Context.auto () in
+  let limits = Context.hardware_limits ctx in
+  let executed = ref [] in
+  let ctx, routine =
+    Context.compile ~name:case.name ~prelowered:case.opt
+      ~lowered_transform:(fun o ->
+        let segments = S.maybe_default_schedules ~backend_name ~limits ~static_indices:[] o in
+        executed := List.map segments ~f:(fun (seg : LL.optimized) -> LL.flat_lines [ seg.llc ]);
+        segments)
+      ctx Ir.Assignments.empty_comp Ir.Indexing.Empty
+  in
+  let ctx = L.run_linked (ctx, routine) ~seed:case.seed in
+  (List.map case.read ~f:(Context.get_values ctx), !executed)
+
+let () =
+  printf "--- leg 8: a row statistic beside the value pass costs it no lanes ---\n";
+  List.iter
+    [ ("after", `After); ("before", `Before) ]
+    ~f:(fun (order, row_statistic) ->
+      let case =
+        hoisted ~name:("lanes_row_" ^ order) ~lane_body:accumulate ~reference:accumulate_reference
+          ~row_statistic ()
+      in
+      let writes_r = String.is_suffix ~suffix:"_r" and writes_o = String.is_suffix ~suffix:"_o" in
+      let what = Printf.sprintf "row statistic %s the value pass" order in
+      List.iter
+        [ ("costly lanes", costly); ("cheap lanes", cheap) ]
+        ~f:(fun (economics, limits) ->
+          let segments = gpu_segments ~limits case.opt in
+          p_exists
+            (Printf.sprintf "%s, %s: the value pass is scheduled with lanes" what economics)
+            (List.concat segments) ~f:lane_under_serial;
+          p_none (Printf.sprintf "%s, %s: no kernel holds both" what economics) segments
+            ~f:(fun seg ->
+              List.exists seg ~f:(computes ~writes:writes_r)
+              && List.exists seg ~f:(computes ~writes:writes_o));
+          let row = List.filter (List.concat segments) ~f:(computes ~writes:writes_r) in
+          p
+            (Printf.sprintf "%s, %s: the GPU pipeline emits the row statistic" what economics)
+            (not (List.is_empty row));
+          p_all
+            (Printf.sprintf "%s, %s: the row statistic runs under a Grid or Workgroup loop" what
+               economics)
+            row ~f:hardware);
+      (* The control: the plain-plan probe alone -- [admitted]'s merge rule before gh-ocannl-1239 --
+         merges the two, and the kernel declines the lanes. *)
+      let plain_only =
+        S.fission_scheduled ~promote_locals:true
+          ~keep_mapping:(S.mapping_probe (fun o -> S.default_gpu ~lanes:false ~limits:costly o))
+          ~preset:(fun o -> S.default_gpu ~limits:costly o)
+          ~zero_sched:(S.zero_expansion ~limits:costly) ~static_indices:[] (copy case.opt)
+        |> List.map ~f:(fun (_, _, _, (post : LL.optimized)) -> LL.flat_lines [ post.LL.llc ])
+      in
+      p_exists (Printf.sprintf "%s, judged on the plain plans alone: one kernel holds both" what)
+        plain_only ~f:(fun seg ->
+          List.exists seg ~f:(computes ~writes:writes_r)
+          && List.exists seg ~f:(computes ~writes:writes_o));
+      p_none
+        (Printf.sprintf "%s, judged on the plain plans alone: the value pass loses its lanes" what)
+        (List.concat plain_only) ~f:lane_under_serial;
+      let got, executed = execute_pipeline case in
+      check_values case got;
+      let claim =
+        Printf.sprintf "%s, executed on the run's device: the value pass keeps its lanes" what
+      in
+      if not (S.backend_is_gpu backend_name) then skipped ~backend:backend_name claim
+      else p_exists claim (List.concat executed) ~f:lane_under_serial)

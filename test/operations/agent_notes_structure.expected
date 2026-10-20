@@ -8,17 +8,20 @@ every table is a table, row by row: true
 every notes file is reachable from the index, and links back: true
 no bullet is repeated across the notes: true
 no source-level GitHub citation uses a bare hash or hashless work label: true
-every note anchor AGENTS.md or a tools script points at is a heading its note has: true
+every note anchor AGENTS.md, a tools script or a test source's literal points at is a heading its note has: true
 every rule the scan names is reported over the live tree: true
 every finding carries one of the rules the scan names: true
 each flagged bullet has an exemption key of its own: true
 every exemption still names a bullet that needs one: true
+every pointer-fixture exemption names a source the rule would flag: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes
   [scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets
   [scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers
+  [scanner-refusal:94abf9ad59c6aa58e4608e31b0c1481a] sources' string literals
   [scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported
   [scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries
   [scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet
   [scanner-refusal:ec62d0a7d728c7ab15a2c9b8608c6404] every exemption still
+  [scanner-refusal:91d29d400185d4fe574f5deb83d48157] every pointer-fixture exemption

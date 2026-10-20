@@ -267,9 +267,11 @@
 # work, where the plain plan runs the channel loop serially in a thread that pays it once
 # (gh-ocannl-1003, gh-ocannl-1167). `cut`: lanes wherever a kernel admits them, and schedule fission
 # cuts a kernel rather than merge a lane nest out of its lanes. `admitted`: lanes wherever a kernel
-# admits them, but no kernel boundary is kept for lanes -- fission judges merges on the plain plans,
-# so a merge costing a nest only its lanes is taken (it merges the fused backward's dV with dK, and
-# would equally merge a lane nest with any neighbour sharing its plain chain). `off`: never, which
+# admits them, and no kernel boundary is kept for lanes between nests with a lane path -- fission
+# judges those merges on the plain plans, so a merge costing a nest only its lanes is taken (it
+# merges the fused backward's dV with dK); a neighbour with no lane path at all (a row statistic
+# sharing the forward value pass's plain chain) is still cut off rather than cost a lane nest its
+# lanes (gh-ocannl-1239). `off`: never, which
 # also leaves gpu_lane_preamble_reduction nothing to apply to. `auto` resolves per device: cut where
 # redundant per-lane scalar work is cheap (Metal, CUDA), admitted elsewhere (HIP, measured on
 # gfx1151 and gfx1102: the forward value pass wins on lanes in its own kernel, while dV cut from dK
@@ -1102,6 +1104,17 @@
 # reclaims streams silently and cudajit exposes no eager stream destruction, so the CUDA backend
 # does not consult it.
 #exit_stream_teardown_timeout=2.0
+
+# Seconds a GPU backend (cuda, hip, metal) may spend in one device discovery, device query or
+# device opening before the process gives up on it: past the bound it prints one line starting
+# `OCANNL device_init_deadline:` (the backend, the bound, "the device or driver is likely wedged")
+# and dies by SIGALRM, status 142 (gh-ocannl-1281). A faulted GPU leaves the driver wedged, and
+# every later process then spins in device initialization forever (gh-ocannl-1211); a healthy
+# device initializes in well under a second, so the default is generous for cold starts on loaded,
+# WSL2 or freshly installed boxes. `0` disables it. The bound is a watchdog thread, so the
+# program's own `alarm`/`setitimer` timers and signal masks are left untouched; it is not armed when
+# the program has its own SIGALRM handler, and never on Windows. The cc backends need none.
+#device_init_deadline=120
 
 # If `true` (the default), the HIP backend checks a freshly linked kernel's private (scratch)
 # segment size against what the device can back at full occupancy, and declines an over-budget
