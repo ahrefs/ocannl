@@ -1039,7 +1039,12 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
     against it, since the kernel is timed with its launch.
   The Python runners carry `"dominant_kernel": null` (they expose no per-kernel counts), printed
   `—`. `BENCH_DOMINANT_KERNEL=0` turns the instrument off for an OCANNL cell — it costs one compile
-  per kernel of the step — and its row then prints `—` too.
+  per kernel of the step — and its row then prints `—` too. The instrument has a wall-clock budget
+  of its own, `BENCH_DOMINANT_KERNEL_BUDGET_S` (default 600 s; gh-ocannl-1260): past it the column
+  is `no-kernel`, "instrument over budget", and the cell keeps its result line instead of losing it
+  to the cell's cap. On POSIX a kernel still compiling or timing is interrupted at the budget; on
+  Windows the instrument stops between kernels. A sweep with a cell cap near the workload's own
+  time sets the budget below the cap's slack.
 - Losses are recorded per step *before* that step's SGD update (forward runs first in every
   framework's step). The first step doubles as the compile probe in the Python runners; for
   OCANNL, `compile_s` wraps `Context.compile` (or `Autotune.tune`).

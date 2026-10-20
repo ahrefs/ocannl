@@ -36,3 +36,9 @@ timed_steps is the count the protocol asked for: true
 losses carries one parity checksum per parity step: true
 every parity checksum is a finite number: true
 the last checkpoint before the instrument holds the result line's own losses: true
+a stalled kernel timing is cut short: the cell completes in a fraction of the stall: true
+and the instrument reports no-kernel, naming the budget it ran past: true
+the over-budget cell still emits its result line with its timings: true
+and with one loss per parity step: true
+under a budget nothing reaches, the instrument starts every kernel: true
+and names a dominant kernel: true

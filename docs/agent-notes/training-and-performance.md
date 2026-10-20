@@ -372,7 +372,10 @@ files.
   `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every
   parity step and again after the timed steps, before the dominant-kernel instrument -- which
   compiles and times every shipped kernel alone and can outlast the workload (a TUF
-  `gpt2_mini_train_s1024` cell lost six finite losses to a 90 s cap expiring inside it). A
+  `gpt2_mini_train_s1024` cell lost six finite losses to a 90 s cap expiring inside it). The
+  instrument's own wall-clock budget, `BENCH_DOMINANT_KERNEL_BUDGET_S`, bounds that stage: past it
+  the column is `no-kernel` and the cell keeps its result (gh-ocannl-1260,
+  `Bench_harness.with_deadline`); the checkpoint covers a cap shorter than the budget. A
   checkpoint carries the losses so far, stage statuses, the step count and the cell's identity, and
   NO timing: its `result` stage is always `pending` and `accepted` is `false`. `orchestrate.run_cell`
   folds the last one into a failed cell's note and hands it to `on_checkpoint`;
