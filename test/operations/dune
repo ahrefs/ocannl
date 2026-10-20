@@ -4428,16 +4428,20 @@
 
 (test
  ; ocannl-backend: metal -- `Context.metal ()`, then asserts on the guarded gather in the emitted
- ; MSL; the off-platform `select` arm replays the golden.
+ ; MSL, read through `Test_utils.Generated`; the off-platform `select` arm replays the golden.
  (name test_metal_guarded_gather_codegen)
  (package neural_nets_lib)
  (modules test_metal_guarded_gather_codegen)
- (deps ocannl_config test_metal_guarded_gather_codegen.expected)
+ (deps
+  ocannl_config
+  test_metal_guarded_gather_codegen.expected
+  (env_var OCANNL_BUILD_FILES_PREFIX))
  (libraries
   base
   stdio
   ocannl
   arrayjit.utils
+  test_utils
   (select
    test_metal_guarded_gather_codegen.ml
    from
@@ -4449,16 +4453,21 @@
 
 (test
  ; ocannl-backend: metal -- `Context.metal ()`, then asserts on the `__pool_slots` declaration in
- ; the emitted MSL; the off-platform `select` arm replays the golden.
+ ; the emitted MSL, read through `Test_utils.Generated`; the off-platform `select` arm replays the
+ ; golden.
  (name test_metal_pool_slot_width)
  (package neural_nets_lib)
  (modules test_metal_pool_slot_width)
- (deps ocannl_config test_metal_pool_slot_width.expected)
+ (deps
+  ocannl_config
+  test_metal_pool_slot_width.expected
+  (env_var OCANNL_BUILD_FILES_PREFIX))
  (libraries
   base
   stdio
   ocannl
   arrayjit.utils
+  test_utils
   (select
    test_metal_pool_slot_width.ml
    from

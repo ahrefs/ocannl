@@ -2178,7 +2178,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   must declare `(env_var OCANNL_BUILD_FILES_PREFIX)` — otherwise dune serves the previous run's
   result when the variable changes, which is gh-ocannl-628's hole one key over. `env_var_deps`
   requires it of every stanza whose `(modules …)` name a source that calls the initializer, and
-  reports a declaration with no caller behind it as well (gh-ocannl-723). Where the declaration goes
+  reports a declaration with no caller behind it as well (gh-ocannl-723); a module built through a
+  `(select …)` answers for its arms too (`Dune_stanza_scan.select_arms`), so a `.real.ml` caller is
+  its stanza's (gh-ocannl-1294). The other way round is closed by `codegen_text_inventory`, which
+  refuses a test source that reads `Utils.build_files_dir`/`Utils.build_file` itself. Where the declaration goes
   is dune's semantics and not one rule: a `(test)` runs under its own `(deps …)`, an inline-test
   library under `(inline_tests (deps …))`, and an `(executable)` has no `deps` field at all, so it is
   the rule that RUNS it that carries the declaration — the same placement as the `ocannl_config` dep

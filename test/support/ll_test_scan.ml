@@ -333,20 +333,7 @@ let linked ~directory_modules ~module_name stanzas =
 (** A select arm is source for the generated target module, never a module named *.real or
     *.missing. Keep the owning stanza with the relationship: another stanza linking ll_test cannot
     cover it, and every owner of a reused arm must adopt the harness. *)
-let select_arms stanza =
-  Option.value (Dune.field stanza "libraries") ~default:[]
-  |> List.concat_map ~f:(function
-    | Sexp.List (Sexp.Atom "select" :: Sexp.Atom target :: Sexp.Atom "from" :: arms)
-      when String.is_suffix target ~suffix:".ml" ->
-        List.filter_map arms ~f:(function
-          | Sexp.List terms -> (
-              match
-                List.drop_while terms ~f:(fun term -> not (Sexp.equal term (Sexp.Atom "->")))
-              with
-              | [ Sexp.Atom "->"; Sexp.Atom source ] -> Some (target, source)
-              | _ -> None)
-          | _ -> None)
-    | _ -> [])
+let select_arms = Dune.select_arms
 
 (** Fold physical dune files and parent subdir blocks into the same directory groups before
     resolving defaults. Directory-spanning ownership modes remain explicit refusals, as in

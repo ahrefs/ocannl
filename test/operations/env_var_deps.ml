@@ -2256,21 +2256,37 @@ let main () =
          directory. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
+          (* A module's sources: its own [<module>.ml], and the alternatives a `(select …)` may
+             compile as it -- a `.real.ml` arm calls the initializer as much as a plain source does,
+             and is claimed by the stanza naming the module (gh-ocannl-1294). *)
+          let keys module_name =
+            let target = module_name ^ ".ml" in
+            let arms =
+              List.concat_map group ~f:Scan.select_arms
+              |> List.filter_map ~f:(fun (selected, arm) ->
+                  Option.some_if (String.equal selected target) arm)
+            in
+            List.map (target :: arms) ~f:(fun file -> String.lowercase (Scan.in_subdir here file))
+          in
           let subjects =
-            let key module_name = String.lowercase (Scan.in_subdir here (module_name ^ ".ml")) in
-            let calls module_name = Set.mem artifact_caller_keys (key module_name) in
+            let calls module_name =
+              List.exists (keys module_name) ~f:(Set.mem artifact_caller_keys)
+            in
             (* A module that reads `build_files_prefix` some other way needs the variable tracked
                for the same reason a caller does, and is subject to the same rule (Codex P2, rounds
                2 and 3). Narrowed textually first, the way the caller census is: the key has to be
                SPELLED for either spelling of a read to name it, so only the sources that mention it
                are parsed. *)
             let reads_prefix module_name =
-              match List.Assoc.find sources ~equal:String.equal (key module_name) with
-              | None -> false
-              | Some on_disk -> (
-                  let content = In_channel.read_all on_disk in
-                  String.is_substring content ~substring:artifact_config_key
-                  && try Sources.source_reads_key content ~key:artifact_config_key with _ -> false)
+              List.exists (keys module_name) ~f:(fun key ->
+                  match List.Assoc.find sources ~equal:String.equal key with
+                  | None -> false
+                  | Some on_disk -> (
+                      let content = In_channel.read_all on_disk in
+                      String.is_substring content ~substring:artifact_config_key
+                      &&
+                        try Sources.source_reads_key content ~key:artifact_config_key
+                        with _ -> false))
             in
             (* Dune's default module set is the directory less what other stanzas claim, so the scan
                needs to know what the directory holds -- a `(test (name t))` with no `(modules …)`
@@ -2305,8 +2321,8 @@ let main () =
                     ^ "` by name"
               in
               List.iter needs ~f:(fun m ->
-                  artifact_claimed :=
-                    Set.add !artifact_claimed (String.lowercase (Scan.in_subdir here (m ^ ".ml"))));
+                  List.iter (keys m) ~f:(fun key ->
+                      artifact_claimed := Set.add !artifact_claimed key));
               artifact_table :=
                 Printf.sprintf "  %-58s %s (%s)" where
                   (Scan.artifact_verdict_name subject.Scan.artifact_verdict)
@@ -4102,7 +4118,16 @@ let main () =
    drift from them -- which buys the sharper claim: the violating tree exits 1 and names the stanza,
    and the legitimate one exits 0. *)
 
-let control_root_paths = [ "t/dune"; "t/probe.ml"; "t/nested/probe2.ml" ]
+let control_root_paths =
+  [
+    "t/dune";
+    "t/probe.ml";
+    "t/nested/probe2.ml";
+    "t/probe3.ml";
+    "t/probe3.real.ml";
+    "t/probe3.missing.ml";
+  ]
+
 let control_probe = "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n"
 
 (* The subject: an `(executable)` whose one module calls the initializer, plus the rule that runs it
@@ -4147,9 +4172,37 @@ let control_subject ~declares =
    (with-stdout-to
     %%{target}
     (run ./probe2.exe)))))
+
+; gh-ocannl-1294: a module built through a `(select …)` is compiled from whichever arm the
+; toolchain picked, and dune hands the scan that copy as `probe3.ml` -- here the stub's, as on a
+; machine without the library. The arm that calls the initializer is `probe3.real.ml`, and the stanza
+; naming `probe3` answers for it: claimed when its rule declares, refused like any caller's when it
+; does not.
+(executable
+ (name probe3)
+ (modules probe3)
+ (libraries
+  test_utils
+  (select
+   probe3.ml
+   from
+   (test_utils -> probe3.real.ml)
+   (-> probe3.missing.ml))))
+
+(rule
+ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.
+ (target probe3.actual)
+ (deps
+  ocannl_config
+%s  %%{dep:probe3.exe})
+ (action
+  (with-stdout-to
+   %%{target}
+   (run ./probe3.exe))))
 |dune}
     (if declares then Printf.sprintf "  (env_var %s)\n" Scan.artifact_env_var else "")
     Scan.artifact_env_var
+    (if declares then Printf.sprintf "  (env_var %s)\n" Scan.artifact_env_var else "")
 
 (* The rest of the tree exists only so that the two runs differ in ONE verdict. Both lists below are
    checked for staleness against the files that make them necessary, so a tree without those files
@@ -4263,6 +4316,15 @@ let run_checker ?(credentials = `Shipped) ~root ~exe args =
     Refusal_manifest.observe_refused_run ~source:"test/operations/env_var_deps.ml" text;
   (status, text)
 
+(* The sources [control_root_paths] names beside its dune file. *)
+let write_control_sources root =
+  write_file (Stdlib.Filename.concat root "t/probe.ml") control_probe;
+  write_file (Stdlib.Filename.concat root "t/nested/probe2.ml") control_probe;
+  write_file (Stdlib.Filename.concat root "t/probe3.real.ml") control_probe;
+  write_file (Stdlib.Filename.concat root "t/probe3.missing.ml") "let () = ()\n";
+  (* The select's output, as dune hands it over: here the stub's copy. *)
+  write_file (Stdlib.Filename.concat root "t/probe3.ml") "let () = ()\n"
+
 let control () =
   (* Absolute before the chdir: `Sys.executable_name` resolves the name this process was started
      with, and a relative one would name nothing from inside the temporary tree. *)
@@ -4275,8 +4337,7 @@ let control () =
   let context = control_context () in
   List.iter context ~f:(fun (file, content) ->
       write_file (Stdlib.Filename.concat root file) content);
-  write_file (Stdlib.Filename.concat root "t/probe.ml") control_probe;
-  write_file (Stdlib.Filename.concat root "t/nested/probe2.ml") control_probe;
+  write_control_sources root;
   let paths = control_root_paths @ List.map context ~f:fst in
   let run ~declares =
     write_file (Stdlib.Filename.concat root "t/dune") (control_subject ~declares);
@@ -4312,6 +4373,11 @@ let control () =
     violating_reported;
   Verdict.p "the same tree with the declaration added passes and says nothing about it"
     legitimate_passed;
+  (* gh-ocannl-1294: the `(select …)` arm calling the initializer is its stanza's, so the stanza is
+     named when it omits the declaration -- and, in the legitimate run above, the arm is claimed
+     rather than reported as a caller no stanza owns. *)
+  Verdict.p "a select arm reaching the initializer is its stanza's: the stanza is named without it"
+    (String.is_substring (snd violating) ~substring:"the executable probe3");
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-1280's control. No stanza in this repository declares a credential, so a control read
@@ -4355,8 +4421,7 @@ let credential_control () =
   let context = control_context () in
   List.iter context ~f:(fun (file, content) ->
       write_file (Stdlib.Filename.concat root file) content);
-  write_file (Stdlib.Filename.concat root "t/probe.ml") control_probe;
-  write_file (Stdlib.Filename.concat root "t/nested/probe2.ml") control_probe;
+  write_control_sources root;
   let paths = control_root_paths @ List.map context ~f:fst in
   let run ?credentials ?pform name =
     write_file (Stdlib.Filename.concat root "t/dune") (credential_subject ?pform name);
