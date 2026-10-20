@@ -1125,7 +1125,10 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
     | _ -> false
   in
   let rec of_expr expr =
-    let effect_boundary result discarded =
+    (* What [discarded] writes into cells, by any route: a cell operator, a field write, or a call
+       made for its effect whose provenance stores (review rounds 3 to 7). Nested functions are not
+       entered -- their writes happen when they are called. *)
+    let collect_writes discarded =
       let written = ref no_provenance in
       let writes =
         object (self)
@@ -1158,6 +1161,10 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         end
       in
       writes#expression discarded;
+      !written
+    in
+    let effect_boundary result discarded =
+      let written = ref (collect_writes discarded) in
       let stored = Set.union result.stored (Set.union !written.parameters !written.stored) in
       if !written.generated || (not (Set.is_empty !written.parameters)) || !written.buffer then
         if result.generated || not (Set.is_empty result.parameters) then
@@ -1218,7 +1225,22 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               }
           else result
         in
-        { result with functions = [ span expr.pexp_loc ] }
+        (* A parameter written into a cell ANYWHERE in the body is stored -- under a loop, a branch
+           or a match as much as in a discarded position (review round 7). *)
+        let effects =
+          List.fold
+            (match body with
+            | Pfunction_body body -> [ body ]
+            | Pfunction_cases (cases, _, _) -> List.map cases ~f:(fun c -> c.pc_rhs))
+            ~init:no_provenance
+            ~f:(fun acc body -> join_provenance acc (collect_writes body))
+        in
+        {
+          result with
+          functions = [ span expr.pexp_loc ];
+          stored =
+            Set.union_list (module String) [ result.stored; effects.parameters; effects.stored ];
+        }
     | (Pexp_apply (_, _) | Pexp_setfield _ | Pexp_setinstvar _)
       when match expr.pexp_desc with
            | Pexp_apply (callee, _) -> writes_cell scope callee

@@ -24,10 +24,18 @@ let run f =
       | Some error ->
           let loc = Ppxlib.Location.Error.get_location error in
           let column (p : Lexing.position) = p.pos_cnum - p.pos_bol in
+          (* The compiler's own spelling: a range on one line is that line's characters, one that
+             spans lines names both, the end column relative to the end line (review round 7). *)
+          let where =
+            if loc.loc_start.pos_lnum = loc.loc_end.pos_lnum then
+              Printf.sprintf "line %d, characters %d-%d" loc.loc_start.pos_lnum
+                (column loc.loc_start) (column loc.loc_end)
+            else
+              Printf.sprintf "lines %d-%d, characters %d-%d" loc.loc_start.pos_lnum
+                loc.loc_end.pos_lnum (column loc.loc_start) (column loc.loc_end)
+          in
           Unparsed
-            (Printf.sprintf "line %d, characters %d-%d: %s" loc.loc_start.pos_lnum
-               (column loc.loc_start)
-               (column loc.loc_start + loc.loc_end.pos_cnum - loc.loc_start.pos_cnum)
+            (Printf.sprintf "%s: %s" where
                (String.concat ~sep:" " (String.split_lines (Ppxlib.Location.Error.message error))))
       | None -> Raised (Stdlib.Printexc.to_string exn))
 

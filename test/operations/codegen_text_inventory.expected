@@ -319,7 +319,7 @@ test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot nam
     ... ^ " e5m2 ldmatrix a"
     ... ^ " e5m2 ldmatrix b"
     ... ^ " ldmatrix a,b"
-test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: computed fragment, opaque aggregate component]
+test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     "#elif "
     "/* mma.sync fragment reduction body begins */"
     "/* mma.sync fragment reduction body ends */"

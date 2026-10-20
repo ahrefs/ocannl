@@ -47,6 +47,7 @@ ok: use -- including Ir makes its Schedule_cache reachable through the structure
 ok: use -- an included module's exports still win over the structure's base
 ok: use -- a later include of another named module keeps the cache's values
 ok: use -- a structure's own value shadows the included cache's
+ok: use -- an alias of the included cache's value is still the cache's
 ok: use -- and a later include of the cache takes the name back
 ok: use -- an include of a namespace of modules leaves the structure's own values
 ok: use -- opening a structure brings in the modules it inherits from an include

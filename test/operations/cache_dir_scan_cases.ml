@@ -273,6 +273,13 @@ let () = M.Schedule_cache.store ~dir:"autotune_cache_both" key value|ocaml},
 end
 let () = M.store ~dir:"scratch" key value|ocaml},
       [] );
+    ( "an alias of the included cache's value is still the cache's",
+      {ocaml|module M = struct
+  include Ir.Schedule_cache
+  let save = store
+end
+let () = M.save ~dir:"autotune_cache_alias" key value|ocaml},
+      [ "~dir names autotune_cache_alias" ] );
     ( "and a later include of the cache takes the name back",
       {ocaml|module M = struct
   let store ~dir _ _ = ignore (dir : string)

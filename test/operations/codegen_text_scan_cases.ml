@@ -888,6 +888,12 @@ let wrapper z = (store z).value <- ""
 let outer z = wrapper z; !cell
 let () = p "marker" (String.is_substring (outer (Generated.read "w")) ~substring:"m16")|ocaml},
       "+partial(mutation)" );
+    ( "a parameter written under a loop is stored",
+      {ocaml|let cell = ref ""
+let store x = for _ = 1 to 1 do cell := x done
+let wrapper z = store z; !cell
+let () = p "marker" (String.is_substring (wrapper (Generated.read "w")) ~substring:"m17")|ocaml},
+      "+partial(mutation)" );
     (* gh-ocannl-1237: the [Stdlib]-qualified spellings of the cell operators are the same cells. *)
     ( "Stdlib-qualified reference operators are a cell write and read",
       {ocaml|let store x = let r = ref "" in Stdlib.( := ) r x; Stdlib.( ! ) r

@@ -311,8 +311,15 @@ let read ?(source = "") content =
               ( self#opened ~top:false ~include_:false env (self#module_of env m),
                 (bases, exports, values) )
           | Pstr_value (_, bindings) ->
+              (* A binding that only names another value ([let save = store]) is an alias, which
+                 keeps whatever the name means through the bases: only a computed value shadows
+                 (review round 7). *)
               let bound =
-                Lexical_scope.pattern_vars (List.map bindings ~f:(fun vb -> vb.pvb_pat))
+                Lexical_scope.pattern_vars
+                  (List.filter_map bindings ~f:(fun vb ->
+                       match vb.pvb_expr.pexp_desc with
+                       | Pexp_ident _ -> None
+                       | _ -> Some vb.pvb_pat))
               in
               (env, (bases, exports, Set.union values (Set.of_list (module String) bound)))
           | Pstr_include { pincl_mod = m; _ } ->
