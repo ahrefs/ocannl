@@ -16,7 +16,15 @@
    [Low_level.validate_parallel] rejects it), a tensor-node write inside one
    ([Low_level.validate_scope_bodies], gh-ocannl-584) -- and so is each one's twin without
    [Privatize]: the fallback reaches no executed value. The control is the same schedule without the
-   breaking op: the tile stays wide and executes to the entry program's once-narrowed 258. *)
+   breaking op: the tile stays wide and executes to the entry program's once-narrowed 258.
+
+   2. Provenance for loops a [Split] mints. The tile narrows once per execution of [over], which
+   matches the serial rendering of the program [apply] was handed only where one execution of [over]
+   covers exactly the loop that rendering localizes the write at. The outer half of a [Split] of
+   that loop does (258, on an f32 tile). The inner half narrows once per outer iteration -- 260,
+   matching neither the entry program (258) nor the split schedule without [Privatize] (256) -- so
+   its tile stays at storage and reproduces the latter; without the record it widened. So does the
+   outer half of a split of a loop INSIDE the localizing level. *)
 
 open Base
 module Tn = Ir.Tnode
@@ -72,6 +80,18 @@ let claim_trigger_stage =
 let claim_uncompilable =
   "compilation refuses both fallen-back programs and their twins without Privatize, so the \
    fallback reaches no executed value"
+
+let claim_split_outer =
+  "a Privatize over the outer half of a Split of the localizing loop widens like that loop (258 \
+   with the serial rendering, on an f32 tile)"
+
+let claim_split_inner =
+  "a Privatize over the inner half of that Split keeps a bf16 storage tile and the split \
+   schedule's own narrowing (256, as without Privatize)"
+
+let claim_split_inside =
+  "a Privatize over the outer half of a Split of a loop inside the localizing level keeps a bf16 \
+   storage tile and the schedule's own narrowing (256, as without Privatize)"
 
 (* === The final re-check === *)
 
@@ -243,7 +263,106 @@ let recheck_legs () =
     && List.equal Float.equal serial [ 258.0 ]
     && List.equal Float.equal values serial)
 
+(* === Provenance for Split-minted loops === *)
+
+(* [x] varies along every axis; each [k] iteration pair (and each [k] row of [build_ikm]) adds 1.25
+   to its cell. *)
+let xs_ik = [| 0.5; 0.75; 0.25; 1.0; 0.75; 0.5; 1.0; 0.25 |]
+let node2 = Ll_test.node_factory ~prec:bf16 ~first_id:14100 ~dims:[| 2 |] ()
+
+(* [i { k { acc[i] += x[i, k] } }], localized at [k]. *)
+let build_ik name =
+  let acc = node2 (name ^ "_acc") and x = node2 ~dims:[| 2; 4 |] (name ^ "_x") in
+  Ll_test.materialize acc;
+  Ll_test.materialize x;
+  let i = Ll_test.sym () and k = Ll_test.sym () in
+  let raw =
+    Ll_test.loop_n i 2
+      (Ll_test.loop_n k 4
+         (Ll_test.set acc
+            [| it i |]
+            (bin Ir.Ops.Add (Ll_test.get acc [| it i |]) (Ll_test.get x [| it i; it k |]))))
+  in
+  (Ll_test.optimize ~materialized:[ acc; x ] ~name raw, acc, x, i, k)
+
+(* [i { k { m { acc[i] += x[i, k, m] } } }], localized at [k]. *)
+let build_ikm name =
+  let acc = node2 (name ^ "_acc") and x = node2 ~dims:[| 2; 2; 2 |] (name ^ "_x") in
+  Ll_test.materialize acc;
+  Ll_test.materialize x;
+  let i = Ll_test.sym () and k = Ll_test.sym () and m = Ll_test.sym () in
+  let raw =
+    Ll_test.loop_n i 2
+      (Ll_test.loop_n k 2
+         (Ll_test.loop_n m 2
+            (Ll_test.set acc
+               [| it i |]
+               (bin Ir.Ops.Add (Ll_test.get acc [| it i |]) (Ll_test.get x [| it i; it k; it m |])))))
+  in
+  (Ll_test.optimize ~materialized:[ acc; x ] ~name raw, acc, x, i, k, m)
+
+let split ~factor axis = Sched.split ~axis ~factor ~outer:LL.Serial ~inner:LL.Serial
+
+let provenance_legs () =
+  let run_ik name sched =
+    let o, acc, x, i, k = build_ik name in
+    let scheduled = Sched.apply (sched ~acc ~i ~k) o in
+    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+  in
+  (* The cell varies under [i], which the [Swap] puts inside the reduction loop: code generation
+     localizes no level of the split program, which narrows per step. *)
+  let swapped_split ~i ~k =
+    let sp, ko, ki = split ~factor:2 k in
+    ([ Sched.Swap { outer = i; inner = k }; sp ], ko, ki)
+  in
+  let serial, _ = run_ik "prc_ik_serial" (fun ~acc:_ ~i:_ ~k:_ -> []) in
+  let twin, _ =
+    run_ik "prc_ik_twin" (fun ~acc:_ ~i ~k ->
+        let ops, _, _ = swapped_split ~i ~k in
+        ops)
+  in
+  let outer, outer_llc =
+    run_ik "prc_ik_outer" (fun ~acc ~i ~k ->
+        let ops, ko, _ = swapped_split ~i ~k in
+        ops @ [ pz ~target:acc ~over:ko ])
+  in
+  let inner, inner_llc =
+    run_ik "prc_ik_inner" (fun ~acc ~i ~k ->
+        let ops, _, ki = swapped_split ~i ~k in
+        ops @ [ pz ~target:acc ~over:ki ])
+  in
+  let run_ikm name ~privatize =
+    let o, acc, x, i, k, m = build_ikm name in
+    let sp, mo, _ = split ~factor:1 m in
+    let ops =
+      [ Sched.Swap { outer = i; inner = k }; Sched.Swap { outer = i; inner = m }; sp ]
+      @ if privatize then [ pz ~target:acc ~over:mo ] else []
+    in
+    let scheduled = Sched.apply ops o in
+    (exec ~name ~acc ~init:[| 256.0; 256.0 |] ~x ~xs:xs_ik scheduled, scheduled.LL.llc)
+  in
+  let inside_twin, _ = run_ikm "prc_ikm_twin" ~privatize:false in
+  let inside, inside_llc = run_ikm "prc_ikm_priv" ~privatize:true in
+  Stdio.eprintf
+    "privatize_recheck: split legs serial %s, twin %s, outer %s, inner %s; inside-level twin %s, \
+     privatized %s (not part of the golden)\n\
+     %!"
+    (floats serial) (floats twin) (floats outer) (floats inner) (floats inside_twin) (floats inside);
+  p claim_split_outer
+    (List.equal Float.equal serial [ 258.0; 258.0 ]
+    && List.equal Float.equal outer serial
+    && only_prec Ir.Ops.single outer_llc);
+  p claim_split_inner
+    (List.equal Float.equal twin [ 256.0; 256.0 ]
+    && List.equal Float.equal inner twin && only_prec bf16 inner_llc);
+  p claim_split_inside
+    (List.equal Float.equal inside_twin [ 256.0; 256.0 ]
+    && List.equal Float.equal inside inside_twin
+    && only_prec bf16 inside_llc)
+
 let () =
   Test_utils.with_policy
     (fun pol -> { pol with Numerics.bf16_arithmetic = Numerics.Bf16_wide })
-    (fun () -> recheck_legs ())
+    (fun () ->
+      recheck_legs ();
+      provenance_legs ())
