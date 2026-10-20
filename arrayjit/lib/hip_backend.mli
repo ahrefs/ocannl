@@ -29,5 +29,6 @@ val fp8_guard_source : unit -> string
 val host_capabilities : unit -> (string * string) list
 (** What this backend probes on the host without opening a device (gh-ocannl-1038): the HIP SDK
     include tree ([hip_include]), the complete rocWMMA header tree tile-MMA support requires
-    ([rocwmma_include]) -- each [none], the directory, or the directory [=>] where it resolves --
-    and the hiprtc library's version. {!Context.host_capabilities} collects it. *)
+    ([rocwmma_include]) -- each in [Utils.capability_dir]'s form, so a tree repointed, appearing, or
+    upgraded in place moves it -- and the hiprtc library's version. {!Context.host_capabilities}
+    collects it. *)

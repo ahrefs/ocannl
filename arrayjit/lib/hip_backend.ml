@@ -209,8 +209,12 @@ let rocwmma_include_dir =
    at an already-searched path reruns the tests whose verdicts read it. *)
 let host_capabilities () =
   [
-    ("hip_include", Utils.capability_dir (Lazy.force hip_sdk_include_dir));
-    ("rocwmma_include", Utils.capability_dir (Lazy.force rocwmma_include_dir));
+    ( "hip_include",
+      Utils.capability_dir ~requires:[ "hip/hip_fp16.h" ] (Lazy.force hip_sdk_include_dir) );
+    ( "rocwmma_include",
+      Utils.capability_dir
+        ~requires:[ "rocwmma/rocwmma.hpp"; "rocwmma/internal/types.hpp" ]
+        (Lazy.force rocwmma_include_dir) );
     ( "hiprtc",
       try
         let major, minor = Hiprtc.version () in

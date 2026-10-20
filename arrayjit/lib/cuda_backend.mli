@@ -10,6 +10,7 @@ val cuda_include_options : unit -> string list
 
 val host_capabilities : unit -> (string * string) list
 (** What this backend probes on the host without opening a device (gh-ocannl-1038): the toolkit
-    include tree {!cuda_include_options} found ([cuda_include]: [none], the directory, or the
-    directory [=>] where it resolves, which is what moves when [/usr/local/cuda] is repointed at a
-    new toolkit). {!Context.host_capabilities} collects it. *)
+    include tree {!cuda_include_options} found ([cuda_include], in [Utils.capability_dir]'s form:
+    where it resolves, which is what moves when [/usr/local/cuda] is repointed at a new toolkit, and
+    whether the headers nvrtc compiles against are there, with a fingerprint of them).
+    {!Context.host_capabilities} collects it. *)

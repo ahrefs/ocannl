@@ -2039,5 +2039,6 @@ let host_capabilities () =
   [
     ( "cuda_include",
       Utils.capability_dir
+        ~requires:[ "cuda_fp16.h"; "cuda_fp8.h"; "mma.h" ]
         (List.find_map (cuda_include_options ()) ~f:(String.chop_prefix ~prefix:"-I")) );
   ]
