@@ -1407,6 +1407,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the two-`cat` shape. `env_var_deps`' per-key derivations below (named schedule values, the cc
   width, guards, `Generated.init`) predate the record and still ask for their declarations, which
   are redundant for any rule the record reaches.
+- **The host reaches a test the same way** (gh-ocannl-1038). A verdict can read a capability a
+  backend probes on the HOST -- the rocWMMA header tree HIP's tile-MMA support requires, the
+  dispatch/OpenMP runtime the cc backend's Grid loops link, the ISA and vector width its SIMD probes
+  find, the CUDA toolkit tree -- and none of those is a file dune sees: a declared `(env_var
+  ROCWMMA_PATH)` closed only the vector that had fired (gh-ocannl-1032), not a tree appearing at a
+  path already searched. So `test/config/dune` also runs `tools/host_caps.ml`'s `--record` under
+  `(universe)`, writing `ocannl_host_capabilities` -- `Context.host_capabilities`, each backend's own
+  device-free probes, the same list CI prints as its host line -- and `ocannl_ambient_env` appends
+  it to `ocannl_ambient`. It therefore reaches every rule the environment record reaches, with
+  nothing declared per stanza; `config_dep_completeness` checks this producer beside the other two.
+  It costs about a quarter second per invocation (mac-studio): dune gives each invocation a fresh
+  `TMPDIR`, so the cc probe cache starts empty there, and the invocation's tests then reuse what
+  this rule probed. Device properties (compute capability, device limits, the GPU's architecture)
+  stay out: reading them opens a device, which a probe run on every dune invocation, CPU batches
+  included, must not do. A new host-side probe belongs in its backend's `host_capabilities`, never
+  restated in a test or a stanza.
 - **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
   run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
   `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one

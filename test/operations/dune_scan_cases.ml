@@ -1695,6 +1695,21 @@ let refusal_tree =
     ("unconfigured/dune", "(test (name a) (modules a))\n");
   ]
 
+(* gh-ocannl-1038: a test/config/dune that records the ambient environment -- both producers the
+   check above asks for, intact -- and not the host. The refusal it must draw is the host record's
+   own, which the environment's producers passing leaves as the only producer refusal possible. *)
+let hostless_tree =
+  [
+    ("test/config/ocannl_config", "");
+    ( "test/config/dune",
+      {dune|(rule (target ocannl_ambient) (deps ocannl_config (universe)) (action (run ./env.exe)))
+(subdir ambient
+ (rule (target ocannl_config) (deps ../ocannl_config ../ocannl_ambient)
+  (action (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))
+|dune}
+    );
+  ]
+
 let scanner_refusal_controls exe =
   let source = "test/operations/config_dep_completeness.ml" in
   let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
@@ -1703,7 +1718,31 @@ let scanner_refusal_controls exe =
         (refuses
            (root :: List.map refusal_tree ~f:(fun (path, _) -> Stdlib.Filename.concat root path)));
       Verdict.p "config_dep_completeness refuses a run handed no dune file, exiting 1"
-        (refuses [ root ]))
+        (refuses [ root ]));
+  (* Run from inside the tree, handed `.` and relative paths: the scanner places a dune file
+     relative to the workspace root it is given, and the producer check asks for `test/config/dune`
+     by that path -- an absolute temporary path is never it, which would leave the environment's
+     refusal firing in place of the one this control is for. The scanner's own source goes into the
+     tree too, where its closing manifest looks for it from a workspace root
+     (`Refusal_control_manifest.print`); this directory has it as a dependency. *)
+  let scanner_source = "config_dep_completeness.ml" in
+  let tree =
+    ("test/operations/" ^ scanner_source, Stdio.In_channel.read_all scanner_source) :: hostless_tree
+  in
+  Test_utils.Refusal_control_manifest.with_tree tree (fun root ->
+      let here = Stdlib.Sys.getcwd () in
+      let exe = if Stdlib.Filename.is_relative exe then Stdlib.Filename.concat here exe else exe in
+      let refused =
+        Stdlib.Sys.chdir root;
+        Exn.protect
+          ~f:(fun () ->
+            Test_utils.Refusal_control_manifest.refuses ~source ~exe
+              ("." :: List.map hostless_tree ~f:fst))
+          ~finally:(fun () -> Stdlib.Sys.chdir here)
+      in
+      Verdict.p
+        "config_dep_completeness refuses an ambient record that leaves out the host, exiting 1"
+        refused)
 
 let () =
   let check name expected found =

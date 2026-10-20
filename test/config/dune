@@ -82,13 +82,40 @@
  (modules ocannl_ambient_env)
  (libraries base stdio unix arrayjit.utils))
 
+; gh-ocannl-1038: the host as a dependency, beside the environment. A test whose verdict reads a
+; capability a backend probes on the host -- the rocWMMA header tree the HIP backend's tile-MMA
+; support requires, the OpenMP runtime the cc backend's parallel Grid loops link against, the
+; vector width its SIMD probes find -- read something no rule named: a tree appearing at a path
+; already searched changed no declared input, and dune served the verdict computed without it.
+; `ocannl_host_capabilities` is `Context.host_capabilities`, the backends' own probes collected
+; without opening a device, written by tools/host_caps.exe -- the program that prints the same
+; capabilities as every CI build job's host line -- under `(universe)`, so once per invocation:
+; about a quarter second, the cc probes' compiles, which the invocation's tests then find in the
+; probe cache under the temporary directory dune gives it. The ambient record appends it, so a
+; moved capability reruns every rule `config_dep_completeness` already requires to depend on the
+; record, with nothing declared per stanza. Its stdout is the CI line and is dropped here.
+
 (rule
- ; ocannl-backend: none -- links arrayjit.utils alone and only reads the environment.
+ ; ocannl-backend: none -- probes the host through every backend's device-free probes and selects no
+ ; backend; it opens no device.
+ (target ocannl_host_capabilities)
+ (deps ocannl_config (universe))
+ (action
+  (ignore-stdout
+   (run
+    %{exe:../../tools/host_caps.exe}
+    --record=%{target}
+    --ocannl_suppress_welcome_message=true
+    --ocannl_log_config_sourcing=false))))
+
+(rule
+ ; ocannl-backend: none -- links arrayjit.utils alone; reads the environment and the host record.
  (target ocannl_ambient)
  (deps ocannl_config (universe))
  (action
   (run
    %{exe:ocannl_ambient_env.exe}
+   --host-record=%{dep:ocannl_host_capabilities}
    --ocannl_suppress_welcome_message=true
    --ocannl_log_config_sourcing=false)))
 

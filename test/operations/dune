@@ -5721,25 +5721,12 @@
  (deps
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_BUILD_FILES_PREFIX)
+  ; The HIP arms branch on the ADVERTISED tile-MMA capability (gh-ocannl-1032), whose host half --
+  ; the rocWMMA header tree -- reaches this rule through the host record `ocannl_config` carries
+  ; (gh-ocannl-1038), so a tree appearing at a path already searched reruns it.
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_BF16_ARITHMETIC)
-  ; gh-ocannl-1032: this test's HIP arms branch on the ADVERTISED tile-MMA capability, so the three
-  ; variables Hip_backend's rocWMMA-header probe reads are inputs to its verdict -- undeclared, a
-  ; run that newly points at (or away from) a header tree is served the previous run's result as a
-  ; pass, which is how a verification run of this very fix came back green without re-executing.
-  ;
-  ; These three close the vector that has actually fired; they do NOT close the other one, a tree
-  ; appearing or disappearing at a path already being searched (an install under an unchanged
-  ; HIP_PATH). Nothing dune can depend on tracks that: a dep must live in the workspace, and
-  ; `(universe)` is not available here -- in this repository `(universe)` plus an alias IS the
-  ; ambient-gate marker (`env_var_deps.is_gate`), so putting it on a test makes that test the
-  ; directory's gate and forces it under `ocannl_training_test`. The residual is the rocWMMA-header
-  ; provenance gap gh-ocannl-1026 already records, and it belongs to every capability-probing test
-  ; rather than to this one; a shared probe rule is the fix, filed rather than special-cased here.
-  (env_var ROCWMMA_PATH)
-  (env_var LOCALAPPDATA)
-  (env_var HIP_PATH)
   (env_var OCANNL_BACKEND)
   ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
   (env_var OCANNL_CC_VECTOR_BYTES)
@@ -6462,13 +6449,8 @@
  (deps
   ocannl_config
   ; The census claims are gated on the tensorized capability (Ll_test.tensorized_capability): on a
-  ; GPU the ADVERTISED tile-MMA formats, so the rocWMMA-header probe's three variables are inputs to
-  ; its verdict (the rationale, and the residual: schedule_mma_matmul's stanza, gh-ocannl-1032); on
-  ; the C backends the register tiling's vector file. The numerics policy is pinned in the test
-  ; instead; routine logging is declared below.
-  (env_var ROCWMMA_PATH)
-  (env_var LOCALAPPDATA)
-  (env_var HIP_PATH)
+  ; GPU the ADVERTISED tile-MMA formats, on the C backends the register tiling's vector file. The
+  ; numerics policy is pinned in the test instead; routine logging is declared below.
   (env_var OCANNL_CC_VECTOR_BYTES)
   ; Every configuration key the two modules its seeding and segmentation run through read --
   ; schedule.ml (default presets, zero expansion, fission) and sketch_families.ml (seeding) -- so a
