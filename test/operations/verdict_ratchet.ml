@@ -4177,6 +4177,11 @@ let () =
   let rows = Array.init 1 ~f:(fun ?(value = sample) _ -> value) in
   Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Array.to_list rows) ~f:positive|ocaml},
       [ "sample" ] );
+    ( "refuses a gate read off the initializer of a qualified Stdlib reference",
+      {ocaml|let () =
+  let rows = Stdlib.ref [ sample ] in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Stdlib.( ! ) rows) ~f:positive|ocaml},
+      [ "sample" ] );
     ( "follows a collection function through a value alias",
       {ocaml|open Base
 let () =

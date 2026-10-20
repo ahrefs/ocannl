@@ -614,6 +614,7 @@ refuses a gate read off the base of a matched record update for a field it leave
 refuses a gate read off the value a merge's combining callback returns: true
 refuses a gate that closes on the string a gated validity claim reads: true
 refuses a gate read off the default of a callback's optional parameter: true
+refuses a gate read off the initializer of a qualified Stdlib reference: true
 follows a collection function through a value alias: true
 follows a collection function a local open of List brings in: true
 accepts a gate beside a helper bound inside an open of List under a listed name: true

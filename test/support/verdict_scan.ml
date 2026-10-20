@@ -1871,6 +1871,13 @@ let gate_census content =
                   | Pexp_ident { txt = Ppxlib.Longident.Lident (("!" | "@" | "ref") as name); _ }
                     when Option.is_none (Lexical_scope.lookup callee_env name) ->
                       List.iter positional ~f:(visit env)
+                  | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, ("!" | "@" | "ref")); _ }
+                    when match self#module_path callee_env prefix with
+                         | Some (Standard_library _) -> true
+                         | _ -> false ->
+                      (* [Stdlib.ref [sample]], [Base.( ! ) rows]: the same primitives,
+                         qualified. *)
+                      List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path callee_env prefix with
                       | Some (Collection_module { stdlib; _ }) -> (
@@ -1973,7 +1980,8 @@ let gate_census content =
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path callee_env prefix with
-                      | Some (Standard_library _) when connective name ->
+                      | Some (Standard_library _)
+                        when connective name || List.mem [ "!"; "ref" ] name ~equal:String.equal ->
                           List.iter positional ~f:(visit env)
                       | Some (Collection_module _) when Option.is_none (collection_function name) ->
                           self#note_unlisted callee
