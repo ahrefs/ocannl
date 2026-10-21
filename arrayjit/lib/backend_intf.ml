@@ -1118,6 +1118,13 @@ type ('dev, 'runner, 'event) context = {
       *)
   upload_arenas : upload_arenas;
       (** This upload lineage's arenas and pool reference counts, fresh in {!Device.make_child}. *)
+  release_hooks : (unit -> unit) list ref; [@sexp.opaque]
+      (** What a release does besides freeing pools: drop device resources a routine linked into
+          this context retains across runs (the CUDA/HIP graph execs of a graph-captured segment
+          batch, gh-ocannl-1445). Run by every finalize of a value that shares the list -- a linear
+          upload chain and its upload forks -- so each hook must be idempotent and must leave its
+          routine runnable (rebuilding what it dropped), since a fork can outlive the value it came
+          from. Fresh in {!Device.make_child}. *)
   optimize_ctx : Low_level.optimize_ctx;
       (** The optimization context threaded through compilation: all OCANNL backends compile through
           the {!Low_level} IR, so this is concretely {!Low_level.optimize_ctx} (the abstraction for
@@ -1273,6 +1280,12 @@ module type Backend_device_common = sig
 
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+
+  val get_free_and_total_memory : device -> (int * int) option
+  (** The driver's free and total bytes of the device's memory, read now; [None] where the backend
+      has no such reading (the CPU backends and Metal). Device-global, unlike {!get_used_memory}: it
+      counts every allocation on the device, other processes' and the driver's own (contexts, loaded
+      code, local memory, instantiated graphs) included, in allocation granules (gh-ocannl-1424). *)
 
   val get_global_debug_info : unit -> Sexp.t
   (** Global debug information; backend-specific and might evolve independently on the backends. *)

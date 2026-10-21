@@ -8,7 +8,7 @@ check's own output above the refusal.
     box_gate.require("gh1181_cells.py", args, HERE / "fixtures", names, run=<managed runner>)
 
 `--box` names the measurement box (an ID `fixtures/DIGESTS.txt` declares; `check-box.sh` refuses
-any other). `--skip-box-check` measures without the check, for a deliberate partial run, and says
+any other), or the fleet's name for one, which the parsed value holds as the box's ID. `--skip-box-check` measures without the check, for a deliberate partial run, and says
 so on the run's output. Neither, at `require`, exits 2; a GAP exits 1; any other status of the
 check (a usage or harness error: nothing was judged) exits 2.
 """
@@ -20,11 +20,31 @@ HERE = Path(__file__).resolve().parent
 CHECK_BOX = HERE / "check-box.sh"
 
 
+def canonical_box(name):
+    """The measurement box a fleet name stands for (`rog-nv-linux` -> `rog-nv`), else `name`.
+
+    check-box.sh's table answers, so a driver records the box's ID in its rows rather than the
+    fleet's name for it (gh-ocannl-1433); a check-box.sh that cannot answer leaves the name as
+    given, for the check itself to judge."""
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["bash", str(CHECK_BOX), "--canonical-box", name],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return name
+    out = done.stdout.strip()
+    return out if done.returncode == 0 and out and "\n" not in out else name
+
+
 def add_arguments(ap):
-    """The gate's two options, on a driver's (sub)parser."""
+    """The gate's two options, on a driver's (sub)parser. `--box` holds the box's ID."""
     ap.add_argument(
         "--box",
         metavar="BOX",
+        type=canonical_box,
         help="the measurement box this run measures on (an ID fixtures/DIGESTS.txt's "
         "measurement-boxes declares); benchmarks/check-box.sh checks it and the run's fixtures "
         "before the first cell, and a GAP refuses the run",

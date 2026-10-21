@@ -205,3 +205,4 @@ every implemented option has an ordinary label and every unimplemented option an
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:8827ebeb8572d08d2dd427695c19c0f4] lib/ optional arguments
   [scanner-refusal:69241f287bacdd3e1e418debbdc13d3d] every unimplemented option
+End of synthetic controls.

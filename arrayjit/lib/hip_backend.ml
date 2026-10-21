@@ -339,6 +339,10 @@ end = struct
      [Context.get_used_memory] contract. *)
   let get_used_memory (device : device) = Slab.used_memory device
 
+  let get_free_and_total_memory (device : device) =
+    set_ctx device.dev.primary_context;
+    Some (H.Device.get_free_and_total_mem ())
+
   (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
      it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). *)
   let opt_alloc_merge_buffer ~size_in_bytes (device : device) : unit =
@@ -467,6 +471,46 @@ end = struct
   (* No runtime linking needed since Threefry is included directly in each kernel *)
   let set_builtins_for_device ~primary_context:_ _kernel_module = assert !initialized
 
+  (* gh-ocannl-1445: a graph-captured routine's instantiated graphs, by capture key, in FIFO order
+     for eviction (see [sequence_segments]). Destroyed when the routine's context is released
+     ([destroy_graphs], one of its [release_hooks]) and at process exit, before the device's stream
+     (below), not only on eviction: an undestroyed [hipGraphExec] at exit is what kept ROCr's
+     [SharedSignalPool] leak report coming back with graph capture on (gh-ocannl-1370). *)
+  type graph_cache = {
+    graphs_device : device;
+    cache : (string, H.Graph.exec) Hashtbl.t;
+    order : string Queue.t;
+    lock : Stdlib.Mutex.t;
+        (** Held by every run of the routine and by [destroy_graphs]: upload forks share their
+            context's release hooks and can be released from different domains. *)
+  }
+
+  let graph_caches : graph_cache Backend_impl.Weak_registry.t = Backend_impl.Weak_registry.create ()
+
+  let live_graph_execs () =
+    List.sum
+      (module Int)
+      (Backend_impl.Weak_registry.live graph_caches)
+      ~f:(fun g -> Stdlib.Mutex.protect g.lock (fun () -> Hashtbl.length g.cache))
+
+  (* Idempotent, and the routine stays runnable: its next run captures afresh. The stream is
+     synchronized first, since a cached exec may still have a launch pending on it; the cache is
+     emptied under its lock, and every exec taken out of it is attempted, the first failure
+     re-raised. *)
+  let destroy_graphs g =
+    let execs =
+      Stdlib.Mutex.protect g.lock (fun () ->
+          if Hashtbl.is_empty g.cache then []
+          else (
+            set_ctx g.graphs_device.dev.primary_context;
+            H.Stream.synchronize g.graphs_device.runner;
+            let execs = Hashtbl.data g.cache in
+            Hashtbl.clear g.cache;
+            Queue.clear g.order;
+            execs))
+    in
+    Backend_impl.attempt_each (List.map execs ~f:(fun exec () -> H.Graph.exec_destroy exec))
+
   (* gh-ocannl-1036: destroy each device's stream at process exit. A HIP stream that is never
      destroyed makes the ROCm runtime report its 77 signals as leaked on stderr when the process
      ends; the GC finalizer above does not run at exit, and would not destroy the stream if it did.
@@ -491,7 +535,18 @@ end = struct
                        (fun () ->
                          set_ctx device.dev.primary_context;
                          H.Stream.is_ready device.runner);
-                     teardown = (fun () -> H.Stream.destroy device.runner);
+                     teardown =
+                       (fun () ->
+                         (* gh-ocannl-1445: the device's cached graphs first, then its stream. *)
+                         (* Every cache is attempted, and the stream is destroyed whatever
+                            they raise. *)
+                         Exn.protect
+                           ~f:(fun () ->
+                             Backend_impl.Weak_registry.live graph_caches
+                             |> List.filter ~f:(fun g -> phys_equal g.graphs_device device)
+                             |> List.map ~f:(fun g () -> destroy_graphs g)
+                             |> Backend_impl.attempt_each)
+                           ~finally:(fun () -> H.Stream.destroy device.runner));
                    }))
               : Utils.exit_teardown_outcome list))
 
@@ -1390,7 +1445,7 @@ end = struct
      is a fresh kernel argument every run), when disabled via [gpu_graph_capture=false], or
      permanently for this routine if the runtime rejects capture. *)
   let sequence_segments (context : context) ~name ~(bindings : Indexing.lowered_bindings)
-      ~uses_merge_buffer (tasks : Task.t list) : Task.t option =
+      ~uses_merge_buffer (tasks : Task.t list) : (Task.t * (unit -> unit)) option =
     let use_capture =
       List.length tasks > 1
       && Utils.get_global_flag ~default:true ~arg_name:"gpu_graph_capture"
@@ -1400,8 +1455,16 @@ end = struct
     else
       let device = context.device in
       let max_cached_graphs = 128 in
-      let cache : (string, H.Graph.exec) Hashtbl.t = Hashtbl.create (module String) in
-      let order : string Queue.t = Queue.create () in
+      let graphs =
+        {
+          graphs_device = device;
+          cache = Hashtbl.create (module String);
+          order = Queue.create ();
+          lock = Stdlib.Mutex.create ();
+        }
+      in
+      Backend_impl.Weak_registry.register graph_caches graphs;
+      let cache = graphs.cache and order = graphs.order in
       let broken = ref false in
       let run_plain () = List.iter tasks ~f:Task.run in
       let current_key () =
@@ -1437,46 +1500,54 @@ end = struct
         exec
       in
       Some
-        (Task.Task
-           {
-             context_lifetime = tasks;
-             description = "graph-captured segments of " ^ name ^ " on " ^ get_name device;
-             work =
-               (fun () ->
-                 if !broken then run_plain ()
-                 else (
-                   set_ctx @@ ctx_of context;
-                   let key = current_key () in
-                   match Hashtbl.find cache key with
-                   | Some exec -> H.Graph.launch exec device.runner
-                   | None -> (
-                       match capture () with
-                       | exec ->
-                           if Queue.length order >= max_cached_graphs then (
-                             let victim = Queue.dequeue_exn order in
-                             (* The evicted exec may still have a pending launch on the stream. *)
-                             H.Stream.synchronize device.runner;
-                             H.Graph.exec_destroy (Hashtbl.find_exn cache victim);
-                             Hashtbl.remove cache victim);
-                           Hashtbl.set cache ~key ~data:exec;
-                           Queue.enqueue order key;
-                           H.Graph.launch exec device.runner
-                       | exception H.Hip_error { status; message } ->
-                           (* E.g. capture unsupported on this runtime: fall back to per-segment
-                              launches for this routine (same-stream FIFO supplies the segment
-                              ordering), and re-run outside capture so a genuine launch failure
-                              surfaces on the plain path. *)
-                           broken := true;
-                           Stdio.eprintf
-                             "ocannl: disabling HIP graph capture for routine %s (%s: %s)\n%!" name
-                             message
-                             (Sexp.to_string_hum @@ H.sexp_of_result status);
-                           run_plain ())));
-           })
+        ( Task.Task
+            {
+              (* Holding [graphs] here keeps the registry's weak pointer alive exactly as long as
+                 the routine's schedule. *)
+              context_lifetime = (tasks, graphs);
+              description = "graph-captured segments of " ^ name ^ " on " ^ get_name device;
+              work =
+                (fun () ->
+                  if !broken then run_plain ()
+                  else
+                    Stdlib.Mutex.protect graphs.lock (fun () ->
+                        set_ctx @@ ctx_of context;
+                        let key = current_key () in
+                        match Hashtbl.find cache key with
+                        | Some exec -> H.Graph.launch exec device.runner
+                        | None -> (
+                            match capture () with
+                            | exec ->
+                                if Queue.length order >= max_cached_graphs then (
+                                  let victim = Queue.dequeue_exn order in
+                                  (* The evicted exec may still have a pending launch on the
+                                     stream. *)
+                                  H.Stream.synchronize device.runner;
+                                  H.Graph.exec_destroy (Hashtbl.find_exn cache victim);
+                                  Hashtbl.remove cache victim);
+                                Hashtbl.set cache ~key ~data:exec;
+                                Queue.enqueue order key;
+                                H.Graph.launch exec device.runner
+                            | exception H.Hip_error { status; message } ->
+                                (* E.g. capture unsupported on this runtime: fall back to
+                                   per-segment launches for this routine (same-stream FIFO supplies
+                                   the segment ordering), and re-run outside capture so a genuine
+                                   launch failure surfaces on the plain path. *)
+                                broken := true;
+                                Stdio.eprintf
+                                  "ocannl: disabling HIP graph capture for routine %s (%s: %s)\n%!"
+                                  name message
+                                  (Sexp.to_string_hum @@ H.sexp_of_result status);
+                                run_plain ())));
+            },
+          fun () -> destroy_graphs graphs )
 
   let get_global_debug_info () =
     Sexp.message "hip_global_debug"
-      [ ("live_streams", [%sexp_of: int] @@ H.Stream.get_total_live_streams ()) ]
+      [
+        ("live_streams", [%sexp_of: int] @@ H.Stream.get_total_live_streams ());
+        ("live_graph_execs", [%sexp_of: int] @@ live_graph_execs ());
+      ]
 
   let static_properties () =
     let device_properties =

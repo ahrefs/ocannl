@@ -87,6 +87,20 @@ files.
   (gh-ocannl-1408).
   `test/operations/autotune_device_memory` simulates a capacity at the `Delta_pool_allocated`
   fault-injection seam; `autotune_candidate_release` pins zero working pools between candidates.
+- **A refusal's free bytes are read with the refused compile's own earlier pools still allocated**
+  (gh-ocannl-1424). A group past the per-pool cap (4 GiB unless `large_models`, `pool_cap`) is
+  several pools that `allocate_delta` allocates one after another before placing anything, and
+  the driver's free bytes in `Device_memory_exhausted` are read at the refusal, before the unwind
+  gives the earlier pools back. Read bare, that looks like memory something else holds: the b256
+  `gpt2_mini_train` materialize-all arm (28.2 GB working in seven pools, by
+  `Memory_budget.footprint`) was refused at its third pool on rog's 12 GiB card with its first two
+  (8.35 GB) still allocated, and at its second on tuf's 8 GiB card, and the free bytes read as 8.6
+  GB and 3.9 GB "resident after arm A", while arm A (6.9 GB) gives back everything it allocated. The
+  refusal's detail now names the pool's position, the group's total and the bytes the earlier pools
+  held. Before blaming a
+  leak, score the footprint, and compare the `working_bytes` (census) and `device_free` (driver)
+  fields of `Train.tune_placements`' progress lines across the arm boundaries: equal working bytes
+  with a falling `device_free` is memory no pool table accounts for.
 - Device allocation refusals are typed at the GPU pool allocators
   (`Schedule_outcome.Device_memory_exhausted`, the `Resource_exceeded Device_memory` decline with
   the refused bytes and the driver's free bytes), because HIP has no `classify_failure` and its
@@ -94,7 +108,10 @@ files.
   CUDA's was a `Backend_rejected` stage string nothing could reason about. A refused BASE compile
   refuses the whole search before the cache is consulted (`Pre_search_failure` at `Backend_link`):
   scheduling only adds device buffers to the base lowering (new tiles, fission's local-to-device
-  promotions), so no candidate, replay or fallback would fit either. Size such a probe on the
+  promotions), so no candidate, replay or fallback would fit either. On a GPU backend the base is
+  refused before codegen (it binds no hardware dimension, gh-ocannl-1340) and links nothing, so
+  there the FIRST search candidate to reach link is the probe, its refusal the same typed
+  `Pre_search_failure`; a warm GPU call therefore tries its replay first. Size such a probe on the
   UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's
   workload under CUDA), which made a half-footprint test capacity fit the baseline there. The
   same holds for a search WINNER: the unscheduled footprint bounds every shipped routine from
@@ -207,6 +224,18 @@ files.
   cannot be captured (OCANNL streams are all non-default, so this only bites standalone repros).
   Fallback paths (logging on, capture rejected, config off) are plain per-segment launches —
   same-stream FIFO makes the generic event chain redundant on CUDA/HIP.
+- The instantiated graphs belong to the routine's context (gh-ocannl-1445): `sequence_segments`
+  returns a release action beside the task, `Backends.link` adds it to the child context's
+  `release_hooks`, and `Backends.finalize` runs the hooks once the pools are freed, outside the
+  retryable cleanup: a failing hook neither keeps the pools rooted nor resets the `finalized` flag
+  over freed pools. Hooks are idempotent and leave the routine able to recapture, since an upload
+  fork shares the list and can outlive the value released. Every cache still alive at exit
+  is destroyed by the backend's `at_exit` teardown, on HIP before the stream. The caches are held
+  through `Backend_impl.Weak_registry`, so a routine dropped without a release is still collected,
+  its graphs by cudajit's and hipjit's own finalizers. `live_graph_execs` in the backend's global
+  debug info (`Context.global_debug_info`) counts what the caches hold;
+  `test/operations/graph_exec_release` pins the release, `exit_stream_teardown`'s `device_graph`
+  arm the exit.
 
 - HIP scratch (private segment) is budgeted **per work-item, independent of launch geometry**, and
   a kernel over budget aborts the HSA queue instead of failing cleanly (gh-ocannl-533). The

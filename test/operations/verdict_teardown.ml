@@ -59,19 +59,28 @@ let one_line_err =
 
 (* A scan's ending, through the printers the scans share: its claims, [Verdict.success_trailer],
    then the refusal-control marker section, where [Refusal_control_manifest.print_section] prints a
-   claim's marker only once Verdict recorded the claim passing. The claims' diagnostics come from
+   claim's marker only once Verdict recorded the claim passing, a direct failure's only once its
+   refusal ran, and the section's closing row whatever came before it. The diagnostics come from
    this source text, by the extractor [print] itself reads a scan's source with. *)
 let manifest_source =
   {|let () =
   p "the first manifest claim" ok;
-  p "the last manifest claim" true|}
+  p "the last manifest claim" true;
+  if refused then Verdict.fail "the manifest refusal"|}
 
-let manifest_ending ~first_holds =
+let manifest_ending ~first_holds ~refusal_runs =
   p "the first manifest claim" first_holds;
   p "the last manifest claim" true;
   Verdict.success_trailer ~blank_line:true [ "every manifest claim held." ];
+  let source = "test/operations/verdict_teardown.ml" in
+  (* The refusal's caught branch, as a scan's control records it -- or, in the silenced child, a
+     mutant that keeps every claim passing while the refusal no longer runs (gh-ocannl-1251). *)
+  if refusal_runs then
+    Test_utils.Refusal_control_manifest.observe_failure ~source ~format:"the manifest refusal";
+  (* What a scan writes on stderr beside its golden, so that each stream has a transcript. *)
+  Stdio.eprintf "Manifest diagnostics: 3 (not part of the golden)\n";
   let diagnostics = Test_utils.Refusal_control_scan.diagnostics manifest_source in
-  Test_utils.Refusal_control_manifest.print_section ~source:"test/operations/verdict_teardown.ml"
+  Test_utils.Refusal_control_manifest.print_section ~source
     ~expected:(List.map diagnostics ~f:Test_utils.Refusal_control_scan.marker)
     diagnostics
 
@@ -234,6 +243,27 @@ let () =
           exited 0 held_status && exited 1 status
           && List.length (derive held) = List.length held - 3
           && List.equal String.equal (String.split_lines out) (derive held));
+      (* What it reads a mutant by that silences one refusal while every claim still holds: no
+         failed check, so no teardown line -- only the refusal's marker missing, and the section's
+         closing row still printed after it (gh-ocannl-1251, gh-ocannl-1318). *)
+      let manifest_silenced = run_child "manifest_silenced" in
+      about "manifest_silenced"
+        "a scan whose refusal no longer runs, every claim holding, exits 0 and omits that \
+         refusal's marker and only it, still ending on the section's closing row"
+        manifest_silenced ~holds:(fun status out err ->
+          let _, held_out, _ = manifest_held in
+          let refusal_marker =
+            Test_utils.Refusal_control_scan.(marker (List.last_exn (diagnostics manifest_source)))
+          in
+          let held = String.split_lines held_out in
+          let derived =
+            List.filter held ~f:(fun row -> not (String.is_substring row ~substring:refusal_marker))
+          in
+          exited 0 status
+          && (not (has err ~substring:"FAILED"))
+          && List.length derived = List.length held - 1
+          && List.equal String.equal (String.split_lines out) derived
+          && String.equal (List.last_exn held) Test_utils.Refusal_control_manifest.closing_row);
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
@@ -247,7 +277,8 @@ let () =
       print_transcript "trailer_omitted" trailer_omitted;
       print_transcript "pass_fail_forms" pass_fail_forms;
       print_transcript "manifest_held" manifest_held;
-      print_transcript "manifest_failed" manifest_failed
+      print_transcript "manifest_failed" manifest_failed;
+      print_transcript "manifest_silenced" manifest_silenced
   | [ _; mode ] -> (
       (* Only on the paths whose stdout is not compared byte for byte. *)
       if String.is_prefix mode ~prefix:"fail_then_" then Stdlib.Format.printf "%s@\n" formatted;
@@ -307,8 +338,9 @@ let () =
           pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false;
           (* A message ending as a claim would: still no claim (gh-ocannl-1364). *)
           fail "a message ending like a claim: false"
-      | "manifest_held" -> manifest_ending ~first_holds:true
-      | "manifest_failed" -> manifest_ending ~first_holds:false
+      | "manifest_held" -> manifest_ending ~first_holds:true ~refusal_runs:true
+      | "manifest_failed" -> manifest_ending ~first_holds:false ~refusal_runs:true
+      | "manifest_silenced" -> manifest_ending ~first_holds:true ~refusal_runs:false
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))

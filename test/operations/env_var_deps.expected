@@ -185,6 +185,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test bench_mma_writes: Ir.Schedule.apply
   test/operations/dune, test clamped_window_pool: Ir.Schedule.apply
   test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test conv_merged_gpu_seeds: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test cost_model_reuse: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test cpu_parallel: Ir.Schedule.apply
   test/operations/dune, test cpu_scratch_matmul_grid: Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules
@@ -217,7 +218,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test pipelined_move_legality: Ir.Schedule.apply, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
   test/operations/dune, test privatize_census: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test privatize_recheck: Ir.Schedule.apply
-  test/operations/dune, test qkv_zero_init: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test qkv_zero_init: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test reduction_forms: Ir.Schedule.apply
   test/operations/dune, test scan_companion_coverage: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test scan_loop: Ir.Schedule.apply
@@ -225,7 +226,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test schedule_batched_mma: Ir.Schedule.apply
   test/operations/dune, test schedule_coalesce: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.fuse_epilogue_witness, Ir.Schedule.maybe_default_schedules, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_contraction_nest: Ir.Schedule.apply
-  test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_cpu_pack_matmul: Ir.Schedule.apply
   test/operations/dune, test schedule_epilogue_fusion: Ir.Schedule.apply
   test/operations/dune, test schedule_ldmatrix_matmul: Ir.Schedule.apply
@@ -315,7 +316,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test autotune_round_expansion (Autotune.tune, Scripted_search.search): pinned: autotune_round_expansion.ml calls `Fissioned_chain.small_menu` at initialization, before any search
   test/operations/dune, test autotune_seam_domains (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_seeded_seed (Autotune.tune): independent, by its marker
-  test/operations/dune, test autotune_serial_baseline (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_serial_baseline (Autotune.tune, Autotune.tune_deferred): independent, by its marker
   test/operations/dune, test autotune_sketch_placements (Scripted_search.search): pinned: autotune_sketch_placements.ml calls `Fissioned_chain.small_menu` at initialization, before any search
   test/operations/dune, test autotune_smoke (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_split_reduce (Autotune.tune): independent, by its marker
@@ -608,12 +609,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:a2ef9338814a08816bb85a6bab6ac71c] statically recoverable scanner
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
-  [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
-  [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
-  [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
   [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares
   [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
   [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's
   [scanner-refusal:b35f6c5cf70c9d942c2e42a4c1af9975] Test_utils.Generated.init
   [scanner-refusal:9ad60261dbb2540d4d7e060be725ad4d] repository's census finds
+End of synthetic controls.

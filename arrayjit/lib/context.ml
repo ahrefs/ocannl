@@ -1093,20 +1093,48 @@ let get_used_memory ctx =
           Backend.get_used_memory c.BI.device);
     }
 
-let release ctx =
+let get_free_and_total_memory ctx =
   Backends.query ctx.wrapped
     {
       q =
         (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
-          Backends.finalize (module Backend) c);
-    };
-  Hashtbl.to_alist ctx.ledger.merge_buffer_readers
-  |> List.iter ~f:(fun (transfer_id, readers) ->
-      let remaining =
-        List.filter readers ~f:(fun (_, context_id) -> context_id <> ctx.context_id)
-      in
-      if List.is_empty remaining then Hashtbl.remove ctx.ledger.merge_buffer_readers transfer_id
-      else Hashtbl.set ctx.ledger.merge_buffer_readers ~key:transfer_id ~data:remaining)
+          Backend.get_free_and_total_memory c.BI.device);
+    }
+
+let global_debug_info ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) _c ->
+          Backend.get_global_debug_info ());
+    }
+
+let release ctx =
+  let retire_readers () =
+    Hashtbl.to_alist ctx.ledger.merge_buffer_readers
+    |> List.iter ~f:(fun (transfer_id, readers) ->
+        let remaining =
+          List.filter readers ~f:(fun (_, context_id) -> context_id <> ctx.context_id)
+        in
+        if List.is_empty remaining then Hashtbl.remove ctx.ledger.merge_buffer_readers transfer_id
+        else Hashtbl.set ctx.ledger.merge_buffer_readers ~key:transfer_id ~data:remaining)
+  in
+  match
+    Backends.query ctx.wrapped
+      {
+        q =
+          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+            Backends.finalize (module Backend) c);
+      }
+  with
+  | () -> retire_readers ()
+  | exception exn ->
+      (* gh-ocannl-1445: a release hook (graph execs) that fails runs after the pools were freed and
+         leaves the context finalized, so it is a released consumer all the same. *)
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      if Backends.query ctx.wrapped { q = (fun _ c -> Atomic.get c.BI.finalized) } then
+        retire_readers ();
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
 
 (* gh-560: the analyze-only entry points — lowering and optimization without backend codegen or
    linking. [Backends.lower_assignments] forks the lineage state itself, so the result is read off a

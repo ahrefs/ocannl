@@ -3061,7 +3061,8 @@
   mtime
   mtime.clock.os
   arrayjit.utils
-  arrayjit.verdict)
+  arrayjit.verdict
+  ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4307,6 +4308,8 @@
 
 (rule
  ; ocannl-backend: none -- runs the scanner's synthetic stale-exclusion refusal branch.
+ ; The fixture library's wrapper interface is what its declared-but-unread control copies alone
+ ; into a tree of its own (gh-ocannl-1233).
  (target codegen_text_inventory_control.actual)
  (package neural_nets_lib)
  (deps
@@ -4316,7 +4319,10 @@
  (action
   (with-stdout-to
    %{target}
-   (run %{dep:codegen_text_inventory.exe} --refusal-control))))
+   (run
+    %{dep:codegen_text_inventory.exe}
+    --refusal-control
+    %{dep:.emitter_fixture.objs/byte/emitter_fixture.cmi}))))
 
 (rule
  (alias runtest-codegen_text_inventory_control)
@@ -6493,6 +6499,10 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -7004,6 +7014,36 @@
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
 
 (test
+ ; gh-ocannl-1406: GPU conv seeds on aligned-merged lowerings, every seed executed.
+ (name conv_merged_gpu_seeds)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The leg is gated on the seeder's tensorized capability for an f32 site (tf32 on CUDA).
+  (env_var OCANNL_TF32_MATMULS)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules conv_merged_gpu_seeds)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; cc-vector-width: independent -- every seeding judgment runs on synthetic limits, and the host
  ; tune has no sketch family.
  ; gh-ocannl-1407: the seeding census, on synthetic device limits, and its config key's stream.
@@ -7385,6 +7425,20 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1445: a graph-captured routine's instantiated graphs are destroyed when its context is
+; released (cuda and hip; skipped where the backend caches no graphs).
+
+(test
+ (name graph_exec_release)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules graph_exec_release)
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9631,6 +9685,7 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_GPU_SERIAL_LANES)
@@ -9663,6 +9718,7 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_GPU_SERIAL_LANES)
@@ -10281,7 +10337,15 @@
   (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
   (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
  (modules autotune_seeded_seed)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test scripted_search)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.verdict
+  test_utils
+  ll_test
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10374,6 +10438,31 @@
   (env_var OCANNL_BACKEND))
  (modules uint4x32_fixed_index_parity)
  (libraries base ocannl stdio test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1476: an operand repeated in one step -- a self-concatenation, a self-product -- gets
+ ; projections of its own per occurrence, executed forward and backward.
+ (name self_concat)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules self_concat)
+ (libraries base ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1474: the Rev_sides scatter establishes the margins of each padded target it writes.
+ (name rev_sides_padded_target)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rev_sides_padded_target)
+ (libraries base ocannl arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

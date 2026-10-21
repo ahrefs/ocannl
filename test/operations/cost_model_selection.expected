@@ -14,6 +14,12 @@ pruned search timed fewer candidates than the full search: true
 baseline still timed under aggressive pruning: true
 tuned values correct without the pre-filter: true
 tuned values correct with the pre-filter: true
+a typed builder refusal in the pre-filter does not end the search: true
+the pre-filter's refusal is a counted decline under the builder's cause: true
+no candidate carrying the refused parameters is compiled: true
+the search with a refused candidate computes correct values: true
+control: without the pre-filter the same refusal is declined at candidate compile: true
+control: there, a candidate carrying the refused parameters is compiled: true
 model_default returns a working routine with correct values: true
 model_default scored candidates (default pipeline included): true
 model_default reports a choice with its model score: true

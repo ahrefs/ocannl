@@ -24,6 +24,11 @@
    device's resident work-items, so it RISES on smaller devices, and one with <= 16384 of them
    cannot be pushed over budget by any compilable kernel.
 
+   Since gh-ocannl-1340 a GPU baseline that binds no hardware dimension -- the identity-transform
+   base always does -- is refused before codegen, so it never reaches the validator and the decline
+   checks are vacuous on HIP too (announced on stderr); they stay as the contract a dispatchable
+   base would meet.
+
    Gated behind [slow], and meaningful only where the baseline is actually over budget. The two ways
    to be inapplicable — a non-HIP backend, and a HIP device whose budget exceeds that frame — are
    announced on stderr rather than folded into the printed booleans, so the golden stays backend-
@@ -90,7 +95,17 @@ let () =
     List.filter r.Autotune.declines ~f:(fun d ->
         match d.Autotune.key with SO.Resource_exceeded_key SO.Thread_scratch -> true | _ -> false)
   in
-  if not r.Autotune.baseline_declined then
+  let baseline_refused_before_codegen =
+    List.exists r.Autotune.declines ~f:(fun d ->
+        SO.equal_rejection_key d.Autotune.key (SO.Not_dispatched_key "baseline"))
+  in
+  if baseline_refused_before_codegen then
+    Stdio.eprintf
+      "scratch/tune: the baseline binds no hardware dimension and was refused before codegen \
+       (gh-ocannl-1340), so it never met the scratch validator — the decline checks below are \
+       vacuous\n\
+       %!"
+  else if not r.Autotune.baseline_declined then
     Stdio.eprintf
       "scratch/tune: this device backs a %d-byte frame — the decline checks below are vacuous\n%!"
       (side * side * 4)

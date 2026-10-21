@@ -13,3 +13,12 @@ in the refused-seed search too, every seeded attempt compiled and was timed: tru
 a refused seeded window is retried after the seed pass: true
 the retried seeded plan is crowned and reported as seeded_ms: true
 a search that times nothing returns the untuned compile's gradients, bitwise: true
+a search-less tune with no cache ships the untuned compile's gradients, bitwise: true
+a search-less tune whose cache misses ships the untuned compile's gradients, bitwise: true
+under seed A the search is abandoned after its first timed candidates: true
+control: seed A again replays that abandonment without timing anything: true
+under seed B the same trajectory searches rather than replay seed A's abandonment: true
+under seed A the search completes and records its steps: true
+control: seed A again replays the crown with its steps: true
+under seed B the crown replays without seed A's steps: true
+not every store of the two-seed sequences was refused: true

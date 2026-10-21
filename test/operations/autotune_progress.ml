@@ -6,9 +6,12 @@
    against what the search reported through its callbacks: the format every line keeps, one
    [search_start]/[search_done] pair per report and in the same order, the outcome and timed count
    of each [search_done] equal to its report's, one candidate line per attempt, each phase's last
-   candidate line at [tried=N/N], and the arm and flip framing around the searches. Timings vary run
-   to run, so only relationships between them are claimed. Everything captured is echoed back to
-   stderr afterwards, so nothing the run wrote is hidden and the lines can be read there. *)
+   candidate line at [tried=N/N], and the arm and flip framing around the searches, with the device
+   memory each arm line reports (gh-ocannl-1424): no arm starts beside anything an earlier one left
+   in OCANNL's pools, and the driver's free bytes appear exactly where the backend can read them.
+   Timings vary run to run, so only relationships between them are claimed. Everything captured is
+   echoed back to stderr afterwards, so nothing the run wrote is hidden and the lines can be read
+   there. *)
 
 open Base
 open Ocannl
@@ -57,11 +60,12 @@ let () =
   (* Every report, arms and flips alike, in arrival order. *)
   let reports = ref [] in
   let capture r = reports := r :: !reports in
+  let ctx = Context.auto () in
   let (), lines =
     Stderr_capture.lines (fun () ->
         ignore
           (Train.tune_placements ~beam_width:1 ~rounds:1 ~repeats:1 ~cache_dir:"" ~report:capture
-             ~flip_report:capture ~inline_flips:1 (Context.auto ()) c comp Ir.Indexing.Empty
+             ~flip_report:capture ~inline_flips:1 ctx c comp Ir.Indexing.Empty
             : _ * _))
   in
   let progress = List.filter lines ~f:Stderr_capture.Progress.is_progress in
@@ -160,4 +164,43 @@ let () =
   p "flips_done's measured count equals the flip searches' arm_start lines"
     (match named "flips_done" with
     | [ (_, f) ] -> Option.equal Int.equal (int_field f "measured") (Some (List.length flip_arms))
-    | _ -> false)
+    | _ -> false);
+  (* gh-ocannl-1424: the memory fields. Working bytes are the census's, deterministic on every
+     backend; the driver's free bytes vary with everything else on the device, so only their
+     presence is claimed, against the query the lines are read through. *)
+  let placements_starts = named "placements_start" in
+  let reads_driver = Option.is_some (Context.get_free_and_total_memory ctx) in
+  let driver_field f key =
+    match field f key with
+    | Some "none" -> not reads_driver
+    | Some v -> reads_driver && Option.is_some (Int.of_string_opt v)
+    | None -> false
+  in
+  p "one placements_start line, ahead of every arm"
+    (List.length placements_starts = 1
+    &&
+    match
+      List.find events ~f:(fun (ev, _) ->
+          String.equal ev "placements_start" || String.equal ev "arm_start")
+    with
+    | Some (ev, _) -> String.equal ev "placements_start"
+    | None -> false);
+  p_all
+    "placements_start reports working bytes and the driver's free and total bytes where it has them"
+    placements_starts ~f:(fun (_, f) ->
+      Option.is_some (int_field f "working_bytes")
+      && driver_field f "device_free" && driver_field f "device_total");
+  p_all "every arm line reports working bytes and the driver's free bytes where it has them"
+    (arm_starts @ arm_dones) ~f:(fun (_, f) ->
+      Option.is_some (int_field f "working_bytes") && driver_field f "device_free");
+  let base_working =
+    Option.bind (List.hd placements_starts) ~f:(fun (_, f) -> int_field f "working_bytes")
+  in
+  p_all "every arm starts with the working bytes the call started with" arm_starts ~f:(fun (_, f) ->
+      Option.is_some base_working
+      && Option.equal Int.equal (int_field f "working_bytes") base_working);
+  List.iter (placements_starts @ arm_starts) ~f:(fun (ev, f) ->
+      Stdio.eprintf "%s %s: working_bytes=%s device_free=%s (not part of the golden)\n%!" ev
+        (Option.value (field f "arm") ~default:"-")
+        (Option.value (field f "working_bytes") ~default:"?")
+        (Option.value (field f "device_free") ~default:"?"))

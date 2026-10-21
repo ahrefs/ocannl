@@ -197,6 +197,41 @@ end
 
 let next_global_device_id : Utils.atomic_int = Atomic.make 0
 
+(* Runs every thunk, even after one raises, then re-raises the first failure with its backtrace: for
+   cleanup whose steps are independent, where one failure must not skip the rest. *)
+let attempt_each (thunks : (unit -> unit) list) =
+  let failure = ref None in
+  List.iter thunks ~f:(fun f ->
+      try f ()
+      with exn ->
+        if Option.is_none !failure then failure := Some (exn, Stdlib.Printexc.get_raw_backtrace ()));
+  Option.iter !failure ~f:(fun (exn, backtrace) ->
+      Stdlib.Printexc.raise_with_backtrace exn backtrace)
+
+(* gh-ocannl-1445: the values a backend must still reach at process exit without keeping them alive
+   until then. Each is held through a weak pointer, so one whose owner was dropped without a release
+   is collected as before (and its own finalizers run), while every one still alive at exit can be
+   torn down deterministically. Dead cells are pruned as registrations accumulate. *)
+module Weak_registry = struct
+  type 'a t = { mutex : Stdlib.Mutex.t; mutable cells : 'a Stdlib.Weak.t list; mutable added : int }
+
+  let create () = { mutex = Stdlib.Mutex.create (); cells = []; added = 0 }
+
+  let register r v =
+    let cell = Stdlib.Weak.create 1 in
+    Stdlib.Weak.set cell 0 (Some v);
+    Stdlib.Mutex.protect r.mutex (fun () ->
+        r.cells <- cell :: r.cells;
+        r.added <- r.added + 1;
+        if r.added >= 64 then (
+          r.cells <- List.filter r.cells ~f:(fun c -> Stdlib.Weak.check c 0);
+          r.added <- 0))
+
+  let live r =
+    Stdlib.Mutex.protect r.mutex (fun () ->
+        List.filter_map r.cells ~f:(fun c -> Stdlib.Weak.get c 0))
+end
+
 module Device
     (Device_types : Device_types)
     (Slab : Device_slab with type device := Device_types.device) =
@@ -233,6 +268,7 @@ struct
       released_pool_ids = Set.empty (module Int);
       upload_tip = ref ctx_buffers;
       upload_arenas = fresh_upload_arenas ();
+      release_hooks = ref [];
       optimize_ctx;
       merge_buffer_node = None;
     }
@@ -250,6 +286,7 @@ struct
       released_pool_ids = Set.empty (module Int);
       upload_tip = ref ctx_buffers;
       upload_arenas = fresh_upload_arenas ();
+      release_hooks = ref [];
       optimize_ctx;
       merge_buffer_node;
     }
@@ -383,7 +420,7 @@ module type Lowered_backend = sig
     bindings:Indexing.lowered_bindings ->
     uses_merge_buffer:bool ->
     Task.t list ->
-    Task.t option
+    (Task.t * (unit -> unit)) option
   (** When the backend can run an ordered batch of same-stream kernel tasks — the segment schedules
       of one fissioned routine, all from this backend's [link_batch] on [context]'s device — with
       device-side ordering cheaper than per-boundary events, returns the combined task. E.g. the
@@ -393,5 +430,10 @@ module type Lowered_backend = sig
       per step. [bindings] are the routine's static-index refs and [uses_merge_buffer] says whether
       the routine reads the device's merge buffer: together they cover every launch-time-varying
       kernel argument, so a backend that bakes arguments (graph capture) can key its captures on
-      their current values. [None] falls back to the generic event chain of [Raise_backend.link]. *)
+      their current values. [None] falls back to the generic event chain of [Raise_backend.link].
+
+      The second component is the combined task's release: it drops what the task retains across
+      runs on the device (CUDA/HIP: the cached instantiated graphs, gh-ocannl-1445), and runs when
+      the routine's context is released (it becomes one of the context's [release_hooks]). It must
+      be idempotent and leave the task runnable, rebuilding on its next run. *)
 end

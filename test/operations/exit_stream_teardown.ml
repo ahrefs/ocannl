@@ -10,7 +10,10 @@
 
    Each property has a negative control. On hip, the teardown leaves no leak report, and with the
    teardown off ([exit_stream_teardown_timeout=0]) the report comes back -- so a clean run cannot
-   pass for a ROCr build that stopped reporting leaks, which is skipped as vacuous instead.
+   pass for a ROCr build that stopped reporting leaks, which is skipped as vacuous instead. A
+   routine whose segments were graph-captured and are still cached at exit must not bring the report
+   back either (gh-ocannl-1445): the teardown destroys the cached graphs before the stream, and the
+   child reports how many there were, so the claim cannot pass over a run that captured none.
 
    The bound is the other property: a crashing or hung process must not be held at exit. On hip, a
    stream with seconds of work queued at exit holds the teardown for the bound and no longer (that
@@ -124,7 +127,45 @@ let device_arms () =
       off_claim)
   else (
     p on_claim (on_leaks = 0);
-    p off_claim (off_leaks > 0))
+    p off_claim (off_leaks > 0));
+  off_leaks > 0
+
+(* gh-ocannl-1445: a routine whose segments were graph-captured, still cached and unreleased at
+   exit. Its instantiated graph used to outlive the process, and on hip that alone brought the
+   leaked-signal report back with the stream teardown on (measured for gh-ocannl-1370). The child
+   forces capture on, whatever the ambient configuration, and reports how many graphs the backend
+   caches, so a clean exit cannot pass for a run that captured nothing. *)
+let device_graph_arm ~rocr_reports_leaks =
+  let code, _, out, err =
+    run_child
+      [
+        "device_graph";
+        "--ocannl_gpu_graph_capture=true";
+        Printf.sprintf "--ocannl_exit_stream_teardown_timeout=%g"
+          Utils.default_exit_stream_teardown_timeout;
+      ]
+  in
+  let backend = backend_of out in
+  let cached =
+    String.split_lines out
+    |> List.find_map ~f:(String.chop_prefix ~prefix:"cached graphs at exit: ")
+    |> Option.bind ~f:Int.of_string_opt
+  in
+  let leaks = leaked_signals err in
+  eprintf
+    "device_graph child ran on %s with %s cached graph(s) at exit; %d signals reported leaked (not \
+     part of the golden)\n\
+     %!"
+    backend
+    (Option.value_map cached ~default:"no" ~f:Int.to_string)
+    leaks;
+  p "the graph-capturing device child exits normally" (code = 0);
+  let claim = "graphs still cached at exit leave no leaked-signal report" in
+  if not (String.equal backend "hip") then skipped ~backend claim
+  else if not rocr_reports_leaks then
+    skipped ~aggregation:`Environment ~backend:"a ROCr build that does not report leaked signals"
+      claim
+  else p claim (Option.exists cached ~f:(fun n -> n >= 1) && leaks = 0)
 
 let bound_flag = Printf.sprintf "--ocannl_exit_stream_teardown_timeout=%g" bound
 
@@ -233,6 +274,7 @@ let stand_in_arms () =
     && String.is_substring out ~substring:"outcome: disabled")
 
 let () =
-  device_arms ();
+  let rocr_reports_leaks = device_arms () in
+  device_graph_arm ~rocr_reports_leaks;
   busy_device_arm ();
   stand_in_arms ()

@@ -396,7 +396,8 @@ type conv_judgment = {
   cj_site : conv_site;
   cj_real_stmts : int;
       (** The lowering's real top-level statements besides the site's own covering zero
-          ([conv_real_stmts]) — the count the companion caps judge. *)
+          ([conv_real_stmts]) — the count the CPU leg's companion caps judge. The GPU leg judges
+          companion coverage instead ([companion_geometry], gh-ocannl-1406). *)
   cj_cpu : conv_leg;
   cj_gpu : conv_leg;
 }

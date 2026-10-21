@@ -1,0 +1,18 @@
+(w, w) ++^ "s, c; s, d => s, c^d": the forward is the operands side by side, per row: true
+(w, w) ++^ "s, c; s, d => s, c^d": operand 0's gradient sums its segments' slices of the upstream gradient: true
+(w, w) ++^ "s, c; s, d => s, c^d": the scatter accumulates into operand 0's gradient once per segment naming it: true
+(w, w) ++^ "s, c; s, d => s, c^d": the concatenated axis names one symbol per segment: true
+(w, w) ++^ "s, c; s, d => s, c^d": the concatenated segments' symbols: true
+(w, w) ++^ "s, c; s, d => s, c^d": one component iterates exactly the concatenated segments: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": the forward is the operands side by side, per row: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": operand 0's gradient sums its segments' slices of the upstream gradient: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": operand 1's gradient sums its segments' slices of the upstream gradient: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": the scatter accumulates into operand 0's gradient once per segment naming it: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": the scatter accumulates into operand 1's gradient once per segment naming it: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": the concatenated axis names one symbol per segment: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": the concatenated segments' symbols: true
+(w, v, w) ++^ "s, a; s, b; s, c => s, a^b^c": one component iterates exactly the concatenated segments: true
+m +* "a, b; b, c => a, c" m: the forward is the matrix square: true
+m +* "a, b; b, c => a, c" m: the gradient sums both factors' contributions: true
+m * m: the forward is the matrix square: true
+m * m: the gradient sums both factors' contributions: true

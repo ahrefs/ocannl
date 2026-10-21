@@ -416,9 +416,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   own evidence: a claim marker is emitted only after `Verdict` recorded a passing execution of that
   exact format (and each observation is consumed once), while a direct-failure marker requires
   that the refusal RAN: an `observe_failure` from the caught branch itself, or a
-  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line of that
-  scanner's refused child run (exit 1; `Refusal_control_manifest.refuses`, or
-  `observe_refused_run` over a harness's own capture) that is the refusal's OWN -- matched by its
+  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line of a refused
+  child run (exit 1) THAT CLAIM made -- `Refusal_control_manifest.refuses ~claim`, or
+  `observe_refused_run` over a harness's own capture plus `attribute ~claim` beside the claim
+  (env_var_deps' `attribute`) -- that is the refusal's OWN -- matched by its
   format and by no sibling format of the same scanner that fixes more text, so a general refusal
   cannot live on a specific sibling's line. Either half alone counts for nothing: a
   claim over a fixture the scan ACCEPTS, a prose line, or an unrelated passing claim once stood in
@@ -426,6 +427,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (gh-ocannl-1207; `Manifest.standing` holds the rule, `refusal_control_scan_cases` pins each
   direction). The claim is a gate -- incidental refusals keep a malformed tree's child at exit 1 on
   their own -- and the line is the evidence; map each key to the claim whose run prints it. A
+  line from a sibling claim's run counts for nothing (gh-ocannl-1233): pooled per scanner, the
+  runs let a key stand mapped to a claim whose own run never printed it. A
   refusal no control can reach -- a library constant, a walk defect the raw-text floor exists for
   -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
   heading, so it stays catalogued without claiming execution; a key in both tables is refused by
@@ -433,7 +436,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `print`. The cheap way to execute one is a child run of the scanner over a `with_tree` of
   malformed input (`config_scan_lexing`, `dune_scan_cases`, `verdict_scan_cases`, codegen's
   `--refusal-control`; env_var_deps' `malformed_tree_control` builds its tree beside the shared
-  `control_context` through `run_checker`). Claim markers are consumed as a multiset, so two
+  `control_context` through `run_checker`). Every section ends on the unconditional closing row
+  `End of synthetic controls.` (`Refusal_control_manifest.closing_row`; gh-ocannl-1251,
+  gh-ocannl-1318), which is how `tools/mutation-run.sh` tells a complete run from a cut one.
+  Claim markers are consumed as a multiset, so two
   identical claim formats require two executions; refused lines are not consumed, so two sites of
   one direct-failure format would share one line. A new manifest row therefore
   prints nothing until its arm supplies runtime evidence. Never compute a marker by hand: while a
@@ -2011,11 +2017,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   failing run of `verdict_ratchet`, `env_var_deps`, `config_dep_completeness` and the rest is
   that many rows short; the runner matches the run against the golden without its `OK: ` rows,
   with or without the blank row before them, under the same row-for-row and teardown conditions.
-  A new scan that prints its trailer through `Verdict.success_trailer` inherits this. Residual: a golden ending on its marker section cannot tell a complete
-  run from one cut inside the markers (nor one ending on its trailer a failing run from one cut
-  before it), and a mutant that silences one refusal while every claim
-  passes leaves no teardown, so it reads STOPPED EARLY although the golden caught it -- both want a
-  trailer row after the section. A test that echoes a child's stderr (`verdict_teardown`)
+  A new scan that prints its trailer through `Verdict.success_trailer` inherits this. A golden
+  ending on a marker section's closing row (`End of synthetic controls.`, every manifest golden)
+  needs neither the teardown nor the row-for-row match: a run whose stdout ends on the golden's
+  LAST closing row (counted, since every section ends on the same text) printed all it was going
+  to, so its shortfall is omissions, never a cut (`rows short of the golden: K`) -- a mutant that
+  silences one refusal while every claim passes, with no failed check and so no teardown, is
+  caught -- and a run cut inside the markers lacks the row and stopped early (gh-ocannl-1251,
+  gh-ocannl-1318). Elsewhere the teardown is still all that separates a complete failing run from
+  one cut before its last rows. A test that echoes a child's stderr (`verdict_teardown`)
   can carry a child's `STOPPED EARLY` line; read the rows line before discarding such a run.
   Otherwise the exit status remains test-run's, so a killed mutant normally exits 1, and a
   passing mutation exits 0 and needs investigation.
@@ -2030,11 +2040,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Verdict text the runner reads it takes from `verdict_teardown.expected`, whose last section is
   its children's streams, and replays through the runner: a refactor of `verdict.ml` keeps the
   harness green, while a promotion that changes those transcripts means running the harness.
-  The same holds for what the runner skips of a scan's ending: the `manifest_held`/`manifest_failed` pair ends
+  The same holds for what the runner skips of a scan's ending: the `manifest_held`/`manifest_failed`/`manifest_silenced` trio ends
   through the printers every scan shares, `Verdict.success_trailer` and
   `Refusal_control_manifest.print_section`, and the failing child's run, replayed against the
-  passing child's stdout, must read as caught with one marker and the trailer omitted -- no source
-  grep of either printer, nor of a scan (gh-ocannl-1364).
+  passing child's stdout, must read as caught with one marker and the trailer omitted, and the
+  silenced child's run, with no teardown, as caught with one marker omitted -- no source grep of
+  either printer, nor of a scan (gh-ocannl-1364).
 - The guarded pairwise claim has the same two label dialects as the scalar claim (gh-ocannl-816):
   `pf_all2` formats a computed label before taking the two arrays, and `pass_fail_all2` preserves
   `pass_fail`'s lazy failure detail while adding the structural empty, floor-shortfall, or
@@ -3845,6 +3856,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   -- tools/test-run.sh ...`, with no slot override: the hold exports `FLEET_MEASUREMENT_HELD`, and
   the slot then runs the batch under it, logging `EXECUTION SLOT <box>: inside measurement <id>`
   (lukstafi/ludics-lite#480), which `slot_refusal` reads as an admission like a held slot's.
+- **A GPU-box batch that resolved to cc alone is green and tested nothing on the GPU, so the
+  runner says so, and `--expect-backend B` refuses it** (gh-ocannl-1433). Two wave legs
+  (staging#1268, staging#1269) passed on rog and minix with `OCANNL_BACKEND` unset and the test
+  configuration naming cc. On a box where cuda or hip meets a width hazard (the local view above,
+  so the fleet's Linux GPU boxes and never a Mac), `run`/`start`/`fresh` print `WARNING: this box
+  has a GPU backend (<b>), but this batch holds only cc: ...` in the announcements, the run's log
+  and the digest, and `plan` prints it too; a batch holding no backend at all (the scans) is not
+  warned about. `--expect-backend B` (repeatable, before the dune arguments) states what the batch
+  must hold: one that does not hold every B, or whose backends are unread (`exec`), is refused
+  before the slot, the probe and dune -- verdict `BACKEND REFUSED`, exit 2, the digest naming what
+  it held -- and a held expectation, cc included, silences the warning. The option makes `run`
+  resolve the batch on any box, a Mac included. A GPU leg passes the backend it is for:
+  `OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build @...`. Leg 88 of
+  `tools/test-test-run.sh` pins both, and its warning stays clear of the words leg 49's
+  width-silence controls grep for (`cap`, `sdma`, `nvidia`, `dxg`).
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on
