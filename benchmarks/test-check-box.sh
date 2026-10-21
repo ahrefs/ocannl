@@ -304,6 +304,17 @@ if harness_leg 'fleet names'; then
   usage_leg "a fleet name for a box the DIGESTS file does not declare exits 2" fleet-undeclared \
     "is the fleet's name for minix, which .* does not declare"
 fi
+if harness_leg 'fleet names: what a driver records'; then
+  # --canonical-box is the gates' reading of --box (box-gate.sh, box_gate.py): a driver records
+  # the box's ID, not the fleet's name for it (Codex review round 1). The shell gate, sourced here
+  # against the real subject, holds the ID; the Python one is test_orchestrate's BoxNameTest.
+  got=$("$SUBJECT" --canonical-box rog-nv-linux),$("$SUBJECT" --canonical-box tuf),$("$SUBJECT" --canonical-box elsewhere)
+  [ "$got" = rog-nv,tuf,elsewhere ]
+  report $? "--canonical-box maps a fleet name to its box and leaves any other name" "got $got"
+  got=$(. "$here/box-gate.sh" && box_gate_args --box minix-amd-linux --other && printf '%s/%s' "$box_gate_box" "$box_gate_shift")
+  [ "$got" = minix/2 ]
+  report $? "box-gate.sh holds the box's ID for a fleet name" "got $got"
+fi
 if harness_leg 'fleet names: the relationships'; then
   # Every fleet name resolves to a box the checked-in DIGESTS.txt declares and box_profile knows,
   # and every declared box has a fleet name -- derived from the subject, not listed here.
@@ -316,6 +327,8 @@ if harness_leg 'fleet names: the relationships'; then
     check "fleet-$name" --box "$name" --fixture mlp_small
     [ "$rc" != 2 ] || bad="$bad $name"
     grep -qxF -- "$box" <<<"$declared_boxes" || bad="$bad $name->$box(undeclared)"
+    # --canonical-box, which answers without reading DIGESTS, relies on this.
+    ! grep -qxF -- "$name" <<<"$declared_boxes" || bad="$bad $name(is-itself-declared)"
   done <<<"$fleet"
   while IFS= read -r box; do
     awk -v b="$box" '$2 == b { f = 1 } END { exit !f }' <<<"$fleet" || bad="$bad $box(no-fleet-name)"

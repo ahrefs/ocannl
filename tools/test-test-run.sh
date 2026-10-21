@@ -226,7 +226,8 @@
 #  88. a GPU box's batch resolving to cc alone (gh-ocannl-1433) runs and WARNs
 #      in the announcements, the log and the digest, and `--expect-backend`
 #      refuses it before dune (BACKEND REFUSED, exit 2); the GPU backend held,
-#      cc expected, a Mac, a batch holding no backend say nothing; the option
+#      cc expected, a Mac, a batch holding no backend say nothing; a WSL bridge
+#      names cuda or hip and recommends neither; the option
 #      still refuses on a Mac and refuses an unread batch; `plan` reports both.
 #  79. credentials never reach dune (gh-ocannl-1280): a run exporting GH_TOKEN
 #      and FOO_API_KEY hands dune neither, while a plain variable and the
@@ -5808,6 +5809,14 @@ for probe in "nv-cc|$nv_present|$kfd_absent|cuda|" "kfd-cc|$nv_absent|$kfd_small
     fi
   done
 done
+if [ -z "$d" ]; then
+  # A WSL guest's bridge is a hazard for cuda and hip alike: the warning names both and
+  # recommends neither, since minix-amd-wsl's GPU is not cuda (Codex review round 1).
+  native_probe be-wsl "$dxg_present" "$kfd_absent" "$nv_absent" "" run build @cheap
+  grep -qF "WARNING: this box has a GPU backend (cuda or hip), but this batch holds only cc" <<<"$argv_err" &&
+    grep -qF "(OCANNL_BACKEND=<this box's GPU backend>)" <<<"$argv_err" ||
+    d="a WSL bridge: stderr $argv_err"
+fi
 if [ -z "$d" ]; then
   # No GPU hazard: no warning for cc, but the option still resolves, and refuses.
   native_probe be-mac "$dxg_absent" "$kfd_absent" "$nv_absent" "" run build @cheap

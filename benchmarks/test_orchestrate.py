@@ -6933,6 +6933,9 @@ class BoxGateStandIn:
         stub = self.dir / "check-box.sh"
         stub.write_text(
             "#!/usr/bin/env bash\n"
+            # The parser's name reading answers as the real script does for a declared box;
+            # BoxNameTest below asks the real script itself.
+            '[ "$1" != --canonical-box ] || { printf \'%s\\n\' "$2"; exit 0; }\n'
             'here=$(dirname "$0")\n'
             'printf \'%s\\n\' "$*" >>"$here/calls"\n'
             'exit "$(cat "$here/rc")"\n'
@@ -7045,6 +7048,28 @@ class BoxGateTest(BoxGateStandIn, unittest.TestCase):
             vars(ap.parse_args(["--skip-box-check", "--box", "tuf"])),
             {"box": "tuf", "skip_box_check": True},
         )
+
+
+class BoxNameTest(unittest.TestCase):
+    """A driver's `--box` holds the measurement box's ID, also when given the fleet's name for it
+    (gh-ocannl-1433): `rog-nv-linux` is recorded as `rog-nv`, in env.json and every row. The table
+    is the real check-box.sh's, asked through `--canonical-box`."""
+
+    def test_a_fleet_name_parses_to_its_box(self):
+        ap = argparse.ArgumentParser()
+        box_gate.add_arguments(ap)
+        self.assertEqual(ap.parse_args(["--box", "rog-nv-linux"]).box, "rog-nv")
+        self.assertEqual(ap.parse_args(["--box", "minix-amd-linux"]).box, "minix")
+        self.assertEqual(ap.parse_args(["--box", "mac-studio"]).box, "m4-max")
+
+    def test_a_box_id_and_an_unknown_name_stay_as_given(self):
+        # The unknown one is check-box.sh's to refuse, when the gate runs it.
+        self.assertEqual(box_gate.canonical_box("tuf"), "tuf")
+        self.assertEqual(box_gate.canonical_box("rog-nv-wsl"), "rog-nv-wsl")
+
+    def test_a_check_that_cannot_answer_leaves_the_name(self):
+        with unittest.mock.patch.object(box_gate, "CHECK_BOX", Path("/no/such/check-box.sh")):
+            self.assertEqual(box_gate.canonical_box("rog-nv-linux"), "rog-nv-linux")
 
 
 class OrchestrateBoxGateTest(BoxGateStandIn, unittest.TestCase):

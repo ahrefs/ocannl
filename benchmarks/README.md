@@ -849,8 +849,8 @@ benchmarks/check-box.sh --box rog-nv --fixture gpt2_mini_train --fixture gpt2_mi
 
 `--box` is the box's ID in `fixtures/DIGESTS.txt`'s `measurement-boxes` field, or the fleet's
 name for it (`mac-studio` m4-max, `rog-nv-linux` rog-nv, `minix-amd-linux` minix, `tuf-amd-linux`
-tuf; `check-box.sh --fleet-names` prints the table, and the check says which box a fleet name
-resolved to before its items; gh-ocannl-1433); the script's
+tuf; `check-box.sh --fleet-names` prints the table, the check says which box a fleet name
+resolved to before its items, and a driver given one records the box's ID; gh-ocannl-1433); the script's
 `box_profile` names what that box's torch must reach (cuda on rog-nv, hip on minix and tuf, mps on
 m4-max) and the toolchain its drivers compile with (`nvcc`, `hipcc`, the macOS SDK). It prints one
 `ok`/`GAP`/`skip` line per item -- the venv (`~/.venvs/ocannl-bench`, `--venv` moves it), its

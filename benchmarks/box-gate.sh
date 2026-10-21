@@ -12,7 +12,8 @@
 #
 # The options box_gate_args takes, ahead of the driver's own arguments, each at most once:
 #   --box BOX         the measurement box this run measures on: an ID declared by
-#                     fixtures/DIGESTS.txt's `measurement-boxes` (check-box.sh refuses any other).
+#                     fixtures/DIGESTS.txt's `measurement-boxes` (check-box.sh refuses any other),
+#                     or the fleet's name for one, which box_gate_box holds as the box's ID.
 #   --skip-box-check  measure without the check, for a deliberate partial run; box_gate says so
 #                     on the run's output. With --box too, the box still names the run.
 # Scanning stops at the first argument that is neither, so the driver's own options and operands
@@ -42,7 +43,12 @@ box_gate_args() {
         [ "$seen_box" = 0 ] || { echo "${0##*/}: --box given twice" >&2; exit 2; }
         [ $# -ge 2 ] && [ -n "$2" ] ||
           { echo "${0##*/}: --box needs a value: the measurement box this run measures on" >&2; exit 2; }
-        box_gate_box=$2 seen_box=1 box_gate_shift=$((box_gate_shift + 2))
+        # The measurement box a fleet name stands for (check-box.sh's one table), so a driver
+        # records `rog-nv`, not `rog-nv-linux`; a check-box.sh that cannot answer leaves the name
+        # as given, for the check itself to judge (gh-ocannl-1433).
+        box_gate_box=$(bash "$box_gate_check" --canonical-box "$2" 2>/dev/null) || box_gate_box=
+        case $box_gate_box in '' | *[[:space:]]*) box_gate_box=$2 ;; esac
+        seen_box=1 box_gate_shift=$((box_gate_shift + 2))
         shift 2
         ;;
       --skip-box-check)

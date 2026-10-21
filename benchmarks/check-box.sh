@@ -4,6 +4,8 @@
 #   benchmarks/check-box.sh --box BOX [--fixture NAME]... [--fixture-dir DIR] [--venv DIR]
 #                           [--digests FILE] [--box-only]
 #   benchmarks/check-box.sh --fleet-names    # the fleet names --box takes, `<name> <box>` lines
+#   benchmarks/check-box.sh --canonical-box NAME  # NAME's measurement box if NAME is a fleet
+#                                                 # name, else NAME itself (box-gate's reading)
 #
 # Every measurement session runs it first, from the checkout it will measure in; tools/sweep.sh
 # runs it once per box with --box-only against the box's fixture store. Each item prints one
@@ -102,6 +104,13 @@ while [ $# -gt 0 ]; do
     --fleet-names)
       [ $# -eq 1 ] || die "--fleet-names takes nothing else"
       for name in $fleet_names; do printf '%s %s\n' "$name" "$(fleet_box "$name")"; done
+      exit 0
+      ;;
+    --canonical-box)
+      # The name a driver records for its run (box-gate.sh, box_gate.py): the same resolution
+      # as --box below, which judges it -- no fleet name is a declared box (test-check-box.sh).
+      [ $# -eq 2 ] && [ -n "$2" ] || die "--canonical-box takes one name and nothing else"
+      fleet_box "$2" || printf '%s\n' "$2"
       exit 0
       ;;
     -h | --help) usage; exit 0 ;;

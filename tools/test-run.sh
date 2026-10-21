@@ -609,7 +609,7 @@ batch_holds_backend() { # <backend>; 0 iff the resolved batch holds it
   return 1
 }
 plan_backend_check() { # after plan_batch, and batch_resolve when expect_backends is set
-  local b missing= gpus
+  local b missing= gpus select
   backend_refusal= backend_warning=
   if [ -n "$expect_backends" ]; then
     if [ -n "$batch_unknown" ]; then
@@ -627,7 +627,13 @@ plan_backend_check() { # after plan_batch, and batch_resolve when expect_backend
   [ "$(batch_kind)" = cpu ] || return 0
   gpus=$(box_gpu_backends)
   [ -n "$gpus" ] || return 0
-  backend_warning="WARNING: this box has a GPU backend ($gpus), but this batch holds only $(batch_summary): it tests nothing on the GPU. Select one (OCANNL_BACKEND=$(set -- $gpus; printf '%s' "$1")) to test it here, or pass --expect-backend to refuse a batch that does not hold it (gh-ocannl-1433)."
+  # A WSL guest's bridge is a hazard for cuda and hip alike, so there the box's
+  # own GPU is not known here: name the one backend only when it is the only one.
+  case $gpus in
+    *' '*) gpus="${gpus// / or }" select="OCANNL_BACKEND=<this box's GPU backend>" ;;
+    *) select="OCANNL_BACKEND=$gpus" ;;
+  esac
+  backend_warning="WARNING: this box has a GPU backend ($gpus), but this batch holds only $(batch_summary): it tests nothing on the GPU. Select it ($select) to test it here, or pass --expect-backend to refuse a batch that does not hold it (gh-ocannl-1433)."
 }
 
 # The device probe (gh-ocannl-1211; probe_perl says what it reads): every GPU
