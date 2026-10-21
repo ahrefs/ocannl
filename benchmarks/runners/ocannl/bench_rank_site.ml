@@ -103,6 +103,21 @@ let () =
          %!"
         site label (ms ex.Autotune.ex_rank_ms) (ms ex.ex_compute_ms) (ms ex.ex_memory_ms)
         (ms ex.ex_floor_ms) ex.ex_admitted);
+  (* [BENCH_PICK=1] (gh-ocannl-1278): what [Autotune.model_default] actually picks here under the
+     configuration in force -- the selection rule the agreement script replays from the explain
+     lines, read off the compile itself. Nothing is timed. *)
+  (if Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_PICK") (Some "1") then
+     let pick = ref None in
+     let _ctx, _routine =
+       Autotune.model_default ~name:(name ^ "_pick")
+         ~report:(fun c -> pick := Some c)
+         ctx comp Ir.Indexing.Empty
+     in
+     match !pick with
+     | None -> Stdio.printf "rank-site: pick site=%s no report\n%!" site
+     | Some c ->
+         Stdio.printf "rank-site: pick site=%s label=%S rank_ms=%s\n%!" site c.Autotune.mc_label
+           (ms c.mc_rank_ms));
   if tune then
     let report = ref None in
     let _ctx, _routine =

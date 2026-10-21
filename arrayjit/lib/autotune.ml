@@ -4561,9 +4561,12 @@ let seeded_geometries =
 let seeded_min_blocks = 128
 
 (* The numerics-preserving candidate set (gh-ocannl-1324, gh-ocannl-1253): the unfused scalar
-   blocktile pipeline with no twin flavor. Tensorized forms change numerics, the conv and coalesced
-   families reorder the reduction, and the twins are the search's to time. Shared by the seeding and
-   by [model_default]'s GPU family search, so the two cannot drift. *)
+   blocktile pipeline with no twin flavor. Tensorized forms change numerics and the conv family
+   reorders the reduction. The coalesced layouts do NOT: each keeps every cell's summation order
+   (test/operations/coalesce_numerics executes it), and they stay out, as the twins do, because they
+   are the search's to time -- the ranking score cannot tell a coalesced leaf from its uncoalesced
+   twin (gh-ocannl-1278). Shared by the seeding and by [model_default]'s GPU family search, so the
+   two cannot drift. *)
 let scalar_blocktile p =
   p.sk_gpu && (not p.sk_mma) && (not p.sk_conv) && (not p.sk_epilogue)
   && Option.is_none p.sk_coalesce && (not p.sk_batch_inner) && Option.is_none p.sk_swizzle
@@ -5215,9 +5218,10 @@ let model_seeding ~backend ~limits =
 (* Where the model starts from the seeded plan, the family is restricted to the numerics-preserving
    candidate set the seeding uses ({!scalar_blocktile}, at a site accumulating at its storage
    precision), so a model pick never changes a result the seeded plan would not: tensorized forms
-   reround, the conv and coalesced families reorder the reduction. Other leaves are kept out of the
-   ranking, counted as not numerics-preserving, never an error. Metal, the CPU backends and an
-   unseeded CUDA/HIP compile keep the whole family. *)
+   reround, the conv family reorders the reduction. (The coalesced branch is not enumerated here at
+   all: it preserves numerics, but the score ties it with its uncoalesced twins, gh-ocannl-1278.)
+   Other leaves are kept out of the ranking, counted as not numerics-preserving, never an error.
+   Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
 let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
   let preserving =
     lazy
@@ -5298,10 +5302,10 @@ let model_default ?name ?report ctx comp bindings =
     (* Where the model starts from the seeded plan, the family is restricted to the
        numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
        accumulating at its storage precision), so a model pick never changes a result the seeded
-       plan would not: tensorized forms reround, the conv and coalesced families reorder the
-       reduction. Other leaves are kept out of the ranking, counted as not numerics-preserving
-       ([n_excluded]), never an error. Metal, the CPU backends and an unseeded CUDA/HIP compile keep
-       the whole family. *)
+       plan would not: tensorized forms reround, the conv family reorders the reduction (see
+       [model_admits] on the coalesced branch). Other leaves are kept out of the ranking, counted as
+       not numerics-preserving ([n_excluded]), never an error. Metal, the CPU backends and an
+       unseeded CUDA/HIP compile keep the whole family. *)
     let admits base_opt = model_admits ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt in
     let capabilities = Context.codegen_capabilities ctx in
     (* [model_family_search] with the default as incumbent, logging its ledger; under the
