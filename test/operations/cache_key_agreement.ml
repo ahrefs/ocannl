@@ -259,50 +259,6 @@ let emitted_exemptions =
       "it moves the very artifacts this oracle reads, and Generated refuses a set prefix" );
   ]
 
-(* A kernel's text with its loop symbols renamed by first appearance: each lowering mints them
-   afresh ([i110], [Indexing.symbol_ident]), so two compiles of one graph differ there and nowhere
-   else. Only that shape is renamed -- a type or builtin whose name ends in a digit ([uint3],
-   [float4], [__half2]) stays as written, so a flip that changes one shows (Codex P2, round 3).
-   Number literals are copied whole, so a hex float's letters are not read as an identifier. *)
-let is_loop_symbol ident =
-  String.length ident > 1
-  && Char.equal ident.[0] 'i'
-  && String.for_all (String.drop_prefix ident 1) ~f:Char.is_digit
-
-let alpha_normalized text =
-  let names = Hashtbl.create (module String) in
-  let out = Buffer.create (String.length text) in
-  let n = String.length text in
-  let is_ident_char c = Char.is_alphanum c || Char.equal c '_' in
-  let rec scan i =
-    if i < n then
-      let c = text.[i] in
-      if Char.is_alpha c || Char.equal c '_' then (
-        let j = ref i in
-        while !j < n && is_ident_char text.[!j] do
-          Int.incr j
-        done;
-        let ident = String.sub text ~pos:i ~len:(!j - i) in
-        if is_loop_symbol ident then
-          let fresh = Hashtbl.length names in
-          Buffer.add_string out
-            ("@" ^ Int.to_string (Hashtbl.find_or_add names ident ~default:(fun () -> fresh)))
-        else Buffer.add_string out ident;
-        scan !j)
-      else if Char.is_digit c then (
-        let j = ref i in
-        while !j < n && (is_ident_char text.[!j] || Char.equal text.[!j] '.') do
-          Int.incr j
-        done;
-        Buffer.add_string out (String.sub text ~pos:i ~len:(!j - i));
-        scan !j)
-      else (
-        Buffer.add_char out c;
-        scan (i + 1))
-  in
-  scan 0;
-  Buffer.contents out
-
 (* [~lower_only] stops the compile once the lowered code is canonicalized, before anything is
    rendered or handed to a compiler. *)
 exception Lowered
@@ -752,16 +708,15 @@ let () =
               eprintf "%s=%s: the key computation read it and raised %s\n" key value
                 (Exn.to_string exn);
               true));
-  (* 7. Stage 2: the codegen-diff oracle. One graph, recompiled under one routine name with debug
-     artifacts on, so that [Generated] can read the kernel each compile emits. Not a fresh graph per
-     compile: two fresh builds of the same program bind Metal's pool slots in different orders, so
-     their kernels differ with nothing flipped. What a reused graph freezes is the front end's work
-     and the first compile's placements, and the canonical digest names both (the lowered code,
-     [with_placements]), so a key acting there moves the cache key and cannot be an under-keying.
-     The population is traced on a RE-compile, so it holds exactly the keys a recompile reads -- the
-     ones whose flips take effect here (Codex P2, round 3). *)
+  (* 7. Stage 2: the codegen-diff oracle. A fresh graph per compile, under one routine name with
+     debug artifacts on, so that [Generated] can read the kernel each compile emits: a flip then
+     acts on the whole pipeline -- the front end, the placements, the lowering and the rendering --
+     so a key read anywhere on it enters the oracle. Fresh builds of one program emit one kernel up
+     to the numbers minted into identifiers (gh-ocannl-1473), which [Generated.normalize_minted]
+     renames away. The population is traced on the second compile, so it holds exactly the keys a
+     compile of a fresh build reads. *)
   let routine = "cka_probe" in
-  let probe =
+  let probe () =
     let a =
       TDSL.ndarray [| 1.; 2.; 3.; 4.; 5.; 6.; 7.; 8. |] ~label:[ "cka_p" ] ~output_dims:[ 8 ] ()
     in
@@ -775,7 +730,7 @@ let () =
         ~lowered_transform:(fun opt ->
           canon := Some (SC.canonicalize ~static_indices:[] opt);
           [ opt ])
-        ctx probe Ir.Indexing.Empty
+        ctx (probe ()) Ir.Indexing.Empty
     in
     let canon = Option.value_exn ~here:[%here] !canon in
     let key =
@@ -784,7 +739,7 @@ let () =
            ~capabilities:(Context.codegen_capabilities ctx)
            canon ~backend)
     in
-    (key, alpha_normalized (Test_utils.Generated.read routine))
+    (key, Test_utils.Generated.normalize_minted (Test_utils.Generated.read routine))
   in
   let oracle () =
     let baseline_key, baseline_src = compile_probe () in
@@ -797,7 +752,7 @@ let () =
       let stable = String.equal again_key baseline_key && String.equal again_src baseline_src in
       if not stable then
         eprintf "two compiles of the probe, normalized:\n%s\n----\n%s\n" baseline_src again_src;
-      p "the probe compiles to the same kernel under the same key twice over" stable;
+      p "two fresh builds of the probe compile to the same kernel under the same key" stable;
       Set.of_list (module String) r
     in
     let oracle_class key =

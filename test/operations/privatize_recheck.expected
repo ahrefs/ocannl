@@ -1,9 +1,13 @@
-a Workgroup_reduce Retype inside the scope a materializing Unroll minted around a privatized tile's update leaves an accumulation the final re-check does not widen: true
-privatize_fallbacks is per domain: the same trigger run in a second domain records its own fallback there, each domain's log holds exactly its own, and this one's is left unchanged: true
-that tile falls back to bf16 storage precision: true
-a Stage whose loads land inside that scope trips the re-check too: the fallback is recorded and the tile is at bf16 storage: true
-compilation refuses both fallen-back programs and their twins without Privatize, so the fallback reaches no executed value: true
-without a breaking op the privatized tile stays f32, passes the re-check, leaves the fallback log unchanged, and executes to the entry program's once-narrowed value (258): true
+a Workgroup_reduce or Grid Retype of a loop inside the scope a materializing Unroll minted around a privatized tile's update is refused at the Retype, typed, naming the hardware loop in the scope: true
+a Stage whose loads land inside that scope is refused at the Stage, typed, naming the tensor-node write in the scope: true
+the same three schedules without Privatize are refused the same way: the rule is the scope's: true
+op_legality asked of the program the Privatize and the Unroll left calls all three ops illegal, with the refusal apply raises, and probing the Stage leaves that program's traced store as it was: true
+a Vectorized retype or an in-place Unroll of that scope-nested loop, and the same Stage applied ahead of the Unroll (its loads then keep the nest from minting a scope), are admitted by apply and not called illegal by op_legality: true
+without a breaking op the privatized tile stays f32, passes the re-check, and executes to the entry program's once-narrowed value (258): true
+after a Privatize, a Grid or Workgroup Retype of a loop the tile's cell omits, between the tile's transfers and its update, is refused at the Retype, typed, through apply_classified and schedule_legality: true
+op_legality judging that Retype alone, on the program an earlier apply privatized, does not call it illegal: it has no record of the tile: true
+on a storage-precision tile, a Grid Retype of an inner loop its cell mentions, or of the privatized loop itself, is refused at the Retype too: true
+a Grid Retype of a loop enclosing the tile's transfers, and a Vectorized Retype of the omitted loop, are admitted: true
 a Privatize over the outer half of a Split of the localizing loop widens like that loop (258 with the serial rendering, on an f32 tile): true
 a Privatize over the inner half of that Split keeps a bf16 storage tile and the split schedule's own narrowing (256, as without Privatize): true
 a Privatize over the outer half of a Split of a loop inside the localizing level keeps a bf16 storage tile and the schedule's own narrowing (256, as without Privatize): true

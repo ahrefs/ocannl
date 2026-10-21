@@ -5657,34 +5657,44 @@ let grid_fold (axes : hardware_axis_info list) ~(slot : int) : int * int option 
   in
   (!stride, if has_higher then Some (slot_max_extent axes `Grid slot) else None)
 
-(* Whether any [Local_scope] body within [llc]'s scalars contains a hardware-annotated loop. *)
-let rec scalar_scopes_have_annotated (llc : t) : bool =
-  let scalar (llsc : scalar_t) : bool =
+(* The first hardware-annotated loop inside a [Local_scope] body within [llc]'s scalars (at any
+   nesting depth), with the scope whose body holds it. One predicate for the compile gate
+   ([validate_parallel] below) and the schedule-op check that refuses the op putting it there
+   (gh-ocannl-1467). *)
+let rec scope_hardware_loop (llc : t) : (Indexing.symbol * axis_type * scope_id) option =
+  let scalar (llsc : scalar_t) =
     let rec go = function
-      | Local_scope { body; _ } ->
-          (not (List.is_empty (hardware_axes body))) || scalar_scopes_have_annotated body
+      | Local_scope { id; body; _ } -> (
+          match hardware_axes body with
+          | a :: _ -> Some (a.ha_index, a.ha_axis, id)
+          | [] -> scope_hardware_loop body)
       | Get_dynamic { dyn_value = v, _; _ } -> go v
-      | Ternop (_, (s1, _), (s2, _), (s3, _)) -> go s1 || go s2 || go s3
-      | Binop (_, (s1, _), (s2, _)) -> go s1 || go s2
+      | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
+          Option.first_some (go s1) (Option.first_some (go s2) (go s3))
+      | Binop (_, (s1, _), (s2, _)) -> Option.first_some (go s1) (go s2)
       | Unop (_, (s, _)) -> go s
       | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-          false
+          None
     in
     go llsc
   in
   match llc with
-  | Seq (a, b) -> scalar_scopes_have_annotated a || scalar_scopes_have_annotated b
-  | For_loop { body; _ } -> scalar_scopes_have_annotated body
+  | Seq (a, b) -> Option.first_some (scope_hardware_loop a) (scope_hardware_loop b)
+  | For_loop { body; _ } -> scope_hardware_loop body
   | Scan_loop { carried; body; _ } ->
-      List.exists carried ~f:(fun c -> scalar c.init) || scalar_scopes_have_annotated body
-  | If { cond = c, _; body } -> scalar c || scalar_scopes_have_annotated body
+      Option.first_some
+        (List.find_map carried ~f:(fun c -> scalar c.init))
+        (scope_hardware_loop body)
+  | If { cond = c, _; body } -> Option.first_some (scalar c) (scope_hardware_loop body)
   | Set { llsc; _ } -> scalar llsc
-  | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar v || scalar llsc
+  | Set_dynamic { dyn_value = v, _; llsc; _ } -> Option.first_some (scalar v) (scalar llsc)
   | Set_from_vec { arg = s, _; _ } -> scalar s
   | Set_local (_, llsc) -> scalar llsc
-  | Tile_mma { fallback; _ } -> scalar_scopes_have_annotated fallback
+  | Tile_mma { fallback; _ } -> scope_hardware_loop fallback
   | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
-      false
+      None
+
+let scalar_scopes_have_annotated (llc : t) : bool = Option.is_some (scope_hardware_loop llc)
 
 (** Wraps the body of each hardware-annotated loop whose extent is smaller than its slot's launch
     dimension in an [If (index < extent)] guard, for the kinds [should_guard] selects (backends
@@ -6252,6 +6262,70 @@ and code_touches_tn tn (llc : t) =
   (* The fallback is what a backend without an MMA hook executes, so what it touches is touched. *)
   | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
       Tn.equal tn d_tn || Tn.equal tn a_tn || Tn.equal tn b_tn || code_touches_tn tn fallback
+
+(* gh-ocannl-1473: the nodes {!code_touches_tn} reports, each once, in the order the code first
+   touches them (a write before the reads of its own right-hand side). A function of the code alone
+   -- no hash-table traversal, no node identity -- so two fresh builds of one program, whose nodes
+   carry different uids, list their counterparts at the same positions. The traversal mirrors
+   [code_touches_tn] case for case: membership here is exactly that predicate. *)
+let touched_tns_in_order (llc : t) : Tn.t list =
+  let seen = Hash_set.create (module Tn) in
+  let acc = ref [] in
+  let visit tn =
+    if not (Hash_set.mem seen tn) then (
+      Hash_set.add seen tn;
+      acc := tn :: !acc)
+  in
+  let rec scalar (llsc : scalar_t) =
+    match llsc with
+    | Get (tn, _) -> visit tn
+    | Get_merge_buffer _ -> ()
+    | Get_dynamic { tn; dyn_value = v, _; _ } ->
+        visit tn;
+        scalar v
+    | Local_scope { body; _ } -> code body
+    | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar a;
+        scalar b;
+        scalar c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar a;
+        scalar b
+    | Unop (_, (a, _)) -> scalar a
+  and code (llc : t) =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ -> ()
+    | Seq (a, b) ->
+        code a;
+        code b
+    | For_loop { body; _ } -> code body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar c.init);
+        code body
+    | If { cond = c, _; body } ->
+        scalar c;
+        code body
+    | Zero_out tn -> visit tn
+    | Set { tn; llsc; _ } ->
+        visit tn;
+        scalar llsc
+    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
+        visit tn;
+        scalar v;
+        scalar llsc
+    | Set_from_vec { tn; arg = a, _; _ } ->
+        visit tn;
+        scalar a
+    | Set_local (_, llsc) -> scalar llsc
+    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+        visit d_tn;
+        visit a_tn;
+        visit b_tn;
+        code fallback
+  in
+  code llc;
+  List.rev !acc
 
 (* gh-ocannl-639: the accumulation-update statement shape [tn[idcs] = op(tn[idcs], contrib)] (or its
    FMA form) over an associative-commutative [op], with [contrib] free of [tn]. The single source of

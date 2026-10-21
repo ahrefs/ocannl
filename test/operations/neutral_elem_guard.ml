@@ -102,10 +102,14 @@ let () =
   let a = vec 8 and k = vec 3 in
   verdict ~claim:"an early derivation is rejected for a padded window that reads margins"
     ~expect_rejected:true (fun () -> padded_conv ~op_asn:margin_touching_op_asn a k);
-  (* [Shape.to_padding] finalizes inference for every active step: had the rejected leg registered
-     and derived its step, [a] would carry the window's margins here. *)
+  (* Read the padding fields directly: [Shape.to_padding] would finalize inference, closing [a]
+     (gh-ocannl-1301) before the accepted control below could commit its margins. Had the rejected
+     leg registered and derived its step, [a] would carry the window's margins here. *)
   Verdict.p "the operand of the rejected padded window carries no padding"
-    (Option.is_none (Shape.to_padding a.Tensor.shape));
+    (let sh = a.Tensor.shape in
+     Option.is_none sh.Shape.batch_padding
+     && Option.is_none sh.Shape.input_padding
+     && Option.is_none sh.Shape.output_padding);
   verdict ~claim:"the same operands then construct the padded operation when nothing derives early"
     ~expect_rejected:false (fun () -> padded_conv ~op_asn:conv_op_asn a k);
   Verdict.p "the accepted operation commits the operand's margins with its neutral element, 0"

@@ -110,9 +110,9 @@ float bfloat16_to_single(uint16_t bf16)
 }
 
  void where_fwd(
-    HALF_T *restrict a_then_val,
     float *restrict where,
     unsigned char *restrict cond_condition,
+    HALF_T *restrict a_then_val,
     unsigned short *restrict b_else_val) {
 
   /* Local declarations and initialization. */

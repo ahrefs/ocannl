@@ -286,6 +286,17 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
   (* Raised, not returned as an outcome: a dead handle is the caller's error, not a property of any
      candidate, and no search over it can succeed. *)
   check_live ~fn:"compile" ctx;
+  (* The frontend's session gate and stale-node check (gh-ocannl-1301): a tainted inference session
+     compiles nothing, and no program reaches the backend over a node the frontend discarded. *)
+  !Tn.session_gate ();
+  Option.iter !Tn.validity_check ~f:(fun check ->
+      let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
+      Set.iter
+        (Set.union_list (module Tn) [ read; written; comp.Ir.Assignments.embedded_nodes ])
+        ~f:check;
+      (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
+      Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
+          Hashtbl.iter_keys p.traced_store ~f:check));
   (* Compile and link on the wrapped backend context; only backend-independent routine components
      (and, via [with_backend]'s rebuilt constructor, the updated context) escape the dispatch. *)
   let wrapped, backend_outcome =
@@ -782,6 +793,7 @@ let copy_nd (src : Nd.t) : Nd.t =
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
   check_live ~fn:"to_host" ctx;
+  Option.iter !Tn.validity_check ~f:(fun check -> check tn);
   check_not_poisoned ctx;
   (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice
      owns no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run.
@@ -850,6 +862,7 @@ let to_host ctx (tn : Tn.t) : Nd.t =
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
   check_live ~fn:"from_host" ctx;
+  Option.iter !Tn.validity_check ~f:(fun check -> check tn);
   check_not_poisoned ctx;
   (* Reject direct host writes to an [\@|] slice view (gh-ocannl-293 293a). Critically, [slice_of]
      is set eagerly at construction, so this fires even when the slice has not been lowered yet and

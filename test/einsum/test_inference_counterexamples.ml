@@ -12,9 +12,11 @@ let fail msg =
   Int.incr failures;
   Stdio.printf "UNEXPECTED: %s\n" msg
 
+(* The cases share one session (gh-ocannl-1301): a case that fails taints it, and the next case's
+   [rewind_to_last_closure] discards the failed case's open work -- the closed work of earlier cases
+   stays. *)
 let run name ~expect f =
-  Tensor.unsafe_reinitialize ();
-  Shape.unsafe_reinitialize ();
+  Tensor.rewind_to_last_closure ();
   Stdio.printf "=== %s ===\n" name;
   match
     try
@@ -43,6 +45,12 @@ let () =
       let%op y = x + (x ++ "a,b,..r.. => ..r..,b,a" [ "a"; "b"; "r" ]) in
       Shape.set_dim a 3;
       Shape.set_dim b 5;
+      y)
+
+let () =
+  run "cyclic row permute, concrete periodic shape, after a failed case" ~expect:`Success (fun () ->
+      let%op x = { x = uniform1 (); o = [ 3; 5; 3 ] } in
+      let%op y = x + (x ++ "a,b,..r.. => ..r..,b,a" [ "a"; "b"; "r" ]) in
       y)
 
 let () = if !failures > 0 then Stdlib.exit 1

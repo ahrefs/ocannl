@@ -132,15 +132,15 @@ OCANNL's einsum is more general than PyTorch's, supporting row variables and con
 OCANNL's einsum has two syntax modes:
 
 1. **Single-character mode** (PyTorch-compatible):
-   - Triggered when NO commas appear in the spec
+   - Used when the spec has no comma and none of the multi-char triggers below
    - Each alphanumeric character is an axis identifier
    - Spaces are optional and ignored: `"ij"` = `"i j"`
    
 2. **Multi-character mode**:
-   - Triggered by ANY comma in the spec
+   - Triggered by ANY comma in the spec, and by the convolution and concatenation syntax (`*`, `+`, `^`, `<`, `=` other than `=>`)
    - Trailing commas ignored (can be used to trigger multi-char mode)
    - Identifiers can be multi-character (e.g., `height`, `width`)
-   - Must be separated by non-alphanumeric: `,` `|` `->` `;` `=>`
+   - Must be separated by non-alphanumeric: `,` `|` `->` `;` `=>` — never by whitespace alone: `"s a; s b => s a^b"` is a parse error, write `"s, a; s, b => s, a^b"`
    - Makes convolution syntax less confusing: `stride*out+kernel`
 
 | Operation | PyTorch einsum | OCANNL single-char | OCANNL multi-char |

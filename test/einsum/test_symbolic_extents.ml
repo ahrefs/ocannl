@@ -65,13 +65,16 @@ let test_broadcast_and_reuse () =
   Stdio.printf "c values (a + b + 1 = 1.75 each): %s\n"
     (String.concat ~sep:" " (Array.to_list (Array.map cv ~f:(Printf.sprintf "%.2f"))))
 
+(* A case whose failure left the session tainted (gh-ocannl-1301) is rewound, so the next case
+   starts from the last closure. *)
 let expect_shape_error name f =
-  try
-    f ();
-    Stdio.printf "%s: ERROR - expected Shape_error, got none\n" name
-  with
+  (try
+     f ();
+     Stdio.printf "%s: ERROR - expected Shape_error, got none\n" name
+   with
   | Row.Shape_error (msg, _) -> Stdio.printf "%s: correctly raised: %s\n" name msg
-  | Utils.User_error msg -> Stdio.printf "%s: correctly raised: %s\n" name msg
+  | Utils.User_error msg -> Stdio.printf "%s: correctly raised: %s\n" name msg);
+  if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ()
 
 let test_error_cases () =
   let open Nn_blocks.DSL_modules in

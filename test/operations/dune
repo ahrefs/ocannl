@@ -4939,6 +4939,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name fresh_build_kernel_text)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules fresh_build_kernel_text)
+ (libraries base ocannl stdio test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name fission_equivalence)
  (package neural_nets_lib)
  (deps
@@ -9211,5 +9222,27 @@
   (env_var OCANNL_BACKEND))
  (modules workgroup_memory_accounting)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name rewind_to_last_closure)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rewind_to_last_closure)
+ (libraries base ocannl stdio unix fresh_process arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name closed_shape_write_guard)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules closed_shape_write_guard)
+ (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))

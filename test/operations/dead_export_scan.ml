@@ -67,7 +67,6 @@ let exempt_zero_reference_exports =
     "C_syntax.op_syntax_idents";
     "C_syntax.summarize_peel_census";
     "C_syntax.summarize_volatility_census";
-    "Lexer.buffered_token";
     "Lexer.multichar_token";
     "Lexer.single_char_token";
     "Ndarray.adjust_idx_for_padding";
@@ -150,7 +149,6 @@ let exempt_zero_reference_exports =
     "Operation.stretch";
     "Operation.sub";
     "Operation.tanh";
-    "Operation.threefry4x32_crypto";
     "Operation.threefry4x32_light";
     "Operation.transpose_op_of_spec";
     "Operation.tropical";
@@ -208,7 +206,6 @@ let exempt_zero_reference_exports =
     "Tnode.is_alphanum_";
     "Tnode.known_not_materialized";
     "Tnode.log_accessible_headers";
-    "Tnode.next_uid";
     "Tnode.prec_of_dalayed";
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";

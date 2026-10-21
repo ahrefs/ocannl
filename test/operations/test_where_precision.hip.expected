@@ -15,10 +15,10 @@
 #define NAN __builtin_nanf("")
 #endif
 extern "C" __global__ void where_fwd(
-    __half *__restrict__ a_then_val,
-    __hip_bfloat16 *__restrict__ b_else_val,
     float *__restrict__ where,
-    unsigned char *__restrict__ cond_condition) {
+    unsigned char *__restrict__ cond_condition,
+    __half *__restrict__ a_then_val,
+    __hip_bfloat16 *__restrict__ b_else_val) {
 
   /* Local declarations and initialization. */
 
