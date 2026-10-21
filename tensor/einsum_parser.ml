@@ -76,10 +76,16 @@ let whitespace_separated_axes spec =
   go 0;
   if !found then Some (Buffer.contents buf) else None
 
+(* The single-char lexer buffers the COMMA it emits after an axis; a parse that failed between the
+   two tokens leaves it behind, so every parse starts from an empty buffer. *)
+let run entry spec lexbuf =
+  Lexer.buffered_token := None;
+  entry (Lexer.token (is_multichar spec)) lexbuf
+
 let parse entry spec =
   let multichar = is_multichar spec in
   let lexbuf = Lexing.from_string spec in
-  try entry (Lexer.token multichar) lexbuf with
+  try run entry spec lexbuf with
   | Lexer.Syntax_error msg -> raise (Parse_error ("Lexer error: " ^ msg))
   | Parser.Error ->
       let pos = lexbuf.Lexing.lex_curr_p in
@@ -104,9 +110,14 @@ let parse entry spec =
                `..%s..`, not `...%s..`%s"
               name name multichar_note
       in
+      (* The rewrite is offered only when it parses: a gap the scan reads as two axes can sit where
+         a comma is no fix either, e.g. inside a row variable's [..batch shard..]. *)
+      let parses fixed =
+        match run entry fixed (Lexing.from_string fixed) with _ -> true | exception _ -> false
+      in
       let separator_hint =
         match (Lexer.multichar_trigger spec, whitespace_separated_axes spec) with
-        | Some trigger, Some fixed ->
+        | Some trigger, Some fixed when parses fixed ->
             Printf.sprintf
               "; hint: the `%c` puts this spec in multichar mode, where axes are separated by \
                commas, not whitespace: write `%s`"

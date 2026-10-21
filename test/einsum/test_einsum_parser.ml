@@ -148,6 +148,8 @@ let test_whitespace_between_axes () =
   show "x 2, _ z => x";
   (* Whitespace next to an ellipsis, a row variable or an operator separates nothing and is fine. *)
   show "..b.. a, c; d ... => a^d";
+  (* A gap where a comma is no fix either takes no suggestion: inside a row variable's name. *)
+  show "..batch shard.., x; y => x^y";
   (* In single-char mode whitespace is ignored, so [s a] is the two axes [sa]. *)
   show "s a; s b => s a b";
   printf "\n"

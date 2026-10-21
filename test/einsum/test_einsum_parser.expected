@@ -46,6 +46,7 @@ Testing whitespace between axes in multichar mode:
   'x 2, _ z => x' -> Parse error at line 1, column 3 in spec: x 2, _ z => x; hint: the `,` puts this spec in multichar mode, where axes are separated by commas, not whitespace: write `x, 2, _, z => x`
     suggested 'x, 2, _, z => x' -> 1 RHSes, result output axes: 1
   '..b.. a, c; d ... => a^d' -> 2 RHSes, result output axes: 1
+  '..batch shard.., x; y => x^y' -> Parse error at line 1, column 13 in spec: ..batch shard.., x; y => x^y
   's a; s b => s a b' -> 2 RHSes, result output axes: 3
 
 All tests passed!
