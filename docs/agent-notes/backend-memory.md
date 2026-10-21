@@ -391,7 +391,9 @@ files.
   only after hiprtc returns (`Ir.Kernel_code_cache`: bounded FIFO by bytes,
   `hip_kernel_cache_mib`, 0 restores one joint program per batch). Parameters, bindings and launch
   geometry always come from the current rendering; `link_batch` loads each distinct program once and
-  every kernel still goes through `link_proc`'s scratch validation. Within a search the winner's
+  every kernel still goes through `link_proc`'s scratch validation. Under device debugging
+  (`Utils.with_runtime_debug`) the cache is bypassed: a code object's debug info names the file it
+  was compiled from, which the next compile of the routine rewrites. Within a search the winner's
   compile hits the cache, so the shipped code is the timed code.
 - The `.hip` build artifact stays the routine's FULL generated source whatever was compiled (tests
   read it through `Generated`); `.hsaco`/`.hip_log` belong to the program actually compiled, and

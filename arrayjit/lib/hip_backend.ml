@@ -1215,7 +1215,10 @@ end = struct
     let full_source = r.assemble all in
     write_source_artifact ~name (with_conditional_includes full_source);
     let programs = Array.create ~len:n None in
-    let enabled = Kernel_code_cache.enabled kernel_cache in
+    (* Not under device debugging: a code object's debug info then names the source file it was
+       compiled from, which a later compile of the same routine rewrites, so reuse would point a
+       debugger at text that is not the code's. Every kernel compiles, as with the cache off. *)
+    let enabled = Kernel_code_cache.enabled kernel_cache && not (Utils.with_runtime_debug ()) in
     let keyed =
       if not enabled then [||]
       else
@@ -1223,13 +1226,8 @@ end = struct
             let source = r.assemble [ i ] in
             let options = hiprtc_options ~target_archs source in
             (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
-               kernel -- rendered with other symbol numbers -- finds this one. Not under device
-               debugging: the code object then carries the source's names in its debug info, so only
-               the exact text may share it. *)
-            let canonical =
-              if Utils.with_runtime_debug () then source
-              else Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source
-            in
+               kernel -- rendered with other symbol numbers -- finds this one. *)
+            let canonical = Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source in
             (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
     in
     let lookup idxs =

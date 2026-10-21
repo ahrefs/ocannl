@@ -1170,7 +1170,8 @@
 # hiprtc option list are byte-identical. hiprtc's cost is mostly per program and it compiles one
 # program at a time, so this is what keeps an autotuning candidate that changes a few kernels of a
 # large routine from recompiling all of them. 0 disables it: every routine compiles as one program
-# of all its kernels.
+# of all its kernels. Device debugging (output_debug_files_in_build_directory with log_level above
+# 1) bypasses it too, since a code object's debug info names the file it was compiled from.
 #hip_kernel_cache_mib=256
 
 # The `-O` argument to the compiler executable for the `cc` and `multidev_cc` backends.
