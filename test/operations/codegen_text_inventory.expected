@@ -556,6 +556,7 @@ test/operations/vec_signed_zero.ml
     "tmma_as_0__, tmma_as_0__"
     "vector_size"
     "vunif"
+test/operations/workgroup_memory_accounting.ml [also pins text this scan cannot name: untraced callback]
 
 every scanned root meets its golden floor: true
 every scanned root meets its source-site floor: true

@@ -2999,9 +2999,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   only what they already build — checked when the split landed by running both shards in fresh
   build directories under `--trace-file` and comparing their executed commands with an unsharded
   run's; repeat that check after adding an `all`-only target to `test/operations`. The units are
-  dealt longest-first by the script's `WEIGHTS` table (CPU seconds; the costs are heavy-tailed,
-  so an unweighted deal measured 63/37); refresh it with `tools/ci-shard.sh weigh` over a full
-  traced run when `tools/ci-times.sh` shows the shards drifting apart. `dune show aliases`, which
+  dealt longest-first by the script's `WEIGHTS` table (the costs are heavy-tailed, so an
+  unweighted deal measured 63/37). Its unit is wall-clock seconds of dune job slot ON THE RUNNER
+  (gh-ocannl-1464): a Mac-measured CPU table had drifted to a 26/12-minute split, because a test
+  holds its slot for its wall time (`cc_march_census`: 806 s on 474 CPU-s at `-j 4`) and heavy
+  newcomers were missing from it, each dealt at the default weight. Every `main` shard job weighs
+  its own build's trace, and `tools/ci-shard.sh merge-weights` turns one run's shard logs into
+  the replacement table (the script's header has the fetch recipe); refresh it when
+  `tools/ci-times.sh` shows the shards drifting apart. `dune show aliases`, which
   the script reads, prints on STDERR and exits 0 for a directory it does not know (and `dune
   rules` prints nothing for an action-only alias, so it cannot answer coverage questions either):
   the script validates the listing and refuses (exit 2) rather than shard a partial one.
@@ -3017,7 +3022,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   copies its output into `$RUNNER_TEMP/dune-build.log` through `tee`, and a failure-only last step
   runs `tools/ci-failed-rules.sh --github` over it: one entry per dune error header (`File
   "<path>", line(s) N[-M]`), the rule named by its own `alias`/`name`/`target` fields, the command
-  dune ran or the error it printed, each also an `::error` annotation on the run's summary page.
+  dune ran or the error it printed, each also an `::error` annotation on the run's summary page
+  whose message leads with the entry's `<path>:<lines>` (the annotation list shows the message,
+  not `file=`, and a golden mismatch has no other detail to name it; gh-ocannl-1464).
   That step exits 1 deliberately, so `gh run view <id> --log-failed` includes it. The script reads
   a log GitHub serves too (timestamps, colour, CRLF, `--log-failed`'s JOB/STEP prefixes), so
   `gh run view <id> --log-failed | tools/ci-failed-rules.sh` is the first read of any red job; it
@@ -3906,7 +3913,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   stanzas red on their own — including one generated alias per member of a `(tests (names …))`
   stanza — read those first, they are the test-logic failures the noise was hiding; `all clean`
   says every red target passed alone; `unjudged (exit N): <aliases>` are the ones the cap cut
-  short, never folded into `all clean`. One or two inline-expectation sites use a capped
+  short, never folded into `all clean`. A `(test)` golden diff, whose site names only its
+  `.expected`, reruns as the stanza its resolved `diff --git` header's `<dir>/<name>.exe.output`
+  operand names, `@<dir>/runtest-<name>` (gh-ocannl-1464); an explicit rule's `.expected` site
+  stays unmapped, since nothing in the log pairs it with its rule. One or two inline-expectation sites use a capped
   `@<dir>/runtest` fallback and name it on a `directory fallback` line; three or more remain on
   `unmapped: [<site>]...`, as do unnamed spans and bare `target` rules. The bound keeps a wide red
   from becoming a full serial directory suite while giving a small inline red the same retry.
@@ -4051,7 +4061,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   protection against tampered traces is producer-side scrubbing (ahrefs/ocannl#1280), not the
   reader. `tools/test-action-durations.sh` seeds a canary in every non-read field of the schema it
   inventories, rejects one decode-and-print twin per such field by the canary alone, and pins the
-  tampered-prefix leak as the documented boundary.
+  tampered-prefix leak as the documented boundary. `tools/ci-shard.sh weigh` holds the same
+  boundary over its own fields (gh-ocannl-1287): it opens only `process finish`, decodes `prog`,
+  `dir` and the time slot's digit-only duration, and tests `process_args` for the fast-math flag
+  by comparing bytes; `tools/test-ci-shard.sh` seeds and twins its inventory the same way. Each
+  reader keeps its own whitelist rather than share a module, since what each may decode differs
+  and each harness rewrites its own subject's whitelist line to build its twins.
 
 ### Skip coverage
 
@@ -4207,10 +4222,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   TAKE`; a changed fingerprint is reported against the previous failure rather than merely the
   previous run. A red after a green also gets the ready bisect on the line after it
   (gh-ocannl-1375): `<box>/<backend>: bisect on <host>: OCANNL_BACKEND=<backend> tools/test-run.sh
-  bisect <green sha> <this sha> <aliases>`, the aliases being the failing stanzas the serial rerun
-  maps plus each `(test)` golden diff's `@<dir>/runtest-<name>` (from its `.exe.output` operand;
-  the site itself names only the `.expected`), with any site no stanza is found for listed as left
-  out. A green at the same commit prints `bisect: none` instead: nothing in the code moved. Standing identical reds stay quiet, which is the signal-to-noise property the
+  bisect <green sha> <this sha> <aliases>`, the aliases being exactly the failing stanzas the
+  serial rerun maps (`rerun_aliases`, `(test)` golden diffs included), with any site no stanza is
+  found for listed as left out. A green at the same commit prints `bisect: none` instead: nothing in the code moved. Standing identical reds stay quiet, which is the signal-to-noise property the
   cursor exists to preserve. The cursor key includes the requested logical ref, so an exploratory
   branch or historical run cannot become `origin/master`'s predecessor. Golden paths come from the
   full log: ordinary test diffs name their `.expected` file directly, while an explicit rule's

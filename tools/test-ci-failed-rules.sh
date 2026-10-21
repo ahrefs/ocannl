@@ -142,7 +142,7 @@ if harness_leg 'a red build lists exactly the failing rule #dune'; then
   out=$(cd "$proj" && subject --github "$TMP/red.log" 2>&1); rc=$?
   ann=$(printf '%s\n' "$out" | grep '^::error ')
   if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$ann" | wc -l | tr -d ' ')" = 1 ] &&
-     [[ $ann == '::error file=t/dune,line=6,endLine=17,title=Failed dune rule::(rule) target bad.actual -- ran: (cd _build/default/t && '* ]]; then
+     [[ $ann == '::error file=t/dune,line=6,endLine=17,title=Failed dune rule::t/dune:6-17  (rule) target bad.actual -- ran: (cd _build/default/t && '* ]]; then
     report 0 '--github annotates the failing rule once'
   else report 1 '--github annotates the failing rule once' "exit $rc; $out"; fi
 fi
@@ -220,6 +220,14 @@ if harness_leg 'a golden mismatch and a compile error are told apart #dune'; the
      printf '%s\n' "$out" | sed -n '4p' | grep -q '^      Error: '; then
     report 0 'a golden mismatch and a compile error are told apart'
   else report 1 'a golden mismatch and a compile error are told apart' "builds $brc/$crc, exit $rc; $out"; fi
+  # The annotation list shows only the message, so the golden mismatch -- which
+  # carries no detail -- must name its path there, not only in `file=`
+  # (gh-ocannl-1464).
+  out=$(cd "$proj" && subject --github "$TMP/golden.log" 2>&1); rc=$?
+  ann=$(printf '%s\n' "$out" | grep '^::error ')
+  want='::error file=t/passing.expected,line=1,endLine=1,title=Failed dune rule::t/passing.expected:1  output differs from this golden'
+  report "$([ "$rc" = 0 ] && [ "$ann" = "$want" ]; echo $?)" '--github names a golden mismatch'"'"'s path in the annotation message' \
+    "exit $rc; $out"
   printf 'let () = print_string "ok\\n"\n' >"$proj/t/passing.ml"
   printf 'ok\n' >"$proj/t/passing.expected"
 fi
