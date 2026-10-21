@@ -5723,7 +5723,7 @@ type explain = {
 type segment_explain = { xs_segment : string; xs_candidates : (string * explain) list }
 type explanation = { x_routine : (string * explain) list; x_segments : segment_explain list }
 
-let model_explain ?name ctx comp bindings =
+let model_explain ?name ?(coalesced = false) ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
   let limits = Context.hardware_limits ctx in
@@ -5802,15 +5802,7 @@ let model_explain ?name ctx comp bindings =
     (* The sketch leaves [model_default]'s family search visits on [prog] (a whole routine or one
        segment), in its visiting order. Exactly the leaves it can score: a schedule that fails to
        apply, or whose scheduled form fails validation, is excluded from its ranking too. *)
-    let leaf_explains ~label prog =
-      let admits = model_admits ~seeding ~accum_prec prog in
-      let leaves =
-        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
-        | Some tree ->
-            Sspace.leaves
-              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-        | None -> []
-      in
+    let explain_leaves ~label ~admits prog leaves =
       List.filter_map leaves ~f:(fun p ->
           match
             validate_segments_for_model ~limits
@@ -5822,6 +5814,30 @@ let model_explain ?name ctx comp bindings =
           with
           | exception Outcome.Cause_at _ -> None
           | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
+    in
+    let leaf_explains ~label prog =
+      let leaves =
+        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
+        | Some tree ->
+            Sspace.leaves
+              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+        | None -> []
+      in
+      explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
+    in
+    (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, which [model_default] does
+       not rank, listed on request to check the score's ranking of them against timings. A leaf is
+       marked admitted when its uncoalesced form is: the set [model_default] would rank were the
+       coalesced layouts admitted as numerics-preserving (neither reorders a cell's summation). *)
+    let coalesced_explains prog =
+      if not coalesced then []
+      else
+        let admits = model_admits ~seeding ~accum_prec prog in
+        explain_leaves
+          ~label:(fun p -> spec_label (Whole (W_sketch p)))
+          ~admits:(fun p -> admits { p with sk_coalesce = None })
+          prog
+          (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
     in
     (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it -- the
        fold-zeros segmentation of the searched program, when it splits the routine or exposes a
@@ -5850,7 +5866,8 @@ let model_explain ?name ctx comp bindings =
     {
       x_routine =
         (incumbent_label, explain incumbent)
-        :: leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base;
+        :: (leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base
+           @ coalesced_explains base);
       x_segments;
     }
 

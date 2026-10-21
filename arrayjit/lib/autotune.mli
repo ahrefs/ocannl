@@ -2456,7 +2456,12 @@ type explanation = {
 }
 
 val model_explain :
-  ?name:string -> Context.t -> Ir.Assignments.comp -> Ir.Indexing.unit_bindings -> explanation
+  ?name:string ->
+  ?coalesced:bool ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  explanation
 (** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
     compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): the whole-routine candidates
     and, per segment, the per-segment ones (gh-ocannl-1438), each with whether the numerics
@@ -2465,7 +2470,12 @@ val model_explain :
     apply or validate are omitted, as {!model_default} excludes them; a segment whose preset has no
     score is listed with its unscored entries, where {!model_default} skips it. Where
     {!model_default} ranks nothing — no envelope constants, or the default annotator off —
-    [x_routine] is the default pipeline alone and [x_segments] is empty. *)
+    [x_routine] is the default pipeline alone and [x_segments] is empty.
+
+    [~coalesced:true] (default [false]) appends to [x_routine] the whole-routine leaves of the
+    coalesced tuner branch ({!coalesced_seed_params}), which {!model_default} does not rank, so the
+    score's ranking of them can be checked against timings (gh-ocannl-1278). Each is marked admitted
+    exactly when its uncoalesced form would be. *)
 
 val untuned_compile :
   ?name:string ->
