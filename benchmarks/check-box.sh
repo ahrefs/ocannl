@@ -3,6 +3,7 @@
 #
 #   benchmarks/check-box.sh --box BOX [--fixture NAME]... [--fixture-dir DIR] [--venv DIR]
 #                           [--digests FILE] [--box-only]
+#   benchmarks/check-box.sh --fleet-names    # the fleet names --box takes, `<name> <box>` lines
 #
 # Every measurement session runs it first, from the checkout it will measure in; tools/sweep.sh
 # runs it once per box with --box-only against the box's fixture store. Each item prints one
@@ -18,6 +19,8 @@
 #   - BOX: a measurement box declared in the DIGESTS file's `# measurement-boxes:` header AND
 #     listed in box_profile below, which names the device torch must reach and the toolchain
 #     the box's drivers compile with. A declared box missing here is refused, not defaulted.
+#     Or the fleet's name for one (`rog-nv-linux` for rog-nv; fleet_box below, gh-ocannl-1433),
+#     which a line before the items resolves to its box; the verdict names the box.
 #   - NAME: the stem of a spec in benchmarks/workloads/*.json (`gpt2_mini_train`, not the file
 #     name). Without --fixture, every fixture DIGESTS records under BOX's origin is required.
 #   - DIR, FILE: paths; --venv defaults to ~/.venvs/ocannl-bench, the box's shared venv,
@@ -60,6 +63,26 @@ box_profile() {
   esac
 }
 
+# The fleet's name for a measurement box -> that box (gh-ocannl-1433). The fleet names its hosts by
+# endpoint (FLEET_BOXES and FLEET_LOCAL_BOX, lukstafi/ludics-lite's issue-wave registry: the native
+# Linux boot's ssh alias in wake-lab.sh's endpoint map, and the Mac's own name), while DIGESTS.txt
+# and the reports name the box, so a worker given a fleet box passed the fleet's name and was
+# refused. The table is here, not derived at run time from wake-lab.sh's map: the far boxes this
+# check runs on have no wake-lab.sh, the map has no row for the Mac, and its box names (`rog`) are
+# not the measurement IDs (`rog-nv`) either. benchmarks/test-check-box.sh pins it against the map,
+# and against FLEET_BOXES, wherever those can be read. Only the native boots: no box measures from
+# a WSL guest or from Windows.
+fleet_box() {
+  case $1 in
+    mac-studio) echo m4-max ;;
+    rog-nv-linux) echo rog-nv ;;
+    minix-amd-linux) echo minix ;;
+    tuf-amd-linux) echo tuf ;;
+    *) return 1 ;;
+  esac
+}
+fleet_names="mac-studio rog-nv-linux minix-amd-linux tuf-amd-linux" # fleet_box's domain
+
 box= venv=$HOME/.venvs/ocannl-bench fixture_dir=$here/fixtures digests= box_only=0
 fixtures=()
 while [ $# -gt 0 ]; do
@@ -76,6 +99,11 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --box-only) box_only=1; shift ;;
+    --fleet-names)
+      [ $# -eq 1 ] || die "--fleet-names takes nothing else"
+      for name in $fleet_names; do printf '%s %s\n' "$name" "$(fleet_box "$name")"; done
+      exit 0
+      ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown argument '$1' (see --help)" ;;
   esac
@@ -91,8 +119,14 @@ command -v perl >/dev/null 2>&1 || die "no perl on PATH (the device smoke is bou
 
 declared=$(python3 "$here/fixture_digest.py" --list-declared-measurement-boxes --digests "$digests") ||
   die "cannot read the declared measurement boxes of $digests"
-printf '%s\n' "$declared" | grep -qxF -- "$box" ||
-  die "'$box' is not a measurement box declared by $digests (declared: $(printf '%s' "$declared" | tr '\n' ' '))"
+if ! printf '%s\n' "$declared" | grep -qxF -- "$box"; then
+  fleet_name=$box
+  box=$(fleet_box "$fleet_name") ||
+    die "'$fleet_name' is not a measurement box declared by $digests (declared: $(printf '%s' "$declared" | tr '\n' ' ')), nor the fleet's name for one ($fleet_names)"
+  printf '%s\n' "$declared" | grep -qxF -- "$box" ||
+    die "'$fleet_name' is the fleet's name for $box, which $digests does not declare (declared: $(printf '%s' "$declared" | tr '\n' ' '))"
+  echo "check-box: --box $fleet_name is the fleet's name for measurement box $box"
+fi
 profile=$(box_profile "$box") ||
   die "'$box' is declared but has no box_profile entry in $0: add its device and toolchain there"
 device=${profile% *} toolchain=${profile#* }
