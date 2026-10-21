@@ -392,22 +392,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   directory went to `repo_relative` as ONE component, so a `..` popped all of `test/a` and a
   `(chdir ../b …)` there ran in a top-level `b` -- split a directory (`Scan.split_path`) before
   resolving a path against it.
-  gh-ocannl-723 is the pattern's second instance and shows what a scanner rule costs once the seam
-  exists: the rule is `Scan.artifact_subjects`, `dune_scan_cases` puts it to fifteen stanza/source
-  pairs the repository has no member of, and `config_scan_lexing` does the same for the source side
-  — where the hostile input is the repository's own, since `test/support/generated.ml` names
-  `Generated.init` in half a dozen doc comments and `generated_provenance.ml` asserts on a string
-  literal quoting one, so a text scan would read the module that DEFINES the initializer as its
-  heaviest caller. Two lessons beyond the pattern. First, a decision-table control still leaves the
-  wiring from decision to failure unexercised, and `env_var_deps --control` closes it: it builds a
-  synthetic tree containing the violating pair, hands it to `env_var_deps.exe` as a CHILD, and
-  claims that the child names the stanza and exits 1 without the declaration and exits 0 with it —
-  the `generated_provenance` capture pattern, and worth the fixture because the tree is DERIVED from
-  the check's own exemption and gateless lists and so cannot drift from them. Second, a vacuity
-  floor over a repository census cannot be asked of an arbitrary tree: the artifact caller floor
-  applies only when `Config_key_scan.floor_violations` says the run was handed the repository's scan
-  roots, and WHICH mode the run was in goes into the golden, so a glob that breaks flips that line
-  rather than quietly retiring the floor.
+  A source-side census needs the same hostile input: `config_scan_lexing` puts
+  `Config_key_scan.generated_init_calls_in_source` to the repository's own traps, since
+  `test/support/generated.ml` names `Generated.init` in half a dozen doc comments and
+  `generated_provenance.ml` asserts on a string literal quoting one, so a text scan would read the
+  module that DEFINES the initializer as its heaviest caller. Two lessons beyond the pattern. First,
+  a decision-table control still leaves the wiring from decision to failure unexercised, and
+  `env_var_deps --control` closes it: it builds a synthetic tree containing the violating shape,
+  hands it to `env_var_deps.exe` as a CHILD, and claims that the child names it and exits 1, and
+  that the same tree without it exits 0 — the `generated_provenance` capture pattern, and worth the
+  fixture because the tree is DERIVED from the check's own gateless list and so cannot drift from
+  it. Second, a vacuity floor over a repository census cannot be asked of an arbitrary tree: the
+  family floors apply only when `Config_key_scan.floor_violations` says the run was handed the
+  repository's scan roots, and WHICH mode the run was in goes into the golden, so a glob that breaks
+  flips that line rather than quietly retiring the floor.
   gh-ocannl-800 adds the corresponding refusal ratchet. `env_var_deps` derives scanner sources from
   the repository-wide rules through the shared `per_directory` traversal, extracts literal formats
   handed to `Verdict.fail`, `failwith`, or a Verdict claim form (including `Printf` formats, with
@@ -486,14 +484,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   wrapper runs the executable inside it under the qualified path, so match runners over the whole
   file while resolving modules per group, or descending finds both stanzas and then discards the
   relation between them.
-  Two more, about the rule rather than the scan. A declaration is justified by ANY read of the key it
-  tracks, so phrase the rule over the key (`Config_key_scan.source_reads_key`) and not over the one
-  function that prompted the check — otherwise the documented way of pinning a key becomes unusable
-  for that key. And having widened it that far, widen it in BOTH directions: permitting a
-  declaration for a direct reader while requiring one only of the function's callers leaves exactly
-  the stale run the check exists to prevent. A third: `inline_tests` on a library does not make its
-  modules test-only, so a rule that is about what a module DOES when linked (here, emptying the
-  artifact directory) must not accept a declaration that invalidates the inline-test runner alone.
+  One more, about the rule rather than the scan: `inline_tests` on a library does not make its
+  modules test-only, so a rule that is about what a module DOES when linked (emptying the artifact
+  directory, gh-ocannl-723's library refusal) must not accept anything that scopes to the
+  inline-test runner alone.
   One more trap that costs a debugging round: dune's `glob_files_rec` runs over the BUILD tree,
   where a `<name>.pp.ml` sits beside every ppx-using `<name>.ml` — and a `.pp.ml` is not input the
   compiler's own parser accepts. A scan that parses everything it is handed (rather than only the
@@ -565,8 +559,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   corpus where every member satisfies the rule cannot tell a rule from a tautology. The two landed
   exemplars to copy are `test/operations/marker_backend_vocabulary.ml` (gh-ocannl-689, the marker
   vocabulary against `Backends.all_of_backend`; gh-ocannl-706 added the CPU/GPU classification
-  beside it) and gh-ocannl-723's `artifact_subjects`, which asks the question from the dune scanner
-  that already pairs a stanza with the sources its `(modules …)` name.
+  beside it) and `config_dep_completeness`'s `Config_dep_resolution.analyze`, which asks the
+  question of a tree handed to it as data.
 - Not every hand-written list is a member of that habit, and telling them apart is the test of
   whether it is being applied thoughtfully. A JUDGMENT CALL is not a set the system owns anywhere
   else: `digest_completeness`'s `codegen_stage_modules` says which modules read configuration
@@ -2147,8 +2141,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   for a leg this backend cannot evaluate: gate it and report `Verdict.skipped` rather than letting it
   reach the read, because an absent artifact is a failure here by design.
   The dune side of that: `init` READS `build_files_prefix`, which the ambient record in
-  `ocannl_config` carries like every other key, so nothing is declared for it (gh-ocannl-1425). The
-  other way round is closed by `codegen_text_inventory`, which refuses a test source that reads
+  `ocannl_config` carries like every other key, so nothing is declared for it (gh-ocannl-1425).
+  `env_var_deps` still refuses the call in a library module, a `(select …)` arm included: it
+  empties the calling process's artifact directory, so from a library it runs in every executable
+  linking it (gh-ocannl-723). The other way round is closed by `codegen_text_inventory`, which refuses a test source that reads
   `Utils.build_files_dir`/`Utils.build_file` itself.
 - **Before changing code generation, read the inventory**: `dune build
   @test/operations/runtest-codegen_text_inventory` prints, as its golden, every file in the tree

@@ -2662,6 +2662,64 @@ let main () =
                                             (List.map vector_file_keys ~f:(fun (key, _) ->
                                                  Printf.sprintf "`%s`" key)))
                                          width_marker_sentinel width_marker_declaration))))));
+      (* gh-ocannl-723's placement half, which the ambient record does not retire: the initializer
+         empties the artifact directory of the process that calls it, so it belongs to an
+         executable's own modules. Called from a library module's initialization, it runs in every
+         executable linking the library -- unrelated ones included -- and can sweep artifacts an
+         earlier-initialized module already produced. A `(select …)` arm is the stanza's module as
+         much as its plain source is. Refused per library module; a repository with no library
+         calling it passes, which is the point. *)
+      check_per_directory (fun subdir group ->
+          let here = Scan.in_subdir dir subdir in
+          let directory = if String.is_empty here then "." else here in
+          let directory_modules =
+            List.filter_map source_files ~f:(fun (path, _) ->
+                if String.equal (Stdlib.Filename.dirname path) directory then
+                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
+                else None)
+          in
+          List.iter group ~f:(fun stanza ->
+              match Scan.head stanza with
+              | Some "library" ->
+                  let library =
+                    match Scan.names_of stanza with name :: _ -> name | [] -> "<unnamed>"
+                  in
+                  let arms = Scan.select_arms stanza in
+                  List.iter (Scan.modules_of ~directory_modules group stanza) ~f:(fun m ->
+                      let target = m ^ ".ml" in
+                      let files =
+                        target
+                        :: List.filter_map arms ~f:(fun (selected, arm) ->
+                            Option.some_if (String.equal selected target) arm)
+                      in
+                      List.iter files ~f:(fun file ->
+                          let key = String.lowercase (Scan.in_subdir here file) in
+                          match List.Assoc.find sources ~equal:String.equal key with
+                          | None -> ()
+                          | Some on_disk -> (
+                              let content = In_channel.read_all on_disk in
+                              if Sources.could_call_generated_init content then
+                                match Sources.generated_init_calls_in_source content with
+                                | [] -> ()
+                                | calls ->
+                                    fail
+                                      (Printf.sprintf
+                                         "%s, library %s: %s calls %s from a library module -- the \
+                                          initializer empties the artifact directory of the \
+                                          process that calls it, so it belongs to an executable's \
+                                          own modules; from a library it runs in every executable \
+                                          linking it (gh-ocannl-723)"
+                                         dune_file library key
+                                         (String.concat ~sep:", "
+                                            (List.map calls ~f:(fun c -> "`" ^ c ^ "`"))))
+                                | exception exn ->
+                                    fail
+                                      (Printf.sprintf
+                                         "%s names `Test_utils.Generated` and does not parse, so \
+                                          whether library %s calls the initializer cannot be \
+                                          established: %s"
+                                         key library (Exn.to_string exn)))))
+              | _ -> ()));
       (* gh-ocannl-1037: the per-module entry points into inline tests. Every module of an
          inline-test library that holds tests has one, every rule running such a runner IS one, and
          none is aggregated onto `runtest`, where the library's generated action already runs it.
@@ -4752,8 +4810,9 @@ let ambient_gate_control () =
    nothing, two on one stanza, one contradicting an `(env_var OCANNL_BACKEND)`, the marker's text
    outside a comment, a declaration of a variable the ambient record carries, one alias diffing two
    goldens, an undeclared tracing gate, an undeclared by-name read of a reserved tooling variable, a
-   test naming a module no source was handed for -- beside a second dune file declaring a gate over
-   a directory the checker was handed no source from, and a third putting its descendants' modules
+   test naming a module no source was handed for, the initializer called from a library module and a
+   library source naming it that does not parse -- beside a second dune file declaring a gate over a
+   directory the checker was handed no source from, and a third putting its descendants' modules
    into its stanzas with `(include_subdirs …)`. A second run hands the checker nothing at all. The
    claims are gates -- incidental refusals would keep the child at exit 1 on their own -- and each
    refusal's own `FAIL:` line is the evidence `raw_direct_evidence` attributes to them. *)
@@ -4794,6 +4853,9 @@ let malformed_tree_subject =
 (library (name gated) (modules gated))
 (test (name envread) (modules envread))
 (test (name ghost) (modules ghost))
+; dune's default module set: initlib and broken, which no other stanza claims (the tracing walk
+; reads only an explicit `(modules …)`, and would stop on the unparsable one).
+(library (name initlib))
 |dune}
 
 let malformed_tree_sources =
@@ -4801,6 +4863,8 @@ let malformed_tree_sources =
     ("t/noop.ml", "let () = ()\n");
     ("t/gated.ml", "[%%global_debug_log_level_from_env_var \"OCANNL_LOG_LEVEL_PROBE\"]\n");
     ("t/envread.ml", "let _ = Sys.getenv_opt \"OCANNL_TOOL_PROBE_MASK\"\n");
+    ("t/initlib.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
+    ("t/broken.ml", "let = Test_utils.Generated.init\n");
     ( "far/dune",
       "(library (name far) (modules far) (preprocessor_deps (env_var OCANNL_LOG_LEVEL_PROBE)))\n" );
     ("inc/dune", "(include_subdirs unqualified)\n");
@@ -5131,6 +5195,12 @@ let malformed_tree_control () =
   let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
   let malformed = run_checker ~root ~exe ("." :: List.map files ~f:fst) in
   let empty = run_checker ~root ~exe [ "." ] in
+  List.iter
+    [ ("malformed", malformed); ("empty", empty) ]
+    ~f:(fun (label, (status, text)) ->
+      if not (exited 1 (status, text)) then
+        eprintf "the malformed-tree control's %s run %s. Its captured output:\n%s\n" label
+          (describe_status status) text);
   printf
     "The checker is put to one dune file built to trip the marker grammar and the declaration\n\
      checks, and to a run handed nothing at all.\n\n";

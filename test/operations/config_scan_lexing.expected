@@ -58,6 +58,24 @@ ok: predicate handed on as a value is an escaping read -- debug_log_from_routine
 ok: predicate call contributes its keys -- with_runtime_debug
 ok: predicate call is not an escaping read -- with_runtime_debug
 ok: predicate handed on as a value is an escaping read -- with_runtime_debug
+ok: Generated.init -- written out
+ok: Generated.init -- through the module alias the tests use
+ok: Generated.init -- through an alias of any other name
+ok: Generated.init -- under an open of the module
+ok: Generated.init -- under an expression-scoped open
+ok: Generated.init -- through a locally bound module
+ok: Generated.init -- under an include, which puts init in scope under no name of its own
+ok: Generated.init -- a bare init without the open is somebody else's function
+ok: Generated.init -- a module called Generated is read by its name, whatever it was bound to
+ok: Generated.init -- through a chain of aliases
+ok: Generated.init -- through an alias carrying a signature constraint
+ok: Generated.init -- a doc comment naming it is not a call
+ok: Generated.init -- a string literal quoting it is not a call
+ok: Generated.init -- a different function of the module is not the initializer
+ok: Generated.init -- both spellings in one file
+ok: could call -- names the module
+ok: could call -- names it only to alias it
+ok: could call -- does not name it at all
 digest_completeness refuses the malformed tree, exiting 1: true
 test_config_consistency refuses the malformed tree, exiting 1: true
 

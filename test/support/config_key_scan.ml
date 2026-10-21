@@ -179,8 +179,9 @@ let path_ends_in name txt =
     to the end of the structure that holds it, a [let open … in body] reaching over the body — which
     is what a client wanting the other direction needs (Codex P2, round 3 of PR #484).
 
-    Shared with [dead_export_scan], which matches a reference by its receiver the same way, because
-    a second copy of these rules is exactly the restatement this module exists to avoid. *)
+    Shared by the initializer census below and [dead_export_scan], which match a reference by its
+    receiver the same way, because a second copy of these rules is exactly the restatement this
+    module exists to avoid. *)
 let module_bindings_of structure ~wanted =
   let aliases = ref [] and opened = ref false in
   let open_ranges = ref [] in
@@ -266,6 +267,78 @@ let module_bindings_of structure ~wanted =
 (** Whether an offset falls inside any of [ranges]. *)
 let within ranges offset =
   List.exists ranges ~f:(fun (start, stop) -> start <= offset && offset < stop)
+
+(** Whether [path] names [fn] of the module [wanted], given that module's local bindings: written
+    out or reached through an alias, or spelled bare under an [open]/[include] of it. *)
+let names_function_of ~wanted ~aliases ~opened ~fn path =
+  match List.rev path with
+  | last :: receivers when String.equal last fn -> (
+      match receivers with
+      | [] -> opened
+      | receiver :: _ ->
+          String.equal receiver wanted || List.mem aliases receiver ~equal:String.equal)
+  | _ -> false
+
+(** {1 The artifact-freshness initializer (gh-ocannl-723)} *)
+
+(** The module that owns the freshness-checked reads of [build_files/], and the function of it that
+    a test must call before its first compile. *)
+let generated_module = "Generated"
+
+let generated_init = "init"
+
+(** Every spelling of a [Test_utils.Generated.init] call in [content], deduplicated and in the order
+    they first appear; empty when the source does not call it.
+
+    Three spellings reach the same function and all three are read, because the difference between
+    them is a matter of taste and the rule built on this is not: [Test_utils.Generated.init] written
+    out, [Generated.init] through a [module Generated = Test_utils.Generated] alias (which is what
+    most tests here do), and a bare [init] under an [open] or [include] of the module. Each of those
+    has an expression spelling too ([let module G = … in], [let open … in]), and both are collected:
+    the difference between them is a matter of taste as well. The alias may be spelled anything, so
+    the aliases and opens are collected in a first pass and the call sites matched against them in a
+    second — OCaml lets neither be used before it is bound, so two passes cost nothing and save the
+    walk from depending on that. An [open] is taken to reach the whole file rather than its own
+    scope, which is the over-reading direction and the safe one (see below).
+
+    Parsed rather than grepped, for the reason the rest of this module is:
+    [test/support/generated.ml] names its own [Generated.init] in half a dozen doc comments and
+    error messages, and [generated_provenance.ml] quotes one of them in a string literal it asserts
+    on. A text scan would read every one of those as a call.
+
+    The receiver is matched by NAME, so a module bound to [Generated] that is not this one is read
+    as if it were: the safe direction for the rule built on this, [env_var_deps]' refusal of the
+    initializer in a library module, where a false call costs a moved module and a missed one an
+    initializer running in every executable that links the library. *)
+let generated_init_calls_in_source content =
+  let structure = structure_of content in
+  let aliases, opened, _open_ranges = module_bindings_of structure ~wanted:generated_module in
+  let is_the_call path =
+    names_function_of ~wanted:generated_module ~aliases ~opened ~fn:generated_init path
+  in
+  let found = ref [] in
+  let calls =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match longident_of expr with
+        | Some path when is_the_call path ->
+            let spelling = String.concat ~sep:"." path in
+            if not (List.mem !found spelling ~equal:String.equal) then found := spelling :: !found
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  calls#structure structure;
+  List.rev !found
+
+(** Whether [content] could possibly call the initializer: the module has to be NAMED for any of the
+    three spellings to reach it, alias and [open] included, so the substring is a necessary
+    condition and skipping a file without it skips no call. Only a narrowing filter — what decides
+    is {!generated_init_calls_in_source} — but it keeps a repository-wide census from parsing every
+    source in the tree. *)
+let could_call_generated_init content = String.is_substring content ~substring:generated_module
 
 (** Every site where an OCaml source names one of the requested paths under the scanner's lexical
     module model: the path as the source SPELLS it -- [F.small_menu] under

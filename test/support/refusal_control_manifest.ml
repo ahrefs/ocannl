@@ -364,6 +364,8 @@ let raw_entries =
         "[scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than";
         "[scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file";
         "[scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search";
+        "[scanner-refusal:591d750b2330cdac197127abc39ce397] executable's own modules";
+        "[scanner-refusal:f30ace350fdf01fcc307ea64e391a7bf] Test_utils.Generated";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
@@ -823,6 +825,10 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:b9c87589aecbe6de4db58fc4671f7491",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:eac17cf643d980bb15c3113087c863c4",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:591d750b2330cdac197127abc39ce397",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:f30ace350fdf01fcc307ea64e391a7bf",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
   ]
 

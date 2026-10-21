@@ -271,6 +271,103 @@ let x = Utils.settings.large_models|ocaml},
    table, since what is under test is the reach of the entries and not their contents. *)
 let predicate_position_cases = Scan.settings_predicates
 
+(* gh-ocannl-723: which sources call [Test_utils.Generated.init], the source side of the rule that
+   keeps the initializer out of library modules.
+
+   The hostile input here is the repository's own: [test/support/generated.ml] names its own
+   [Generated.init] in half a dozen doc comments and error messages, and [generated_provenance.ml]
+   asserts on a string literal quoting one of them -- so a text scan would read the module that
+   DEFINES the initializer as its heaviest caller. The spellings on the other side are the three the
+   tests actually use, and the alias is the one most of them take. *)
+let generated_init_cases =
+  [
+    ( "written out",
+      {ocaml|let () = Test_utils.Generated.init ~backend_name|ocaml},
+      [ "Test_utils.Generated.init" ] );
+    ( "through the module alias the tests use",
+      {ocaml|module Generated = Test_utils.Generated
+let () = Generated.init ~backend_name|ocaml},
+      [ "Generated.init" ] );
+    ( "through an alias of any other name",
+      {ocaml|module G = Test_utils.Generated
+let () = G.init ~backend_name|ocaml},
+      [ "G.init" ] );
+    ( "under an open of the module",
+      {ocaml|open Test_utils.Generated
+let () = init ~backend_name|ocaml},
+      [ "init" ] );
+    (* Each of those has an expression spelling, and a pass that knew only the structure ones read
+       the bare `init` below as somebody else's function -- an unrecognised caller, which looks
+       exactly like a stanza with nothing to declare (Codex P2, round 1). *)
+    ( "under an expression-scoped open",
+      {ocaml|let () = let open Test_utils.Generated in init ~backend_name|ocaml},
+      [ "init" ] );
+    ( "through a locally bound module",
+      {ocaml|let () = let module G = Test_utils.Generated in G.init ~backend_name|ocaml},
+      [ "G.init" ] );
+    ( "under an include, which puts init in scope under no name of its own",
+      {ocaml|include Test_utils.Generated
+let () = init ~backend_name|ocaml},
+      [ "init" ] );
+    (* A bare `init` is one only under that open: nothing else makes it this function, and reading
+       it as one would make a caller of every module with an initializer. *)
+    ( "a bare init without the open is somebody else's function",
+      {ocaml|let init () = () 
+let () = init ()|ocaml},
+      [] );
+    (* The match is by NAME, and a module called `Generated` is read as the one wherever it was
+       bound. Over-reading is the safe direction of the two: a declaration too many makes dune rerun
+       a stanza it need not have, while one too few is the stale run this rule exists to prevent. *)
+    ( "a module called Generated is read by its name, whatever it was bound to",
+      {ocaml|module Generated = Somewhere.Else
+let () = Generated.init ~backend_name|ocaml},
+      [ "Generated.init" ] );
+    (* The one this check exists for: the module that defines the initializer names it in prose and
+       in the message it raises, and calls it nowhere. *)
+    (* An alias of an alias reaches the same function, and a first pass that recorded `G` without
+       consulting what it had recorded read `H.init` as somebody else's (Codex P2, round 2). *)
+    ( "through a chain of aliases",
+      {ocaml|module G = Test_utils.Generated
+module H = G
+let () = H.init ~backend_name|ocaml},
+      [ "H.init" ] );
+    (* A signature constraint wraps the path without changing which module it names (Codex P2, round
+       4). *)
+    ( "through an alias carrying a signature constraint",
+      {ocaml|module G : module type of Test_utils.Generated = Test_utils.Generated
+let () = G.init ~backend_name|ocaml},
+      [ "G.init" ] );
+    ( "a doc comment naming it is not a call",
+      {ocaml|(** [Test_utils.Generated.init] must be called before any compile. *)
+let uninitialized () = ()|ocaml},
+      [] );
+    ( "a string literal quoting it is not a call",
+      {ocaml|let message = "Test_utils.Generated.init ~backend_name must be called before any compile"|ocaml},
+      [] );
+    ( "a different function of the module is not the initializer",
+      {ocaml|module Generated = Test_utils.Generated
+let src = Generated.read "nz_mma"|ocaml},
+      [] );
+    (* Two spellings in one file are two answers, and the census only needs one -- but a scan that
+       reported the first and stopped would go quiet the day a file changed which one it opens
+       with. *)
+    ( "both spellings in one file",
+      {ocaml|module Generated = Test_utils.Generated
+let () = Test_utils.Generated.init ~backend_name
+let () = Generated.init ~backend_name|ocaml},
+      [ "Test_utils.Generated.init"; "Generated.init" ] );
+  ]
+
+(* And the textual filter the census narrows with, which is only safe while naming the module is a
+   NECESSARY condition for calling it: a file the filter drops is never parsed, so a call it hid
+   would be invisible rather than reported. *)
+let could_call_cases =
+  [
+    ("names the module", {ocaml|let () = Test_utils.Generated.init ~backend_name|ocaml}, true);
+    ("names it only to alias it", {ocaml|module G = Test_utils.Generated|ocaml}, true);
+    ("does not name it at all", {ocaml|let () = print_string "hello"|ocaml}, false);
+  ]
+
 (* gh-ocannl-1207: the two scanners' own refusals, executed rather than vouched for by the lexer
    cases above, which pass on input the scanners ACCEPT. Each scanner runs as a child process over
    one synthetic tree built to trip every refusal its input can reach: two sources sharing a
@@ -379,6 +476,20 @@ let () =
       else
         fail "predicate handed on -- %s: expected 1 escaping read, found %d" predicate
           handed_on_count);
+  List.iter generated_init_cases ~f:(fun (name, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"Generated.init" ~name ~default:[] (fun () ->
+            Scan.generated_init_calls_in_source source)
+      in
+      if List.equal String.equal found expected then printf "ok: Generated.init -- %s\n" name
+      else
+        fail "Generated.init -- %s: expected [%s], found [%s]" name
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found));
+  List.iter could_call_cases ~f:(fun (name, source, expected) ->
+      let found = Scan.could_call_generated_init source in
+      if Bool.equal found expected then printf "ok: could call -- %s\n" name
+      else fail "could call -- %s: expected %b, found %b" name expected found);
   (match Stdlib.Sys.argv with
   | [| _; digest_exe; consistency_exe |] -> scanner_refusal_controls ~digest_exe ~consistency_exe
   | _ ->
