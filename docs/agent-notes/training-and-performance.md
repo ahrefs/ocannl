@@ -198,16 +198,29 @@ files.
   same compute leg whatever its geometry, batch-grid flavor or coalescing: a plain leaf (batch loops
   serial in the kernel) ties its `bgrid` twin and measures 3-36x slower, and a coalesced leaf ties
   its uncoalesced twin while the fastest leaf at q/k/v was `64x64x8/4x4 bgrid coal-n` (1.25-1.75x
-  under the seeded plan). The seeded plan scores slightly ABOVE the tie (its zero-fill kernel's
-  ops), so `model_default` under seeding (the `performance`/`approximate` profiles) displaces it
-  with the first leaf of the walk, a plain one: `bench_rank_site` `BENCH_PICK=1` reads
-  `32x32x8/4x4` at q/k/v (8.8-35x slower than seeded) and `64x64x8/4x4` at the out projection
-  (2.6-11x), under gate 32 and `auto` alike. So coalesced leaves stay out of `model_default` until
-  the score prices launch parallelism; their scalar leaves ARE numerics-preserving
-  (`coalesce_numerics`: every scalar `coal-n`/`coal-k` seed computes the scalar family's values
-  bitwise on order-sensitive inputs, on CUDA, HIP and Metal), so admission is a score question only.
-  The contraction layout's tensorized and fused leaves (gh-ocannl-1459) are no more admissible than
-  their uncoalesced twins: `model_explain`'s coalesced rows judge each leaf by its uncoalesced form.
+  under the seeded plan). Coalesced leaves therefore stay out of `model_default` until the score
+  prices launch parallelism; their scalar leaves ARE numerics-preserving (`coalesce_numerics`: every
+  scalar `coal-n`/`coal-k` seed computes the scalar family's values bitwise on order-sensitive
+  inputs, on CUDA, HIP and Metal), so admission is a score question only. The contraction layout's
+  tensorized and fused leaves (gh-ocannl-1459) are no more admissible than their uncoalesced twins:
+  `model_explain`'s coalesced rows judge each leaf by its uncoalesced form.
+- **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
+  sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
+  zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes
+  inside a compute-bound kernel (a family leaf keeps its zero nest in its one kernel; the
+  per-segment substitution folds zeros) vanish under the max. Against the seeded plan as scored,
+  every tied leaf "strictly" won, and `model_default` under seeding (the `performance`/`approximate`
+  profiles) shipped the walk's first leaf, a plain one, 2.6-35x slower. Each walk is now anchored at
+  the seeded plan's own sketch on the searched program (`Autotune.model_seeded_anchors`: the
+  parameters the plan's record says it applied there, applied as a leaf; `model_explain` marks it
+  `ex_anchor`), so only a leaf the score separates displaces the plan. Read the record, never the
+  gate re-run: under `auto` the ranked judgment of the whole routine (zero nest inside) declined a
+  site whose own segment the plan seeded, and a fix pinned at threshold 32 passed every check while
+  both profiles still shipped the slow leaves. A launch-fill term was set aside rather than landed:
+  the `auto` seeding gate reads the same score, the fitted issue rate already absorbs its
+  calibration kernel's partial fill, and blocks against `seeded_min_blocks` mis-orders outproj b8
+  (its fastest leaf launches 64 blocks). `test/operations/model_seeded_anchor` pins the anchor on
+  CUDA and HIP.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes

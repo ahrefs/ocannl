@@ -1,0 +1,8 @@
+on CUDA/HIP the seeded plan seeds each single-site contraction: true
+on CUDA/HIP each single-site walk is anchored exactly once, at the seeded plan's own sketch: true
+on CUDA/HIP the chain's per-segment substitution anchors a segment: true
+on CUDA/HIP model_default's pick is no fallback to the default pipeline: true
+on CUDA/HIP the pick is the seeded plan, or ranks strictly below its walk's anchor (no tie): true
+on CUDA/HIP the picked routine computes bitwise what the seeded plan's does: true
+on CUDA/HIP the outputs are not trivially zero: true
+off CUDA/HIP the explanation lists candidates, none of them an anchor: true

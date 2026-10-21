@@ -50,6 +50,11 @@
 # defaults, no model_* flag), beside `ceilings`. With it, SITES may name bench_rank_site's
 # gpt2_mini projection sites (qkv:b,s,h,e,k and outproj:b,s,j,h,e), whose explain lines list the
 # coalesced branch's leaves the tuner times beside the family.
+# BENCH_PICK=1 (inherited by the cells) makes each listing cell also print model_default's actual
+# pick, which the agreement script joins to its measured row against the seeded plan's
+# (gh-ocannl-1477). PICK_PROFILES (with RANK_ONLY=1, say 'performance approximate') adds, per site,
+# a pick-only cell rank_<site>_pick_<profile> under --ocannl_profile=<profile> with the shipped
+# seeding gate (no threshold pin): what that profile ships, joined to the same measured rows.
 # Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
 # environment cannot swap the measured plans for tuned or model-picked ones.
 # The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
@@ -188,10 +193,18 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
     ${model[@]+"${model[@]}"}
   cell "rank_${name}_ceilings" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 "${ceilings[@]}"
+  picks=()
+  if [[ ${RANK_ONLY:-0} == 1 ]]; then
+    for profile in ${PICK_PROFILES:-}; do
+      cell "rank_${name}_pick_${profile}" env BENCH_PICK=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \
+        "$rank_site" "--ocannl_backend=$backend" "--ocannl_profile=$profile"
+      if $last_ok; then picks+=(--pick "${profile}=$out/rank_${name}_pick_${profile}.out"); fi
+    done
+  fi
   if $timed; then
     python3 "$root/benchmarks/gh1442_agreement.py" "$out/rank_${name}.tsv" \
       "ceilings=$out/rank_${name}_ceilings.out" \
-      "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" |
+      "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
   fi
 done

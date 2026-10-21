@@ -5265,9 +5265,10 @@ let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?
 
 (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
    ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
-   incumbent every candidate must strictly beat, and the action taken when none does. [None] where
-   the untuned compile is the plain default (another backend, seeding off). Shared by
-   [model_default] and [model_explain]. *)
+   incumbent, and the action taken when no candidate strictly beats it -- measured, on each searched
+   program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477). [None] where the
+   untuned compile is the plain default (another backend, seeding off). Shared by [model_default]
+   and [model_explain]. *)
 let model_seeding ~backend ~limits =
   if not (Sched.backend_is_gpu backend) then None
   else seeded_settings ~backend ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
@@ -5287,6 +5288,55 @@ let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
       | None -> true)
   in
   fun p -> Option.is_none seeding || (scalar_blocktile p && Lazy.force preserving)
+
+(* gh-ocannl-1477: the seeded plan's own sketches on a program [model_default] searches -- the whole
+   routine, or one keyed segment of its per-segment substitution: each scalar blocktile the plan
+   applied ([seeded], its [sd_seeded] parameters, deduplicated), applied to [prog] and validated as
+   a family leaf is, those that apply. Empty without seeding, or where the plan seeds nothing. The
+   caller's threshold is the best-scoring one.
+
+   Why the walks need it: the seeded plan runs its zero-fill as a kernel of its own (the default
+   segmentation, no zero fold), while a family leaf keeps the zero nest inside its one kernel, and
+   the ranking score sums [max (compute, memory)] per kernel. So the seeded plan pays the zero
+   kernel's memory leg as a separate term that a leaf hides under its compute leg; with every scalar
+   leaf of a site tied on the compute leg, the first leaf of the walk -- a plain one, its batch
+   loops serial inside one block, measured 2.6-35x slower -- "strictly" beat the plan. Scored in the
+   candidates' own decomposition, the seeded geometry ties them, and the incumbent wins every tie.
+
+   The parameters are the plan's RECORD, never its gate re-run on [prog]: under the [auto] gate the
+   ranked judgment of the whole routine (zero nest and companions inside) can decline a site whose
+   own segment the plan seeds, which left the walk unanchored and the defect in place under the
+   [performance] and [approximate] profiles. A segment of a multi-site routine is held to every
+   seeded geometry that applies to it, not only its own site's: the stricter threshold, never a
+   looser one. Shared by [model_default] and [model_explain]. *)
+let model_seeded_anchors ~limits ~accum_prec ~static_indices ~(seeded : sketch_params list)
+    (prog : LL.optimized) : (sketch_params * LL.optimized list) list =
+  List.dedup_and_sort seeded ~compare:(fun a b ->
+      String.compare (sketch_params_label a) (sketch_params_label b))
+  |> List.filter_map ~f:(fun p ->
+      match
+        validate_segments_for_model ~limits
+          [
+            Sched.apply_classified ~static_indices
+              (sketch_schedule ~accum_prec ~p prog)
+              (scratch_of prog);
+          ]
+      with
+      | segs -> Some (p, segs)
+      | exception Outcome.Cause_at _ -> None)
+
+(* The seeded plan's record ([sd_seeded]: first unit, parameters) for one keyed segment of a fission
+   of the same routine ([plan]): the entries whose unit lies in one of the segment's occurrences.
+   Both segmentations number the routine's units alike; the fold-zeros one merges a zero-fill into
+   the segment of the site it initializes, which still holds the site's unit. *)
+let seeded_record_for_key ~(plan : Sched.segmentation) ~record (key : seg_key) =
+  let starts = segment_starts plan in
+  let spans = List.mapi plan ~f:(fun i (_, n) -> (starts.(i), n)) in
+  List.filter_map record ~f:(fun (u, p) ->
+      Option.some_if
+        (List.exists spans ~f:(fun (start, n) ->
+             List.mem key.key_units start ~equal:Int.equal && start <= u && u < start + n))
+        p)
 
 let model_default ?name ?report ctx comp bindings =
   let backend = Context.backend_name ctx in
@@ -5353,8 +5403,9 @@ let model_default ?name ?report ctx comp bindings =
     in
     (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
        ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
-       incumbent every candidate must strictly beat, and the action taken when none does. [None]
-       where the untuned compile is the plain default (another backend, seeding off). *)
+       incumbent, and the action taken when no candidate strictly beats it (and its own sketch,
+       [anchored] below). [None] where the untuned compile is the plain default (another backend,
+       seeding off). *)
     let seeding_here = lazy (model_seeding ~backend ~limits) in
     (* Where the model starts from the seeded plan, the family is restricted to the
        numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
@@ -5365,6 +5416,27 @@ let model_default ?name ?report ctx comp bindings =
        unseeded CUDA/HIP compile keep the whole family. *)
     let admits base_opt = model_admits ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt in
     let capabilities = Context.codegen_capabilities ctx in
+    (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
+       searched program, scored as its leaves are ({!model_seeded_anchors}), where it is below the
+       incumbent: a leaf that only ties the seeded geometry never displaces the seeded plan, while
+       one the score separates from it (a memory leg past the cache, say) still can. Placement
+       leaves reuse [select], so they are anchored too. Returns the walk's threshold on [prog] and
+       the anchor setting it: the lower of [incumbent] and the best-scoring of the seeded plan's own
+       sketches that apply to [prog] ([seeded], the plan's record for the units [prog] covers). *)
+    let anchored ~seeded ~incumbent prog =
+      List.fold (model_seeded_anchors ~limits ~accum_prec ~static_indices ~seeded prog)
+        ~init:(incumbent, None) ~f:(fun ((threshold, best) as acc) (p, segs) ->
+          match score segs with
+          | Some a ->
+              logf
+                "model_default: anchored at the seeded sketch %s (rank %.6f ms, incumbent %.6f ms)"
+                (sketch_params_label p) (a *. 1e3) (incumbent *. 1e3);
+              let best =
+                match best with Some (_, b) when Float.(b <= a) -> best | _ -> Some (p, a)
+              in
+              (Float.min threshold a, best)
+          | None -> acc)
+    in
     (* [model_family_search] with the default as incumbent, logging its ledger; under the
        numerics-preserving restriction, a leaf outside it is excluded before it is scheduled.
        Returns the first leaf strictly better than [incumbent] (exact ties broken by operand loads,
@@ -5422,27 +5494,41 @@ let model_default ?name ?report ctx comp bindings =
        it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a compilation
        failure of it is the default's and is not retried. *)
     let seeded_changed = ref false in
-    (* The seeded plan's split prelude (CUDA, gh-ocannl-1325) on a hermetic copy; the program itself
-       where the model does not start from the seeded plan. *)
-    let prelude (opt : LL.optimized) =
+    (* The seeded plan's split prelude (CUDA, gh-ocannl-1325); the program itself where the model
+       does not start from the seeded plan. On a hermetic copy for scoring; in place for the pick's
+       application, as the [`Seeded] action's [seeded_apply] splits the compile's own lowering: a
+       pick applied to a copy registers the nodes its transforms create (a fissioned segment's
+       promoted locals) in the copy's placements, not the compiling context's, and the compile then
+       fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
+    let prelude ?(hermetic = true) (opt : LL.optimized) =
       match Lazy.force seeding_here with
       | Some (_, min_serial, _) ->
-          fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
+          fst
+            (seeded_split ~backend ~min_serial ~static_indices
+               (if hermetic then scratch_of opt else opt))
       | None -> opt
     in
     let select (opt : LL.optimized) =
+      let seeded_record = ref [] in
       try
         (* The incumbent -- the seeded plan where there is one, else the untuned default pipeline --
            scored on a hermetic copy: both the anchor candidate and the fallback. *)
         let incumbent_label, incumbent_action, incumbent_scratch =
           match Lazy.force seeding_here with
-          | Some seeding -> ("seeded", `Seeded seeding, seeded_segs seeding (scratch_of opt))
+          | Some seeding ->
+              ( "seeded",
+                `Seeded seeding,
+                seeded_segs
+                  ~on_choice:(fun c -> seeded_record := c.sd_seeded)
+                  seeding (scratch_of opt) )
           | None ->
               ( "default",
                 `Default,
                 Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
                   (scratch_of opt) )
         in
+        (* gh-ocannl-1477: what the incumbent plan seeded, by first unit -- the anchors' source. *)
+        let seeded_record = !seeded_record in
         let default_score = score incumbent_scratch in
         (* The candidates compete on the program the seeded plan starts from, its split prelude
            included, so a winner keeps the reductions the untuned compile splits. *)
@@ -5459,7 +5545,13 @@ let model_default ?name ?report ctx comp bindings =
               base;
             (* The claiming family's tree (matmul or conv), twins included, searched with the
                default as incumbent. *)
-            let whole_best = Option.join (tree_search ~incumbent:ds base) in
+            let whole_best =
+              Option.join
+                (tree_search
+                   ~incumbent:
+                     (fst (anchored ~seeded:(List.map seeded_record ~f:snd) ~incumbent:ds base))
+                   base)
+            in
             let contenders =
               match whole_best with
               | Some (p, sc) -> [ (spec_label (Whole (W_sketch p)), sc, `Whole p) ]
@@ -5480,7 +5572,7 @@ let model_default ?name ?report ctx comp bindings =
                   None
               | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
               | plan, tuples -> (
-                  let entries =
+                  let decided =
                     List.filter_map (keyed_segments ~static_indices plan tuples)
                       ~f:(fun (key, pre, post) ->
                         match score [ post ] with
@@ -5490,9 +5582,25 @@ let model_default ?name ?report ctx comp bindings =
                               ~where:("model_default segment " ^ seg_key_tag key)
                               ~is_gpu ~is_cpu ~limits pre;
                             (* The segment's family tree searched with the segment's own
-                               default-preset score as incumbent. *)
-                            let best_sketch = Option.join (tree_search ~incumbent:bs pre) in
-                            match best_sketch with Some (p, _s) -> Some (key, p) | None -> None))
+                               default-preset score as incumbent, anchored at the seeded plan's own
+                               sketch on the segment under seeding (gh-ocannl-1477). *)
+                            let threshold, anchor =
+                              anchored
+                                ~seeded:(seeded_record_for_key ~plan ~record:seeded_record key)
+                                ~incumbent:bs pre
+                            in
+                            match Option.join (tree_search ~incumbent:threshold pre) with
+                            | Some (p, _s) -> Some (`Strict (key, p))
+                            | None -> Option.map anchor ~f:(fun (p, _) -> `Anchor (key, p))))
+                  in
+                  (* A substitution only where some segment strictly improves on its anchor; every
+                     other segment the seeded plan seeds keeps its seeded sketch (round 1 of
+                     staging#1332), so the contender is the seeded plan with strict improvements,
+                     not those improvements over default presets. *)
+                  let entries =
+                    if List.exists decided ~f:(function `Strict _ -> true | `Anchor _ -> false)
+                    then List.map decided ~f:(function `Strict e | `Anchor e -> e)
+                    else []
                   in
                   if List.is_empty entries then None
                   else
@@ -5560,11 +5668,11 @@ let model_default ?name ?report ctx comp bindings =
                       && List.is_empty c.sd_sunk))
                  seeding opt)
         | `Whole p ->
-            let opt = prelude opt in
+            let opt = prelude ~hermetic:false opt in
             validate_segments_for_model ~limits
               [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
         | `Fiss (plan, entries) ->
-            let opt = prelude opt in
+            let opt = prelude ~hermetic:false opt in
             validate_segments_for_model ~limits (apply_fiss ~plan ~entries opt)
       in
       match apply_action () with
@@ -5779,6 +5887,7 @@ type explain = {
   ex_spilled : bool option;
   ex_operand_loads : CM.load_count;
   ex_admitted : bool;
+  ex_anchor : bool;
 }
 
 type segment_explain = { xs_segment : string; xs_candidates : (string * explain) list }
@@ -5794,7 +5903,7 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let opt = Context.lowered_for_decisions ?name ctx comp bindings in
   let ms = Option.map ~f:(fun s -> s *. 1e3) in
-  let explain ?(ex_admitted = true) segs =
+  let explain ?(ex_admitted = true) ?(ex_anchor = false) segs =
     let ex_operand_loads =
       CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
     in
@@ -5808,6 +5917,7 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           ex_spilled = None;
           ex_operand_loads;
           ex_admitted;
+          ex_anchor;
         }
     | Some (bound, legs) ->
         (* A leg is present on every kernel or on none: its peak is one constant. *)
@@ -5822,6 +5932,7 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
           ex_operand_loads;
           ex_admitted;
+          ex_anchor;
         }
   in
   (* [model_default]'s early exits: without envelope constants, or with the default annotator off,
@@ -5843,12 +5954,15 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
   else
     (* [model_default]'s incumbent and searched program, as it derives them. *)
     let seeding = model_seeding ~backend ~limits in
+    let record = ref [] in
     let incumbent_label, incumbent =
       match seeding with
       | Some (gate, min_serial, sink_enabled) ->
           ( "seeded",
-            seeded_apply ~capabilities:caps ~backend ~limits ~accum_prec ~static_indices ~gate
-              ~min_serial ~sink_enabled (scratch_of opt) )
+            seeded_apply
+              ~on_choice:(fun c -> record := c.sd_seeded)
+              ~capabilities:caps ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial
+              ~sink_enabled (scratch_of opt) )
       | None ->
           ( "default",
             Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
@@ -5876,7 +5990,12 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           | exception Outcome.Cause_at _ -> None
           | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
     in
-    let leaf_explains ~label prog =
+    let record = !record in
+    (* gh-ocannl-1477: the leaf [model_default] anchors the walk on [prog] at -- the best-ranked of
+       the seeded plan's own sketches there ({!model_seeded_anchors}, from [seeded], the plan's
+       record for the units [prog] covers) -- marked [ex_anchor]; listed after the leaves when the
+       walk's leaves do not include it. *)
+    let leaf_explains ~seeded ~label prog =
       let leaves =
         match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
         | Some tree ->
@@ -5884,7 +6003,25 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
               (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
         | None -> []
       in
-      explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
+      let listed =
+        explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
+      in
+      let rank (_, ex) = Option.value ex.ex_rank_ms ~default:Float.infinity in
+      let anchors =
+        List.map (model_seeded_anchors ~limits ~accum_prec ~static_indices ~seeded prog)
+          ~f:(fun (p, segs) -> (label p, explain ~ex_anchor:true segs))
+      in
+      match
+        List.min_elt
+          (List.filter anchors ~f:(fun (_, ex) -> Option.is_some ex.ex_rank_ms))
+          ~compare:(fun a b -> Float.compare (rank a) (rank b))
+      with
+      | None -> listed
+      | Some ((anchor, _) as row) ->
+          if List.exists listed ~f:(fun (l, _) -> String.equal l anchor) then
+            List.map listed ~f:(fun (l, ex) ->
+                if String.equal l anchor then (l, { ex with ex_anchor = true }) else (l, ex))
+          else listed @ [ row ]
     in
     (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, which [model_default] does
        not rank, listed on request to check the score's ranking of them against timings. A leaf is
@@ -5921,13 +6058,18 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
                 xs_segment = tag;
                 xs_candidates =
                   ("preset", explain [ post ])
-                  :: leaf_explains ~label:(fun p -> sketch_params_label p ^ " @" ^ tag) pre;
+                  :: leaf_explains
+                       ~seeded:(seeded_record_for_key ~plan ~record key)
+                       ~label:(fun p -> sketch_params_label p ^ " @" ^ tag)
+                       pre;
               })
     in
     {
       x_routine =
         (incumbent_label, explain incumbent)
-        :: (leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base
+        :: (leaf_explains ~seeded:(List.map record ~f:snd)
+              ~label:(fun p -> spec_label (Whole (W_sketch p)))
+              base
            @ coalesced_explains base);
       x_segments;
     }
