@@ -1,0 +1,21 @@
+f32 scalar draw of the all-ones key: 0x1.fffffep-1
+f32 packed draws of the all-ones key: 0x1.fffffep-1 0x1.fffffep-1 0x0p+0 0x0p+0
+f32: the scalar draw from an all-ones word is the greatest value below 1: true
+f32: the host conversion draws what the backend draws from the all-ones key: true
+f32: the packed draws are the greatest value below 1 from all-ones bits and 0 from zero bits: true
+f32: each per-lane extraction draws what the packed store draws in that lane: true
+f32: no form draws 1 or more: true
+bf16 scalar draw of the all-ones key: 0x1.fep-1
+bf16 packed draws of the all-ones key: 0x1.fep-1 0x1.fep-1 0x1.fep-1 0x1.fep-1 0x0p+0 0x0p+0 0x0p+0 0x0p+0
+bf16: the scalar draw from an all-ones word is the greatest value below 1: true
+bf16: the host conversion draws what the backend draws from the all-ones key: true
+bf16: the packed draws are the greatest value below 1 from all-ones bits and 0 from zero bits: true
+bf16: each per-lane extraction draws what the packed store draws in that lane: true
+bf16: no form draws 1 or more: true
+f16 scalar draw of the all-ones key: 0x1.ffcp-1
+f16 packed draws of the all-ones key: 0x1.ffcp-1 0x1.ffcp-1 0x1.ffcp-1 0x1.ffcp-1 0x0p+0 0x0p+0 0x0p+0 0x0p+0
+f16: the scalar draw from an all-ones word is the greatest value below 1: true
+f16: the host conversion draws what the backend draws from the all-ones key: true
+f16: the packed draws are the greatest value below 1 from all-ones bits and 0 from zero bits: true
+f16: each per-lane extraction draws what the packed store draws in that lane: true
+f16: no form draws 1 or more: true

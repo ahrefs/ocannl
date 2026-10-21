@@ -170,6 +170,7 @@ let shims =
 #define __uint2float_rn(x) ((float)(unsigned int)(x))
 #define __uint2double_rn(x) ((double)(unsigned int)(x))
 static inline unsigned int __float_as_uint(float x) { unsigned int b; memcpy(&b, &x, sizeof b); return b; }
+static inline float __uint_as_float(unsigned int b) { float x; memcpy(&x, &b, sizeof x); return x; }
 static inline long long __double_as_longlong(double x) { long long b; memcpy(&b, &x, sizeof b); return b; }
 static inline double __hiloint2double(int hi, int lo) {
   unsigned long long b = ((unsigned long long)(unsigned int)hi << 32) | (unsigned int)lo;
@@ -385,35 +386,38 @@ let () =
             | None -> false))
     vendors
 
+(* A probe of the compiled library, and one call of it: the result's size and bytes. *)
+let bind lib name =
+  let open Ctypes in
+  Foreign.foreign ~from:lib name (ptr uint32_t @-> int @-> ptr uchar @-> returning int)
+
+let run fn words lane =
+  let open Ctypes in
+  let input = CArray.of_list uint32_t (List.map Unsigned.UInt32.of_int words) in
+  let out = CArray.make uchar ~initial:Unsigned.UChar.zero 64 in
+  let size = fn (CArray.start input) lane (CArray.start out) in
+  (size, List.init size (fun i -> Unsigned.UChar.to_int (CArray.get out i)))
+
+(* A [_lane] helper's lanes are its [_vec] pack's: the pack's size over the lane's. *)
+let lanes lib key =
+  match shape key with
+  | Lane ->
+      let stem = Option.get (chop_suffix key ~suffix:"_uniform_lane") in
+      let vec_size, _ =
+        run (bind lib (probe_name ~prefix:"" (stem ^ "_uniform_vec"))) [ 0; 0; 0; 0 ] 0
+      in
+      let lane_size, _ = run (bind lib (probe_name ~prefix:"" key)) [ 0; 0; 0; 0 ] 0 in
+      List.init (vec_size / lane_size) Fun.id
+  | _ -> [ 0 ]
+
 let () =
   case "conversion helpers against the C table" @@ fun () ->
   with_probes (fun lib ->
-      let open Ctypes in
-      let bind name =
-        Foreign.foreign ~from:lib name (ptr uint32_t @-> int @-> ptr uchar @-> returning int)
-      in
-      let run fn words lane =
-        let input = CArray.of_list uint32_t (List.map Unsigned.UInt32.of_int words) in
-        let out = CArray.make uchar ~initial:Unsigned.UChar.zero 64 in
-        let size = fn (CArray.start input) lane (CArray.start out) in
-        (size, List.init size (fun i -> Unsigned.UChar.to_int (CArray.get out i)))
-      in
+      let bind = bind lib and lanes = lanes lib in
       let c_probe = Hashtbl.create 64 in
       List.iter
         (fun key -> Hashtbl.replace c_probe key (bind (probe_name ~prefix:"" key)))
         all_probed;
-      (* A [_lane] helper's lanes are its [_vec] pack's: the pack's size over the lane's. *)
-      let lanes key =
-        match shape key with
-        | Lane ->
-            let stem = Option.get (chop_suffix key ~suffix:"_uniform_lane") in
-            let vec_size, _ =
-              run (bind (probe_name ~prefix:"" (stem ^ "_uniform_vec"))) [ 0; 0; 0; 0 ] 0
-            in
-            let lane_size, _ = run (Hashtbl.find c_probe key) [ 0; 0; 0; 0 ] 0 in
-            List.init (vec_size / lane_size) Fun.id
-        | _ -> [ 0 ]
-      in
       let agrees ~log ~label ~prefix key =
         let mine = bind (probe_name ~prefix key) and theirs = Hashtbl.find c_probe key in
         let lanes = lanes key in
@@ -451,6 +455,121 @@ let () =
               (probed v)
               ~f:(agrees ~log:true ~label:v.label ~prefix))
         impls)
+
+(* The narrow uniform draws below 1 (gh-ocannl-1434). A half or bf16 draw used to be the f32 draw of
+   its bits ROUNDED to the narrow format, which is exactly 1.0 for every f32 draw within half a
+   narrow ulp of 1 (1 in 4096 half draws, 1 in 512 bf16 ones). Each is now the f32 draw truncated
+   toward zero. The oracle reaches that value by another route than the helpers' mantissa mask: the
+   host codec's round-to-nearest, stepped one encoding down when it landed above the draw -- the
+   greatest value of the format not above the f32 draw. *)
+type narrow = { widen : int -> float; round : float -> int }
+
+let half = { widen = Ir.Ops.half_to_single; round = Ir.Ops.single_to_half }
+let bf16 = { widen = Ir.Ops.bfloat16_to_single; round = Ir.Ops.single_to_bfloat16 }
+let contains ~sub s = count_occurrences ~sub s > 0
+
+(* Which narrow format a draw helper produces, read off its name as the emission spells it. *)
+let narrow_of key =
+  match shape key with
+  | From_u4 | Lane | From_u32 ->
+      if contains ~sub:"_to_half_uniform" key then Some half
+      else if contains ~sub:"_to_bfloat16_uniform" key then Some bf16
+      else None
+  | _ -> None
+
+(* The f32 draw of a word, [uint32_to_single_uniform]: its top 24 bits scaled by 2^-24. *)
+let f32_draw word = Float.of_int ((word land 0xFFFFFFFF) lsr 8) *. 0x1p-24
+
+let floor_in n f =
+  let r = n.round f in
+  if n.widen r > f then r - 1 else r
+
+(* The encodings a probe's result bytes hold, little-endian 16-bit elements. *)
+let elements (size, bytes) =
+  let b = Array.of_list bytes in
+  List.init (size / 2) (fun j -> b.(2 * j) lor (b.((2 * j) + 1) lsl 8))
+
+(* The word whose f32 draw element [j] of a helper's result narrows: a scalar form draws from the
+   first word, a packed or lane form from the low (even [j]) or high (odd [j]) 16 bits of word [j /
+   2], moved to the top of a word -- the 16-bit draw scaled by 2^-16. *)
+let source_word key words j =
+  match shape key with
+  | From_u32 -> List.hd words
+  | From_u4 when not (String.ends_with ~suffix:"_vec" key) -> List.hd words
+  | _ ->
+      let w = List.nth words (j / 2) in
+      let v16 = if j mod 2 = 0 then w land 0xFFFF else (w lsr 16) land 0xFFFF in
+      v16 lsl 16
+
+let narrow_keys = List.filter (fun k -> Option.is_some (narrow_of k)) all_probed
+let all_ones = [ 0xFFFFFFFF; 0xFFFFFFFF; 0xFFFFFFFF; 0xFFFFFFFF ]
+
+let () =
+  case "narrow uniform draws stay below 1" @@ fun () ->
+  p_all "every half and bf16 draw the C table defines is probed in the C and both vendor copies"
+    (List.filter (fun k -> Option.is_some (narrow_of k)) c_keys)
+    ~f:(fun key -> List.for_all (fun v -> List.mem key (probed v)) vendors);
+  with_probes (fun lib ->
+      let bound = Hashtbl.create 64 in
+      let bind name =
+        match Hashtbl.find_opt bound name with
+        | Some fn -> fn
+        | None ->
+            let fn = bind lib name in
+            Hashtbl.replace bound name fn;
+            fn
+      in
+      let lanes = lanes lib in
+      (* Every top-16-bit pattern under all-ones low bits besides the shared draws, for the word
+         helpers: that walks every 16-bit lane value and every scalar draw's top binades. *)
+      let words_for key =
+        match shape key with
+        | From_u32 -> List.init 65536 (fun v -> [ (v lsl 16) lor 0xFFFF; 0; 0; 0 ]) @ draws
+        | _ -> draws
+      in
+      let elements_of prefix key words =
+        List.concat_map
+          (fun lane ->
+            let got = elements (run (bind (probe_name ~prefix key)) words lane) in
+            match shape key with
+            | Lane -> [ (lane, List.hd got) ]
+            | _ -> List.mapi (fun j e -> (j, e)) got)
+          (lanes key)
+      in
+      List.iter
+        (fun (label, prefix, keys) ->
+          p_all
+            (label
+           ^ ": every half and bf16 uniform form draws, at every probed input and lane, the \
+              greatest value of its format not above the f32 draw of the same bits") keys
+            ~f:(fun key ->
+              let n = Option.get (narrow_of key) in
+              List.for_all
+                (fun words ->
+                  List.for_all
+                    (fun (j, e) ->
+                      let want = floor_in n (f32_draw (source_word key words j)) in
+                      let ok = e = want in
+                      if not ok then
+                        Printf.eprintf
+                          "(not part of the golden) %s %s element %d of [%s]: got 0x%04x want 0x%04x\n"
+                          label key j
+                          (String.concat " " (List.map (Printf.sprintf "%08x") words))
+                          e want;
+                      ok)
+                    (elements_of prefix key words))
+                (words_for key));
+          p_all
+            (label
+           ^ ": at the all-ones input every half and bf16 uniform form draws below 1 in every lane"
+            ) keys ~f:(fun key ->
+              let n = Option.get (narrow_of key) in
+              List.for_all (fun (_, e) -> n.widen e < 1.) (elements_of prefix key all_ones)))
+        ([ ("C", "", narrow_keys) ]
+        @ List.map
+            (fun v ->
+              (v.label, v.name ^ "_", List.filter (fun k -> List.mem k narrow_keys) (probed v)))
+            vendors))
 
 (* Float bit patterns: every exponent of both signs under boundary and sampled mantissas, and the
    neighbourhood of the guard's threshold, half the smallest e5m2 subnormal. *)
