@@ -3914,17 +3914,22 @@ let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec op
    per-fission-segment (the [F_sketch] granularity — [fission_scheduled] with empty per-segment
    schedules, since only the pre-schedule segment slices are consulted). Fission not applying
    degrades to the whole-routine site; a classified rejection degrades likewise rather than failing
-   the caller (the classification is a ranking input, not a legality fact). *)
-let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indices
+   the caller (the classification is a ranking input, not a legality fact).
+
+   Segmented as THIS backend's seeders segment ([tune]'s [F_sketch] flavor and [model_default] pass
+   [Sched.fission_keep_mapping ~is_gpu]): cc advertises an [mma] descriptor too, and segmenting it
+   the GPU way both judged its sites on a segmentation its own families never see and read the GPU
+   lane keys ([gpu_fission_keep_mapping], [gpu_serial_lanes]) on a backend whose searches never read
+   them (gh-ocannl-1430, raised on gh-ocannl-1331). *)
+let mma_eligible_sites ~is_gpu ~(limits : Ir.Backend_intf.hardware_limits) ~static_indices
     (opt : LL.optimized) : matmul_site list =
   match limits.Ir.Backend_intf.mma with
   | None -> []
   | Some mma ->
       let segments =
         match
-          (* [mma] is a GPU capability: segment as the GPU seeders do. *)
           Sched.fission_scheduled
-            ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
+            ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
             ~preset:(fun _ -> [])
             ~zero_sched:(fun _ -> [])
             ~static_indices (scratch_of opt)
@@ -3944,14 +3949,15 @@ let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indic
             (mma_tile_for_precisions_in_scope mma ~scope:(matmul_mma_scope site ~bk:0) ~a_prec
                ~b_prec ~d_prec))
 
-let placement_enablement ~limits ~static_indices ~(base : LL.optimized) ~(allmat : LL.optimized) =
+let placement_enablement ~is_gpu ~limits ~static_indices ~(base : LL.optimized)
+    ~(allmat : LL.optimized) =
   let site_tns sites =
     List.fold sites
       ~init:(Set.empty (module Ir.Tnode))
       ~f:(fun acc site -> Set.add (Set.add (Set.add acc site.m_a) site.m_b) site.m_d)
   in
-  let base_sites = mma_eligible_sites ~limits ~static_indices base in
-  let allmat_sites = mma_eligible_sites ~limits ~static_indices allmat in
+  let base_sites = mma_eligible_sites ~is_gpu ~limits ~static_indices base in
+  let allmat_sites = mma_eligible_sites ~is_gpu ~limits ~static_indices allmat in
   (* An all-materialized site whose destination already carries an eligible default-placement site
      is not enablement: the family is expressible either way, and promoting its operands would rank
      ordinary mma-adjacent flips above genuinely family-unlocking ones. *)
@@ -4300,7 +4306,11 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
   in
   let allmat = Context.lowered_for_decisions ?name ~materialized:to_materialize ctx comp bindings in
-  let enablement, disablement = placement_enablement ~limits ~static_indices ~base ~allmat in
+  let enablement, disablement =
+    placement_enablement
+      ~is_gpu:(Sched.backend_is_gpu (Context.backend_name ctx))
+      ~limits ~static_indices ~base ~allmat
+  in
   let ps_candidates = rank_flip_candidates ~ordering ?profit ~enablement ~disablement candidates in
   let candidate_set =
     Set.of_list (module Ir.Tnode) (List.map ps_candidates ~f:(fun fc -> fc.LL.fc_tn))

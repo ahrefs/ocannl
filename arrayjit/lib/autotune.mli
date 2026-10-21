@@ -1715,6 +1715,7 @@ val model_prefilter : keep_fraction:float -> ('a * float option) list -> ('a * f
     [keep_fraction >= 1]. Exposed for tests. *)
 
 val placement_enablement :
+  is_gpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
   static_indices:Ir.Indexing.static_symbol list ->
   base:Ir.Low_level.optimized ->
@@ -1728,8 +1729,9 @@ val placement_enablement :
 
     - [enablement]: operand/destination nodes of an mma-eligible matmul site (the backend advertises
       a format tile and the wide-f16 policy's required scope for the site's unstaged form,
-      whole-routine or per-fission-segment — the granularity the seeders detect at) that exists in
-      the all-materialized lowering but has no eligible counterpart under default placements.
+      whole-routine or per-fission-segment — the granularity the seeders detect at, segmented as the
+      seeders of a GPU ([is_gpu]) or a CPU backend segment, gh-ocannl-1430) that exists in the
+      all-materialized lowering but has no eligible counterpart under default placements.
       Materializing such a node is what makes the tensorized family expressible — the flip changes
       the feasible set, not just the objective, which the per-node recompute-cost bound has no term
       for (on gh-558's [mlp_wide]/hip/bf16, cost ranking buried the family-unlocking cast twins
