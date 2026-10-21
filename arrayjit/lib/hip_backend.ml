@@ -1283,6 +1283,7 @@ end = struct
         ~conditional_includes:Cuda_like_config.Hip.conditional_includes ()
     in
     let n = Array.length r.entries in
+    Compile_cost.record_kernels ~rendered:n ~compiled:0;
     let all = List.init n ~f:Fn.id in
     let kernel_names = Array.map r.entries ~f:(fun (_, name, _) -> name) in
     (* The artifacts' name, as [Compile_driver.drive] derives it. *)
@@ -1310,9 +1311,12 @@ end = struct
               let source = r.assemble [ i ] in
               let options = hiprtc_options ~target_archs source in
               (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
-                 kernel -- rendered with other symbol numbers -- finds this one. *)
+                 kernel -- rendered with other symbol numbers -- finds this one. Not under device
+                 debugging: the code object then carries the source's names in its debug info, so
+                 only the exact text may share it. *)
               let canonical =
-                Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source
+                if Utils.with_runtime_debug () then source
+                else Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source
               in
               (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
         in
@@ -1336,14 +1340,25 @@ end = struct
       Printf.sprintf "/* kernel code cache: compiled %d of %d kernels, reused %d */\n" n_compiled n
         (n - n_compiled)
     in
-    if List.is_empty groups && Utils.settings.output_debug_files_in_build_directory then (
-      (* Nothing compiled: no [.hsaco] of this compile exists, so none is left that would read as
-         one. *)
-      (try Stdlib.Sys.remove (Utils.build_file (name ^ ".hsaco")) with Sys_error _ -> ());
-      Stdio.Out_channel.write_all (Utils.build_file (name ^ ".hip_log")) ~data:log_header);
-    Compile_cost.record_kernels ~rendered:n ~compiled:0;
+    if Utils.settings.output_debug_files_in_build_directory then (
+      (* The code objects and logs an earlier compile of this name left -- its own and its extra
+         option groups' ([<name>.group<k>], a spelling no routine name takes) -- are not this
+         compile's, so none is left that would read as one; this compile writes its own below. *)
+      let dir = Stdlib.Filename.dirname (Utils.build_file (name ^ ".hsaco")) in
+      let ours file =
+        List.exists [ ".hsaco"; ".hip_log" ] ~f:(fun ext ->
+            String.equal file (name ^ ext)
+            || (String.is_prefix file ~prefix:(name ^ ".group") && String.is_suffix file ~suffix:ext))
+      in
+      (try
+         Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
+             if ours file then
+               try Stdlib.Sys.remove (Stdlib.Filename.concat dir file) with Sys_error _ -> ())
+       with Sys_error _ -> ());
+      if List.is_empty groups then
+        Stdio.Out_channel.write_all (Utils.build_file (name ^ ".hip_log")) ~data:log_header);
     List.iteri groups ~f:(fun k (options, idxs) ->
-        let artifact = if k = 0 then name else name ^ "_" ^ Int.to_string k in
+        let artifact = if k = 0 then name else name ^ ".group" ^ Int.to_string k in
         (* Before the call: a program hiprtc refuses was still given these kernels. *)
         Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
         let code =
