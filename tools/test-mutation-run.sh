@@ -1067,6 +1067,27 @@ PERL
 cmp module.ml "$fixture/pristine"
 grep -q '^  NOT RUN      3-survived.patch$' "$fixture/result" || { cat "$fixture/result"; echo 'batch: signal did not stop the batch'; exit 1; }
 grep -q '^  caught       1-caught.patch ' "$fixture/result"
+# A signal arriving while a mutant is being restored is recorded, not dropped: injected into a copy
+# of the runner just as restoration begins, it stops the batch once the first mutant is restored.
+perl - tools/mutation-run.sh > tools/mutation-restore-signal.sh <<'PERL'
+use strict;
+use warnings;
+local $/;
+open my $f, '<', $ARGV[0] or die $!;
+my $s = <$f>;
+my $anchor = "    if (\$changed) {\n";
+my $at = index($s, $anchor);
+die "missing restoration anchor" if $at < 0;
+substr($s, $at, 0, qq{    kill 'TERM', \$\$;\n});
+print $s;
+PERL
+rm "$fixture/patches/2-sleeping.patch"
+actual=0
+bash tools/mutation-restore-signal.sh --batch module.ml "$fixture/patches" @runtest-probe > "$fixture/result" 2>&1 || actual=$?
+[ "$actual" = 143 ] || { cat "$fixture/result"; echo "batch restoration signal: exit $actual, not 143"; exit 1; }
+cmp module.ml "$fixture/pristine"
+grep -q '^  NOT RUN      3-survived.patch$' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'batch: a signal during restoration did not stop the batch'; exit 1; }
 printf 'PASS --batch runs one baseline, then each patch restored in turn, and tabulates them; a bad patch or empty directory refuses before launch; a signal stops it restored\n'
 }
 harness_leg_run '21: --batch runs one baseline and tabulates every patch' leg_21

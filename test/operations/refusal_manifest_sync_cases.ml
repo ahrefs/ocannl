@@ -255,6 +255,48 @@ let check () =
   p "and no golden swaps its marker for either successor"
     (let golden = String.concat (List.map (markers twice) ~f:(fun m -> m ^ "\n")) in
      String.equal (Sync.rewrite_golden twice_plan golden) golden);
+  (* One site of a claim reworded while the same claim survives at another: the label still names
+     the surviving site, so nothing is relabeled or swapped, and the row's reading is unresolved. *)
+  let two_sites =
+    {ocaml|
+let check ok =
+  Verdict.fail "a refusal that stays";
+  Verdict.p "the malformed tree is refused" ok;
+  Verdict.p "the malformed tree is refused" ok
+|ocaml}
+  in
+  let one_site_reworded =
+    String.substr_replace_first two_sites ~pattern:"the malformed tree is refused\" ok;"
+      ~with_:"a malformed tree is refused\" ok;"
+  in
+  let survivor_text =
+    manifest
+      ~rows:[ ("synthetic_scan.ml", markers two_sites) ]
+      ~evidence:
+        [
+          ( "synthetic_scan.ml:" ^ identity_of two_sites "a refusal that stays",
+            "the malformed tree is refused: true" );
+        ]
+      ~catalogue:[]
+  in
+  let survivor_plan =
+    Sync.plan ~text:survivor_text
+      ~diagnostics_of:(fun _ -> Some (Scan.diagnostics one_site_reworded))
+      ~renamed_claims:[] ()
+  in
+  p "a claim reworded at one site while it survives at another is unresolved"
+    (List.length survivor_plan.unresolved = 1);
+  p_none ~min:1 "and no evidence label follows it (the row is still rewritten)"
+    survivor_plan.changes ~f:(function
+    | Sync.Relabeled _ -> true
+    | Row _ | Rekeyed _ -> false);
+  p_empty "nor does a control file's rename of it: the label names the surviving site"
+    ~over:(Scan.diagnostics two_sites)
+    (fst (Sync.claim_renames ~before:two_sites ~after:one_site_reworded));
+  p_all ~min:2 "a control file deleted since the base leaves every old claim unpaired"
+    (List.filter (Scan.diagnostics before) ~f:(fun d -> Poly.equal d.Scan.kind Scan.Claim))
+    ~f:(fun d ->
+      List.mem (snd (Sync.claim_renames ~before ~after:"")) d.Scan.format ~equal:String.equal);
   (* The text reader against the real manifest's compiled tables: every row, key and label it would
      rewrite is the one the tests read. *)
   let live_text = In_channel.read_all "../support/refusal_control_manifest.ml" in

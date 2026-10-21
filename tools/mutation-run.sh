@@ -434,7 +434,11 @@ sub mutate {
     } or $error = $@;
     # No interrupt may cut the restoration in half. Publish a complete replacement
     # in the same directory, then independently compare against the recovery copy.
-    $SIG{$_} = 'IGNORE' for qw(INT TERM HUP);
+    # A batch records a signal here without acting on it, so the batch stops after this mutant.
+    for my $pair ([INT => 2], [TERM => 15], [HUP => 1]) {
+        my ($name, $number) = @$pair;
+        $SIG{$name} = $batch ? sub { $cancel ||= 128 + $number } : 'IGNORE';
+    }
     if ($changed) {
         # A dead launcher is not proof that its supervisor/Dune descendants ended.
         # Their inherited worktree flock is the existing harness ownership signal.

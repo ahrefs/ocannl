@@ -166,14 +166,18 @@ let claim_renames ~before ~after =
     List.filter (Scan.diagnostics source) ~f:(fun d ->
         match d.Scan.kind with Scan.Claim -> true | Scan.Fail -> false)
   in
+  let after = claims after in
   let pairs, dropped, _ =
     align
       ~equal:(fun a b -> String.equal a.Scan.format b.Scan.format)
-      ~before:(claims before) ~after:(claims after)
+      ~before:(claims before) ~after
   in
+  (* A label the source still claims at another site names that site still: no rename. *)
+  let survives format = List.exists after ~f:(fun d -> String.equal d.Scan.format format) in
   ( List.filter_map pairs ~f:(fun (old, renamed) ->
         Option.some_if
-          (not (String.equal old.Scan.format renamed.Scan.format))
+          ((not (String.equal old.Scan.format renamed.Scan.format))
+          && not (survives old.Scan.format))
           (old.Scan.format, renamed.Scan.format)),
     List.map dropped ~f:(fun d -> d.Scan.format) )
 
@@ -246,9 +250,20 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
               |> List.filter ~f:(fun identity ->
                   not (List.exists diagnostics ~f:(fun d -> String.equal d.Scan.identity identity)))
               |> Fn.flip ( @ ) !unpaired;
+            (* An old identity the source still has at another site was reworded at one site only:
+               its key, label and golden rows now name two things, so none of them moves. *)
+            let survives identity =
+              List.exists diagnostics ~f:(fun d -> String.equal d.Scan.identity identity)
+            in
             List.iter pairs ~f:(fun (marker, d) ->
                 Option.iter (marker_identity marker) ~f:(fun identity ->
-                    if not (String.equal marker (Scan.marker d)) then (
+                    if String.equal marker (Scan.marker d) then ()
+                    else if survives identity then
+                      unresolved_f
+                        "%s was reworded at one of its sites in %s and still occurs at another: \
+                         the goldens holding it, and any entry naming it, are a hand edit"
+                        marker row.source
+                    else (
                       markers := (marker, Scan.marker d) :: !markers;
                       Hashtbl.add_multi replaced ~key:(row.source ^ ":" ^ identity) ~data:d;
                       match d.Scan.kind with

@@ -35,7 +35,8 @@ let refuse fmt =
    old ones nothing replaced one for one. A [base] git cannot diff against refuses: read as "nothing
    changed", it would report a stale label as nothing to sync. A source new since [base] has no old
    claims; one renamed since [base] (git's rename detection, [-M]) is read under its old path there;
-   one that does not parse on either side contributes nothing (the scans report it). *)
+   one deleted since [base] leaves every old claim unpaired; one that does not parse on either side
+   contributes nothing (the scans report it). *)
 let claim_changes base =
   let changed =
     match git [ "diff"; "--name-status"; "-M"; base; "--"; "test/operations"; "test/support" ] with
@@ -48,15 +49,16 @@ let claim_changes base =
             | [ _; path ] -> Some (path, path)
             | [ _; old_path; path ] -> Some (old_path, path)
             | _ -> None)
-        |> List.filter ~f:(fun (_, path) ->
-            String.is_suffix path ~suffix:".ml" && Stdlib.Sys.file_exists path)
+        |> List.filter ~f:(fun (_, path) -> String.is_suffix path ~suffix:".ml")
   in
   let renamed, unpaired =
     List.map changed ~f:(fun (old_path, path) ->
         match git [ "show"; base ^ ":" ^ old_path ] with
         | None -> ([], [])
         | Some before -> (
-            try Sync.claim_renames ~before ~after:(In_channel.read_all path) with _ -> ([], [])))
+            (* A source deleted since [base] claims nothing now: every old claim is unpaired. *)
+            let after = if Stdlib.Sys.file_exists path then In_channel.read_all path else "" in
+            try Sync.claim_renames ~before ~after with _ -> ([], [])))
     |> List.unzip
   in
   (List.concat renamed, List.concat unpaired)
