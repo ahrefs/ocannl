@@ -717,6 +717,7 @@ let tune_json t =
           ~timing:(Autotune.timing_string r.Autotune.timing)
           ~rounds_run:r.Autotune.rounds_run ~beam_width:r.Autotune.beam_width
           ~budget_cut:r.Autotune.budget_cut ~budget_s:r.Autotune.budget_s
+          ~call_budget_s:r.Autotune.call_budget_s ~call_share_s:r.Autotune.call_share_s
           ~timings_contended:r.Autotune.timings_contended
           ~timings_unbatched:r.Autotune.timings_unbatched
           ~timing_decisions:(timing_decisions_wire r.Autotune.timing_decisions)

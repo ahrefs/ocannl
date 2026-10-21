@@ -2176,6 +2176,33 @@ files.
   `budget_cut` is the crown's -- and benchmark arms carry it as `budget_s`. It is deliberately not
   a `regime_knobs` key: those are numerics settings the orchestrator's regime gate holds to the
   cell's regime, and a budgeted exact cell would read as a leak.
+- **A `tune_placements` call budget is split, not shared first-come** (gh-ocannl-1440).
+  `tune_call_budget_seconds` runs one clock for the call; each search gets what is left over the
+  searches still planned (`Autotune.call_budget`, reported as `call_budget_s`/`call_share_s` beside
+  the per-search `budget_s`), and is cut at the tighter of its share and its own budget by the same
+  `budget_allows`. A first-come deadline let arm A spend everything and compared arm B on its floors
+  alone. Both arms always search (the positional `?report` contract, and they are the call's
+  floor); the flip chain stops before any alternative once the budget is spent, mid-group included
+  (an unmeasured alternative leaves its node open, like a pruned one). The key is
+  `Placement_shaping`: a share follows the wall clock, so it stays out of the trajectory identity,
+  and a cut trajectory is a prefix of the same order, which early stopping reads conservatively.
+  `test/operations/tune_call_budget.ml` places cuts with two virtual clocks counted in attempts
+  (`Autotune.call_budget_elapsed` for the call, `budget_elapsed` per search, a search's first
+  attempt being its `baseline`); per-search, no non-floor attempt may start at an index at or past
+  the cut.
+- **A deferred cache hit ships its validated code relinked** (gh-ocannl-1440).
+  `Context.compile_outcome ?retain` keeps a successful compile's code, censuses and pre-link
+  context (`Context.retained`, no working pools: those are a link's), and
+  `Context.relink_outcome` links it again on that context with a fresh delta and routine id. The
+  deferred hit releases the validating replay's context and relinks at `compile_deferred`, so the
+  cached schedule compiles once; a relink the device refuses ships the untuned default, as the
+  second compile's failure did. The counters: `Context.backend_compiles` (per domain, completed
+  backend compiles), `report.compiles`/`replay_compiles`, `Autotune.deferred_compiles`, and
+  `Train.shipped.ship_compiles`, which together account for every compile of a call
+  (`test/operations/deferred_hit_compiles.ml`). A searched winner still recompiles from its saved
+  form: its candidate was compiled in the search lineage, which a `timing_ctx` makes another
+  context. A backend-level code cache (the HIP code-object cache of gh-ocannl-1314) composes:
+  the relink is the backend's own `link`.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

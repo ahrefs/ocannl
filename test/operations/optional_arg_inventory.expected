@@ -184,6 +184,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:to_routine ?output_cd_file -- implemented
   lib/train.ml:tune_placements ?beam_width -- implemented
   lib/train.ml:tune_placements ?cache_dir -- implemented
+  lib/train.ml:tune_placements ?call_budget -- implemented
   lib/train.ml:tune_placements ?flip_report -- implemented
   lib/train.ml:tune_placements ?inline_flips -- implemented
   lib/train.ml:tune_placements ?log -- implemented

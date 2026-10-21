@@ -1,0 +1,40 @@
+setting: a positive number of seconds is a call budget: true
+setting: empty, zero and negative mean none: true
+setting: unparsable text is refused, naming the key: true
+control: no call budget on any report: true
+control: the flip chain measured flips: true
+tight: every attempt belongs to a reported search: true
+tight: both arms searched and reported, in position: true
+tight: every report carries the call's budget: true
+tight: each search's share is what was left over the searches still planned: true
+tight: no non-floor attempt started at or past its search's cut: true
+tight: no flip search started once the call's budget was spent: true
+tight: the shipped routine computes the untuned output bit for bit: true
+mid: every attempt belongs to a reported search: true
+mid: both arms searched and reported, in position: true
+mid: every report carries the call's budget: true
+mid: each search's share is what was left over the searches still planned: true
+mid: no non-floor attempt started at or past its search's cut: true
+mid: no flip search started once the call's budget was spent: true
+mid: the shipped routine computes the untuned output bit for bit: true
+generous: every attempt belongs to a reported search: true
+generous: both arms searched and reported, in position: true
+generous: every report carries the call's budget: true
+generous: each search's share is what was left over the searches still planned: true
+generous: no non-floor attempt started at or past its search's cut: true
+generous: no flip search started once the call's budget was spent: true
+generous: the shipped routine computes the untuned output bit for bit: true
+per-search: every attempt belongs to a reported search: true
+per-search: both arms searched and reported, in position: true
+per-search: every report carries the call's budget: true
+per-search: each search's share is what was left over the searches still planned: true
+per-search: no non-floor attempt started at or past its search's cut: true
+per-search: no flip search started once the call's budget was spent: true
+per-search: the shipped routine computes the untuned output bit for bit: true
+tight: the call attempted fewer candidates than the control: true
+tight: the budget was spent before the flips, so none was measured: true
+mid: the chain measured a flip, then stopped short of the control's flips: true
+generous: a budget never spent changes nothing the control did: true
+generous: no search was cut: true
+per-search: every report carries the per-search budget, the tighter cut: true
+tune_call_budget: done

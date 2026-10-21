@@ -532,6 +532,8 @@ let () =
   let placement_keys =
     [
       ("tune_inline_flips", "7");
+      (* A call budget no search here comes near: stated, it reaches every search as a share. *)
+      ("tune_call_budget_seconds", "100000");
       ("tune_flip_ordering", "profitable");
       ("tune_flip_profit_margin", "1.25");
       ("tune_ship_arm", "auto");

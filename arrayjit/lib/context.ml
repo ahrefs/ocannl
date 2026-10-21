@@ -282,177 +282,228 @@ let auto () =
          as a spelling mistake. *)
       create_from_backend_name ~ordinal:0 backend_name
 
-let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate ctx comp bindings =
+(* What a backend link hands back, minus the backend-typed context (already rewrapped). *)
+type link_payload = {
+  lp_task : task_handle;
+  lp_bindings : Idx.lowered_bindings;
+  lp_name : string;
+  lp_inputs : Set.M(Tn).t;
+  lp_merge_buffer_input : Tn.t option;
+  lp_outputs : Set.M(Tn).t;
+}
+
+type census =
+  Ir.C_syntax.mma_summary
+  * Ir.C_syntax.peel_summary
+  * Ir.C_syntax.volatility_summary
+  * Ir.Low_level.optimized list
+
+(* gh-ocannl-1440: compiled code kept for a later link on the context it was compiled from. The
+   closure holds the backend's code and the pre-link backend context, typed inside the dispatch that
+   produced them; neither holds working pools, which a link allocates. *)
+type retained = {
+  rt_ctx : t;
+  rt_comp : Asgns.comp;
+  rt_census : census;
+  rt_link : unit -> (Backends.wrapped_context * link_payload) Ir.Schedule_outcome.outcome;
+  rt_relinked : bool Atomic.t;
+}
+
+(* gh-ocannl-1440: completed backend compiles (codegen and device compile) on this domain. *)
+let compiles_key = Stdlib.Domain.DLS.new_key (fun () -> ref 0)
+let backend_compiles () = !(Stdlib.Domain.DLS.get compiles_key)
+
+(* The ledger, frontier and routine record of a link, shared by a compile and a relink. *)
+let finish_link ctx comp wrapped
+    {
+      lp_task = task;
+      lp_bindings = lowered_bindings;
+      lp_name = name;
+      lp_inputs = backend_inputs;
+      lp_merge_buffer_input = merge_buffer_input;
+      lp_outputs = backend_outputs;
+    } ((mma, peel, volatility, segments) : census) =
+  (* Allocate unique ID from shared ledger *)
+  let id = ctx.ledger.next_id in
+  ctx.ledger.next_id <- id + 1;
+
+  (* Use the backend routine's precise access sets for dependency tracking. [backend_inputs] =
+     materialized read-only and read-before-write nodes. A merge-buffer input is a separate read of
+     the transfer slab: it depends on the synthetic transfer routine recorded by [copy], not on a
+     writer of the node's ordinary context buffer. [backend_outputs] = all materialized written-to
+     nodes. *)
+  let frontier = ctx.frontier in
+  let empty_int_set = Set.empty (module Int) in
+
+  (* RAW: for each ordinary input, depend on its last writer. *)
+  let deps =
+    Set.fold backend_inputs ~init:empty_int_set ~f:(fun deps tn ->
+        match Map.find frontier.last_writer tn with
+        | Some writer_id -> Set.add deps writer_id
+        | None -> deps)
+  in
+
+  (* The backend's static merge-node check has already established the same node identity on its
+     wrapped context. Mirror that invariant in the execution frontier and attach the consumer to the
+     transfer routine that actually filled the slab. *)
+  let deps =
+    match (merge_buffer_input, frontier.merge_buffer_writer) with
+    | None, _ -> deps
+    | Some input, Some (transferred, transfer_id) when Tn.equal input transferred ->
+        Set.add deps transfer_id
+    | Some input, _ ->
+        failwith
+          (Printf.sprintf
+             "Context.compile: backend accepted merge-buffer input %s without a matching \
+              execution-frontier transfer"
+             (Tn.debug_name input))
+  in
+
+  (* WAW + WAR: for each backend output, depend on last writer and all last readers *)
+  let deps =
+    Set.fold backend_outputs ~init:deps ~f:(fun deps tn ->
+        let deps =
+          match Map.find frontier.last_writer tn with
+          | Some writer_id -> Set.add deps writer_id
+          | None -> deps
+        in
+        match Map.find frontier.last_readers tn with
+        | Some readers -> Set.union deps readers
+        | None -> deps)
+  in
+
+  (* Build updated frontier (immutable — only in returned context) *)
+  let new_last_writer =
+    Set.fold backend_outputs ~init:frontier.last_writer ~f:(fun lw tn ->
+        Map.set lw ~key:tn ~data:id)
+  in
+  let new_last_readers =
+    Set.fold backend_outputs ~init:frontier.last_readers ~f:(fun lr tn -> Map.remove lr tn)
+  in
+  let pure_inputs = Set.diff backend_inputs backend_outputs in
+  let new_last_readers =
+    Set.fold pure_inputs ~init:new_last_readers ~f:(fun lr tn ->
+        let existing = Option.value (Map.find lr tn) ~default:empty_int_set in
+        Map.set lr ~key:tn ~data:(Set.add existing id))
+  in
+  let new_frontier =
+    { frontier with last_writer = new_last_writer; last_readers = new_last_readers }
+  in
+
+  (* Register in shared ledger *)
+  Hashtbl.set ctx.ledger.routine_names ~key:id ~data:name;
+  let updated_ctx = derive ~frontier:new_frontier ctx wrapped in
+  Option.iter merge_buffer_input ~f:(fun _ ->
+      let _, transfer_id = Option.value_exn ~here:[%here] frontier.merge_buffer_writer in
+      Hashtbl.update ctx.ledger.merge_buffer_readers transfer_id ~f:(fun readers ->
+          (id, updated_ctx.context_id) :: Option.value readers ~default:[]));
+
+  (* Required inputs for the initialization check below: the backend routine's materialized
+     read-only / read-before-write nodes, resolved against this compile's placements (the
+     context-scoped memory-modes split removed the pre-lowering [context_nodes] settlement). Nodes
+     with registered host initialization data (ndarray-backed literals, loaded tensors)
+     self-initialize at link time from [Host_inits] (gh-ocannl-333), so they are excluded. *)
+  let inputs =
+    Set.filter (Set.diff backend_inputs comp.Asgns.embedded_nodes) ~f:(fun tn ->
+        not (Ir.Host_inits.mem tn))
+  in
+
+  (* Outputs are all nodes written by the computation *)
+  let outputs = backend_outputs in
+
+  let routine =
+    {
+      context = updated_ctx;
+      task;
+      bindings = lowered_bindings;
+      name;
+      inputs;
+      outputs;
+      routine_id = id;
+      execution_deps = deps;
+      mma;
+      peel;
+      volatility;
+      segments;
+    }
+  in
+
+  (updated_ctx, routine)
+
+let payload_of (r : _ BI.routine) =
+  {
+    lp_task = r.BI.schedule;
+    lp_bindings = r.BI.bindings;
+    lp_name = r.BI.name;
+    lp_inputs = r.BI.inputs;
+    lp_merge_buffer_input = r.BI.merge_buffer_input;
+    lp_outputs = r.BI.outputs;
+  }
+
+let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate ?retain ctx comp
+    bindings =
   (* Raised, not returned as an outcome: a dead handle is the caller's error, not a property of any
      candidate, and no search over it can succeed. *)
   check_live ~fn:"compile" ctx;
-  (* Compile and link on the wrapped backend context; only backend-independent routine components
-     (and, via [with_backend]'s rebuilt constructor, the updated context) escape the dispatch. *)
-  let wrapped, backend_outcome =
-    Backends.with_backend ctx.wrapped
-      {
-        f =
-          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) bctx ->
-            (* The [Tile_mma] rendering census is collected HERE, once, around this routine's
-               codegen (gh-ocannl-626): whether a routine tensorized is a property of the compiled
-               routine, not of whichever timing harness remembered to bracket the global. Fissioned
-               segments compile inside this bracket, so their kernels land in the same summary. *)
-            let (((outcome, mma), peel), volatility), segments =
-              (* And the reduction peel's own census (gh-ocannl-733), bracketed the same way and for
-                 the same reason: which decision produced a kernel is a property of the compiled
-                 routine, not of whichever test remembered to collect it. Likewise the volatility
-                 census (gh-ocannl-782): which of this routine's serial accumulations the Metal
-                 compiler-bug workaround pinned to memory, and therefore which of them are not
-                 register-resident. And the shipped kernel segments themselves (gh-ocannl-1006). *)
-              Backends.with_segments_census @@ fun () ->
-              Ir.C_syntax.with_volatility_census @@ fun () ->
-              Ir.C_syntax.with_peel_census @@ fun () ->
-              Ir.C_syntax.with_census (fun () ->
-                  Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure ~provenance
-                    ~phase:Ir.Schedule_outcome.Transform ?candidate (fun () ->
-                      let code =
-                        Backend.compile ?name ?lowered_transform ?prelowered bctx.BI.optimize_ctx
-                          bindings comp
-                      in
-                      Ir.Schedule_outcome.tag Ir.Schedule_outcome.Backend_link (fun () ->
-                          Backend.link bctx code)))
-            in
-            match outcome with
-            | Ok r ->
-                ( r.BI.context,
-                  Ok
-                    ( r.BI.schedule,
-                      r.BI.bindings,
-                      r.BI.name,
-                      r.BI.inputs,
-                      r.BI.merge_buffer_input,
-                      r.BI.outputs,
-                      mma,
-                      peel,
-                      volatility,
-                      segments ) )
-            | Error failure -> (bctx, Error failure));
-      }
-  in
-  match backend_outcome with
+  (* Compile and link on the backend context; only backend-independent routine components (and the
+     rewrapped context) escape the dispatch. Unwrapped rather than through [Backends.with_backend]
+     so that a [retain]ed link (gh-ocannl-1440) can rewrap the context it links later. *)
+  match Backends.unwrap ctx.wrapped with
+  | Backends.Unwrapped (impl, bctx) -> (
+      let module Backend = (val impl.Backends.bi_module) in
+      let link code () =
+        let r = Backend.link bctx code in
+        (impl.Backends.bi_wrap r.BI.context, payload_of r)
+      in
+      (* The [Tile_mma] rendering census is collected HERE, once, around this routine's codegen
+         (gh-ocannl-626): whether a routine tensorized is a property of the compiled routine, not of
+         whichever timing harness remembered to bracket the global. Fissioned segments compile
+         inside this bracket, so their kernels land in the same summary. *)
+      let (((outcome, mma), peel), volatility), segments =
+        (* And the reduction peel's own census (gh-ocannl-733), bracketed the same way and for the
+           same reason: which decision produced a kernel is a property of the compiled routine, not
+           of whichever test remembered to collect it. Likewise the volatility census
+           (gh-ocannl-782): which of this routine's serial accumulations the Metal compiler-bug
+           workaround pinned to memory, and therefore which of them are not register-resident. And
+           the shipped kernel segments themselves (gh-ocannl-1006). *)
+        Backends.with_segments_census @@ fun () ->
+        Ir.C_syntax.with_volatility_census @@ fun () ->
+        Ir.C_syntax.with_peel_census @@ fun () ->
+        Ir.C_syntax.with_census (fun () ->
+            Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure ~provenance
+              ~phase:Ir.Schedule_outcome.Transform ?candidate (fun () ->
+                let code =
+                  Backend.compile ?name ?lowered_transform ?prelowered bctx.BI.optimize_ctx bindings
+                    comp
+                in
+                Int.incr (Stdlib.Domain.DLS.get compiles_key);
+                (code, Ir.Schedule_outcome.tag Ir.Schedule_outcome.Backend_link (link code))))
+      in
+      match outcome with
+      | Error failure -> Error failure
+      | Ok (code, (wrapped, payload)) ->
+          let census = (mma, peel, volatility, segments) in
+          Option.iter retain ~f:(fun keep ->
+              keep
+                {
+                  rt_ctx = ctx;
+                  rt_comp = comp;
+                  rt_census = census;
+                  rt_link =
+                    (fun () ->
+                      Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure
+                        ~provenance ~phase:Ir.Schedule_outcome.Backend_link ?candidate (link code));
+                  rt_relinked = Atomic.make false;
+                });
+          Ok (finish_link ctx comp wrapped payload census))
+
+let relink_outcome rt =
+  check_live ~fn:"relink" rt.rt_ctx;
+  if not (Atomic.compare_and_set rt.rt_relinked false true) then
+    invalid_arg "Context.relink_outcome: this retained code was already relinked";
+  match rt.rt_link () with
   | Error failure -> Error failure
-  | Ok
-      ( task,
-        lowered_bindings,
-        name,
-        backend_inputs,
-        merge_buffer_input,
-        backend_outputs,
-        mma,
-        peel,
-        volatility,
-        segments ) ->
-      (* Allocate unique ID from shared ledger *)
-      let id = ctx.ledger.next_id in
-      ctx.ledger.next_id <- id + 1;
-
-      (* Use the backend routine's precise access sets for dependency tracking. [backend_inputs] =
-         materialized read-only and read-before-write nodes. A merge-buffer input is a separate read
-         of the transfer slab: it depends on the synthetic transfer routine recorded by [copy], not
-         on a writer of the node's ordinary context buffer. [backend_outputs] = all materialized
-         written-to nodes. *)
-      let frontier = ctx.frontier in
-      let empty_int_set = Set.empty (module Int) in
-
-      (* RAW: for each ordinary input, depend on its last writer. *)
-      let deps =
-        Set.fold backend_inputs ~init:empty_int_set ~f:(fun deps tn ->
-            match Map.find frontier.last_writer tn with
-            | Some writer_id -> Set.add deps writer_id
-            | None -> deps)
-      in
-
-      (* The backend's static merge-node check has already established the same node identity on its
-         wrapped context. Mirror that invariant in the execution frontier and attach the consumer to
-         the transfer routine that actually filled the slab. *)
-      let deps =
-        match (merge_buffer_input, frontier.merge_buffer_writer) with
-        | None, _ -> deps
-        | Some input, Some (transferred, transfer_id) when Tn.equal input transferred ->
-            Set.add deps transfer_id
-        | Some input, _ ->
-            failwith
-              (Printf.sprintf
-                 "Context.compile: backend accepted merge-buffer input %s without a matching \
-                  execution-frontier transfer"
-                 (Tn.debug_name input))
-      in
-
-      (* WAW + WAR: for each backend output, depend on last writer and all last readers *)
-      let deps =
-        Set.fold backend_outputs ~init:deps ~f:(fun deps tn ->
-            let deps =
-              match Map.find frontier.last_writer tn with
-              | Some writer_id -> Set.add deps writer_id
-              | None -> deps
-            in
-            match Map.find frontier.last_readers tn with
-            | Some readers -> Set.union deps readers
-            | None -> deps)
-      in
-
-      (* Build updated frontier (immutable — only in returned context) *)
-      let new_last_writer =
-        Set.fold backend_outputs ~init:frontier.last_writer ~f:(fun lw tn ->
-            Map.set lw ~key:tn ~data:id)
-      in
-      let new_last_readers =
-        Set.fold backend_outputs ~init:frontier.last_readers ~f:(fun lr tn -> Map.remove lr tn)
-      in
-      let pure_inputs = Set.diff backend_inputs backend_outputs in
-      let new_last_readers =
-        Set.fold pure_inputs ~init:new_last_readers ~f:(fun lr tn ->
-            let existing = Option.value (Map.find lr tn) ~default:empty_int_set in
-            Map.set lr ~key:tn ~data:(Set.add existing id))
-      in
-      let new_frontier =
-        { frontier with last_writer = new_last_writer; last_readers = new_last_readers }
-      in
-
-      (* Register in shared ledger *)
-      Hashtbl.set ctx.ledger.routine_names ~key:id ~data:name;
-      let updated_ctx = derive ~frontier:new_frontier ctx wrapped in
-      Option.iter merge_buffer_input ~f:(fun _ ->
-          let _, transfer_id = Option.value_exn ~here:[%here] frontier.merge_buffer_writer in
-          Hashtbl.update ctx.ledger.merge_buffer_readers transfer_id ~f:(fun readers ->
-              (id, updated_ctx.context_id) :: Option.value readers ~default:[]));
-
-      (* Required inputs for the initialization check below: the backend routine's materialized
-         read-only / read-before-write nodes, resolved against this compile's placements (the
-         context-scoped memory-modes split removed the pre-lowering [context_nodes] settlement).
-         Nodes with registered host initialization data (ndarray-backed literals, loaded tensors)
-         self-initialize at link time from [Host_inits] (gh-ocannl-333), so they are excluded. *)
-      let inputs =
-        Set.filter (Set.diff backend_inputs comp.Asgns.embedded_nodes) ~f:(fun tn ->
-            not (Ir.Host_inits.mem tn))
-      in
-
-      (* Outputs are all nodes written by the computation *)
-      let outputs = backend_outputs in
-
-      let routine =
-        {
-          context = updated_ctx;
-          task;
-          bindings = lowered_bindings;
-          name;
-          inputs;
-          outputs;
-          routine_id = id;
-          execution_deps = deps;
-          mma;
-          peel;
-          volatility;
-          segments;
-        }
-      in
-
-      Ok (updated_ctx, routine)
+  | Ok (wrapped, payload) -> Ok (finish_link rt.rt_ctx rt.rt_comp wrapped payload rt.rt_census)
 
 let compile ?name ?lowered_transform ?prelowered ctx comp bindings =
   match

@@ -67,7 +67,10 @@ let string s =
     own search, or for a replay the search that stored the entry ({!Autotune.report}'s
     [budget_cut]). [budget_s] is the budget the arm's call resolved, [null] for none
     ({!Autotune.report}'s [budget_s], gh-ocannl-1438): a fact about the call, not the crown, so a
-    replay that a budget admitted says so.
+    replay that a budget admitted says so. [call_budget_s] and [call_share_s] are its siblings one
+    level up (gh-ocannl-1440): the [Train.tune_placements] call's budget
+    ([tune_call_budget_seconds]) and this arm's share of it, [null] without one; the arm's search is
+    cut at the tighter of [budget_s] and [call_share_s].
 
     [timings_contended] is the number of timing windows refused because host contention dominated
     their samples (gh-ocannl-855). A nonzero count means the finite winner, if any, came from an
@@ -120,13 +123,15 @@ let decision_counts_object counts =
   ^ "}"
 
 let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~budget_cut ~budget_s
-    ~timings_contended ~timings_unbatched ~timing_decisions ~best_ms ~best_label ~tensorized
-    ~tensorization ~mma_statements ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms
-    ~terminal_failure =
+    ~call_budget_s ~call_share_s ~timings_contended ~timings_unbatched ~timing_decisions ~best_ms
+    ~best_label ~tensorized ~tensorization ~mma_statements ~mma_scalar_fallbacks ~mma_seeded
+    ~mma_timed ~mma_best_ms ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"budget_s":%s,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"budget_s":%s,"call_budget_s":%s,"call_share_s":%s,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
     (string name) (string state) searched cache_hit (string timing) rounds_run beam_width budget_cut
     (Option.value_map budget_s ~default:"null" ~f:(fun b -> num b))
+    (Option.value_map call_budget_s ~default:"null" ~f:(fun b -> num b))
+    (Option.value_map call_share_s ~default:"null" ~f:(fun b -> num b))
     timings_contended timings_unbatched (num best_ms) (string best_label) tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
     mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)

@@ -569,10 +569,12 @@ type shipped = {
   ship_replayed : bool;
   ship_routine : string;
   ship_report : Autotune.report option;
+  ship_compiles : int;
 }
 
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
-    ?inline_flips ?ship_arm ?placement_store ?log ?progress ?on_ship ctx loss comp bindings =
+    ?inline_flips ?ship_arm ?placement_store ?call_budget ?log ?progress ?on_ship ctx loss comp
+    bindings =
   (* [?log] and [?progress] scope the two streams over the whole call: the arm lines below and every
      nested {!Autotune.tune} read them through {!Autotune.log_enabled} and
      {!Autotune.progress_enabled}. One search at a time (gh-ocannl-1352): the whole call is one
@@ -607,6 +609,38 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
        say. This is a measurement-only setting; a normal run ships the measured winner.\n\
        %!"
       (placement_arm_name ship_arm);
+  (* gh-ocannl-1440: one wall-clock budget for the whole call, on one clock started here -- before
+     the placement-store replay, whose search spends it too. Each search the call starts gets a
+     share: what is left, divided among the searches still planned ([~left], the current one
+     included), so the time a cache hit or a short search does not use goes to the searches after
+     it. The search is cut at its share by {!Autotune.tune}'s own budget rule. *)
+  let call_budget =
+    match call_budget with
+    | Some b -> if Float.(b > 0.) then Some b else None
+    | None -> Autotune.call_budget_setting ()
+  in
+  let call_clock = Autotune.progress_stopwatch () in
+  let call_elapsed () = Autotune.Seam.get Autotune.call_budget_elapsed (call_clock ()) in
+  let call_share ~left =
+    Option.map call_budget ~f:(fun total ->
+        {
+          Autotune.cb_total_s = total;
+          cb_share_s = (total -. call_elapsed ()) /. Float.of_int left;
+        })
+  in
+  let call_budget_spent () =
+    Option.exists call_budget ~f:(fun total -> Float.(call_elapsed () >= total))
+  in
+  (* gh-ocannl-1440: the backend compiles this call performs outside its searches -- whose own each
+     search's report counts ([Autotune.report.compiles]) -- i.e. compiling what ships, a shipping
+     compile that failed or was substituted before it included. [shipped.ship_compiles]. *)
+  let shipping_compiles = ref 0 in
+  let counted f =
+    let before = Context.backend_compiles () in
+    Exn.protect ~f ~finally:(fun () ->
+        shipping_compiles := !shipping_compiles + (Context.backend_compiles () - before))
+  in
+  let compile_deferred d = counted (fun () -> Autotune.compile_deferred d) in
   (* gh-ocannl-1424: the baseline the arm lines' memory fields compare against. *)
   if Autotune.progress_enabled () then
     Autotune.progressf "event=placements_start%s" (placement_memory_fields ~with_total:true ctx);
@@ -672,7 +706,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      that ships is compiled ([ship]). [eager] compiles at once, inside the failure containment: the
      replayed decision's one search uses it, since a compile failure there is a failed replay and
      sends the call to the arms. *)
-  let tune ?to_report ?(progress_note = "") ?abandon ?(eager = false) arm ctx timing_ctx =
+  let tune ?to_report ?(progress_note = "") ?abandon ?(eager = false) ~left arm ctx timing_ctx =
     let to_report = Option.value to_report ~default:report in
     let capture r =
       last := Some r;
@@ -690,7 +724,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 (Report_callback_failed
                    (Exn.to_string exn, exn, Stdlib.Printexc.get_raw_backtrace ())))
     in
-    logf "arm %s search:" arm;
+    let call_budget = call_share ~left in
+    logf "arm %s search:%s" arm
+      (Option.value_map call_budget ~default:"" ~f:(fun cb ->
+           Printf.sprintf " a %.4g s share of the call's %g s budget (%d search(es) planned)"
+             cb.Autotune.cb_share_s cb.Autotune.cb_total_s left));
     (* gh-ocannl-1061: the arm-level cost record, on {!Autotune.progressf}'s stream. *)
     let stopwatch = Autotune.progress_stopwatch () in
     let memory_fields () =
@@ -702,9 +740,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       match
         let deferred =
           Autotune.tune_deferred ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?abandon
-            ~report:capture ctx comp bindings
+            ?call_budget ~report:capture ctx comp bindings
         in
-        if eager then ignore (Autotune.compile_deferred deferred : Context.t * Context.routine);
+        if eager then ignore (compile_deferred deferred : Context.t * Context.routine);
         deferred
       with
       | deferred -> Ok deferred
@@ -990,6 +1028,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
               ship_replayed = replayed;
               ship_routine = (snd compiled).Context.name;
               ship_report = report;
+              ship_compiles = !shipping_compiles;
             }
         with exn ->
           let backtrace = Stdlib.Printexc.get_raw_backtrace () in
@@ -1034,7 +1073,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
             logf "the winner cannot ship: a later arm poisoned the caller's lineage";
             raise poisoned
         | None -> (
-            match Autotune.compile_deferred deferred with
+            match compile_deferred deferred with
             | exception exn
               when (not (must_propagate exn)) && List.is_empty fallbacks && last_resort ->
                 (* Every completed result failed to compile after an earlier one shipped a
@@ -1048,7 +1087,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 deliver ~what:"A" ~report:None
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, no measured placement compiled")
-                  (Autotune.untuned_compile ?name ctx comp bindings)
+                  (counted (fun () -> Autotune.untuned_compile ?name ctx comp bindings))
             | exception exn when (not (must_propagate exn)) && not (List.is_empty fallbacks) ->
                 let fallback_what, fallback, fallback_report = List.hd_exn fallbacks in
                 logf "%s's compile failed (%s): shipping %s instead, unrecorded" what
@@ -1092,10 +1131,21 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
   (* The completed results among [candidates], as [ship]'s fallbacks. *)
   let completed candidates = List.filter candidates ~f:(fun (_, r, _) -> Result.is_ok r) in
   let cold () =
-    let a, a_ms, a_report = tune "A (default placements)" ctx timing_ctx in
+    (* Resolved before the arms (gh-ocannl-1440): the call budget's split plans the flip slots the
+       arms share it with. *)
+    let inline_flips =
+      match inline_flips with
+      | Some n -> n
+      | None -> Int.of_string (Utils.get_global_arg ~arg_name:"tune_inline_flips" ~default:"0")
+    in
+    let planned_flips = if forced then 0 else max 0 inline_flips in
+    let a, a_ms, a_report =
+      tune ~left:(2 + planned_flips) "A (default placements)" ctx timing_ctx
+    in
     propagate_if_poisoned "A" a;
     let b, b_ms, b_report =
-      tune "B (materialize-all)" (materialize ctx) (Option.map timing_ctx ~f:materialize)
+      tune ~left:(1 + planned_flips) "B (materialize-all)" (materialize ctx)
+        (Option.map timing_ctx ~f:materialize)
     in
     (* Both arms gone: there is no winner to ship, and the first failure is the one that has not
        been cascaded from — a device the other arm's failure exhausted or a lineage it poisoned
@@ -1191,11 +1241,6 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                      s.Autotune.mma_best_ms)));
     let winner, winner_ms, winner_report =
       if a_wins then (a, a_ms, a_report) else (b, b_ms, b_report)
-    in
-    let inline_flips =
-      match inline_flips with
-      | Some n -> n
-      | None -> Int.of_string (Utils.get_global_arg ~arg_name:"tune_inline_flips" ~default:"0")
     in
     (* gh-ocannl-638: the chain walks from arm A toward arm B one node at a time, so a refined
        result is neither arm — which is exactly what a forced arm asks not to ship. Skipped rather
@@ -1384,9 +1429,31 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       (Exn.to_string exn);
                     None)
           in
+          (* gh-ocannl-1440: the flip slots the call budget's split plans -- the flip budget, or the
+             surface's alternatives if fewer -- and the stop once the call's budget is spent,
+             checked before every alternative, a group's included: each alternative measured is
+             compared against the same incumbent, and a group whose alternatives were not all
+             measured leaves its node open, as a pruned alternative does. *)
+          let flip_slots =
+            min inline_flips
+              (List.sum (module Int) candidates ~f:(fun fc -> List.length fc.LL.fc_alternatives))
+          in
+          let call_stopped = ref false in
+          let stop_for_call_budget () =
+            if (not !call_stopped) && call_budget_spent () then (
+              call_stopped := true;
+              logf "flip refinement stopped: the call budget of %g s is spent (%d flip(s) measured)"
+                (Option.value call_budget ~default:0.)
+                !measured;
+              Autotune.progressf "event=call_budget_spent budget_s=%g elapsed_s=%.1f measured=%d"
+                (Option.value call_budget ~default:0.)
+                (call_clock ()) !measured);
+            !call_stopped
+          in
           let rec walk = function
             | [] -> ()
             | _ when !measured >= inline_flips -> ()
+            | _ when stop_for_call_budget () -> ()
             (* Same lineage, same rule as the A/B above: a poisoned one refuses every timing run, so
                a further search can only fail. Unlike the arms, there is nothing to propagate here —
                the A/B winner is already in hand — so the refinement just stops. *)
@@ -1436,12 +1503,14 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                           Int.incr pruned;
                           logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
                           None
+                      | _ when stop_for_call_budget () -> None
                       | _ ->
                           let apply c = Context.decide_reading c fa.LL.fa_flip [ tn ] in
                           let ctx' = apply base_ctx in
                           let timing' = Option.map base_timing ~f:apply in
                           let r, ms, rep =
                             tune ~to_report:flip_report
+                              ~left:(max 1 (flip_slots - !measured))
                               ~progress_note:
                                 (Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
                               ?abandon arm ctx' timing'
@@ -1567,7 +1636,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       (* Compiled eagerly: a replayed decision that does not compile is a failed replay, which the
          arms below answer. *)
       let r, _ms, replay_report =
-        tune ~eager:true
+        tune ~eager:true ~left:1
           ~to_report:(Some (fun r -> deferred := Some r))
           (what ^ " (replayed placement)") (apply decisions ctx)
           (Option.map timing_ctx ~f:(apply decisions))
@@ -1578,7 +1647,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           (* The replay validated, but its compile shipped the untuned default in place of the
              schedule the decision was recorded for: a failed replay like the one below, so the
              decision is treated as stale and the arms are searched. *)
-          (try Context.release (fst (Autotune.compile_deferred compiled))
+          (try Context.release (fst (compile_deferred compiled))
            with exn when not (must_propagate exn) ->
              logf "release of a substituted replay failed: %s" (Exn.to_string exn));
           logf
@@ -1595,7 +1664,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
               try f rep
               with exn ->
                 let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                (try Context.release (fst (Autotune.compile_deferred compiled))
+                (try Context.release (fst (compile_deferred compiled))
                  with exn2 when not (must_propagate exn2) ->
                    logf "release after a failing report callback failed: %s" (Exn.to_string exn2));
                 Stdlib.Printexc.raise_with_backtrace exn backtrace)
