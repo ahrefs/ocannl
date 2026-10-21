@@ -446,7 +446,23 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   diagnostic gained, lost or reworded -- it writes the added/removed markers and the replacement row
   there instead, and names the `<source>:<md5>` key of each new direct failure with no entry and
   no in-process `observe_failure` (a separate `--control` run's observations are invisible there),
-  whose `raw_direct_evidence` or `raw_catalogue_only` entry stays hand-written.
+  whose `raw_direct_evidence` or `raw_catalogue_only` entry stays hand-written. After a rewording,
+  one `tools/refusal-manifest-sync.sh` does the rest (gh-ocannl-1429; `--dry-run` shows the plan):
+  it rewrites each stale row, re-keys the `raw_direct_evidence`/`raw_catalogue_only` entry of a
+  reworded direct failure, relabels an evidence entry whose control claim was reworded in its
+  scanner's own source (one reworded in another test source changed since `--base`, default HEAD,
+  is reported with its new text, never relabeled: the label may back another scanner's evidence),
+  swaps the replaced markers and
+  reworded claim rows in the goldens holding them, and runs the touched sources' catalogued
+  goldens plus the audit -- promoting and re-running only when a diff remains. It follows a
+  diagnostic only where the registered row and the extraction pair it one for one (a rewording
+  keeps its place; a rewording beside an insertion pairs nothing), and prints anything else
+  `UNRESOLVED` for a hand edit -- then it writes and runs nothing, so a rerun once they are settled
+  still sees every source the rewording touched; one old format at two sites reworded differently,
+  or text two scanners share, has no single successor and is unresolved too. A source whose
+  entries differ from `--base`'s, or a named one, has its goldens re-run. The golden
+  swap is not a hand-computed marker: a marker whose refusal the run does not exercise still
+  vanishes from the run's output, and the confirming run says so.
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
   scanner census; the audit's own stanza argument list assigns each source its goldens, and its
@@ -1901,7 +1917,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - Mutation manifest rows use `tools/mutation-run.sh <module> <patch-file> <@alias>`
   (gh-ocannl-969), in an otherwise idle, isolated worktree. The patch is literal bytes
   `OLD@@@NEW`, with exactly one delimiter, a nonempty OLD occurring exactly once (overlapping
-  occurrences count), and no implicit newline trimming; NEW can be empty. The runner first runs
+  occurrences count), and no implicit newline trimming; NEW can be empty. Where OLD occurs nowhere
+  byte for byte it may match modulo whitespace (gh-ocannl-1429), so an ocamlformat rewrap of the
+  target -- a long string broken at a space with a `\`-newline continuation, a tuple's parenthesis
+  padded once it no longer fits a line -- does not strand a patch written before it, nor the
+  reverse: a whitespace run of OLD matches any run, whitespace just inside a bracket is optional,
+  the match must still be the only one, NEW replaces the matched bytes verbatim, and the report
+  says `anchor: matched modulo whitespace`. A rewrap that moves a token is still a rewrite.
+  `--batch <module> <patch-dir> <@alias>` runs every `*.patch` of a directory against one module
+  and alias: all patches are anchored before anything runs, the baseline runs once, each mutant
+  runs and is restored in turn under a `== <patch> ==` header, and a table ends the batch
+  (`caught`, `SURVIVED`, `NO EVIDENCE`, `NOT RUN` after a signal); it exits 0 only when every
+  mutant was caught, 1 when one survived, 4 when one was no evidence. The runner first runs
   the unmutated test once (`baseline: <run>`) and refuses, with nothing mutated, when that
   baseline is red: a golden not yet promoted after a change to the test read mutants as stopped
   early (gh-ocannl-1361's worker, twice), and a test red on its own would read every mutant as

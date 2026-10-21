@@ -199,6 +199,15 @@ case "$PROBE_MODE" in
   replay) rm -f "$out/$name.exe.output"; cp "$PROBE_HOME/replay.stdout" "$out/$name.exe.output"
     cat "$PROBE_HOME/replay.stderr"; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
+  # A batch's mutants (gh-ocannl-1429), told apart by what each wrote into the module.
+  batch)
+    case "$(cat module.ml)" in
+      *CAUGHT*) [ -z "${PROBE_KILL_IDLE:-}" ] || touch "$PROBE_HOME/kill-idle"
+        rows 'first: false\nnested: label: true\nlast: true\n'; printf 'FAIL: first: false\n'; exit 1 ;;
+      *SURVIVED*) rows 'first: true\nnested: label: true\nlast: true\n'; exit 0 ;;
+      *SLEEPING*) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
+      *) echo 'Error: injected compile failure'; exit 1 ;;
+    esac ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
   sleep) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
@@ -724,16 +733,21 @@ harness_leg_run '10: INT TERM HUP cancel in the baseline, the fork window and du
 leg_10b() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A signal landing after the baseline was judged, before the mutation's own handlers: injected into a
-# copy of the runner right after the baseline, it still cancels before anything is mutated.
-perl - tools/mutation-run.sh > tools/mutation-late-signal.sh <<'PERL'
+# copy of the runner right after the baseline, and again right after the run snapshots the
+# baseline's record (the gap a review found once the mutant became a sub run per patch), it still
+# cancels before anything is mutated.
+for anchor in post-baseline post-snapshot; do
+perl - tools/mutation-run.sh "$anchor" > tools/mutation-late-signal.sh <<'PERL'
 use strict;
 use warnings;
+my $which = $ARGV[1];
 local $/;
 open my $f, '<', $ARGV[0] or die $!;
 my $s = <$f>;
-my $anchor = qq{\nunlink "\$scratch/baseline";\n};
+my $anchor = $which eq 'post-baseline' ? qq{\nunlink "\$scratch/baseline";\n}
+    : qq{\nmy \$cancel = \$baseline_stop;\n};
 my $at = index($s, $anchor);
-die "missing post-baseline anchor" if $at < 0;
+die "missing $which anchor" if $at < 0;
 substr($s, $at + length($anchor), 0, qq{kill 'TERM', \$\$;\n});
 print $s;
 PERL
@@ -742,8 +756,9 @@ rm -f "$fixture/observed"
 actual=0
 bash tools/mutation-late-signal.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
 [ "$actual" = 143 ] && [ ! -e "$fixture/observed" ] ||
-  { cat "$fixture/result"; echo "late baseline signal: exit $actual, or the mutant ran"; exit 1; }
+  { cat "$fixture/result"; echo "late baseline signal ($anchor): exit $actual, or the mutant ran"; exit 1; }
 cmp module.ml "$fixture/pristine"
+done
 printf 'PASS a signal between the baseline and the mutation cancels before mutating\n'
 }
 harness_leg_run '10b: a signal between the baseline and the mutation cancels before mutating' leg_10b
@@ -933,5 +948,183 @@ rm .test-run.lock
 printf 'PASS idle observes the legacy lock without removing it\n'
 }
 harness_leg_run '19: idle observes the legacy lock without removing it' leg_19
+leg_20() {
+# A patch written before `dune fmt` applies after it, and the reverse (gh-ocannl-1429): OLD matches
+# modulo whitespace -- each run of it, an OCaml string's `\`-newline continuation included, and the
+# padding just inside a bracket -- where it occurs nowhere byte for byte, still exactly once; NEW
+# replaces the bytes matched. The formatted text is ocamlformat 0.29's own rewrap of the one-line
+# form at the repository's margin.
+export PROBE_MODE=fail
+formatted='let raw =\n  [\n    ( "synthetic_scan.ml:00000000000000000000000000000001",\n      "a control claim whose label ocamlformat broke across two lines when it grew past the \\\n       margin: true" );\n  ]\n'
+one_line='let raw = [ ("synthetic_scan.ml:00000000000000000000000000000001", "a control claim whose label ocamlformat broke across two lines when it grew past the margin: true") ]\n'
+reset_module "$formatted" '("synthetic_scan.ml:00000000000000000000000000000001", "a control claim whose label ocamlformat broke across two lines when it grew past the margin: true")@@@("MUTATED", "")'
+run_case 1
+grep -q '^anchor: matched modulo whitespace ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'pre-format patch: no modulo-whitespace line'; exit 1; }
+printf 'let raw =\n  [\n    ("MUTATED", "");\n  ]\n' > "$fixture/expected"
+cmp "$fixture/observed" "$fixture/expected" || { cat "$fixture/observed"; echo 'pre-format patch: wrong mutant'; exit 1; }
+reset_module "$one_line" '( "synthetic_scan.ml:00000000000000000000000000000001",\n      "a control claim whose label ocamlformat broke across two lines when it grew past the \\\n       margin: true" )@@@("MUTATED", "")'
+run_case 1
+grep -q '^anchor: matched modulo whitespace ' "$fixture/result"
+printf 'let raw = [ ("MUTATED", "") ]\n' > "$fixture/expected"
+cmp "$fixture/observed" "$fixture/expected" || { cat "$fixture/observed"; echo 'post-format patch: wrong mutant'; exit 1; }
+# A byte-for-byte occurrence wins, and says nothing of whitespace, even beside one that differs.
+reset_module 'a b KEEP\na  b\n' 'a b@@@MUTATED'
+run_case 1
+if grep -q '^anchor: ' "$fixture/result"; then cat "$fixture/result"; echo 'exact anchor read as modulo whitespace'; exit 1; fi
+printf 'MUTATED KEEP\na  b\n' > "$fixture/expected"
+cmp "$fixture/observed" "$fixture/expected"
+# Two matches modulo whitespace, overlapping ones included, refuse as one byte-for-byte pair does;
+# so does a difference beyond whitespace -- a separator changed -- and a tolerated match in which
+# NEW changes nothing. None launches.
+export PROBE_MODE=pass
+count=$(wc -l < "$fixture/invocations")
+for case_text in 'a  b\na\tb\n|a b@@@x|ambiguous anchor (modulo whitespace)' \
+  'x  x  x\n|x x@@@y|ambiguous anchor (modulo whitespace)' \
+  '[ a; b ]\n|[ a, b ]@@@x|missing anchor' \
+  'f  (x)\n|f (x)@@@f  (x)|mutation does not change the module'; do
+  module_text=${case_text%%|*}
+  rest=${case_text#*|}
+  reset_module "$module_text" "${rest%%|*}"
+  run_case 2
+  grep -q "^mutation-run: ${rest#*|}\$" "$fixture/result" || { cat "$fixture/result"; echo "missing refusal: ${rest#*|}"; exit 1; }
+done
+[ "$(wc -l < "$fixture/invocations")" = "$count" ]
+printf 'PASS a patch written before or after an ocamlformat rewrap applies modulo whitespace, exactly once; byte-for-byte wins; ambiguous, non-whitespace and no-op matches refuse before launch\n'
+}
+harness_leg_run '20: anchors modulo whitespace survive an ocamlformat rewrap' leg_20
+leg_21() {
+# --batch (gh-ocannl-1429): one baseline, then each patch of the directory in name order, each
+# restored before the next, and a table; every patch checked before anything runs.
+export PROBE_MODE=batch
+reset_module 'prefix\nANCHOR\nsuffix\n' 'unused'
+rm -rf "$fixture/patches"
+mkdir "$fixture/patches"
+printf 'ANCHOR@@@MUTATED_CAUGHT' > "$fixture/patches/1-caught.patch"
+printf 'ANCHOR@@@MUTATED_SURVIVED' > "$fixture/patches/2-survived.patch"
+printf 'ANCHOR@@@MUTATED_BROKEN' > "$fixture/patches/3-broken.patch"
+printf 'not a patch' > "$fixture/patches/notes.txt"
+: > "$fixture/baselines"
+count=$(wc -l < "$fixture/invocations")
+batch_case() { # EXPECTED-EXIT
+  actual=0
+  tools/mutation-run.sh --batch module.ml "$fixture/patches" @runtest-probe > "$fixture/result" 2>&1 || actual=$?
+  [ "$actual" = "$1" ] || { cat "$fixture/result"; echo "batch: wrong exit $actual != $1"; exit 1; }
+  cmp module.ml "$fixture/pristine"
+}
+batch_case 1
+[ "$(($(wc -l < "$fixture/baselines")))" = 1 ] || { cat "$fixture/result"; echo "batch: $(wc -l < "$fixture/baselines") baselines, not one"; exit 1; }
+[ "$(($(wc -l < "$fixture/invocations")))" = $((count + 4)) ] || { echo 'batch: not one baseline plus three runs'; exit 1; }
+[ "$(grep -c '^restored: byte-identical (cmp)$' "$fixture/result")" = 3 ]
+[ "$(grep -c '^== [123]-[a-z]*\.patch ==$' "$fixture/result")" = 3 ]
+for row in 'caught       1-caught.patch' 'SURVIVED     2-survived.patch' 'NO EVIDENCE  3-broken.patch'; do
+  grep -q "^  $row  (run [0-9TZ-]*)\$" "$fixture/result" || { cat "$fixture/result"; echo "batch: no row $row"; exit 1; }
+done
+grep -q '^batch: 3 of 3 mutant(s) run against one baseline ([0-9TZ-]*)$' "$fixture/result"
+if grep -q 'notes.txt' "$fixture/result"; then echo 'batch: a non-patch file was run'; exit 1; fi
+# Every mutant caught: the batch exits 0; one no evidence and none surviving: 4.
+rm "$fixture/patches/2-survived.patch"
+batch_case 4
+rm "$fixture/patches/3-broken.patch"
+batch_case 0
+# A bad patch refuses the whole batch before its baseline, naming it; so does an empty directory.
+printf 'MISSING@@@MUTATED' > "$fixture/patches/0-missing.patch"
+count=$(wc -l < "$fixture/invocations")
+batch_case 2
+grep -q '^mutation-run: 0-missing.patch: missing anchor$' "$fixture/result" || { cat "$fixture/result"; exit 1; }
+rm "$fixture/patches"/*.patch
+batch_case 2
+grep -q '^mutation-run: no \*.patch file in ' "$fixture/result"
+[ "$(wc -l < "$fixture/invocations")" = "$count" ]
+# A signal during the second mutant restores it and stops the batch: the third never runs.
+printf 'ANCHOR@@@MUTATED_CAUGHT' > "$fixture/patches/1-caught.patch"
+printf 'ANCHOR@@@MUTATED_SLEEPING' > "$fixture/patches/2-sleeping.patch"
+printf 'ANCHOR@@@MUTATED_SURVIVED' > "$fixture/patches/3-survived.patch"
+rm -f "$fixture/ready"
+perl - "$fixture" <<'PERL'
+use strict;
+use warnings;
+my ($dir) = @ARGV;
+my $pid = fork();
+die $! unless defined $pid;
+if (!$pid) {
+    open STDOUT, '>', "$dir/result" or die $!;
+    open STDERR, '>&', \*STDOUT or die $!;
+    exec 'tools/mutation-run.sh', '--batch', 'module.ml', "$dir/patches", '@runtest-probe';
+    die $!;
+}
+my $ready = 0;
+# The second mutant's readiness follows a baseline and a whole first mutant: a minute's headroom,
+# not the single-run legs' ten seconds, so a loaded box does not read as a failure.
+for (1..1200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
+kill('TERM', $pid);
+local $SIG{ALRM} = sub { kill 'KILL', $pid; die "batch signal case timed out\n" };
+alarm 15;
+waitpid($pid, 0);
+my $got = $? >> 8;
+alarm 0;
+die "not ready or wrong signal status: $got\n" unless $ready && $got == 143;
+PERL
+cmp module.ml "$fixture/pristine"
+grep -q '^  NOT RUN      3-survived.patch$' "$fixture/result" || { cat "$fixture/result"; echo 'batch: signal did not stop the batch'; exit 1; }
+grep -q '^  caught       1-caught.patch ' "$fixture/result"
+# A signal arriving while a mutant is being restored is recorded, not dropped: injected into a copy
+# of the runner just as restoration begins, it stops the batch once the first mutant is restored.
+perl - tools/mutation-run.sh > tools/mutation-restore-signal.sh <<'PERL'
+use strict;
+use warnings;
+local $/;
+open my $f, '<', $ARGV[0] or die $!;
+my $s = <$f>;
+my $anchor = "    if (\$changed) {\n";
+my $at = index($s, $anchor);
+die "missing restoration anchor" if $at < 0;
+substr($s, $at, 0, qq{    kill 'TERM', \$\$;\n});
+print $s;
+PERL
+rm "$fixture/patches/2-sleeping.patch"
+actual=0
+bash tools/mutation-restore-signal.sh --batch module.ml "$fixture/patches" @runtest-probe > "$fixture/result" 2>&1 || actual=$?
+[ "$actual" = 143 ] || { cat "$fixture/result"; echo "batch restoration signal: exit $actual, not 143"; exit 1; }
+cmp module.ml "$fixture/pristine"
+grep -q '^  NOT RUN      3-survived.patch$' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'batch: a signal during restoration did not stop the batch'; exit 1; }
+# A signal pending before the first mutant starts runs none: every row NOT RUN, nothing mutated.
+perl - tools/mutation-run.sh > tools/mutation-early-signal.sh <<'PERL'
+use strict;
+use warnings;
+local $/;
+open my $f, '<', $ARGV[0] or die $!;
+my $s = <$f>;
+my $anchor = "\nmy \$cancel = \$baseline_stop;\n";
+my $at = index($s, $anchor);
+die "missing post-snapshot anchor" if $at < 0;
+substr($s, $at + length($anchor), 0, qq{kill 'TERM', \$\$;\n});
+print $s;
+PERL
+rm -f "$fixture/observed"
+actual=0
+bash tools/mutation-early-signal.sh --batch module.ml "$fixture/patches" @runtest-probe > "$fixture/result" 2>&1 || actual=$?
+[ "$actual" = 143 ] && [ ! -e "$fixture/observed" ] ||
+  { cat "$fixture/result"; echo "batch early signal: exit $actual, or a mutant ran"; exit 1; }
+grep -q '^batch: 0 of 2 mutant(s) run ' "$fixture/result" &&
+  [ "$(grep -c '^  NOT RUN ' "$fixture/result")" = 2 ] ||
+  { cat "$fixture/result"; echo 'batch: a mutant that never started is not NOT RUN'; exit 1; }
+cmp module.ml "$fixture/pristine"
+# The restoration's lock probe is immune to the signals a batch's restoration records: a TERM that
+# reaches the probe (here the probe sends it to itself, once, after the caught mutant ran) must not
+# kill it into a "lock held" reading that leaves the module mutated (exit 3).
+cp tools/test-run.sh "$fixture/test-run.sh.saved"
+perl -0pi -e 's/\A(#![^\n]*\n)/$1\[ "\$\{1:-\}" = idle ] && [ -e "\$PROBE_HOME\/kill-idle" ] && { rm -f "\$PROBE_HOME\/kill-idle"; kill -TERM \$\$; }\n/' tools/test-run.sh
+grep -q 'kill-idle' tools/test-run.sh || { echo 'batch: the probe self-signal was not staged'; exit 1; }
+actual=0
+PROBE_KILL_IDLE=1 tools/mutation-run.sh --batch module.ml "$fixture/patches" @runtest-probe > "$fixture/result" 2>&1 || actual=$?
+cp "$fixture/test-run.sh.saved" tools/test-run.sh
+[ ! -e "$fixture/kill-idle" ] || { cat "$fixture/result"; echo 'batch: the probe never ran its self-signal'; exit 1; }
+[ "$actual" = 1 ] || { cat "$fixture/result"; echo "batch: a signalled lock probe ended the batch with $actual, not 1"; exit 1; }
+cmp module.ml "$fixture/pristine"
+printf 'PASS --batch runs one baseline, then each patch restored in turn, and tabulates them; a bad patch or empty directory refuses before launch; a signal stops it restored\n'
+}
+harness_leg_run '21: --batch runs one baseline and tabulates every patch' leg_21
 
 finish

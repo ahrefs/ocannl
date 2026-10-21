@@ -1,0 +1,49 @@
+a list aligned with itself pairs, drops and inserts nothing: true
+an element replaced between two kept ones pairs with its replacement: true
+two adjacent replacements pair in order: true
+a replacement beside an insertion pairs nothing: which replaced which is not determined: true
+a replacement at either end still pairs: true
+a rewording the row pairs one for one leaves nothing unresolved: true
+the rewritten row is the new extraction, in order: true
+the reworded direct failure's evidence key follows it, its unchanged sibling's stays: true
+the reworded control claim's label follows it, an unchanged claim's stays: true
+a synced manifest plans nothing more: true
+the plan names the row, the re-key and the relabel: true
+a golden's replaced markers and reworded claim rows are rewritten, and nothing else: true
+a golden holding none of them is unchanged: true
+a key whose failure was reworded beside an insertion is unresolved, not guessed: true
+a direct failure reworded into a claim leaves its key unresolved: true
+a direct failure turned into a claim of the same words leaves its key unresolved: true
+a control claim reworded into a format with substitutions leaves its label unresolved: true
+a key that answers to no current failure and no rewording is unresolved: true
+a control file's reworded claim is paired old to new, its unchanged one is not: true
+and a one-for-one rewording leaves no old claim unpaired: true
+an evidence label naming a claim reworded outside the scanner sources is unresolved, with the new text as its hint: true
+and is not relabeled: true
+a control file's claim reworded beside an insertion leaves the label naming it unresolved: true
+and relabels nothing: true
+a key whose format's two sites were reworded differently is unresolved, as is its marker: true
+and no entry is re-keyed to either successor (the row is still rewritten): true
+and no golden swaps its marker for either successor: true
+a claim reworded at one site while it survives at another is unresolved: true
+and no evidence label follows it (the row is still rewritten): true
+nor does a control file's rename of it: the label names the surviving site: true
+a control file deleted since the base leaves every old claim unpaired: true
+an evidence label a reworded formatted claim rendered is unresolved, not left stale: true
+and is not rewritten: true
+the claims-only pairing alone does pair the reworded claim: true
+but the row's alignment outranks it: the evidence label is not relabeled: true
+and the label naming it is unresolved: true
+two claims that only swap places leave nothing unpaired: true
+a claim another scanner source still makes, reworded in one, is unresolved: true
+and no evidence label follows it (the row is still rewritten): true
+another scanner's evidence naming the reworded label is unresolved, not relabeled: true
+and nothing relabels it: true
+a golden row of the same label in another source's golden is not rewritten: true
+while the reworded claim's own source's golden row is: true
+a re-key onto a key another entry holds is unresolved: true
+and is not made: true
+the text reader reads the real manifest's rows as compiled: true
+and its direct-evidence entries: true
+and its catalogue-only entries: true
+every row's marker list spans a bracketed list of the manifest text: true
