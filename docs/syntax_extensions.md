@@ -691,6 +691,12 @@ Recurring stumbling points, each verified against the sources:
   the construction point explicit with `let%op mk_f () x = ...` and apply `mk_f ()` once per
   instance. Initializers may use labeled arguments, for example
   `kaiming ~scale_sq:2.0 normal1 ()`.
+- **Dimension captures follow the same rule.** Their bindings sit where inline declarations do, so
+  in `let%op f x = x ++ "... | h, w, ..c.. => ... | ..c.." ["h"; "w"]` the captured `h` and `w`
+  are bound once, when `f` is defined, and every application of `f` unifies with the same two
+  dimensions: a second input of a different spatial size fails shape inference. A stateless
+  function that captures puts the extension point inside its body instead,
+  `let f x = let%op r = ... in r`, as `Nn_blocks.global_avg_pool2d` does (gh-ocannl-880).
 
 ## Further features of the syntax extension %cd
 

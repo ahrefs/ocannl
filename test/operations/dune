@@ -2104,6 +2104,28 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name mobile_cnn_width)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules mobile_cnn_width)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name demo_models_smoke)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules demo_models_smoke)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name conv_bias_shapes)
  (package neural_nets_lib)
  (deps
