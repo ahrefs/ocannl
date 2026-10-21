@@ -82,12 +82,10 @@
 ; is what config_dep_completeness asks of a rule that runs an executable; this rule disables the
 ; file rather than reading it, and depending on it anyway keeps the two claims independent.
 ;
-; The env_var deps are the guard's keys, declared on EVERY rule that runs this executable and not on
-; the guarding one alone (gh-ocannl-749, Codex P1). This rule's claim is stream-level and does hold
-; under any of them -- but dune invalidates each rule on its own deps, so a check that let a
-; neighbour's declaration answer for this run could not tell that case apart from a rule that had
-; dropped a key. Three of the five are pinned on the commandline below besides, which the ambient
-; environment cannot outrank; the declaration costs a rerun and says so where the next author reads.
+; `ocannl_ambient`, the record of the ambient OCANNL environment (gh-ocannl-1149), is on EVERY rule
+; that runs this executable and not on the guarding one alone: dune invalidates each rule on its own
+; deps. Three of the guard's keys are pinned on the commandline below besides, which the ambient
+; environment cannot outrank.
 
 (rule
  ; ocannl-backend: none -- startup_streams.exe links no backend; the claim is about which stream
@@ -96,12 +94,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
-  (env_var OCANNL_LOG_CONFIG_SOURCING)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_NO_CONFIG_FILE)
-  (env_var OCANNL_PROFILE))
+  ocannl_ambient)
  (action
   (with-stdout-to
    %{target}
@@ -123,28 +116,16 @@
 ; config file's absolute path; it is given a silent configuration of its own so that the build log
 ; does not carry a copy of the chatter under test.
 ;
-; The env_var deps are what make the executable's own guard reachable: dune tracks no environment
-; variable but OCANNL_BACKEND, so an ambient OCANNL setting arriving after this target was built
-; would otherwise leave the stale .raw in place and the test green without having run (Codex P2 on
-; PR #348). Declaring them makes the change invalidate the rule, the guard fire, and the run fail
-; by name. Both spellings of each, as `Utils.env_var_names` builds them: the `ocannl_`-prefixed key
-; in lowercase and in uppercase, which since gh-ocannl-605 is all an OCANNL setting has in the
-; environment (dashes remain a commandline affordance). The keys are the ones that shape stderr --
-; what the guard checks, less `clean_up_*`, which are pinned on the commandline below and so cannot
-; be reached from the environment.
+; The `ocannl_ambient` dep is what makes the executable's own guard reachable: an ambient OCANNL
+; setting arriving after this target was built would otherwise leave the stale .raw in place and
+; the test green without having run (Codex P2 on PR #348). The record (gh-ocannl-1149) makes the
+; change invalidate the rule, the guard fire, and the run fail by name.
 
 (rule
  ; ocannl-backend: none -- startup_streams.exe links no backend; the claim is about which stream
  ; the startup banner and the unknown-key warning go to, neither of which names a backend.
  (target default_stderr.raw)
- (deps
-  ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
-  (env_var OCANNL_LOG_CONFIG_SOURCING)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_NO_CONFIG_FILE)
-  (env_var OCANNL_PROFILE))
+ (deps ocannl_config ocannl_ambient)
  (action
   (with-stderr-to
    %{target}
@@ -161,12 +142,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
-  (env_var OCANNL_LOG_CONFIG_SOURCING)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_NO_CONFIG_FILE)
-  (env_var OCANNL_PROFILE))
+  ocannl_ambient)
  (action
   (with-stdin-from
    %{dep:default_stderr.raw}
@@ -189,15 +165,7 @@
 (rule
  ; ocannl-backend: none -- startup bootstrap decisions and sourcing trace only.
  (target bootstrap_precedence.raw)
- (deps
-  ocannl_config
-  ocannl_ambient
-  bootstrap_conflict/ocannl_config
-  (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
-  (env_var OCANNL_LOG_CONFIG_SOURCING)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_NO_CONFIG_FILE)
-  (env_var OCANNL_PROFILE))
+ (deps ocannl_config ocannl_ambient bootstrap_conflict/ocannl_config)
  (action
   (with-stderr-to
    %{target}
@@ -217,12 +185,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
-  (env_var OCANNL_LOG_CONFIG_SOURCING)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_NO_CONFIG_FILE)
-  (env_var OCANNL_PROFILE))
+  ocannl_ambient)
  (action
   (with-stdin-from
    %{dep:bootstrap_precedence.raw}

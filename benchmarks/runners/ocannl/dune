@@ -180,14 +180,7 @@
   (sandbox none)
   (universe)
   ocannl_config
-  (alias mma-register-scope-emit-env_spelling_gate)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (alias mma-register-scope-emit-env_spelling_gate))
  ; Both staged layouts (gh-ocannl-1190): the plain twin and its Swizzle_b128 sibling.
  (action
   (no-infer

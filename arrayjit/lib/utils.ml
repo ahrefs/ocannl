@@ -815,6 +815,19 @@ let classify_env_var ?(case_insensitive = env_names_case_insensitive) name =
               if same_env_name name (env_var_name key) then Env_config_key key
               else Env_unread_spelling key))
 
+(** Whether the test suite's ambient record carries the variable [name] (gh-ocannl-1149): every name
+    {!classify_env_var} addresses to the configuration -- a key, an unknown key, an unread spelling
+    -- except [OCANNL_BACKEND], whose invalidation each dune stanza states itself, and the reserved
+    tooling and tracing-gate namespaces. [test/config/ocannl_ambient_env.ml] writes the record from
+    this answer and [test/operations/env_var_deps] refuses an [(env_var …)] declaration of a name it
+    is [true] of, so the two cannot disagree on which variables a declaration would duplicate
+    (gh-ocannl-1425). *)
+let env_var_in_ambient_record ?case_insensitive name =
+  match classify_env_var ?case_insensitive name with
+  | Env_not_addressed | Env_reserved _ -> false
+  | Env_config_key "backend" -> false
+  | Env_config_key _ | Env_unknown_key _ | Env_unread_spelling _ | Env_unread_reserved _ -> true
+
 (** Every environment variable that addresses OCANNL's configuration and that nothing reads: the
     name, whether it is fatal, and the reason, in the order the names sort.
 

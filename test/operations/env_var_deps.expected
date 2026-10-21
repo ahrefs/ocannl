@@ -18,94 +18,6 @@ Directories whose sources this scan reads:
   test/training
   tools
 
-Configuration keys tracked as ambient dependencies, in the one spelling OCANNL reads:
-  automatic_cpu_schedule
-  automatic_gpu_schedule
-  autotune_beam_width
-  autotune_budget_seconds
-  autotune_composite_playoff_margin
-  autotune_composite_playoff_width
-  autotune_keep_fraction
-  autotune_log
-  autotune_pad_waste_max
-  autotune_progress
-  autotune_register_tile_rm_twin
-  autotune_round_expansion
-  autotune_rounds
-  autotune_search
-  autotune_staffed_singles
-  backend
-  bf16_arithmetic
-  big_models
-  buffer_aliasing
-  build_files_prefix
-  cc_backend_arch_flags
-  cc_backend_compiler_command
-  cc_backend_fast_math
-  cc_backend_fp_contract
-  cc_backend_optimization_level
-  cc_backend_simd_flags
-  cc_fp16_arithmetic
-  cc_grid_private_bytes_cap
-  cc_parallel_chunks
-  cc_parallel_grid
-  cc_vector_bytes
-  cc_vector_registers
-  check_half_prec_constants_cutoff
-  cpu_schedule_min_parallel
-  debug_log_from_routines
-  debug_log_to_stream_files
-  default_prec
-  enable_device_only
-  exit_stream_teardown_timeout
-  fp16_arithmetic
-  fp_contract
-  fp_finite_math
-  fp_reassociate
-  gpu_default_reduction_sink
-  gpu_default_sketch_min_reduction
-  gpu_default_split_reduce_min_serial
-  gpu_elide_covered_zeros
-  gpu_fission_keep_mapping
-  gpu_lane_all_reduce_simdgroups
-  gpu_lane_preamble_reduction
-  gpu_schedule_block_size
-  gpu_schedule_min_parallel
-  gpu_schedule_workgroup_fill
-  gpu_serial_lanes
-  inline_complex_computations
-  inline_scalar_constexprs
-  inline_simple_computations
-  large_models
-  legality_crosscheck
-  limit_constant_fill_size
-  ll_ident_style
-  log_config_sourcing
-  log_level
-  memory_budget
-  model_cache_bandwidth
-  model_cache_capacity
-  model_default_geometry_lattice
-  model_default_placements
-  model_default_schedule
-  model_peak_flops
-  model_peak_memory_bandwidth
-  narrow_compute_f32
-  no_config_file
-  output_prec_in_ll_files
-  prefer_backend_uniformity
-  profile
-  schedule_fission
-  schedule_log_launches
-  stack_threshold_in_bytes
-  suppress_welcome_message
-  tf32_matmuls
-  tune_inline_flips
-  virtualize_footprint_materialization
-  virtualize_max_inline_fanin
-  virtualize_max_inline_reduction
-  virtualize_max_visits
-
 Per-module tracing gates, and the library whose preprocessor_deps declares each:
   OCANNL_LOG_LEVEL_ASSIGNMENTS   arrayjit/lib/dune, library ir (arrayjit/lib/assignments.ml)
   OCANNL_LOG_LEVEL_BACKENDS      arrayjit/lib/dune, library context (arrayjit/lib/backends.ml)
@@ -133,156 +45,6 @@ Ambient variables a module reads by name at run time, and the stanza that declar
 
 Run-time reads exempted from declaration, each for the reason `exempt_reads` gives:
   test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS
-
-Configuration keys a program reads straight from the environment through `Utils.read_env_var`, and how
-many runs of it answer for each (gh-ocannl-749). A key read this way cannot be outranked by
-a commandline flag or a config file, so every run depends on the variable unconditionally --
-and EVERY one of them declares it or pins it with `setenv`, since dune invalidates each rule
-on its own deps.
-  OCANNL_DASHED_ONLY_KEY                 test/operations/dune, executable config_var_spellings (3 runs of config_var_spellings.exe)
-  OCANNL_DEMO_KEY                        test/operations/dune, executable config_var_spellings (3 runs of config_var_spellings.exe)
-  OCANNL_PROFILE                         test/operations/dune, test config_profiles (1 run of it)
-  OCANNL_AUTOTUNE_BEAM_WIDTH             test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_AUTOTUNE_ROUNDS                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_AUTOTUNE_SEARCH                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_CC_BACKEND_ARCH_FLAGS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_CC_BACKEND_FAST_MATH            test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_CC_BACKEND_FP_CONTRACT          test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_CC_BACKEND_SIMD_FLAGS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_CC_VECTOR_BYTES                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_FP16_ARITHMETIC                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_MODEL_DEFAULT_SCHEDULE          test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_NO_CONFIG_FILE                  test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_TF32_MATMULS                    test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_TUNE_INLINE_FLIPS               test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_VIRTUALIZE_MAX_VISITS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_LOG_CONFIG_SOURCING             test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
-  OCANNL_LOG_LEVEL                       test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
-  OCANNL_NO_CONFIG_FILE                  test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
-  OCANNL_PROFILE                         test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
-  OCANNL_SUPPRESS_WELCOME_MESSAGE        test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
-
-Programs naming `Ir.Schedule` and the entry points they name, every configuration key of which is
-declared or pinned by every rule running the program (gh-ocannl-1149):
-  (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, big_models, check_half_prec_constants_cutoff, cpu_schedule_min_parallel, debug_log_from_routines, gpu_fission_keep_mapping, gpu_lane_all_reduce_simdgroups, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, gpu_serial_lanes, large_models, legality_crosscheck, log_level, profile, schedule_fission, schedule_log_launches, stack_threshold_in_bytes)
-  benchmarks/runners/ocannl/dune, executable bench_mma_register_scope_emit: Ir.Schedule.apply
-  bin/dune, executable narrow_gebp_bench: Ir.Schedule.apply
-  bin/dune, executable narrow_storage_bench: Ir.Schedule.apply
-  bin/dune, executable projection_shape_bench: Ir.Schedule.apply
-  bin/dune, executable schedule_bench: Ir.Schedule.apply
-  test/operations/dune, executable autotune_batched_companion: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, executable autotune_fission_sketch: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.default_pipeline_fissions, Ir.Schedule.fission_scheduled, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
-  test/operations/dune, executable autotune_mma_companion: Ir.Schedule.apply
-  test/operations/dune, executable config_class_fingerprint: Ir.Schedule.gpu_serial_lanes
-  test/operations/dune, test accum_width: Ir.Schedule.apply
-  test/operations/dune, test aligned_chains_shared_symbol: Ir.Schedule.aligned_chains
-  test/operations/dune, test autotune_privatize: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
-  test/operations/dune, test autotune_scope_menu: Ir.Schedule.apply
-  test/operations/dune, test autotune_serial_baseline: Ir.Schedule.automatic_schedule_active, Ir.Schedule.maybe_default_schedules
-  test/operations/dune, test autotune_sketch_placements: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
-  test/operations/dune, test autotune_smoke: Ir.Schedule.apply
-  test/operations/dune, test autotune_split_reduce: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented
-  test/operations/dune, test bench_mma_writes: Ir.Schedule.apply
-  test/operations/dune, test clamped_window_pool: Ir.Schedule.apply
-  test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test conv_merged_gpu_seeds: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test cost_model_reuse: Ir.Schedule.apply, Ir.Schedule.default_gpu
-  test/operations/dune, test cpu_parallel: Ir.Schedule.apply
-  test/operations/dune, test cpu_scratch_matmul_grid: Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules
-  test/operations/dune, test cpu_simd_reduction: Ir.Schedule.apply
-  test/operations/dune, test cpu_vectorized: Ir.Schedule.apply
-  test/operations/dune, test epilogue_fusion_mma_seeds: Ir.Schedule.apply
-  test/operations/dune, test fission_equivalence: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.zero_expansion
-  test/operations/dune, test fission_replay_segmentation: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
-  test/operations/dune, test fission_schedule: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.zero_expansion
-  test/operations/dune, test fp_licences: Ir.Schedule.apply
-  test/operations/dune, test fragment_scope_move_legality: Ir.Schedule.apply, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
-  test/operations/dune, test gpu_fission_mapping: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test gpu_lane_reduction: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits, Ir.Schedule.default_gpu, Ir.Schedule.lane_all_reduce_simdgroups_for, Ir.Schedule.lane_preamble_reduction_for
-  test/operations/dune, test gpu_parallel_prefix: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
-  test/operations/dune, test gpu_serial_lanes: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.serial_lanes_for, Ir.Schedule.zero_expansion
-  test/operations/dune, test gpu_small_leading_axis: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
-  test/operations/dune, test hosted_constant_fill: Ir.Schedule.apply
-  test/operations/dune, test launch_dim_gate: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits, Ir.Schedule.check_hardware_limits_classified, Ir.Schedule.default_gpu
-  test/operations/dune, test launch_predicate_parity: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits_classified, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test lowered_nest_order: Ir.Schedule.apply
-  test/operations/dune, test matmul_interchange: Ir.Schedule.apply
-  test/operations/dune, test metal_threadgroup_overflow: Ir.Schedule.apply
-  test/operations/dune, test mma_operand_loads: Ir.Schedule.apply
-  test/operations/dune, test mma_tensorization_label: Ir.Schedule.apply
-  test/operations/dune, test model_load_tiebreak: Ir.Schedule.apply
-  test/operations/dune, test narrow_storage_compute: Ir.Schedule.apply
-  test/operations/dune, test online_softmax_block: Ir.Schedule.apply
-  test/operations/dune, test online_softmax_block_mma: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test op_legality: Ir.Schedule.apply, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
-  test/operations/dune, test pipelined_move_legality: Ir.Schedule.apply, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
-  test/operations/dune, test privatize_census: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test privatize_recheck: Ir.Schedule.apply
-  test/operations/dune, test qkv_zero_init: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test reduction_forms: Ir.Schedule.apply
-  test/operations/dune, test scan_companion_coverage: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test scan_loop: Ir.Schedule.apply
-  test/operations/dune, test schedule_batch_grid: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits_classified
-  test/operations/dune, test schedule_batched_mma: Ir.Schedule.apply
-  test/operations/dune, test schedule_coalesce: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.fuse_epilogue_witness, Ir.Schedule.maybe_default_schedules, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality, Ir.Schedule.zero_expansion
-  test/operations/dune, test schedule_contraction_nest: Ir.Schedule.apply
-  test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test schedule_cpu_pack_matmul: Ir.Schedule.apply
-  test/operations/dune, test schedule_epilogue_fusion: Ir.Schedule.apply
-  test/operations/dune, test schedule_ldmatrix_matmul: Ir.Schedule.apply
-  test/operations/dune, test schedule_mma_matmul: Ir.Schedule.apply
-  test/operations/dune, test schedule_mma_scope_scratch: Ir.Schedule.apply
-  test/operations/dune, test schedule_ops: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits, Ir.Schedule.default_gpu
-  test/operations/dune, test schedule_pack_mma_matmul: Ir.Schedule.apply
-  test/operations/dune, test schedule_packed_constants: Ir.Schedule.apply
-  test/operations/dune, test schedule_pad: Ir.Schedule.apply
-  test/operations/dune, test schedule_partition: Ir.Schedule.apply
-  test/operations/dune, test schedule_pipelined_matmul: Ir.Schedule.apply
-  test/operations/dune, test schedule_refusal_classification: Ir.Schedule.apply, Ir.Schedule.apply_classified
-  test/operations/dune, test schedule_register_matmul: Ir.Schedule.apply
-  test/operations/dune, test schedule_smem_matmul: Ir.Schedule.apply
-  test/operations/dune, test schedule_split_reduce: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
-  test/operations/dune, test schedule_strided_1x1: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test schedule_swizzle_matmul: Ir.Schedule.apply
-  test/operations/dune, test scratch_value_variance: Ir.Schedule.default_gpu
-  test/operations/dune, test seeded_params_capabilities: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits_classified
-  test/operations/dune, test seeding_census: Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
-  test/operations/dune, test split_reduce_block_hoist: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented
-  test/operations/dune, test split_reduce_pair: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented, Ir.Schedule.op_legality
-  test/operations/dune, test thread_private_gate: Ir.Schedule.check_hardware_limits_classified, Ir.Schedule.thread_private_bytes
-  test/operations/dune, test tile_mma_declines: Ir.Schedule.apply
-  test/operations/dune, test tile_mma_geometry: Ir.Schedule.apply
-  test/operations/dune, test tile_mma_narrow: Ir.Schedule.apply
-  test/operations/dune, test vec_signed_zero: Ir.Schedule.apply
-  test/operations/dune, test workgroup_memory_accounting: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits
-  test/operations/dune, test zero_elision: Ir.Schedule.maybe_default_schedules
-  test/training/dune, test fused_classifier: Ir.Schedule.maybe_default_schedules
-
-Programs reading the cc vector width, every rule running which declares or pins `OCANNL_CC_VECTOR_BYTES`
-(gh-ocannl-1320):
-  (the `Cc_backend` values reaching `cc_vector_bytes`: codegen_tag, host_capabilities, vector_bytes_setting, vector_file_setting)
-  (the device-limits fields they fill in arrayjit/lib/schedulers.ml: codegen_tag, simd_vector)
-  (the record type of those fields, whose every label marks a limits update, in arrayjit/lib/backend_intf.ml: hardware_limits)
-  bin/dune, executable narrow_gebp_bench: narrow_gebp_bench.ml reads `.simd_vector`
-  bin/dune, executable schedule_bench: schedule_bench.ml reads `.simd_vector`
-  test/operations/dune, executable autotune_fission_sketch: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
-  test/operations/dune, executable limits_field_classes: limits_field_classes.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector` to its base, `.simd_vector`
-  test/operations/dune, test autotune_budget: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
-  test/operations/dune, test autotune_budget_unfloored: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
-  test/operations/dune, test autotune_composite_playoff: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
-  test/operations/dune, test autotune_round_expansion: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
-  test/operations/dune, test autotune_sketch_placements: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
-  test/operations/dune, test autotune_staffed_singles: library fissioned_chain (fissioned_chain.ml) reads `Cc_backend.vector_file_setting`
-  test/operations/dune, test cache_key_agreement: cache_key_agreement.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector` to its base
-  test/operations/dune, test cc_march_census: cc_march_census.ml reads `Cc_backend.vector_file_setting`
-  test/operations/dune, test cpu_vectorized: cpu_vectorized.ml reads `.simd_vector`
-  test/operations/dune, test online_softmax_block_mma: online_softmax_block_mma.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector` to its base
-  test/operations/dune, test schedule_cache_device: schedule_cache_device.ml reads `{ … with … }` leaving `codegen_tag` to its base, `{ … with … }` leaving `simd_vector` to its base
-  test/operations/dune, test schedule_conv_gemm: schedule_conv_gemm.ml reads `{ … with … }` leaving `codegen_tag` to its base, `.simd_vector`
-  test/operations/dune, test schedule_mma_matmul: schedule_mma_matmul.ml reads `.simd_vector`
-  test/operations/dune, test schedule_strided_1x1: schedule_strided_1x1.ml reads `{ … with … }` leaving `codegen_tag` to its base, `.simd_vector`
-  test/operations/dune, test tile_mma_geometry: tile_mma_geometry.ml reads `.simd_vector`
-  test/operations/dune, test tile_mma_narrow: tile_mma_narrow.ml reads `.simd_vector`
 
 Programs starting a search with a run that can select cc, each pinning the cc vector file
 (`cc_vector_bytes`, `cc_vector_registers`) or saying why its claims hold at every width (gh-ocannl-1368):
@@ -522,25 +284,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   benchmarks/runners/ocannl/dune (bin-smoke, metal-codegen) -- no gate: its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings
   benchmarks/dune -- no gate: its one runtest action runs python3 over the benchmark orchestrator's own unit tests, which import no OCANNL executable -- there is no startup check in reach to gate, the same reason `config_dep_completeness` exempts it from the ocannl_config dependency
 
-Declarations of a name OCANNL does not read as a configuration key, exempt by design:
-  test/operations/dune:ocannl_backedn -- the fixture behind the `config_var_warnings` golden, which captures the warning a mistyped key draws; the rule tracks the name so that an ambient one arriving does not leave the golden stale
-  test/operations/dune:OCANNL_BACKEDN -- the same fixture, in the casing OCANNL reads -- a lowercase one is reported rather than read, so both write to the stream the golden holds
-  test/operations/dune:OCANNL_DEMO_KEY -- a synthetic key `config_var_spellings` looks up by name: no key OCANNL reads, so it cannot be declared for its value -- but the run depends on it (gh-ocannl-749), an ambient one drawing the unknown-key warning onto the stream those goldens capture
-  test/operations/dune:OCANNL_DASHED_ONLY_KEY -- the same fixture's second synthetic key, tracked for the same reason
-  test/operations/dune:ocannl-log_level -- the `config_var_fatal_spelling` fixture: a known key in the dashed spelling that gh-ocannl-605 dropped, which since gh-ocannl-652 aborts the run rather than warning
-
 Credential variables no stanza may declare (tools/credential-env.sh, gh-ocannl-1280):
   GH_TOKEN | GITHUB_TOKEN | GH_ENTERPRISE_TOKEN | CLAUDE_CODE_MESSAGING_TOKEN | *_TOKEN | *_API_KEY
-
-Artifact-directory declarations, by dune file. A stanza whose modules call
-`Test_utils.Generated.init` declares `(env_var OCANNL_BUILD_FILES_PREFIX)`
-where dune runs it -- in its own `(deps ...)`, or, for an `(executable)` which has none, in
-the rule that runs it (gh-ocannl-723). What is held here is which VERDICTS a file's stanzas
-draw, not how many draw each: a tally would move whenever a test is added, and the per-stanza
-table goes to stderr.
-  the census covers every scan root, so the floor of 20 callers applies to it
-  benchmarks/runners/ocannl/dune: declared
-  test/operations/dune: declared
 
 Backend declarations, by dune file. Every stanza that runs an executable either declares
 `(env_var OCANNL_BACKEND)`, or carries the marker comment
@@ -579,11 +324,10 @@ member the family's `(alias (name <family>) (deps ...))` stanza omits fails this
   test/operations/dune: lifecycle, metal-codegen
 
 every stanza that runs an executable either declares the backend variable or says in place why it does not: true
+no `(env_var ...)` declares a variable the ambient record carries, which every rule depending on `ocannl_config` reruns for already: true
 every marker the text spells was read as one, and every stanza the raw text shows running an executable has a site placed for it: true
 every stanza either reader names as running an executable is named by the other too: true
 every focused-aggregate member is reached by its family alias, and a repository-wide derivation finds enough of them for the rule to be about something: true
-every source that calls Test_utils.Generated.init is claimed by some stanza's modules, and a repository-wide census finds enough of them for the rule to be about something: true
-every stanza whose modules call Test_utils.Generated.init declares OCANNL_BUILD_FILES_PREFIX where dune runs it, and every declaration of it has a caller behind it: true
 
 Scanner refusal controls (gh-ocannl-800). Sources come from repository-wide scan rules;
 controls are *_cases.expected, *_control.expected, or a live scan golden with an explicit
@@ -596,15 +340,14 @@ the refusal-control manifest source set equals the derived scanner census: true
 the permanent control-golden corpus is present: true
 every statically recoverable scanner refusal diagnostic appears in a control golden or has a named reasoned exemption: true
 
-OK: every `(env_var ...)` addressed to OCANNL names a spelling a run reads, every test directory carries the ambient gate, and every per-module tracing gate is declared by the library whose modules read it.
+OK: no `(env_var ...)` restates a variable the ambient record carries, every test directory carries the ambient gate, and every per-module tracing gate is declared by the library whose modules read it.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:7d1923374b5bbf7028b59f2670772e8c] executable either declares
+  [scanner-refusal:b8641dbf725aa68ffcc15fea6a3eb550] ocannl_config
   [scanner-refusal:68816c7803a2eabaa2a2d8799ba00a78] running an executable
   [scanner-refusal:a90efecb7feb61485c0886565a0e4ba9] running an executable
   [scanner-refusal:1bb3be04ec494f4917d1537675671f1d] repository-wide derivation finds
-  [scanner-refusal:b54873c01dcc148c1691a882e4181993] Test_utils.Generated.init
-  [scanner-refusal:7ff972d0b76d472194796b39466092aa] Test_utils.Generated.init
   [scanner-refusal:f8d375e9267abafa87ce8eec2d53731d] repository-wide scan rules
   [scanner-refusal:f1c1e39705142c7bdc92b3f0ede72582] refusal-control manifest source
   [scanner-refusal:1f42d7a2739170c96004439d524c5d96] permanent control-golden corpus
@@ -615,6 +358,4 @@ Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_o
   [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
   [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's
-  [scanner-refusal:b35f6c5cf70c9d942c2e42a4c1af9975] Test_utils.Generated.init
-  [scanner-refusal:9ad60261dbb2540d4d7e060be725ad4d] repository's census finds
 End of synthetic controls.

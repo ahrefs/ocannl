@@ -1,31 +1,35 @@
 (* gh-ocannl-628: the ambient variables a dune rule declares, against the ones a run reads.
 
-   A dune rule is invalidated by an environment variable only if it says so. Where that matters is
-   everywhere: 213 stanzas in this repository declare `(env_var OCANNL_BACKEND)` so that changing
-   the backend re-runs the test rather than serving the previous backend's output as a pass.
+   A dune rule is invalidated by an environment variable only if it says so -- or if it depends on a
+   file that changes with it. Since gh-ocannl-1149 the second is how OCANNL's configuration
+   variables reach a test: `test/config/dune` records every one the environment holds, under
+   `(universe)`, into the `ocannl_config` every test directory copies (and the `ocannl_ambient` a
+   directory with its own configuration lists), and `config_dep_completeness` asks that dependency
+   of every rule running a program that reads configuration. What is left for a rule to declare is
+   what the record leaves out, and that is what this file checks.
 
-   Two ways that goes wrong, both silent, both checked here.
+   {1 A declaration the record already carries}
 
-   {1 A spelling nothing reads}
-
-   `Utils.read_env_var` consults ONE name per key, `OCANNL_<KEY>` (gh-ocannl-652). Before that it
-   consulted the lowercase `ocannl_<key>` FIRST -- so `ocannl_backend=cuda` outranked
-   `OCANNL_BACKEND` and decided which backend every test compiled and ran on, while not one dune
-   file in the repository declared it: a developer who exported the lowercase form got stale targets
-   served as passes, from rules written precisely to prevent that. gh-ocannl-628 swept the second
-   spelling INTO 213 stanzas; gh-ocannl-652 dropped the spelling instead, and made setting one fatal
-   so that the demotion could not be silent. What is left to check here is that a declaration names
-   the spelling that is read -- a stanza declaring `(env_var ocannl_backend)` tracks a variable no
-   run will consult, and invalidates nothing.
+   A rule declaring `(env_var OCANNL_<KEY>)` for a key the record carries restates it: the rule
+   reruns when the variable changes either way. The declarations predate the record and were written
+   by hand -- review found one missing key per round, which is what the record answered -- and the
+   derivations that once asked for them (the keys a named schedule value reaches, the cc vector
+   width, an ambient guard's keys, `Generated.init`'s `build_files_prefix`) were retired with them
+   (gh-ocannl-1425). So a declaration of a name `Utils.env_var_in_ambient_record` is true of -- the
+   predicate `ocannl_ambient_env` writes the record from, so the two cannot disagree -- is refused,
+   which is also what catches the misspellings an older check here looked for: an `(env_var
+   ocannl_backend)` names a variable the record carries too, and invalidates nothing more.
 
    {2 Suites a rejected spelling never reaches}
 
-   Nothing declares the REJECTED spellings, by design, so nothing reruns for one either: a cached
-   `@test/einsum/runtest` would serve its previous passes with `ocannl_backend=cuda` ambient and the
-   fatal startup check never reached (gh-ocannl-652, Codex P1 round 2). Each test directory carries
-   an `env_spelling_gate` whose `(universe)` dependency makes dune rerun it every invocation; this
-   check is what keeps the set whole, since dune aliases are per directory and the next test
-   directory would otherwise be added without one.
+   No rule declares the REJECTED spellings, by design, so before the record nothing reran for one: a
+   cached `@test/einsum/runtest` would serve its previous passes with `ocannl_backend=cuda` ambient
+   and the fatal startup check never reached (gh-ocannl-652, Codex P1 round 2). The record now
+   reruns every rule depending on it; the gate is what reaches the check from an alias whose rules
+   do not, and it predates the record. Each test directory carries an `env_spelling_gate` whose
+   `(universe)` dependency makes dune rerun it every invocation; this check is what keeps the set
+   whole, since dune aliases are per directory and the next test directory would otherwise be added
+   without one.
 
    Per ALIAS, not per directory (Codex P1 round 3). A `(test)` stanza is a runtest action and
    nothing else, so a directory whose gate is a test stanza is ungated for `@slow` -- a separately
@@ -52,15 +56,16 @@
    trace shows nothing" rather than as "the trace was never compiled in". Each gate is checked
    against the library whose modules read it.
 
-   {2 A stanza that declares neither spelling}
+   {1 The backend: declared, or named in place}
 
-   The pairing check above sees a stanza that declares ONE spelling. What it cannot see is a stanza
-   that declares NEITHER: a backend-sensitive test added with no `(env_var ...)` at all is invisible
-   to a check phrased over the declarations that exist, and dune then serves the previous backend's
-   output as a pass under `OCANNL_BACKEND=cuda dune build @…` -- the exact failure this file exists
-   to prevent, arrived at from the other side (gh-ocannl-659, found on lukstafi/ocannl-staging#374
-   where `simd_lane_choice` was added with no declaration; it is genuinely backend-free, and nothing
-   in the build would have said otherwise had it been a `Context.auto` test).
+   `OCANNL_BACKEND` is the one configuration variable the record leaves out, so that switching
+   backends between sweep legs does not rerun the stanzas pinned to one. A backend-sensitive test
+   added with no `(env_var ...)` at all is invisible to a check phrased over the declarations that
+   exist, and dune then serves the previous backend's output as a pass under `OCANNL_BACKEND=cuda
+   dune build @…` -- the exact failure this file exists to prevent, arrived at from the other side
+   (gh-ocannl-659, found on lukstafi/ocannl-staging#374 where `simd_lane_choice` was added with no
+   declaration; it is genuinely backend-free, and nothing in the build would have said otherwise had
+   it been a `Context.auto` test).
 
    So the rule below is an exclusive or, asked of every stanza that runs an executable: either it
    declares `(env_var OCANNL_BACKEND)`, or it carries a marker comment inside its parentheses naming
@@ -79,9 +84,9 @@
 
    `Utils.classify_env_var`, the same function the startup check uses (gh-ocannl-629), so a name a
    rule tracks and a name a run reports cannot be classified two ways. It also supplies the reserved
-   namespaces: `OCANNL_TOOL_...` is the tooling's, and `OCANNL_LOG_LEVEL_<MODULE>` is a gate,
-   checked by the other half of this test. Both are uppercase-only, as configuration keys now are
-   too. *)
+   namespaces the record leaves out: `OCANNL_TOOL_...` is the tooling's, read by name and declared
+   where a module reads one, and `OCANNL_LOG_LEVEL_<MODULE>` is a gate, checked by the tracing half
+   of this test. Both are uppercase-only, as configuration keys now are too. *)
 
 open Base
 open Stdio
@@ -97,29 +102,9 @@ module Sources = Test_utils.Config_key_scan
 module Refusals = Test_utils.Refusal_control_scan
 module Refusal_manifest = Test_utils.Refusal_control_manifest
 
-(* Declarations of a name OCANNL does not read as a configuration key. Keyed by "<dune
-   file>:<name>", and each entry earns its place on every run (see the staleness check below): a
-   rule tracking a variable no key would be read from is normally a typo, which is the whole point
-   of asking. *)
-let exempt_declarations =
-  [
-    ( "test/operations/dune:ocannl_backedn",
-      "the fixture behind the `config_var_warnings` golden, which captures the warning a mistyped \
-       key draws; the rule tracks the name so that an ambient one arriving does not leave the \
-       golden stale" );
-    ( "test/operations/dune:OCANNL_BACKEDN",
-      "the same fixture, in the casing OCANNL reads -- a lowercase one is reported rather than \
-       read, so both write to the stream the golden holds" );
-    ( "test/operations/dune:OCANNL_DEMO_KEY",
-      "a synthetic key `config_var_spellings` looks up by name: no key OCANNL reads, so it cannot \
-       be declared for its value -- but the run depends on it (gh-ocannl-749), an ambient one \
-       drawing the unknown-key warning onto the stream those goldens capture" );
-    ( "test/operations/dune:OCANNL_DASHED_ONLY_KEY",
-      "the same fixture's second synthetic key, tracked for the same reason" );
-    ( "test/operations/dune:ocannl-log_level",
-      "the `config_var_fatal_spelling` fixture: a known key in the dashed spelling that \
-       gh-ocannl-605 dropped, which since gh-ocannl-652 aborts the run rather than warning" );
-  ]
+(* gh-ocannl-1425: the stable fragment of the refusal of a declaration the ambient record makes
+   redundant, which the controls look for. *)
+let recorded_diagnostic = "which the ambient record already carries"
 
 (* Run-time reads of a reserved tooling variable that deliberately decide nothing a stanza could
    track, keyed by "<source>:<name>". A declaration buys a rerun when the value changes; a variable
@@ -561,7 +546,7 @@ let normalize_path path =
    companion rule may run either -- `%{dep:probe.exe}` or `%{bin:pkg.probe}`, which
    `Scan.executables_run` reports as `Runs "probe.exe"` and `Runs "pkg.probe"` -- and accepting only
    the first leaves a correctly aggregated family reported as incomplete (Codex P2, round 3). The
-   same pair `Scan.artifact_subjects` matches its runners on.
+   same pair `Scan.program_runners` matches its runners on.
 
    The two are matched DIFFERENTLY, and it matters: the file is compared after resolving the
    action's cwd against it, so `(chdir nested (run ./probe.exe))` is another directory's file; the
@@ -915,23 +900,6 @@ let inline_runner_runs ~libraries stanza =
           | _ -> None)
   | _ -> []
 
-(* The pins of each run, in [stanza], of [library]'s inline-test runner -- the counterpart of
-   [inline_runner_runs] that the width rule needs (gh-ocannl-1320), since a per-module rule answers
-   for a variable by its own deps or by pinning it around that run. *)
-let inline_runner_pins ~library stanza =
-  match Scan.head stanza with
-  | Some "rule" ->
-      List.filter_map (Scan.classified_command_sites_with_pins_preserving_multiplicity stanza)
-        ~f:(fun (cwd, pinned, site, command) ->
-          match (site, command) with
-          | Scan.Program _, ((Scan.Runs _ | Scan.Runs_dependency _) as command) ->
-              Option.bind (Scan.command_file_path ~cwd command) ~f:(fun path ->
-                  Option.some_if
-                    (String.equal (normalize_path path) (inline_runner_path library))
-                    pinned)
-          | _ -> None)
-  | _ -> []
-
 (* Whether a module's source holds inline tests: the extension points `ppx_inline_test` and
    `ppx_expect` register. A mention in a comment over-asks, which is the loud direction. *)
 let holds_inline_tests source =
@@ -940,15 +908,6 @@ let holds_inline_tests source =
 
 (* The prefix `Utils.classify_env_var` reports for a per-module tracing gate. *)
 let gate_prefix = "ocannl_log_level_"
-
-(* A lower bound on how many sources call `Test_utils.Generated.init` (gh-ocannl-723). The rule
-   below is a relationship between two answers, and if the source-side answer silently became "none"
-   -- a ppxlib upgrade, a rename of the module, a glob that stopped reaching the test sources -- the
-   relationship would hold vacuously over an empty set and the check would go green having stopped
-   checking. A floor rather than a count, for the reason gh-ocannl-665 took the counts out of the
-   sibling goldens: it must not move when a test is added or removed. There were 37 on
-   2026-08-23. *)
-let artifact_caller_floor = 20
 
 (* A lower bound on how many scanner refusal diagnostics the repository census extracts statically
    (gh-ocannl-800). The exact count used to sit in this scan's golden, where every PR adding a
@@ -959,104 +918,26 @@ let artifact_caller_floor = 20
    raising it to the day's count, which would bring the tally back. *)
 let refusal_diagnostic_floor = 200
 
-(* The configuration key `OCANNL_BUILD_FILES_PREFIX` addresses, which is what a module reading it by
-   name reads. *)
-let artifact_config_key = "build_files_prefix"
-
 (* The stanza kinds that name their own modules, and so can be asked what those modules read. *)
 let module_stanzas = [ "library"; "test"; "tests"; "executable"; "executables" ]
 
-(* The module that DEFINES the environment reader, and so names every configuration key there is
-   while passing them to it. Every other library module reaching the reader is reported
-   (gh-ocannl-749, Codex P2 round 6): a guard in a plain library is run by whatever links it, which
-   puts the declaration on every such stanza -- a relationship nothing follows, and the same
-   argument `Artifact_in_library` makes for the initializer. Named rather than derived, being one
-   file with one reason -- and by its repository PATH, since a basename match would extend the
-   exemption to any `utils.ml` a test directory adds, silently skipping its reads (Codex P2, round
-   8). *)
-let env_reader_home = "arrayjit/lib/utils.ml"
-
-(* gh-ocannl-1149: the schedule pipeline, and the keys a program that names it depends on.
-
-   The configuration a run reads through the library is out of reach of this file in general -- a
-   test compiling through `Context.compile` reads dozens of keys, and declaring them all on two
-   hundred stanzas would claim a sensitivity no one varies. The tests whose SUBJECT is the default
-   schedule are different: they call `Ir.Schedule`'s presets, its fission or its default pipeline by
-   name, and its keys are exactly the ones a developer flips while debugging them. Left to hand
-   lists, the declarations drifted -- `gpu_serial_lanes` declared three of the keys its legs read,
-   and a hip run with `OCANNL_GPU_FISSION_KEEP_MAPPING` changed served the previous result as a pass
-   (lukstafi/ocannl-staging#916).
-
-   So the keys are derived, from the module rather than listed: every top-level value of
-   `schedule.ml`, with the literal `~arg_name` reads it makes and those of the module's other values
-   it names, transitively ([Sources.top_level_key_reach]). A source naming one of those values
-   through `Ir.Schedule` -- directly, under an alias, or under an `open` -- puts its keys on every
-   rule that runs it. A qualified call out of `schedule.ml` is followed into the sibling module of
-   `arrayjit/lib` it names -- a nested submodule of it included -- by the same reading of that
-   module, and a call of a `Utils` settings predicate contributes the keys
-   [Sources.settings_predicates] records for it: the run that `Utils.debug_log_from_routines ()`
-   switches serial depends on `log_level` as surely as on a literal read. A field of
-   `Utils.settings` is answered for by every key its `restore_settings` assignment reads, a
-   compatibility alias included.
-
-   What is followed is calls OUT of the values a test names. A key the backend reads on its own
-   while compiling -- `Backends.compile` consulting `Schedule.log_launches`, say -- is a read every
-   compiled program makes, which is the `Context.compile` route this rule leaves out of scope; the
-   wider class is gh-ocannl-1149's remainder. Execution-neutral keys are asked for like the rest --
-   the launch trace changes no golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` to
-   read it needs the run to happen. *)
-let pipeline_home = "arrayjit/lib/schedule.ml"
-let pipeline_module = [ "Ir"; "Schedule" ]
-
-(* gh-ocannl-1320: the cc vector width, and the programs that read it.
-
-   An ARM box renders cc kernels at 16 bytes and the ubuntu leg at 32 or 64, so a claim that
-   silently depends on the width passes locally and fails in CI; the local proxy is a rerun at
-   `OCANNL_CC_VECTOR_BYTES=32` (backend-precision-and-simd.md). That rerun is a cached replay on
-   every stanza that does not declare the variable.
-
-   Who reads the width is derived, as the pipeline's keys are. The VALUES are those of `Cc_backend`
-   whose key reach ([Sources.top_level_key_reach], the module read the way the pipeline's sibling
-   modules are) includes [width_key]; the FIELDS are those of the cc device's limits record -- the
-   record expressions of [width_limits_home] -- whose initializer reaches it through a helper or
-   names one of those values by its last component, however qualified; the record's TYPE, in
-   [width_limits_type_home], gives the labels that mark a limits update. A program reads the width
-   when its own modules, or a program-local library it links, name such a value
-   (`Context.Cc_backend.vector_bytes_setting`, under an alias or an `open` too), project such a
-   field off a record (`limits.simd_vector`, or a record pattern), or update a limits record leaving
-   such a field to a non-constant base ([Sources.field_reads_in_source]: `{ device_limits with
-   native_fp16_arithmetic = false }` keeps the device's vector file; staging#1094's worked case
-   pinned the width alone and kept the device's register count, which the width scales). Every rule
-   running it declares or pins [width_key]'s variable; a library with inline tests answers for
-   itself, through its `(inline_tests (deps …))` and each per-module rule running its runner.
-
-   Asked for is the width key alone. The auto width also follows the SIMD and arch flags and the
-   compiler the probe runs through, but those reach it only through the auto probe, as they reach
-   everything a compiled program does -- gh-ocannl-1149's remainder -- while [width_key] is the knob
-   the notes tell a developer to turn. A program that only CONSTRUCTS limits (every width field
-   given, or `{ no_hardware_limits with … }`) and lets codegen read the configured width inside the
-   library is out of reach for the same reason: that is the route every compiled program takes.
-   Every library the scan sees is followed except those under [width_compiler_roots]: test support
-   and a `bin` or benchmark helper library are a program's own code by extension (Codex P2, round
-   5), while a library of the compiler or the framework naming the width is the compiler. *)
+(* The cc vector width's configuration key, which a search's seeding reads (gh-ocannl-1368
+   below). *)
 let width_key = "cc_vector_bytes"
-let width_module = "Cc_backend"
-let width_limits_home = "arrayjit/lib/schedulers.ml"
-let width_limits_type_home = "arrayjit/lib/backend_intf.ml"
 
 (* gh-ocannl-1368: a search on cc runs at the width the host auto-probes, unless the program pins
    it.
 
    CI's x86 runners draw AVX2 or AVX-512 CPUs at random, and the width changes which sketches the
    autotune search seeds and which its roofline pre-filter keeps: a claim built on the menu passed
-   at 32 bytes and failed at 64 (gh-ocannl-1363, staging#1162). The rule above makes a rerun at
-   another width happen; this one asks that the default run not depend on the host at all. Every
-   program that starts a search and has a run that can select cc either PINS the vector file
-   ([vector_file_keys]: the width and the register count) for the whole process -- per key, every
-   such run either sets it on the command line or with `(setenv …)` to a value that pins, or runs a
-   program whose initialization calls a blessed helper ([vector_file_pin_values]) before any search
-   -- or its stanza carries the marker `; cc-vector-width: independent -- <reason>`, saying at the
-   site why its claims hold at every width.
+   at 32 bytes and failed at 64 (gh-ocannl-1363, staging#1162). The ambient record makes a rerun at
+   another width happen (gh-ocannl-1149); this rule asks that the default run not depend on the host
+   at all. Every program that starts a search and has a run that can select cc either PINS the
+   vector file ([vector_file_keys]: the width and the register count) for the whole process -- per
+   key, every such run either sets it on the command line or with `(setenv …)` to a value that pins,
+   or runs a program whose initialization calls a blessed helper ([vector_file_pin_values]) before
+   any search -- or its stanza carries the marker `; cc-vector-width: independent -- <reason>`,
+   saying at the site why its claims hold at every width.
 
    The rule guards against a program that forgets the width, not against one written to deceive a
    lint: what it credits is narrow on purpose -- a reviewed helper, called in plain sight before the
@@ -1136,15 +1017,9 @@ let vector_file_stating_reach ~key content =
 let compare_names (m, v) (m', v') =
   match String.compare m m' with 0 -> String.compare v v' | c -> c
 
-(* The library's synthetic limits, by its home module and name. *)
-let width_constant_base = ([ "Ir"; "Backend_intf" ], "no_hardware_limits")
+(* The compiler's and the framework's roots: a source under one is the library's, never a program's
+   own pinning helper. *)
 let width_compiler_roots = [ "arrayjit/lib/"; "tensor/"; "lib/" ]
-
-(* The spellings a program names a `Cc_backend` value by: through the `Context` re-export, or
-   directly where the stanza links the backend library itself. *)
-let width_paths_of value =
-  let components = String.split value ~on:'.' in
-  [ "Context" :: width_module :: components; width_module :: components ]
 
 (* Dune resolves aliases, module defaults, and action paths within the directory a stanza is applied
    to. Keep that descent in one place: checks plug into [checks], and this iterator hands every one
@@ -1299,323 +1174,6 @@ let main () =
     List.Assoc.find sources ~equal:String.equal
       (String.lowercase (Scan.in_subdir dir (module_name ^ ".ml")))
   in
-  (* gh-ocannl-723: every source that calls `Test_utils.Generated.init`, keyed the way `source_of`
-     looks a module up, so that a stanza's `(modules …)` field answers for its own sources. Narrowed
-     textually before parsing -- the module has to be NAMED for any spelling of the call to reach it
-     -- so the census costs a substring search over the repository and a parse of the few dozen
-     files that could contain one. *)
-  let artifact_callers =
-    List.filter_map source_files ~f:(fun (path, on_disk) ->
-        let content = In_channel.read_all on_disk in
-        if not (Sources.could_call_generated_init content) then None
-        else
-          match Sources.generated_init_calls_in_source content with
-          | [] -> None
-          | _ :: _ -> Some path
-          | exception exn ->
-              (* A source this scan cannot read is one it cannot answer for, and answering "no
-                 calls" for it would be the silent failure the whole check is against. *)
-              Verdict.fail
-                (Printf.sprintf
-                   "%s names `Test_utils.Generated` and does not parse, so whether it calls the \
-                    initializer cannot be established: %s"
-                   path (Exn.to_string exn));
-              None)
-  in
-  let artifact_caller_keys =
-    Set.of_list (module String) (List.map artifact_callers ~f:String.lowercase)
-  in
-  (* gh-ocannl-1149: the configuration keys a program reaches by NAMING the schedule pipeline. *)
-  (* The library's modules by the name its sources call them, each read once and only when a call
-     reaches it. OCaml admits no cycle between a library's modules, so the in-progress guard only
-     keeps a malformed tree from looping. *)
-  let pipeline_library = Stdlib.Filename.dirname pipeline_home in
-  let library_modules =
-    List.filter_map source_files ~f:(fun (path, on_disk) ->
-        if String.equal (Stdlib.Filename.dirname path) pipeline_library then
-          Some
-            ( String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)),
-              on_disk )
-        else None)
-  in
-  (* A field of `Utils.settings` is answered for by every key its `restore_settings` assignment
-     reads, so a compatibility alias (`big_models` for `large_models`) is asked for beside the
-     key. *)
-  let { Sources.external_keys; settings_field_keys } = Sources.library_reach ~library_modules () in
-  let pipeline_entries =
-    match List.Assoc.find source_files ~equal:String.equal pipeline_home with
-    | None -> []
-    | Some on_disk -> (
-        (* A source that does not parse RAISES here, and below: the build that compiles it has
-           failed already, and a scan carrying on would report no reach for it -- the silent
-           direction. *)
-        match
-          Sources.top_level_key_reach ~external_keys ~settings_field_keys
-            (In_channel.read_all on_disk)
-        with
-        | { Sources.reach; unplaced; _ } ->
-            List.iter unplaced ~f:(fun key ->
-                fail
-                  (Printf.sprintf
-                     "%s reads the configuration key `%s` outside every named top-level value, so \
-                      no entry point of `%s` is credited with it and a program naming the pipeline \
-                      would not be asked to declare it -- move the read into a named top-level \
-                      function"
-                     pipeline_home key
-                     (String.concat ~sep:"." pipeline_module)));
-            List.filter reach ~f:(fun (_, keys) -> not (List.is_empty keys)))
-  in
-  (* Per source, the entry points it names and the keys they reach, keyed the way `source_of` looks
-     a module up. Narrowed textually first, as the sibling censuses are: the module has to be NAMED
-     for any reference to reach it. *)
-  let pipeline_reach =
-    if List.is_empty pipeline_entries then Map.empty (module String)
-    else
-      let paths = List.map pipeline_entries ~f:(fun (name, _) -> pipeline_module @ [ name ]) in
-      List.filter_map source_files ~f:(fun (path, on_disk) ->
-          let content = In_channel.read_all on_disk in
-          if
-            String.equal path pipeline_home
-            || not (String.is_substring content ~substring:(List.last_exn pipeline_module))
-          then None
-          else
-            match Sources.module_references_in_source content ~paths with
-            | [] -> None
-            | spellings ->
-                let prefix = String.concat ~sep:"." pipeline_module ^ "." in
-                let names =
-                  List.map spellings ~f:(fun s ->
-                      Option.value (String.chop_prefix s ~prefix) ~default:s)
-                in
-                let keys =
-                  List.concat_map names ~f:(fun name ->
-                      List.Assoc.find_exn pipeline_entries ~equal:String.equal name)
-                  |> List.dedup_and_sort ~compare:String.compare
-                in
-                Some (String.lowercase path, (names, keys)))
-      |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
-  in
-  let pipeline_table = ref [] in
-  (* gh-ocannl-1320: the width's values and fields, derived; and per source, how it reads them. *)
-  (* `Cc_backend` read directly rather than through the shared [module_reach] cache, with every name
-     a destructuring top-level `let` binds credited (Codex P2, round 10) -- an over-read kept to the
-     width module, where it can only add width values. *)
-  let width_backend_reach =
-    Option.map (List.Assoc.find library_modules width_module ~equal:String.equal) ~f:(fun on_disk ->
-        Sources.top_level_key_reach ~external_keys ~settings_field_keys ~all_pattern_names:true
-          (In_channel.read_all on_disk))
-  in
-  let width_values =
-    match width_backend_reach with
-    | None -> []
-    | Some { Sources.reach; _ } ->
-        List.filter_map reach ~f:(fun (name, keys) ->
-            Option.some_if (List.mem keys width_key ~equal:String.equal) name)
-  in
-  (* A width read the derivation cannot attribute retires the rule in silence -- no value, so no
-     field and no reader -- so it is refused rather than read as an absence of readers (Codex P2,
-     round 4): the key read outside every named top-level value of `Cc_backend`, or reached by none
-     of them at all. *)
-  (match width_backend_reach with
-  | None -> ()
-  | Some { Sources.unplaced; _ } ->
-      if List.mem unplaced width_key ~equal:String.equal then
-        fail
-          (Printf.sprintf
-             "%s reads the cc vector width key `%s` outside every named top-level value, so no \
-              value is credited with it and no width reader would be asked to declare `%s` -- move \
-              the read into a named top-level function"
-             width_module width_key (Utils.env_var_name width_key))
-      else if List.is_empty width_values then
-        fail
-          (Printf.sprintf
-             "no top-level value of %s reaches the cc vector width key `%s`, so the width rule \
-              derives no reader at all -- if the key moved, follow it in \
-              `width_module`/`width_key`; if it is gone, retire the rule rather than let it pass \
-              vacuously"
-             width_module width_key));
-  (* A field carries the width when its initializer reaches the key: through a top-level or
-     function-local helper, or by naming one of the width values -- matched by its last component,
-     so no alias, `open`, `let open` or local open of `Cc_backend` hides it (Codex P2, rounds 1-3).
-     A same-named value of another module over-reads, which costs declarations, not a stale pass. *)
-  let width_fields =
-    match List.Assoc.find source_files ~equal:String.equal width_limits_home with
-    | None -> []
-    | Some on_disk ->
-        (Sources.top_level_key_reach ~external_keys ~settings_field_keys
-           ~by_last_component:(fun name ->
-             if
-               List.exists width_values ~f:(fun value ->
-                   String.equal (List.last_exn (String.split value ~on:'.')) name)
-             then [ width_key ]
-             else [])
-           (In_channel.read_all on_disk))
-          .field_reach
-        |> List.filter_map ~f:(fun (field, keys) ->
-            Option.some_if (List.mem keys width_key ~equal:String.equal) field)
-        |> List.dedup_and_sort ~compare:String.compare
-  in
-  (* Every label of the record type the width fields belong to, which is what tells a limits update
-     from an update of some other record. *)
-  let width_record_types =
-    match List.Assoc.find source_files ~equal:String.equal width_limits_type_home with
-    | None -> []
-    | Some on_disk ->
-        Sources.record_type_labels (In_channel.read_all on_disk)
-        |> List.filter ~f:(fun (_, labels) ->
-            (* ANY width field, not every one: the last-component match can over-read a field of
-               another record into [width_fields], and that may only add types -- more labels mark
-               more updates -- never remove `hardware_limits` (Codex P2, round 5). *)
-            List.exists width_fields ~f:(fun field -> List.mem labels field ~equal:String.equal))
-  in
-  let width_record_fields =
-    List.concat_map width_record_types ~f:snd |> List.dedup_and_sort ~compare:String.compare
-  in
-  let width_reach =
-    let paths = List.concat_map width_values ~f:width_paths_of in
-    List.filter_map source_files ~f:(fun (path, on_disk) ->
-        let content = In_channel.read_all on_disk in
-        if
-          not
-            (String.is_substring content ~substring:width_module
-            || List.exists (width_fields @ width_record_fields) ~f:(fun field ->
-                String.is_substring content ~substring:field))
-        then None
-        else
-          (* One entry per value: `Context.Cc_backend.v` and, under a `module Cc_backend =
-             Context.Cc_backend` alias, `Cc_backend.v` are the same read. *)
-          let named =
-            if List.is_empty paths then []
-            else
-              List.filter_map (Sources.module_references_in_source content ~paths)
-                ~f:(fun spelling ->
-                  Option.map
-                    (String.substr_index spelling ~pattern:(width_module ^ "."))
-                    ~f:(fun at -> Printf.sprintf "`%s`" (String.drop_prefix spelling at)))
-              |> List.dedup_and_sort ~compare:String.compare
-          in
-          (* And any path ENDING in `Cc_backend.v`, whatever qualifies it -- `module C = Context`
-             then `C.Cc_backend.v` (Codex P2, round 12) -- an over-read of another module's
-             `Cc_backend` that costs a declaration. *)
-          let suffixed =
-            let tails =
-              List.map width_values ~f:(fun v -> width_module :: String.split v ~on:'.')
-            in
-            List.filter_map (Sources.value_paths_in_source content) ~f:(fun path ->
-                List.find tails ~f:(fun tail ->
-                    List.length path >= List.length tail
-                    && List.equal String.equal tail
-                         (List.drop path (List.length path - List.length tail))))
-            |> List.map ~f:(fun tail -> Printf.sprintf "`%s`" (String.concat ~sep:"." tail))
-          in
-          let named = List.dedup_and_sort (named @ suffixed) ~compare:String.compare in
-          match
-            named
-            @ Sources.field_reads_in_source content ~fields:width_fields
-                ~record_fields:width_record_fields ~constant_base:width_constant_base
-          with
-          | [] -> None
-          | spellings -> Some (String.lowercase path, spellings))
-    |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
-  in
-  (* The program-local libraries -- every one outside [width_compiler_roots] -- by every name a
-     `(libraries …)` field can give them, with the modules each owns and the libraries it links in
-     turn. *)
-  let width_libraries =
-    List.concat_map dune_files ~f:(fun (file, on_disk) ->
-        let dir = match Stdlib.Filename.dirname file with "." -> "" | dir -> dir in
-        if
-          List.exists width_compiler_roots ~f:(fun root ->
-              String.is_prefix (dir ^ "/") ~prefix:root)
-        then []
-        else
-          let walked =
-            Scan.walk dir (Scan.stanzas (In_channel.read_all on_disk)) ~f:(fun d s -> [ (d, s) ])
-          in
-          List.concat_map walked ~f:(fun (d, stanza) ->
-              match Scan.head stanza with
-              | Some "library" ->
-                  let group =
-                    List.filter_map walked ~f:(fun (d', s) -> Option.some_if (String.equal d d') s)
-                  in
-                  let directory = if String.is_empty d then "." else d in
-                  let directory_modules =
-                    List.filter_map source_files ~f:(fun (path, _) ->
-                        Option.some_if
-                          (String.equal (Stdlib.Filename.dirname path) directory)
-                          (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)))
-                  in
-                  let atoms field =
-                    Option.value_map (Scan.field stanza field) ~default:[] ~f:(fun args ->
-                        List.filter_map args ~f:(function Sexp.Atom a -> Some a | _ -> None))
-                  in
-                  let entry =
-                    ( List.hd (atoms "name") |> Option.value ~default:"<unnamed>",
-                      d,
-                      (* Less the modules dune is told have no implementation, which make no
-                         run-time read (Codex P2, round 7). *)
-                      (let interface_only =
-                         List.concat_map [ "modules_without_implementation"; "virtual_modules" ]
-                           ~f:(fun field -> List.map (atoms field) ~f:String.lowercase)
-                       in
-                       (* A default module set in a directory the globs never reach is every source
-                          there, none of which was handed over: stood for by one placeholder the
-                          unseen-source refusal reports (Codex P2, round 12). *)
-                       if
-                         Option.is_none (Scan.field stanza "modules")
-                         && not (Set.mem scanned_dirs directory)
-                       then [ "<every module of the directory>" ]
-                       else
-                         List.filter (Scan.modules_of ~directory_modules group stanza) ~f:(fun m ->
-                             not (List.mem interface_only (String.lowercase m) ~equal:String.equal))),
-                      (* Every atom of the field, so `(re_export x)` and a `(select …)`'s
-                         alternatives are followed too; an atom naming no program-local library
-                         matches nothing (Codex P2, round 3). *)
-                      (* And a virtual library's `default_implementation`, which dune links when
-                         nothing else is chosen (Codex P2, round 8). *)
-                      List.concat_map [ "libraries"; "default_implementation" ] ~f:(fun field ->
-                          Option.value_map (Scan.field stanza field) ~default:[]
-                            ~f:(List.concat_map ~f:Scan.atoms)) )
-                  in
-                  List.map (atoms "name" @ atoms "public_name") ~f:(fun name -> (name, entry))
-              | _ -> []))
-  in
-  (* What a program's linked program-local libraries read of the width, transitively, each read
-     attributed to the library and module it sits in. *)
-  let width_unseen_reported = Hashtbl.create (module String) in
-  let width_reads_linked stanza =
-    let rec close seen = function
-      | [] -> List.rev seen
-      | name :: rest -> (
-          match List.Assoc.find width_libraries name ~equal:String.equal with
-          | Some ((canonical, _, _, libraries) as entry)
-            when not (List.exists seen ~f:(fun (c, _, _, _) -> String.equal c canonical)) ->
-              close (entry :: seen) (libraries @ rest)
-          | _ -> close seen rest)
-    in
-    let direct =
-      Option.value_map (Scan.field stanza "libraries") ~default:[]
-        ~f:(List.concat_map ~f:Scan.atoms)
-    in
-    List.concat_map (close [] direct) ~f:(fun (library, d, modules, _) ->
-        List.filter_map modules ~f:(fun m ->
-            let key = String.lowercase (Scan.in_subdir d (m ^ ".ml")) in
-            (* A followed library module the scan was handed no source for is one whose reads it
-               cannot see, which looks exactly like one that makes none (Codex P2, round 6). *)
-            if Option.is_none (source_of ~dir:d m) && not (Hashtbl.mem width_unseen_reported key)
-            then (
-              Hashtbl.set width_unseen_reported ~key ~data:();
-              fail
-                (Printf.sprintf
-                   "library %s, which a program links, names the module `%s`, and this check was \
-                    handed no `%s` to read -- a width read there would be invisible to every \
-                    program linking it. Add the directory to the rule's globs"
-                   library m key));
-            Option.map (Map.find width_reach key) ~f:(fun spellings ->
-                Printf.sprintf "library %s (%s.ml) reads %s" library (String.lowercase m)
-                  (String.concat ~sep:", " spellings))))
-  in
-  let width_table = ref [] in
   (* gh-ocannl-1368: the search's entry points, derived. The anchor is refused when it moves, as the
      width's are: a renamed `tune` would otherwise retire the rule with an empty population. *)
   let search_home_defines =
@@ -1660,7 +1218,7 @@ let main () =
                      String.is_substring content ~substring:(List.last_exn tail)))
             then []
             else
-              (Sources.top_level_key_reach ~fields:false
+              (Sources.top_level_key_reach
                  ~external_keys:(fun path ->
                    if
                      List.exists tails ~f:(fun tail ->
@@ -1822,31 +1380,10 @@ let main () =
      a run was in goes into the golden, so a glob that breaks flips that line rather than quietly
      retiring the floor. *)
   let repository_census = List.is_empty (Sources.floor_violations (List.map source_files ~f:fst)) in
-  (* gh-ocannl-1320: the width derivation's anchors. A rename or a narrowed glob that loses one of
-     them would empty the derivation, and a promoted golden would then retire every requirement in
-     silence (Codex P2, round 5). So on the repository, and in any tree holding the limits record,
-     each anchor must be found and must yield something. *)
-  (if repository_census || List.Assoc.mem source_files ~equal:String.equal width_limits_home then
-     let missing =
-       List.filter_map
-         [
-           ( Option.is_none (List.Assoc.find library_modules width_module ~equal:String.equal),
-             Printf.sprintf "no `%s` module among arrayjit/lib's sources" width_module );
-           (List.is_empty width_fields, Printf.sprintf "no field of %s carries it" width_limits_home);
-           ( List.is_empty width_record_types,
-             Printf.sprintf "no record type of %s declares those fields" width_limits_type_home );
-         ]
-         ~f:(fun (absent, what) -> Option.some_if absent what)
-     in
-     if not (List.is_empty missing) then
-       fail
-         (Printf.sprintf
-            "the cc vector-width derivation lost an anchor: %s -- the rule would derive no reader \
-             and pass every stanza; follow the rename in `width_module`, `width_limits_home` or \
-             `width_limits_type_home`, or extend the rule's globs"
-            (String.concat ~sep:"; " missing)));
-  (* gh-ocannl-1368's anchors, on the same terms: the search's entry point, and the helper that pins
-     the width for the searches whose claims depend on it. *)
+  (* gh-ocannl-1368's anchors: the search's entry point, and the helper that pins the width for the
+     searches whose claims depend on it. A rename or a narrowed glob that loses one of them would
+     empty the derivation, and a promoted golden would then retire every requirement in silence. So
+     on the repository, and in any tree holding the entry point's home, each must be found. *)
   (if repository_census || List.Assoc.mem source_files ~equal:String.equal search_home then
      let missing =
        List.filter_map
@@ -1880,15 +1417,6 @@ let main () =
              the blessed pin helpers (%s) -- bless a new helper in `vector_file_pin_values` once \
              review has seen it pin every key, or restore the statement a blessed one lost"
             (show vector_file_pinners) (show vector_file_blessed)));
-  let artifact_claimed = ref (Set.empty (module String)) in
-  let artifact_violations = ref 0 in
-  (* One line per subject for stderr, and per dune file for the golden: what the golden holds is
-     that a file still declares the variable where its modules call the initializer, not how many
-     stanzas do -- the gh-ocannl-665 argument, since a count moves whenever a test is added. *)
-  let artifact_table = ref [] in
-  let artifact_by_file = ref [] in
-  let exemptions = Map.of_alist_exn (module String) exempt_declarations in
-  let exemptions_used = ref (Set.empty (module String)) in
   let gateless = Map.of_alist_exn (module String) gateless_dirs in
   let gateless_used = ref [] in
   let gated = ref [] in
@@ -1916,11 +1444,10 @@ let main () =
      two would pass while the second was true. *)
   let xor_violations = ref 0 in
   let marker_holes = ref 0 in
-  let tracked_keys = ref (Set.empty (module String)) in
+  let recorded_violations = ref 0 in
   let gate_table = ref [] in
   let read_table = ref [] in
   let exempt_read_table = ref [] in
-  let guard_table = ref [] in
   (* The scanner sources are derived from the same repo-wide rule property that makes a rule a
      member of [@scans], but their directory descent comes from [per_directory] below. A new scan
      therefore joins the diagnostic check with no source list to update. *)
@@ -2203,7 +1730,6 @@ let main () =
          `(subdir b (rule … probe.exe))` name different programs and only the pair says which
          (gh-ocannl-747, Codex P2 round 3). *)
       let all_group_runners = file_stanzas in
-      let artifact_subjects = ref [] in
       (* gh-ocannl-800: collect the executable each repository-wide scan rule runs. Dune's main
          module contract makes [foo.exe] come from [foo.ml]; the source lookup below holds that
          relationship against the files this run was actually handed. This is deliberately a
@@ -2253,128 +1779,6 @@ let main () =
                                 `%s` source to inspect for refusal diagnostics -- add the \
                                 scanner's directory to the source globs"
                                dune_file executable source)))));
-      (* gh-ocannl-723: the artifact-directory declaration, against the modules that read the key
-         needing it. Both directions, since a declaration nothing reads for is the restatement this
-         replaces rather than the relationship. This is the first consumer of the common
-         per-directory seam; nested modules and executables cannot fall back to the dune file's
-         directory. *)
-      check_per_directory (fun subdir group ->
-          let here = Scan.in_subdir dir subdir in
-          (* A module's sources: its own [<module>.ml], and the alternatives a `(select …)` may
-             compile as it -- a `.real.ml` arm calls the initializer as much as a plain source does,
-             and is claimed by the stanza naming the module (gh-ocannl-1294). *)
-          let keys module_name =
-            let target = module_name ^ ".ml" in
-            let arms =
-              List.concat_map group ~f:Scan.select_arms
-              |> List.filter_map ~f:(fun (selected, arm) ->
-                  Option.some_if (String.equal selected target) arm)
-            in
-            List.map (target :: arms) ~f:(fun file -> String.lowercase (Scan.in_subdir here file))
-          in
-          let subjects =
-            let calls module_name =
-              List.exists (keys module_name) ~f:(Set.mem artifact_caller_keys)
-            in
-            (* A module that reads `build_files_prefix` some other way needs the variable tracked
-               for the same reason a caller does, and is subject to the same rule (Codex P2, rounds
-               2 and 3). Narrowed textually first, the way the caller census is: the key has to be
-               SPELLED for either spelling of a read to name it, so only the sources that mention it
-               are parsed. *)
-            let reads_prefix module_name =
-              List.exists (keys module_name) ~f:(fun key ->
-                  match List.Assoc.find sources ~equal:String.equal key with
-                  | None -> false
-                  | Some on_disk -> (
-                      let content = In_channel.read_all on_disk in
-                      String.is_substring content ~substring:artifact_config_key
-                      &&
-                        try Sources.source_reads_key content ~key:artifact_config_key
-                        with _ -> false))
-            in
-            (* Dune's default module set is the directory less what other stanzas claim, so the scan
-               needs to know what the directory holds -- a `(test (name t))` with no `(modules …)`
-               builds `t.ml` (Codex P2, round 2). Only the sources this scan was handed, which is
-               what it can answer for; the census check below is what catches a caller no stanza
-               claims either way. *)
-            let directory = if String.is_empty here then "." else here in
-            let directory_modules =
-              List.filter_map source_files ~f:(fun (path, _) ->
-                  if String.equal (Stdlib.Filename.dirname path) directory then
-                    Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-                  else None)
-            in
-            Scan.artifact_subjects ~directory_modules ~subdir ~runner_stanzas:all_group_runners
-              group ~calls ~reads_prefix
-          in
-          List.iter subjects ~f:(fun subject ->
-              let where =
-                Printf.sprintf "%s, the %s %s" dune_file subject.Scan.artifact_head
-                  subject.Scan.artifact_name
-              in
-              let needs = subject.Scan.artifact_callers @ subject.Scan.artifact_readers in
-              let what =
-                match (subject.Scan.artifact_callers, subject.Scan.artifact_readers) with
-                | [], readers ->
-                    String.concat ~sep:", " readers ^ " reads `" ^ artifact_config_key ^ "` by name"
-                | callers, [] ->
-                    String.concat ~sep:", " callers ^ " calls `Test_utils.Generated.init`"
-                | callers, readers ->
-                    String.concat ~sep:", " callers ^ " calls `Test_utils.Generated.init` and "
-                    ^ String.concat ~sep:", " readers ^ " reads `" ^ artifact_config_key
-                    ^ "` by name"
-              in
-              List.iter needs ~f:(fun m ->
-                  List.iter (keys m) ~f:(fun key ->
-                      artifact_claimed := Set.add !artifact_claimed key));
-              artifact_table :=
-                Printf.sprintf "  %-58s %s (%s)" where
-                  (Scan.artifact_verdict_name subject.Scan.artifact_verdict)
-                  (if List.is_empty needs then subject.Scan.artifact_deps_site
-                   else String.concat ~sep:", " needs)
-                :: !artifact_table;
-              artifact_subjects := subject :: !artifact_subjects;
-              match subject.Scan.artifact_verdict with
-              | Scan.Artifact_declared | Scan.Artifact_other_reader -> ()
-              | Scan.Artifact_undeclared ->
-                  Int.incr artifact_violations;
-                  fail
-                    (Printf.sprintf
-                       "%s: %s -- `%s` decides which directory the run's generated artifacts are \
-                        read from, and %s does not declare `(env_var %s)`, so dune serves the \
-                        previous run's result across a change of it. Add the declaration there"
-                       where what artifact_config_key subject.Scan.artifact_deps_site
-                       Scan.artifact_env_var)
-              | Scan.Artifact_stale_declaration ->
-                  Int.incr artifact_violations;
-                  fail
-                    (Printf.sprintf
-                       "%s declares `(env_var %s)` in %s and no module of it reads `%s` at all -- \
-                        neither through `Test_utils.Generated.init` nor by name. A declaration \
-                        with nothing behind it is a restatement, not a relationship, and the next \
-                        author copies it. Drop it, or read the generated artifacts through \
-                        `Test_utils.Generated`, which is the one supported way to read them"
-                       where Scan.artifact_env_var subject.Scan.artifact_deps_site
-                       artifact_config_key)
-              | Scan.Artifact_unrun ->
-                  Int.incr artifact_violations;
-                  fail
-                    (Printf.sprintf
-                       "%s: %s, and no stanza in this file runs the executable -- an \
-                        `(executable)` has no `deps` field, so the `(env_var %s)` declaration goes \
-                        on the rule that RUNS it, the same placement as the `%s` dep and the \
-                        backend marker. This scan can find neither"
-                       where what Scan.artifact_env_var Scan.config_file)
-              | Scan.Artifact_in_library ->
-                  Int.incr artifact_violations;
-                  fail
-                    (Printf.sprintf
-                       "%s: %s, from a library module -- the initializer empties the artifact \
-                        directory of the process that owns it, so it belongs to an executable's \
-                        own modules. Called through a library it puts the `(env_var %s)` \
-                        requirement on every stanza that links the library, where nothing follows \
-                        it"
-                       where what Scan.artifact_env_var)));
       (* The ambient gate, per directory AND per alias (gh-ocannl-652). Per SUBDIRECTORY too: a
          `(subdir child …)` group defines aliases in `child`, and a gate at the top level is a gate
          for the top level -- so a family alias written inside the group could otherwise serve its
@@ -2819,31 +2223,23 @@ let main () =
           List.iter names ~f:(fun name ->
               if is_credential credential_patterns name then
                 refuse_credential (Printf.sprintf "declares `(env_var %s)`" name));
+          (* gh-ocannl-1425: a declaration of a variable the ambient record carries restates it.
+             Every rule depending on `ocannl_config` -- which `config_dep_completeness` asks of
+             every rule running a program that reads configuration -- or on `ocannl_ambient` or
+             `(universe)` reruns when any such variable changes, so the declaration invalidates
+             nothing more, and the next author copies it. Asked by the predicate the record is
+             written from, so the two cannot disagree on which names those are; what it leaves out
+             -- someone else's variables, the reserved tooling and tracing-gate namespaces, and
+             `OCANNL_BACKEND`, whose rule above stays -- is what a stanza may still declare. *)
           List.iter names ~f:(fun name ->
-              let key = dune_file ^ ":" ^ name in
-              match Utils.classify_env_var name with
-              (* Someone else's variable entirely (`PATH`, `HOME`): not this check's business. *)
-              | Utils.Env_not_addressed -> ()
-              | Utils.Env_config_key config_key -> tracked_keys := Set.add !tracked_keys config_key
-              (* The gates are checked below, against the modules that read them. *)
-              | Utils.Env_reserved _ -> ()
-              | Utils.Env_unread_spelling _ | Utils.Env_unknown_key _ | Utils.Env_unread_reserved _
-                ->
-                  if Map.mem exemptions key then exemptions_used := Set.add !exemptions_used key
-                  else
-                    let what =
-                      match Utils.classify_env_var name with
-                      | Utils.Env_unread_reserved prefix ->
-                          "is in the reserved " ^ prefix
-                          ^ " namespace in a casing its reader does not consult"
-                      | _ -> "addresses OCANNL and names no configuration key it reads"
-                    in
-                    fail
-                      (Printf.sprintf
-                         "%s declares `(env_var %s)`, which %s -- a variable nothing consults \
-                          invalidates nothing; fix the spelling, or exempt it by name with the \
-                          reason"
-                         dune_file name what)));
+              if Utils.env_var_in_ambient_record name then (
+                Int.incr recorded_violations;
+                fail
+                  (Printf.sprintf
+                     "%s declares `(env_var %s)`, %s: every rule depending on `%s` (or \
+                      `ocannl_ambient`, or `(universe)`) reruns when it changes (gh-ocannl-1149), \
+                      so the declaration restates the record -- drop it"
+                     dune_file name recorded_diagnostic Scan.config_file))));
       (* What a stanza's own modules read, against what the stanza declares: the gates, read while
          PREPROCESSING them, and the ambient variables they read by name at RUN time. *)
       (* Per `(subdir …)` group, like every other reading in this file: a nested stanza's modules
@@ -2915,10 +2311,10 @@ let main () =
                      built; `Sys.getenv "OCANNL_TOOL_TEST_RESTRICT_MASK"` is read while it RUNS, and
                      the consequence of not declaring it is the same one this whole check is about
                      -- `test_cpu_topology` was reusable across a change of the mask that decides
-                     what it does. Presence is checkable here and not for configuration keys at
-                     large, which a test reaches through the library rather than by name: what makes
-                     the difference is the literal in the source, which says exactly which variable
-                     this module reads.
+                     what it does. Asked only of the names the ambient record leaves out -- the
+                     reserved tooling namespace and `OCANNL_BACKEND`: a configuration key read by
+                     name is in the record, which every rule depending on `ocannl_config` reruns for
+                     (gh-ocannl-1425).
 
                      An `(executable)` stanza has no `deps` field at all -- its companion rule
                      carries them -- so for those the declaration is looked for anywhere in the dune
@@ -2946,6 +2342,9 @@ let main () =
                           else
                             match Utils.classify_env_var read with
                             | Utils.Env_not_addressed -> ()
+                            (* The ambient record carries it, and with it every rule depending on
+                               `ocannl_config` (gh-ocannl-1425). *)
+                            | _ when Utils.env_var_in_ambient_record read -> ()
                             | _ when List.Assoc.mem exempt_reads exempt_key ~equal:String.equal ->
                                 exempt_read_table := exempt_key :: !exempt_read_table
                             | _ ->
@@ -2959,43 +2358,19 @@ let main () =
                                        dir source read where)
                                 else read_table := (where, read, dir ^ "/" ^ source) :: !read_table))
               | _ -> ()));
-      (* gh-ocannl-749: the same question, for the reads OCANNL's own environment reader makes.
-         `Sys.getenv "NAME"` above says which variable it reads in the call itself;
-         `Utils.read_env_var key` takes the key as a value, and the shape that matters takes it from
-         a LIST -- an ambient-environment guard, refusing to run when a variable that would rewrite
-         its golden is set. Three of them stand in this repository, and each was a hand-written list
-         of keys standing in for its rule's `(env_var …)` declarations with nothing relating the two:
-         the guard only RUNS when dune reruns the rule, which happens only for a variable the rule
-         declares, so a key on the list and not in the deps is a key the guard never sees.
-         gh-ocannl-628's hole, arrived at from the guard side.
-
-         What is checked is the relationship, not the list: the keys are read out of the source and
-         paired with the declarations of the rules dune runs it under, exactly as gh-ocannl-723 pairs
-         a `Generated.init` caller with `OCANNL_BUILD_FILES_PREFIX` -- and through the same
-         machinery, so the two cannot drift on who runs what.
-
-         A pass of its own rather than a clause of the gate walk above, because the question is per
-         PROGRAM and not per stanza, and because a stanza reaching for dune's default module set
-         never entered that walk at all: it is guarded on `(modules …)` being written down, so a
-         `(test (name guard))` whose implicit `guard.ml` reads the environment was accepted in
-         silence (Codex P2, round 1). `Scan.modules_of` resolves the default set the way the artifact
-         scan does.
-
-         Over the SUBDIRECTORY groups the artifact check built, and not the top-level stanzas: a
-         `(subdir gen …)` applies its stanzas to another directory, so a nested program's modules
-         live there and its runners may sit at either level -- and a walk that saw only the top level
-         read the wrapper as a stanza with no modules and skipped its body (Codex P2, round 2). *)
+      (* gh-ocannl-1368's census is per PROGRAM, not per stanza: a stanza reaching for dune's default
+         module set never entered the gate walk above, which is guarded on `(modules …)` being
+         written down, so a `(test (name probe))` whose implicit `probe.ml` starts a search would be
+         accepted in silence. `Scan.modules_of` resolves the default set. Over the SUBDIRECTORY
+         groups, and not the top-level stanzas: a `(subdir gen …)` applies its stanzas to another
+         directory, so a nested program's modules live there and its runners may sit at either
+         level. *)
       (* `(include_subdirs unqualified)` puts a descendant directory's modules into a stanza's
          module set, which the per-directory census below does not model -- and the module would then
-         be claimed by nobody, taking its environment reads out of the check silently (Codex P2,
-         round 10). Refused rather than approximated: a scan that cannot place a file's modules
-         should say so, which is the same answer it gives an unresolvable key. *)
-      (* `(include_subdirs …)` is a STANZA, not a field of one: asking `Scan.field` for it searched
-         the children of every other stanza and never fired, so the refusal this was supposed to be
-         did not exist (Codex P2, round 11 -- my own round-10 fix, dead on arrival). *)
-      (* Through `Scan.walk`, so a directive inside a `(subdir gen …)` is reached too: looping the
-         top-level forms let a nested one bypass the refusal entirely (Codex P2, round 13 -- the
-         second defect in this one refusal, the first being that it matched nothing at all). *)
+         be claimed by nobody, taking its reads out of the check silently. Refused rather than
+         approximated: a scan that cannot place a file's modules should say so. It is a STANZA, not a
+         field of one, reached through `Scan.walk` so that a directive inside a `(subdir gen …)` is
+         seen too. *)
       check_per_directory (fun _subdir stanzas ->
           List.iter stanzas ~f:(fun stanza ->
               match stanza with
@@ -3006,8 +2381,8 @@ let main () =
                        "%s declares `(include_subdirs %s)`, which puts a descendant directory's \
                         modules into its stanzas' module sets -- this check derives a stanza's \
                         modules from its own directory, so it cannot say which modules those \
-                        stanzas own, nor which environment reads go with them. Teach it the mode, \
-                        or keep the guard's modules beside their dune file"
+                        stanzas own, nor which reads go with them. Teach it the mode, or keep the \
+                        program's modules beside their dune file"
                        dune_file
                        (String.concat ~sep:" " (List.concat_map args ~f:Scan.atoms)))
               | _ -> ()));
@@ -3024,42 +2399,20 @@ let main () =
               let kind =
                 match Scan.head stanza with
                 | Some (("test" | "tests" | "executable" | "executables") as kind) -> Some kind
-                (* EVERY library, and always as a refusal. An `(inline_tests (deps …))` declaration
-                   invalidates the inline-test runner alone -- the library stays linkable, and a
-                   standalone test that links it reuses its output across a change of the variable
-                   the library module reads (Codex P2, round 7). So the inline-test case is not a
-                   licence either, and the rule is the one `Artifact_in_library` already states: a
-                   read that goes stale belongs to an executable's own modules. *)
-                | Some "library" -> Some "library"
                 | _ -> None
               in
               match kind with
               | None -> ()
               | Some kind ->
                   let modules = Scan.modules_of ~directory_modules group stanza in
-                  let source_of_module module_name =
-                    Option.map (source_of ~dir:here module_name) ~f:(fun on_disk ->
-                        (module_name ^ ".ml", In_channel.read_all on_disk))
-                  in
-                  let path_of source = Scan.in_subdir here source in
                   let named () =
                     match Scan.names_of stanza with name :: _ -> name | [] -> "<unnamed>"
                   in
-                  (* Where the declaration has to sit is dune's semantics, not one rule: a `(test)`
-                     runs under its own `(deps …)` and an inline-test library under
-                     `(inline_tests (deps …))`, while an `(executable)` has no `deps` field at all,
-                     so every rule that RUNS it carries the declaration -- and EVERY one, since dune
-                     invalidates each rule on its own deps and the undeclared one would serve its
-                     previous result whatever its neighbours say. Reading the whole file's
-                     declarations instead was the latitude `config_dep_completeness` gives the
-                     `ocannl_config` dep, and it is too loose here: with six rules running
-                     `profile_precedence.exe`, one of them dropping a key still passed (Codex P1,
-                     round 1). *)
-                  (* A stanza dune runs ITSELF may still pin: `(test … (action (setenv OCANNL_X ""
-                     (run %{test}))))` fixes the value for every run of it, so demanding a
-                     declaration besides would be asking for a dependency the run cannot have (Codex
-                     P2, round 12). Derived from the stanza's own action, the same way an
-                     executable's runners are. *)
+                  (* Which rules run the program is dune's semantics: a `(test)` runs itself, while
+                     an `(executable)` is run by every rule naming it, each under its own `(deps …)`
+                     and `(setenv …)` scope. A stanza dune runs itself may still pin: `(test …
+                     (action (setenv OCANNL_X 16 (run %{test}))))` fixes the value for every run of
+                     it -- by SCOPE, intersected over the runs its action makes. *)
                   let own_pins stanza =
                     match List.map (Scan.runs_of ~subdir stanza) ~f:(fun (_, pins) -> pins) with
                     | [] -> Set.empty (module String)
@@ -3071,43 +2424,26 @@ let main () =
                         List.map
                           (Scan.program_runners ~subdir ~runner_stanzas:all_group_runners group
                              stanza) ~f:(fun (name, runners) ->
-                            ( name,
-                              Scan.program_modules stanza ~modules ~name,
-                              name ^ ".exe",
-                              (* The pins come with the runner, scoped to the runs of THIS program:
-                                 a `setenv` around a helper beside the subject pins nothing here,
-                                 and one around the subject is not undone by an unpinned helper
-                                 (Codex P1 round 1, P2 round 4). *)
-                              List.map runners ~f:(fun (r, pins) -> (Scan.field r "deps", pins)),
-                              List.map runners ~f:(fun (r, pins) -> (r, pins)) ))
-                    (* Against an EMPTY runner list, which is the same shape an executable nothing
-                       runs gets and says the same thing: there is no `deps` field in reach that a
-                       change of the variable could invalidate for every process that links it. *)
-                    | "library" -> [ (named (), modules, "whatever links it", [], []) ]
-                    | _ ->
-                        [
-                          ( named (),
-                            modules,
-                            "it",
-                            [ (Scan.field stanza "deps", own_pins stanza) ],
-                            [ (stanza, own_pins stanza) ] );
-                        ]
+                            (* The pins come with the runner, scoped to the runs of THIS program: a
+                               `setenv` around a helper beside the subject pins nothing here, and
+                               one around the subject is not undone by an unpinned helper. *)
+                            (name, Scan.program_modules stanza ~modules ~name, runners))
+                    | _ -> [ (named (), modules, [ (stanza, own_pins stanza) ]) ]
                   in
-                  List.iter programs ~f:(fun (name, own_modules, program, runners, run_stanzas) ->
+                  List.iter programs ~f:(fun (name, own_modules, run_stanzas) ->
                       let where =
                         Printf.sprintf "%s%s, %s %s" dune_file
                           (if String.is_empty subdir then "" else " (subdir " ^ subdir ^ ")")
                           kind name
                       in
                       (* A module the scan was handed no source for is one it cannot answer for, and
-                         reading it as a module with no reads is the silent direction: a new source
-                         root added without extending this rule's globs would take its guards out of
-                         the check without anything saying so (Codex P2, round 8). It is reported,
+                         reading it as a module that starts no search is the silent direction: a new
+                         source root added without extending this rule's globs would take its
+                         programs out of the check without anything saying so. It is reported,
                          except where the directory itself was never scanned -- that boundary is
-                         stated in the golden and reported by the gate half above. *)
-                      (* A module dune is TOLD has no implementation is not a missing input: an
-                         `.mli` performs no run-time read, so there is nothing for this check to
-                         look at (Codex P2, round 9). *)
+                         stated in the golden and reported by the gate half above. A module dune is
+                         TOLD has no implementation is not a missing input: an `.mli` runs
+                         nothing. *)
                       let without_implementation =
                         List.concat_map [ "modules_without_implementation"; "virtual_modules" ]
                           ~f:(fun field ->
@@ -3120,7 +2456,7 @@ let main () =
                       in
                       List.iter own_modules ~f:(fun module_name ->
                           if
-                            Option.is_none (source_of_module module_name)
+                            Option.is_none (source_of ~dir:here module_name)
                             && (not
                                   (List.mem without_implementation (String.lowercase module_name)
                                      ~equal:String.equal))
@@ -3129,420 +2465,265 @@ let main () =
                             fail
                               (Printf.sprintf
                                  "%s names the module `%s`, and this check was handed no `%s.ml` \
-                                  from %s to read -- a module it cannot see is one whose \
-                                  environment reads it cannot check, which looks exactly like a \
-                                  module that makes none. Add the directory to the rule's globs, \
-                                  or name the generated source among them"
+                                  from %s to read -- a module it cannot see is one whose reads it \
+                                  cannot check, which looks exactly like a module that makes none. \
+                                  Add the directory to the rule's globs, or name the generated \
+                                  source among them"
                                  where module_name (String.lowercase module_name) directory));
-                      let sources =
-                        List.filter_map own_modules ~f:source_of_module
-                        |> List.filter ~f:(fun (source, _) ->
-                            not (String.equal (path_of source) env_reader_home))
-                      in
-                      let reads =
-                        List.map sources ~f:(fun (source, content) ->
-                            ( source,
-                              if Sources.could_read_env_var content then
-                                Sources.env_reader_reads_in_source content
-                              else { Sources.reader_keys = []; reader_unresolved = [] } ))
-                      in
-                      (* Every reach is resolved to a finite set of keys or REPORTED. A reach the
-                         scan cannot follow used to fall back on the program's string literals,
-                         which is a superset where the key list is written in the program and says
-                         nothing where it is not -- so one incidental literal naming a real key made
-                         an unresolved reach look answered, and the check reported success having
-                         proven nothing about it (Codex P2, round 4). *)
-                      List.iter reads ~f:(fun (source, r) ->
-                          List.iter r.Sources.reader_unresolved ~f:(fun what ->
-                              fail
-                                (Printf.sprintf
-                                   "%s: %s/%s reaches the environment reader with a key this scan \
-                                    cannot resolve to a finite set -- %s. There is then nothing to \
-                                    hold the `(env_var …)` declarations against, and a check that \
-                                    carried on would report success having proven nothing. Iterate \
-                                    a list of string literals this program's modules define, or \
-                                    spell the key at the call"
-                                   where directory source what)));
-                      (* Normalized before the registry is consulted: `read_env_var` builds its
-                         variable through `Utils.env_var_name`, which UPPERCASES, so `read_env_var
-                         "PROFILE"` reads the same `OCANNL_PROFILE` as the lowercase spelling. A
-                         case-sensitive membership test dropped it as an unknown key and asked for
-                         no declaration -- a silent pass over a variable the guard does observe
-                         (Codex P2, round 5).
-
-                         Every resolved key is asked for, KNOWN OR NOT: the reader builds and
-                         consults `OCANNL_<KEY>` whatever the registry says, so a misspelled key is
-                         still a variable the run depends on, and filtering it out recorded neither
-                         a requirement nor a refusal (Codex P2, round 11). An unknown one cannot be
-                         declared -- the sibling check refuses a declaration naming no key OCANNL
-                         reads -- so a pin is the way to satisfy it, which is what the synthetic
-                         keys in `config_var_spellings` already do. *)
-                      let keys =
-                        List.concat_map reads ~f:(fun (_, r) -> r.Sources.reader_keys)
-                        |> List.map ~f:String.lowercase
-                        |> List.dedup_and_sort ~compare:String.compare
-                      in
-                      List.iter keys ~f:(fun key ->
-                          let var = Utils.env_var_name key in
-                          let answers (deps, pins) =
-                            Scan.declares_env_var deps var
-                            (* A variable the rule pins with `(setenv …)` cannot arrive from the
-                               ambient environment, so that run does not depend on it. By SCOPE, and
-                               at every run the action makes: a `progn` pinning one branch has not
-                               pinned another. *)
-                            || Set.mem pins var
-                          in
-                          match (runners, List.filter runners ~f:(fun r -> not (answers r))) with
-                          | [], _ when String.equal kind "library" ->
-                              fail
-                                (Printf.sprintf
-                                   "%s reads the configuration key `%s` straight from the \
-                                    environment, from a library module -- every executable that \
-                                    links the library reads it, so the requirement would fall on \
-                                    every stanza that links it, where nothing follows it. An \
-                                    `(inline_tests (deps …))` declaration is not a licence either: \
-                                    it invalidates the inline-test runner alone, and leaves the \
-                                    other linkers stale. Move the read into the executable's own \
-                                    modules, where `(env_var %s)` can answer for it"
-                                   where key var)
-                          | [], _ ->
-                              fail
-                                (Printf.sprintf
-                                   "%s reads the configuration key `%s` straight from the \
-                                    environment, and no stanza in this file runs %s -- an \
-                                    `(executable)` has no `deps` field, so the `(env_var %s)` \
-                                    declaration goes on the rule that RUNS it, and this scan can \
-                                    find none"
-                                   where key program var)
-                          | _, [] ->
-                              guard_table :=
-                                ( where,
-                                  var,
-                                  Printf.sprintf "%d run%s of %s" (List.length runners)
-                                    (if List.length runners = 1 then "" else "s")
-                                    program )
-                                :: !guard_table
-                          | _, missing ->
-                              fail
-                                (Printf.sprintf
-                                   "%s reads the configuration key `%s` straight from the \
-                                    environment through `Utils.%s`, and %d of the %d run%s of %s \
-                                    neither declares `(env_var %s)` nor pins the variable -- dune \
-                                    then serves that run's previous output across a change of it, \
-                                    so the guard that would have reported the variable never runs. \
-                                    Add the declaration to every rule that runs %s, or pin the \
-                                    variable there with `(setenv %s …)`%s"
-                                   where key Sources.env_reader (List.length missing)
-                                   (List.length runners)
-                                   (if List.length runners = 1 then "" else "s")
-                                   program var program var
-                                   (if Set.mem Utils.known_config_keys key then ""
-                                    else
-                                      Printf.sprintf
-                                        ". `%s` is no configuration key OCANNL reads, so it cannot \
-                                         be declared -- pin it, or fix the spelling"
-                                        key)));
-                      (* gh-ocannl-1320: the cc vector width, read by the program's own modules or a
-                         program-local library it links, asked of every run of it. A plain library
-                         is not asked -- its linkers are -- but one with inline tests is a program
-                         of its own: its generated runner runs under `(inline_tests (deps …))`, and
-                         each hand-written per-module rule running that runner under its own deps
-                         (Codex P2, round 1). *)
-                      (let width_runners, width_program =
-                         match kind with
-                         | "library" -> (
-                             match Scan.field stanza "inline_tests" with
-                             | None -> ([], program)
-                             | Some args ->
-                                 let library = named () in
-                                 ( (Scan.field_in args "deps", Set.empty (module String))
-                                   :: List.concat_map group ~f:(fun rule ->
-                                       List.map (inline_runner_pins ~library rule) ~f:(fun pins ->
-                                           (Scan.field rule "deps", pins))),
-                                   "its inline tests" ))
-                         | _ -> (runners, program)
-                       in
-                       let reads =
-                         List.filter_map own_modules ~f:(fun module_name ->
-                             Option.map
-                               (Map.find width_reach
-                                  (String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))))
-                               ~f:(fun spellings ->
-                                 Printf.sprintf "%s.ml reads %s" (String.lowercase module_name)
-                                   (String.concat ~sep:", " spellings)))
-                         @ width_reads_linked stanza
-                       in
-                       let var = Utils.env_var_name width_key in
-                       if not (List.is_empty width_runners || List.is_empty reads) then
-                         let via = String.concat ~sep:"; " reads in
-                         if
-                           List.for_all width_runners ~f:(fun (deps, pins) ->
-                               Scan.declares_env_var deps var || Set.mem pins var
-                               || Option.value_map deps ~default:false
-                                    ~f:(List.exists ~f:depends_on_universe))
-                         then width_table := (where, via) :: !width_table
-                         else
-                           fail
-                             (Printf.sprintf
-                                "%s reads the cc vector width (%s), and a rule running %s neither \
-                                 declares nor pins `%s` -- so a rerun at another width, the check \
-                                 an ARM box owes the ubuntu leg, replays the previous width's \
-                                 result as a pass. Add (env_var %s) to every rule that runs %s"
-                                where via width_program var var width_program));
                       (* gh-ocannl-1368: a program starting a search, with a run that can select cc,
                          pins the vector file or says at its stanza why its claims hold at every
                          width. *)
-                      (let in_here module_name =
-                         String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))
-                       in
-                       (* One subject per program: a `(tests (names a b))` stanza builds a separate
-                          executable per name, linking each one's main module and the shared ones
-                          but not its siblings' mains (Codex P2, round 2). *)
-                       let subjects =
-                         match (kind, Scan.names_of stanza) with
-                         | "tests", (_ :: _ :: _ as names) ->
-                             List.map names ~f:(fun n ->
-                                 ( Printf.sprintf "%s (%s)" where n,
-                                   Scan.program_modules stanza ~modules:own_modules ~name:n ))
-                         | _ -> [ (where, own_modules) ]
-                       in
-                       let cc_runs = List.filter run_stanzas ~f:(fun (r, _) -> runs_cc r) in
-                       (* The pin set names the variable a `setenv` fixes, not the value it fixes it
-                          to, and `""` or `-1` leaves the key on the host's probe: every `setenv` of
-                          it in the run's stanza has to set a value (Codex P2, round 1). *)
-                       let sets_a_value runner ~key =
-                         let var = Utils.env_var_name key in
-                         let rec values = function
-                           | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest)
-                             when String.equal (String.uppercase name) var ->
-                               value :: List.concat_map rest ~f:values
-                           | Sexp.List items -> List.concat_map items ~f:values
-                           | Sexp.Atom _ -> []
-                         in
-                         List.for_all (values runner) ~f:(function
-                           | Sexp.Atom value -> vector_file_pins key value
-                           | Sexp.List _ -> false)
-                       in
-                       (* A command-line setting outranks both the environment and the configuration
-                          file (Codex P2, round 3), under any spelling the runtime reads
-                          ([Utils.cmdline_var_prefixes], round 4). The scan credits none: one
-                          anywhere in the run's stanza leaves the key to the command line, which
-                          needs the marker. *)
-                       let on_command_line runner ~key =
-                         let prefixes = Utils.cmdline_var_prefixes key in
-                         let rec atoms = function
-                           | Sexp.Atom atom -> [ atom ]
-                           | Sexp.List items -> List.concat_map items ~f:atoms
-                         in
-                         List.exists (atoms runner) ~f:(fun atom ->
-                             List.exists prefixes ~f:(fun prefix -> String.is_prefix atom ~prefix))
-                       in
-                       (* Whether a program's initialization pins the file: one of its modules CALLS
-                          a blessed helper in statement position of a top-level item that runs at
-                          initialization (a helper in a closure or an argument is not a call, round
-                          4), every item before it names neither a search nor another of the
-                          program's modules -- a search seeds from whatever the file is when it
-                          starts, so a pin after it is no pin (round 3) -- and no item from the
-                          pinning one up to the first search spells a key of the file, which could
-                          reset it (round 4). No other module of the program names a search at all,
-                          since its initializers may run before the pinning one. *)
-                       let init_pin modules =
-                         let names_search m = Map.mem search_reach (in_here m) in
-                         let key_literals =
-                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
-                               vector_file_literals key)
-                         in
-                         List.find_map modules ~f:(fun m ->
-                             let others =
-                               List.filter modules ~f:(fun m' -> not (String.equal m m'))
-                             in
-                             match Map.find vector_file_init_order (in_here m) with
-                             | Some (items, helper_of, is_search)
-                               when not (List.exists others ~f:names_search) ->
-                                 let barrier = function
-                                   | path when is_search path -> true
-                                   | first :: _ :: _ -> List.mem others first ~equal:String.equal
-                                   | _ -> false
-                                 in
-                                 let rec scan pinned = function
-                                   | [] -> pinned
-                                   | item :: _ when List.exists item.Sources.paths ~f:barrier ->
-                                       pinned
-                                   | item :: rest ->
-                                       let pinned =
-                                         match
-                                           if item.Sources.runs then
-                                             List.filter_map item.Sources.called ~f:helper_of
-                                           else []
-                                         with
-                                         | [] -> pinned
-                                         | helpers -> Some helpers
-                                       in
-                                       let pinned =
-                                         if
-                                           List.exists item.Sources.literals ~f:(fun literal ->
-                                               List.mem key_literals literal ~equal:String.equal)
-                                         then None
-                                         else pinned
-                                       in
-                                       scan pinned rest
-                                 in
-                                 Option.map (scan None items) ~f:(fun helpers ->
-                                     Printf.sprintf
-                                       "%s.ml calls %s at initialization, before any search"
-                                       (String.lowercase m)
-                                       (String.concat ~sep:", "
-                                          (List.map
-                                             (List.dedup_and_sort helpers ~compare:String.compare)
-                                             ~f:(fun helper -> "`" ^ helper ^ "`"))))
-                             | _ -> None)
-                       in
-                       (* How a subject pins the whole file on every cc run, or [None]. Per key and
-                          run, by precedence: a command-line setting leaves it unpinned, then a
-                          `setenv` around the run decides -- a `-1` there undoes the initializer's
-                          pin (round 2) -- and only without either, the initializer. *)
-                       let pinned_by modules =
-                         let init = init_pin modules in
-                         let answers =
-                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
-                               let var = Utils.env_var_name key in
-                               List.map cc_runs ~f:(fun (r, pins) ->
-                                   (* A `setenv` of the key anywhere in the stanza that sets no
-                                      pinning value leaves this run unpinned, even one wrapping only
-                                      some of its invocations: the pin set it is read from
-                                      intersects them (Codex P2, round 7). *)
-                                   if on_command_line r ~key || not (sets_a_value r ~key) then None
-                                   else if Set.mem pins var then
-                                     Some
-                                       (Printf.sprintf "every run that can select cc pins `%s`" var)
-                                   else init))
-                         in
-                         Option.map (Option.all answers) ~f:(fun hows ->
-                             String.concat ~sep:"; "
-                               (List.dedup_and_sort hows ~compare:String.compare))
-                       in
-                       let searching =
-                         List.filter_map subjects ~f:(fun (subject, modules) ->
-                             match
-                               List.filter_map modules ~f:(fun m ->
-                                   Map.find search_reach (in_here m))
-                               |> List.concat
-                               |> List.dedup_and_sort ~compare:String.compare
-                             with
-                             | [] -> None
-                             | searches ->
-                                 Some (subject, String.concat ~sep:", " searches, pinned_by modules))
-                       in
-                       let markers = width_markers_of stanza in
-                       if not (List.is_empty searching || List.is_empty cc_runs) then (
-                         List.iter markers ~f:(fun m ->
-                             width_markers_used := m.Scan.contained_line :: !width_markers_used);
-                         let record subject via answer =
-                           search_table := (subject, via, answer) :: !search_table
-                         in
-                         match markers with
-                         | _ :: second :: _ ->
-                             fail
-                               (Printf.sprintf
-                                  "%s carries more than one width marker (the second at line %d) \
-                                   -- say it once"
-                                  where second.Scan.contained_line)
-                         | [ marker ] -> (
-                             match List.filter_map searching ~f:(fun (_, _, pinned) -> pinned) with
-                             | hows when List.length hows = List.length searching ->
-                                 fail
-                                   (Printf.sprintf
-                                      "%s pins the cc vector file (%s) and carries a width marker \
-                                       at line %d saying its claims hold at every width -- a \
-                                       pinned program's runs see one width, so keep whichever is \
-                                       true"
-                                      where (String.concat ~sep:"; " hows)
-                                      marker.Scan.contained_line)
-                             | _ ->
-                                 List.iter searching ~f:(fun (subject, via, pinned) ->
-                                     record subject via
-                                       (match pinned with
-                                       | Some how -> "pinned: " ^ how
-                                       | None -> "independent, by its marker")))
-                         | [] ->
-                             List.iter searching ~f:(fun (subject, via, pinned) ->
-                                 match pinned with
-                                 | Some how -> record subject via ("pinned: " ^ how)
-                                 | None ->
-                                     fail
-                                       (Printf.sprintf
-                                          "%s starts a search (%s) with a run that can select cc, \
-                                           at the width the host auto-probes -- 16 bytes on ARM, \
-                                           32 or 64 on the x86 runners CI draws at random, with a \
-                                           register count that differs again -- so a claim on what \
-                                           the search seeds or keeps passes on one host and fails \
-                                           on the next. Pin the vector file (%s) by calling \
-                                           `Fissioned_chain.small_menu` or `small_menu_envelope` \
-                                           in a top-level item before the first search, or with \
-                                           `(setenv …)` of each on every such run, or add `; %s %s \
-                                           -- <why its claims hold at every width>` inside the \
-                                           stanza"
-                                          subject via
-                                          (String.concat ~sep:", "
-                                             (List.map vector_file_keys ~f:(fun (key, _) ->
-                                                  Printf.sprintf "`%s`" key)))
-                                          width_marker_sentinel width_marker_declaration))));
-                      (* gh-ocannl-1149: the keys the program reaches by naming the schedule
-                         pipeline, asked of every run of it exactly as a guard's keys are. Not of a
-                         library: one naming the pipeline is the route every compiled program takes,
-                         which the header of [pipeline_home] leaves out of scope -- and not of an
-                         executable no rule runs, which has no cached result to go stale. *)
-                      if not (String.equal kind "library") then
-                        let reached =
-                          List.filter_map own_modules ~f:(fun module_name ->
-                              Map.find pipeline_reach
-                                (String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))))
+                      let in_here module_name =
+                        String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))
+                      in
+                      (* One subject per program: a `(tests (names a b))` stanza builds a separate
+                         executable per name, linking each one's main module and the shared ones but
+                         not its siblings' mains (Codex P2, round 2). *)
+                      let subjects =
+                        match (kind, Scan.names_of stanza) with
+                        | "tests", (_ :: _ :: _ as names) ->
+                            List.map names ~f:(fun n ->
+                                ( Printf.sprintf "%s (%s)" where n,
+                                  Scan.program_modules stanza ~modules:own_modules ~name:n ))
+                        | _ -> [ (where, own_modules) ]
+                      in
+                      let cc_runs = List.filter run_stanzas ~f:(fun (r, _) -> runs_cc r) in
+                      (* The pin set names the variable a `setenv` fixes, not the value it fixes it
+                         to, and `""` or `-1` leaves the key on the host's probe: every `setenv` of
+                         it in the run's stanza has to set a value (Codex P2, round 1). *)
+                      let sets_a_value runner ~key =
+                        let var = Utils.env_var_name key in
+                        let rec values = function
+                          | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest)
+                            when String.equal (String.uppercase name) var ->
+                              value :: List.concat_map rest ~f:values
+                          | Sexp.List items -> List.concat_map items ~f:values
+                          | Sexp.Atom _ -> []
                         in
-                        let entries =
-                          List.concat_map reached ~f:fst
-                          |> List.dedup_and_sort ~compare:String.compare
+                        List.for_all (values runner) ~f:(function
+                          | Sexp.Atom value -> vector_file_pins key value
+                          | Sexp.List _ -> false)
+                      in
+                      (* A command-line setting outranks both the environment and the configuration
+                         file (Codex P2, round 3), under any spelling the runtime reads
+                         ([Utils.cmdline_var_prefixes], round 4). The scan credits none: one
+                         anywhere in the run's stanza leaves the key to the command line, which
+                         needs the marker. *)
+                      let on_command_line runner ~key =
+                        let prefixes = Utils.cmdline_var_prefixes key in
+                        let rec atoms = function
+                          | Sexp.Atom atom -> [ atom ]
+                          | Sexp.List items -> List.concat_map items ~f:atoms
                         in
-                        let pipeline_keys =
-                          List.concat_map reached ~f:snd
-                          |> List.dedup_and_sort ~compare:String.compare
+                        List.exists (atoms runner) ~f:(fun atom ->
+                            List.exists prefixes ~f:(fun prefix -> String.is_prefix atom ~prefix))
+                      in
+                      (* Whether a program's initialization pins the file: one of its modules CALLS
+                         a blessed helper in statement position of a top-level item that runs at
+                         initialization (a helper in a closure or an argument is not a call, round
+                         4), every item before it names neither a search nor another of the
+                         program's modules -- a search seeds from whatever the file is when it
+                         starts, so a pin after it is no pin (round 3) -- and no item from the
+                         pinning one up to the first search spells a key of the file, which could
+                         reset it (round 4). No other module of the program names a search at all,
+                         since its initializers may run before the pinning one. *)
+                      let init_pin modules =
+                        let names_search m = Map.mem search_reach (in_here m) in
+                        let key_literals =
+                          List.concat_map vector_file_keys ~f:(fun (key, _) ->
+                              vector_file_literals key)
                         in
-                        if not (List.is_empty runners || List.is_empty pipeline_keys) then
-                          let unanswered =
-                            List.filter pipeline_keys ~f:(fun key ->
-                                let var = Utils.env_var_name key in
-                                (* A rule depending on `(universe)` reruns on every build, so no
-                                   variable can serve it from the cache. *)
-                                List.exists runners ~f:(fun (deps, pins) ->
-                                    not
-                                      (Scan.declares_env_var deps var || Set.mem pins var
-                                      || Option.value_map deps ~default:false
-                                           ~f:(List.exists ~f:depends_on_universe))))
-                          in
-                          let via =
-                            String.concat ~sep:", "
-                              (List.map entries ~f:(fun entry ->
-                                   String.concat ~sep:"." (pipeline_module @ [ entry ])))
-                          in
-                          if List.is_empty unanswered then
-                            pipeline_table := (where, via) :: !pipeline_table
-                          else
+                        List.find_map modules ~f:(fun m ->
+                            let others =
+                              List.filter modules ~f:(fun m' -> not (String.equal m m'))
+                            in
+                            match Map.find vector_file_init_order (in_here m) with
+                            | Some (items, helper_of, is_search)
+                              when not (List.exists others ~f:names_search) ->
+                                let barrier = function
+                                  | path when is_search path -> true
+                                  | first :: _ :: _ -> List.mem others first ~equal:String.equal
+                                  | _ -> false
+                                in
+                                let rec scan pinned = function
+                                  | [] -> pinned
+                                  | item :: _ when List.exists item.Sources.paths ~f:barrier ->
+                                      pinned
+                                  | item :: rest ->
+                                      let pinned =
+                                        match
+                                          if item.Sources.runs then
+                                            List.filter_map item.Sources.called ~f:helper_of
+                                          else []
+                                        with
+                                        | [] -> pinned
+                                        | helpers -> Some helpers
+                                      in
+                                      let pinned =
+                                        if
+                                          List.exists item.Sources.literals ~f:(fun literal ->
+                                              List.mem key_literals literal ~equal:String.equal)
+                                        then None
+                                        else pinned
+                                      in
+                                      scan pinned rest
+                                in
+                                Option.map (scan None items) ~f:(fun helpers ->
+                                    Printf.sprintf
+                                      "%s.ml calls %s at initialization, before any search"
+                                      (String.lowercase m)
+                                      (String.concat ~sep:", "
+                                         (List.map
+                                            (List.dedup_and_sort helpers ~compare:String.compare)
+                                            ~f:(fun helper -> "`" ^ helper ^ "`"))))
+                            | _ -> None)
+                      in
+                      (* How a subject pins the whole file on every cc run, or [None]. Per key and
+                         run, by precedence: a command-line setting leaves it unpinned, then a
+                         `setenv` around the run decides -- a `-1` there undoes the initializer's
+                         pin (round 2) -- and only without either, the initializer. *)
+                      let pinned_by modules =
+                        let init = init_pin modules in
+                        let answers =
+                          List.concat_map vector_file_keys ~f:(fun (key, _) ->
+                              let var = Utils.env_var_name key in
+                              List.map cc_runs ~f:(fun (r, pins) ->
+                                  (* A `setenv` of the key anywhere in the stanza that sets no
+                                     pinning value leaves this run unpinned, even one wrapping only
+                                     some of its invocations: the pin set it is read from intersects
+                                     them (Codex P2, round 7). *)
+                                  if on_command_line r ~key || not (sets_a_value r ~key) then None
+                                  else if Set.mem pins var then
+                                    Some
+                                      (Printf.sprintf "every run that can select cc pins `%s`" var)
+                                  else init))
+                        in
+                        Option.map (Option.all answers) ~f:(fun hows ->
+                            String.concat ~sep:"; "
+                              (List.dedup_and_sort hows ~compare:String.compare))
+                      in
+                      let searching =
+                        List.filter_map subjects ~f:(fun (subject, modules) ->
+                            match
+                              List.filter_map modules ~f:(fun m ->
+                                  Map.find search_reach (in_here m))
+                              |> List.concat
+                              |> List.dedup_and_sort ~compare:String.compare
+                            with
+                            | [] -> None
+                            | searches ->
+                                Some (subject, String.concat ~sep:", " searches, pinned_by modules))
+                      in
+                      let markers = width_markers_of stanza in
+                      if not (List.is_empty searching || List.is_empty cc_runs) then (
+                        List.iter markers ~f:(fun m ->
+                            width_markers_used := m.Scan.contained_line :: !width_markers_used);
+                        let record subject via answer =
+                          search_table := (subject, via, answer) :: !search_table
+                        in
+                        match markers with
+                        | _ :: second :: _ ->
                             fail
                               (Printf.sprintf
-                                 "%s names %s, which reach%s the configuration key%s %s, and a \
-                                  rule running %s neither declares nor pins %s -- dune then serves \
-                                  the previous result as a pass when the variable changes, which \
-                                  is how a debugging run of the default schedule goes silently \
-                                  stale. Add %s to every rule that runs %s"
-                                 where via
-                                 (if List.length entries = 1 then "es" else "")
-                                 (if List.length unanswered = 1 then "" else "s")
-                                 (String.concat ~sep:", " unanswered)
-                                 program
-                                 (if List.length unanswered = 1 then "it" else "them")
-                                 (String.concat ~sep:" "
-                                    (List.map unanswered ~f:(fun key ->
-                                         Printf.sprintf "(env_var %s)" (Utils.env_var_name key))))
-                                 program))));
+                                 "%s carries more than one width marker (the second at line %d) -- \
+                                  say it once"
+                                 where second.Scan.contained_line)
+                        | [ marker ] -> (
+                            match List.filter_map searching ~f:(fun (_, _, pinned) -> pinned) with
+                            | hows when List.length hows = List.length searching ->
+                                fail
+                                  (Printf.sprintf
+                                     "%s pins the cc vector file (%s) and carries a width marker \
+                                      at line %d saying its claims hold at every width -- a pinned \
+                                      program's runs see one width, so keep whichever is true"
+                                     where (String.concat ~sep:"; " hows) marker.Scan.contained_line)
+                            | _ ->
+                                List.iter searching ~f:(fun (subject, via, pinned) ->
+                                    record subject via
+                                      (match pinned with
+                                      | Some how -> "pinned: " ^ how
+                                      | None -> "independent, by its marker")))
+                        | [] ->
+                            List.iter searching ~f:(fun (subject, via, pinned) ->
+                                match pinned with
+                                | Some how -> record subject via ("pinned: " ^ how)
+                                | None ->
+                                    fail
+                                      (Printf.sprintf
+                                         "%s starts a search (%s) with a run that can select cc, \
+                                          at the width the host auto-probes -- 16 bytes on ARM, 32 \
+                                          or 64 on the x86 runners CI draws at random, with a \
+                                          register count that differs again -- so a claim on what \
+                                          the search seeds or keeps passes on one host and fails \
+                                          on the next. Pin the vector file (%s) by calling \
+                                          `Fissioned_chain.small_menu` or `small_menu_envelope` in \
+                                          a top-level item before the first search, or with \
+                                          `(setenv …)` of each on every such run, or add `; %s %s \
+                                          -- <why its claims hold at every width>` inside the \
+                                          stanza"
+                                         subject via
+                                         (String.concat ~sep:", "
+                                            (List.map vector_file_keys ~f:(fun (key, _) ->
+                                                 Printf.sprintf "`%s`" key)))
+                                         width_marker_sentinel width_marker_declaration))))));
+      (* gh-ocannl-723's placement half, which the ambient record does not retire: the initializer
+         empties the artifact directory of the process that calls it, so it belongs to an
+         executable's own modules. Called from a library module's initialization, it runs in every
+         executable linking the library -- unrelated ones included -- and can sweep artifacts an
+         earlier-initialized module already produced. A `(select …)` arm is the stanza's module as
+         much as its plain source is. Refused per library module; a repository with no library
+         calling it passes, which is the point. *)
+      check_per_directory (fun subdir group ->
+          let here = Scan.in_subdir dir subdir in
+          let directory = if String.is_empty here then "." else here in
+          let directory_modules =
+            List.filter_map source_files ~f:(fun (path, _) ->
+                if String.equal (Stdlib.Filename.dirname path) directory then
+                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
+                else None)
+          in
+          List.iter group ~f:(fun stanza ->
+              match Scan.head stanza with
+              | Some "library" ->
+                  let library =
+                    match Scan.names_of stanza with name :: _ -> name | [] -> "<unnamed>"
+                  in
+                  let arms = Scan.select_arms stanza in
+                  List.iter (Scan.modules_of ~directory_modules group stanza) ~f:(fun m ->
+                      let target = m ^ ".ml" in
+                      let files =
+                        target
+                        :: List.filter_map arms ~f:(fun (selected, arm) ->
+                            Option.some_if (String.equal selected target) arm)
+                      in
+                      List.iter files ~f:(fun file ->
+                          let key = String.lowercase (Scan.in_subdir here file) in
+                          match List.Assoc.find sources ~equal:String.equal key with
+                          | None -> ()
+                          | Some on_disk -> (
+                              let content = In_channel.read_all on_disk in
+                              if Sources.could_call_generated_init content then
+                                match Sources.generated_init_calls_in_source content with
+                                | [] -> ()
+                                | calls ->
+                                    fail
+                                      (Printf.sprintf
+                                         "%s, library %s: %s calls %s from a library module -- the \
+                                          initializer empties the artifact directory of the \
+                                          process that calls it, so it belongs to an executable's \
+                                          own modules; from a library it runs in every executable \
+                                          linking it (gh-ocannl-723)"
+                                         dune_file library key
+                                         (String.concat ~sep:", "
+                                            (List.map calls ~f:(fun c -> "`" ^ c ^ "`"))))
+                                | exception exn ->
+                                    fail
+                                      (Printf.sprintf
+                                         "%s names `Test_utils.Generated` and does not parse, so \
+                                          whether library %s calls the initializer cannot be \
+                                          established: %s"
+                                         key library (Exn.to_string exn)))))
+              | _ -> ()));
       (* gh-ocannl-1037: the per-module entry points into inline tests. Every module of an
          inline-test library that holds tests has one, every rule running such a runner IS one, and
          none is aggregated onto `runtest`, where the library's generated action already runs it.
@@ -3641,8 +2822,7 @@ let main () =
                      "%s carries a width marker, and no program of its stanza starts a search with \
                       a run that can select cc -- drop the marker"
                      (width_marker_where marker.Scan.contained_line))));
-      check_family_members ();
-      artifact_by_file := (dune_file, !artifact_subjects) :: !artifact_by_file);
+      check_family_members ());
   (* Every static format a repository scanner hands to a Verdict refusal or claim, related to all
      permanent control goldens. The filename conventions are the repository's existing control
      vocabulary; a scan whose live golden embeds its controls announces the same thing with the
@@ -3695,15 +2875,6 @@ let main () =
       (Printf.sprintf
          "scanner-refusal exemptions no extracted diagnostic needs any more -- drop them: %s"
          (String.concat ~sep:", " (Set.to_list stale_refusal_exemptions)));
-  let stale =
-    Set.diff (Set.of_list (module String) (List.map exempt_declarations ~f:fst)) !exemptions_used
-  in
-  if not (Set.is_empty stale) then
-    fail
-      (Printf.sprintf
-         "exempted declarations no dune file makes any more -- drop them from the exemption list: \
-          %s"
-         (String.concat ~sep:", " (Set.to_list stale)));
   (* gh-ocannl-1233: the same question of `exempt_reads`. Every control tree carries each entry's
      reader ([control_context]), so a tree with no library source cannot trip this. *)
   let stale_reads =
@@ -3722,8 +2893,6 @@ let main () =
      in the golden where widening it is a reviewable diff. *)
   printf "Directories whose sources this scan reads:\n";
   Set.iter scanned_dirs ~f:(fun dir -> printf "  %s\n" (if String.is_empty dir then "." else dir));
-  printf "\nConfiguration keys tracked as ambient dependencies, in the one spelling OCANNL reads:\n";
-  Set.iter !tracked_keys ~f:(printf "  %s\n");
   printf "\nPer-module tracing gates, and the library whose preprocessor_deps declares each:\n";
   List.sort !gate_table ~compare:(fun (_, a, _) (_, b, _) -> String.compare a b)
   |> List.iter ~f:(fun (where, gate, source) -> printf "  %-30s %s (%s)\n" gate where source);
@@ -3733,49 +2902,6 @@ let main () =
   |> List.iter ~f:(fun (where, read, source) -> printf "  %-30s %s (%s)\n" read where source);
   printf "\nRun-time reads exempted from declaration, each for the reason `exempt_reads` gives:\n";
   List.dedup_and_sort !exempt_read_table ~compare:String.compare |> List.iter ~f:(printf "  %s\n");
-  printf
-    "\n\
-     Configuration keys a program reads straight from the environment through `Utils.%s`, and how\n\
-     many runs of it answer for each (gh-ocannl-749). A key read this way cannot be outranked by\n\
-     a commandline flag or a config file, so every run depends on the variable unconditionally --\n\
-     and EVERY one of them declares it or pins it with `setenv`, since dune invalidates each rule\n\
-     on its own deps.\n"
-    Sources.env_reader;
-  List.sort !guard_table ~compare:(fun (wa, a, sa) (wb, b, sb) ->
-      match String.compare wa wb with
-      | 0 -> ( match String.compare a b with 0 -> String.compare sa sb | c -> c)
-      | c -> c)
-  |> List.iter ~f:(fun (where, var, source) -> printf "  %-38s %s (%s)\n" var where source);
-  printf
-    "\n\
-     Programs naming `%s` and the entry points they name, every configuration key of which is\n\
-     declared or pinned by every rule running the program (gh-ocannl-1149):\n"
-    (String.concat ~sep:"." pipeline_module);
-  (* The universe the requirement is drawn from, so a key the pipeline starts reading is a
-     reviewable diff -- and a `schedule.ml` this run was not handed empties it rather than retiring
-     the rule in silence. *)
-  printf "  (the keys its values reach: %s)\n"
-    (String.concat ~sep:", "
-       (List.concat_map pipeline_entries ~f:snd |> List.dedup_and_sort ~compare:String.compare));
-  List.sort !pipeline_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
-  |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
-  printf
-    "\n\
-     Programs reading the cc vector width, every rule running which declares or pins `%s`\n\
-     (gh-ocannl-1320):\n"
-    (Utils.env_var_name width_key);
-  (* The derivation itself, so a value or field that starts or stops carrying the width is a
-     reviewable diff -- and a `cc_backend.ml` or `schedulers.ml` this run was not handed empties a
-     line rather than retiring the rule in silence. *)
-  printf "  (the `%s` values reaching `%s`: %s)\n" width_module width_key
-    (String.concat ~sep:", " width_values);
-  printf "  (the device-limits fields they fill in %s: %s)\n" width_limits_home
-    (String.concat ~sep:", " width_fields);
-  printf "  (the record type of those fields, whose every label marks a limits update, in %s: %s)\n"
-    width_limits_type_home
-    (String.concat ~sep:", " (List.map width_record_types ~f:fst));
-  List.sort !width_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
-  |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
   printf
     "\n\
      Programs starting a search with a run that can select cc, each pinning the cc vector file\n\
@@ -3818,34 +2944,9 @@ let main () =
         (Option.value_map aliases ~default:"" ~f:(fun aliases ->
              " (" ^ String.concat ~sep:", " aliases ^ ")"))
         why);
-  printf "\nDeclarations of a name OCANNL does not read as a configuration key, exempt by design:\n";
-  List.iter exempt_declarations ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nCredential variables no stanza may declare (%s, gh-ocannl-1280):\n  %s\n"
     credential_env_file
     (String.concat ~sep:" | " (List.map credential_patterns ~f:credential_pattern_text));
-  printf
-    "\n\
-     Artifact-directory declarations, by dune file. A stanza whose modules call\n\
-     `Test_utils.Generated.init` declares `(env_var %s)`\n\
-     where dune runs it -- in its own `(deps ...)`, or, for an `(executable)` which has none, in\n\
-     the rule that runs it (gh-ocannl-723). What is held here is which VERDICTS a file's stanzas\n\
-     draw, not how many draw each: a tally would move whenever a test is added, and the per-stanza\n\
-     table goes to stderr.\n"
-    Scan.artifact_env_var;
-  printf "  %s\n"
-    (if repository_census then
-       Printf.sprintf "the census covers every scan root, so the floor of %d callers applies to it"
-         artifact_caller_floor
-     else
-       "the census does not cover the repository's scan roots, so only the relationship is asked \
-        of it");
-  List.sort !artifact_by_file ~compare:(fun (a, _) (b, _) -> String.compare a b)
-  |> List.iter ~f:(fun (dune_file, subjects) ->
-      if not (List.is_empty subjects) then
-        printf "  %s: %s\n" dune_file
-          (List.map subjects ~f:(fun s -> Scan.artifact_verdict_name s.Scan.artifact_verdict)
-          |> List.dedup_and_sort ~compare:String.compare
-          |> String.concat ~sep:", "));
   (* gh-ocannl-659. The golden holds which backend WORDS a dune file's markers use, not how many
      stanzas carry each: a tally there would move on every test added anywhere in the repository,
      which is the churn gh-ocannl-665 took out of `config_dep_completeness` for the same reason. The
@@ -3968,6 +3069,10 @@ let main () =
      why it does not"
     (!xor_violations = 0);
   Verdict.p
+    "no `(env_var ...)` declares a variable the ambient record carries, which every rule depending \
+     on `ocannl_config` reruns for already"
+    (!recorded_violations = 0);
+  Verdict.p
     "every marker the text spells was read as one, and every stanza the raw text shows running an \
      executable has a site placed for it"
     (!marker_holes = 0);
@@ -3980,7 +3085,7 @@ let main () =
      true of nothing and print the line a healthy repository prints. The floor is a statement about
      the REPOSITORY, so it is asked only of a run that has it: the control's synthetic trees
      legitimately contain one member or none, and the relationship is checked over them either way.
-     Same shape, and the same reasoning, as the artifact census floor below. *)
+     Same shape, and the same reasoning, as the refusal census floor below. *)
   let family_members = List.sort !family_table ~compare:Poly.compare in
   let family_unaggregated = List.filter family_members ~f:(fun (_, _, _, reached) -> not reached) in
   let found family =
@@ -4017,48 +3122,6 @@ let main () =
      derivation finds enough of them for the rule to be about something"
     dune_files ~f:(fun (dune_file, _) ->
       (not (Set.mem unaggregated_files dune_file)) && family_floor_met);
-  eprintf
-    "Artifact-directory verdict of every stanza whose modules call Test_utils.Generated.init, or \
-     which declares %s without one (not diffed -- see gh-ocannl-665):\n\
-     %s\n"
-    Scan.artifact_env_var
-    (String.concat ~sep:"\n" (List.rev !artifact_table));
-  let unclaimed =
-    List.filter artifact_callers ~f:(fun path ->
-        not (Set.mem !artifact_claimed (String.lowercase path)))
-  in
-  List.iter unclaimed ~f:(fun path ->
-      fail
-        (Printf.sprintf
-           "%s calls `Test_utils.Generated.init` and no stanza's `(modules ...)` claims it -- the \
-            rule that would require `(env_var %s)` of it never reaches it. Name the module in the \
-            stanza that builds it, or hand this scan that directory's dune file"
-           path Scan.artifact_env_var));
-  let floor_met =
-    (not repository_census) || List.length artifact_callers >= artifact_caller_floor
-  in
-  if not floor_met then
-    fail
-      (Printf.sprintf
-         "the repository's census finds %d source%s calling `Test_utils.Generated.init`, against a \
-          floor of %d -- the census has stopped finding them, and a relationship checked over an \
-          empty set holds for nothing"
-         (List.length artifact_callers)
-         (if List.length artifact_callers = 1 then "" else "s")
-         artifact_caller_floor);
-  eprintf "Sources calling Test_utils.Generated.init: %d, against a floor of %d.\n"
-    (List.length artifact_callers) artifact_caller_floor;
-  (* Over the sources scanned, for the reason the family claim above gives: a control tree may
-     legitimately hold no caller at all, and the callers' own floor is the repository-gated one. *)
-  let unclaimed_sources = Set.of_list (module String) unclaimed in
-  Verdict.p_all
-    "every source that calls Test_utils.Generated.init is claimed by some stanza's modules, and a \
-     repository-wide census finds enough of them for the rule to be about something"
-    source_files ~f:(fun (path, _) -> (not (Set.mem unclaimed_sources path)) && floor_met);
-  Verdict.p
-    "every stanza whose modules call Test_utils.Generated.init declares OCANNL_BUILD_FILES_PREFIX \
-     where dune runs it, and every declaration of it has a caller behind it"
-    (!artifact_violations = 0);
   if repository_census then (
     let derived_scanner_sources =
       Set.to_list !scanner_sources |> List.sort ~compare:String.compare
@@ -4111,135 +3174,84 @@ let main () =
         && Set.is_empty stale_refusal_exemptions));
   Verdict.success_trailer ~blank_line:true
     [
-      "every `(env_var ...)` addressed to OCANNL names a spelling a run reads, every test \
-       directory carries the ambient gate, and every per-module tracing gate is declared by the \
-       library whose modules read it.";
+      "no `(env_var ...)` restates a variable the ambient record carries, every test directory \
+       carries the ambient gate, and every per-module tracing gate is declared by the library \
+       whose modules read it.";
     ];
   if repository_census then
     List.Assoc.find sources "test/operations/env_var_deps.ml" ~equal:String.equal
     |> Option.iter ~f:(fun source -> Refusal_manifest.print source)
 
-(* gh-ocannl-723's negative control, and why it runs the checker rather than inspecting it.
+(* gh-ocannl-1425's negative control, and why it runs the checker rather than inspecting it.
 
-   A control written from today's corpus encodes the ABSENCE of the shape it is about: every stanza
-   in this repository that calls `Test_utils.Generated.init` declares the variable, so a check that
-   reported nothing and a check that decided nothing would both pass over it, and the second is what
-   an unexercised rule quietly becomes. So the rule is put to a stanza/source pair the repository
-   does not contain: a synthetic tree of four dune files and one source, handed to THIS executable
-   in a child process, once with the declaration and once without.
+   A control written from today's corpus encodes the ABSENCE of the shape it is about: no stanza in
+   this repository declares a variable the ambient record carries, so a check that reported nothing
+   and a check that decided nothing would both pass over it, and the second is what an unexercised
+   rule quietly becomes. So the rule is put to a tree the repository does not contain: one dune file
+   and two sources, handed to THIS executable in a child process, once declaring only variables the
+   record leaves out -- someone else's, a reserved tooling name, the backend -- and once declaring
+   two it carries besides: a key inside a `(subdir …)` group, and an unknown lowercase name at the
+   top level.
 
-   Everything but the one declaration is held fixed between the two runs, so the difference in
+   Everything but those two declarations is held fixed between the two runs, so the difference in
    verdict is the rule's and nothing else's. The tree is built to satisfy the file's other rules --
-   the fixtures for the exemption and gateless lists are DERIVED from those lists, so they cannot
-   drift from them -- which buys the sharper claim: the violating tree exits 1 and names the stanza,
-   and the legitimate one exits 0. *)
+   the fixtures for the gateless list are DERIVED from that list, so they cannot drift from it --
+   which buys the sharper claim: the violating tree exits 1 and names both variables, and the
+   legitimate one exits 0. *)
 
-let control_root_paths =
-  [
-    "t/dune";
-    "t/probe.ml";
-    "t/nested/probe2.ml";
-    "t/probe3.ml";
-    "t/probe3.real.ml";
-    "t/probe3.missing.ml";
-  ]
+let control_root_paths = [ "t/dune"; "t/probe.ml"; "t/nested/probe2.ml" ]
+let control_probe = "let () = ()\n"
 
-let control_probe = "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n"
+(* The key the violating arm declares inside the group, and the unknown name it declares at the top
+   level: lowercase, so the record's `Env_unknown_key` arm is the one asked. *)
+let control_recorded_key = "OCANNL_BUILD_FILES_PREFIX"
+let control_recorded_unknown = "ocannl_backedn"
 
-(* The subject: an `(executable)` whose one module calls the initializer, plus the rule that runs it
-   -- an executable has no `deps` field, so the rule is where the declaration has to go, and putting
-   the pair in the control is what keeps that placement checked. *)
 let control_subject ~declares =
   Printf.sprintf
     {dune|(executable
  (name probe)
- (modules probe)
- (libraries test_utils))
+ (modules probe))
 
 (rule
  ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.
  (target probe.actual)
  (deps
   ocannl_config
+  (env_var HOME)
+  (env_var OCANNL_TOOL_PROBE_DIR)
 %s  %%{dep:probe.exe})
  (action
   (with-stdout-to
    %%{target}
    (run ./probe.exe))))
 
-; A second, always-correct pair inside a `(subdir …)`. It is not the pair under control -- it
-; declares in both runs -- but it is what makes the LEGITIMATE run's exit status depend on the walk
-; descending: a scan that only read the top level would leave `nested/probe2.ml` claimed by nobody,
-; which the census check reports (Codex P2, round 3).
+; The same pair inside a `(subdir …)`: the declaration under control sits here in the violating run,
+; so that a scan reading only the top level would pass it.
 (subdir
  nested
  (executable
   (name probe2)
-  (modules probe2)
-  (libraries test_utils))
+  (modules probe2))
  (rule
-  ; ocannl-backend: none -- the same fixture, one directory down.
   (target probe2.actual)
   (deps
    ocannl_config
    (env_var %s)
-   %%{dep:probe2.exe})
+%s   %%{dep:probe2.exe})
   (action
    (with-stdout-to
     %%{target}
     (run ./probe2.exe)))))
-
-; gh-ocannl-1294: a module built through a `(select …)` is compiled from whichever arm the
-; toolchain picked, and dune hands the scan that copy as `probe3.ml` -- here the stub's, as on a
-; machine without the library. The arm that calls the initializer is `probe3.real.ml`, and the stanza
-; naming `probe3` answers for it: claimed when its rule declares, refused like any caller's when it
-; does not.
-(executable
- (name probe3)
- (modules probe3)
- (libraries
-  test_utils
-  (select
-   probe3.ml
-   from
-   (test_utils -> probe3.real.ml)
-   (-> probe3.missing.ml))))
-
-(rule
- ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.
- (target probe3.actual)
- (deps
-  ocannl_config
-%s  %%{dep:probe3.exe})
- (action
-  (with-stdout-to
-   %%{target}
-   (run ./probe3.exe))))
 |dune}
-    (if declares then Printf.sprintf "  (env_var %s)\n" Scan.artifact_env_var else "")
-    Scan.artifact_env_var
-    (if declares then Printf.sprintf "  (env_var %s)\n" Scan.artifact_env_var else "")
+    (if declares then Printf.sprintf "  (env_var %s)\n" control_recorded_unknown else "")
+    Scan.backend_env_var
+    (if declares then Printf.sprintf "   (env_var %s)\n" control_recorded_key else "")
 
-(* The rest of the tree exists only so that the two runs differ in ONE verdict. Both lists below are
-   checked for staleness against the files that make them necessary, so a tree without those files
+(* The rest of the tree exists only so that the two runs differ in ONE verdict. The gateless list is
+   checked for staleness against the files that make it necessary, so a tree without those files
    fails for reasons that have nothing to do with the rule under control. *)
 let control_context () =
-  let by_file =
-    List.map exempt_declarations ~f:(fun (key, _) ->
-        match String.lsplit2 key ~on:':' with
-        | Some (file, name) -> (file, name)
-        | None -> (key, key))
-    |> Map.of_alist_multi (module String)
-  in
-  let exempt_files =
-    List.map (Map.to_alist by_file) ~f:(fun (file, names) ->
-        let declarations =
-          String.concat ~sep:"" (List.map names ~f:(Printf.sprintf "  (env_var %s)\n"))
-        in
-        ( file,
-          "(rule\n (target exempt.fixture)\n (deps\n" ^ declarations
-          ^ " )\n (action\n  (with-stdout-to\n   %{target}\n   (echo \"\"))))\n" ))
-  in
   let gateless_files =
     List.map gateless_dirs ~f:(fun (file, (aliases, _)) ->
         let content =
@@ -4280,7 +3292,7 @@ let control_context () =
     |> Map.to_alist
     |> List.map ~f:(fun (dune, stanzas) -> (dune, String.concat stanzas))
   in
-  exempt_files @ gateless_files @ library_dunes @ read_files
+  gateless_files @ library_dunes @ read_files
 
 let write_file path data =
   let dir = Stdlib.Filename.dirname path in
@@ -4361,11 +3373,7 @@ let attribute claim runs =
 (* The sources [control_root_paths] names beside its dune file. *)
 let write_control_sources root =
   write_file (Stdlib.Filename.concat root "t/probe.ml") control_probe;
-  write_file (Stdlib.Filename.concat root "t/nested/probe2.ml") control_probe;
-  write_file (Stdlib.Filename.concat root "t/probe3.real.ml") control_probe;
-  write_file (Stdlib.Filename.concat root "t/probe3.missing.ml") "let () = ()\n";
-  (* The select's output, as dune hands it over: here the stub's copy. *)
-  write_file (Stdlib.Filename.concat root "t/probe3.ml") "let () = ()\n"
+  write_file (Stdlib.Filename.concat root "t/nested/probe2.ml") control_probe
 
 let control () =
   (* Absolute before the chdir: `Sys.executable_name` resolves the name this process was started
@@ -4385,53 +3393,60 @@ let control () =
     write_file (Stdlib.Filename.concat root "t/dune") (control_subject ~declares);
     run_checker ~root ~exe ("." :: paths)
   in
-  (* The exact sentence the rule produces, so that the control observes THIS rule failing and not
-     merely the child's misfortune -- the argument gh-ocannl-692 made for `generated_provenance`. *)
-  let diagnostic = "calls `Test_utils.Generated.init`" in
   let report label (status, text) =
     eprintf "the control's %s run %s. Its captured output:\n%s\n" label (describe_status status)
       text
   in
-  let violating = run ~declares:false in
-  let legitimate = run ~declares:true in
-  let violating_reported =
-    (match fst violating with Unix.WEXITED 1 -> true | _ -> false)
-    && String.is_substring (snd violating) ~substring:diagnostic
-    && String.is_substring (snd violating) ~substring:Scan.artifact_env_var
+  let violating = run ~declares:true in
+  let legitimate = run ~declares:false in
+  (* The exact sentence the rule produces, naming each variable, so that the control observes THIS
+     rule failing and not merely the child's misfortune -- the argument gh-ocannl-692 made for
+     `generated_provenance`. *)
+  let refuses name =
+    String.is_substring (snd violating)
+      ~substring:(Printf.sprintf "declares `(env_var %s)`, %s" name recorded_diagnostic)
   in
+  let violating_reported =
+    (match fst violating with Unix.WEXITED 1 -> true | _ -> false) && refuses control_recorded_key
+  in
+  let unknown_reported = refuses control_recorded_unknown in
   let legitimate_passed =
     (match fst legitimate with Unix.WEXITED 0 -> true | _ -> false)
-    && not (String.is_substring (snd legitimate) ~substring:diagnostic)
+    && not (String.is_substring (snd legitimate) ~substring:recorded_diagnostic)
   in
-  if not violating_reported then report "violating" violating;
+  if not (violating_reported && unknown_reported) then report "violating" violating;
   if not legitimate_passed then report "legitimate" legitimate;
   printf
-    "The rule is put to a stanza this repository does not contain: an `(executable)` whose one\n\
-     module calls `Test_utils.Generated.init`, run by a rule that does or does not declare\n\
-     `(env_var %s)`. Nothing else differs between the two runs.\n\n"
-    Scan.artifact_env_var;
+    "The rule is put to a tree this repository does not contain: two rules declaring only\n\
+     variables the ambient record leaves out (`HOME`, a reserved tooling name, `%s`), and\n\
+     the same tree declaring `(env_var %s)` inside a `(subdir …)` group and\n\
+     `(env_var %s)` at the top level besides. Nothing else differs between the two runs.\n\n"
+    Scan.backend_env_var control_recorded_key control_recorded_unknown;
   attribute
-    "the checker reports the stanza and exits 1 when the rule running it omits the declaration"
+    "the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir \
+     …)` group"
+    [ violating ];
+  attribute "an unknown lowercase name the record carries too is named in the same run"
     [ violating ];
   Verdict.p
-    "the checker reports the stanza and exits 1 when the rule running it omits the declaration"
+    "the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir \
+     …)` group"
     violating_reported;
-  Verdict.p "the same tree with the declaration added passes and says nothing about it"
+  Verdict.p "an unknown lowercase name the record carries too is named in the same run"
+    unknown_reported;
+  Verdict.p
+    "the same tree declaring only someone else's variable, a reserved tooling name and the backend \
+     passes and says nothing about it"
     legitimate_passed;
-  (* gh-ocannl-1294: the `(select …)` arm calling the initializer is its stanza's, so the stanza is
-     named when it omits the declaration -- and, in the legitimate run above, the arm is claimed
-     rather than reported as a caller no stanza owns. *)
-  Verdict.p "a select arm reaching the initializer is its stanza's: the stanza is named without it"
-    (String.is_substring (snd violating) ~substring:"the executable probe3");
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-1280's control. No stanza in this repository declares a credential, so a control read
-   off today's corpus would pass whether the rule had teeth or not. The tree is the one above with
-   its declaring arm -- which passes -- plus one rule declaring a single `(env_var ...)`; the arms
+   off today's corpus would pass whether the rule had teeth or not. The tree is the one above in its
+   legitimate arm -- which passes -- plus one rule declaring a single `(env_var ...)`; the arms
    differ in that one name, or in the deny-list the checker is handed, and in nothing else. *)
 
 let credential_subject ?(pform = false) name =
-  control_subject ~declares:true
+  control_subject ~declares:false
   ^
   if pform then
     Printf.sprintf
@@ -4544,7 +3559,8 @@ let credential_control () =
   in
   List.iter claims ~f:(fun (_, label, result, ok) -> if not ok then report label result);
   printf
-    "The credential rule is put to the declaring tree above plus one rule whose only dependency is\n\
+    "\n\
+     The credential rule is put to the passing tree above plus one rule whose only dependency is\n\
      a single `(env_var ...)`: a deny-listed name, a name matched by a pattern, and a near miss;\n\
      then to the same rule reading a name through `%%{env:...}` instead, to the program's module\n\
      reading one by name, and to the near miss again with no deny-list and with one the reader\n\
@@ -5118,9 +4134,9 @@ let family_control () =
      what differs between the shapes, and an unclaimed source is not itself a finding here. *)
   write_file (Stdlib.Filename.concat root "t/probe2.ml") "let () = ()\n";
   (* The remaining shapes' own modules. A stanza names its modules, and a module this scan is handed
-     no source for is a finding of its own (gh-ocannl-749) -- so a fixture tree that declares one
-     without providing it fails for a reason that has nothing to do with the family relationship.
-     Inert, present always, and claimed only by the shape that names them. *)
+     no source for is a finding of its own -- so a fixture tree that declares one without providing
+     it fails for a reason that has nothing to do with the family relationship. Inert, present
+     always, and claimed only by the shape that names them. *)
   write_file (Stdlib.Filename.concat root "t/harness.ml") "let () = ()\n";
   write_file (Stdlib.Filename.concat root "t/child/childgate.ml") "let () = ()\n";
   let paths =
@@ -5237,7 +4253,7 @@ let family_control () =
   (* The negative control: neither derivation calls this stanza a member, so no family alias is
      asked for. A derivation that over-claimed would fail this correct tree. *)
   let no_member = run ~metal:false ~lifecycle:false ~family:None () in
-  let stale_artifact =
+  let recorded_declaration =
     run ~metal:false ~lifecycle:false ~family:None
       ~transform:(fun content ->
         String.substr_replace_all content ~pattern:"(deps ocannl_config)"
@@ -5253,14 +4269,6 @@ let family_control () =
            OCANNL_LOG_LEVEL_PROBE)))\n")
       ()
   in
-  let exemption_file, exemption_content =
-    List.find_exn context ~f:(fun (path, _) -> String.equal path "test/operations/dune")
-  in
-  write_file
-    (Stdlib.Filename.concat root exemption_file)
-    (String.substr_replace_all exemption_content ~pattern:"(env_var ocannl_backedn)" ~with_:"");
-  let stale_exemption = run ~metal:false ~lifecycle:false ~family:None () in
-  write_file (Stdlib.Filename.concat root exemption_file) exemption_content;
   (* The same tree with the stand-in reader of each `exempt_reads` entry reading nothing. *)
   let readers =
     List.filter context ~f:(fun (path, _) ->
@@ -5476,11 +4484,11 @@ let family_control () =
      reported there too"
     subdir_collision_ok;
   Verdict.p "a stanza neither derivation calls a member is asked for no family alias" no_member_ok;
-  attribute "declaring generated-artifact storage without an initializer is refused"
-    [ stale_artifact ];
-  Verdict.p "declaring generated-artifact storage without an initializer is refused"
-    (exited 1 stale_artifact
-    && String.is_substring (snd stale_artifact) ~substring:"no module of it reads");
+  attribute "declaring a configuration variable the ambient record already carries is refused"
+    [ recorded_declaration ];
+  Verdict.p "declaring a configuration variable the ambient record already carries is refused"
+    (exited 1 recorded_declaration
+    && String.is_substring (snd recorded_declaration) ~substring:recorded_diagnostic);
   attribute "a tracing dependency without a module reading it is refused" [ stale_trace ];
   Verdict.p "a tracing dependency without a module reading it is refused"
     (exited 1 stale_trace
@@ -5491,419 +4499,6 @@ let family_control () =
     && (not (List.is_empty readers))
     && String.is_substring (snd stale_read)
          ~substring:"exempted run-time reads no source makes any more");
-  attribute "an exemption whose declaration disappears is refused" [ stale_exemption ];
-  Verdict.p "an exemption whose declaration disappears is refused"
-    (exited 1 stale_exemption
-    && String.is_substring (snd stale_exemption)
-         ~substring:"exempted declarations no dune file makes any more");
-  try remove_tree root with Unix.Unix_error _ -> ()
-
-(* gh-ocannl-749's control, and why it is a third tree.
-
-   The rule is that a key a module reads straight from the environment is one the stanza running it
-   declares. Every guard in this repository now declares its keys -- which is what this change did
-   -- so a control drawn from the corpus would pass whether the rule has teeth or has stopped
-   deciding. Put to a tree of its own it is the rule that is claimed about: the same source, once
-   under a rule that declares the key, once under one that does not, and once under one that pins
-   the variable with `setenv` instead.
-
-   The source is a GUARD, not a literal read: the key reaches the reader through a list, which is
-   the shape the hand-written lists took and the shape the earlier check could not see. One key is a
-   configuration key and one is not, so the tree also says that the candidate set is intersected
-   with the registry rather than taken whole -- a scan demanding `OCANNL_NOT_A_CONFIG_KEY` would
-   fail the legitimate run, and the declaration it asked for would then be reported by the sibling
-   check as naming no key OCANNL reads. *)
-
-let guard_key = "virtualize_max_visits"
-let guard_non_key = "not_a_config_key"
-
-(* The same guard with its key SHOUTED. `read_env_var` uppercases to build the variable, so this
-   reads the very same `OCANNL_<KEY>`; a case-sensitive look-up against the registry dropped it as
-   an unknown key and asked for nothing (Codex P2, round 5). *)
-let guard_of key =
-  Printf.sprintf
-    "let () =\n\
-    \  let guarded_keys = [ %S ] in\n\
-    \  Base.List.iter guarded_keys ~f:(fun arg_name ->\n\
-    \    match Utils.read_env_var arg_name with Some _ -> exit 1 | None -> ())\n"
-    key
-
-let shouting_probe = guard_of (String.uppercase guard_key)
-let guard_probe = guard_of guard_key
-
-(* A guard on a key the registry does not know. The reader builds and consults `OCANNL_<KEY>`
-   whatever the registry says, so the run depends on it -- and it cannot be DECLARED, the sibling
-   check refusing a declaration naming no key OCANNL reads, so a pin is the only way to answer for
-   it (Codex P2, round 11 of PR #484). *)
-let unknown_key_probe = guard_of guard_non_key
-
-(* A dynamic reach whose key list is in ANOTHER compilation unit -- the reviewer's own example. The
-   source names no configuration key at all, so the candidate fallback resolves to nothing and the
-   check would have run its loop over an empty list, passing while checking nothing. *)
-let opaque_probe = "let () = List.iter (fun k -> ignore (Utils.read_env_var k)) Shared.guarded\n"
-
-(* One rule running the guard, answering for the variable in one of the three ways a rule can. The
-   declared spelling is built from the key rather than written out, so the control cannot drift from
-   `Utils.env_var_name`. *)
-let guard_rule ~target ~declares ~pins =
-  Printf.sprintf
-    {dune|(rule
- ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.
- (target %s)
- (deps
-  ocannl_config
-%s  %%{dep:guard.exe})
- (action
-  (with-stdout-to
-   %%{target}
-%s)))
-|dune}
-    target
-    (if declares then Printf.sprintf "  (env_var %s)\n" (Utils.env_var_name guard_key) else "")
-    (match pins with
-    | `No -> "  (run ./guard.exe)"
-    | `Around_the_run ->
-        Printf.sprintf "  (setenv %s 1\n   (run ./guard.exe))" (Utils.env_var_name guard_key)
-    | `Around_the_run_unknown ->
-        Printf.sprintf "  (setenv %s 1\n   (run ./guard.exe))" (Utils.env_var_name guard_non_key)
-    (* The pin on a SIBLING branch of the same action: `setenv` scopes over what it wraps, so this
-       rule's run of the guard is as exposed to the ambient variable as an unpinned one. A check
-       reading the rule's setenvs as a flat set would credit it (Codex P1, round 1). *)
-    | `Elsewhere_in_the_action ->
-        Printf.sprintf "  (progn\n   (setenv %s 1\n    (run ./other.exe))\n   (run ./guard.exe))"
-          (Utils.env_var_name guard_key)
-    (* The inverse: the guard IS pinned, and an unpinned run of a helper stands beside it. The pin
-       belongs to the guard's run, so an intersection taken over every command in the action --
-       which is what this check did first -- demanded a declaration the run cannot need (Codex P2,
-       round 4). *)
-    | `Around_the_run_beside_a_helper ->
-        Printf.sprintf "  (progn\n   (setenv %s 1\n    (run ./guard.exe))\n   (run ./other.exe))"
-          (Utils.env_var_name guard_key))
-
-(* The arms. Everything but the one thing each is about is held fixed, so a difference in verdict is
-   that thing's and nothing else's. *)
-let guard_subject ~arm =
-  let executable modules =
-    Printf.sprintf "(executable\n (name guard)\n%s (libraries arrayjit.utils))\n\n" modules
-  in
-  let named = " (modules guard)\n" in
-  let one ~declares ~pins = guard_rule ~target:"guard.actual" ~declares ~pins in
-  match arm with
-  | `Declares | `Unresolvable -> executable named ^ one ~declares:true ~pins:`No
-  | `Pins -> executable named ^ one ~declares:false ~pins:`Around_the_run
-  | `Pins_beside_a_helper ->
-      executable named ^ one ~declares:false ~pins:`Around_the_run_beside_a_helper
-  | `Pins_elsewhere -> executable named ^ one ~declares:false ~pins:`Elsewhere_in_the_action
-  | `Neither -> executable named ^ one ~declares:false ~pins:`No
-  (* An `(executable)` reaching for dune's DEFAULT module set: the same tree with the `(modules …)`
-     field left off, which is the common shape and the one the check skipped entirely while it was a
-     clause of a walk guarded on that field being written down (Codex P2, round 1). *)
-  | `Implicit_modules -> executable "" ^ one ~declares:false ~pins:`No
-  (* A module the stanza NAMES and the scan was handed no source for. Reading it as a module with no
-     reads is the silent direction (Codex P2, round 8). *)
-  | `Module_without_source ->
-      Printf.sprintf
-        "(executable\n (name guard)\n (modules guard helper)\n (libraries arrayjit.utils))\n\n%s"
-        (guard_rule ~target:"guard.actual" ~declares:true ~pins:`No)
-  (* A test directory's own `utils.ml`: the exemption belongs to the module that DEFINES the reader,
-     at its repository path, and a basename match would extend it to this one (Codex P2, round
-     8). *)
-  | `Utils_lookalike ->
-      Printf.sprintf
-        "(executable\n (name guard)\n (modules guard utils)\n (libraries arrayjit.utils))\n\n%s"
-        (guard_rule ~target:"guard.actual" ~declares:false ~pins:`No)
-  (* The same program one directory down. A `(subdir …)` applies its stanzas to another directory,
-     so the modules live there and the runner may sit at either level -- and a walk over the
-     top-level forms alone read the wrapper as a stanza with no modules (Codex P2, round 2). *)
-  | `In_a_subdir ->
-      Printf.sprintf "(subdir gen\n %s)\n\n%s"
-        (String.strip (executable " (modules guard)\n"))
-        (String.substr_replace_all
-           (guard_rule ~target:"guard.actual" ~declares:false ~pins:`No)
-           ~pattern:"guard.exe" ~with_:"gen/guard.exe")
-  (* A `(library)` with inline tests is RUN by dune, under `(inline_tests (deps …))`, so a module of
-     it reading the environment goes stale the same way an executable's does. A plain `(library)` is
-     out of scope, `Utils` being where the reader lives. *)
-  (* And a PLAIN library, run by nothing of its own: the requirement would fall on every stanza that
-     links it, so the read is reported rather than attributed (Codex P2, round 6). *)
-  (* The mode this scan refuses to model. It shipped dead once -- matched as a FIELD of a stanza
-     rather than as a stanza -- so it has an arm of its own now: a refusal with no control is a
-     refusal nobody has seen happen (Codex P2, round 11). *)
-  (* The unknown-key guard, once answered for and once not. *)
-  | `Unknown_key -> executable named ^ one ~declares:false ~pins:`No
-  | `Unknown_key_pinned ->
-      executable named
-      ^ guard_rule ~target:"guard.actual" ~declares:false ~pins:`Around_the_run_unknown
-  (* A `(test)` dune runs itself, with an action that PINS the variable: the run cannot observe the
-     ambient one, so no declaration answers for it (Codex P2, round 12). *)
-  | `Self_running_pin ->
-      Printf.sprintf
-        "(test\n\
-        \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
-        \ (name guard)\n\
-        \ (modules guard)\n\
-        \ (deps ocannl_config)\n\
-        \ (libraries arrayjit.utils)\n\
-        \ (action\n\
-        \  (setenv %s 1\n\
-        \   (run %%{test}))))\n\n\
-         (rule\n\
-        \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
-        \ (alias runtest)\n\
-        \ (deps ocannl_config (universe))\n\
-        \ (action\n\
-        \  (run %%{dep:ambient.exe})))\n\n\
-         (executable\n\
-        \ (name ambient)\n\
-        \ (modules ambient)\n\
-        \ (link_flags -linkall)\n\
-        \ (libraries arrayjit.utils))\n"
-        (Utils.env_var_name guard_key)
-  (* The same directive one level down, which the top-level loop did not reach. *)
-  | `Include_subdirs_nested ->
-      "(subdir gen\n (include_subdirs unqualified))\n\n"
-      ^ Printf.sprintf
-          "(executable\n (name guard)\n (modules guard)\n (libraries arrayjit.utils))\n\n%s"
-          (guard_rule ~target:"guard.actual" ~declares:true ~pins:`No)
-  | `Include_subdirs ->
-      "(include_subdirs unqualified)\n\n"
-      ^ Printf.sprintf
-          "(executable\n (name guard)\n (modules guard)\n (libraries arrayjit.utils))\n\n%s"
-          (guard_rule ~target:"guard.actual" ~declares:true ~pins:`No)
-  | `Plain_library -> "(library\n (name guard)\n (modules guard)\n (libraries arrayjit.utils))\n"
-  | `Inline_tests_library ->
-      "(library\n\
-       ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
-      \ (name guard)\n\
-      \ (modules guard)\n\
-      \ (libraries arrayjit.utils)\n\
-      \ (inline_tests))\n"
-  (* An `(inline_tests (deps …))` declaration is not a licence: it invalidates the inline runner
-     alone, while the library stays linkable by executables that declare nothing (Codex P2, round
-     7). *)
-  | `Inline_tests_library_declares ->
-      Printf.sprintf
-        "(library\n\
-         ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
-        \ (name guard)\n\
-        \ (modules guard)\n\
-        \ (libraries arrayjit.utils)\n\
-        \ (inline_tests\n\
-        \  (deps\n\
-        \   (env_var %s))))\n"
-        (Utils.env_var_name guard_key)
-  (* TWO rules running the same executable. Dune invalidates each on its own deps, so one of them
-     declaring says nothing about the other's run -- the file-wide latitude this check started with
-     accepted exactly this tree (Codex P1, round 1). *)
-  | `Second_runner_bare ->
-      executable named ^ one ~declares:true ~pins:`No ^ "\n"
-      ^ guard_rule ~target:"guard2.actual" ~declares:false ~pins:`No
-  | `Second_runner_declares ->
-      executable named ^ one ~declares:true ~pins:`No ^ "\n"
-      ^ guard_rule ~target:"guard2.actual" ~declares:true ~pins:`No
-
-let guard_control () =
-  let exe =
-    let name = Stdlib.Sys.executable_name in
-    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
-    else name
-  in
-  let root = Stdlib.Filename.temp_dir "evd_guard" "" in
-  let context = control_context () in
-  List.iter context ~f:(fun (file, content) ->
-      write_file (Stdlib.Filename.concat root file) content);
-  let paths =
-    "t/dune" :: "t/ambient.ml" :: "t/guard.ml" :: "t/gen/guard.ml" :: "t/utils.ml"
-    :: List.map context ~f:fst
-  in
-  (* The probe goes where the stanza's modules live, which for the subdir arm is one level down.
-     Both places are handed to the checker on every run, and the arm that is not using one writes an
-     inert source there, so the argument list -- and hence which globs the checker believes it was
-     given -- is the same in every arm. *)
-  write_file (Stdlib.Filename.concat root "t/ambient.ml") "let () = ()\n";
-  let run ?(probe = guard_probe) ?(at = "t/guard.ml") arm =
-    List.iter [ "t/guard.ml"; "t/gen/guard.ml"; "t/utils.ml" ] ~f:(fun path ->
-        write_file
-          (Stdlib.Filename.concat root path)
-          (if String.equal path at then probe else "let () = ()\n"));
-    write_file (Stdlib.Filename.concat root "t/dune") (guard_subject ~arm);
-    run_checker ~root ~exe ("." :: paths)
-  in
-  let report label (status, text) =
-    eprintf "the guard control's %s run %s. Its captured output:\n%s\n" label
-      (describe_status status) text
-  in
-  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
-  let undeclared = run `Neither in
-  let declared = run `Declares in
-  let pinned = run `Pins in
-  let pinned_elsewhere = run `Pins_elsewhere in
-  let pinned_beside_helper = run `Pins_beside_a_helper in
-  let implicit = run `Implicit_modules in
-  let in_a_subdir = run `In_a_subdir ~at:"t/gen/guard.ml" in
-  let module_without_source = run `Module_without_source in
-  let utils_lookalike = run `Utils_lookalike ~at:"t/utils.ml" in
-  let unknown_key = run `Unknown_key ~probe:unknown_key_probe in
-  let unknown_key_pinned = run `Unknown_key_pinned ~probe:unknown_key_probe in
-  let self_running_pin = run `Self_running_pin in
-  let include_subdirs = run `Include_subdirs in
-  let include_subdirs_nested = run `Include_subdirs_nested in
-  let plain_library = run `Plain_library in
-  let inline_library = run `Inline_tests_library in
-  let inline_library_declares = run `Inline_tests_library_declares in
-  let second_bare = run `Second_runner_bare in
-  let second_declares = run `Second_runner_declares in
-  let unresolvable = run `Unresolvable ~probe:opaque_probe in
-  let shouted = run `Neither ~probe:shouting_probe in
-  (* A fragment of the failure and of nothing else. The report's own heading names the reader and
-     the key too, so a substring drawn from there would be found in every run (Codex's round-one
-     lesson on the sibling controls, met here on the first try). *)
-  let diagnostic = "so the guard that would have reported the variable never runs" in
-  let unresolved = "with a key this scan cannot resolve" in
-  let says text substring = String.is_substring text ~substring in
-  let names_the_key text = says text (Utils.env_var_name guard_key) in
-  let reports (result : Unix.process_status * string) fragment =
-    exited 1 result && says (snd result) fragment
-  in
-  let passes result fragment = exited 0 result && not (says (snd result) fragment) in
-  let undeclared_ok = reports undeclared diagnostic && names_the_key (snd undeclared) in
-  let declared_ok = passes declared diagnostic in
-  let pinned_ok = passes pinned diagnostic in
-  let pinned_elsewhere_ok = reports pinned_elsewhere diagnostic in
-  let pinned_beside_helper_ok = passes pinned_beside_helper diagnostic in
-  let implicit_ok = reports implicit diagnostic && names_the_key (snd implicit) in
-  let in_a_subdir_ok = reports in_a_subdir diagnostic && names_the_key (snd in_a_subdir) in
-  let module_without_source_ok = reports module_without_source "handed no `helper.ml`" in
-  let utils_lookalike_ok =
-    reports utils_lookalike diagnostic && names_the_key (snd utils_lookalike)
-  in
-  let unknown_key_ok =
-    reports unknown_key "no configuration key OCANNL reads"
-    && String.is_substring (snd unknown_key) ~substring:(Utils.env_var_name guard_non_key)
-  in
-  let unknown_key_pinned_ok = passes unknown_key_pinned diagnostic in
-  let self_running_pin_ok = passes self_running_pin diagnostic in
-  let include_subdirs_ok = reports include_subdirs "include_subdirs unqualified" in
-  let include_subdirs_nested_ok = reports include_subdirs_nested "include_subdirs unqualified" in
-  let plain_library_ok =
-    reports plain_library "from a library module" && names_the_key (snd plain_library)
-  in
-  let inline_library_ok =
-    reports inline_library "from a library module" && names_the_key (snd inline_library)
-  in
-  let inline_library_declares_ok =
-    reports inline_library_declares "from a library module"
-    && names_the_key (snd inline_library_declares)
-  in
-  (* The count is what says the SECOND runner is what failed: one of the two, not both, and not the
-     stanza as a whole. *)
-  let second_bare_ok =
-    reports second_bare diagnostic && says (snd second_bare) "1 of the 2 runs of guard.exe"
-  in
-  let second_declares_ok = passes second_declares diagnostic in
-  let unresolvable_ok = reports unresolvable unresolved in
-  let shouted_ok = reports shouted diagnostic && names_the_key (snd shouted) in
-  if not undeclared_ok then report "undeclared" undeclared;
-  if not declared_ok then report "declared" declared;
-  if not pinned_ok then report "pinned" pinned;
-  if not pinned_elsewhere_ok then report "pinned-elsewhere" pinned_elsewhere;
-  if not implicit_ok then report "implicit-modules" implicit;
-  if not pinned_beside_helper_ok then report "pinned-beside-a-helper" pinned_beside_helper;
-  if not in_a_subdir_ok then report "in-a-subdir" in_a_subdir;
-  if not module_without_source_ok then report "module-without-source" module_without_source;
-  if not utils_lookalike_ok then report "utils-lookalike" utils_lookalike;
-  if not unknown_key_ok then report "unknown-key" unknown_key;
-  if not unknown_key_pinned_ok then report "unknown-key-pinned" unknown_key_pinned;
-  if not self_running_pin_ok then report "self-running-pin" self_running_pin;
-  if not include_subdirs_ok then report "include-subdirs" include_subdirs;
-  if not include_subdirs_nested_ok then report "include-subdirs-nested" include_subdirs_nested;
-  if not plain_library_ok then report "plain-library" plain_library;
-  if not inline_library_ok then report "inline-tests-library" inline_library;
-  if not inline_library_declares_ok then
-    report "inline-tests-library-declares" inline_library_declares;
-  if not second_bare_ok then report "second-runner-bare" second_bare;
-  if not second_declares_ok then report "second-runner-declares" second_declares;
-  if not unresolvable_ok then report "unresolvable" unresolvable;
-  if not shouted_ok then report "shouted-key" shouted;
-  printf
-    "\n\
-     The guard rule is put to a tree of one `(executable)` whose module reads a configuration key\n\
-     from a LIST it hands to `Utils.read_env_var`. The arms differ in how the rules running it\n\
-     answer for `(env_var %s)`, in whether the stanza writes its `(modules …)` down, and in whether\n\
-     the key list is resolvable at all. Nothing else differs between the runs.\n\n"
-    (Utils.env_var_name guard_key);
-  attribute
-    "the checker reports the key and exits 1 when the rule running the guard neither declares nor \
-     pins it"
-    [ undeclared ];
-  Verdict.p
-    "the checker reports the key and exits 1 when the rule running the guard neither declares nor \
-     pins it"
-    undeclared_ok;
-  Verdict.p "the same tree with the declaration added passes and says nothing about it" declared_ok;
-  Verdict.p "and so does the same tree pinning the variable with `setenv` instead" pinned_ok;
-  Verdict.p
-    "a `setenv` over a SIBLING branch of the same action does not pin this run, and is reported"
-    pinned_elsewhere_ok;
-  Verdict.p "and an unpinned run of a HELPER beside a pinned guard does not un-pin it"
-    pinned_beside_helper_ok;
-  Verdict.p
-    "a stanza reaching for dune's default module set is judged too, not skipped for lack of a \
-     `(modules …)` field"
-    implicit_ok;
-  Verdict.p
-    "a program declared inside a `(subdir …)` is reached, not read as a stanza with no modules"
-    in_a_subdir_ok;
-  attribute
-    "a module the stanza names and this check was handed no source for is reported, not read as \
-     one that makes no reads"
-    [ module_without_source ];
-  Verdict.p
-    "a module the stanza names and this check was handed no source for is reported, not read as \
-     one that makes no reads"
-    module_without_source_ok;
-  Verdict.p
-    "a test directory's own `utils.ml` is not the module that defines the reader, and is not exempt"
-    utils_lookalike_ok;
-  Verdict.p "a key the registry does not know is still asked for, and is reported as undeclarable"
-    unknown_key_ok;
-  Verdict.p "and pinning it is the way to answer for one" unknown_key_pinned_ok;
-  Verdict.p
-    "a stanza dune runs itself pins through its own action, and is not asked to declare besides"
-    self_running_pin_ok;
-  attribute "a dune file whose module sets this scan cannot place is refused, not approximated"
-    [ include_subdirs ];
-  Verdict.p "a dune file whose module sets this scan cannot place is refused, not approximated"
-    include_subdirs_ok;
-  Verdict.p "and the same directive inside a `(subdir …)` does not slip past the refusal"
-    include_subdirs_nested_ok;
-  Verdict.p
-    "a guard in a plain library is reported, there being no `deps` field in reach to declare it"
-    plain_library_ok;
-  Verdict.p "a library with inline tests is refused the same way, being linkable all the same"
-    inline_library_ok;
-  attribute
-    "and declaring the variable in `(inline_tests (deps …))` is no licence: that invalidates the \
-     inline runner alone"
-    [ inline_library_declares ];
-  Verdict.p
-    "and declaring the variable in `(inline_tests (deps …))` is no licence: that invalidates the \
-     inline runner alone"
-    inline_library_declares_ok;
-  Verdict.p
-    "a second rule running the same executable answers for its own run: one declaring does not \
-     cover the other"
-    second_bare_ok;
-  Verdict.p "and the same pair with both declaring passes" second_declares_ok;
-  attribute
-    "a dynamic reach whose keys resolve to nothing is refused rather than passed over in silence"
-    [ unresolvable ];
-  Verdict.p
-    "a dynamic reach whose keys resolve to nothing is refused rather than passed over in silence"
-    unresolvable_ok;
-  Verdict.p
-    "a key spelled in upper case names the same variable, and is asked for under the same name"
-    shouted_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-1037's control, a tree of its own for the reason the others give: the repository's
@@ -6033,884 +4628,6 @@ let inline_alias_control () =
     [ aggregated ];
   Verdict.p "a per-module alias listed in the `runtest` aggregate is reported as a double run"
     aggregated_ok;
-  try remove_tree root with Unix.Unix_error _ -> ()
-
-(* gh-ocannl-1149's control. Every stanza naming the schedule pipeline now declares what it reaches,
-   so a control drawn from the corpus would pass whether the rule decides anything or not; put to a
-   tree of its own, the same test is run under each way a rule can answer for its keys.
-
-   The stand-in `schedule.ml` reads each key in a way the derivation has to follow: one call away
-   from the value the test names, through a `Utils` settings predicate, and through a submodule of a
-   sibling module of the library that reads a field of `Utils.settings` -- one a stand-in
-   `restore_settings` initializes from two keys, the second a compatibility alias. It reads the
-   launch trace too, which is execution-neutral and asked for all the same: a developer setting it
-   needs the run to happen. *)
-let pipeline_key = "gpu_schedule_block_size"
-let pipeline_trace_key = "schedule_log_launches"
-let pipeline_helper = "arrayjit/lib/helper.ml"
-
-let pipeline_stub ~unplaced =
-  Printf.sprintf
-    "let block () = Utils.get_global_arg ~arg_name:%S ~default:\"256\"\n\
-     let trace = lazy (Utils.get_global_flag ~default:false ~arg_name:%S)\n\
-     let preset () = block ()\n\
-     let launches () = Lazy.force trace\n\
-     let serial () = Utils.debug_log_from_routines ()\n\
-     let tiled () = Helper.Inner.width ()\n\
-     %s"
-    pipeline_key pipeline_trace_key
-    (if unplaced then
-       "let () = ignore (Utils.get_global_arg ~arg_name:\"gpu_schedule_min_parallel\" \
-        ~default:\"64\")\n"
-     else "")
-
-(* How the stanza answers for the keys the aliased probe reaches. *)
-let pipeline_subject answer =
-  let vars = List.map [ pipeline_key; pipeline_trace_key ] ~f:Utils.env_var_name in
-  let deps =
-    match answer with
-    | `Declares -> String.concat (List.map vars ~f:(Printf.sprintf " (env_var %s)"))
-    | `Universe -> " (universe)"
-    | `Pins | `Neither -> ""
-  in
-  let action =
-    match answer with
-    | `Pins ->
-        Printf.sprintf "\n (action\n  (setenv %s 64\n   (setenv %s false\n    (run %%{test}))))"
-          (List.nth_exn vars 0) (List.nth_exn vars 1)
-    | `Declares | `Universe | `Neither -> ""
-  in
-  Printf.sprintf
-    "(test\n\
-    \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
-    \ (name probe)\n\
-    \ (modules probe)\n\
-    \ (deps ocannl_config%s)\n\
-    \ (libraries arrayjit.ir)%s)\n\n\
-     (rule\n\
-    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
-    \ (alias runtest)\n\
-    \ (deps ocannl_config (universe))\n\
-    \ (action\n\
-    \  (run %%{dep:ambient.exe})))\n\n\
-     (executable\n\
-    \ (name ambient)\n\
-    \ (modules ambient)\n\
-    \ (link_flags -linkall)\n\
-    \ (libraries arrayjit.utils))\n"
-    deps action
-
-let pipeline_control () =
-  let exe =
-    let name = Stdlib.Sys.executable_name in
-    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
-    else name
-  in
-  let root = Stdlib.Filename.temp_dir "evd_pipeline" "" in
-  let context = control_context () in
-  List.iter context ~f:(fun (file, content) ->
-      write_file (Stdlib.Filename.concat root file) content);
-  write_file
-    (Stdlib.Filename.concat root pipeline_helper)
-    "module Inner = struct\n  let width () = Utils.settings.large_models\nend\n";
-  write_file
-    (Stdlib.Filename.concat root env_reader_home)
-    "let restore_settings () =\n\
-    \  settings.large_models <-\n\
-    \    get_global_flag ~default:(get_global_flag ~default:false ~arg_name:\"big_models\")\n\
-    \      ~arg_name:\"large_models\"\n";
-  let paths =
-    "t/dune" :: "t/ambient.ml" :: "t/probe.ml" :: pipeline_home :: pipeline_helper
-    :: env_reader_home :: List.map context ~f:fst
-  in
-  write_file (Stdlib.Filename.concat root "t/ambient.ml") "let () = ()\n";
-  let run ?(unplaced = false) ~probe answer =
-    write_file (Stdlib.Filename.concat root pipeline_home) (pipeline_stub ~unplaced);
-    write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
-    write_file (Stdlib.Filename.concat root "t/dune") (pipeline_subject answer);
-    run_checker ~root ~exe ("." :: paths)
-  in
-  let aliased = "module S = Ir.Schedule\nlet () = ignore (S.preset ()); ignore (S.launches ())\n" in
-  let opened = "open Ir.Schedule\nlet () = ignore (preset ())\n" in
-  let vendor = "let () = ignore (Vendor.Schedule.preset ())\n" in
-  let across = "let () = ignore (Ir.Schedule.serial ()); ignore (Ir.Schedule.tiled ())\n" in
-  let report label (status, text) =
-    eprintf "the pipeline control's %s run %s. Its captured output:\n%s\n" label
-      (describe_status status) text
-  in
-  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
-  let says substring (_, text) = String.is_substring text ~substring in
-  let names key result = says (Utils.env_var_name key) result in
-  let diagnostic = "how a debugging run of the default schedule goes silently stale" in
-  let undeclared = run ~probe:aliased `Neither in
-  let declared = run ~probe:aliased `Declares in
-  let pinned = run ~probe:aliased `Pins in
-  let universe = run ~probe:aliased `Universe in
-  let crossing = run ~probe:across `Neither in
-  let under_open = run ~probe:opened `Neither in
-  let lookalike = run ~probe:vendor `Neither in
-  let unplaced = run ~unplaced:true ~probe:aliased `Declares in
-  let undeclared_ok =
-    exited 1 undeclared && says diagnostic undeclared && names pipeline_key undeclared
-    && names pipeline_trace_key undeclared
-  in
-  let declared_ok = exited 0 declared && not (says diagnostic declared) in
-  let pinned_ok = exited 0 pinned && not (says diagnostic pinned) in
-  let universe_ok = exited 0 universe && not (says diagnostic universe) in
-  let crossing_ok =
-    exited 1 crossing && says diagnostic crossing && names "log_level" crossing
-    && names "debug_log_from_routines" crossing
-    && names "large_models" crossing && names "big_models" crossing
-  in
-  let under_open_ok = exited 1 under_open && says diagnostic under_open in
-  let lookalike_ok = exited 0 lookalike && not (says diagnostic lookalike) in
-  let unplaced_ok =
-    exited 1 unplaced
-    && says "outside every named top-level value" unplaced
-    && says "gpu_schedule_min_parallel" unplaced
-  in
-  if not undeclared_ok then report "undeclared" undeclared;
-  if not declared_ok then report "declared" declared;
-  if not pinned_ok then report "pinned" pinned;
-  if not universe_ok then report "universe" universe;
-  if not crossing_ok then report "crossing" crossing;
-  if not under_open_ok then report "under-open" under_open;
-  if not lookalike_ok then report "lookalike" lookalike;
-  if not unplaced_ok then report "unplaced" unplaced;
-  printf
-    "\n\
-     The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module\n\
-     names values of a stand-in `Ir.Schedule`, which reads `%s` one call away, the\n\
-     launch trace directly, a settings predicate of `Utils`, and a settings field two keys set, from\n\
-     a submodule of a sibling module.\n\
-     The arms differ in how the stanza answers for the keys, in which values the module names and\n\
-     how, and in one stray read in the stand-in.\n\n"
-    pipeline_key;
-  attribute
-    "a test naming the pipeline is reported, with the key its value reaches through the module's \
-     own calls and the execution-neutral trace key, when its stanza declares neither"
-    [ undeclared ];
-  Verdict.p
-    "a test naming the pipeline is reported, with the key its value reaches through the module's \
-     own calls and the execution-neutral trace key, when its stanza declares neither"
-    undeclared_ok;
-  Verdict.p "the same stanza declaring the keys passes" declared_ok;
-  Verdict.p "and so does the same stanza pinning them with `setenv` around its run" pinned_ok;
-  Verdict.p "and so does one depending on `(universe)`, which no cache serves" universe_ok;
-  Verdict.p
-    "keys read through a `Utils` settings predicate, and through a `Utils.settings` field read in \
-     a sibling module's submodule -- with the alias that also sets the field -- are followed and \
-     asked for"
-    crossing_ok;
-  Verdict.p "a value reached under `open Ir.Schedule` is a reference too" under_open_ok;
-  Verdict.p "another library's `Schedule` is not the pipeline, and asks for nothing" lookalike_ok;
-  attribute
-    "a key the pipeline reads outside every named value is refused, not dropped from every \
-     requirement"
-    [ unplaced ];
-  Verdict.p
-    "a key the pipeline reads outside every named value is refused, not dropped from every \
-     requirement"
-    unplaced_ok;
-  try remove_tree root with Unix.Unix_error _ -> ()
-
-(* gh-ocannl-1320's control. Every width reader in the repository declares the variable once this
-   rule lands, so a control drawn from the corpus would pass whether the rule decides anything or
-   not; put to a tree of its own, one `(test)` is run under each way of reading the width and each
-   way of answering for it.
-
-   The stand-in `cc_backend.ml` reads the width key in one value, reaches it one call away in a
-   second, and reads another key in a third. The stand-in `schedulers.ml` fills three fields from
-   those three -- one under a `let open`, one through a helper the function declares locally,
-   calling through a module alias, one directly -- so the derivation has to see through the first
-   two and tell both from the third (Codex P2, rounds 1-3). The stand-in `backend_intf.ml` declares
-   the record type, whose other label marks an update that copies every width field. The tree sits
-   under `test/` so that a library beside the subject is one the rule follows. *)
-let width_backend_stub =
-  "let auto_vector_bytes () = 16\n\
-   let vector_bytes_setting () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
-   let registers () = 2 * vector_bytes_setting ()\n\
-   let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n"
-
-let width_limits_stub =
-  "module CC = Cc_backend\n\
-   let cpu_mma_limits () =\n\
-  \  let helper () = CC.registers () in\n\
-  \  { no_hardware_limits with\n\
-  \    simd_vector_bytes = (let open Cc_backend in vector_bytes_setting ());\n\
-  \    simd_vector_registers = helper (); worker_pool_tag = Cc_backend.chunks () }\n"
-
-let width_type_stub =
-  "type hardware_limits = {\n\
-  \  simd_vector_bytes : int;\n\
-  \  simd_vector_registers : int;\n\
-  \  worker_pool_tag : int;\n\
-  \  native_fp16_arithmetic : bool;\n\
-   }\n"
-
-let width_subject ?(links = "") answer =
-  let var = Utils.env_var_name width_key in
-  let deps =
-    match answer with
-    | `Declares -> Printf.sprintf " (env_var %s)" var
-    | `Pins | `Pins_ambient | `Pins_ambient_lower | `Neither -> ""
-  in
-  let action =
-    match answer with
-    | `Pins -> Printf.sprintf "\n (action\n  (setenv %s 16\n   (run %%{test})))" var
-    | `Pins_ambient ->
-        Printf.sprintf "\n (action\n  (setenv %s %%{env:%s=-1}\n   (run %%{test})))" var var
-    | `Pins_ambient_lower ->
-        Printf.sprintf "\n (action\n  (setenv %s %%{env:%s=-1}\n   (run %%{test})))" var
-          (String.lowercase var)
-    | `Declares | `Neither -> ""
-  in
-  Printf.sprintf
-    "(test\n\
-    \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
-    \ (name probe)\n\
-    \ (modules probe)\n\
-    \ (deps ocannl_config%s)\n\
-    \ (libraries arrayjit.ir%s)%s)\n\n\
-     (rule\n\
-    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
-    \ (alias runtest)\n\
-    \ (deps ocannl_config (universe))\n\
-    \ (action\n\
-    \  (run %%{dep:ambient.exe})))\n\n\
-     (executable\n\
-    \ (name ambient)\n\
-    \ (modules ambient)\n\
-    \ (link_flags -linkall)\n\
-    \ (libraries arrayjit.utils))\n"
-    deps links action
-
-(* The library beside the subject: a plain one, or one with inline tests -- a program of its own --
-   whose `(inline_tests (deps …))` does or does not declare the variable. A directory with inline
-   tests carries its own ambient gate, as every directory with runtest actions does. *)
-let width_support_dune inline =
-  let gate =
-    "\n\
-     (rule\n\
-    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
-    \ (alias runtest)\n\
-    \ (deps ocannl_config (universe))\n\
-    \ (action\n\
-    \  (run %{dep:ambient.exe})))\n\n\
-     (executable\n\
-    \ (name ambient)\n\
-    \ (modules ambient)\n\
-    \ (link_flags -linkall)\n\
-    \ (libraries arrayjit.utils))\n"
-  in
-  match inline with
-  | `Plain -> "(library\n (name support)\n (modules support)\n (libraries arrayjit.ir))\n"
-  | `Plain_with_interface ->
-      "(library\n\
-      \ (name support)\n\
-      \ (modules support iface)\n\
-      \ (modules_without_implementation iface)\n\
-      \ (libraries arrayjit.ir))\n"
-  | (`Inline_undeclared | `Inline_declared) as inline ->
-      Printf.sprintf
-        "(library\n\
-        \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
-        \ (name support)\n\
-        \ (modules support)\n\
-        \ (inline_tests (deps ocannl_config%s))\n\
-        \ (libraries arrayjit.ir))\n\
-         %s"
-        (match inline with
-        | `Inline_declared -> " (env_var " ^ Utils.env_var_name width_key ^ ")"
-        | `Inline_undeclared -> "")
-        gate
-
-let width_control () =
-  let exe =
-    let name = Stdlib.Sys.executable_name in
-    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
-    else name
-  in
-  let root = Stdlib.Filename.temp_dir "evd_width" "" in
-  let context = control_context () in
-  List.iter context ~f:(fun (file, content) ->
-      write_file (Stdlib.Filename.concat root file) content);
-  let backend_home =
-    Stdlib.Filename.concat (Stdlib.Filename.dirname width_limits_home) "cc_backend.ml"
-  in
-  write_file (Stdlib.Filename.concat root width_limits_type_home) width_type_stub;
-  write_file (Stdlib.Filename.concat root "test/t/ambient.ml") "let () = ()\n";
-  write_file (Stdlib.Filename.concat root "test/lib/ambient.ml") "let () = ()\n";
-  (* A wrapper library re-exporting the reader: `(libraries (re_export support))` is a link too. *)
-  write_file
-    (Stdlib.Filename.concat root "test/wrap/dune")
-    "(library\n (name wrapper)\n (modules wrapper)\n (libraries (re_export support)))\n";
-  write_file (Stdlib.Filename.concat root "test/wrap/wrapper.ml") "let () = ()\n";
-  (* A virtual library whose default implementation reads the width. *)
-  write_file
-    (Stdlib.Filename.concat root "test/virt/dune")
-    "(library\n\
-    \ (name vlib)\n\
-    \ (modules vm)\n\
-    \ (virtual_modules vm)\n\
-    \ (default_implementation vimpl))\n";
-  write_file
-    (Stdlib.Filename.concat root "test/virt_impl/dune")
-    "(library\n (name vimpl)\n (implements vlib)\n (modules vm))\n";
-  write_file
-    (Stdlib.Filename.concat root "test/virt_impl/vm.ml")
-    "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n";
-  (* And one there with dune's default module set. *)
-  write_file (Stdlib.Filename.concat root "other/implicit/dune") "(library\n (name implicit_lib))\n";
-  (* A library whose directory the scan's globs do not reach: its source is never handed over. *)
-  write_file
-    (Stdlib.Filename.concat root "other/lib/dune")
-    "(library\n (name unseen)\n (modules unseen))\n";
-  (* A helper library outside the test roots, as a `bin` or benchmark one would be. *)
-  write_file
-    (Stdlib.Filename.concat root "tools/helper/dune")
-    "(library\n (name helper_lib)\n (modules helper_lib)\n (libraries arrayjit.ir))\n";
-  let paths =
-    "test/t/dune" :: "test/t/ambient.ml" :: "test/t/probe.ml" :: "test/lib/dune"
-    :: "test/lib/support.ml" :: "test/lib/ambient.ml" :: "test/wrap/dune" :: "test/wrap/wrapper.ml"
-    :: "tools/helper/dune" :: "tools/helper/helper_lib.ml" :: "other/lib/dune"
-    :: "other/implicit/dune" :: "test/virt/dune" :: "test/virt_impl/dune" :: "test/virt_impl/vm.ml"
-    :: backend_home :: width_limits_home :: width_limits_type_home :: List.map context ~f:fst
-  in
-  let run ?(backend = Some width_backend_stub) ?(limits = width_limits_stub)
-      ?(helper = "let () = ()\n") ?(support = "let () = ()\n") ?(inline = `Plain) ?links ~probe
-      answer =
-    let backend_file = Stdlib.Filename.concat root backend_home in
-    (match backend with
-    | Some backend -> write_file backend_file backend
-    | None -> ( try Stdlib.Sys.remove backend_file with Sys_error _ -> ()));
-    write_file (Stdlib.Filename.concat root width_limits_home) limits;
-    write_file (Stdlib.Filename.concat root "tools/helper/helper_lib.ml") helper;
-    write_file (Stdlib.Filename.concat root "test/lib/support.ml") support;
-    write_file (Stdlib.Filename.concat root "test/lib/dune") (width_support_dune inline);
-    write_file (Stdlib.Filename.concat root "test/t/probe.ml") probe;
-    write_file (Stdlib.Filename.concat root "test/t/dune") (width_subject ?links answer);
-    let paths =
-      if Option.is_some backend then paths
-      else List.filter paths ~f:(fun path -> not (String.equal path backend_home))
-    in
-    run_checker ~root ~exe ("." :: paths)
-  in
-  let projected = "let width limits = limits.Ir.Backend_intf.simd_vector_bytes\n" in
-  let aliased =
-    "module Cc_backend = Context.Cc_backend\nlet () = ignore (Cc_backend.registers ())\n"
-  in
-  let updated = "let pinned device = { device with Ir.Backend_intf.simd_vector_bytes = 16 }\n" in
-  let copied =
-    "let narrow device = { device with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
-  in
-  let unrelated =
-    "let synthetic =\n\
-    \  { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 32; simd_vector_registers = \
-     16 }\n\
-     let other r = { r with some_other_field = 1 }\n\
-     let base = Ir.Backend_intf.no_hardware_limits\n\
-     let make w = { base with simd_vector_bytes = w }\n\
-     let derived = { (make 16) with worker_pool_tag = 0 }\n\
-     module BI = Ir.Backend_intf\n\
-     let aliased = { BI.no_hardware_limits with BI.native_fp16_arithmetic = false }\n\
-     let tag limits = limits.Ir.Backend_intf.worker_pool_tag\n\
-     let () = ignore (Context.Cc_backend.auto_vector_bytes ()); ignore (Context.Cc_backend.chunks \
-     ())\n"
-  in
-  let report label (status, text) =
-    eprintf "the width control's %s run %s. Its captured output:\n%s\n" label
-      (describe_status status) text
-  in
-  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
-  let says substring (_, text) = String.is_substring text ~substring in
-  let diagnostic = "replays the previous width's result as a pass" in
-  let refused result = exited 1 result && says diagnostic result in
-  let passed result = exited 0 result && not (says diagnostic result) in
-  let undeclared = run ~probe:projected `Neither in
-  let declared = run ~probe:projected `Declares in
-  let pinned = run ~probe:projected `Pins in
-  let pinned_ambient = run ~probe:projected `Pins_ambient in
-  let via_alias = run ~probe:aliased `Neither in
-  let via_update = run ~probe:updated `Neither in
-  let via_copy = run ~probe:copied `Neither in
-  let via_library = run ~support:projected ~links:" support" ~probe:"let () = ()\n" `Neither in
-  let via_reexport = run ~support:projected ~links:" wrapper" ~probe:"let () = ()\n" `Neither in
-  let not_linked = run ~support:projected ~probe:"let () = ()\n" `Neither in
-  let inline_undeclared =
-    run ~support:projected ~inline:`Inline_undeclared ~probe:"let () = ()\n" `Neither
-  in
-  let inline_declared =
-    run ~support:projected ~inline:`Inline_declared ~probe:"let () = ()\n" `Neither
-  in
-  let constant = run ~probe:unrelated `Neither in
-  let shadowed =
-    run
-      ~probe:
-        "let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
-         let narrow = { no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
-      `Neither
-  in
-  let unplaced_backend =
-    run
-      ~backend:
-        (Some
-           "let () = ignore (Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\")\n\
-            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:projected `Declares
-  in
-  let unreached_backend =
-    run
-      ~backend:
-        (Some
-           "let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:projected `Declares
-  in
-  let lost_anchor = run ~backend:None ~probe:projected `Declares in
-  let over_read =
-    run
-      ~limits:(width_limits_stub ^ "let other () = { other_tag = Other.registers () }\n")
-      ~probe:copied `Neither
-  in
-  let local_qualified =
-    run
-      ~probe:
-        "module Local = struct\n\
-        \  let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
-         end\n\
-         let narrow = { Local.no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = \
-         false }\n"
-      `Neither
-  in
-  let via_helper_lib = run ~helper:projected ~links:" helper_lib" ~probe:"let () = ()\n" `Neither in
-  let shadowed_home =
-    run
-      ~probe:
-        "module Ir = struct\n\
-        \  module Backend_intf = struct\n\
-        \    let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
-        \  end\n\
-         end\n\
-         let narrow = { Ir.Backend_intf.no_hardware_limits with native_fp16_arithmetic = false }\n"
-      `Neither
-  in
-  let via_include =
-    run
-      ~backend:
-        (Some
-           "let read_width () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
-            include struct let registers () = read_width () end\n\
-            let vector_bytes_setting () = read_width ()\n\
-            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:aliased `Neither
-  in
-  let unseen_library = run ~links:" unseen" ~probe:"let () = ()\n" `Declares in
-  let pinned_ambient_lower = run ~probe:projected `Pins_ambient_lower in
-  let via_nested_include =
-    run
-      ~backend:
-        (Some
-           "module Public = struct\n\
-           \  module Width = struct\n\
-           \    let registers () = Utils.get_global_arg ~default:\"-1\" \
-            ~arg_name:\"cc_vector_bytes\"\n\
-           \  end\n\
-            end\n\
-            include Public\n\
-            let vector_bytes_setting () = Width.registers ()\n\
-            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:"let () = ignore (Context.Cc_backend.Width.registers ())\n" `Neither
-  in
-  let via_default_impl = run ~links:" vlib" ~probe:"let () = ()\n" `Neither in
-  let opened_suffix =
-    run
-      ~probe:
-        "open Local\n\
-         let narrow = { Backend_intf.no_hardware_limits with \
-         Ir.Backend_intf.native_fp16_arithmetic = false }\n"
-      `Neither
-  in
-  let parent_alias =
-    run ~probe:"module C = Context\nlet () = ignore (C.Cc_backend.registers ())\n" `Neither
-  in
-  let implicit_library = run ~links:" implicit_lib" ~probe:"let () = ()\n" `Declares in
-  let via_multi_hop =
-    run
-      ~backend:
-        (Some
-           "module Public = struct\n\
-           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
-            end\n\
-            module W = Public\n\
-            module X = W\n\
-            include X\n\
-            let vector_bytes_setting () = Public.registers ()\n\
-            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:aliased `Neither
-  in
-  let foreign_alias =
-    run
-      ~probe:
-        "module Local = struct\n\
-        \  module Backend_intf = struct\n\
-        \    let no_hardware_limits = Context.hardware_limits (Context.auto ())\n\
-        \  end\n\
-         end\n\
-         module BI = Local.Backend_intf\n\
-         let narrow = { BI.no_hardware_limits with BI.native_fp16_arithmetic = false }\n"
-      `Neither
-  in
-  let via_aliased_include =
-    run
-      ~backend:
-        (Some
-           "module Public = struct\n\
-           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
-            end\n\
-            module W = Public\n\
-            include W\n\
-            let vector_bytes_setting () = Public.registers ()\n\
-            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:aliased `Neither
-  in
-  let via_destructuring =
-    run
-      ~backend:
-        (Some
-           "let read_width () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
-            let (registers, other) = (read_width, fun () -> 0)\n\
-            let vector_bytes_setting () = read_width ()\n\
-            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:aliased `Neither
-  in
-  let via_local_alias =
-    run
-      ~limits:
-        "module Widths = struct let registers () = Cc_backend.registers () end\n\
-         module W = Widths\n\
-         let cpu_mma_limits () =\n\
-        \  { no_hardware_limits with\n\
-        \    simd_vector_bytes = Cc_backend.vector_bytes_setting ();\n\
-        \    simd_vector_registers = W.registers (); worker_pool_tag = Cc_backend.chunks () }\n"
-      ~probe:updated `Neither
-  in
-  let via_named_include =
-    run
-      ~backend:
-        (Some
-           "module Public = struct\n\
-           \  let registers () = Utils.get_global_arg ~default:\"-1\" ~arg_name:\"cc_vector_bytes\"\n\
-            end\n\
-            include Public\n\
-            let vector_bytes_setting () = Public.registers ()\n\
-            let chunks () = Utils.get_global_arg ~default:\"0\" ~arg_name:\"cc_parallel_chunks\"\n")
-      ~probe:aliased `Neither
-  in
-  let opened_bare =
-    run
-      ~probe:
-        "open Dynamic_limits\n\
-         let narrow = { no_hardware_limits with Ir.Backend_intf.native_fp16_arithmetic = false }\n"
-      `Neither
-  in
-  let interface_only =
-    run ~inline:`Plain_with_interface ~links:" support" ~probe:"let () = ()\n" `Neither
-  in
-  let via_local_module =
-    run
-      ~limits:
-        "module CC = Cc_backend\n\
-         let cpu_mma_limits () =\n\
-        \  let module W = struct let get () = CC.registers () end in\n\
-        \  { no_hardware_limits with\n\
-        \    simd_vector_bytes = CC.vector_bytes_setting ();\n\
-        \    simd_vector_registers = W.get (); worker_pool_tag = Cc_backend.chunks () }\n"
-      ~probe:updated `Neither
-  in
-  let unplaced_record =
-    run
-      ~backend:
-        (Some
-           (width_backend_stub
-          ^ "let () = ignore { x = Utils.get_global_arg ~default:\"-1\" \
-             ~arg_name:\"cc_vector_bytes\" }\n"))
-      ~probe:projected `Declares
-  in
-  let undeclared_ok =
-    refused undeclared
-    && says (Utils.env_var_name width_key) undeclared
-    && says "`.simd_vector_bytes`" undeclared
-  in
-  let declared_ok = passed declared in
-  let pinned_ok = passed pinned in
-  let pinned_ambient_ok = refused pinned_ambient in
-  let via_alias_ok = refused via_alias && says "`Cc_backend.registers`" via_alias in
-  let via_update_ok =
-    refused via_update && says "leaving `simd_vector_registers` to its base" via_update
-  in
-  let via_copy_ok =
-    refused via_copy
-    && says "leaving `simd_vector_bytes` to its base" via_copy
-    && says "leaving `simd_vector_registers` to its base" via_copy
-  in
-  let via_library_ok = refused via_library && says "library support (support.ml)" via_library in
-  let not_linked_ok = passed not_linked in
-  let via_reexport_ok = refused via_reexport && says "library support (support.ml)" via_reexport in
-  let inline_undeclared_ok =
-    refused inline_undeclared && says "running its inline tests" inline_undeclared
-  in
-  let inline_declared_ok = passed inline_declared in
-  let constant_ok = passed constant in
-  let shadowed_ok = refused shadowed && says "leaving `simd_vector_bytes` to its base" shadowed in
-  let unplaced_backend_ok =
-    exited 1 unplaced_backend && says "outside every named top-level value, so no" unplaced_backend
-  in
-  let unreached_backend_ok =
-    exited 1 unreached_backend && says "derives no reader at all" unreached_backend
-  in
-  let lost_anchor_ok =
-    exited 1 lost_anchor && says "lost an anchor" lost_anchor
-    && says ("no `" ^ width_module ^ "` module") lost_anchor
-  in
-  let over_read_ok =
-    refused over_read && says "leaving `simd_vector_registers` to its base" over_read
-  in
-  let local_qualified_ok =
-    refused local_qualified && says "leaving `simd_vector_bytes` to its base" local_qualified
-  in
-  let via_helper_lib_ok =
-    refused via_helper_lib && says "library helper_lib (helper_lib.ml)" via_helper_lib
-  in
-  let shadowed_home_ok =
-    refused shadowed_home && says "leaving `simd_vector_bytes` to its base" shadowed_home
-  in
-  let via_include_ok = refused via_include && says "`Cc_backend.registers`" via_include in
-  let pinned_ambient_lower_ok = refused pinned_ambient_lower in
-  let via_nested_include_ok =
-    refused via_nested_include && says "`Cc_backend.Width.registers`" via_nested_include
-  in
-  let via_local_alias_ok =
-    refused via_local_alias && says "leaving `simd_vector_registers` to its base" via_local_alias
-  in
-  let via_aliased_include_ok =
-    refused via_aliased_include && says "`Cc_backend.registers`" via_aliased_include
-  in
-  let via_destructuring_ok =
-    refused via_destructuring && says "`Cc_backend.registers`" via_destructuring
-  in
-  let foreign_alias_ok =
-    refused foreign_alias && says "leaving `simd_vector_bytes` to its base" foreign_alias
-  in
-  let opened_suffix_ok =
-    refused opened_suffix && says "leaving `simd_vector_bytes` to its base" opened_suffix
-  in
-  let parent_alias_ok = refused parent_alias && says "`Cc_backend.registers`" parent_alias in
-  let implicit_library_ok =
-    exited 1 implicit_library && says "library implicit_lib, which a program links" implicit_library
-  in
-  let via_multi_hop_ok = refused via_multi_hop && says "`Cc_backend.registers`" via_multi_hop in
-  let via_default_impl_ok =
-    refused via_default_impl && says "library vimpl (vm.ml)" via_default_impl
-  in
-  let via_named_include_ok =
-    refused via_named_include && says "`Cc_backend.registers`" via_named_include
-  in
-  let opened_bare_ok =
-    refused opened_bare && says "leaving `simd_vector_bytes` to its base" opened_bare
-  in
-  let interface_only_ok =
-    exited 0 interface_only && not (says "which a program links" interface_only)
-  in
-  let via_local_module_ok =
-    refused via_local_module && says "leaving `simd_vector_registers` to its base" via_local_module
-  in
-  let unplaced_record_ok =
-    exited 1 unplaced_record && says "outside every named top-level value, so no" unplaced_record
-  in
-  let unseen_library_ok =
-    exited 1 unseen_library && says "library unseen, which a program links" unseen_library
-  in
-  if not undeclared_ok then report "undeclared" undeclared;
-  if not declared_ok then report "declared" declared;
-  if not pinned_ok then report "pinned" pinned;
-  if not pinned_ambient_ok then report "pinned-ambient" pinned_ambient;
-  if not via_alias_ok then report "via-alias" via_alias;
-  if not via_update_ok then report "via-update" via_update;
-  if not via_copy_ok then report "via-copy" via_copy;
-  if not via_library_ok then report "via-library" via_library;
-  if not not_linked_ok then report "not-linked" not_linked;
-  if not via_reexport_ok then report "via-reexport" via_reexport;
-  if not inline_undeclared_ok then report "inline-undeclared" inline_undeclared;
-  if not inline_declared_ok then report "inline-declared" inline_declared;
-  if not constant_ok then report "constant" constant;
-  if not shadowed_ok then report "shadowed" shadowed;
-  if not unplaced_backend_ok then report "unplaced-backend" unplaced_backend;
-  if not unreached_backend_ok then report "unreached-backend" unreached_backend;
-  if not lost_anchor_ok then report "lost-anchor" lost_anchor;
-  if not over_read_ok then report "over-read" over_read;
-  if not local_qualified_ok then report "local-qualified" local_qualified;
-  if not via_helper_lib_ok then report "via-helper-lib" via_helper_lib;
-  if not shadowed_home_ok then report "shadowed-home" shadowed_home;
-  if not via_include_ok then report "via-include" via_include;
-  if not unseen_library_ok then report "unseen-library" unseen_library;
-  if not pinned_ambient_lower_ok then report "pinned-ambient-lower" pinned_ambient_lower;
-  if not via_nested_include_ok then report "via-nested-include" via_nested_include;
-  if not via_default_impl_ok then report "via-default-impl" via_default_impl;
-  if not opened_suffix_ok then report "opened-suffix" opened_suffix;
-  if not parent_alias_ok then report "parent-alias" parent_alias;
-  if not implicit_library_ok then report "implicit-library" implicit_library;
-  if not via_multi_hop_ok then report "via-multi-hop" via_multi_hop;
-  if not foreign_alias_ok then report "foreign-alias" foreign_alias;
-  if not via_aliased_include_ok then report "via-aliased-include" via_aliased_include;
-  if not via_destructuring_ok then report "via-destructuring" via_destructuring;
-  if not via_local_alias_ok then report "via-local-alias" via_local_alias;
-  if not via_named_include_ok then report "via-named-include" via_named_include;
-  if not opened_bare_ok then report "opened-bare" opened_bare;
-  if not interface_only_ok then report "interface-only" interface_only;
-  if not via_local_module_ok then report "via-local-module" via_local_module;
-  if not unplaced_record_ok then report "unplaced-record" unplaced_record;
-  printf
-    "\n\
-     The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree\n\
-     library, over a stand-in `Cc_backend` reading `%s` in one value and one call away in\n\
-     another, and a stand-in limits record filling two fields from those --\n\
-     under a `let open` and through a function-local helper calling through an alias -- and a third\n\
-     from a value reading another key.\n\
-     The arms differ in how the module reads the width, whether the test links the library that\n\
-     reads it, whether that library has inline tests, and how the stanza answers for the variable.\n\n"
-    width_key;
-  attribute
-    "a test projecting a width field off a limits record is reported, naming the variable and the \
-     read, when its stanza declares neither"
-    [ undeclared ];
-  Verdict.p
-    "a test projecting a width field off a limits record is reported, naming the variable and the \
-     read, when its stanza declares neither"
-    undeclared_ok;
-  Verdict.p "the same stanza declaring the variable passes" declared_ok;
-  Verdict.p "and so does the same stanza pinning it with `setenv` around its run" pinned_ok;
-  Verdict.p
-    "but a `setenv` whose value reads the same variable back through `%{env:…}` pins nothing, and \
-     is reported"
-    pinned_ambient_ok;
-  Verdict.p
-    "a `Cc_backend` value reaching the width one call away, named through a module alias of \
-     `Context.Cc_backend`, is a read"
-    via_alias_ok;
-  Verdict.p
-    "a limits update overwriting one width field leaves the other to a device base, and is a read"
-    via_update_ok;
-  Verdict.p
-    "a limits update overwriting only a label the width does not fill copies every width field, \
-     and is a read"
-    via_copy_ok;
-  Verdict.p "a read in a test-tree library the test links is the test's read" via_library_ok;
-  Verdict.p "and the same library, not linked, asks nothing of the test" not_linked_ok;
-  Verdict.p "a read reached through a library's `(re_export …)` dependency is the test's read too"
-    via_reexport_ok;
-  Verdict.p
-    "a read in a library with inline tests is asked of its `(inline_tests (deps …))` when nothing \
-     links it"
-    inline_undeclared_ok;
-  Verdict.p "and declaring the variable there answers for it" inline_declared_ok;
-  Verdict.p
-    "a fully synthetic limits record -- through an alias of the constant base and a function \
-     returning an update of it -- an update of another record, a field the width does not fill, \
-     and `Cc_backend` values not reaching the width ask for nothing"
-    constant_ok;
-  Verdict.p
-    "but a bare `no_hardware_limits` the test binds to a device's limits is that binding, and an \
-     update of it is a read"
-    shadowed_ok;
-  attribute
-    "a `Cc_backend` reading the width key outside every named value is refused, not read as having \
-     no width readers"
-    [ unplaced_backend ];
-  Verdict.p
-    "a `Cc_backend` reading the width key outside every named value is refused, not read as having \
-     no width readers"
-    unplaced_backend_ok;
-  attribute
-    "and one whose values no longer reach the key at all is refused rather than passing vacuously"
-    [ unreached_backend ];
-  Verdict.p
-    "and one whose values no longer reach the key at all is refused rather than passing vacuously"
-    unreached_backend_ok;
-  attribute
-    "a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not passed \
-     with no readers"
-    [ lost_anchor ];
-  Verdict.p
-    "a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not passed \
-     with no readers"
-    lost_anchor_ok;
-  Verdict.p
-    "a field of another record over-read by name adds requirements and keeps the limits type's \
-     updates recognised"
-    over_read_ok;
-  Verdict.p
-    "a `no_hardware_limits` reached through a local module of the test is not the library's \
-     constant, and an update of it is a read"
-    local_qualified_ok;
-  Verdict.p "a read in a helper library outside the test roots is the linking program's read"
-    via_helper_lib_ok;
-  Verdict.p
-    "a canonical `Ir.Backend_intf.no_hardware_limits` under a file's own `module Ir` is that \
-     module's, and an update of it is a read"
-    shadowed_home_ok;
-  Verdict.p "a `Cc_backend` value exported through `include struct … end` is a width value too"
-    via_include_ok;
-  attribute
-    "a linked library whose source the scan was never handed is refused, not read as making no \
-     reads"
-    [ unseen_library ];
-  Verdict.p
-    "a linked library whose source the scan was never handed is refused, not read as making no \
-     reads"
-    unseen_library_ok;
-  Verdict.p "and the self-read is recognised case-insensitively, as Windows reads the variable"
-    pinned_ambient_lower_ok;
-  Verdict.p "a `Cc_backend` value re-exported by `include` of a named structure is a width value"
-    via_named_include_ok;
-  Verdict.p
-    "a bare `no_hardware_limits` the file does not bind came from an `open`, and an update of it \
-     is a read"
-    opened_bare_ok;
-  Verdict.p "a library's interface-only module has no source to hand over, and is not refused"
-    interface_only_ok;
-  Verdict.p "a field filled through a `let module` helper still carries the width"
-    via_local_module_ok;
-  Verdict.p "a width read inside a record under an unnamed `let ()` stays unplaced, and is refused"
-    unplaced_record_ok;
-  Verdict.p "a nested submodule's value re-exported by a named `include` is a width value too"
-    via_nested_include_ok;
-  Verdict.p
-    "a virtual library's default implementation reading the width is the linking program's read"
-    via_default_impl_ok;
-  Verdict.p
-    "a field filled through a top-level alias of a structure the limits file defines still carries \
-     the width"
-    via_local_alias_ok;
-  Verdict.p
-    "a `Cc_backend` value re-exported by `include` of an alias of a structure is a width value"
-    via_aliased_include_ok;
-  Verdict.p "and so is one bound by a destructuring top-level `let`" via_destructuring_ok;
-  Verdict.p
-    "an alias of some other module's `Backend_intf` does not name the library's synthetic limits, \
-     and an update through it is a read"
-    foreign_alias_ok;
-  Verdict.p
-    "and a bare `Backend_intf.no_hardware_limits` may come from any `open`, so an update of it is \
-     a read"
-    opened_suffix_ok;
-  Verdict.p "a `Cc_backend` value reached through an alias of its parent module is a read"
-    parent_alias_ok;
-  Verdict.p
-    "a linked library with dune's default module set in a directory the globs never reach is \
-     refused"
-    implicit_library_ok;
-  Verdict.p "a value re-exported by `include` through two module aliases is a width value"
-    via_multi_hop_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)
@@ -7223,13 +4940,14 @@ let ambient_gate_control () =
    reaches, executed rather than vouched for by a neighbouring control that passes. One dune file
    trips them together -- a marker between stanzas, one naming no backend, one on a stanza that runs
    nothing, two on one stanza, one contradicting an `(env_var OCANNL_BACKEND)`, the marker's text
-   outside a comment, a declaration of a variable nothing reads, one alias diffing two goldens, the
-   initializer in an executable nothing runs and in a library, an undeclared tracing gate, an
-   undeclared by-name read, a guarded read nothing runs -- beside a source that names
-   `Test_utils.Generated` and does not parse, and a second dune file declaring a gate over a
-   directory the checker was handed no source from. A second run hands the checker nothing at all.
-   The claims are gates -- incidental refusals would keep the child at exit 1 on their own -- and
-   each refusal's own `FAIL:` line is the evidence `raw_direct_evidence` attributes to them. *)
+   outside a comment, a declaration of a variable the ambient record carries, one alias diffing two
+   goldens, an undeclared tracing gate, an undeclared by-name read of a reserved tooling variable, a
+   test naming a module no source was handed for, the initializer called from a library module and a
+   library source naming it that does not parse -- beside a second dune file declaring a gate over a
+   directory the checker was handed no source from, and a third putting its descendants' modules
+   into its stanzas with `(include_subdirs …)`. A second run hands the checker nothing at all. The
+   claims are gates -- incidental refusals would keep the child at exit 1 on their own -- and each
+   refusal's own `FAIL:` line is the evidence `raw_direct_evidence` attributes to them. *)
 let malformed_tree_subject =
   {dune|; ocannl-backend: none -- between stanzas, about none of them.
 (rule
@@ -7264,24 +4982,24 @@ let malformed_tree_subject =
  (alias runtest-two)
  (action (progn (diff a.expected a.actual) (diff b.expected b.actual))))
 
-(executable (name unrun) (modules unrun))
-(library (name initlib) (modules initlib))
 (library (name gated) (modules gated))
 (test (name envread) (modules envread))
-(executable (name guarded) (modules guarded))
+(test (name ghost) (modules ghost))
+; dune's default module set: initlib and broken, which no other stanza claims (the tracing walk
+; reads only an explicit `(modules …)`, and would stop on the unparsable one).
+(library (name initlib))
 |dune}
 
 let malformed_tree_sources =
   [
     ("t/noop.ml", "let () = ()\n");
-    ("t/broken.ml", "let = Test_utils.Generated.init\n");
-    ("t/unrun.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
-    ("t/initlib.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
     ("t/gated.ml", "[%%global_debug_log_level_from_env_var \"OCANNL_LOG_LEVEL_PROBE\"]\n");
-    ("t/envread.ml", "let _ = Sys.getenv_opt \"OCANNL_LOG_LEVEL\"\n");
-    ("t/guarded.ml", "let _ = Utils.read_env_var \"log_level\"\n");
+    ("t/envread.ml", "let _ = Sys.getenv_opt \"OCANNL_TOOL_PROBE_MASK\"\n");
+    ("t/initlib.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
+    ("t/broken.ml", "let = Test_utils.Generated.init\n");
     ( "far/dune",
       "(library (name far) (modules far) (preprocessor_deps (env_var OCANNL_LOG_LEVEL_PROBE)))\n" );
+    ("inc/dune", "(include_subdirs unqualified)\n");
   ]
 
 (* gh-ocannl-1368's control. Every program in the repository answers for the width once this rule
@@ -7630,9 +5348,15 @@ let malformed_tree_control () =
   let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
   let malformed = run_checker ~root ~exe ("." :: List.map files ~f:fst) in
   let empty = run_checker ~root ~exe [ "." ] in
+  List.iter
+    [ ("malformed", malformed); ("empty", empty) ]
+    ~f:(fun (label, (status, text)) ->
+      if not (exited 1 (status, text)) then
+        eprintf "the malformed-tree control's %s run %s. Its captured output:\n%s\n" label
+          (describe_status status) text);
   printf
     "The checker is put to one dune file built to trip the marker grammar and the declaration\n\
-     checks, beside a source that does not parse, and to a run handed nothing at all.\n\n";
+     checks, and to a run handed nothing at all.\n\n";
   attribute "a dune file built to trip the marker grammar and the declaration checks is refused"
     [ malformed ];
   Verdict.p "a dune file built to trip the marker grammar and the declaration checks is refused"
@@ -7649,12 +5373,9 @@ let () =
       control ();
       credential_control ();
       floor_control ();
-      guard_control ();
       lifecycle_contract_control ();
       family_control ();
       inline_alias_control ();
-      pipeline_control ();
-      width_control ();
       search_control ();
       ambient_gate_control ();
       repository_inventory_control ();

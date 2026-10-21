@@ -148,24 +148,6 @@ let rec pattern_name pattern =
   | Ppat_constraint (inner, _) | Ppat_alias (inner, _) -> pattern_name inner
   | _ -> None
 
-(** Every variable a pattern binds, in order: [x], and both [a] and [b] of [(a, b)] or
-    [{ f = a; g = b }]. *)
-let pattern_names pattern =
-  let found = ref [] in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! pattern pat =
-        (match pat.ppat_desc with
-        | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> found := txt :: !found
-        | _ -> ());
-        super#pattern pat
-    end
-  in
-  iterator#pattern pattern;
-  List.rev !found
-
 (* A path is flattened defensively here, unlike {!longident_of}: this one runs over MODULE paths,
    where a functor application is a shape the language admits, and a scan that raised on one would
    refuse a file for containing an unrelated [module M = F (X)]. *)
@@ -197,8 +179,8 @@ let path_ends_in name txt =
     to the end of the structure that holds it, a [let open … in body] reaching over the body — which
     is what a client wanting the other direction needs (Codex P2, round 3 of PR #484).
 
-    Shared by the two scans that match a call by its receiver — the initializer census below and the
-    environment reader above — because a second copy of these rules is exactly the restatement this
+    Shared by the initializer census below and [dead_export_scan], which match a reference by its
+    receiver the same way, because a second copy of these rules is exactly the restatement this
     module exists to avoid. *)
 let module_bindings_of structure ~wanted =
   let aliases = ref [] and opened = ref false in
@@ -286,63 +268,6 @@ let module_bindings_of structure ~wanted =
 let within ranges offset =
   List.exists ranges ~f:(fun (start, stop) -> start <= offset && offset < stop)
 
-(** Where a binding of the simple name [fn] is in scope in [structure]: a [let fn = …] at structure
-    level reaching to the end of the structure that holds it, a [let fn = … in body] reaching over
-    the body, and a parameter called [fn] reaching over its function.
-
-    What it is for is shadowing. A file that both opens a module and defines its own [fn] spells the
-    bare name for its own, and a scan that read the [open] alone would attribute the call to the
-    module — which for a check that asks for an [(env_var …)] declaration means failing a correct
-    stanza over a variable the program never reads (Codex P2, round 3 of PR #484).
-
-    Best-effort in the direction that costs least: a pattern {!pattern_name} does not recognise
-    yields no range, and a call inside BOTH an open's scope and a shadow's is read as shadowed
-    whichever is inner. Both leave a bare call unattributed rather than wrongly attributed, which is
-    the safe direction for the client that asks. *)
-let shadow_ranges_of structure ~fn =
-  let ranges = ref [] in
-  let structure_end = ref 0 in
-  let binds bindings =
-    List.exists bindings ~f:(fun b ->
-        Option.value_map (pattern_name b.pvb_pat) ~default:false ~f:(String.equal fn))
-  in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! structure items =
-        let saved = !structure_end in
-        (match List.last items with
-        | Some last -> structure_end := last.pstr_loc.loc_end.pos_cnum
-        | None -> ());
-        super#structure items;
-        structure_end := saved
-
-      method! structure_item item =
-        (match item.pstr_desc with
-        | Pstr_value (_, bindings) when binds bindings ->
-            ranges := (item.pstr_loc.loc_end.pos_cnum, !structure_end) :: !ranges
-        | _ -> ());
-        super#structure_item item
-
-      method! expression expr =
-        (match expr.pexp_desc with
-        | Pexp_let (_, bindings, body) when binds bindings ->
-            ranges := (body.pexp_loc.loc_start.pos_cnum, body.pexp_loc.loc_end.pos_cnum) :: !ranges
-        | Pexp_function (params, _, _)
-          when List.exists params ~f:(fun p ->
-                   match p.pparam_desc with
-                   | Pparam_val (_, _, pattern) ->
-                       Option.value_map (pattern_name pattern) ~default:false ~f:(String.equal fn)
-                   | _ -> false) ->
-            ranges := (expr.pexp_loc.loc_start.pos_cnum, expr.pexp_loc.loc_end.pos_cnum) :: !ranges
-        | _ -> ());
-        super#expression expr
-    end
-  in
-  iterator#structure structure;
-  List.rev !ranges
-
 (** Whether [path] names [fn] of the module [wanted], given that module's local bindings: written
     out or reached through an alias, or spelled bare under an [open]/[include] of it. *)
 let names_function_of ~wanted ~aliases ~opened ~fn path =
@@ -353,207 +278,6 @@ let names_function_of ~wanted ~aliases ~opened ~fn path =
       | receiver :: _ ->
           String.equal receiver wanted || List.mem aliases receiver ~equal:String.equal)
   | _ -> false
-
-(** {1 Configuration read straight from the environment (gh-ocannl-749)} *)
-
-(** The one function that reads a configuration key's environment variable and nothing else.
-    [Utils.get_global_arg] consults the commandline and the config file too, so a value it returns
-    can be pinned where the environment cannot reach it; this one cannot be outranked, which is what
-    makes a read through it an unconditional dependency on [OCANNL_<KEY>]. *)
-let env_reader = "read_env_var"
-
-(** The module that owns it. *)
-let utils_module = "Utils"
-
-type env_reader_reads = {
-  reader_keys : string list;
-      (** every key the reader is reached with, sorted and deduplicated: a string literal at the
-          call, and the elements of a list an iteration hands it one at a time *)
-  reader_unresolved : string list;
-      (** one line per reach whose key this scan could not resolve to a finite set of literals,
-          naming what it saw. A caller must treat a non-empty list as a refusal: the alternative is
-          a check that runs its loop over whatever keys happened to be resolvable and reports
-          success, which is a pass proving nothing (Codex P2, round 4 of PR #484). *)
-}
-
-(** Guard-key contract (gh-ocannl-797).
-
-    A dynamic guard uses exactly this local expression:
-    [let guarded_keys = [ "key"; ... ] in Base.List.iter guarded_keys ~f:(fun arg_name -> match
-     Utils.read_env_var arg_name with ...)].
-
-    The list, iteration, callback parameter and match scrutinee are adjacent AST nodes. No list
-    binding, projection, concatenation, callback scope or helper is inferred. Each other dynamic
-    reach refuses with the required shape. Match arms may contain arbitrary reporting code, but
-    additional reader reaches in them are checked independently. Literal reads remain supported;
-    reader identification shares the module's existing receiver census.
-
-    [Base] is a reserved spelling in this contract: a file declaring a module with that name is
-    refused conservatively, without resolving its scope. This is a maintenance contract rather than
-    an adversarial OCaml interpreter. *)
-
-let rec guard_key_literals expr =
-  match expr.pexp_desc with
-  | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> Some []
-  | Pexp_construct ({ txt = Lident "::"; _ }, Some { pexp_desc = Pexp_tuple [ head; tail ]; _ }) ->
-      Option.both (string_literal head) (guard_key_literals tail)
-      |> Option.map ~f:(fun (key, keys) -> key :: keys)
-  | _ -> None
-
-let env_reader_reads_in_source content =
-  let structure = structure_of content in
-  let keys = ref [] and unresolved = ref [] in
-  let blessed = Hash_set.create (module Int) in
-  let contracted = Hash_set.create (module Int) in
-  let aliases, _opened, open_ranges = module_bindings_of structure ~wanted:utils_module in
-  let shadows = shadow_ranges_of structure ~fn:env_reader in
-  let names_the_reader ~offset path =
-    match List.rev path with
-    | last :: [] when String.equal last env_reader ->
-        within open_ranges offset && not (within shadows offset)
-    | _ -> names_function_of ~wanted:utils_module ~aliases ~opened:false ~fn:env_reader path
-  in
-  let base_declared = ref false in
-  let declarations =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! module_binding binding =
-        if Option.equal String.equal binding.pmb_name.txt (Some "Base") then base_declared := true;
-        super#module_binding binding
-
-      method! expression expr =
-        (match expr.pexp_desc with
-        | Pexp_letmodule ({ txt = Some "Base"; _ }, _, _) -> base_declared := true
-        | _ -> ());
-        super#expression expr
-
-      method! module_expr expr =
-        (match expr.pmod_desc with
-        | Pmod_functor (Named ({ txt = Some "Base"; _ }, _), _) -> base_declared := true
-        | _ -> ());
-        super#module_expr expr
-    end
-  in
-  declarations#structure structure;
-  let required_shape =
-    "expected `let guarded_keys = [\"key\"; ...] in Base.List.iter guarded_keys ~f:(fun arg_name \
-     -> match Utils.read_env_var arg_name with ...)`"
-  in
-  let refuse_at expr detail =
-    let pos = expr.pexp_loc.loc_start in
-    unresolved :=
-      Printf.sprintf "line %d, column %d: %s; %s%s" pos.pos_lnum (pos.pos_cnum - pos.pos_bol) detail
-        required_shape
-        (if !base_declared then " (this source declares the reserved module Base)" else "")
-      :: !unresolved
-  in
-  let exact_path expr path =
-    Option.value_map (longident_of expr) ~default:false ~f:(List.equal String.equal path)
-  in
-  let record_contract expr =
-    let record_iteration literals iteration =
-      (* A following relationship assertion or reporting expression does not change the guard. Only
-         the first expression may be the iteration; there is no binding to follow. *)
-      let iteration =
-        match iteration.pexp_desc with Pexp_sequence (first, _) -> first | _ -> iteration
-      in
-      match iteration.pexp_desc with
-      | Pexp_apply
-          ( iterator,
-            [
-              (Asttypes.Nolabel, source);
-              ( Asttypes.Labelled "f",
-                {
-                  pexp_desc =
-                    Pexp_function
-                      ( [
-                          {
-                            pparam_desc =
-                              Pparam_val
-                                ( Asttypes.Nolabel,
-                                  None,
-                                  { ppat_desc = Ppat_var { txt = parameter; _ }; _ } );
-                            _;
-                          };
-                        ],
-                        None,
-                        Pfunction_body
-                          {
-                            pexp_desc =
-                              Pexp_match
-                                ( ({
-                                     pexp_desc =
-                                       Pexp_apply (reader, [ (Asttypes.Nolabel, argument) ]);
-                                     _;
-                                   } as read),
-                                  _ );
-                            _;
-                          } );
-                  _;
-                } );
-            ] )
-        when exact_path iterator [ "Base"; "List"; "iter" ]
-             && exact_path source [ "guarded_keys" ]
-             && exact_path reader [ "Utils"; "read_env_var" ]
-             && exact_path argument [ parameter ] && not !base_declared ->
-          Option.iter (guard_key_literals literals) ~f:(fun guarded_keys ->
-              Hash_set.add contracted read.pexp_loc.loc_start.pos_cnum;
-              keys := guarded_keys @ !keys)
-      | _ -> ()
-    in
-    match expr.pexp_desc with
-    | Pexp_let
-        ( Asttypes.Nonrecursive,
-          [
-            {
-              pvb_pat = { ppat_desc = Ppat_var { txt = "guarded_keys"; _ }; _ };
-              pvb_expr = literals;
-              _;
-            };
-          ],
-          iteration ) ->
-        record_iteration literals iteration
-    | _ -> ()
-  in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression expr =
-        record_contract expr;
-        (match expr.pexp_desc with
-        | Pexp_apply (f, args) -> (
-            match longident_of f with
-            | Some path when names_the_reader ~offset:f.pexp_loc.loc_start.pos_cnum path -> (
-                Hash_set.add blessed f.pexp_loc.loc_start.pos_cnum;
-                if not (Hash_set.mem contracted expr.pexp_loc.loc_start.pos_cnum) then
-                  match args with
-                  | [ (Asttypes.Nolabel, argument) ] -> (
-                      match string_literal argument with
-                      | Some key -> keys := key :: !keys
-                      | None -> refuse_at expr "dynamic reader outside the guard contract")
-                  | _ -> refuse_at expr "reader applied to no single key")
-            | _ -> ())
-        | Pexp_ident { txt; _ }
-          when names_the_reader ~offset:expr.pexp_loc.loc_start.pos_cnum (flatten_longident txt) ->
-            if not (Hash_set.mem blessed expr.pexp_loc.loc_start.pos_cnum) then
-              refuse_at expr "reader handed on as a value"
-        | _ -> ());
-        super#expression expr
-    end
-  in
-  iterator#structure structure;
-  {
-    reader_keys = List.dedup_and_sort !keys ~compare:String.compare;
-    reader_unresolved = List.dedup_and_sort !unresolved ~compare:String.compare;
-  }
-
-(** Whether [content] could possibly reach the reader: the function has to be NAMED for any spelling
-    of a call, an alias or an [open] to reach it, so the substring is a necessary condition and a
-    file without it is skipped unparsed. The same narrowing filter {!could_call_generated_init} is,
-    and only a filter — what decides is {!env_reader_reads_in_source}. *)
-let could_read_env_var content = String.is_substring content ~substring:env_reader
 
 (** {1 The artifact-freshness initializer (gh-ocannl-723)} *)
 
@@ -583,9 +307,9 @@ let generated_init = "init"
     on. A text scan would read every one of those as a call.
 
     The receiver is matched by NAME, so a module bound to [Generated] that is not this one is read
-    as if it were. That is the safe direction of the two, and deliberately so: a declaration too
-    many makes dune rerun a stanza that need not have been rerun, while one too few is the stale run
-    the rule built on this exists to prevent. *)
+    as if it were: the safe direction for the rule built on this, [env_var_deps]' refusal of the
+    initializer in a library module, where a false call costs a moved module and a missed one an
+    initializer running in every executable that links the library. *)
 let generated_init_calls_in_source content =
   let structure = structure_of content in
   let aliases, opened, _open_ranges = module_bindings_of structure ~wanted:generated_module in
@@ -621,10 +345,10 @@ let could_call_generated_init content = String.is_substring content ~substring:g
     [module F = Fissioned_chain] -- beside the requested path it resolves to, so a caller can follow
     one particular reference (gh-ocannl-1368's width-pinning helpers).
 
-    Used for env_var_deps' derivations: the schedule pipeline's configuration keys (gh-ocannl-1149)
-    and the programs starting an autotune search (gh-ocannl-1368). Lifecycle membership instead uses
-    {!Lifecycle_scan}'s resolution-free Dune contract (gh-ocannl-798). This source pass remains an
-    approximation rather than a typed OCaml environment. *)
+    Used for env_var_deps' derivation of the programs starting an autotune search (gh-ocannl-1368).
+    Lifecycle membership instead uses {!Lifecycle_scan}'s resolution-free Dune contract
+    (gh-ocannl-798). This source pass remains an approximation rather than a typed OCaml
+    environment. *)
 let module_reference_sites content ~paths =
   let structure = structure_of content in
   let rec starts_with components path =
@@ -1143,11 +867,6 @@ let keys_in_source content =
 type key_reach = {
   reach : (string * string list) list;
       (** Every top-level value of the module, with the keys it reaches. *)
-  field_reach : (string * string list) list;
-      (** Every field a record expression inside a top-level value initializes, with the keys its
-          initializer reaches, resolved exactly as the value's own reach is (gh-ocannl-1320: which
-          device-limits fields the cc vector width fills). A field initialized in several records
-          appears once per record. *)
   unplaced : string list;
       (** Keys read outside every NAMED top-level value binding -- in a nested module, or under
           [let () = …] -- which no entry is credited with, and which a caller has to refuse rather
@@ -1158,12 +877,11 @@ type key_reach = {
     reads in its own body, and those of every top-level value of the same module it names,
     transitively (gh-ocannl-1149).
 
-    What it is for is a requirement on a program that NAMES one of these values from outside: the
-    keys reached are the ones its run depends on, so the rules running it declare them. A reach is a
+    What it is for is a question about a program that NAMES one of these values from outside: which
+    keys -- or, through [external_keys], which tagged entry points -- its run reaches. A reach is a
     superset where it errs, and errs that way on purpose: a local binding that shadows a top-level
     name is still read as a use of it, and an optional argument a caller supplies -- which spares
-    the read it defaults to -- is not modeled. The cost of the excess is a rerun when the variable
-    changes; the cost of a miss is a stale result served as a pass.
+    the read it defaults to -- is not modeled.
 
     In source order, so a top-level name refers to the binding before it, as in OCaml, and a
     [let rec] group is closed to its fixpoint. A nested [module M = struct … end] is walked too, its
@@ -1172,26 +890,11 @@ type key_reach = {
     -- contributes whatever [external_keys] answers for its path, after a top-level [module X = Y]
     alias of this module has been expanded; the caller decides which modules it can follow, since
     this function sees one file. A field of [Utils.settings] contributes what [settings_field_keys]
-    answers for it (the field's own name by default). [~fields:false] leaves [field_reach] empty for
-    a caller that reads only [reach]: following a record field's initializer through a long
-    function's local helpers is not memoized, and over [autotune.ml] it ran for minutes.
-
-    [by_last_component] answers for any path no local value answers to by its LAST component alone,
-    whatever qualifies it and whatever brought it into scope -- an `open`, a `let open … in`, a
-    local [M.( … )], an alias of any shape. It is for a caller that knows the value names it is
-    after and would rather over-read a same-named value elsewhere than track every scoping construct
-    OCaml has (gh-ocannl-1320, Codex P2 rounds 1 and 3). Empty by default: the schedule pipeline's
-    derivation predates it. *)
+    answers for it (the field's own name by default). *)
 let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
-    ?(settings_field_keys = fun field -> [ field ]) ?(by_last_component = fun (_ : string) -> [])
-    ?(all_pattern_names = false) ?(fields = true) content =
-  (* The names a binding is credited under: its simple name, or with [~all_pattern_names] every
-     variable its pattern binds, each with the whole initializer's reach (Codex P2, round 10).
-     Opt-in because that over-reads -- in `Utils`, [config_file_args] would reach the bootstrap keys
-     and widen the schedule pipeline's requirement on every stanza naming it. *)
-  let names_of pattern =
-    if all_pattern_names then pattern_names pattern else Option.to_list (pattern_name pattern)
-  in
+    ?(settings_field_keys = fun field -> [ field ]) content =
+  (* The names a binding is credited under: its simple name. *)
+  let names_of pattern = Option.to_list (pattern_name pattern) in
   let structure = structure_of content in
   let aliases =
     List.filter_map structure ~f:(fun item ->
@@ -1280,72 +983,16 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
           let expanded = expand path in
           if List.equal String.equal expanded path then None else local_as expanded depth
     in
-    let by_name =
-      Option.value_map (List.last path)
-        ~default:(Set.empty (module String))
-        ~f:(fun name -> Set.of_list (module String) (by_last_component name))
-    in
     match local (List.length scope) with
     | Some keys -> keys
     | None -> (
         match path with
         | [ _ ] ->
-            List.fold !included ~init:by_name ~f:(fun acc m ->
+            List.fold !included
+              ~init:(Set.empty (module String))
+              ~f:(fun acc m ->
                 Set.union acc (Set.of_list (module String) (external_keys (m @ path))))
-        | _ -> Set.union by_name (Set.of_list (module String) (external_keys (expand path))))
-  in
-  let field_reach = ref [] in
-  (* Every simple name a `let … in` inside [expr] binds, with what each binding reads and names. *)
-  let local_bindings_of expr =
-    let found = ref [] in
-    let iterator =
-      object
-        inherit Ast_traverse.iter as super
-
-        method! expression expr =
-          (match expr.pexp_desc with
-          | Pexp_let (_, bindings, _) ->
-              List.iter bindings ~f:(fun binding ->
-                  Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
-                      found := (name, direct_of binding.pvb_expr) :: !found))
-          (* A [let module M = struct … end in] helper's values, reached as [M.v] (Codex P2, round
-             7). *)
-          | Pexp_letmodule ({ txt = Some m; _ }, { pmod_desc = Pmod_structure items; _ }, _) ->
-              List.iter items ~f:(fun item ->
-                  match item.pstr_desc with
-                  | Pstr_value (_, bindings) ->
-                      List.iter bindings ~f:(fun binding ->
-                          Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
-                              found := (m ^ "." ^ name, direct_of binding.pvb_expr) :: !found))
-                  | _ -> ())
-          | _ -> ());
-          super#expression expr
-      end
-    in
-    iterator#expression expr;
-    Map.of_alist_multi (module String) !found
-  in
-  (* The record fields a binding's body initializes, each with its initializer, resolved once the
-     binding's own scope is known. *)
-  let record_fields_of expr =
-    let found = ref [] in
-    let iterator =
-      object
-        inherit Ast_traverse.iter as super
-
-        method! expression expr =
-          (match expr.pexp_desc with
-          | Pexp_record (fields, _) ->
-              List.iter fields ~f:(fun ({ txt = field; _ }, value) ->
-                  Option.iter
-                    (List.last (flatten_longident field))
-                    ~f:(fun field -> found := (field, value) :: !found))
-          | _ -> ());
-          super#expression expr
-      end
-    in
-    iterator#expression expr;
-    List.rev !found
+        | _ -> Set.of_list (module String) (external_keys (expand path)))
   in
   let reach_of ~env ~scope (keys, names) =
     List.fold names
@@ -1385,40 +1032,6 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                   List.fold group ~init:env ~f:(fun acc (name, direct) ->
                       Map.set acc ~key:name ~data:(reach_of ~env ~scope direct))
             in
-            (* A field's initializer sees what the binding's body sees: the earlier values, and for
-               a recursive group the group itself. *)
-            let field_env = match rec_flag with Recursive -> env' | Nonrecursive -> env in
-            (* Named bindings only: [direct_of] marks every literal read it visits as placed, and an
-               unnamed [let () = …] must keep its reads in [unplaced] (Codex P2, round 7). *)
-            let named =
-              List.filter bindings ~f:(fun b -> not (List.is_empty (names_of b.pvb_pat)))
-            in
-            List.iter named ~f:(fun binding ->
-                (* And the helpers the binding declares locally (Codex P2, round 2): a single name
-                   bound by a `let` anywhere inside the binding stands for what every such binding
-                   of it reads -- flow-insensitively, so shadowing over-reads, the direction whose
-                   cost is a declaration. *)
-                let locals = local_bindings_of binding.pvb_expr in
-                let rec local_reach ~seen (keys, names) =
-                  List.fold names
-                    ~init:(Set.of_list (module String) keys)
-                    ~f:(fun acc path ->
-                      let name = dotted path in
-                      match path with
-                      | _ when Map.mem locals name ->
-                          if Set.mem seen name then acc
-                          else
-                            List.fold (Map.find_multi locals name) ~init:acc ~f:(fun acc direct ->
-                                Set.union acc (local_reach ~seen:(Set.add seen name) direct))
-                      | _ -> Set.union acc (resolve ~env:field_env ~scope path))
-                in
-                if fields then
-                  List.iter (record_fields_of binding.pvb_expr) ~f:(fun (field, value) ->
-                      field_reach :=
-                        ( field,
-                          Set.to_list
-                            (local_reach ~seen:(Set.empty (module String)) (direct_of value)) )
-                        :: !field_reach));
             env'
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
            functor's body is not walked: what its values read depends on its argument. *)
@@ -1457,7 +1070,6 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
   in
   {
     reach = Map.to_alist env |> List.map ~f:(fun (name, keys) -> (name, Set.to_list keys));
-    field_reach = List.rev !field_reach;
     unplaced;
   }
 
@@ -1712,205 +1324,6 @@ let initialization_items content =
         called = List.concat_map evaluated ~f:statements;
         literals = List.rev !literals;
       })
-
-(** Every record type [content] declares at top level, with its labels:
-    [type t = { a : int; b : int }] contributes [("t", ["a"; "b"])]. *)
-let record_type_labels content =
-  List.concat_map (structure_of content) ~f:(fun item ->
-      match item.pstr_desc with
-      | Pstr_type (_, declarations) ->
-          List.filter_map declarations ~f:(fun declaration ->
-              match declaration.ptype_kind with
-              | Ptype_record labels ->
-                  Some
-                    ( declaration.ptype_name.txt,
-                      List.map labels ~f:(fun label -> label.pld_name.txt) )
-              | _ -> None)
-      | _ -> [])
-
-(** Where [content] reads one of [fields] off a record, in words a diagnostic can quote: a field
-    projection [limits.simd_vector], a record pattern naming the field, and a [{ base with … }]
-    update that leaves some of [fields] to its base -- a copy of the base's value, read where the
-    base came from. An update is recognised as one of the record by overwriting any of
-    [record_fields] (every label of the record type [fields] belong to) or of [fields], so
-    [{ limits with native_fp16_arithmetic = false }] copies every one of [fields] from its base.
-
-    A CONSTANT base is no read: [base_value] (the library's synthetic limits) at its home module
-    [base_home] ([Ir.Backend_intf.no_hardware_limits]), through a module alias every binding of
-    which names that home ([module BI = Ir.Backend_intf]), or bare where the file does not bind the
-    name; or a name every binding of which in this file is a constant record -- a full record
-    literal, an update of a constant base, or a function returning one -- so
-    [let cpu_limits = { no_hardware_limits with … }] and a later [{ cpu_limits with … }] read
-    nothing. Any other path is not constant -- a [Local.no_hardware_limits] may be anything (Codex
-    P2, rounds 4-5) -- the direction whose cost is a declaration. Field names are matched by their
-    last component, without types: a field of another record spelled the same way is read as this
-    one, for the same reason (gh-ocannl-1320). *)
-let field_reads_in_source content ~fields ~record_fields ~constant_base:(base_home, base_value) =
-  let wanted field = List.mem fields field ~equal:String.equal in
-  let of_the_record field = wanted field || List.mem record_fields field ~equal:String.equal in
-  let structure = structure_of content in
-  let last lid = List.last (flatten_longident lid) in
-  (* Every simple-name value binding in the file, with what it binds. *)
-  let bindings =
-    let found = ref [] in
-    let note binding =
-      Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
-          found := (name, binding.pvb_expr) :: !found)
-    in
-    let iterator =
-      object
-        inherit Ast_traverse.iter as super
-
-        method! structure_item item =
-          (match item.pstr_desc with Pstr_value (_, bs) -> List.iter bs ~f:note | _ -> ());
-          super#structure_item item
-
-        method! expression expr =
-          (match expr.pexp_desc with Pexp_let (_, bs, _) -> List.iter bs ~f:note | _ -> ());
-          super#expression expr
-      end
-    in
-    iterator#structure structure;
-    !found
-  in
-  (* Every module name the file binds to a path, anywhere: [module BI = Ir.Backend_intf], or a [let
-     module … in]. *)
-  let module_aliases =
-    let found = ref [] in
-    let note name module_expr =
-      match (name, module_expr.pmod_desc) with
-      | Some name, Pmod_ident { txt; _ } ->
-          Option.iter (flatten_module_path txt) ~f:(fun path -> found := (name, path) :: !found)
-      | Some name, _ -> found := (name, []) :: !found
-      | None, _ -> ()
-    in
-    let iterator =
-      object
-        inherit Ast_traverse.iter as super
-
-        method! structure_item item =
-          (match item.pstr_desc with
-          | Pstr_module { pmb_name = { txt; _ }; pmb_expr; _ } -> note txt pmb_expr
-          | _ -> ());
-          super#structure_item item
-
-        method! expression expr =
-          (match expr.pexp_desc with
-          | Pexp_letmodule ({ txt; _ }, module_expr, _) -> note txt module_expr
-          | _ -> ());
-          super#expression expr
-      end
-    in
-    iterator#structure structure;
-    Map.of_alist_multi (module String) !found
-  in
-  let rec unwrap expr =
-    match expr.pexp_desc with Pexp_constraint (inner, _) -> unwrap inner | _ -> expr
-  in
-  (* What a binding produces once applied: a function's body, so [let simd w = { no_hardware_limits
-     with … }] makes [simd 32] a constant base too. *)
-  let rec result expr =
-    match (unwrap expr).pexp_desc with
-    | Pexp_function (_, _, Pfunction_body body) -> result body
-    | _ -> unwrap expr
-  in
-  (* Closed to a fixpoint: a name is constant once every binding of it is a constant record. *)
-  let constant_names =
-    let names = List.dedup_and_sort (List.map bindings ~f:fst) ~compare:String.compare in
-    let rec close known =
-      (* A bare name this file binds means its binding, which the closure judges -- a local
-         [no_hardware_limits] bound to a device's limits is not the library's constant (Codex P2,
-         round 4). A qualified path, or a bare name the file never binds, is judged by
-         [constant_bases]. *)
-      (* A module path naming the home: [base_home] itself ([Ir.Backend_intf]), none of whose
-         modules the file rebinds -- a bare [Backend_intf] may come from any [open] (Codex P2,
-         round 12), and
-         [module Ir = Local] or [module BI = Local.Backend_intf] name Local's (Codex P2, rounds 6
-         and 11). *)
-      let canonical_home path =
-        List.equal String.equal path base_home
-        && not (List.exists path ~f:(fun m -> Map.mem module_aliases m))
-      in
-      let constant_ident txt =
-        match flatten_module_path txt with
-        | Some [ name ] when List.exists bindings ~f:(fun (n, _) -> String.equal n name) ->
-            Set.mem known name
-        (* A bare name the file does not bind came from an `open` this scan does not resolve, so it
-           may be anything (Codex P2, round 7). *)
-        | Some [ _ ] -> false
-        | Some path -> (
-            let value = List.last_exn path and prefix = List.drop_last_exn path in
-            String.equal value base_value
-            &&
-            match prefix with
-            (* Through a module alias the file defines: every binding of it must name the home. *)
-            | [ alias ] when Map.mem module_aliases alias ->
-                List.for_all (Map.find_multi module_aliases alias) ~f:canonical_home
-            | _ -> canonical_home prefix)
-        | None -> false
-      in
-      let is_constant_base base =
-        match (unwrap base).pexp_desc with
-        | Pexp_ident { txt; _ } -> constant_ident txt
-        | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> constant_ident txt
-        | _ -> false
-      in
-      (* A binding's result is a constant record, or an alias of a constant base. *)
-      let constant_record expr =
-        let result = result expr in
-        match result.pexp_desc with
-        | Pexp_record (_, None) -> true
-        | Pexp_record (_, Some base) -> is_constant_base base
-        | Pexp_ident _ -> is_constant_base result
-        | _ -> false
-      in
-      let known' =
-        List.filter names ~f:(fun name ->
-            List.for_all bindings ~f:(fun (n, expr) ->
-                (not (String.equal n name)) || constant_record expr))
-        |> Set.of_list (module String)
-      in
-      if Set.equal known known' then (known, is_constant_base) else close known'
-    in
-    (* Start from every name and shrink: a name whose bindings are all literals stays, and one built
-       from a non-constant base drops out, taking its dependents with it. *)
-    close (Set.of_list (module String) names)
-  in
-  let _, is_constant_base = constant_names in
-  let found = ref [] in
-  let add spelling =
-    if not (List.mem !found spelling ~equal:String.equal) then found := spelling :: !found
-  in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression expr =
-        (match expr.pexp_desc with
-        | Pexp_field (_, { txt; _ }) ->
-            Option.iter (last txt) ~f:(fun field ->
-                if wanted field then add (Printf.sprintf "`.%s`" field))
-        | Pexp_record (set, Some base) ->
-            let overwritten = List.filter_map set ~f:(fun ({ txt; _ }, _) -> last txt) in
-            if List.exists overwritten ~f:of_the_record && not (is_constant_base base) then
-              List.iter fields ~f:(fun field ->
-                  if not (List.mem overwritten field ~equal:String.equal) then
-                    add (Printf.sprintf "`{ … with … }` leaving `%s` to its base" field))
-        | _ -> ());
-        super#expression expr
-
-      method! pattern pat =
-        (match pat.ppat_desc with
-        | Ppat_record (named, _) ->
-            List.iter named ~f:(fun ({ txt; _ }, _) ->
-                Option.iter (last txt) ~f:(fun field ->
-                    if wanted field then add (Printf.sprintf "`{ %s; … }` pattern" field)))
-        | _ -> ());
-        super#pattern pat
-    end
-  in
-  iterator#structure structure;
-  List.rev !found
 
 (** The library sources among a rule's dependencies, sorted and deduplicated.
 
@@ -2181,17 +1594,6 @@ let keys_by_file files =
       ( Stdlib.Filename.basename fname,
         Set.of_list (module String) (keys_in_source content @ settings_keys_in_source content) ))
 
-(** Whether [content] reads configuration key [key] by name, through either spelling this module
-    recognises: an [~arg_name:"key"] call site, or a field of the startup-resolved [Utils.settings].
-
-    What it is for: a stanza declaring [OCANNL_<KEY>] is justified by SOME read of that key among
-    its modules, and calling the initializer is only one of them. A converse check that knew only
-    the initializer would report a test reading the key directly as carrying a stale declaration,
-    and so would make the documented way of pinning a key unusable for it (Codex P2, round 2). *)
-let source_reads_key content ~key =
-  let has keys = List.mem keys key ~equal:String.equal in
-  has (keys_in_source content) || has (settings_keys_in_source content)
-
 type library_reach = {
   external_keys : string list -> string list;
       (** The keys the value a qualified path names reaches: a [Utils] settings predicate's
@@ -2244,7 +1646,7 @@ let library_reach ?(wrappers = []) ~library_modules () =
           ~f:(fun on_disk ->
             Hashtbl.set module_reaches ~key:module_name ~data:(Some []);
             let reach =
-              (top_level_key_reach ~external_keys ~settings_field_keys ~fields:false
+              (top_level_key_reach ~external_keys ~settings_field_keys
                  (Stdio.In_channel.read_all on_disk))
                 .reach
             in

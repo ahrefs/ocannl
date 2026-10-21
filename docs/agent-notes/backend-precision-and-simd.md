@@ -1852,13 +1852,9 @@ files.
   So a change to a cc mma or register-tile census claim, a `Register_tile` geometry claim or a SIMD
   rendering test gets one more targeted run of the affected aliases at 32. Pinning a
   `hardware_limits` record in the test does not make it width-independent, as staging#1094 shows:
-  codegen still reads the configured width. The stanza must DECLARE `(env_var OCANNL_CC_VECTOR_BYTES)`, or
-  dune serves the previous 16-byte result as a pass (AGENTS.md, *Testing*). `env_var_deps`
-  requires the declaration of every stanza whose program reads the width — projects a width field,
-  names a `Cc_backend` value reaching `cc_vector_bytes`, or leaves a width field to a device base in
-  a limits update (gh-ocannl-1320; the derivation: build-and-test.md). A test that only constructs
-  synthetic limits and leaves codegen to read the width is outside what it can see: declare it by
-  judgment when its golden depends on the rendering.
+  codegen still reads the configured width. The rerun at 32 is a real one because the ambient
+  record in every test's `ocannl_config` carries `OCANNL_CC_VECTOR_BYTES` (gh-ocannl-1149); no
+  stanza declares the variable (gh-ocannl-1425 retired gh-ocannl-1320's declaration rule).
 - **A single width per machine would make a wider machine emit LESS vector code, and "the widest
   that fits" is still not enough.** Every explicit-SIMD rendering declines below one full vector,
   so at 64 bytes an f32 loop of extent 8..15 — and a `Tile_mma` column extent in that range — falls

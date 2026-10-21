@@ -231,7 +231,7 @@ let historical_invalid_config_mentions =
     ("docs/proposals/gh-ocannl-409.md", "bacend", 1);
     ("docs/proposals/gh-ocannl-409.md", "output_debug_files_in_run_directory", 1);
     ("docs/proposals/gh-ocannl-409.md", "randomness_lib", 4);
-    ("test/operations/dune", "backedn", 3);
+    ("test/operations/dune", "backedn", 2);
     ("test/operations/dune", "not_a_real_key", 1);
     ("test/operations/startup_streams/ocannl_config", "definitely_not_a_config_key", 1);
   ]
@@ -568,16 +568,13 @@ let non_config_environment_mentions =
   [
     ("benchmarks/report-gh550-cuda.md", "550_no_release", 1);
     ("ocannl_config.reference", "print", 2);
-    ("test/operations/dune", "dashed_only_key", 4);
-    ("test/operations/dune", "demo_key", 6);
+    ("test/operations/dune", "dashed_only_key", 2);
+    ("test/operations/dune", "demo_key", 4);
     ("test/operations/config_var_spellings.ml", "demo_key", 1);
     ("test/operations/config_var_spellings.ml", "print", 1);
     ("test/operations/config_var_spellings.ml", "backedn", 1);
-    ("test/operations/env_var_deps.ml", "backedn", 1);
-    ("test/operations/env_var_deps.ml", "demo_key", 2);
-    ("test/operations/env_var_deps.ml", "dashed_only_key", 1);
+    ("test/operations/env_var_deps.ml", "demo_key", 1);
     ("test/operations/env_var_deps.ml", "x", 1);
-    ("test/operations/env_var_deps.ml", "not_a_config_key", 1);
     ("test/operations/scope_over_materialized.ml", "virtualize_", 1);
     ("arrayjit/lib/utils.ml", "not_a_key", 2);
     ("arrayjit/lib/utils.ml", "backedn", 2);
