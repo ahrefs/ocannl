@@ -22,9 +22,13 @@
 # claim of it may read false), and Verdict's teardown ended the process (gh-ocannl-1216).
 # The same holds for a golden's success trailer, its `OK: ` rows (and the blank row
 # before them), which a scan prints only when no claim failed.
-# A golden ending on its marker section cannot tell a complete run from one cut
-# inside the markers, nor one ending on its trailer a failing run from one cut
-# before it; the teardown is all that separates them. A run
+# A golden ending on a marker section's closing row (`End of synthetic controls.`, printed
+# after every marker whatever came before it, gh-ocannl-1251/1318) needs neither: a run whose
+# stdout ends on the golden's LAST closing row (as many of them as the golden has) printed
+# everything it was going to, so its rows short of the golden are omissions, never a cut -- a
+# mutant that silences one refusal while every claim passes is caught -- and a run cut inside
+# the markers, missing that row, stopped early. Elsewhere the teardown is all that separates
+# a complete failing run from one cut inside its markers or before its trailer. A run
 # that stopped early, or never ran (a build failure; an executable the mutation
 # left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
 # (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
@@ -100,6 +104,10 @@ my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
 # (gh-ocannl-1216). tools/test-mutation-run.sh replays a run that printer ended, so this shape is
 # pinned on its output, not its source.
 my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
+# The row that section ends on, printed unconditionally after its markers (gh-ocannl-1251,
+# gh-ocannl-1318); pinned, like the marker shape, on the printer's output that
+# tools/test-mutation-run.sh replays.
+my $closing_row = qr/^End of synthetic controls\.$/;
 # A `FAIL: ` row is Verdict.fail's (every line of a multi-line message carries the prefix): the
 # run's own report of what went wrong, no row the golden has -- unless the golden has some, as a
 # golden capturing a refusing child's diagnostics does (config_usage_scan_script_hint's is nothing
@@ -122,7 +130,8 @@ sub read_rows {
         $line =~ s/\r?\n$//;
         push @lines, $line;
     }
-    my %r = (rows => 0, own_fail => 0, last => '', raises => 0, markers => 0, plain => [], fail_rows => {});
+    my %r = (rows => 0, own_fail => 0, last => '', raises => 0, markers => 0, closings => 0, plain => [],
+        fail_rows => {});
     # The golden `FAIL: ` rows the run matches by text; the remainder is the budget for others.
     my %exact = %golden_fail;
     my $budget = $golden_fails;
@@ -145,6 +154,7 @@ sub read_rows {
         }
         $r{rows}++;
         $r{raises}++ if $line =~ $case_raise;
+        $r{closings}++ if $line =~ $closing_row;
         if ($line =~ $marker_row) { $r{markers}++ } else { push @{$r{plain}}, $line }
     }
     close $f or refuse("close $path: $!");
@@ -167,8 +177,9 @@ sub log_pass {
     close $f or refuse("close $log: $!");
 }
 my $golden_read = read_rows("$root/$golden", 0);
-my ($golden_rows, $golden_last, $golden_markers, @golden_plain) =
-    ($golden_read->{rows}, $golden_read->{last}, $golden_read->{markers}, @{$golden_read->{plain}});
+my ($golden_rows, $golden_last, $golden_markers, $golden_closings, @golden_plain) =
+    ($golden_read->{rows}, $golden_read->{last}, $golden_read->{markers}, $golden_read->{closings},
+     @{$golden_read->{plain}});
 # A scan's success trailer: its `OK: ` rows, which it prints only once no claim failed
 # (Verdict.success_trailer, whose output tools/test-mutation-run.sh replays),
 # so a complete failing run lacks them -- and the blank row a trailer's leading `\n` puts before
@@ -439,17 +450,30 @@ my $reported = eval {
                 # golden's row for row, and the process ended through Verdict's teardown, so a
                 # failed claim did end it.
                 my ($markers, @plain) = ($run->{markers}, @{$run->{plain}});
-                my $trailer = $teardown && $markers <= $golden_markers ? same_plain_rows(@plain) : undef;
+                # Or the golden ends on a marker section's closing row and this run's stdout ends
+                # on its LAST one -- as many closing rows as the golden, since every section ends
+                # on the same text: stdout is a prefix of what the program printed, so nothing
+                # before that row was cut, whether or not a check failed, and no teardown is
+                # needed to say so.
+                my $closed = $golden_last =~ $closing_row && $last eq $golden_last
+                    && $run->{closings} == $golden_closings;
+                my $trailer = ($teardown || $closed) && $markers <= $golden_markers
+                    ? same_plain_rows(@plain) : undef;
                 if ($raised && $teardown && ($last eq $golden_last || $last =~ $case_raise)) {
                     print "cases raised: $raised (the rows short of the golden are theirs; "
                         . "the run reached its last case)\n";
                 } elsif (defined $trailer && ($trailer || $markers < $golden_markers)) {
                     my $omitted = $golden_markers - $markers;
-                    print "refusal markers omitted: $omitted (a failed claim's marker is not printed; "
-                        . "every other row was, so the run reached its last row)\n" if $omitted;
+                    print "refusal markers omitted: $omitted (no marker prints for a failed claim or for a "
+                        . "refusal that did not run; every other row did, so the run reached its last row)\n"
+                        if $omitted;
                     print "success trailer omitted: $trailer row" . ($trailer == 1 ? '' : 's')
                         . " (`OK: ` rows print only when no claim failed; every other row did, so the "
                         . "run reached its last row)\n" if $trailer;
+                } elsif ($closed) {
+                    print "rows short of the golden: " . ($golden_rows - $printed) . " (the run ended on "
+                        . "the golden's last section-closing row, so none was cut; the run reached its "
+                        . "last row)\n";
                 } else {
                     $verdict = "STOPPED EARLY: the mutated run printed $printed of the golden's $golden_rows rows";
                 }

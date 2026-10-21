@@ -45,6 +45,7 @@ case "$*" in
   'build -j 4 @runtest-probe') name=probe ;;
   'build -j 4 @runtest-manifest') name=manifest ;;
   'build -j 4 @runtest-tail') name=tail ;;
+  'build -j 4 @runtest-sections') name=sections ;;
   'build -j 4 @runtest-trailer') name=trailer ;;
   'build -j 4 @runtest-replay') name=replay ;;
   'build -j 4 @runtest-capture') name=capture ;;
@@ -77,6 +78,7 @@ rows() { rm -f "$out/$name.exe.output"; printf "$1" > "$out/$name.exe.output"; }
 m1='  [scanner-refusal:00000000000000000000000000000001] first refusal\n'
 m2='  [scanner-refusal:00000000000000000000000000000002] last refusal\n'
 section='\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n'
+closing='End of synthetic controls.\n'
 case "$PROBE_MODE" in
   fail)
     # Two Verdict.fail messages ending like claims, on both streams as Verdict.fail prints them.
@@ -156,11 +158,22 @@ case "$PROBE_MODE" in
   # the rows do not.
   omittedswap) rows "first: false\nswapped in$section$m2"'last: true\n'
     printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
-  # tail.expected ends on its markers, as every real manifest golden does: a run cut inside
-  # them with a teardown reads exactly as one whose claim failed. The runner's header names
-  # this residual; only a trailer row after the section would separate the two.
+  # tail.expected ends on its section's closing row, as every real manifest golden does
+  # (gh-ocannl-1251, gh-ocannl-1318): a run cut inside the markers lacks that row, teardown or
+  # not; a mutant silencing one refusal while every claim holds prints it after one marker
+  # fewer, with no teardown, as does a failing run with one; and a run printing the row but
+  # dropping another, or ending on a row of its own after it, is not the golden's ending.
   tailcut) rows "first: false\n$section$m1"
     printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
+  tailsilenced) rows "first: true\n$section$m1$closing"; printf 'the golden differs\n'; exit 1 ;;
+  tailfailed) rows "first: false\n$section$m2$closing"
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
+  tailswap) rows "swapped in\n$section$m1$closing"; printf 'the golden differs\n'; exit 1 ;;
+  # sections.expected holds two sections, each ending on the same closing row: a run cut after
+  # the first one ends on a closing row too, but not on the golden's last.
+  sectionscut) rows "first: true\n$section$m1$closing"; exit 1 ;;
+  tailafter) rows "first: true\n$section$m1${closing}FAIL: a message after the section\n"
+    printf 'FAIL: a message after the section\n'; exit 1 ;;
   # A failed claim leaves no success trailer (`OK: ` rows a scan prints only when no claim
   # failed), nor the blank row before it; nor, here, its own marker. The blank row kept, and
   # every marker printed (a failed claim with none). Then the same shortfall cut short, with
@@ -206,10 +219,13 @@ printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > manifest.expected
-printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n' \
+printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nEnd of synthetic controls.\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > tail.expected
 printf 'FAIL: the first diagnostic\nFAIL: the second diagnostic\n' > capture.expected
+printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\nEnd of synthetic controls.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\nEnd of synthetic controls.\n' \
+  '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
+  '  [scanner-refusal:00000000000000000000000000000002] last refusal' > sections.expected
 printf 'first: true\n\nOK: every claim held.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > trailer.expected
@@ -346,7 +362,7 @@ for mode in omitted omittedlast; do
   export PROBE_MODE=$mode
   PROBE_ALIAS=@runtest-manifest run_case 1
   grep -q '^rows: 5 printed of 6 in manifest.expected$' "$fixture/result"
-  grep -q "^refusal markers omitted: 1 (a failed claim's marker is not printed; every other row was, so the run reached its last row)$" \
+  grep -q "^refusal markers omitted: 1 (no marker prints for a failed claim or for a refusal that did not run; every other row did, so the run reached its last row)$" \
     "$fixture/result" || { cat "$fixture/result"; echo "$mode: no omitted-markers line"; exit 1; }
   reached
 done
@@ -358,11 +374,34 @@ for mode in omittedcut omittedkilled omittedswap; do
     omittedkilled|omittedswap) flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 6 rows" ;;
   esac
 done
-# The residual, pinned so that closing it shows here: a cut inside a golden's closing markers.
+# A golden ending on its section's closing row (gh-ocannl-1251, gh-ocannl-1318): a run cut inside
+# the markers stopped early, though a teardown says a claim failed; a run ending on the closing
+# row reached its last row, with a teardown or -- a mutant silencing one refusal while every claim
+# holds -- without one, and so did one whose other rows differ; a row of the run's own after the
+# closing row, or a run ending on an earlier section's closing row, did not.
 export PROBE_MODE=tailcut
+PROBE_ALIAS=@runtest-tail run_case 4
+flagged "STOPPED EARLY: the mutated run printed 4 of the golden's 6 rows"
+for mode in tailsilenced tailfailed; do
+  export PROBE_MODE=$mode
+  PROBE_ALIAS=@runtest-tail run_case 1
+  grep -q '^rows: 5 printed of 6 in tail.expected$' "$fixture/result"
+  grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
+    { cat "$fixture/result"; echo "$mode: no omitted-markers line"; exit 1; }
+  reached
+done
+export PROBE_MODE=tailswap
 PROBE_ALIAS=@runtest-tail run_case 1
-grep -q '^refusal markers omitted: 1 ' "$fixture/result"
-printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
+grep -q "^rows short of the golden: 1 (the run ended on the golden's last section-closing row, so none was cut; the run reached its last row)$" \
+  "$fixture/result" || { cat "$fixture/result"; echo 'tailswap: no closed-run line'; exit 1; }
+reached
+export PROBE_MODE=tailafter
+PROBE_ALIAS=@runtest-tail run_case 4
+flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 6 rows"
+export PROBE_MODE=sectionscut
+PROBE_ALIAS=@runtest-sections run_case 4
+flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 9 rows"
+printf 'PASS rows short only by a refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4; a golden ending on its closing row tells a silenced refusal from a cut\n'
 }
 harness_leg_run '3: rows short only by a failed claim'\''s refusal marker' leg_3
 leg_4() {
@@ -484,7 +523,24 @@ grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
 grep -q '^success trailer omitted: 2 rows ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'manifest_failed: the omitted success trailer was not read as one'; exit 1; }
 reached
-printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed, a scan ending short by a failed claim'"'"'s marker and its trailer is caught\n'
+# A mutant silencing one refusal while every claim holds (gh-ocannl-1251, gh-ocannl-1318): no
+# teardown line, its refusal's marker missing, the section's closing row still last -- caught.
+# Its stderr carries no teardown, so only the closing row can say the run was not cut inside the
+# markers; the runner must not have read one.
+replay_unclaimed() {
+  for stream in stdout stderr; do transcript "$1" "$stream" "$fixture/replay.$stream"; done
+  transcript "${2#@}" stdout replay.expected
+  export PROBE_MODE=replay
+  PROBE_ALIAS=@runtest-replay run_case "$3"
+}
+replay_unclaimed manifest_silenced @manifest_held 1
+if grep -q '^FAILED: ' "$fixture/replay.stderr"; then
+  echo 'manifest_silenced: the silenced child printed a teardown line'; exit 1
+fi
+grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'manifest_silenced: the silenced refusal was not read as caught'; exit 1; }
+reached
+printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed, a scan ending short by a failed claim'"'"'s marker and its trailer is caught, and so is one short only by a silenced refusal'"'"'s marker\n'
 }
 harness_leg_run '5: real Verdict runs, from verdict_teardown'\''s golden' leg_5
 leg_6() {

@@ -47,3 +47,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal
   [scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is
   [scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control
+End of synthetic controls.

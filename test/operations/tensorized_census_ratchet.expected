@@ -4,3 +4,4 @@ the Ll_test executor forms are exactly the harness functions that reach Context.
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity
   [scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run
+End of synthetic controls.

@@ -84,3 +84,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:501e8a68f00d9f02dc169f32d4980a9f] reader measuring indentation
   [scanner-refusal:de56c44843177e1b1a86d6d0970e8ec9] refused rather than
   [scanner-refusal:ea2e7502608bb8e1195b7ec15868624a] nested under github/workflows
+End of synthetic controls.

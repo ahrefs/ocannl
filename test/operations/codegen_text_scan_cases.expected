@@ -225,3 +225,4 @@ ok: rejection -- the qualified spelling is what everything already uses
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module
+End of synthetic controls.

@@ -1269,6 +1269,11 @@ let doubly_classified =
   List.filter_map direct_evidence ~f:(fun (key, _) ->
       Option.some_if (List.Assoc.mem catalogue_only key ~equal:String.equal) key)
 
+(** The last row of every section {!print_section} prints, unconditionally. [tools/mutation-run.sh]
+    reads it by this text, taken from [verdict_teardown]'s transcripts of real runs rather than from
+    this source: a golden ending on it is complete exactly when a run's stdout ends on it. *)
+let closing_row = "End of synthetic controls."
+
 (** The section [print] ends a scan's golden with: its heading, then the marker of each of
     [diagnostics] that [expected] (the source's registered row) lists and this run exercised -- a
     claim's once Verdict recorded it passing, a direct failure's once its refusal ran -- and the
@@ -1276,7 +1281,13 @@ let doubly_classified =
     under. Exposed apart from [print] so that a control can print a section for diagnostics it
     extracted itself, through the same printer: [verdict_teardown]'s transcripts, which
     [tools/test-mutation-run.sh] replays through [tools/mutation-run.sh], are of runs ending here
-    (gh-ocannl-1364). *)
+    (gh-ocannl-1364).
+
+    The section ends on {!closing_row}, printed whatever came before it (gh-ocannl-1251,
+    gh-ocannl-1318): every golden that prints a section pins it, so a run that printed it decided
+    every marker above it. Without it a run cut inside the markers read the same as a complete run
+    whose claim failed, and a run whose only shortfall was one silenced refusal -- every claim
+    passing, so no teardown line -- read as cut short. *)
 let print_section ~source ~expected diagnostics =
   let passed_labels = ref (Verdict.passed_labels ()) in
   let catalogued = ref [] in
@@ -1319,7 +1330,8 @@ let print_section ~source ~expected diagnostics =
   if not (List.is_empty !catalogued) then (
     printf
       "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";
-    List.iter (List.rev !catalogued) ~f:(printf "  %s\n"))
+    List.iter (List.rev !catalogued) ~f:(printf "  %s\n"));
+  printf "%s\n" closing_row
 
 let print source =
   let source_path =

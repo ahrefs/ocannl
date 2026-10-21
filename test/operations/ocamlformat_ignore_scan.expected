@@ -21,3 +21,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:f111a87fee55ca52831220a49495432a] its append-corruption diagnostic
   [scanner-refusal:d3e7969b1266fa6b311234da304986db] line containing no
   [scanner-refusal:4186a2cb3aaa270f0e693d87e91d2e2d] undeclared file present
+End of synthetic controls.

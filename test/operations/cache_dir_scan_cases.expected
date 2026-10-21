@@ -92,3 +92,4 @@ ok: built-in default -- an empty default names no directory
 ok: built-in default -- another key's default is not this one's
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+End of synthetic controls.

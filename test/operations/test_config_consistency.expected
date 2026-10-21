@@ -11,3 +11,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:9a0c38727d642eb678b4707766f25708] known_config_keys
+End of synthetic controls.
