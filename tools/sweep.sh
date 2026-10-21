@@ -1739,16 +1739,19 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
 # unit's lines stay contiguous and a line is never split by another lane's.
 say() { printf '%s\n' "$*" >>"$LANE_OUT" || die "cannot buffer sweep output in $LANE_OUT"; }
 
-# The rerun targets behind a log's dune-file and inline-expectation sites, one
-# per line, each prefixed `alias `, `inline ` or `unmapped `. A `(test (name
-# X))` stanza reruns as
-# `@<dir>/runtest-X`, the per-test alias dune generates from 3.20 (the
-# project's floor); an explicit rule as `@<dir>/<its alias>`. An inline
-# expectation is proved by its source-to-`.corrected` diff and tagged with its
-# directory's broad `runtest` alias: serial_rerun uses that fallback only when
-# one or two such sites were unmapped, so a small environment-red unit still
-# gets a serial retry without turning a wider red into a serial directory
-# suite. Other source locations, unnamed spans and bare targets stay unmapped.
+# The rerun targets behind a log's dune-file, `(test)`-golden and inline-expectation sites, one
+# per line, each prefixed `alias `, `inline ` or `unmapped `. A `(test (name X))` stanza reruns as
+# `@<dir>/runtest-X`, the per-test alias dune generates from 3.20 (the project's floor); an
+# explicit rule as `@<dir>/<its alias>`. A `(test)` stanza's golden diff -- the most common red,
+# and a site that names only its `.expected` file -- reruns as the stanza its resolved `diff --git`
+# header names: the second operand `<dir>/<name>.exe.output` is the run of `@<dir>/runtest-<name>`
+# (gh-ocannl-1464). An explicit rule's `.expected` site stays unmapped even where its dune-file
+# site is mapped: nothing in the log pairs the two. Each alias is printed once, however many sites
+# name it. An inline expectation is proved by its source-to-`.corrected` diff and tagged with its
+# directory's broad `runtest` alias: serial_rerun uses that fallback only when one or two such
+# sites were unmapped, so a small environment-red unit still gets a serial retry without turning a
+# wider red into a serial directory suite. Other source locations, unnamed spans and bare targets
+# stay unmapped.
 rerun_aliases() { # log
   sweep_fingerprint_sites "$1" | sort -u | awk -v log_file="$1" '
     BEGIN {
@@ -1761,9 +1764,22 @@ rerun_aliases() { # log
           sub(/^a\//, "", source)
           if (corrected == "b/_build/default/" source ".corrected") inline[source] = 1
         }
+        if (raw ~ /^diff --git a\/_build\/default\/[A-Za-z0-9_.\/-]+\.expected b\/_build\/default\/[A-Za-z0-9_.\/-]+\.exe\.output$/) {
+          split(raw, parts, / /)
+          golden = parts[3]; output = parts[4]
+          sub(/^a\/_build\/default\//, "", golden)
+          sub(/^b\/_build\/default\//, "", output)
+          sub(/\.exe\.output$/, "", output)
+          dir = golden
+          sub(/[^\/]+$/, "", dir)
+          name = substr(output, length(dir) + 1)
+          if (substr(output, 1, length(dir)) == dir && name != "" && name !~ /\//)
+            stanza[golden] = "@" dir "runtest-" name
+        }
       }
       close(log_file)
     }
+    function alias(a) { if (!(a in printed)) { printed[a] = 1; print "alias " a } }
     /^File "[^"]*dune", (alias|name|names) "?[A-Za-z0-9_.-]+"?$/ {
       dir = $2
       sub(/^"/, "", dir)
@@ -1772,8 +1788,17 @@ rerun_aliases() { # log
         value = $4
         sub(/^"/, "", value)
         sub(/"$/, "", value)
-        if ($3 == "alias") print "alias @" dir value
-        else print "alias @" dir "runtest-" value
+        if ($3 == "alias") alias("@" dir value)
+        else alias("@" dir "runtest-" value)
+        next
+      }
+    }
+    /^File "[^"]+\.expected", lines? [0-9]+(-[0-9]+)?$/ {
+      path = $2
+      sub(/^"/, "", path)
+      sub(/",$/, "", path)
+      if (path in stanza) {
+        alias(stanza[path])
         next
       }
     }
@@ -1793,43 +1818,15 @@ rerun_aliases() { # log
 }
 
 # The targets of a regression's bisect (gh-ocannl-1375), one per line as `target <alias>`, each
-# once, or `unmapped <site>` for a failing site no stanza is found for. The stanzas rerun_aliases
-# maps (a dune-file site, or an inline expectation's directory `runtest`), plus a `(test)` stanza's
-# golden diff, which names only its `.expected` file -- the per-test alias is in its resolved
-# `diff --git` header instead, whose second operand `<dir>/<name>.exe.output` is the run of the
-# stanza `@<dir>/runtest-<name>` names (dune >= 3.20, the project's floor). An explicit rule's
-# `.expected` site stays unmapped here even where its dune-file site is mapped: nothing in the log
-# pairs the two, so the line says only what it can prove.
+# once, or `unmapped <site>` for a failing site no stanza is found for: exactly the stanzas
+# rerun_aliases maps, an inline expectation's by its directory `runtest`.
 bisect_targets() { # log
-  rerun_aliases "$1" | awk -v log_file="$1" '
-    BEGIN {
-      while ((getline raw < log_file) > 0) {
-        if (raw !~ /^diff --git a\/_build\/default\/[A-Za-z0-9_.\/-]+\.expected b\/_build\/default\/[A-Za-z0-9_.\/-]+\.exe\.output$/)
-          continue
-        split(raw, parts, / /)
-        golden = parts[3]; output = parts[4]
-        sub(/^a\/_build\/default\//, "", golden)
-        sub(/^b\/_build\/default\//, "", output)
-        sub(/\.exe\.output$/, "", output)
-        dir = golden
-        sub(/[^\/]+$/, "", dir)
-        name = substr(output, length(dir) + 1)
-        if (substr(output, 1, length(dir)) == dir && name != "" && name !~ /\//)
-          stanza[golden] = "@" dir "runtest-" name
-      }
-      close(log_file)
-    }
+  rerun_aliases "$1" | awk '
     {
-      line = ""
+      line = $0
       if ($0 ~ /^alias /) line = "target " substr($0, 7)
       else if ($0 ~ /^inline /) { line = substr($0, 8); sub(/\t.*/, "", line); line = "target " line }
-      else if ($0 ~ /^unmapped /) {
-        line = $0
-        path = $0
-        if (sub(/^unmapped File "/, "", path) && sub(/", lines? .*$/, "", path) && (path in stanza))
-          line = "target " stanza[path]
-      }
-      if (line != "" && !(line in seen)) { seen[line] = 1; print line }
+      if (!(line in seen)) { seen[line] = 1; print line }
     }'
 }
 

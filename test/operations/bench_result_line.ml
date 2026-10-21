@@ -51,7 +51,10 @@ let tune =
   (* [shipped_mma] is the shipped ARTIFACT's census, and it disagrees with arm B's on purpose: this
      cell shipped a flip refinement or a replay fallback, so the arm describes a schedule that was
      discarded and only this field describes what ran (gh-ocannl-626). *)
-  Bench_json.tune_object ~shipped:"B" ~searches:3 ~replays:1 ~no_searches:1
+  (* gh-ocannl-1438: the shipped placement was replayed from the placement store, under the digest
+     of the search that compiled it. *)
+  Bench_json.tune_object ~shipped:"B" ~placement_replay:true ~shipped_digest:"0123abcd" ~searches:3
+    ~replays:1 ~no_searches:1
     ~shipped_mma:(Some ("tensorized", 4, 0))
     ~arms:
       [
@@ -59,29 +62,32 @@ let tune =
           ~cache_hit:false
             (* An arm that timed nothing still names an objective: [tune] resolves it before it can
                construct any report, so every arm on the line carries one. *)
-          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~budget_cut:false ~timings_contended:0
-          ~timings_unbatched:0 ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:"tile 32x32"
-          ~tensorized:false ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0
-          ~mma_seeded:4 ~mma_timed:0 ~mma_best_ms:Float.infinity
+          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~budget_cut:false ~budget_s:None
+          ~timings_contended:0 ~timings_unbatched:0 ~timing_decisions:[] ~best_ms:Float.infinity
+          ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None ~mma_statements:0
+          ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0 ~mma_best_ms:Float.infinity
           ~terminal_failure:
             (Some
                (Printf.sprintf "compile failed: \"kernel\" \\ path%c%c ESC" (Char.of_int_exn 0)
                   (Char.of_int_exn 27)));
         (* gh-ocannl-1409: a replayed crown whose storing search its budget cut. *)
         Bench_json.tune_arm ~name:"B" ~state:"cache-replay" ~searched:false ~cache_hit:true
-          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~budget_cut:true ~timings_contended:0
-          ~timings_unbatched:0 ~timing_decisions:[] ~best_ms:0.75 ~best_label:"grid 128"
-          ~tensorized:true ~tensorization:(Some "scalar-fallback") ~mma_statements:2
-          ~mma_scalar_fallbacks:2 ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8 ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~budget_cut:true ~budget_s:(Some 900.)
+          ~timings_contended:0 ~timings_unbatched:0 ~timing_decisions:[] ~best_ms:0.75
+          ~best_label:"grid 128" ~tensorized:true ~tensorization:(Some "scalar-fallback")
+          ~mma_statements:2 ~mma_scalar_fallbacks:2 ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8
+          ~terminal_failure:None;
         (* Neither searched nor replayed: every counter zero, no winner to name. *)
         Bench_json.tune_arm ~name:"C" ~state:"search-disabled" ~searched:false ~cache_hit:false
-          ~timing:"queued" ~rounds_run:0 ~beam_width:2 ~budget_cut:false ~timings_contended:0
-          ~timings_unbatched:0 ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:""
-          ~tensorized:false ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0
-          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:0 ~beam_width:2 ~budget_cut:false ~budget_s:None
+          ~timings_contended:0 ~timings_unbatched:0 ~timing_decisions:[] ~best_ms:Float.infinity
+          ~best_label:"" ~tensorized:false ~tensorization:None ~mma_statements:0
+          ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity
+          ~terminal_failure:None;
         (* An honestly tensorized winner, and an ordinary one that never asked. *)
         Bench_json.tune_arm ~name:"D" ~state:"searched" ~searched:true ~cache_hit:false
-          ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~budget_cut:false ~timings_contended:2
+          ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~budget_cut:false ~budget_s:None
+          ~timings_contended:2
           ~timings_unbatched:1
             (* gh-ocannl-1263: the settle-by-admission matrix behind those two refusals, in the
                order a report lists it -- one settle carrying two admissions. *)
@@ -98,13 +104,14 @@ let tune =
         Bench_json.tune_arm ~name:"E" ~state:"searched" ~searched:true
           ~cache_hit:false
             (* The other objective, so the golden shows both spellings on one line. *)
-          ~timing:"isolated" ~rounds_run:0 ~beam_width:2 ~budget_cut:false ~timings_contended:0
-          ~timings_unbatched:0
+          ~timing:"isolated" ~rounds_run:0 ~beam_width:2 ~budget_cut:false ~budget_s:None
+          ~timings_contended:0 ~timings_unbatched:0
           ~timing_decisions:[ ("isolated", "admitted", 3) ]
           ~best_ms:1.25 ~best_label:"grid 64" ~tensorized:false
           ~tensorization:(Some "not-requested") ~mma_statements:0 ~mma_scalar_fallbacks:0
           ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
       ]
+    ()
 
 (* gh-ocannl-1006: the dominant kernel's %-of-peak, one fabricated kernel per verdict. The constants
    are round so the arithmetic can be checked by eye: 1e9 bytes at 1e12 B/s is 1 ms, 1e9 ops at 5e12
@@ -344,7 +351,7 @@ let () =
        (member "shipped_mma"
           (Yojson.Safe.from_string
              (Bench_json.tune_object ~shipped:"A" ~searches:1 ~replays:0 ~no_searches:0
-                ~shipped_mma:None ~arms:[])))
+                ~shipped_mma:None ~arms:[] ())))
        `Null)
 
 let () =

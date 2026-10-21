@@ -74,8 +74,13 @@ let fastest_measured (o : Scripted_search.observed) =
 
 (* --- the setting --- *)
 
+let parse v = Scripted_search.with_settings [ (budget_key, v) ] Autotune.budget_setting
+
+(* gh-ocannl-1438: the budget a report carries is the one its call resolved from the setting. *)
+let carries ?budget (o : Scripted_search.observed) =
+  Option.equal Float.equal o.report.Autotune.budget_s (Option.bind budget ~f:parse)
+
 let () =
-  let parse v = Scripted_search.with_settings [ (budget_key, v) ] Autotune.budget_setting in
   p "setting: a positive number of seconds is a budget"
     (Option.equal Float.equal (parse "2.5") (Some 2.5));
   p_all "setting: empty, zero and negative mean no budget" [ ""; "0"; "-3" ] ~f:(fun v ->
@@ -131,8 +136,10 @@ let () =
     (Option.exists r.Autotune.default_ms ~f:(fun d -> Float.(r.Autotune.best_ms <= d)));
   p_all2 "cut: the crowned routine computes the untuned output bit for bit" cut.output reference
     ~f:Float.equal;
+  p "cut: its report carries the budget it was cut against" (carries ~budget:"4" cut);
   p "full: no budget, so the cut crown was not replayed and nothing was cut"
     (searched full && not full.report.Autotune.budget_cut);
+  p "full: its report carries no budget" (carries full);
   p_all2 "full: the crowned routine computes the untuned output bit for bit" full.output reference
     ~f:Float.equal
 
@@ -150,6 +157,9 @@ let () =
     && Float.equal warm.report.Autotune.best_ms cut2.report.Autotune.best_ms);
   p_all2 "warm: the replayed routine computes the untuned output bit for bit" warm.output reference
     ~f:Float.equal;
+  (* The budget is the call's, the cut the crown's: the replay names its own budget, not the one the
+     crown was cut against. *)
+  p "warm: a replay's report carries its own call's budget" (carries ~budget:"1000" warm);
   (* [full] stored over the cut crown in [cut_cache_dir]: what a budgeted call replays now is
      uncut. *)
   let after = search ~budget:"1000" ~cache_dir:cut_cache_dir ~tag:"after" () in

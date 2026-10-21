@@ -3238,19 +3238,30 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                 (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each tile one array of
                    [copies] rotating copies, rounded to the backend's allocation granule, plus the
                    per-kernel tile-MMA scratch of the site's triple, which every completion's
-                   [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). *)
-                let shared_fits ?(copies = 1) rows =
+                   [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). Each tile at its own
+                   operand's storage precision, the precision [gpu_conv_sketch_schedule]'s [Stage]
+                   (no [tile_prec]) declares it at: a mixed-precision site's narrow operand tiles
+                   are not priced at its wide accumulator (gh-ocannl-1452). A flavor whose
+                   accumulator is masked ([acc_masked]: a column pad, or a row pad or row block not
+                   dividing the rows) also places its accumulator fragment, [rows x noc_p] at the
+                   output's storage precision, in workgroup-shared memory
+                   ([Sched.contract_tensorized_accumulator]'s [shared_frag]: a staged pipeline under
+                   pad masks); otherwise it stays in simdgroup fragments. A reduction pad alone
+                   masks nothing: [Tensorize] discharges its guard, the staged operands' padded
+                   slots being exact zeros. *)
+                let shared_fits ?(copies = 1) ~acc_masked rows =
                   match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
                   | Some cap ->
-                      let pb = Ir.Ops.prec_in_bytes prec in
                       Sched.kernel_workgroup_bytes ~capabilities
-                        ~arrays:[ copies * rows * nred_p * pb; copies * nred_p * noc_p * pb ]
-                        ~mma_triples:
-                          [
-                            ( Lazy.force site.c_d.Ir.Tnode.storage_prec,
-                              Lazy.force site.c_a.Ir.Tnode.storage_prec,
-                              Lazy.force site.c_b.Ir.Tnode.storage_prec );
-                          ]
+                        ~arrays:
+                          ([
+                             copies * rows * nred_p * Ir.Ops.prec_in_bytes a_prec;
+                             copies * nred_p * noc_p * Ir.Ops.prec_in_bytes b_prec;
+                           ]
+                          @
+                          if acc_masked then [ rows * noc_p * Ir.Ops.prec_in_bytes d_prec ] else []
+                          )
+                        ~mma_triples:[ (d_prec, a_prec, b_prec) ]
                       <= cap
                   | None -> true
                 in
@@ -3307,25 +3318,32 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                               if String.equal r reason then (r, n + count) else (r, k))
                       | None -> !withheld @ [ (reason, count) ]
                   in
-                  let fits ?copies rows =
-                    let ok = shared_fits ?copies rows in
+                  (* A flavor whose [Tensorize] masks the accumulator: a column pad, or a row pad or
+                     row block that does not divide the row extent. *)
+                  let acc_masked p0 =
+                    p0.sk_bn > 0
+                    || if p0.sk_bm = 0 then p0.sk_tm > 0 else site.c_nrow % p0.sk_bm <> 0
+                  in
+                  (* A flavor with any pad: the accumulator masks, or a reduction pad. *)
+                  let masked p0 = p0.sk_bk > 0 || acc_masked p0 in
+                  let fits ?copies p0 rows =
+                    let ok = shared_fits ?copies ~acc_masked:(acc_masked p0) rows in
                     if not ok then Int.incr mem_refused;
                     ok
                   in
                   let whole =
                     let pad_m = if site.c_nrow % tm_t = 0 then 0 else tm_t in
-                    if fits rows_p then
-                      [
-                        {
-                          base with
-                          sk_gpu = true;
-                          sk_simd = w;
-                          sk_tm = pad_m;
-                          sk_bn = pad_n;
-                          sk_bk = pad_k;
-                        };
-                      ]
-                    else []
+                    let p0 =
+                      {
+                        base with
+                        sk_gpu = true;
+                        sk_simd = w;
+                        sk_tm = pad_m;
+                        sk_bn = pad_n;
+                        sk_bk = pad_k;
+                      }
+                    in
+                    if fits p0 rows_p then [ p0 ] else []
                   in
                   let blocked =
                     List.filter_map [ 8; 16; 32 ] ~f:(fun bm ->
@@ -3338,8 +3356,8 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                             (Printf.sprintf "row block gives fewer than two blocks of the %d rows"
                                site.c_nrow);
                           None)
-                        else if fits bm then
-                          Some
+                        else
+                          let p0 =
                             {
                               base with
                               sk_gpu = true;
@@ -3348,20 +3366,16 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                               sk_bn = pad_n;
                               sk_bk = pad_k;
                             }
-                        else None)
+                          in
+                          if fits p0 bm then Some p0 else None)
                   in
                   (* The pipelined twins (gh-ocannl-487): every conv GPU flavor stages
                      cooperatively, so each unmasked flavor gets a twin per advertised depth — gated
                      on the [copies]-multiplied footprint, since the rotation allocates that many
-                     tile copies. Masked flavors (any pad multiple set, or a row block that does not
-                     divide the row extent) are not twinned: their pad masks keep [Tensorize] on the
-                     barrier-bracketed per-call arm, whose leading bracket sits between the prefetch
-                     and the compute — the copy must complete there, so the twin could only pay the
-                     doubled footprint (Codex P2 on PR #303). *)
-                  let masked p0 =
-                    p0.sk_bn > 0 || p0.sk_bk > 0
-                    || if p0.sk_bm = 0 then p0.sk_tm > 0 else site.c_nrow % p0.sk_bm <> 0
-                  in
+                     tile copies. Masked flavors ([masked]) are not twinned: their pad masks keep
+                     [Tensorize] on the barrier-bracketed per-call arm, whose leading bracket sits
+                     between the prefetch and the compute — the copy must complete there, so the
+                     twin could only pay the doubled footprint (Codex P2 on PR #303). *)
                   (* Depth twins additionally ride the async arms' element floor (Codex P2 on PR
                      #317, as in the matmul sketch): staged tiles of sub-4-byte elements render the
                      portable synchronous form only, so their twin could only pay the doubled
@@ -3390,7 +3404,7 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                         else
                           let rows = if p0.sk_bm = 0 then rows_p else p0.sk_bm in
                           List.filter_map mma.Ir.Backend_intf.mma_pipeline_depths ~f:(fun d ->
-                              if fits ~copies:d rows then Some { p0 with sk_depth = d } else None))
+                              if fits ~copies:d p0 rows then Some { p0 with sk_depth = d } else None))
                   in
                   let flavors = whole @ blocked @ depth_twins in
                   (* Refuse launch geometries the device gate would reject before paying for a

@@ -1197,9 +1197,59 @@ files.
   alike. Operands of one sign (all nonnegative, or all nonpositive) are exact on both widths, f32
   sums up to 53760 included. So a HIP tensorized leg that claims bitwise equality with a serial
   twin needs same-sign operands (`fragment_scope_move_legality` cycles over `[0, modulus)`), and
-  signed data needs a bound, as the bf16 legs carry. `tools/hip_wmma_sign_probe.hip` is the
-  standalone reproducer: its exit status says whether the same-sign rule still holds on a new
-  target or toolkit, and it reports the mixed-sign cases without judging them.
+  signed data needs a stated bound. `tools/hip_wmma_sign_probe.hip` is the standalone reproducer:
+  its exit status says whether the same-sign rule still holds on a new target or toolkit, and it
+  reports the mixed-sign cases without judging them. Re-run it after a ROCm upgrade, and extend it
+  to gfx12's builtins when a gfx12 box exists.
+- **A HIP bitwise claim rests on two conditions, and a HIP tolerance needs a reason that is
+  neither** (gh-ocannl-1432; gh-ocannl-1457, backend enforcement of the licence, builds on this
+  rule). The rule, as the sweep applied it:
+  - *One sign.* Every product a HIP-tensorized reduction sums shares a sign (half and bf16 operands:
+    HIP tensorizes nothing else; f32 and fp8 decline to the scalar fallback). Say so in the data's
+    comment; derive it host-side where it is cheap (`schedule_contraction_nest`'s `out_proj bf16
+    inputs` claims compute it from the init functions).
+  - *The contraction licence for two kernel shapes over inexact arithmetic.* HIP's clang
+    `-ffast-math` contracts `acc + a * b` per kernel, so two kernel shapes (a seed and the default
+    schedule, a fission against no fission) round differently whenever a product or partial sum is
+    not exact. A bitwise claim between them sets `OCANNL_FP_CONTRACT=true` (both shapes then carry
+    an explicit FMA), and on cc also `cc_backend_fp_contract=off`, so gcc cannot contract by its own
+    choice (`seeded_default`, `seeded_refine_blocks`, `zero_elision`). Data whose every product and
+    partial sum is exact (dyadic, within the precision) needs neither licence: any association and
+    any contraction return the exact value. Most tensorized legs take this route.
+  - *A tolerance on a HIP tensorized leg names a reason that is not the sign.* Same-sign exact data
+    gives bitwise; a residue of a few ulps under a tolerance is the signature of signed data. Never
+    loosen a check for one backend: gate that backend on a filed defect and keep it exact
+    (gh-ocannl-1420 was handled that way until its root cause was found).
+  - *A claim gated on several GPU backends gets a leg on each before merge.* In wave-20261018o three
+    master reds came from HIP-only behaviour (half_ops' `-0.0`, two-kernel-shape contraction) under
+    CUDA-only legs.
+  - The bf16 builtins obey the same rule, though the probe covers only the f16 ones: with
+    nonnegative operands every bf16 leg of the ledger below is bitwise on gfx1151 and gfx1102, both
+    accumulator widths, and the bf16-accumulate arm rounds the k-split discriminator's ties to even.
+- **The gh-ocannl-1432 sweep's ledger**, so the next audit of HIP tensorized claims starts from it.
+  Made bitwise with nonnegative data: `schedule_mma_matmul`'s bf16 legs (`bf32`, `bfu*`; the old
+  1e-5/5e-2 HIP tolerances were measured on a signed `mbb`), its staged f16->f32 leg (`approx` on
+  HIP), the Bf16_wide bound (its f32-ulp HIP slack is gone, and a bitwise claim against the
+  once-narrowed reference joins it), and the half legs' `mbh`; `scan_companion_coverage` leg 4's `z`
+  (1e-5); `schedule_batched_mma`'s bf16 legs (5%). Already one-signed, made bitwise:
+  `schedule_contraction_nest`'s `out_proj` bf16 leg (5%; its sums never leave bf16's exact range).
+  Newly run on HIP, bitwise: `schedule_mma_matmul`'s f16->f32 direct full-product leg and its
+  f16->f32 k-split legs. Tolerances that stay, each for a reason other than the sign:
+  `qkv_zero_init`'s f16-operand leg (`2^-8` relative: the serial reference may round each product to
+  f16, which the tensor unit does not); `schedule_strided_1x1`'s f16 legs (1e-3 absolute on integer
+  sums of at least 16, where f16's spacing is `2^-6`, so it admits only exact matches); the
+  Bf16_narrow k-split envelope (how a bf16-accumulate unit rounds a tie is the subject, not the
+  sign); `scan_companion_coverage`'s softmax outputs (an f32 `exp` chain over two kernel shapes
+  without the licence); and the f32 legs at `approx_tol`, which are Metal's reassociating f32 tile
+  (HIP declines f32). Not tensorized on HIP and so out of the sign rule, though their inputs are
+  signed: `schedule_ldmatrix_matmul` (HIP declines swizzled operands) and `tile_mma_narrow` (no
+  `Tensorize` on a GPU). The negative control (the signed operands restored under the bitwise
+  claims, on gfx1102) fails every claim with an f32 or bf16 result: the five bf16 legs, the staged
+  and the direct f16->f32 legs, leg 4's `z` (5.00000191 for 5 in 5 of 9 seeds) and
+  `schedule_batched_mma`'s four. The f16-accumulator claims (`mm_h`, the staged uniform-f16 leg)
+  pass even signed, because f16's rounding absorbs the residue outside exact-zero cells, which those
+  data lack; one sign keeps them from depending on that. A signed `out_proj` input passes its
+  bitwise claims for the same reason at bf16, and fails the derived one-sign premise instead.
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
   `((vtyp){0} + x)` returns `+0.0` for `x = -0.0` (IEEE `(+0.0) + (-0.0) = +0.0`), so use
@@ -1802,13 +1852,9 @@ files.
   So a change to a cc mma or register-tile census claim, a `Register_tile` geometry claim or a SIMD
   rendering test gets one more targeted run of the affected aliases at 32. Pinning a
   `hardware_limits` record in the test does not make it width-independent, as staging#1094 shows:
-  codegen still reads the configured width. The stanza must DECLARE `(env_var OCANNL_CC_VECTOR_BYTES)`, or
-  dune serves the previous 16-byte result as a pass (AGENTS.md, *Testing*). `env_var_deps`
-  requires the declaration of every stanza whose program reads the width — projects a width field,
-  names a `Cc_backend` value reaching `cc_vector_bytes`, or leaves a width field to a device base in
-  a limits update (gh-ocannl-1320; the derivation: build-and-test.md). A test that only constructs
-  synthetic limits and leaves codegen to read the width is outside what it can see: declare it by
-  judgment when its golden depends on the rendering.
+  codegen still reads the configured width. The rerun at 32 is a real one because the ambient
+  record in every test's `ocannl_config` carries `OCANNL_CC_VECTOR_BYTES` (gh-ocannl-1149); no
+  stanza declares the variable (gh-ocannl-1425 retired gh-ocannl-1320's declaration rule).
 - **A single width per machine would make a wider machine emit LESS vector code, and "the widest
   that fits" is still not enough.** Every explicit-SIMD rendering declines below one full vector,
   so at 64 bytes an f32 loop of extent 8..15 — and a `Tile_mma` column extent in that range — falls
@@ -1958,7 +2004,9 @@ files.
     setting `fastMathEnabled` to false as the safe, compatible choice. `Compiler_options.metal` owns
     both ordered property sequences; `test_metal_compile_options` pins both API/debug variants
     GPU-free and
-    `benchmarks/runners/ocannl/metal_reassoc_probe.ml` is the rerunnable measurement.
+    `benchmarks/runners/ocannl/metal_reassoc_probe.ml` is the rerunnable measurement. The fast
+    functions themselves have domain gaps (`sin`/`cos`/`tanh` returning 0 or NaN), which the
+    renderer routes around: see "Metal's fast f32 `sin`/`cos`/`tanh`" below (gh-ocannl-1435).
 - **`__FAST_MATH__` audit**: negating one component of a fast-math umbrella can *unset the macro*
   while leaving the remaining optimizations on — clang defines `__FAST_MATH__` only when the whole
   bundle is in force, so HIP's `-fno-associative-math` (and `-fhonor-infinities`) turn it off. No
@@ -2076,16 +2124,30 @@ files.
   compiler), the modern split and the default. On M4 Max / macOS 26 every finite in-range result
   of both forms was within 0.5 half ulp of f64. The overloads matched the widened form bitwise
   except for `sin(-0)` (the overload returns +0) under both policies, and, under the modern policy,
-  `sin`/`cos` of ±inf and NaN, where the overload gives NaN and the fast f32 functions give 0. The
-  widening therefore moved exactly those values. A half `sin`/`cos` of a non-finite input is now 0
-  under the modern policy, as f32 already was. `half_unary_math` pins the relationship executed
-  (with those inputs; the overloads fail it) and the spelling, Metal-gated: CUDA and HIP keep the
-  native `hexp`/`hsin`/... intrinsics, which promise no such relationship.
+  `sin`/`cos` of ±inf and NaN, where the overload gives NaN and the fast f32 functions give 0.
+  `half_unary_math` pins the relationship executed (with those inputs; the overloads fail it) and
+  the spelling, Metal-gated: CUDA and HIP keep the native `hexp`/`hsin`/... intrinsics, which
+  promise no such relationship.
   `Recip_sqrt` (`rsqrt`) and `Tanh_approx` (`tanh`) keep their half overloads. `rsqrt` matched its
-  widened form bitwise under both policies. For `tanh` the fast f32 function narrowed is much worse
-  (up to 1024 half ulps near the subnormal range) while the overload stays within 0.502, and the
-  two policies' f32 `tanh` disagree on 11466 inputs, so widening it would buy policy coupling at an
-  accuracy cost.
+  widened form bitwise under both policies; the half `tanh` overload stays within 0.502 half ulps
+  and is IEEE on the special values (`unary_math_special_values` checks it).
+
+- **Metal's fast f32 `sin`/`cos`/`tanh` are wrong outside a domain, so OCANNL does not emit them
+  bare** (gh-ocannl-1435). Measured on M4 Max / macOS 26 with
+  `benchmarks/runners/ocannl/metal_f32_math_probe.ml` under the production policy: fast `sin`/`cos`
+  return 0 for ±inf, NaN and every |x| from 2^21 pi (first input 0x1.921fb8p+22, found by an
+  exhaustive scan of 2^18..2^24); below that they are within 3.4 ulps of f64, as `precise::` is
+  (92 of 1048576 sampled results differ from `precise::` bitwise). Fast `tanh` returns 0 for x
+  from about 43.7 and NaN from about 44.4 up (+inf included), +0 for -0, flushes |x| < 2^-26 to 0, and is 2050 ulps off
+  around 2^-12 and 26 around 2^-5 -- the narrowed half form's 1024 half ulps came from here. So
+  `sin`/`cos` at every float precision render through `Builtins_metal`'s `ocannl_sin`/`ocannl_cos`
+  (`fabs(x) < 0x1p22f ? sin(x) : precise::sin(x)`: NaN fails the compare), and f32/bf16 `tanh` as
+  `precise::tanh` (within 2 ulps everywhere, and bitwise the legacy policy's `tanh`, whose functions
+  are the precise ones). Cost: 1.4x (guard) and 4x (`precise::tanh`) on 1024 back-to-back
+  calls per thread, none measurable on a 16M-element load-call-store stream. A cheaper `tanh` patch
+  (pass x through below 2^-12) fixed only the flush, so it was not taken. Metal `bfloat` flushes
+  subnormals in storage (2^-130 reads back 0 through any op), which is a storage property, not
+  these functions'. `unary_math_special_values` pins the values at f32, half and bf16, Metal-gated.
 
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half

@@ -306,11 +306,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";
-    (* gh-ocannl-1010 moved the complete demo architectures out of Nn_blocks into Demo_models; these
-       three have no runner in the tree. *)
-    "Demo_models.mobile_cnn";
-    "Demo_models.multi_head_att_workshop";
-    "Demo_models.sokoban_cnn";
     (* gh-ocannl-915: the derived values its triage kept. None of their derivings is removable:
        [C_syntax.compare_mma_rendering] and [compare_peel_site] sort the census summaries inside
        C_syntax itself, and [compare_peel_skip] and [compare_peel_verdict] are what

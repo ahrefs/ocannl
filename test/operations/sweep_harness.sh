@@ -2062,6 +2062,28 @@ grep -q '^serial rerun: unmapped: \[File "test/compile_error.ml", line 1\] \[Fil
   "$many_inline_log"
 absent '^serial rerun: directory fallback' "$many_inline_log"
 
+# A `(test)` stanza's golden diff -- the commonest red, a site that names only its `.expected` --
+# reruns as the stanza its resolved `diff --git` header's `.exe.output` operand names, as the
+# bisect maps it (gh-ocannl-1464), rather than staying unmapped and blocking `rerun_cleared`.
+# The same stanza's dune-file site names the same alias, which reruns once.
+golden_failure='Fatal error: exception hip_init:
+HIP_ERROR_INVALID_DEVICE
+File "test/golden_probe.expected", line 1, characters 0-0:
+diff --git a/_build/default/test/golden_probe.expected b/_build/default/test/golden_probe.exe.output
+File "test/dune", lines 13-15, characters 0-0:
+13 | (test
+14 |  (name golden_probe)
+15 |  (libraries fixture))'
+serial_golden=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$golden_failure \
+  run_sweep_backend metal --target golden-probe)
+[ "$(tail -3 "$calls" | sed -n '1p')" = 'exec -- dune runtest golden-probe' ]
+[ "$(tail -1 "$calls")" = 'exec -- dune build -j 1 @test/runtest-golden_probe' ]
+grep -q 'm4-max/metal: environment-red, 1 stanzas and 0 directory fallbacks rerun at -j 1' \
+  <<<"$serial_golden"
+golden_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q '^serial rerun: all clean$' "$golden_log"
+absent '^serial rerun: unmapped:' "$golden_log"
+
 # A red unit whose every failure the serial rerun cleared is skip evidence like
 # a pass: its failing stanzas ran again into the same log. The 2026-09-27 sweep
 # dropped minix/hip that way -- red only from a ROCr scratch assertion at

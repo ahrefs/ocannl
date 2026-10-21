@@ -29,3 +29,8 @@ the picked schedule computes correct values: true
 past capacity the weight gradient's pick is a sketch, not the default: true
 below capacity the weight gradient's pick stays the default: true
 the pick's rank is at least its bound: true
+a fissioned chain's explanation lists its matmul segments, each with sketch leaves: true
+each explained segment is listed once: true
+each explained segment lists its preset first, admitted: true
+every explained per-segment ranking score is at least its bound: true
+model_default's pick is a candidate model_explain lists: true

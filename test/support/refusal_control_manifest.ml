@@ -326,12 +326,6 @@ let raw_entries =
         "[scanner-refusal:87659b49df04eee3fc19350b0be6629a] repo-relative scanner paths";
         "[scanner-refusal:8dbf084aae3ed7d3e4ce33fb0d06e710] the credential deny-list";
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
-        "[scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated";
-        "[scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration";
-        "[scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key";
-        "[scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value";
-        "[scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names";
-        "[scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost";
         "[scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost";
         "[scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose";
         "[scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does";
@@ -349,10 +343,6 @@ let raw_entries =
         "[scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule";
         "[scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule";
         "[scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner";
-        "[scanner-refusal:dda5b4655f74eda46ec0c60e320d232b] run's generated artifacts";
-        "[scanner-refusal:747372ab4b28cca8978c2b6bd8983005] env_var";
-        "[scanner-refusal:364d32b22a5cb7a70b569db0d8864170] env_var";
-        "[scanner-refusal:07e7987f0d61b10a9fea6c6590c73d59] env_var";
         "[scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions";
         "[scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on";
         "[scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule";
@@ -364,48 +354,40 @@ let raw_entries =
         "[scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that";
         "[scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares";
         "[scanner-refusal:7aeca22f89e6555c3b97967f8bbdaba4] credential variable on";
-        "[scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var";
+        "[scanner-refusal:92d872e8d8f1d6a3de97bf3499a7170d] env_var";
         "[scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates";
         "[scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing";
         "[scanner-refusal:2df546d04b63387a24409b3c4c6a9611] declares the tracing";
         "[scanner-refusal:a53c6b4b54cc85d2f251e80dd90c855c] credential variable on";
         "[scanner-refusal:e55f77a62871fb685d23199e95c8f173] the environment variable";
-        "[scanner-refusal:d5f94657407bc4dbf949ba4187e80100] include_subdirs";
-        "[scanner-refusal:ea6e2adedc7afd62fa55afcf859f251d] names the module";
-        "[scanner-refusal:55f2feade4e139b5abb073d0b89c42cb] reaches the environment";
-        "[scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration";
-        "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
-        "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
-        "[scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width";
+        "[scanner-refusal:b9c87589aecbe6de4db58fc4671f7491] include_subdirs";
+        "[scanner-refusal:eac17cf643d980bb15c3113087c863c4] names the module";
         "[scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than";
         "[scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file";
         "[scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search";
-        "[scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach";
+        "[scanner-refusal:591d750b2330cdac197127abc39ce397] executable's own modules";
+        "[scanner-refusal:f30ace350fdf01fcc307ea64e391a7bf] Test_utils.Generated";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
         "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
         "[scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
-        "[scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no";
         "[scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads";
         "[scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from";
         "[scanner-refusal:7d1923374b5bbf7028b59f2670772e8c] executable either declares";
+        "[scanner-refusal:b8641dbf725aa68ffcc15fea6a3eb550] ocannl_config";
         "[scanner-refusal:68816c7803a2eabaa2a2d8799ba00a78] running an executable";
         "[scanner-refusal:a90efecb7feb61485c0886565a0e4ba9] running an executable";
         "[scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's";
         "[scanner-refusal:1bb3be04ec494f4917d1537675671f1d] repository-wide derivation finds";
-        "[scanner-refusal:b35f6c5cf70c9d942c2e42a4c1af9975] Test_utils.Generated.init";
-        "[scanner-refusal:9ad60261dbb2540d4d7e060be725ad4d] repository's census finds";
-        "[scanner-refusal:b54873c01dcc148c1691a882e4181993] Test_utils.Generated.init";
-        "[scanner-refusal:7ff972d0b76d472194796b39466092aa] Test_utils.Generated.init";
         "[scanner-refusal:f8d375e9267abafa87ce8eec2d53731d] repository-wide scan rules";
         "[scanner-refusal:f1c1e39705142c7bdc92b3f0ede72582] refusal-control manifest source";
         "[scanner-refusal:1f42d7a2739170c96004439d524c5d96] permanent control-golden corpus";
         "[scanner-refusal:a2ef9338814a08816bb85a6bab6ac71c] statically recoverable scanner";
-        "[scanner-refusal:96e2132b9ea14b4c19e7573b7725b9ec] omits the declaration";
-        "[scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes";
-        "[scanner-refusal:9129542c43718bbbdd95f40fe5b0f98b] reaching the initializer";
+        "[scanner-refusal:edc9c30307628c25acd76b6959b5a172] record carries declared";
+        "[scanner-refusal:b127e705a9263d141f051fd084d920f5] unknown lowercase name";
+        "[scanner-refusal:4a289c3610d53e6f94b45fa13f689381] someone else's variable";
         "[scanner-refusal:055900a8a1fbefd29b7c64a46953700f] external command handed";
         "[scanner-refusal:fac924c455e2114b6e6bdebdc44811fd] same stanza declaring";
         "[scanner-refusal:b4a6c6ad5ae1c0d26b7fe78da5c5aa7f] command handed nothing";
@@ -444,82 +426,13 @@ let raw_entries =
         "[scanner-refusal:0880ce931733097b9e44c86e1f0b7065] ANOTHER directory's binary";
         "[scanner-refusal:93ed6fc086891252db10d64e8dbfeca0] alias dune generates";
         "[scanner-refusal:84a1eda5072c0c3e43ecad5c2af6e561] stanza neither derivation";
-        "[scanner-refusal:5ae6706f247abd51242630658a99a0c1] declaring generated-artifact storage";
+        "[scanner-refusal:ed4970402e1305b0dfaabed50860c3fe] configuration variable the";
         "[scanner-refusal:c5caa846079a8640d0b93242bba8fd1b] tracing dependency without";
         "[scanner-refusal:144d103d186b613dbedbe258066e8ccc] whose read disappears";
-        "[scanner-refusal:9d94b0b39fc9ad513abc3c717482ae60] whose declaration disappears";
-        "[scanner-refusal:e38848b2fb4d8a90933cfe88e13cc04e] guard neither declares";
-        "[scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes";
-        "[scanner-refusal:605b6d65216f3c4fba7184a09d392f05] pinning the variable";
-        "[scanner-refusal:351acc91087a8ad372f2b9d40f2c1d20] SIBLING branch of";
-        "[scanner-refusal:c0e7be9911f1a357c38e840ace916450] pinned guard does";
-        "[scanner-refusal:c417aa0905f775b98ac3a197ecdd454c] dune's default module";
-        "[scanner-refusal:bf505697938fab0cadb9434dc171764b] program declared inside";
-        "[scanner-refusal:9b0ca5fe801d10403fb73978e58049f1] module the stanza";
-        "[scanner-refusal:3aaf1e15d8b245e1193c7d00698c8d84] utils.ml";
-        "[scanner-refusal:ba0a6cca6e0d6cef1cf5e8661a56b5a0] reported as undeclarable";
-        "[scanner-refusal:21fd01e1a9e76489f599ef5a9387c17f] and pinning it";
-        "[scanner-refusal:23b8372cc11b73d08a28c880b778eaf2] itself pins through";
-        "[scanner-refusal:67415c1f44643b671427afd9352d8ba4] refused not approximated";
-        "[scanner-refusal:422d713c4296fbd0c9cc8cace51b682d] same directive inside";
-        "[scanner-refusal:a317ce82c0267d509ae45cf1d1b349d7] reported there being";
-        "[scanner-refusal:c0f203aa0cf72d22c483afaf430d5353] library with inline";
-        "[scanner-refusal:afc8337bcb6f3d267d65774a59ca7f86] inline_tests";
-        "[scanner-refusal:b850c5e69abfcc5facf9b920af1a291f] same executable answers";
-        "[scanner-refusal:b098b95e7bbcc632b19f0e470447fd97] both declaring passes";
-        "[scanner-refusal:d8c7b4408936ac9480281388a26eb873] dynamic reach whose";
-        "[scanner-refusal:7a38e9cb5b4418e6e5bb8fe3b294d8fd] the same variable";
         "[scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated";
         "[scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with";
         "[scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported";
         "[scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed";
-        "[scanner-refusal:7e6affeccdb27fbb0cb1f4badf37de1d] the execution-neutral trace";
-        "[scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring";
-        "[scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning";
-        "[scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe";
-        "[scanner-refusal:0ef14060bb3652683a114deb420a5f42] Utils.settings";
-        "[scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule";
-        "[scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule";
-        "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";
-        "[scanner-refusal:ae4c5182763a52487befbd3029c2fd91] stanza declares neither";
-        "[scanner-refusal:d52ce57d79cc2a310f3f2d2d037e9b2e] declaring the variable";
-        "[scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning";
-        "[scanner-refusal:b5b10305ef82fa7d9077db1eceb93561] variable back through";
-        "[scanner-refusal:6ed1faa93fb2465cb3c3a746f850f77c] Context.Cc_backend";
-        "[scanner-refusal:d86762f9ec334387db672f5035ac305e] limits update overwriting";
-        "[scanner-refusal:448ab51835350320d2d9b13f46f2f82e] limits update overwriting";
-        "[scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the";
-        "[scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing";
-        "[scanner-refusal:ec11239fab853f2292b2255dcbe588e9] re_export";
-        "[scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests";
-        "[scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable";
-        "[scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend";
-        "[scanner-refusal:abc9643d1cda7ae5a236d8652b9d56d1] no_hardware_limits";
-        "[scanner-refusal:4fa531ab8ce35f5bfe13706d82823855] Cc_backend";
-        "[scanner-refusal:2f4d8b9f7e61558560479600d35f74ac] than passing vacuously";
-        "[scanner-refusal:7efbc10da3b495bc80f884dd42737612] Cc_backend";
-        "[scanner-refusal:c408a2684ba7b8916375d06fdb3e7330] type's updates recognised";
-        "[scanner-refusal:a966ee873537b3b8c382531ffea8f095] no_hardware_limits";
-        "[scanner-refusal:69ae4cf5f5249bd390b16e305c1f45d7] helper library outside";
-        "[scanner-refusal:2aa043e6a8bd4e45a080d2f62d8af168] Ir.Backend_intf.no_hardware_limits";
-        "[scanner-refusal:d5139f7e86708309a46549017b6c0f68] Cc_backend";
-        "[scanner-refusal:840d9d1ef23497bec8d699caa98d67d6] linked library whose";
-        "[scanner-refusal:0592d760a046f0395065418e9c342a58] is recognised case-insensitively";
-        "[scanner-refusal:7e956ea74253311af8c0a9b9fa543587] Cc_backend";
-        "[scanner-refusal:549301882f72c66accc4981283aad8e2] no_hardware_limits";
-        "[scanner-refusal:10334c2250270979aa32ddc7a10d93e3] library's interface-only module";
-        "[scanner-refusal:9c6ae4964c8b00fe27c0607da0135f80] field filled through";
-        "[scanner-refusal:f9bd0cf9b0592ab82941e27281a7dc4c] let stays unplaced";
-        "[scanner-refusal:b22617ea23d5bd2270d682426b8c2ac5] submodule's value re-exported";
-        "[scanner-refusal:823039faeecddef225db5009f088e3b9] library's default implementation";
-        "[scanner-refusal:e9b61c2f984d21446b37e9e79253a234] defines still carries";
-        "[scanner-refusal:bea334cae6dc5ff82766eb1a3460ce00] Cc_backend";
-        "[scanner-refusal:9030a635de21129bfd2b27cbf880edc3] destructuring top-level let";
-        "[scanner-refusal:284de09cb0fa8165a928b27489ff432b] Backend_intf";
-        "[scanner-refusal:3571dda50442efc2c734e28a3ad9e4f8] Backend_intf.no_hardware_limits";
-        "[scanner-refusal:07de1e1a3e2d7b7fc3b4e521233c0397] Cc_backend";
-        "[scanner-refusal:7bd8773fde8c6bdebc92968b5cfbb687] dune's default module";
-        "[scanner-refusal:4170b6912074554ea1731ee6535d3426] re-exported by include";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:31948a4b787d4a96777593c36d38abf6] repository-wide scan rule";
@@ -817,8 +730,6 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:a53c6b4b54cc85d2f251e80dd90c855c",
       "a module reading `Sys.getenv_opt \"GH_TOKEN\"`, under the passing tree, is refused by name: \
        true" );
-    ( "env_var_deps.ml:09e01a62cce1d340393a2244ed33ea10",
-      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:034280d144ee4338406ff5f6a1cf287d",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:30c88c1631600d7969a9aefd4de74162",
@@ -834,11 +745,6 @@ let raw_direct_evidence =
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:1aaab6e3cd8f4615e1cd1d0321e309a1",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
-    ( "env_var_deps.ml:dda5b4655f74eda46ec0c60e320d232b",
-      "the checker reports the stanza and exits 1 when the rule running it omits the declaration: \
-       true" );
-    ( "env_var_deps.ml:747372ab4b28cca8978c2b6bd8983005",
-      "declaring generated-artifact storage without an initializer is refused: true" );
     ( "env_var_deps.ml:bbadfd8513559355fedbc54dc3dc678a",
       "a `(subdir …)` group whose actions take the training lock and whose gate does not is \
        reported there too: true" );
@@ -862,46 +768,10 @@ let raw_direct_evidence =
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:c1a398b587b5de3d7d02145dc45274a6",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
-    ( "env_var_deps.ml:2b67d02d52c3465bfba40d167802f0a7",
-      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:2df546d04b63387a24409b3c4c6a9611",
       "a tracing dependency without a module reading it is refused: true" );
-    ( "env_var_deps.ml:d5f94657407bc4dbf949ba4187e80100",
-      "a dune file whose module sets this scan cannot place is refused, not approximated: true" );
-    ( "env_var_deps.ml:ea6e2adedc7afd62fa55afcf859f251d",
-      "a module the stanza names and this check was handed no source for is reported, not read as \
-       one that makes no reads: true" );
-    ( "env_var_deps.ml:55f2feade4e139b5abb073d0b89c42cb",
-      "a dynamic reach whose keys resolve to nothing is refused rather than passed over in \
-       silence: true" );
-    ( "env_var_deps.ml:267a42b2812f4679c4463495cc199d36",
-      "and declaring the variable in `(inline_tests (deps …))` is no licence: that invalidates the \
-       inline runner alone: true" );
-    ( "env_var_deps.ml:a323f01100bfd685e76c62154cf4eaae",
-      "the checker reports the key and exits 1 when the rule running the guard neither declares \
-       nor pins it: true" );
-    ( "env_var_deps.ml:0b33370125e32eaa4bb0f50c6cc3bc1a",
-      "an exemption whose declaration disappears is refused: true" );
     ( "env_var_deps.ml:638620a0745d0a136810c5b0256e0ec0",
       "each missing scoped exemption is stale even while its sibling alias remains: true" );
-    ( "env_var_deps.ml:22e8c3d320466372ca09214ed5850f4f",
-      "a key the pipeline reads outside every named value is refused, not dropped from every \
-       requirement: true" );
-    ( "env_var_deps.ml:ae1b95995f2c4aa10cdeee699ccb3413",
-      "a test naming the pipeline is reported, with the key its value reaches through the module's \
-       own calls and the execution-neutral trace key, when its stanza declares neither: true" );
-    ( "env_var_deps.ml:ea9bbac4c8b7dd80c2aba00aaa7c31ff",
-      "a `Cc_backend` reading the width key outside every named value is refused, not read as \
-       having no width readers: true" );
-    ( "env_var_deps.ml:c0d3ae6ca0018d4cbf12e95986af7220",
-      "and one whose values no longer reach the key at all is refused rather than passing \
-       vacuously: true" );
-    ( "env_var_deps.ml:cdf0668c2967d73ed0c8b32a7c794932",
-      "a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not \
-       passed with no readers: true" );
-    ( "env_var_deps.ml:3d0e227333c3757cabc427ac4fb81130",
-      "a linked library whose source the scan was never handed is refused, not read as making no \
-       reads: true" );
     ( "env_var_deps.ml:a81eacf691e2faeada3ee2b79d5fd7a6",
       "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
        are both refused: true" );
@@ -924,9 +794,6 @@ let raw_direct_evidence =
       "two markers on one stanza are refused: true" );
     ( "env_var_deps.ml:e96ac262e859176f6f0ec05d6f2f30cb",
       "a marker on a rule, which names no program's modules, is refused: true" );
-    ( "env_var_deps.ml:77abb7920eac5544c6bf60dd498ec9cf",
-      "a test projecting a width field off a limits record is reported, naming the variable and \
-       the read, when its stanza declares neither: true" );
     ( "test_config_consistency.ml:40f6a4df02a115c327391e051bacd5c6",
       "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:dfd9b6901bf188f6500bcc1284778dcd",
@@ -963,17 +830,22 @@ let raw_direct_evidence =
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:e1354d390a356f0c79420c25232b0b42",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
-    ( "env_var_deps.ml:364d32b22a5cb7a70b569db0d8864170",
-      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
-    ( "env_var_deps.ml:07e7987f0d61b10a9fea6c6590c73d59",
-      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:02e183a4105132ec092206c1d35d6247",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:0deef0cb94c45615f32ee84ac2e76f8e",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:e55f77a62871fb685d23199e95c8f173",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
-    ( "env_var_deps.ml:41d9bc729b5b8b3908a48d45b1e0203c",
+    ( "env_var_deps.ml:92d872e8d8f1d6a3de97bf3499a7170d",
+      "the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir \
+       …)` group: true" );
+    ( "env_var_deps.ml:b9c87589aecbe6de4db58fc4671f7491",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:eac17cf643d980bb15c3113087c863c4",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:591d750b2330cdac197127abc39ce397",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:f30ace350fdf01fcc307ea64e391a7bf",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
   ]
 
@@ -1007,9 +879,6 @@ let raw_catalogue_only : (string * string) list =
       "a disagreement between this scan's two readers of one dune file: the raw-text floor exists \
        to catch the structural walk missing a stanza, and any input that trips it is a walk \
        defect, not a malformed tree" );
-    ( "env_var_deps.ml:b35f6c5cf70c9d942c2e42a4c1af9975",
-      "a misplaced `Test_utils.Generated.init` call; the generated-artifact controls build only \
-       the declared and the undeclared caller" );
     ( "env_var_deps.ml:941a9fb77d867c7b1576a0f19ee5db3b",
       "a declaration outside every `deps` field; the scan's own reader of those fields is what \
        would have to miss it" );
@@ -1019,9 +888,6 @@ let raw_catalogue_only : (string * string) list =
     ( "env_var_deps.ml:fe4c53f899eb08a9ae67e7a797a5a841",
       "stale entries of `refusal_exemptions`, which is empty" );
     ( "env_var_deps.ml:09ce44850cdf45c95e308d6c64aed813",
-      "a floor under the repository's own census, which only a repository that lost its members \
-       reaches" );
-    ( "env_var_deps.ml:9ad60261dbb2540d4d7e060be725ad4d",
       "a floor under the repository's own census, which only a repository that lost its members \
        reaches" );
     ( "config_dep_completeness.ml:c35e7bf895b2bfc334caa198f2db4c83",

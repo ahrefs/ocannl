@@ -23,18 +23,19 @@ Fp16_wide mma seeds match the backend's advertised emission scopes: true
 Fp16_wide half tensorized structure as expected: true
 Fp16_wide with narrow_compute_f32 off matches the independent wide reference: true
 Fp16_wide with narrow_compute_f32 off declines the register tiling (no narrow C-tile accumulator): true
-bf32 tensorized matmul matches the serial twin: true
+bf32 tensorized matmul matches the serial twin bitwise: true
 bf32 tensorized structure as expected: true
-bfu tensorized matmul matches the serial twin: true
+bfu tensorized matmul matches the serial twin bitwise: true
 bfu tensorized structure as expected: true
-bfu_ta tensorized matmul matches the serial twin: true
+bfu_ta tensorized matmul matches the serial twin bitwise: true
 bfu_ta tensorized structure as expected: true
-bfu_tb tensorized matmul matches the serial twin: true
+bfu_tb tensorized matmul matches the serial twin bitwise: true
 bfu_tb tensorized structure as expected: true
-bfu_m2 tensorized matmul matches the serial twin: true
+bfu_m2 tensorized matmul matches the serial twin bitwise: true
 bfu_m2 tensorized structure as expected: true
 Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise: true
 Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone: true
+Bf16_wide uniform-bf16 tensorized matmul equals the once-narrowed wide reference bitwise: true
 the default-policy uniform-bf16 matmul exceeds the narrowing rounding exactly where the backend keeps bf16 storage residency (the inputs discriminate): true
 the Bf16_narrow uniform-bf16 matmul exceeds the narrowing rounding exactly where that mode keeps bf16 storage residency: true
 on HIP with tile MMA, the Bf16_narrow uniform-bf16 twin tensorizes: true
@@ -61,7 +62,7 @@ full-mantissa tensorized matmul matches the serial twin bitwise: true
 register tiling offers a whole-vector fused accumulator update: true
 staged+tensorized matmul parity (GPU) or clean rejection (CPU): true
 staged+tensorized structure as expected: true
-staged+tensorized half matmul matches the serial twin: true
+staged+tensorized half matmul matches the serial twin bitwise: true
 staged+tensorized half fragment residency: true
 staged+tensorized uniform-f16 matmul matches the serial twin bitwise: true
 staged+tensorized uniform-f16 fragment residency: true

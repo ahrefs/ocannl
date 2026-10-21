@@ -1315,8 +1315,9 @@ module Impl = struct
          half inputs ([benchmarks/runners/ocannl/metal_half_math_probe.ml]), the overloads already
          matched the widened form bitwise under both policies except [sin(-0)] (the overload drops
          the sign) and, under the modern policy only, [sin]/[cos] of inf and NaN (the overload gives
-         NaN, the fast f32 functions 0). [Recip_sqrt] and [Tanh_approx] keep their overloads: see
-         the backend-precision note. *)
+         NaN, the fast f32 functions 0 -- since gh-ocannl-1435 [ocannl_sin]/[ocannl_cos] guard
+         those, see [Builtins_metal]). [Recip_sqrt] and [Tanh_approx] keep their overloads: see the
+         backend-precision note. *)
       let widened_math fn =
         match prec with
         | Ops.Half_prec _ ->
@@ -1330,8 +1331,8 @@ module Impl = struct
       | Log, _ -> widened_math "log"
       | Exp2, _ -> widened_math "exp2"
       | Log2, _ -> widened_math "log2"
-      | Sin, _ -> widened_math "sin"
-      | Cos, _ -> widened_math "cos"
+      | Sin, _ -> widened_math "ocannl_sin"
+      | Cos, _ -> widened_math "ocannl_cos"
       | Sqrt, _ -> widened_math "sqrt"
       | Relu, Ops.Half_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0h"; v ])
       | Relu, Ops.Single_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0f"; v ])
@@ -1358,7 +1359,18 @@ module Impl = struct
           fun v -> infix_binop "/" (string @@ "1.0" ^ s) v
       | Recip_sqrt, _ -> math_doc "rsqrt"
       | Trunc, _ -> math_doc "trunc"
-      | Tanh_approx, _ -> math_doc "tanh"
+      | Tanh_approx, Ops.Half_prec _ -> math_doc "tanh"
+      (* gh-ocannl-1435: the fast f32 [tanh] the production policy selects returns 0 for x from
+         about 43.7 and NaN from about 44.4 up (+inf included), +0 for -0, flushes |x| < 2^-26 to 0
+         and is off by up to 2050 ulps near 2^-12
+         (benchmarks/runners/ocannl/metal_f32_math_probe.ml). [precise::tanh] is within 2 ulps of
+         f64 everywhere, IEEE on the special values, and bitwise the legacy policy's [tanh]; it
+         costs 4x on 1024 back-to-back calls per thread (ALU-bound throughput) and nothing
+         measurable on a load-call-store stream. bfloat16 widens explicitly so the call resolves to
+         the f32 overload. *)
+      | Tanh_approx, Ops.Bfloat16_prec _ ->
+          fun v -> group (string "(bfloat)precise::tanh((float)" ^^ parens v ^^ rparen)
+      | Tanh_approx, _ -> math_doc "precise::tanh"
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform1, _ ->
           fun v -> func_doc ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform") v

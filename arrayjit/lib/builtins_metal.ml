@@ -524,6 +524,22 @@ using namespace metal;|}, []);
     return uint4(uint32_t(x), 0, 0, 0);
 }|},
       [] );
+    (* [Sin] and [Cos] at every float precision (gh-ocannl-1435). Under the production math policy
+       (Safe arithmetic with fast functions, [Compiler_options.metal]) the fast f32 [sin]/[cos]
+       return 0 for inf and NaN, and for every |x| from 2^21 pi up (on M4 Max, scanned exhaustively
+       over 2^18..2^24: the first such input is 0x1.921fb8p+22); below that they are within 3.4 ulps
+       of f64, as [precise::] is. The guard keeps the fast function inside its domain and hands
+       everything else -- NaN fails the comparison -- to [precise::], so the result is IEEE on
+       non-finite inputs and accurate at any magnitude, under either policy (the legacy one's
+       functions are the precise ones already). Measured cost
+       ([benchmarks/runners/ocannl/metal_f32_math_probe.ml]): 1.4x on 1024 back-to-back calls per
+       thread (ALU-bound throughput), none on a load-call-store stream. *)
+    ( "ocannl_sin",
+      {|inline float ocannl_sin(float x) { return fabs(x) < 0x1p22f ? sin(x) : precise::sin(x); }|},
+      [] );
+    ( "ocannl_cos",
+      {|inline float ocannl_cos(float x) { return fabs(x) < 0x1p22f ? cos(x) : precise::cos(x); }|},
+      [] );
     (* The e5m2 software codec. MSL has no fp8 type, so an fp8 tensor is stored as a byte and its
        arithmetic runs in f32 ([Metal_backend.C_syntax_config.compute_prec]): these two are the
        whole storage/compute seam for fp8 on Metal, called at every load and every store.

@@ -30,7 +30,13 @@
    Live code: everything that evaluates stays as captured -- a fixed embedded index is not folded to
    a constant, on a [uint4x32] node or a float one. A template can replay beneath a threefry
    operand, which the consumer's simplify never enters, and there the routine simplify's folds
-   change values (an index and a constant convert to [uint4x32] through different builtins). *)
+   change values (an index and a constant convert to [uint4x32] through different builtins).
+
+   Consumer (gh-ocannl-1469): the same reading on the CONSUMER's side. B's own [Where] with a
+   decided condition around a merge-tainted inherited read compiles and computes the live arm --
+   decided by a constant, by B's own loop extent, or (for a virtual consumer stored as a template)
+   by a reduction loop the template keeps -- while a template's write-index loop decides nothing,
+   and a live or undecided arm is still refused. *)
 
 open Base
 open Ll_test
@@ -313,10 +319,185 @@ let case_live_code () =
   p "live code: a float template keeps its embedded index"
     (Option.equal Int.equal (stored_embeds Ir.Ops.single "fctr") (Some 1))
 
+(* gh-ocannl-1469, the consumer's half. Routine A defers [v := ell + merge(msrc)], whose template
+   genuinely reads the merge buffer, so consuming [v] in a later routine is refused wherever the
+   read executes. Routine B wraps the read in a [Where] of its OWN, and when the condition is
+   decided [virtual_llc] must not descend into the dead arm: B compiles, declares no merge buffer,
+   and computes the live arm. The materialized reading runs B with [v] materialized and holding junk
+   the live arm never reads. *)
+let x_vals = Array.init dim ~f:(fun i -> 40. +. Float.of_int i)
+
+(* A fresh lineage whose routine A deferred the merge-reading [v]. *)
+let tainted_lineage ~label ~tag =
+  let msrc = mk (tag ^ "msrc") and ell = mk (tag ^ "ell") and v = mk (tag ^ "v") in
+  List.iter [ msrc; ell ] ~f:materialize;
+  let ctx = LL.empty_optimize_ctx () in
+  let llc_a =
+    let s = sym () in
+    loop_n s dim
+      (set v [| iter s |] (add (get ell [| iter s |]) (LL.Get_merge_buffer (msrc, [| iter s |]))))
+  in
+  let o_a = optimize_in ctx ~name:("sts_" ^ tag ^ "_a") llc_a in
+  p
+    (label ^ ": routine A defers v, its template reading the merge buffer")
+    (known_virtual o_a v
+    && Option.equal Int.equal (template_count ctx v ~f:(merge_read_of msrc)) (Some 1));
+  (ctx, v)
+
+let consumer_b ~shape ~x ~v ~out =
+  let s = sym () in
+  loop_n s dim (set out [| iter s |] (shape s ~x:(get x [| iter s |]) ~v:(get v [| iter s |])))
+
+let case_consumer_decided ~label ~tag shape =
+  let ctx, v = tainted_lineage ~label ~tag in
+  let x = mk (tag ^ "x") and out = mk (tag ^ "out") in
+  List.iter [ x; out ] ~f:materialize;
+  match consume ctx ~name:("sts_" ^ tag ^ "_b") (consumer_b ~shape ~x ~v ~out) with
+  | Error msg -> p (label ^ ": routine B compiles (refused: " ^ msg ^ ")") false
+  | Ok o_b ->
+      p (label ^ ": routine B compiles") true;
+      p (label ^ ": routine B declares no merge buffer") (Option.is_none o_b.LL.merge_node);
+      let got =
+        execute
+          ~name:("sts_" ^ tag ^ "_b")
+          o_b
+          ~seed:[ (x, x_vals); (out, blank dim) ]
+          ~read:[ out ]
+      in
+      p_all2
+        (label ^ ": executed values are the live arm's")
+        (List.hd_exn got) x_vals ~f:Float.equal;
+      let v_m = mk (tag ^ "vm") and x_m = mk (tag ^ "xm") and out_m = mk (tag ^ "outm") in
+      List.iter [ v_m; x_m; out_m ] ~f:materialize;
+      let o_m = optimize ~name:("sts_" ^ tag ^ "_m") (consumer_b ~shape ~x:x_m ~v:v_m ~out:out_m) in
+      let got_m =
+        execute
+          ~name:("sts_" ^ tag ^ "_m")
+          o_m
+          ~seed:
+            [
+              (v_m, Array.init dim ~f:(fun i -> 9000. +. Float.of_int i));
+              (x_m, x_vals);
+              (out_m, blank dim);
+            ]
+          ~read:[ out_m ]
+      in
+      p_all2
+        (label ^ ": the deferred reading agrees with the materialized one")
+        (List.hd_exn got) (List.hd_exn got_m) ~f:Float.equal
+
+(* The rejection still fires wherever the merge-tainted read may execute. *)
+let case_consumer_refused ~label ~tag shape =
+  let ctx, v = tainted_lineage ~label ~tag in
+  let x = mk (tag ^ "x") and out = mk (tag ^ "out") in
+  List.iter [ x; out ] ~f:materialize;
+  match consume ctx ~name:("sts_" ^ tag ^ "_b") (consumer_b ~shape ~x ~v ~out) with
+  | Ok _ -> p (label ^ ": routine B is refused (it compiled)") false
+  | Error msg ->
+      p
+        (label ^ ": routine B is refused for the cross-routine merge splice")
+        (String.is_substring msg ~substring:"reads a merge buffer")
+
+(* A virtual consumer is stored as a template, and the walk producing it decides with the extent of
+   a reduction loop the template keeps: [w[i] := sum_k where (k < 2) x2[i,k] v[i]]. *)
+let case_consumer_kept_loop () =
+  let label = "consumer kept loop" and tag = "ck" in
+  let ctx, v = tainted_lineage ~label ~tag in
+  let build () =
+    let x2 = mk ~dims:[| dim; kdim |] (tag ^ "x2") and w = mk (tag ^ "w") in
+    let out = mk (tag ^ "out") in
+    List.iter [ x2; out ] ~f:materialize;
+    let llc ~v =
+      let s = sym () and k = sym () and s2 = sym () in
+      List.reduce_exn ~f:seq
+        [
+          zero w;
+          loop_n s dim
+            (loop_n k kdim
+               (set w
+                  [| iter s |]
+                  (add
+                     (get w [| iter s |])
+                     (where_
+                        (lt (embed k) (ic kdim))
+                        (get x2 [| iter s; iter k |])
+                        (get v [| iter s |])))));
+          loop_n s2 dim (set out [| iter s2 |] (get w [| iter s2 |]));
+        ]
+    in
+    (x2, w, out, llc)
+  in
+  let x2_vals =
+    Array.init (dim * kdim) ~f:(fun j ->
+        (100. *. Float.of_int (j / kdim)) +. Float.of_int (j % kdim) +. 1.)
+  in
+  let expected =
+    Array.init dim ~f:(fun i ->
+        Array.fold (Array.sub x2_vals ~pos:(i * kdim) ~len:kdim) ~init:0. ~f:( +. ))
+  in
+  let x2, w, out, llc = build () in
+  match consume ctx ~name:"sts_ck_b" (llc ~v) with
+  | Error msg -> p (label ^ ": routine B compiles (refused: " ^ msg ^ ")") false
+  | Ok o_b ->
+      p (label ^ ": routine B compiles, deferring w") (known_virtual o_b w);
+      p (label ^ ": routine B declares no merge buffer") (Option.is_none o_b.LL.merge_node);
+      let got =
+        execute ~name:"sts_ck_b" o_b ~seed:[ (x2, x2_vals); (out, blank dim) ] ~read:[ out ]
+      in
+      p_all2
+        (label ^ ": executed values are the reduction's")
+        (List.hd_exn got) expected ~f:Float.equal;
+      let x2_m, _, out_m, llc_m = build () in
+      let v_m = mk (tag ^ "vm") in
+      materialize v_m;
+      let o_m = optimize ~name:"sts_ck_m" (llc_m ~v:v_m) in
+      let got_m =
+        execute ~name:"sts_ck_m" o_m
+          ~seed:
+            [
+              (v_m, Array.init dim ~f:(fun i -> 9000. +. Float.of_int i));
+              (x2_m, x2_vals);
+              (out_m, blank dim);
+            ]
+          ~read:[ out_m ]
+      in
+      p_all2
+        (label ^ ": the deferred reading agrees with the materialized one")
+        (List.hd_exn got) (List.hd_exn got_m) ~f:Float.equal
+
+(* The walk that produces a template decides with no loop of the template's write index: the
+   template replays with the read site's index in its place, which need not lie in that loop's
+   extent. [w[i] := where (i < 4) x[i] y[i]] keeps its read of [y]. *)
+let case_consumer_write_index_opaque () =
+  let x = mk "wox" and y = mk "woy" and w = mk "wow" in
+  List.iter [ x; y ] ~f:materialize;
+  let ctx = LL.empty_optimize_ctx () in
+  let llc =
+    let s = sym () in
+    loop_n s dim
+      (set w
+         [| iter s |]
+         (where_ (lt (embed s) (ic dim)) (get x [| iter s |]) (get y [| iter s |])))
+  in
+  let o = optimize_in ctx ~name:"sts_wo" llc in
+  p "write index: w is deferred" (known_virtual o w);
+  p "write index: its loop decides nothing in the stored template"
+    (Option.equal Int.equal (template_count ctx w ~f:(read_of y)) (Some 1))
+
 let () =
   case_merge ();
   case_provenance ();
   case_gate ();
   case_precision_dependent_gate ();
   case_kept_loop ();
-  case_live_code ()
+  case_live_code ();
+  case_consumer_decided ~label:"consumer where 1 x v" ~tag:"c1" (fun _ ~x ~v -> where_ (ic 1) x v);
+  case_consumer_decided ~label:"consumer where 0 v x" ~tag:"c0" (fun _ ~x ~v -> where_ (ic 0) v x);
+  case_consumer_decided ~label:"consumer where (i < 4) x v" ~tag:"ce" (fun s ~x ~v ->
+      where_ (lt (embed s) (ic dim)) x v);
+  case_consumer_kept_loop ();
+  case_consumer_write_index_opaque ();
+  case_consumer_refused ~label:"consumer where 0 x v (v live)" ~tag:"cl" (fun _ ~x ~v ->
+      where_ (ic 0) x v);
+  case_consumer_refused ~label:"consumer where (i < 2) x v (undecided)" ~tag:"cu" (fun s ~x ~v ->
+      where_ (lt (embed s) (ic 2)) x v)

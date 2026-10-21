@@ -378,8 +378,10 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: co
     "precision::tf32"
     "rocwmma"
     "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+    "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>" ^ " __mma_acc"
     "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::bfloat16_t>"
     "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::float16_t>"
+    "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, rocwmma::float16_t"
     "rocwmma::load_matrix_sync(" ^ ...
     "rocwmma::load_matrix_sync(__mma_rc, ocannl_wmma_rc16, 16"
     "rocwmma::mma_sync"
@@ -414,6 +416,7 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: co
     "tile_mma fragment update"
     "tmma_acc__"
     "ulong2(0), true)"
+    ... ^ " __mma_fragment_"
     ... ^ " ldmatrix a,b"
     sprintf "%s; column tail %d in %d vector%s; row tail %d)"
 test/operations/schedule_mma_scope_scratch.ml
@@ -556,6 +559,7 @@ test/operations/vec_signed_zero.ml
     "tmma_as_0__, tmma_as_0__"
     "vector_size"
     "vunif"
+test/operations/workgroup_memory_accounting.ml [also pins text this scan cannot name: untraced callback]
 
 every scanned root meets its golden floor: true
 every scanned root meets its source-site floor: true
