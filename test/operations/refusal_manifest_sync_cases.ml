@@ -385,6 +385,65 @@ let check ok = Verdict.p "the malformed tree is refused" ok
     ~f:(function
     | Sync.Relabeled _ -> true
     | Row _ | Rekeyed _ -> false);
+  (* Another scanner's evidence naming the same label, backed by its own control: a claim reworded
+     in this scanner's source does not relabel it, and that scanner's golden rows keep it. *)
+  let third_scan = {ocaml|
+let check () = Verdict.fail "another scanner's refusal"
+|ocaml} in
+  let foreign_text =
+    manifest
+      ~rows:[ ("synthetic_scan.ml", markers before); ("third_scan.ml", markers third_scan) ]
+      ~evidence:
+        [
+          ( "third_scan.ml:" ^ identity_of third_scan "another scanner's refusal",
+            "the malformed tree is refused: true" );
+        ]
+      ~catalogue:[]
+  in
+  let foreign_plan =
+    Sync.plan ~text:foreign_text
+      ~diagnostics_of:(fun source ->
+        Some (Scan.diagnostics (if String.equal source "third_scan.ml" then third_scan else after)))
+      ~renamed_claims:[] ()
+  in
+  p "another scanner's evidence naming the reworded label is unresolved, not relabeled"
+    (List.exists foreign_plan.unresolved
+       ~f:(String.is_substring ~substring:"another scanner's source"));
+  p_none ~min:1 "and nothing relabels it" foreign_plan.changes ~f:(function
+    | Sync.Relabeled _ -> true
+    | Row _ | Rekeyed _ -> false);
+  p "a golden row of the same label in another source's golden is not rewritten"
+    (String.equal
+       (Sync.rewrite_golden ~sources:[ "third_scan.ml" ] foreign_plan
+          "the malformed tree is refused: true\n")
+       "the malformed tree is refused: true\n");
+  p "while the reworded claim's own source's golden row is"
+    (String.equal
+       (Sync.rewrite_golden ~sources:[ "synthetic_scan.ml" ] foreign_plan
+          "the malformed tree is refused: true\n")
+       "a malformed tree is refused: true\n");
+  (* A failure reworded into a sibling's words: its key would land on a key another entry holds. *)
+  let converged =
+    String.substr_replace_first before ~pattern:"the second refusal reads the old way"
+      ~with_:"%s keeps the first refusal"
+  in
+  let converged_text =
+    manifest
+      ~rows:[ ("synthetic_scan.ml", markers before) ]
+      ~evidence:[ ("synthetic_scan.ml:" ^ second_before, "the last claim keeps its words: true") ]
+      ~catalogue:[ ("synthetic_scan.ml:" ^ first, "reason") ]
+  in
+  let converged_plan =
+    Sync.plan ~text:converged_text
+      ~diagnostics_of:(fun _ -> Some (Scan.diagnostics converged))
+      ~renamed_claims:[] ()
+  in
+  p "a re-key onto a key another entry holds is unresolved"
+    (List.exists converged_plan.unresolved
+       ~f:(String.is_substring ~substring:"another entry holds"));
+  p_none ~min:1 "and is not made" converged_plan.changes ~f:(function
+    | Sync.Rekeyed _ -> true
+    | Row _ | Relabeled _ -> false);
   (* The text reader against the real manifest's compiled tables: every row, key and label it would
      rewrite is the one the tests read. *)
   let live_text = In_channel.read_all "../support/refusal_control_manifest.ml" in

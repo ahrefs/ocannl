@@ -37,6 +37,12 @@ and the label naming it is unresolved: true
 two claims that only swap places leave nothing unpaired: true
 a claim another scanner source still makes, reworded in one, is unresolved: true
 and no evidence label follows it (the row is still rewritten): true
+another scanner's evidence naming the reworded label is unresolved, not relabeled: true
+and nothing relabels it: true
+a golden row of the same label in another source's golden is not rewritten: true
+while the reworded claim's own source's golden row is: true
+a re-key onto a key another entry holds is unresolved: true
+and is not made: true
 the text reader reads the real manifest's rows as compiled: true
 and its direct-evidence entries: true
 and its catalogue-only entries: true

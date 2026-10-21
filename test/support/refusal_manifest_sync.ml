@@ -195,9 +195,10 @@ type plan = {
   unresolved : string list;  (** What a hand edit must settle, one sentence each. *)
   markers : (string * string) list;
       (** Each marker a rewording replaced, old to new: the text a golden holding it now prints. *)
-  claims : (string * string) list;
-      (** Each claim a rewording replaced, by its old identity, to its new format: a golden row
-          [<old label>: true] now prints the new one, where the format has no substitutions. *)
+  claims : (string * (string * string)) list;
+      (** Each claim a rewording replaced, by its old identity, to the scanner source it is in and
+          its new format: a golden row [<old label>: true] of that source now prints the new one,
+          where the format has no substitutions. *)
 }
 
 let evidence_suffix = ": true"
@@ -290,7 +291,7 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
         markers := (marker, Scan.marker d) :: !markers;
         Hashtbl.add_multi replaced ~key:(source ^ ":" ^ identity) ~data:d;
         match d.Scan.kind with
-        | Scan.Claim -> claims := (identity, d.Scan.format) :: !claims
+        | Scan.Claim -> claims := (identity, (source, d.Scan.format)) :: !claims
         | Scan.Fail -> ()));
   (* A row's own alignment outranks the claims-only pairing of the same source: a claim the row
      leaves unpaired (reworded beside an inserted failure, say) is not renamed by a pass that never
@@ -315,7 +316,10 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
         | [ _ ] -> None
         | successors -> Some successors)
   in
-  let ambiguous_markers = ambiguous !markers and ambiguous_claims = ambiguous !claims in
+  let ambiguous_markers = ambiguous !markers
+  and ambiguous_claims =
+    ambiguous (List.map !claims ~f:(fun (identity, (_, format)) -> (identity, format)))
+  in
   Hashtbl.iteri ambiguous_markers ~f:(fun ~key ~data ->
       unresolved_f
         "%s occurs more than once and its occurrences were reworded into %d different successors: \
@@ -332,6 +336,7 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
                 String.equal d.Scan.identity identity
                 && match d.Scan.kind with Scan.Fail -> true | Scan.Claim -> false))
   in
+  let rekeys = ref [] in
   let rekey table entries =
     List.iter entries ~f:(fun entry ->
         let key = entry.key.value in
@@ -349,9 +354,7 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
                  reworded differently: which successor it answers for is a hand edit"
                 key table
           | [ { Scan.kind = Scan.Fail; identity; _ } ], Some (source, _) ->
-              let new_key = source ^ ":" ^ identity in
-              edits := (entry.key.start, entry.key.stop, quote new_key) :: !edits;
-              changes := Rekeyed { table; old_key = key; new_key } :: !changes
+              rekeys := (entry, table, key, source ^ ":" ^ identity) :: !rekeys
           | [ { Scan.kind = Scan.Fail; _ } ], None -> ()
           | [ { Scan.kind = Scan.Claim; format; _ } ], _ ->
               unresolved_f
@@ -366,6 +369,24 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
   in
   rekey "raw_direct_evidence" tables.direct_evidence;
   rekey "raw_catalogue_only" tables.catalogue_only;
+  (* Two keys converging on one successor -- a failure reworded into a sibling's words -- or a
+     successor some other entry already holds would leave one key in two places (both tables at
+     once, or a duplicate a lookup silently picks one of): such a re-key is a hand edit. *)
+  let final_keys =
+    List.map (tables.direct_evidence @ tables.catalogue_only) ~f:(fun entry ->
+        match List.find !rekeys ~f:(fun (rekeyed, _, _, _) -> phys_equal rekeyed entry) with
+        | Some (_, _, _, new_key) -> new_key
+        | None -> entry.key.value)
+  in
+  List.iter (List.rev !rekeys) ~f:(fun (entry, table, old_key, new_key) ->
+      if List.count final_keys ~f:(String.equal new_key) > 1 then
+        unresolved_f
+          "%s in `%s` would be re-keyed to %s, which another entry holds too: merge or drop the \
+           entries by hand"
+          old_key table new_key
+      else (
+        edits := (entry.key.start, entry.key.stop, quote new_key) :: !edits;
+        changes := Rekeyed { table; old_key; new_key } :: !changes));
   (* A control claim reworded: the label of a [raw_direct_evidence] entry names it verbatim. *)
   List.iter tables.direct_evidence ~f:(fun entry ->
       let value = entry.value.value in
@@ -382,7 +403,15 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
           (List.map renamed_claims ~f:fst @ unpaired_claims)
           ~f:(fun old -> String.mem old '%' && Scan.format_matches ~format:old label)
       in
+      let key_source =
+        Option.value_map (String.lsplit2 entry.key.value ~on:':') ~default:"" ~f:fst
+      in
       match List.Assoc.find !claims identity ~equal:String.equal with
+      | Some (source, format) when not (String.equal source key_source) ->
+          unresolved_f
+            "the claim %s's evidence names was reworded in another scanner's source, %s (it now \
+             reads %S): relabel the entry by hand"
+            entry.key.value source format
       | None when List.Assoc.mem external_renames identity ~equal:String.equal ->
           unresolved_f
             "the claim %s's evidence names was reworded outside the scanner sources (it now reads \
@@ -405,12 +434,12 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
              removal, so nothing pairs it with a successor: relabel or re-map the entry by hand"
             entry.key.value
       | None -> ()
-      | Some format when String.mem format '%' ->
+      | Some (_, format) when String.mem format '%' ->
           unresolved_f
             "the claim %s's evidence names was reworded into a format with substitutions (%S): \
              write the label it prints by hand"
             entry.key.value format
-      | Some format ->
+      | Some (_, format) ->
           edits := (entry.value.start, entry.value.stop, quote (format ^ suffix)) :: !edits;
           changes :=
             Relabeled { key = entry.key.value; old_label = label; new_label = format } :: !changes);
@@ -440,8 +469,17 @@ let apply text edits =
     moves: a golden row the rewording changes in any other way is a diff the confirming run shows.
     Without this the audit could never pass on the first run: its coverage claims read the goldens
     for the NEW markers, which only a run that passes would print. *)
-let rewrite_golden plan text =
-  if List.is_empty plan.markers && List.is_empty plan.claims then text
+let rewrite_golden ?sources plan text =
+  (* A claim row is the claim's own source's to rewrite: the same label in another source's golden
+     is another claim. [sources], when given, are the sources whose goldens [text] is. *)
+  let claims =
+    match sources with
+    | None -> plan.claims
+    | Some sources ->
+        List.filter plan.claims ~f:(fun (_, (source, _)) ->
+            List.mem sources source ~equal:String.equal)
+  in
+  if List.is_empty plan.markers && List.is_empty claims then text
   else
     let swap_markers line =
       if not (String.is_substring line ~substring:"[scanner-refusal:") then line
@@ -452,8 +490,8 @@ let rewrite_golden plan text =
     let swap_claim line =
       List.find_map [ ": true"; ": PASS" ] ~f:(fun suffix ->
           Option.bind (String.chop_suffix line ~suffix) ~f:(fun label ->
-              match List.Assoc.find plan.claims (identity_of label) ~equal:String.equal with
-              | Some format when not (String.mem format '%') -> Some (format ^ suffix)
+              match List.Assoc.find claims (identity_of label) ~equal:String.equal with
+              | Some (_, format) when not (String.mem format '%') -> Some (format ^ suffix)
               | _ -> None))
       |> Option.value ~default:line
     in

@@ -173,7 +173,11 @@ let () =
         &&
         let path = Stdlib.Filename.concat operations file in
         let golden = In_channel.read_all path in
-        let updated = Sync.rewrite_golden plan golden in
+        let sources =
+          List.filter_map catalogue ~f:(fun (source, goldens) ->
+              Option.some_if (List.mem goldens file ~equal:String.equal) source)
+        in
+        let updated = Sync.rewrite_golden ~sources plan golden in
         (not (String.equal golden updated))
         &&
         (if write then Out_channel.write_all path ~data:updated;
