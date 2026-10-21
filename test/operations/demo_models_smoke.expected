@@ -1,0 +1,14 @@
+multi_head_att_workshop output dims: 2x3x8
+multi_head_att_workshop output: every value is finite: true
+transformer_with_loss logits dims: 2x3x5
+transformer_with_loss logits: every value is finite: true
+transformer_with_loss loss dims: 1
+transformer_with_loss loss: every value is finite: true
+lenet logits dims: 2x10
+lenet logits: every value is finite: true
+sokoban_cnn action_logits dims: 2x4
+sokoban_cnn action_logits: every value is finite: true
+sokoban_cnn value dims: 2x1
+sokoban_cnn value: every value is finite: true
+mobile_cnn logits dims: 2x3
+mobile_cnn logits: every value is finite: true

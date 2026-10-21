@@ -98,13 +98,14 @@ let%op lenet ?(label = [ "lenet" ]) ?(out_channels1 = 6) ?(out_channels2 = 16) ?
     (* Final classification layer - output shape inferred from training data *)
     ({ w_logits } * x) + { b_logits = 0. }
 
-(** Simple CNN for Sokoban-like grid environments. Processes grid states with multiple conv layers
-    and outputs action logits. *)
+(** Simple CNN for Sokoban-like grid environments. Processes grid states with three conv layers of
+    32, 64 and 64 channels and outputs action logits and a value estimate. *)
 let%op sokoban_cnn ~label ?(num_actions = 4) () =
-  (* Process spatial features with conv layers *)
-  let conv1 = conv_bn_relu ~label:("conv1" :: label) ~kernel_size:3 () in
-  let conv2 = conv_bn_relu ~label:("conv2" :: label) ~kernel_size:3 () in
-  let conv3 = conv_bn_relu ~label:("conv3" :: label) ~kernel_size:3 () in
+  (* Process spatial features with conv layers. The widths are explicit: nothing downstream of a
+     conv's output channels (batch norm, global pooling, the heads' weights) determines them. *)
+  let conv1 = conv_bn_relu ~label:("conv1" :: label) ~kernel_size:3 ~out_channels:32 () in
+  let conv2 = conv_bn_relu ~label:("conv2" :: label) ~kernel_size:3 ~out_channels:64 () in
+  let conv3 = conv_bn_relu ~label:("conv3" :: label) ~kernel_size:3 ~out_channels:64 () in
   fun ~train_step ~grid_state ->
     let x = conv1 ~train_step grid_state |> conv2 ~train_step |> conv3 ~train_step in
 
