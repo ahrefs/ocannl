@@ -628,6 +628,7 @@ tools/mutation-run.sh parses: true
 tools/opam-env.sh parses: true
 tools/per-test-cap.sh parses: true
 tools/promote.sh parses: true
+tools/refusal-manifest-sync.sh parses: true
 tools/remote-verify.sh parses: true
 tools/replay-rules.sh parses: true
 tools/sweep-fingerprint.sh parses: true

@@ -109,9 +109,8 @@ let () =
     (List.equal String.equal
        (List.map synced.direct_evidence ~f:(fun e -> e.value.value))
        [ "a malformed tree is refused: true"; "the last claim keeps its words: true" ]);
-  p "a synced manifest plans nothing more"
-    (List.is_empty
-       (Sync.plan ~text:(Sync.apply text plan.edits) ~diagnostics_of ~renamed_claims:[]).edits);
+  p_empty "a synced manifest plans nothing more" ~over:plan.edits
+    (Sync.plan ~text:(Sync.apply text plan.edits) ~diagnostics_of ~renamed_claims:[]).edits;
   p "the plan names the row, the re-key and the relabel"
     (match plan.changes with
     | [ Row { source = "synthetic_scan.ml"; added; removed }; Rekeyed _; Relabeled _ ] ->
