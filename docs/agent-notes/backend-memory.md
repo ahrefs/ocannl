@@ -285,8 +285,9 @@ files.
   granule (seeded at the gate's estimate, refuted one byte below). A prediction prices each staged
   tile at the precision its `Stage` declares it at: the source operand's storage precision, not the
   accumulator's (the conv family's GPU leg priced both at the output's until gh-ocannl-1452, refusing
-  mixed-precision seeds that fit), and the conv leg also charges a masked flavor's accumulator
-  fragment, which `Tensorize`'s masked contraction places in workgroup memory on a staged pipeline
+  mixed-precision seeds that fit), and the conv leg also charges the accumulator fragment of a
+  flavor with a row or column pad (a reduction pad alone masks nothing: `Tensorize` discharges its
+  guard), which the masked contraction places in workgroup memory on a staged pipeline
   (`test/operations/workgroup_memory_accounting.ml`: every GPU conv seed kept at its built
   schedule's gate estimate, refused one byte below). With the gate exact, the one route to
   the link-time refusal is the test seam `Schedule.with_gate_capabilities`. Guards:

@@ -14,9 +14,10 @@
    precision, so a mixed-precision conv (f16 operands, f32 output, on a stand-in f16 x f16 -> f32
    tile) was charged double and refused seeds that fit. And under: a masked flavor (a pad multiple,
    or a row block not dividing the rows) places its accumulator fragment in workgroup memory beside
-   the tiles, which the leg did not charge. Over an unmasked conv (every extent a tile multiple) and
-   a masked one, every GPU conv seed, built and read by the gate's own estimate, is kept at a limit
-   of exactly that estimate and refused one byte below it: the prediction is the gate's charge, each
+   the tiles, which the leg did not charge (a reduction pad alone masks nothing, its guard being
+   discharged). Over an unmasked conv (every extent a tile multiple), a reduction-padded one and a
+   masked one, every GPU conv seed, built and read by the gate's own estimate, is kept at a limit of
+   exactly that estimate and refused one byte below it: the prediction is the gate's charge, each
    tile priced at its own operand's precision. *)
 
 open Base
@@ -253,8 +254,21 @@ let () =
     ~f:(fun (_, _, o) ->
       Set.for_all o.LL.workgroup_shared ~f:(fun tn ->
           match tn.Tn.label with "fragment" :: _ -> false | _ -> true));
-  (* 9 output rows and 4 input channels, padded to the tile: every flavor is masked, and its
-     accumulator fragment, at the f32 output precision, is workgroup-shared beside the tiles. *)
+  (* 16 output rows and 4 input channels: only the reduction pads, and [Tensorize] discharges that
+     guard (the padded operand slots are zeros), so the accumulator stays unmasked and no fragment
+     is workgroup-shared (Codex P2 on the first push charged one). *)
+  let k_padded =
+    conv_leg ~what:"reduction-padded" (lowering "wmem_conv_k" (make_conv "wmk" ~hw:18 ~ic:4))
+  in
+  p_all "reduction-padded: every flavor pads the reduction" k_padded ~f:(fun (p, _, _) ->
+      p.Autotune.sk_bk > 0);
+  p_all "reduction-padded: no flavor places its accumulator fragment in workgroup memory" k_padded
+    ~f:(fun (_, _, o) ->
+      Set.for_all o.LL.workgroup_shared ~f:(fun tn ->
+          match tn.Tn.label with "fragment" :: _ -> false | _ -> true));
+  (* 9 output rows and 4 input channels, padded to the tile: every flavor's accumulator is masked
+     (the row pad or the non-dividing row block), and its accumulator fragment, at the f32 output
+     precision, is workgroup-shared beside the tiles. *)
   let masked = conv_leg ~what:"masked" (lowering "wmem_conv_m" (make_conv "wmm" ~hw:11 ~ic:4)) in
   p_all "masked: every flavor places an f32 accumulator fragment in workgroup memory" masked
     ~f:(fun (_, _, o) ->

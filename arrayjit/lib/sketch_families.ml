@@ -3121,12 +3121,15 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                    [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). Each tile at its own
                    operand's storage precision, the precision [gpu_conv_sketch_schedule]'s [Stage]
                    (no [tile_prec]) declares it at: a mixed-precision site's narrow operand tiles
-                   are not priced at its wide accumulator (gh-ocannl-1452). A [masked] flavor (a pad
-                   multiple set, or a row block not dividing the rows) also places its accumulator
-                   fragment, [rows x noc_p] at the output's storage precision, in workgroup-shared
-                   memory ([Sched.contract_tensorized_accumulator]'s [shared_frag]: a staged
-                   pipeline under pad masks); an unmasked one keeps it in simdgroup fragments. *)
-                let shared_fits ?(copies = 1) ~masked rows =
+                   are not priced at its wide accumulator (gh-ocannl-1452). A flavor whose
+                   accumulator is masked ([acc_masked]: a column pad, or a row pad or row block not
+                   dividing the rows) also places its accumulator fragment, [rows x noc_p] at the
+                   output's storage precision, in workgroup-shared memory
+                   ([Sched.contract_tensorized_accumulator]'s [shared_frag]: a staged pipeline under
+                   pad masks); otherwise it stays in simdgroup fragments. A reduction pad alone
+                   masks nothing: [Tensorize] discharges its guard, the staged operands' padded
+                   slots being exact zeros. *)
+                let shared_fits ?(copies = 1) ~acc_masked rows =
                   match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
                   | Some cap ->
                       Sched.kernel_workgroup_bytes ~capabilities
@@ -3135,7 +3138,9 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                              copies * rows * nred_p * Ir.Ops.prec_in_bytes a_prec;
                              copies * nred_p * noc_p * Ir.Ops.prec_in_bytes b_prec;
                            ]
-                          @ if masked then [ rows * noc_p * Ir.Ops.prec_in_bytes d_prec ] else [])
+                          @
+                          if acc_masked then [ rows * noc_p * Ir.Ops.prec_in_bytes d_prec ] else []
+                          )
                         ~mma_triples:[ (d_prec, a_prec, b_prec) ]
                       <= cap
                   | None -> true
@@ -3170,14 +3175,16 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                               if String.equal r reason then (r, n + count) else (r, k))
                       | None -> !withheld @ [ (reason, count) ]
                   in
-                  (* A flavor whose [Tensorize] carries pad masks: any pad multiple set, or a row
-                     block that does not divide the row extent. *)
-                  let masked p0 =
-                    p0.sk_bn > 0 || p0.sk_bk > 0
+                  (* A flavor whose [Tensorize] masks the accumulator: a column pad, or a row pad or
+                     row block that does not divide the row extent. *)
+                  let acc_masked p0 =
+                    p0.sk_bn > 0
                     || if p0.sk_bm = 0 then p0.sk_tm > 0 else site.c_nrow % p0.sk_bm <> 0
                   in
+                  (* A flavor with any pad: the accumulator masks, or a reduction pad. *)
+                  let masked p0 = p0.sk_bk > 0 || acc_masked p0 in
                   let fits ?copies p0 rows =
-                    let ok = shared_fits ?copies ~masked:(masked p0) rows in
+                    let ok = shared_fits ?copies ~acc_masked:(acc_masked p0) rows in
                     if not ok then Int.incr mem_refused;
                     ok
                   in
