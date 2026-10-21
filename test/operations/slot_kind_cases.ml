@@ -392,12 +392,6 @@ let () =
  ; ocannl-backend: none -- links no backend in this fixture.
  (alias dyn) (action (dynamic-run ./d.exe)))|dune},
         "build @d/dyn" );
-      ( "an included dependency",
-        {dune|(alias (name inc) (deps (include deps.sexp)))|dune},
-        "build @d/inc" );
-      ( "an alias spelled through a pform",
-        {dune|(alias (name pf) (deps (alias %{env:A=x}/runtest)))|dune},
-        "build @d/pf" );
     ]
     ~f:(fun (what, dune, argv) ->
       let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
@@ -406,6 +400,35 @@ let () =
         (Printf.sprintf "%s off the list counts the configuration" what)
         (String.is_prefix shown ~prefix:"unknown: "
         || String.is_suffix shown ~suffix:" + reads config"));
+  (* A dependency the closure cannot follow -- an included dependency file, an alias spelled through
+     a pform, either wrapped in a sandbox -- leaves what it builds unread, its named backends
+     included: every backend, not merely the configuration (Codex review round 1 on
+     staging#1318). *)
+  List.iter
+    [
+      ( "an included dependency",
+        {dune|(alias (name inc) (deps (include deps.sexp)))|dune},
+        "build @d/inc" );
+      ( "an alias spelled through a pform",
+        {dune|(alias (name pf) (deps (alias %{env:A=x}/runtest)))|dune},
+        "build @d/pf" );
+      ( "a sandboxed included dependency",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias sbi) (deps (sandbox always) (:in (include deps.sexp))) (action (run %{dep:d.exe})))|dune},
+        "build @d/sbi" );
+    ]
+    ~f:(fun (what, dune, argv) ->
+      let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
+      printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
+      p
+        (Printf.sprintf "%s is every backend" what)
+        (String.is_prefix shown ~prefix:"unknown: "
+        && String.is_substring shown ~substring:"this cannot follow");
+      let _, beside = judge ~dune_files:[ ("d", dune); n ] "build @n/scans" in
+      p
+        (Printf.sprintf "%s is nothing to a batch not reaching it" what)
+        (String.equal beside "names nothing + reads config"));
   (* A rule producing what looks like a compilation product is no plain build. *)
   let _, lookalike =
     judge
@@ -512,6 +535,10 @@ let () =
         List.Assoc.remove base "test/operations" ~equal:String.equal,
         config_files,
         "no stanza carries it" );
+      ( "a listed alias with an included dependency",
+        replace "test/operations" {dune|(alias (name scans) (deps (include deps.sexp)))|dune} base,
+        config_files,
+        "(include deps.sexp) this cannot follow" );
       ( "a listed alias with a member it cannot follow",
         replace "test/operations"
           {dune|(alias (name scans) (deps (alias %{env:WHERE=x}/runtest)))|dune} base,

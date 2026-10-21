@@ -80,8 +80,9 @@ type stanza = {
       (** whether one of them is a file dune may build to compile or load anything *)
   needs : need list;
   unplaced : string list;
-      (** the [(alias …)] dependencies whose path this cannot resolve, so whose members the closure
-          does not follow; {!refusals} refuses one inside a checked closure *)
+      (** the dependencies whose members the closure cannot follow: an [(alias …)] whose path does
+          not resolve, and an [(include …)] of a dependency file. A batch reaching one is [Unknown],
+          and {!refusals} refuses one inside a checked closure *)
 }
 
 (** The aliases a stanza sits on, including the per-stanza one dune generates for a test and an
@@ -122,7 +123,9 @@ let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "
     - an [(alias …)]/[(alias_rec …)] anywhere in a dependency field (a stanza's [deps], an
       inline-test library's [(inline_tests (deps …))], [link_deps], ...), resolved against the
       stanza's directory, through the same attached-alias inventory the seeds use, generated
-      per-test aliases included; one whose path does not resolve is [unplaced];
+      per-test aliases included; one whose path does not resolve, and an included dependency file,
+      is [unplaced] -- a batch reaching one is [Unknown], every backend, since what it builds there
+      is unread;
     - a file: every atom anywhere in the stanza, and the payload of every path pform ([%{dep:…}],
       [%{read:…}], …), taken as a file it may need -- matched by BASENAME against every rule's
       targets in any directory, a pform elsewhere in the atom read as a wildcard, a [glob_files]
@@ -210,8 +213,10 @@ let rec dep_fields = function
   | Sexp.List l -> List.concat_map l ~f:dep_fields
 
 (** What a stanza's dependency fields need beyond its atoms -- the aliases they name and the globs
-    they match, found at any depth (inside a named binding or a [sandbox] too) -- and the alias
-    dependencies whose path this cannot resolve. *)
+    they match, found at any depth (inside a named binding or a [sandbox] too) -- and the
+    dependencies whose members this cannot follow: an alias whose path does not resolve, and an
+    included dependency file, whose specifications exist only once built (Codex review round 1 on
+    staging#1318). *)
 let dep_needs ~dir sexp =
   let rec item = function
     | Sexp.Atom _ -> ([], [])
@@ -221,6 +226,7 @@ let dep_needs ~dir sexp =
             let dir, alias = Option.value (String.rsplit2 p ~on:'/') ~default:("", p) in
             ([ Alias_need { dir; alias; recursive = String.equal h "alias_rec" } ], [])
         | None -> ([], [ Printf.sprintf "(%s %s)" h spec ]))
+    | Sexp.List [ Sexp.Atom "include"; Sexp.Atom file ] -> ([], [ "(include " ^ file ^ ")" ])
     | Sexp.List [ Sexp.Atom (("glob_files" | "glob_files_rec") as h); Sexp.Atom spec ] ->
         (* In the directory it names (and below, for [glob_files_rec]); every pform a wildcard, and
            a bare [*] kept -- it matches every target there (Codex review on PR #1027). *)
@@ -1018,15 +1024,29 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases
                            (spell t)
                            (if String.is_empty dir then "." else dir)))
               in
+              let found =
+                lazy
+                  (reached stanzas
+                     (List.filter_map targets ~f:(function
+                       | Alias { dir; alias; recursive } -> Some (dir, alias, recursive)
+                       | Product _ -> None)))
+              in
+              (* A dependency the closure cannot follow leaves what it builds unread: its named
+                 backends included, so counting the configuration does not cover it (Codex review
+                 round 1 on staging#1318). *)
+              let unmodelled =
+                match unmodelled with
+                | Some _ -> unmodelled
+                | None ->
+                    List.find_map (Lazy.force found) ~f:(fun s ->
+                        Option.map (List.hd s.unplaced) ~f:(fun form ->
+                            Printf.sprintf "%s, whose dependency %s this cannot follow" (describe s)
+                              form))
+              in
               match unmodelled with
               | Some why -> Unknown why
               | None ->
-                  let found =
-                    reached stanzas
-                      (List.filter_map targets ~f:(function
-                        | Alias { dir; alias; recursive } -> Some (dir, alias, recursive)
-                        | Product _ -> None))
-                  in
+                  let found = Lazy.force found in
                   let named =
                     List.concat_map found ~f:(fun s ->
                         let why =

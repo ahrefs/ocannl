@@ -164,10 +164,15 @@ build @d/se (a setenv'd backend)         names nothing + reads config
 a setenv'd backend off the list counts the configuration: true
 build @d/dyn (a dynamic-run)             names nothing + reads config
 a dynamic-run off the list counts the configuration: true
-build @d/inc (an included dependency)    names nothing + reads config
-an included dependency off the list counts the configuration: true
-build @d/pf (an alias spelled through a pform) names nothing + reads config
-an alias spelled through a pform off the list counts the configuration: true
+build @d/inc (an included dependency)    unknown: it reaches inc in d, whose dependency (include deps.sexp) this cannot follow
+an included dependency is every backend: true
+an included dependency is nothing to a batch not reaching it: true
+build @d/pf (an alias spelled through a pform) unknown: it reaches pf in d, whose dependency (alias %{env:A=x}/runtest) this cannot follow
+an alias spelled through a pform is every backend: true
+an alias spelled through a pform is nothing to a batch not reaching it: true
+build @d/sbi (a sandboxed included dependency) unknown: it reaches the rule on sbi in d, whose dependency (include deps.sexp) this cannot follow
+a sandboxed included dependency is every backend: true
+a sandboxed included dependency is nothing to a batch not reaching it: true
 build d/r.exe (a rule's .exe)            unknown: it builds d/r.exe, which no executable, test or library stanza in d declares (a rule could produce it)
 a rule-produced .exe is every backend, never a plain build: true
 the fixture tree passes every check: true
@@ -182,6 +187,9 @@ a listed alias reaching a reader through a file is refused: true
 a listed alias no stanza carries:
     the listed @test/operations/scans: no stanza carries it
 a listed alias no stanza carries is refused: true
+a listed alias with an included dependency:
+    the listed @test/operations/scans: it reaches scans in test/operations, whose dependency (include deps.sexp) this cannot follow
+a listed alias with an included dependency is refused: true
 a listed alias with a member it cannot follow:
     the listed @test/operations/scans: it reaches scans in test/operations, whose dependency (alias %{env:WHERE=x}/runtest) this cannot follow
 a listed alias with a member it cannot follow is refused: true
