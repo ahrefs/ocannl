@@ -2095,6 +2095,12 @@ val model_operand_loads :
     (gh-ocannl-1254): [Undescribed] where the backend describes no arm for some statement (every
     backend but CUDA). The walk keys only [Loads]. *)
 
+val scalar_blocktile : sketch_params -> bool
+(** The numerics-preserving candidate set the seeded untuned default draws from and
+    {!model_default}'s family search is restricted to where it starts from the seeded plan
+    (gh-ocannl-1324, gh-ocannl-1253): the unfused GPU scalar blocktile with no twin flavor. Exposed
+    for tests. *)
+
 val model_family_search :
   ?on_rejected:(unit -> unit) ->
   ?admit:(sketch_params -> bool) ->

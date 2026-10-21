@@ -5224,6 +5224,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name coalesce_numerics)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules coalesce_numerics)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name schedule_coalesce)
  (package neural_nets_lib)
  (deps
