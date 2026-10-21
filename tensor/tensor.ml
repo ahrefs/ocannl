@@ -190,6 +190,7 @@ type discarded_range = {
   lo : int;
   hi : int;
   uid_lo : int;
+  uid_hi : int;  (** Exclusive: nodes created after the rewind are never in the range. *)
   in_namespace : string;
   provenance : string;
 }
@@ -198,7 +199,7 @@ let discarded : discarded_range list ref = ref []
 
 let discarded_by (tn : Tn.t) =
   List.find !discarded ~f:(fun r ->
-      tn.id >= r.lo && tn.id < r.hi && tn.uid >= r.uid_lo
+      tn.id >= r.lo && tn.id < r.hi && tn.uid >= r.uid_lo && tn.uid < r.uid_hi
       && String.equal tn.Tn.namespace r.in_namespace)
 
 (* Marks only what it removes: a backprop code handed out before the forward-only run stays [Taken],
@@ -331,6 +332,9 @@ let check_operand_prec t prec =
 
 (** Sets the operands' precision; every operand is validated before any is written. *)
 let update_operands_prec ts prec =
+  (* Every refusal an operation would raise on these operands comes before the first write. *)
+  Shape.check_untainted ();
+  List.iter ts ~f:(check_not_discarded ~what:"operand");
   List.iter ts ~f:(fun t -> check_operand_prec t prec);
   List.iter ts ~f:(fun t ->
       if not (prec_update_is_noop t prec) then Row.note_mutation ();
@@ -1080,6 +1084,7 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
   (* Parameterization writes the value node (memory mode, ownership), the gradient and the shape's
      terminal constraints: a tensor whose inference is closed cannot become a parameter
      (gh-ocannl-1301), since a closed tensor's committed state does not change. *)
+  check_not_discarded ~what:("Tensor.param " ^ name) t;
   if t.shape.Shape.closed then
     raise
     @@ Session_error
@@ -1258,6 +1263,7 @@ let rewind_to_last_closure ?reason () =
         lo = mark;
         hi = session_state.next_id;
         uid_lo = checkpoint.ck_uid_mark;
+        uid_hi = !Tn.next_uid;
         in_namespace = Tn.get_current_namespace ();
         provenance;
       }

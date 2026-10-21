@@ -59,4 +59,7 @@ a seed created in the discarded span is dropped from the cache: true
 a slice role claimed by discarded work does not stick: the symbol can be an extent: true
 a slice role committed by a closure sticks: true
 a variable reference bound by discarded work is refused, naming the rewind: true
+a two-operand precision setter over a discarded operand is refused before writing the other: true
+a parameter whose initializer returns a discarded tensor is refused: true
+a node created after the rewind with a discarded id is not stale: true
 a seed replaced since the closure is restored to the closure's: true

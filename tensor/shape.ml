@@ -2217,8 +2217,11 @@ let fresh_proj_ids update =
     offset + Array.length dims
   in
   let fresh_shape (sh : t) =
-    set_rows sh ~batch:(Row.fresh_row_proj sh.batch) ~input:(Row.fresh_row_proj sh.input)
-      ~output:(Row.fresh_row_proj sh.output);
+    (* Mint in batch, input, output order (labelled arguments evaluate right to left). *)
+    let batch = Row.fresh_row_proj sh.batch in
+    let input = Row.fresh_row_proj sh.input in
+    let output = Row.fresh_row_proj sh.output in
+    set_rows sh ~batch ~input ~output;
     let locked =
       match Ir.Tnode.find ~id:sh.id with
       | Some tn when Lazy.is_val tn.Ir.Tnode.padding -> (

@@ -286,6 +286,31 @@ let retained_handles () =
     (refused_with
        (fun () -> Shape.set_dim a 3)
        ~substrings:[ "capture it afresh"; "rw: discarding a capture" ]);
+  let fresh = leaf "rw_fresh" [| 1.; 2.; 3. |] in
+  let fresh_prec = Ir.Tnode.get_specified_prec fresh.Tensor.value in
+  p "a two-operand precision setter over a discarded operand is refused before writing the other"
+    (refused_with
+       (fun () -> Ocannl.Operation.threefry4x32_crypto fresh x ())
+       ~substrings:[ discarded ]
+    && Option.equal Ir.Ops.equal_prec fresh_prec (Ir.Tnode.get_specified_prec fresh.Tensor.value));
+  let init ?label:_ ?top_down_prec:_ ?batch_dims:_ ?batch_axes:_ ?input_dims:_ ?output_dims:_
+      ?input_axes:_ ?output_axes:_ ?deduced:_ () =
+    x
+  in
+  p "a parameter whose initializer returns a discarded tensor is refused"
+    (refused_with (fun () -> Tensor.param ~t:init "rw_p" ()) ~substrings:[ discarded ]);
+  (* A low-level node created after the rewind, in the session namespace with an id inside the
+     discarded range (arrayjit clients choose their own ids), is not a discarded node. *)
+  let low =
+    Ir.Tnode.create (Ir.Tnode.Default Ir.Ops.single) ~id:x.Tensor.value.Ir.Tnode.id
+      ~label:[ "rw_lowlevel" ]
+      ~unpadded_dims:(lazy [| 1 |])
+      ~padding:(lazy None)
+      ()
+  in
+  p "a node created after the rewind with a discarded id is not stale"
+    (Result.is_ok
+       (outcome (fun () -> Option.iter !Ir.Tnode.validity_check ~f:(fun check -> check low))));
   let seed = Tensor.get_random_seed () in
   ignore (Shape.to_dims seed.Tensor.shape : int array);
   Tensor.set_random_seed ~seed:5 ();
