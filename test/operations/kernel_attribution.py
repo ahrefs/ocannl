@@ -368,6 +368,10 @@ with tempfile.TemporaryDirectory() as scratch:
     print("two runs of one build name the same kernels and join kernel for kernel: true")
     b = cell_of("cuda-gpt2_mini_train-keep-kprof1", b_writes, b_in,
                 [("step", [0, 1, 2, 3, 4]), ("gate", [5, 6])])
+    # The table lists written nodes in creation-uid order, which two builds need not share.
+    check(ka.stable_key("n12_max n11 tile__n5_tile_q") == ka.stable_key("n11 tile__n9_tile_k n12_max")
+          == "n11 n12_max", ka.stable_key("n12_max n11 tile__n5_tile_q"))
+    print("a written-node set keys the same in any order, minted staging aside: true")
     # By trace name A's step__seg2 is B's step__seg2, which is another kernel.
     check(ka.stable_key(run1[2]["writes"]) != ka.stable_key(b[2]["writes"]), str(b))
     pairs, left_a, left_b = ka.join(run1, b)

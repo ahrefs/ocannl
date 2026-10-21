@@ -472,9 +472,11 @@ def stable_key(writes):
     earlier site's staging changes. The trace's own names, `<routine>__seg<j>`, are stable between
     runs of one build -- every repeat of a cell names the same kernels -- but j shifts when a change
     adds or merges a segment anywhere before it, so they join runs of one build and nothing else.
-    A kernel that writes only minted nodes keys on them as they are."""
-    kept = [w for w in writes.split() if not MINTED.match(w)]
-    return " ".join(kept) if kept else writes
+    The names are sorted: the table lists them in creation-uid order (Tn.compare), which two builds
+    need not share. A kernel that writes only minted nodes keys on them, sorted, as they are."""
+    names = writes.split()
+    kept = [w for w in names if not MINTED.match(w)]
+    return " ".join(sorted(kept or names))
 
 
 def join(a, b):

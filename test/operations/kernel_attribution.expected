@@ -22,6 +22,7 @@ the report calls overlapping stamps of a serial step a stamping artifact: true
 a device span longer than the host wall time enclosing it is called a clock error: true
 the table carries each kernel's cost-model bytes and the in-step bandwidth they imply, a row without them dashes: true
 two runs of one build name the same kernels and join kernel for kernel: true
+a written-node set keys the same in any order, minted staging aside: true
 across builds the written nodes, minted staging set aside, join what the segment index no longer does, and name what is new or gone: true
 the report joins each other kernel list against base's, listing what moved, appeared or went: true
 a HIP cell reports its busy shader clock and power from the sysfs samples: true
