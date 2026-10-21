@@ -12,10 +12,13 @@ cut: the full search attempted more: true
 cut: the crown is the fastest window it timed: true
 cut: the crown is no slower than the untuned default it timed: true
 cut: the crowned routine computes the untuned output bit for bit: true
+cut: its report carries the budget it was cut against: true
 full: no budget, so the cut crown was not replayed and nothing was cut: true
+full: its report carries no budget: true
 full: the crowned routine computes the untuned output bit for bit: true
 warm: a budgeted call replays the cut crown, and says it was cut: true
 warm: the replayed routine computes the untuned output bit for bit: true
+warm: a replay's report carries its own call's budget: true
 after: the full search's store replaced the cut crown: true
 stores: not every store was refused: true
 floor: only the baseline and the untuned default were attempted: true

@@ -10175,6 +10175,19 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- a row sum seeds no sketch family; the claims compare the reports
+ ; with the seams' own calls and the progress lines.
+ ; gh-ocannl-1438: a report's privatize drops and the search_done line's new fields.
+ (name autotune_report_drops)
+ ; ocannl-backend: cc -- Context.cpu (); the injected refusals are backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_report_drops)
+ (libraries base ocannl stdio stderr_capture arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name autotune_sketch_placements)
  (package neural_nets_lib)
  (deps

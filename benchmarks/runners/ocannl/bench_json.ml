@@ -65,7 +65,9 @@ let string s =
     says. A replayed or disabled arm ran none either way. [budget_cut] says the arm's crown comes
     from a search its wall-clock budget cut ([autotune_budget_seconds], gh-ocannl-1409): this arm's
     own search, or for a replay the search that stored the entry ({!Autotune.report}'s
-    [budget_cut]).
+    [budget_cut]). [budget_s] is the budget the arm's call resolved, [null] for none
+    ({!Autotune.report}'s [budget_s], gh-ocannl-1438): a fact about the call, not the crown, so a
+    replay that a budget admitted says so.
 
     [timings_contended] is the number of timing windows refused because host contention dominated
     their samples (gh-ocannl-855). A nonzero count means the finite winner, if any, came from an
@@ -117,13 +119,14 @@ let decision_counts_object counts =
            Printf.sprintf {|"%s":{%s}|} (string settle) (String.concat ~sep:"," (cells settle))))
   ^ "}"
 
-let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~budget_cut
+let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~budget_cut ~budget_s
     ~timings_contended ~timings_unbatched ~timing_decisions ~best_ms ~best_label ~tensorized
     ~tensorization ~mma_statements ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms
     ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"budget_s":%s,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
     (string name) (string state) searched cache_hit (string timing) rounds_run beam_width budget_cut
+    (Option.value_map budget_s ~default:"null" ~f:(fun b -> num b))
     timings_contended timings_unbatched (num best_ms) (string best_label) tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
     mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)
@@ -146,18 +149,29 @@ let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~
     {!Autotune.tune} recompiles the winner in the production context and falls back to the untuned
     default when that replay is rejected or lands unparallelized. In both cases the arm describes a
     schedule that was discarded. [null] when the harness reported arms without recording it — which
-    reads as UNKNOWN downstream, never as a tensorized cell. *)
+    reads as UNKNOWN downstream, never as a tensorized cell.
+
+    [placement_replay] and [shipped_digest] are the rest of the shipped artifact's identity
+    ({!Train.shipped}, gh-ocannl-1438): whether the placement was the placement-decision store's
+    recorded decision, replayed, and the [source_digest] of the search whose compile shipped -- the
+    digest its schedule-cache entry is stored under, which a splice A/B (gh-ocannl-1277) matches
+    entries against. [null] when the harness recorded no ship, and the digest also when the shipped
+    search reported none. *)
 let mma_object = function
   | None -> "null"
   | Some (tensorization, statements, scalar_fallbacks) ->
       Printf.sprintf {|{"tensorization":"%s","statements":%d,"scalar_fallbacks":%d}|}
         (string tensorization) statements scalar_fallbacks
 
-let tune_object ~shipped ~searches ~replays ~no_searches ~shipped_mma ~arms =
+let tune_object ~shipped ?placement_replay ?shipped_digest ~searches ~replays ~no_searches
+    ~shipped_mma ~arms () =
   Printf.sprintf
-    {|{"shipped":"%s","searches":%d,"replays":%d,"no_searches":%d,"shipped_mma":%s,"arms":[%s]}|}
-    (string shipped) searches replays no_searches (mma_object shipped_mma)
-    (String.concat ~sep:"," arms)
+    {|{"shipped":"%s","placement_replay":%s,"shipped_digest":%s,"searches":%d,"replays":%d,"no_searches":%d,"shipped_mma":%s,"arms":[%s]}|}
+    (string shipped)
+    (Option.value_map placement_replay ~default:"null" ~f:Bool.to_string)
+    (Option.value_map shipped_digest ~default:"null" ~f:(fun d ->
+         Printf.sprintf {|"%s"|} (string d)))
+    searches replays no_searches (mma_object shipped_mma) (String.concat ~sep:"," arms)
 
 (** The [regime_knobs] object: where each key of the approximate profile's payload resolved from in
     this process, keyed by the setting's name -- [{"source":"default"}] for a key nothing set,

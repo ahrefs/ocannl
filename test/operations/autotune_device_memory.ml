@@ -246,7 +246,7 @@ let () =
           with_capacity ~peak ~capacity:room (fun () ->
               Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:cache_dir4
                 ~report:(fun r -> reports := r :: !reports)
-                ~on_ship:(fun what -> shipped := what :: !shipped)
+                ~on_ship:(fun s -> shipped := s.Train.ship_arm :: !shipped)
                 (Context.auto ()) t2 comp Ir.Indexing.Empty))
     in
     let reports = List.rev !reports in
@@ -322,7 +322,7 @@ let () =
                 ~report:(fun r ->
                   reports := r :: !reports;
                   if arm && List.length !reports = 2 then armed := true)
-                ~on_ship:(fun what -> shipped := what :: !shipped)
+                ~on_ship:(fun s -> shipped := s.Train.ship_arm :: !shipped)
                 (Context.auto ()) t2 comp Ir.Indexing.Empty))
     in
     (result, List.rev !reports, !shipped, !refused)

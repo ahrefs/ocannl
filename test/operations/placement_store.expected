@@ -28,11 +28,17 @@ the cold run records exactly one decision, whenever its evidence was clean: true
 a decision is never recorded over refused windows or a failed search: true
 the recorded decision is the shipped one: true
 the two arms report the distinct digests of the lowerings they tuned: true
+the cold run's ship is not a placement replay: true
+the cold run's ship names the routine it returned: true
+the cold run's ship carries the report of the search it shipped, in that search's position: true
 the recorded outcome digest is the shipped search's own source digest: true
 a fresh lowering of the recorded decision reproduces the digest the shipped search tuned: true
 the warm run's routine computes the right values: true
 the warm run replays the decision exactly when the cold run recorded one: one search, no flips: true
 a replay ships the recorded label: true
+the warm run's ship says it replayed the placement exactly when it ran the one search: true
+the warm run's ship names the routine it returned: true
+a replay's ship carries its one search's report: true
 a replay ships the recorded placement of the intermediate: true
 a replay's one search is a schedule-cache replay: true
 a replay's one search tunes the lowering the recorded decision was measured on: true
@@ -42,6 +48,7 @@ the entry the store holds is reproduced by a fresh lowering of its decision: tru
 the forced run's routine computes the right values: true
 a forced arm searches both arms whatever the store holds: true
 a forced arm ships the forced arm: true
+a forced arm's ship is not a placement replay: true
 a forced run leaves the recorded decision untouched: true
 the bypassed-store run's routine computes the right values: true
 a bypassed store compares both arms, in position, whatever the store holds: true
