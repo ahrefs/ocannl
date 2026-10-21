@@ -452,6 +452,47 @@ for entry in $WEIGH_SECRET; do
 done
 rm -f "$repo/tools/weigh-twin.sh"
 
+# merge-weights: one run's per-shard weigh lines -> the WEIGHTS block. The
+# lines sit wherever `gh run view --log` puts them (job and step columns, a
+# timestamp); a unit's shards are summed; @rest is the largest shard's beyond
+# the others' mean (their @rest is the overhead every shard pays); units
+# under 2 s are left to the default, counted on stderr.
+{
+  printf 'Build (ubuntu, main, 1/2)\tWeigh\t2026-10-21T10:00:00.1234567Z ci-shard-weight 1/3 heavy 100\n'
+  printf '2026-10-21T10:00:00.2Z ci-shard-weight 1/3 @rest 30\n'
+  printf 'ci-shard-weight 2/3 @rest 330\n'
+  printf 'ci-shard-weight 2/3 light 50\n'
+  printf 'ci-shard-weight 3/3 @rest 10\n'
+  printf 'ci-shard-weight 3/3 tiny 1\n'
+  printf 'ci-shard-weight 3/3 driver 3\n'
+  printf 'ci-shard-weight 1/3 driver 4.4\n'
+  printf 'unrelated ci-shard-weight-ish text\n'
+} >"$TMP/run.log"
+subject merge-weights "$TMP/run.log" >"$TMP/merge.out" 2>"$TMP/merge.err"
+merge_rc=$?
+ok=0
+[ "$merge_rc" = 0 ] || ok=1
+[ "$(cat "$TMP/merge.out")" = '@rest 310
+heavy 100
+light 50
+driver 7' ] || ok=1
+grep -q 'warning: driver ran in more than one shard' "$TMP/merge.err" || ok=1
+grep -q '3 shards; @rest overhead per shard 20s; 1 units under 2s, mean 1.0s' "$TMP/merge.err" || ok=1
+report $ok "merge-weights sums each unit's shards and nets @rest of the per-shard overhead" \
+  "exit $merge_rc; $(cat "$TMP/merge.out" "$TMP/merge.err")"
+[ "$(subject merge-weights <"$TMP/run.log" 2>/dev/null)" = "$(cat "$TMP/merge.out")" ]
+report $? "merge-weights reads stdin without a LOG"
+grep -v '^ci-shard-weight 3/3' "$TMP/run.log" >"$TMP/run-missing.log"
+refused "merge-weights: a shard missing from the run" 'no lines for shard\(s\) 3/3 of 3' \
+  subject merge-weights "$TMP/run-missing.log"
+{ cat "$TMP/run.log"; printf 'ci-shard-weight 1/2 heavy 9\n'; } >"$TMP/run-mixed.log"
+refused "merge-weights: shards of two Ns" 'mix shard counts' subject merge-weights "$TMP/run-mixed.log"
+{ cat "$TMP/run.log"; printf 'ci-shard-weight 2/3 light 49\n'; } >"$TMP/run-twice.log"
+refused "merge-weights: a unit twice in one shard" 'names light twice' subject merge-weights "$TMP/run-twice.log"
+printf 'no weights here\n' >"$TMP/run-none.log"
+refused "merge-weights: a log with no weigh lines" 'no ci-shard-weight lines' subject merge-weights "$TMP/run-none.log"
+refused "merge-weights: a missing log" 'usage' subject merge-weights "$TMP/no-such-log"
+
 # The fault-injected twins. Without the split-directory exclusion, @rest would
 # carry test/operations' own runtest and all; naming `default` instead of
 # `all`, it would carry dune's recursive implicit default. Either puts every
