@@ -101,6 +101,11 @@ type t = {
           (gh-ocannl-1301): a closed shape's rows (modulo projection ids), paddings and
           [padding_elem] no longer change -- a write that would change them raises before writing
           anything. Not part of the shape's value: dropped from sexps, ignored by [equal]. *)
+  mutable discarded_by : string option;
+      [@sexp_drop_if fun _ -> true] [@default None] [@equal.ignore]
+      (** Set by [Tensor.rewind_to_last_closure] on every open shape it discards, to the rewind's
+          provenance: a step over a discarded shape is refused before it is registered. Not part of
+          the shape's value. *)
   id : int;  (** A node that has the same shape as this shape, or [-1]. *)
   debug_name : string;
 }

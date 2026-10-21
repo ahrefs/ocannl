@@ -386,6 +386,12 @@ let buffer_of ~is_grad ~is_merge (t : t) : Asgns.buffer =
 let raw_accum ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~shape_logic
     ~(rhs : Asgns.accum_rhs) : Asgns.t =
   check_not_discarded ~what:"%cd assignment" t;
+  (* Everything that can refuse comes before the registration; the rest of a [%cd] assignment's
+     construction is a taint boundary like [Tensor.op]'s (gh-ocannl-1301). *)
+  let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
+  Shape.with_taint_on_failure ~describe:(fun exn ->
+      [%string "%cd assignment to %{Tn.debug_name lhs}: %{Shape.exn_summary exn}"])
+  @@ fun () ->
   let update_step =
     register_update_step
       ~neutral_elem:(Some (Ir.Ops.neutral_elem accum))
@@ -394,7 +400,6 @@ let raw_accum ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~shape_l
   let projections =
     make_projections ~shape:t.shape ~shape_logic ~get_step:(fun () -> update_step)
   in
-  let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   Asgns.Accum_op
     {
       initialize_neutral;
@@ -1093,6 +1098,12 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
               t.value}, whose shape inference is already closed; a parameter must be a tensor \
               built for it"],
            Some t );
+  (* Parameterization's writes, and the post-processing hook, are a taint boundary like
+     [Tensor.op]'s (gh-ocannl-1301). *)
+  Shape.with_taint_on_failure ~describe:(fun exn ->
+      let msg = match exn with Session_error (msg, _) -> msg | exn -> Shape.exn_summary exn in
+      [%string "parameterization of %{name}: %{msg}"])
+  @@ fun () ->
   Row.note_mutation ();
   (* Parameterization changes code ownership (and replaces the gradient program). Its handout state
      must not alias an initializer returned by a custom [t], which may already be Taken. Keep that

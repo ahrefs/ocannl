@@ -21,6 +21,7 @@ let outcome f =
   | exception Tensor.Session_error (msg, _) -> Error msg
   | exception Utils.User_error msg -> Error msg
   | exception Failure msg -> Error msg
+  | exception exn -> Error (Exn.to_string exn)
 
 let refused_with f ~substrings =
   match outcome f with
@@ -346,6 +347,45 @@ let retained_handles () =
     (Result.is_error failure
     &&
     match outcome (fun () -> NTDSL.O.relu (leaf "rw_after" [| 1. |])) with
+    | Error msg -> String.is_substring msg ~substring:tainted
+    | Ok () -> false);
+  Tensor.rewind_to_last_closure ();
+  (* A [%cd] assignment to the gradient of a tensor that has none is refused BEFORE its step is
+     registered: no phantom step constrains the open target afterwards. *)
+  let b2 = leaf "rw_b2" [| 1.; 2. |] in
+  ignore (Lazy.force b2.Tensor.value.Ir.Tnode.dims : int array);
+  let ng =
+    Tensor.term_init [| 1.; 2.; 3. |] ~label:[ "rw_ng" ] ~grad_spec:Tensor.Prohibit_grad ()
+  in
+  p "a %cd assignment to a missing gradient is refused"
+    (Result.is_error (outcome (fun () -> [%cd ng.grad =: b2])));
+  p "and leaves no step behind: the target's own shape still closes as its data says"
+    (match outcome (fun () -> Shape.to_dims ng.Tensor.shape) with
+    | Ok () -> Array.equal Int.equal (Shape.to_dims ng.Tensor.shape) [| 3 |]
+    | Error _ -> false);
+  (* A [%cd] assignment reading a discarded tensor into a live one is refused before registering,
+     and taints nothing. *)
+  let stale = leaf "rw_stale_src" [| 1.; 2. |] in
+  Tensor.rewind_to_last_closure ~reason:"rw: discarding a source" ();
+  p "a %cd assignment reading a discarded tensor is refused, naming the rewind"
+    (refused_with
+       (fun () -> [%cd b2 =: stale])
+       ~substrings:[ discarded; "rw: discarding a source" ]);
+  p "and the refusal taints nothing" (Result.is_ok (outcome (fun () -> NTDSL.O.relu b2)));
+  (* Parameterization is a taint boundary: a failing post-processing hook taints. *)
+  Tensor.rewind_to_last_closure ();
+  let saved_hook = !Tensor.param_postprocess in
+  (Tensor.param_postprocess := fun _ -> failwith "rw: param post-processing failed");
+  let init ?label ?top_down_prec:_ ?batch_dims:_ ?batch_axes:_ ?input_dims:_ ?output_dims:_
+      ?input_axes:_ ?output_axes:_ ?deduced:_ () =
+    Tensor.term_init [| 1.; 2. |] ?label ~grad_spec:Tensor.Prohibit_grad ~output_dims:[ 2 ] ()
+  in
+  let failed = outcome (fun () -> Tensor.param ~t:init "rw_pp" ()) in
+  Tensor.param_postprocess := saved_hook;
+  p "a failing parameter post-processing hook taints the session"
+    (Result.is_error failed
+    &&
+    match outcome (fun () -> NTDSL.O.relu b2) with
     | Error msg -> String.is_substring msg ~substring:tainted
     | Ok () -> false);
   Tensor.rewind_to_last_closure ()

@@ -36,6 +36,11 @@ type t = {
           (gh-ocannl-1301): a closed shape's rows (modulo projection ids), paddings and
           [padding_elem] no longer change -- a write that would change them raises before writing
           anything. Not part of the shape's value: dropped from sexps, ignored by [equal]. *)
+  mutable discarded_by : string option;
+      [@sexp_drop_if fun _ -> true] [@default None] [@equal.ignore]
+      (** Set by [Tensor.rewind_to_last_closure] on every open shape it discards, to the rewind's
+          provenance: a step over a discarded shape is refused before it is registered. Not part of
+          the shape's value. *)
   id : int;  (** A node that has the same shape as this shape. *)
   debug_name : string;
 }
@@ -1401,6 +1406,20 @@ let active_constraints = ref []
     until [Tensor.rewind_to_last_closure] discards everything opened since the last successful
     closure (or [Tensor.unsafe_reinitialize] resets the session). *)
 
+let iter_shapes update_step ~f =
+  f update_step.shape;
+  match update_step.logic with
+  | Terminal _ -> ()
+  | Transpose (_, sh1) -> f sh1
+  | Broadcast (_, sh1, sh2) ->
+      f sh1;
+      f sh2
+  | Broadcast_tern (_, sh1, sh2, sh3) ->
+      f sh1;
+      f sh2;
+      f sh3
+  | Block { rhses; _ } -> List.iter rhses ~f
+
 let taint : string option ref = ref None
 
 let tainted_message provenance =
@@ -1482,6 +1501,10 @@ let check_can_rewind () =
 
 let rewind_open_state ~provenance =
   check_can_rewind ();
+  (* Every open shape is in some active step (each construction registers one): mark them, so a
+     retained handle cannot bring one back into inference. *)
+  List.iter !active_update_steps ~f:(fun step ->
+      iter_shapes step ~f:(fun sh -> if not sh.closed then sh.discarded_by <- Some provenance));
   if !update_uid > !update_mark then
     discarded_updates := (!update_mark, !update_uid, provenance) :: !discarded_updates;
   update_mark := !update_uid;
@@ -1774,6 +1797,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
     output_padding = None;
     padding_elem = None;
     closed = false;
+    discarded_by = None;
     id = cur_sh.id;
     debug_name = "pspace:" ^ cur_sh.debug_name;
   }
@@ -2148,20 +2172,6 @@ let unsafe_reinitialize () =
   discarded_refs := [];
   Row.reset_transient ();
   Row.drop_symbol_roles ()
-
-let iter_shapes update_step ~f =
-  f update_step.shape;
-  match update_step.logic with
-  | Terminal _ -> ()
-  | Transpose (_, sh1) -> f sh1
-  | Broadcast (_, sh1, sh2) ->
-      f sh1;
-      f sh2
-  | Broadcast_tern (_, sh1, sh2, sh3) ->
-      f sh1;
-      f sh2;
-      f sh3
-  | Block { rhses; _ } -> List.iter rhses ~f
 
 let all_rows_w_origin update_step =
   let get_origin sh kind =
@@ -2846,6 +2856,16 @@ let apply_env_step env update_step =
 
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   check_untainted ();
+  (* Before anything is written: a step over a shape a rewind discarded (an operand, a [%cd] source
+     or target retained across it) is refused, and taints nothing. *)
+  iter_shapes update_step ~f:(fun sh ->
+      Option.iter sh.discarded_by ~f:(fun provenance ->
+          raise
+          @@ Row.Shape_error
+               ( [%string
+                   "the shape of #%{sh.id#Int} %{sh.debug_name} was discarded by the rewind after \
+                    %{provenance}; re-run its definition"],
+                 [] )));
   (* The step and its inequalities are registered before the solver runs: a solver failure leaves
      them registered against the old environment, so it taints the session (gh-ocannl-1301). *)
   with_taint_on_failure
@@ -3085,6 +3105,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
       output_padding = None;
       padding_elem = None;
       closed = false;
+      discarded_by = None;
     }
   in
   (match deduced with
@@ -3187,6 +3208,7 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
       output_padding = None;
       padding_elem = None;
       closed = false;
+      discarded_by = None;
     }
   in
   (match deduced with
