@@ -692,8 +692,9 @@ cell is the step: cite the step cell. Each issue's cell:
   longer than the host wall time enclosing it `CLOCK` (a time-base error). On rog (CUDA) and tuf
   (discrete gfx1102) the union equals the sum and the device span sits just under the step; on
   minix (unified gfx1151) rocprofv3 stamps batches of dispatches with one start, with or without
-  graph capture, so every minix cell reads `STAMPS` and only its per-kernel durations stand (see
-  the agent note's HIP entry, also for the 108% gh-ocannl-1392 once read on tuf). Each row carries the cost model's MB read/written (the kernel
+  graph capture, so every minix cell reads `STAMPS` and only its per-kernel durations stand. In
+  an exclusive tuf window the in-step medians sum to 90-92% of the traced step, so gh-ocannl-1392's
+  108% does not reproduce (the agent note's HIP entry has the numbers). Each row carries the cost model's MB read/written (the kernel
   table's `io:` field; `~` an upper bound, `?` code the model cannot see) and the in-step
   bandwidth they imply. Repeats of one build trace identical kernel names and are compared in the
   repeatability table; cells whose kernel lists differ (another treatment or revision, where every
