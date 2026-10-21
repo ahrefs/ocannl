@@ -339,7 +339,8 @@ cell is the step: cite the step cell. Each issue's cell:
   search started, it compiles nothing more beyond the untuned floors and crowns its incumbent. It
   stores that crown, marked as cut, when its timings were clean, so the tuned cell's replay pass
   under the same setting replays it. The result line says so: the arm's `budget_cut` is true on the
-  search pass and on the replay. Each placement arm is its own search, so a two-arm search pass
+  search pass and on the replay, and its `budget_s` is the budget that arm's call resolved
+  (gh-ocannl-1438; `null` for none). Each placement arm is its own search, so a two-arm search pass
   takes about twice S, plus the overrun: the candidate in flight, the floors, the winner's compile,
   and the base compile, which comes before the first check.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
@@ -1063,7 +1064,9 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
   parity configuration; the tuned variant tunes both that graph and the materialize-all
   graph (placement A/B) and keeps the faster one.
 - A tuned OCANNL cell's result line carries a `tune` object (gh-ocannl-546): `shipped` names the
-  arm whose artifact was kept, and each arm reports its crowned candidate's label, whether that
+  arm whose artifact was kept, `placement_replay` whether that placement was the placement store's
+  recorded decision, and `shipped_digest` the `source_digest` of the search whose compile shipped --
+  the schedule-cache entry a splice A/B matches (gh-ocannl-1438) -- and each arm reports its crowned candidate's label, whether that
   schedule tensorizes, how many of its `Tile_mma` statements were emitted and how many of those
   rendered as the lane-0 scalar fallback, the seeded/timed tensorized counts, and the best *timed*
   tensorized candidate's time.

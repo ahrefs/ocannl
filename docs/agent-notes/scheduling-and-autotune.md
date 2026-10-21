@@ -1086,8 +1086,11 @@ files.
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`
   for arm A first and ships the smaller `best_ms`), never the fact that some search crowned it.
   Since gh-ocannl-638, do not re-derive WHICH arm shipped from the reports' times either: config
-  `tune_ship_arm=a|b` overrides the comparison, and `?on_ship` (`"A"` / `"B"` / `"flip"`) is the
-  callback that says what actually shipped. That knob is what a measurement needs: the discarded
+  `tune_ship_arm=a|b` overrides the comparison, and `?on_ship` is the callback that says what
+  actually shipped: a `Train.shipped` record (gh-ocannl-1438) with the arm (`"A"` / `"B"` /
+  `"flip"`), whether the placement was a placement-store replay, the returned routine's name and
+  the report of the search whose compile shipped (its `source_digest` is the schedule-cache entry a
+  splice A/B must match; never infer it from the arm's position). That knob is what a measurement needs: the discarded
   arm is never executed against anything (`?report` carries timing metadata, `winner replay ok` is
   a dispatchability check, and a per-kernel harness times kernels on synthetic buffers without
   checking results), so profiling arm A while arm B ships leaves the profiled routine
@@ -2145,7 +2148,7 @@ files.
   (`test/operations/autotune_budget.ml`). On a small cc chain the default seed dedups against the
   baseline, so check the floor's TIME (`default_ms`), not its label. Every report carries the
   budget its call resolved (`budget_s`, gh-ocannl-1438) -- the call's, where a replay's
-  `budget_cut` is the crown's. It is deliberately not
+  `budget_cut` is the crown's -- and benchmark arms carry it as `budget_s`. It is deliberately not
   a `regime_knobs` key: those are numerics settings the orchestrator's regime gate holds to the
   cell's regime, and a budgeted exact cell would read as a leak.
 ## Scan-loop scheduling
