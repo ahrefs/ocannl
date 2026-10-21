@@ -7047,7 +7047,7 @@ let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
    [Partition] copies a body with its nested loop symbols, so one symbol can name a copy under
    uniform control and a copy under a lane-dependent guard (staging#1028 review round 2). The
    renderer meets a loop by its symbol, so every copy counts as uniform only when every copy is. *)
-type workgroup_reduce_form = Wr_scope_local of scope_id | Wr_cell
+type workgroup_reduce_form = Wr_scope_local of scope_id | Wr_cell of Tn.t
 
 type workgroup_reduce_site = {
   wr_index : Indexing.symbol;
@@ -7062,13 +7062,13 @@ type workgroup_reduce_site = {
    guard between -- [C_syntax.statement_accumulation] of [C_syntax.decide_accum_width], asked of the
    same peel. A single [Set] body reaches [peel_accum_nest]'s base directly, so no level, guard or
    loop bound enters the answer. *)
-let warp_reduce_cell_statement ~index (stmts : t list) =
+let warp_reduce_cell_statement ~index (stmts : t list) : Tn.t option =
   match stmts with
-  | [ (Set _ as st) ] -> (
+  | [ (Set { tn; _ } as st) ] -> (
       match peel_accum_nest ~loop_ranges:Affine.Loop_ranges.empty ~free_of:[ index ] st with
-      | Some (_, _, `Update _, _, _) -> true
-      | Some (_, _, `Scope _, _, _) | None -> false)
-  | _ -> false
+      | Some (_, _, `Update _, _, _) -> Some tn
+      | Some (_, _, `Scope _, _, _) | None -> None)
+  | _ -> None
 
 let workgroup_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : workgroup_reduce_site list =
   let axes = hardware_axes llc in
@@ -7133,11 +7133,14 @@ let workgroup_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : workgroup_
             }
             :: !sites
         in
-        match (axis, stmts) with
-        | Workgroup_reduce, [ Set_local (id, llsc) ]
+        let cell =
+          match axis with Workgroup_reduce -> warp_reduce_cell_statement ~index stmts | _ -> None
+        in
+        match (axis, stmts, cell) with
+        | Workgroup_reduce, [ Set_local (id, llsc) ], _
           when reassociable id.tn && Option.is_some (accum_local_update_parts ~id llsc) ->
             site (Wr_scope_local id)
-        | Workgroup_reduce, _ when warp_reduce_cell_statement ~index stmts -> site Wr_cell
+        | Workgroup_reduce, _, Some tn -> site (Wr_cell tn)
         | _ ->
             let lanes_diverge =
               Option.equal Poly.equal (hardware_kind_of_axis axis) (Some `Workgroup)
@@ -7185,7 +7188,7 @@ let lane_all_reduce_sites_of ~axes (sites : workgroup_reduce_site list) : lane_a
   let sites =
     List.filter_map sites ~f:(fun site ->
         match site.wr_form with
-        | Wr_cell -> None
+        | Wr_cell _ -> None
         | Wr_scope_local id ->
             Some
               {
@@ -7256,7 +7259,7 @@ let inserted_collectives ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc 
     let sites = workgroup_reduce_sites ~reassociable llc in
     let scope_sites =
       List.filter sites ~f:(fun site ->
-          match site.wr_form with Wr_scope_local _ -> true | Wr_cell -> false)
+          match site.wr_form with Wr_scope_local _ -> true | Wr_cell _ -> false)
     in
     let lane =
       List.filter_map
@@ -7277,7 +7280,7 @@ let inserted_collectives ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc 
     let cell =
       List.filter_map sites ~f:(fun site ->
           match site.wr_form with
-          | Wr_cell ->
+          | Wr_cell _ ->
               let ic_form, ic_uniform =
                 if site.wr_extent > warp_size then (Warp_reduce_partials, site.wr_uniform)
                 else (Warp_reduce_shuffle, site.wr_warp_uniform)
@@ -7286,6 +7289,19 @@ let inserted_collectives ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc 
           | Wr_scope_local _ -> None)
     in
     lane @ cell
+
+type warp_reduce_cell_site = { wrc_index : Indexing.symbol; wrc_extent : int; wrc_cell : Tn.t }
+
+(* gh-ocannl-1452: the cell-form entries of [inserted_collectives] with their cells, at every extent
+   (the backend's [warp_reduce_workgroup_bytes] says which extents stage partials): the statements
+   [C_syntax.try_warp_reduce] renders as a warp-shuffle tree, read by [Schedule]'s workgroup-memory
+   estimate. *)
+let warp_reduce_cell_sites ~(reassociable : Tn.t -> bool) (llc : t) : warp_reduce_cell_site list =
+  List.filter_map (workgroup_reduce_sites ~reassociable llc) ~f:(fun site ->
+      match site.wr_form with
+      | Wr_cell wrc_cell ->
+          Some { wrc_index = site.wr_index; wrc_extent = site.wr_extent; wrc_cell }
+      | Wr_scope_local _ -> None)
 
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2). A no-op
     for all-[Serial] code. Raises [Invalid_argument] on: annotated loops with [from_ <> 0]; more

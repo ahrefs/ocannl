@@ -294,8 +294,13 @@ files.
   converted-boundary coordinate table, 256 B once per kernel however many converted `Tile_mma`
   scopes (each `Unroll`/`Partition` copy is one) read it (gh-ocannl-1255; it was per scope). The
   renderer hands the prologue the triples of the emissions it accepted, the estimate those of every
-  `Tile_mma`, so the estimate is the upper bound. A new `threadgroup` or `__shared__`
-  declaration in a backend emitter needs the same route. Metal rounds each `threadgroup` array up
+  `Tile_mma`, so the estimate is the upper bound. Renderer-inserted collectives route the same way:
+  the lane all-reduce's `lred_partials_` (`lane_all_reduce_workgroup_bytes`, gh-ocannl-1168) and
+  the multi-warp warp-shuffle reduction into a cell's `wred_partials_`
+  (`warp_reduce_workgroup_bytes` over `Low_level.warp_reduce_cell_sites`, one slot per warp at the
+  cell's accumulator residency; the renderer checks its declaration against the capability,
+  gh-ocannl-1452). A new `threadgroup` or `__shared__` declaration in a backend emitter needs the
+  same route. Metal rounds each `threadgroup` array up
   to 4 bytes (measured, M4 Max: the driver's request for two odd `half` tiles is their rounded sum),
   so the estimate charges each array rounded to
   `codegen_capabilities.workgroup_allocation_alignment` (gh-ocannl-1330), through
@@ -306,7 +311,14 @@ files.
   rule and every context-holding caller); its tiles are multiples of 8 elements, so Metal's
   granule changes none of its verdicts today, and
   `test/operations/seeded_params_capabilities.ml` pins the threading with a coarser stand-in
-  granule (seeded at the gate's estimate, refuted one byte below). With the gate exact, the one route to
+  granule (seeded at the gate's estimate, refuted one byte below). A prediction prices each staged
+  tile at the precision its `Stage` declares it at: the source operand's storage precision, not the
+  accumulator's (the conv family's GPU leg priced both at the output's until gh-ocannl-1452, refusing
+  mixed-precision seeds that fit), and the conv leg also charges the accumulator fragment of a
+  flavor with a row or column pad (a reduction pad alone masks nothing: `Tensorize` discharges its
+  guard), which the masked contraction places in workgroup memory on a staged pipeline
+  (`test/operations/workgroup_memory_accounting.ml`: every GPU conv seed kept at its built
+  schedule's gate estimate, refused one byte below). With the gate exact, the one route to
   the link-time refusal is the test seam `Schedule.with_gate_capabilities`. Guards:
   `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; plus one
   converted scope they are refused at `Hardware_limits`) and

@@ -1297,9 +1297,12 @@ val workgroup_memory_bytes :
     Plus, per lane all-reduce site that stages per-simdgroup partials
     ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
     {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its extent at the larger of its
-    local's compute and accumulator precisions. Pass the compiling context's
-    [Context.codegen_capabilities]; the capability-free {!Backend_intf.no_codegen_capabilities}
-    counts the tiles alone. *)
+    local's compute and accumulator precisions. Plus, per warp-shuffle reduction into a cell
+    ([Low_level.warp_reduce_cell_sites], gh-ocannl-1452), the backend's
+    {!field:Backend_intf.warp_reduce_workgroup_bytes} for its extent at the accumulator residency of
+    the cell's storage precision: the per-warp partials its multi-warp form declares. Pass the
+    compiling context's [Context.codegen_capabilities]; the capability-free
+    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
 
 val thread_private_bytes : Low_level.optimized -> int
 (** The per-work-item scratch bytes the kernel will declare (gh-ocannl-1313): one function-scope

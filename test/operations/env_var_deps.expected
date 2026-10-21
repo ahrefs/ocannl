@@ -254,6 +254,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test tile_mma_geometry: Ir.Schedule.apply
   test/operations/dune, test tile_mma_narrow: Ir.Schedule.apply
   test/operations/dune, test vec_signed_zero: Ir.Schedule.apply
+  test/operations/dune, test workgroup_memory_accounting: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits
   test/operations/dune, test zero_elision: Ir.Schedule.maybe_default_schedules
   test/training/dune, test fused_classifier: Ir.Schedule.maybe_default_schedules
 

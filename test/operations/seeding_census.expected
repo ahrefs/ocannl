@@ -23,8 +23,8 @@ conv segment (GPU): the census's seeds are sketch_seed_params' list: true
 conv segment (GPU): each conv leg names a refusal exactly when it seeds nothing: true
 conv segment: an unzeroed site the GPU leg seeds: true
 conv segment: row blocks too large for the 9-row site are noted withheld: true
-conv segment (600-byte workgroup memory): the census's seeds are sketch_seed_params' list: true
-conv segment (600-byte workgroup memory): each conv leg names a refusal exactly when it seeds nothing: true
+conv segment (1000-byte workgroup memory): the census's seeds are sketch_seed_params' list: true
+conv segment (1000-byte workgroup memory): each conv leg names a refusal exactly when it seeds nothing: true
 a partial workgroup-memory refusal is noted beside the seeds: true
 conv merged gpu whole-routine: the census's seeds are sketch_seed_params' list: true
 conv merged gpu whole-routine: each conv leg names a refusal exactly when it seeds nothing: true
