@@ -415,21 +415,18 @@ files.
   `Split_reduce` — the split prelude is applied alone, before fission — so each segment's
   `Privatize` sees the split's loops as entry loops. Which hardware levels a backend serializes is
   codegen's fact, so the walk is asked vouching for none and for every one, and the op is refused
-  where the answers differ — the pattern `Low_level.seed_first_write` already used. After all ops
-  `apply_typed` re-checks each wide tile (`Schedule.privatized_tile_widens`) and falls it back to
-  storage where a later op left an update the decision does not widen (`Schedule.privatize_fallbacks`
-  records it) — BEFORE `simplify_llc`, which visits every `Set` and so forces the tile's precision,
-  after which `Tn.update_prec` can no longer change it; the finalized program is judged again and a
-  failure there is refused. The fallback is a safety net: the only op sequences that trip it put a
-  hardware-typed loop (`Retype`) or a tensor-node write (`Stage`'s loads) inside the scope a
-  materializing `Unroll`/`Partition` minted around the tile's update, programs compilation refuses
-  anyway (the renderer's hardware-axis table never holds a loop inside a scope body, which
-  `validate_parallel` also rejects; `validate_scope_bodies`); `privatize_recheck` pins both through
-  `apply`. Every other op keeps the update a widening accumulation: index rewrites map the write
-  and its self-read alike, the scope mints emit the grammar the peel re-reads, and no op rewrites
-  a contribution to read the tile. Hardware levels between
-  the privatized loop and the update are still refused outright, and an f32/f64 target never
-  reaches any of this. Do not reintroduce a schedule-side reconstruction of codegen's input: the
+  where the answers differ — the pattern `Low_level.seed_first_write` already used. After the
+  finalization passes `apply_typed` re-checks each wide tile (`Schedule.privatized_tile_widens`) and
+  REFUSES one whose update the decision no longer widens. It used to fall the tile back to storage
+  silently, but the only op sequences that tripped it (a hardware-typed loop or a tensor-node write
+  put into the scope a materializing `Unroll`/`Partition` minted around the update) are refused at
+  their own op since gh-ocannl-1467 (the scope grammar, scheduling-and-autotune.md), so the
+  re-check is a backstop no known sequence reaches, and a silent numerics change would hide a new
+  one. Every other op keeps the update a widening accumulation: index rewrites map the write and
+  its self-read alike, the scope mints emit the grammar the peel re-reads, and no op rewrites a
+  contribution to read the tile. Hardware levels inside the tile's lifetime are refused outright,
+  at the mint and at every later op of the same `apply`, and an f32/f64 target never reaches any
+  of the width logic. Do not reintroduce a schedule-side reconstruction of codegen's input: the
   rebuilt peel nest this replaced disagreed with codegen one shape at a time through eight review
   rounds (staging#880) and still did after them (a `k { i { acc[i] += .. } }` nest widened to 258
   where the serial rendering narrows to 256; a `Stage` from an earlier `apply` was classified away),

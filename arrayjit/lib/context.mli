@@ -220,9 +220,10 @@ val relink_outcome : retained -> (t * routine) Ir.Schedule_outcome.outcome
     [volatility] and [segments] as the compile that produced it, and a link failure classified like
     the compile's own (phase [Backend_link]). No codegen and no device compile: this is how a search
     that validated a cached schedule by compiling it, then released the compile, ships it without
-    compiling it twice. At most once per retained value ([Invalid_argument] on a second call);
-    refuses a {!release}d source context like {!compile}. A backend-level code cache composes with
-    it: the relink is the backend's own [link]. *)
+    compiling it twice. It passes the compile's frontend gate again (gh-ocannl-1301: a tainted
+    session or a discarded node refuses it). At most once per retained value ([Invalid_argument] on
+    a second call); refuses a {!release}d source context like {!compile}. A backend-level code cache
+    composes with it: the relink is the backend's own [link]. *)
 
 val backend_compiles : unit -> int
 (** How many backend compiles have completed on the calling domain (gh-ocannl-1440): each code

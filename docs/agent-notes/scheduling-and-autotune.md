@@ -837,6 +837,23 @@ files.
   renders; `fragment_scope_move_legality` relates each reason to the census's fallback count on a
   GPU. A trailing scope beside a hook-rendered first copy used to omit the fragment's local-array
   declaration (an untyped Metal compile failure); `unscoped_simdgroup_fragments` now keeps it.
+- The `Local_scope` grammar is the third scope with this treatment, and the only one APPLICATION
+  enforces (gh-ocannl-1467): a scope body is hoisted out of its position, so it holds no
+  hardware-annotated loop (`Low_level.scope_hardware_loop`, the predicate `validate_parallel` gates
+  on) and no effect beyond its own locals (`Low_level.scope_purity_violation`). The mints never
+  break it, but a LATER op can: a hardware `Retype`/`Split` of a loop the scope a materializing
+  `Unroll`/`Partition` minted holds, a `Stage` whose loads land there (even over a tile loop
+  OUTSIDE the scope, when the staged read sits inside it), a `Privatize` over such a loop.
+  `Schedule.apply_opt_op` checks the program every op leaves and refuses, typed and naming the op,
+  a violation the op ADDED (a malformed entry is the compile gates' to refuse, not the next op's);
+  the race queries alone called the `Grid` retype and the `Stage` legal. `scope_verdict` asks the
+  same of the single op, from one unchecked probe shared with the other two scopes, only where a
+  scope body holds a loop. The same post-op check re-judges every `Privatize` tile of the
+  application: no hardware-typed loop may sit inside its per-thread lifetime (between its
+  init-load and store-back) — the mint-time refusals, for the ops after the mint. That needs the
+  application's tile record, so a bare `op_legality` of one op does not see it (`Op_unknown`: the
+  tile is `Local` scratch, which `loops_independent` cannot prove illegal); `schedule_legality`
+  does. Compile gates stay as backstops. `privatize_recheck`.
 - Autotune fault injection keyed by ATTEMPT INDEX (`Autotune.on_candidate_attempt`) is
   backend-dependent and silently vacuous: how many attempts precede an arm's first *timed* candidate
   varies. On Metal a small matmul's materialize-all arm has a baseline binding no hardware dimension

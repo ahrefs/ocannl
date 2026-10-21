@@ -352,7 +352,7 @@ let uint4x32_to_prec_uniform ?grad_spec =
   ->
     (* Ignore what the caller says, since we must learn the precision from the outside. *)
     ignore (top_down_prec : bool option);
-    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tensor.update_operand_prec t1 Ir.Ops.uint4x32;
     let result =
       Tensor.unop (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
         ~transpose_op:(Uint4x32_to_prec (lazy (assert false)))
@@ -384,7 +384,7 @@ let uint4x32_to_prec_uniform1 ?grad_spec =
   ->
     (* Ignore what the caller says, since we must learn the precision from the outside. *)
     ignore (top_down_prec : bool option);
-    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tensor.update_operand_prec t1 Ir.Ops.uint4x32;
     let result =
       Tensor.unop
       (* The argument's shape must EQUAL the result's: with [Pointwise_un] the random bits tensor
@@ -471,8 +471,7 @@ let threefry4x32_crypto ?spec =
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   fun t1 t2 ->
-    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
-    Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
+    Tensor.update_operands_prec [ t1; t2 ] Ir.Ops.uint4x32;
     fun ?grad_spec
       ?label
       ?batch_dims
@@ -498,8 +497,7 @@ let threefry4x32_light ?spec =
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   fun t1 t2 ->
-    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
-    Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
+    Tensor.update_operands_prec [ t1; t2 ] Ir.Ops.uint4x32;
     fun ?grad_spec
       ?label
       ?batch_dims

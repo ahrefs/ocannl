@@ -120,12 +120,16 @@ let bump_next_id id = session_state.next_id <- max session_state.next_id (id + 1
 let get_next_id () = session_state.next_id
 let is_fwd_root t = Map.mem session_state.forward_roots t.value.id
 
+(* Root-map and handout changes count as session mutations (gh-ocannl-1301): a construction that
+   embedded a root and then failed has to be rewound. *)
 let remove_fwd_root t =
+  Row.note_mutation ();
   session_state.forward_roots <- Map.remove session_state.forward_roots t.value.id
 
 let is_bprop_root t = Map.mem session_state.backprop_roots t.value.id
 
 let remove_bprop_root t =
+  Row.note_mutation ();
   session_state.backprop_roots <- Map.remove session_state.backprop_roots t.value.id
 
 let take_forward_code t =
@@ -133,20 +137,96 @@ let take_forward_code t =
   t.consumption.fwd <- Taken;
   t.forward
 
+(** {2 Closure checkpoint and rewind (gh-ocannl-1301)}
+
+    [checkpoint] is recorded at the end of every successful [Shape.finish_inference] (through
+    [Shape.on_closure]): the id and uid marks, and the two root maps (persistent values, so a
+    pointer copy). Everything allocated since the mark is open work. [rewind_to_last_closure]
+    discards it: the ids from [mark] up to [next_id] go to [discarded], and every use of a discarded
+    tensor or node is refused with the rewind's provenance. *)
+
+(* Global singleton for random seed, used in init_params and random number generation *)
+let random_seed : t option ref = ref None
+
+type checkpoint = {
+  mutable ck_mark : int;
+  mutable ck_uid_mark : int;
+  mutable ck_fwd : t Map.M(Int).t;
+  mutable ck_bprop : t Map.M(Int).t;
+  mutable ck_count : int;  (** Closures recorded so far. *)
+  mutable ck_seed : t option;  (** The random-seed singleton at the closure. *)
+}
+
+let checkpoint =
+  {
+    ck_mark = 0;
+    ck_uid_mark = !Tn.next_uid;
+    ck_fwd = Map.empty (module Int);
+    ck_bprop = Map.empty (module Int);
+    ck_count = 0;
+    ck_seed = None;
+  }
+
+let record_checkpoint () =
+  checkpoint.ck_mark <- session_state.next_id;
+  checkpoint.ck_uid_mark <- !Tn.next_uid;
+  checkpoint.ck_fwd <- session_state.forward_roots;
+  checkpoint.ck_bprop <- session_state.backprop_roots;
+  checkpoint.ck_count <- checkpoint.ck_count + 1;
+  checkpoint.ck_seed <- !random_seed
+
+let () = Shape.on_closure := record_checkpoint
+
+(* An external handout of closed work (code given to a caller, or a backprop root dropped by a
+   forward-only run) is a closed-world act: record it in the checkpoint too, so a rewind never
+   resurrects a root whose code the caller holds. Embeddings by constructions are not recorded --
+   those constructions are what a rewind discards. *)
+let record_handout_in_checkpoint ~fwd t =
+  if t.value.id < checkpoint.ck_mark then
+    if fwd then checkpoint.ck_fwd <- Map.remove checkpoint.ck_fwd t.value.id
+    else checkpoint.ck_bprop <- Map.remove checkpoint.ck_bprop t.value.id
+
+type discarded_range = {
+  lo : int;
+  hi : int;
+  uid_lo : int;
+  uid_hi : int;  (** Exclusive: nodes created after the rewind are never in the range. *)
+  in_namespace : string;
+  provenance : string;
+}
+
+let discarded : discarded_range list ref = ref []
+
+let discarded_by (tn : Tn.t) =
+  List.find !discarded ~f:(fun r ->
+      tn.id >= r.lo && tn.id < r.hi && tn.uid >= r.uid_lo && tn.uid < r.uid_hi
+      && String.equal tn.Tn.namespace r.in_namespace)
+
 (* Marks only what it removes: a backprop code handed out before the forward-only run stays [Taken],
    so later consumption can still return the code rather than reject a discard that dropped
    nothing. *)
 let discard_backprop_code t =
   if is_bprop_root t then (
+    record_handout_in_checkpoint ~fwd:false t;
     remove_bprop_root t;
     t.consumption.bprop <- Discarded)
 
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
   let bprop_roots = session_state.backprop_roots in
+  let ck_fwd = checkpoint.ck_fwd and ck_bprop = checkpoint.ck_bprop in
+  let ck_count = checkpoint.ck_count in
   let finally () =
     session_state.forward_roots <- fwd_roots;
     session_state.backprop_roots <- bprop_roots;
+    (* Handouts inside [f] are undone, so their checkpoint records are too (gh-ocannl-1301); after a
+       closure inside [f], the restored maps are the closed state's roots. *)
+    if checkpoint.ck_count = ck_count then (
+      checkpoint.ck_fwd <- ck_fwd;
+      checkpoint.ck_bprop <- ck_bprop)
+    else (
+      checkpoint.ck_fwd <- fwd_roots;
+      checkpoint.ck_bprop <- bprop_roots);
     (* A root's code can only have been taken inside [f] if it was a root at entry, and a root is by
        construction not yet taken: restoring the maps restores the markers. *)
     Map.iter fwd_roots ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
@@ -157,9 +237,6 @@ let with_unchanged_roots ~f =
 let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
-
-(* Global singleton for random seed, used in init_params and random number generation *)
-let random_seed : t option ref = ref None
 
 let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
   let more_embedded = ref @@ Set.empty (module Tn) in
@@ -215,6 +292,61 @@ let session_error_printer = function
   | _ -> None
 
 let () = Stdlib.Printexc.register_printer session_error_printer
+
+let discarded_message (tn : Tn.t) r =
+  [%string
+    "tensor node %{Tn.debug_name tn} was discarded by the rewind after %{r.provenance}; re-run its \
+     definition"]
+
+(** Raises [Session_error] when [t] (its value or gradient node) was discarded by a rewind. Shared
+    with the explicit checkpoints of gh-ocannl-903. *)
+let check_not_discarded ~what t =
+  let nodes = t.value :: Option.value_map t.diff ~default:[] ~f:(fun d -> [ d.grad ]) in
+  List.iter nodes ~f:(fun tn ->
+      Option.iter (discarded_by tn) ~f:(fun r ->
+          raise @@ Session_error (what ^ ": " ^ discarded_message tn r, Some t)))
+
+(** Sets an operand's precision ahead of an operation that requires it (e.g. [uint4x32] bits). A
+    closed operand's precision is part of its committed state (gh-ocannl-1301): an update that would
+    change it is refused before writing; an equal one (or a settled precision, which
+    [Tn.update_prec] checks itself) passes. *)
+let prec_update_is_noop t prec =
+  let tn = t.value in
+  if Lazy.is_val tn.Tn.storage_prec then Ir.Ops.equal_prec (Lazy.force tn.Tn.storage_prec) prec
+  else
+    match tn.Tn.delayed_prec_unsafe with Tn.Specified p -> Ir.Ops.equal_prec p prec | _ -> false
+
+(* A settled precision cannot change either ([Tn.update_prec] would raise): validating it here keeps
+   a multi-operand update from writing one operand before another is refused. *)
+let check_operand_prec t prec =
+  let tn = t.value in
+  if (t.shape.Shape.closed || Lazy.is_val tn.Tn.storage_prec) && not (prec_update_is_noop t prec)
+  then
+    raise
+    @@ Session_error
+         ( [%string
+             "the operand %{Tn.debug_name tn} is closed (committed by an earlier \
+              finish_inference), but this operation would set its precision to \
+              %{Ir.Ops.prec_string prec}; build the operation before closing the operand"],
+           Some t )
+
+(** Sets the operands' precision; every operand is validated before any is written. *)
+let update_operands_prec ts prec =
+  (* Every refusal an operation would raise on these operands comes before the first write. *)
+  Shape.check_untainted ();
+  List.iter ts ~f:(check_not_discarded ~what:"operand");
+  List.iter ts ~f:(fun t -> check_operand_prec t prec);
+  List.iter ts ~f:(fun t ->
+      if not (prec_update_is_noop t prec) then Row.note_mutation ();
+      Tn.update_prec t.value prec)
+
+let update_operand_prec t prec = update_operands_prec [ t ] prec
+
+let () =
+  Tn.session_gate := Shape.check_untainted;
+  (* Installed only once something is discarded, so a session that never rewinds pays nothing. *)
+  Tn.validity_check := None
+
 let lazy_to_dims shape = lazy (Shape.to_dims shape)
 
 let fetch_zeros array shape =
@@ -253,6 +385,13 @@ let buffer_of ~is_grad ~is_merge (t : t) : Asgns.buffer =
 
 let raw_accum ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~shape_logic
     ~(rhs : Asgns.accum_rhs) : Asgns.t =
+  check_not_discarded ~what:"%cd assignment" t;
+  (* Everything that can refuse comes before the registration; the rest of a [%cd] assignment's
+     construction is a taint boundary like [Tensor.op]'s (gh-ocannl-1301). *)
+  let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
+  Shape.with_taint_on_failure ~describe:(fun exn ->
+      [%string "%cd assignment to %{Tn.debug_name lhs}: %{Shape.exn_summary exn}"])
+  @@ fun () ->
   let update_step =
     register_update_step
       ~neutral_elem:(Some (Ir.Ops.neutral_elem accum))
@@ -261,7 +400,6 @@ let raw_accum ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~shape_l
   let projections =
     make_projections ~shape:t.shape ~shape_logic ~get_step:(fun () -> update_step)
   in
-  let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   Asgns.Accum_op
     {
       initialize_neutral;
@@ -332,6 +470,13 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
                   last id #%{session_state.next_id - 1#Int} -- check your uses of \
                   Tensor.unsafe_reinitialize, if all your uses are valid, report this as a bug."],
                Some t ));
+  Shape.check_untainted ();
+  List.iter orig_ts ~f:(check_not_discarded ~what:"Tensor.op: operand");
+  let entry_id = session_state.next_id in
+  Shape.with_taint_on_failure ~describe:(fun exn ->
+      let msg = match exn with Session_error (msg, _) -> msg | exn -> Shape.exn_summary exn in
+      [%string "construction of #%{entry_id#Int} %{String.concat ~sep:\" \" label}: %{msg}"])
+  @@ fun () ->
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts =
     List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.value.id t2.value.id)
@@ -463,13 +608,15 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         tn
     | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding ()
   in
-  let update_infer_prec tn prec =
+  let update_infer_prec ti tn prec =
     (* Instead of just checking prec, we cross-check with dims (needed for code generation), to
-       catch prec forcing bugs. *)
-    if not (Lazy.is_val tn.Tn.dims) then Tn.update_infer_prec tn prec
+       catch prec forcing bugs. A closed operand takes no new links either (gh-ocannl-1301): its
+       committed state does not change after its closure, and a link from a consumer a rewind
+       discards would outlive it. *)
+    if not (Lazy.is_val tn.Tn.dims || ti.shape.Shape.closed) then (
+      Row.note_mutation ();
+      Tn.update_infer_prec tn prec)
   in
-  (* Apply delayed top-down precision updates to parameter subtensors *)
-  List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti.value v.Tn.storage_prec);
   let transpose_op =
     match transpose_op with
     | Uint4x32_to_prec _ -> Shape.Uint4x32_to_prec v.Tn.storage_prec
@@ -552,9 +699,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
                   [op_asn], before the operation's assignments (and so its neutral element) exist \
                   -- not supported, as it would finalize shape inference for the whole session \
                   mid-construction. The operation is not registered, but whatever else the \
-                  [op_asn] did before forcing stays in the session: fix the [op_asn] and \
-                  reinitialize the session (Tensor.unsafe_reinitialize) rather than reusing the \
-                  operands. If the [op_asn] is OCANNL's own, report this as a bug."],
+                  [op_asn] did before forcing stays in the session: fix the [op_asn] and rewind \
+                  the session (Tensor.rewind_to_last_closure) rather than reusing the operands. If \
+                  the [op_asn] is OCANNL's own, report this as a bug."],
                Some t )
   in
   let projections = make_projections ~shape ~shape_logic ~get_step in
@@ -569,8 +716,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     @@ Session_error
          ( [%string
              "Tensor.op: the [op_asn] of tensor #%{id#Int} forced its projections and caught the \
-              rejection; the operation cannot be built. Fix the [op_asn] and reinitialize the \
-              session (Tensor.unsafe_reinitialize) rather than reusing the operands."],
+              rejection; the operation cannot be built. Fix the [op_asn] and rewind the session \
+              (Tensor.rewind_to_last_closure) rather than reusing the operands."],
            Some t );
   let forward = Asgns.sequence @@ fwds @ [ this_op_asn ] in
   (* Extract the neutral element from THIS operation's assignments only, not the whole forward
@@ -578,6 +725,10 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
      conflicts. *)
   let neutral_elem = Asgns.collect_neutral_elem this_op_asn.asgns in
   update_step := Some (register_update_step ~neutral_elem ~shape ~shape_logic);
+  (* Apply delayed top-down precision updates to parameter subtensors. Deferred until the operation
+     is registered (gh-ocannl-1301): a construction that fails before that leaves no link on its
+     operands, so it does not taint the session. *)
+  List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti ti.value v.Tn.storage_prec);
   let forward =
     Asgns.
       { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
@@ -603,7 +754,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     (* Apply delayed top-down precision updates to parameter gradient subtensors *)
     List.iter top_down_ts ~f:(fun ti ->
-        Option.iter ti.diff ~f:(fun d -> update_infer_prec d.grad g.Tn.storage_prec));
+        Option.iter ti.diff ~f:(fun d -> update_infer_prec ti d.grad g.Tn.storage_prec));
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.value.id in
     let zero_grads =
       let zero_g ti =
@@ -670,7 +821,13 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     let diff = Some { grad = g; zero_grads; backprop = Asgns.empty_comp } in
     let t = { t with diff } in
-    let backprop = Asgns.sequence @@ (grad_asn ~t ~g ~projections :: bcks) in
+    (* [grad_asn] runs inside the construction window too: the operands' roots are already removed
+       and the result's not yet installed, so a closure here would checkpoint an incomplete graph
+       (gh-ocannl-1301). *)
+    let backprop =
+      Asgns.sequence
+      @@ (Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) :: bcks)
+    in
     let backprop =
       {
         Asgns.asgns = backprop.asgns;
@@ -890,6 +1047,7 @@ let force_param_diff t =
     }
   in
   let t = { t with diff = Some diff } in
+  Row.note_mutation ();
   session_state.backprop_roots <- Map.set session_state.backprop_roots ~key:t.value.id ~data:t;
   t
 
@@ -928,6 +1086,25 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
       ?top_down_prec:(Some true) ?batch_dims:(Some []) ?batch_axes:None ?input_dims ?output_dims
       ?input_axes ?output_axes ?deduced ()
   in
+  (* Parameterization writes the value node (memory mode, ownership), the gradient and the shape's
+     terminal constraints: a tensor whose inference is closed cannot become a parameter
+     (gh-ocannl-1301), since a closed tensor's committed state does not change. *)
+  check_not_discarded ~what:("Tensor.param " ^ name) t;
+  if t.shape.Shape.closed then
+    raise
+    @@ Session_error
+         ( [%string
+             "Tensor.param %{name}: the initializer returned #%{t.value.id#Int} %{Tn.debug_name \
+              t.value}, whose shape inference is already closed; a parameter must be a tensor \
+              built for it"],
+           Some t );
+  (* Parameterization's writes, and the post-processing hook, are a taint boundary like
+     [Tensor.op]'s (gh-ocannl-1301). *)
+  Shape.with_taint_on_failure ~describe:(fun exn ->
+      let msg = match exn with Session_error (msg, _) -> msg | exn -> Shape.exn_summary exn in
+      [%string "parameterization of %{name}: %{msg}"])
+  @@ fun () ->
+  Row.note_mutation ();
   (* Parameterization changes code ownership (and replaces the gradient program). Its handout state
      must not alias an initializer returned by a custom [t], which may already be Taken. Keep that
      original initializer replayable while the parameter starts with fresh ownership. *)
@@ -978,9 +1155,14 @@ let not_a_root_reason ~(handout : handout) ~what ~name t =
          first-constructed consumer); consume that consumer instead"]
 
 let consume_forward_code t =
+  Shape.check_untainted ();
+  check_not_discarded ~what:"Tensor.consume_forward_code" t;
   (* Handing out the same immutable comp is equivalent to the caller retaining it. In particular,
      roots built since the first handout must neither veto replay nor be consumed by it. *)
-  if equal_handout t.consumption.fwd Taken then t.forward
+  if equal_handout t.consumption.fwd Taken then (
+    (* Taken by an embedding (e.g. [%cd]) and now handed out: a handout all the same. *)
+    record_handout_in_checkpoint ~fwd:true t;
+    t.forward)
   else (
     if not @@ is_fwd_root t then
       raise
@@ -1005,9 +1187,12 @@ let consume_forward_code t =
                {|Tensor.consume_forward_code for %{debug_name t}:
 found conflicting roots with shared non-embedded descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_name conflicting_roots}|}],
              Some t );
+    record_handout_in_checkpoint ~fwd:true t;
     take_forward_code t)
 
 let consume_backprop_code t =
+  Shape.check_untainted ();
+  check_not_discarded ~what:"Tensor.consume_backprop_code" t;
   let diff =
     Option.value_or_thunk t.diff ~default:(fun () ->
         raise
@@ -1016,7 +1201,9 @@ let consume_backprop_code t =
                ^ debug_name t,
                Some t ))
   in
-  if equal_handout t.consumption.bprop Taken then diff.backprop
+  if equal_handout t.consumption.bprop Taken then (
+    record_handout_in_checkpoint ~fwd:false t;
+    diff.backprop)
   else (
     if not @@ is_bprop_root t then
       raise
@@ -1045,6 +1232,7 @@ let consume_backprop_code t =
                {|Tensor.consume_backprop_code for %{debug_grad t}:
 found conflicting roots with shared non-embedded grad descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_grad conflicting_roots}|}],
              Some t );
+    record_handout_in_checkpoint ~fwd:false t;
     remove_bprop_root t;
     t.consumption.bprop <- Taken;
     diff.backprop)
@@ -1066,13 +1254,64 @@ let rec get_random_seed () =
 
 let with_saved_random_seed f =
   let saved = !random_seed in
-  Exn.protectx ~f ~finally:(fun () -> random_seed := saved) ()
+  let ck_count = checkpoint.ck_count in
+  Exn.protectx ~f
+    ~finally:(fun () ->
+      random_seed := saved;
+      (* A closure inside [f] checkpointed [f]'s scoped seed: the restored one is the closed state's
+         (gh-ocannl-1301). *)
+      if checkpoint.ck_count <> ck_count then checkpoint.ck_seed <- saved)
+    ()
+
+let install_validity_check () =
+  Tn.validity_check :=
+    if List.is_empty !discarded then None
+    else
+      Some
+        (fun tn ->
+          Option.iter (discarded_by tn) ~f:(fun r ->
+              raise @@ Session_error (discarded_message tn r, None)))
+
+let rewind_to_last_closure ?reason () =
+  Shape.check_can_rewind ();
+  let provenance =
+    match Shape.taint_provenance () with
+    | Some provenance -> provenance
+    | None -> Option.value reason ~default:"an explicit Tensor.rewind_to_last_closure"
+  in
+  let mark = checkpoint.ck_mark in
+  if session_state.next_id > mark then (
+    discarded :=
+      {
+        lo = mark;
+        hi = session_state.next_id;
+        uid_lo = checkpoint.ck_uid_mark;
+        uid_hi = !Tn.next_uid;
+        in_namespace = Tn.get_current_namespace ();
+        provenance;
+      }
+      :: !discarded;
+    install_validity_check ());
+  (* The closure's roots, wholesale: a root a discarded construction embedded (via [Tensor.op] or
+     [%cd]'s [take_forward_code]) is a root again, with its handout marker reset; external handouts
+     of closed work were recorded in the checkpoint as they happened. *)
+  session_state.forward_roots <- checkpoint.ck_fwd;
+  session_state.backprop_roots <- checkpoint.ck_bprop;
+  Map.iter checkpoint.ck_fwd ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
+  Map.iter checkpoint.ck_bprop ~f:(fun t -> t.consumption.bprop <- Not_handed_out);
+  (* The seed singleton as it was at the closure: one created since is dropped, one replaced since
+     ([set_random_seed]) comes back. *)
+  random_seed := checkpoint.ck_seed;
+  Shape.rewind_open_state ~provenance;
+  record_checkpoint ()
 
 let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : unit =
   Tn.set_current_namespace namespace;
   session_state.next_id <- 0;
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);
+  discarded := [];
+  install_validity_check ();
   param_postprocess := Fn.id;
   random_seed := None;
   Tn.Registry.clear Tn.registry;
@@ -1082,7 +1321,8 @@ let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : uni
   (* The rewrite tier's members memoize the scope-local nodes they mint per source node, so that
      sibling lowerings share one analysis-cache key; the memo retains them like the cache does. *)
   Ir.Rewrites.reset ();
-  Shape.unsafe_reinitialize ()
+  Shape.unsafe_reinitialize ();
+  record_checkpoint ()
 
 let header t =
   let v_dims_s = Tn.dims_to_string t.value in
@@ -1104,7 +1344,12 @@ let header t =
    When no context is supplied, or the node is not present in the context, a placeholder is shown
    instead of the values. *)
 let optional_payload ?ctx ~present ~missing v =
-  match Option.bind ctx ~f:(fun ctx -> try Some (Context.to_host ctx v) with _ -> None) with
+  match
+    Option.bind ctx ~f:(fun ctx ->
+        try Some (Context.to_host ctx v) with
+        | Session_error _ as stale -> raise stale (* A discarded node, gh-ocannl-1301. *)
+        | _ -> None)
+  with
   | Some nd -> present nd
   | None ->
       let tag = if Option.is_none ctx then "<no-context>" else "<not-in-context>" in
@@ -1116,6 +1361,7 @@ type array_print_style =
 
 let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ?ctx
     ~with_shape ~with_id ~with_value ~with_grad t =
+  check_not_discarded ~what:"Tensor printing" t;
   (* First scan to identify which tensors appear embedded anywhere *)
   let tensors_with_embedded_occurrence = Hash_set.create (module Int) in
   let rec scan_for_embedded { subtensor = t; embedded } =
@@ -1399,6 +1645,7 @@ let print ?here ?(force = false) ?ctx ~with_grad ~with_code ?(with_low_level = f
     (style : array_print_style) t =
   Option.iter here ~f:(fun here ->
       Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
+  check_not_discarded ~what:"Tensor.print" t;
   let doc = to_doc ?ctx ~force ~with_grad ~with_code ~with_low_level style t in
   PPrint.ToChannel.pretty 0.7 100 Stdio.stdout doc;
   Stdio.Out_channel.flush Stdio.stdout

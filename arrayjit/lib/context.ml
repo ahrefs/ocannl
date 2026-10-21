@@ -306,6 +306,9 @@ type retained = {
   rt_comp : Asgns.comp;
   rt_census : census;
   rt_link : unit -> (Backends.wrapped_context * link_payload) Ir.Schedule_outcome.outcome;
+  rt_gate : unit -> unit;
+      (** The compile's frontend gate (gh-ocannl-1301), which a relink passes again: the session or
+          a node may have been discarded since the code was compiled. *)
   rt_relinked : bool Atomic.t;
 }
 
@@ -445,6 +448,20 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
   (* Raised, not returned as an outcome: a dead handle is the caller's error, not a property of any
      candidate, and no search over it can succeed. *)
   check_live ~fn:"compile" ctx;
+  (* The frontend's session gate and stale-node check (gh-ocannl-1301): a tainted inference session
+     compiles nothing, and no program reaches the backend over a node the frontend discarded. *)
+  let frontend_gate () =
+    !Tn.session_gate ();
+    Option.iter !Tn.validity_check ~f:(fun check ->
+        let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
+        Set.iter
+          (Set.union_list (module Tn) [ read; written; comp.Ir.Assignments.embedded_nodes ])
+          ~f:check;
+        (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
+        Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
+            Hashtbl.iter_keys p.traced_store ~f:check))
+  in
+  frontend_gate ();
   (* Compile and link on the backend context; only backend-independent routine components (and the
      rewrapped context) escape the dispatch. Unwrapped rather than through [Backends.with_backend]
      so that a [retain]ed link (gh-ocannl-1440) can rewrap the context it links later. *)
@@ -493,12 +510,14 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
                     (fun () ->
                       Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure
                         ~provenance ~phase:Ir.Schedule_outcome.Backend_link ?candidate (link code));
+                  rt_gate = frontend_gate;
                   rt_relinked = Atomic.make false;
                 });
           Ok (finish_link ctx comp wrapped payload census))
 
 let relink_outcome rt =
   check_live ~fn:"relink" rt.rt_ctx;
+  rt.rt_gate ();
   if not (Atomic.compare_and_set rt.rt_relinked false true) then
     invalid_arg "Context.relink_outcome: this retained code was already relinked";
   match rt.rt_link () with
@@ -833,6 +852,7 @@ let copy_nd (src : Nd.t) : Nd.t =
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
   check_live ~fn:"to_host" ctx;
+  Option.iter !Tn.validity_check ~f:(fun check -> check tn);
   check_not_poisoned ctx;
   (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice
      owns no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run.
@@ -901,6 +921,7 @@ let to_host ctx (tn : Tn.t) : Nd.t =
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
   check_live ~fn:"from_host" ctx;
+  Option.iter !Tn.validity_check ~f:(fun check -> check tn);
   check_not_poisoned ctx;
   (* Reject direct host writes to an [\@|] slice view (gh-ocannl-293 293a). Critically, [slice_of]
      is set eagerly at construction, so this fires even when the slice has not been lowered yet and

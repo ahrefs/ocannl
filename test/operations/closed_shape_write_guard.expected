@@ -1,0 +1,16 @@
+compiled operand: a padded convolution over it is refused: true
+compiled operand: its rows, paddings and padding neutral are unchanged: true
+compiled operand: after the rewind, a valid consumer compiles and runs: true
+the closed operand's node was never forced: true
+closed, uncompiled operand: a padded convolution over it is refused: true
+closed, uncompiled operand: its rows, paddings and padding neutral are unchanged: true
+closed, uncompiled operand: after the rewind, a valid consumer compiles and runs: true
+a second padded consumer of a closed, already-padded operand runs (equal writes): true
+a pointwise consumer of the closed operand runs (equal row writes): true
+a uint4x32 operation over a closed float operand is refused: true
+the operand's precision is unchanged: true
+a two-operand uint4x32 operation with a closed float operand is refused: true
+and its open operand's precision was not written either: true
+with a compiled (settled-precision) float operand too, before writing the open one: true
+the refusal did not taint the session: true
+a parameter whose initializer returns a closed tensor is refused: true
