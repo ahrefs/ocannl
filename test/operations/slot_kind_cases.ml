@@ -445,6 +445,25 @@ let () =
           p
             (Printf.sprintf "%s beside %s is every backend" argv what)
             (String.is_prefix shown ~prefix:"unknown: ")));
+  (* A long-form copy_files attaches its copies to an alias: the alias builds what they copy (Codex
+     review round 4 on staging#1318). *)
+  let _, copied_on_alias =
+    judge
+      ~dune_files:
+        [
+          ( "g2",
+            {dune|(rule
+ ; ocannl-backend: cuda -- names the CUDA backend by name in this fixture.
+ (target probe.actual)
+ (action (with-stdout-to %{target} (run ./gpu_tool))))|dune}
+          );
+          ("test/operations", {dune|(copy_files (alias scans) (files ../../g2/*.actual))|dune});
+        ]
+      "build @test/operations/scans"
+  in
+  printf "%-40s %s\n" "build @test/operations/scans (a copy_files on it)" copied_on_alias;
+  p "a copy_files attached to a listed alias reaches what it copies"
+    (String.equal copied_on_alias "names cuda");
   (* A rule producing what looks like a compilation product is no plain build. *)
   let _, lookalike =
     judge
@@ -635,6 +654,28 @@ let () =
           base,
         "hipcfg/ocannl_config" :: config_files,
         "q_undeclared running in q, which reads the configuration in hipcfg" );
+      ( "a reader of an ambient configuration copied from elsewhere",
+        replace "test/config"
+          {dune|(subdir ambient (copy_files ../../../hipcfg/ocannl_config))|dune} base,
+        "hipcfg/ocannl_config" :: config_files,
+        "t_reader running in t, which reads the configuration in" );
+      ( "a reader of an ambient configuration with no producer",
+        List.Assoc.remove base "test/config" ~equal:String.equal,
+        config_files,
+        "t_reader running in t, which reads the configuration in test/config/ambient" );
+      ( "a listed alias carrying a copy of a reader's output",
+        replace "test/operations" {dune|(copy_files (alias scans) (files ../r/*.actual))|dune}
+          (( "r",
+             {dune|(copy_files (files ../test/config/ambient/ocannl_config))
+(executable (name probe) (modules probe))
+(rule
+ (target probe.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:probe.exe}))))|dune}
+           )
+          :: base),
+        config_files,
+        "the listed @test/operations/scans" );
       ( "a reader beside a checked-in configuration the runner does not resolve",
         replace "prof"
           {dune|(test (name p_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune} base,

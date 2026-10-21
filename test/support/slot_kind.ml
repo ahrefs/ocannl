@@ -412,10 +412,17 @@ let views_of ~dir ~named ~reads_config sexp =
     in
     let produced = targets_of sexp in
     let deps, unplaced = dep_needs ~dir sexp in
+    (* A long-form [copy_files] can attach its copies to an alias, which then builds them and so
+       what they copy (Codex review round 4 on staging#1318). *)
+    let copy_aliases =
+      if String.is_prefix head ~prefix:"copy_files" then
+        Option.value_map (Scan.field sexp "alias") ~default:[] ~f:(List.concat_map ~f:Scan.atoms)
+      else []
+    in
     {
       dir;
       role = Runs;
-      attached = attached_aliases sexp;
+      attached = attached_aliases sexp @ copy_aliases;
       sexp;
       named;
       reads_config;
@@ -1233,7 +1240,29 @@ let refusals ?(config_free = config_free_aliases) ~config_files dune_files =
                     Config_dep_resolution.root_normalized
                       (Stdlib.Filename.dirname (Config_dep_resolution.under into source)) )))
         in
-        let resolved = ambient_config_dir :: config_dirs in
+        (* The ambient copy is test/config's only while its exact producer stands, and it is the
+           producer's own output rather than a copy of anything (Codex review round 4 on
+           staging#1318). *)
+        let ambient_trusted =
+          List.exists stanzas ~f:(fun s ->
+              Poly.equal s.role Runs && ambient_augmentation ~dir:s.dir s.sexp)
+          && not
+               (List.exists copied_from ~f:(fun (into, _) -> String.equal into ambient_config_dir))
+        in
+        let resolved = if ambient_trusted then ambient_config_dir :: config_dirs else config_dirs in
+        (* The directories a configuration in [d] comes from, following copies of copies to where
+           they start; a cycle stops where it closes. *)
+        let rec origins ~seen d =
+          match
+            List.filter_map copied_from ~f:(fun (into, from) ->
+                Option.some_if (String.equal into d) from)
+          with
+          | [] -> [ d ]
+          | sources ->
+              List.concat_map sources ~f:(fun from ->
+                  if List.mem seen from ~equal:String.equal then [ from ]
+                  else origins ~seen:(from :: seen) from)
+        in
         (* A stanza declaring neither the variable nor a marker reads the configuration too, the
            widening way [backend_of_rule] reads it: [env_var_deps] fails it, but that may not have
            run yet (Codex review round 3 on staging#1318). *)
@@ -1270,14 +1299,7 @@ let refusals ?(config_free = config_free_aliases) ~config_files dune_files =
                        ^ ", with no checked-in configuration in reach: it reads the gitignored \
                           root one, or none")
                   | _, Some nearest -> (
-                      let sources =
-                        match
-                          List.filter_map copied_from ~f:(fun (into, from) ->
-                              Option.some_if (String.equal into nearest) from)
-                        with
-                        | [] -> [ nearest ]
-                        | sources -> sources
-                      in
+                      let sources = origins ~seen:[ nearest ] nearest in
                       match
                         List.find sources ~f:(fun d ->
                             not (List.mem resolved d ~equal:String.equal))

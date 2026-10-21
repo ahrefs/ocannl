@@ -186,6 +186,8 @@ build a/t_cfg.exe (beside a cram test)   unknown: the dune file in w carries a (
 build a/t_cfg.exe beside a cram test is every backend: true
 runtest c (beside a cram test)           unknown: the dune file in w carries a (cram …) stanza, which this does not read
 runtest c beside a cram test is every backend: true
+build @test/operations/scans (a copy_files on it) names cuda
+a copy_files attached to a listed alias reaches what it copies: true
 build d/r.exe (a rule's .exe)            unknown: it builds d/r.exe, which no executable, test or library stanza in d declares (a rule could produce it)
 a rule-produced .exe is every backend, never a plain build: true
 build @test/operations/scans (a reader inside the listed alias) names nothing + reads config
@@ -229,6 +231,15 @@ a reader beside a copy of a configuration the runner does not resolve is refused
 an undeclared stanza beside a copy of a configuration the runner does not resolve:
     the configuration: q_undeclared running in q, which reads the configuration in hipcfg: not one the runner resolves
 an undeclared stanza beside a copy of a configuration the runner does not resolve is refused: true
+a reader of an ambient configuration copied from elsewhere:
+    the configuration: t_reader running in t, which reads the configuration in hipcfg: not one the runner resolves
+a reader of an ambient configuration copied from elsewhere is refused: true
+a reader of an ambient configuration with no producer:
+    the configuration: t_reader running in t, which reads the configuration in test/config/ambient: not one the runner resolves
+a reader of an ambient configuration with no producer is refused: true
+a listed alias carrying a copy of a reader's output:
+    the listed @test/operations/scans: it reaches the rule producing probe.actual in r, which reads the configuration
+a listed alias carrying a copy of a reader's output is refused: true
 a reader beside a checked-in configuration the runner does not resolve:
     the configuration: p_reader running in prof, which reads the configuration in prof: not one the runner resolves
 a reader beside a checked-in configuration the runner does not resolve is refused: true
@@ -237,6 +248,8 @@ a reader run under a chdir out of its configuration's reach:
 a reader run under a chdir out of its configuration's reach is refused: true
 an ambient configuration appending more than the record:
     the configuration: it reaches the rule producing ocannl_config in test/config/ambient, which can write an ocannl_config
+an ambient configuration appending more than the record:
+    the configuration: t_reader running in t, which reads the configuration in test/config/ambient: not one the runner resolves
 an ambient configuration appending more than the record is refused: true
 a configuration generated elsewhere:
     the configuration: it reaches the rule producing ocannl_config in w, which can write an ocannl_config
