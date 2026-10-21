@@ -337,11 +337,13 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
 (* The tensorized pipelines through the real mma hook: an out projection at bf16 -- the one operand
    format the wmma backends and Metal all advertise in the uniform combination -- seeded against
    [Context.hardware_limits], executing one candidate per tensorized shape this site seeds
-   (unstaged, staged, batch-grid) under the 5% tolerance schedule_batched_mma uses for gfx1151's
-   not-exactly-rounded WMMA, and checking that the emitted source reaches the backend's intrinsic
-   rather than the scalar fallback. Where the device advertises no such tile (cc; an f32-only
-   capability) the leg is reported skipped; where it does, a shape the site fails to seed fails the
-   shape's claims (gh-ocannl-1115) -- the gate is the capability, never the seeds under test.
+   (unstaged, staged, batch-grid) and comparing it with the serial twin BITWISE -- the inputs keep
+   every partial sum exact in bf16 and every product of one sign, which is what makes gfx11's WMMA
+   exactly rounded (gh-ocannl-1420; the leg held a 5% tolerance until gh-ocannl-1432) -- and
+   checking that the emitted source reaches the backend's intrinsic rather than the scalar fallback.
+   Where the device advertises no such tile (cc; an f32-only capability) the leg is reported
+   skipped; where it does, a shape the site fails to seed fails the shape's claims (gh-ocannl-1115)
+   -- the gate is the capability, never the seeds under test.
 
    No pipelined-staged shape here: depth twins are seeded only for staged operands of at least 4
    bytes -- the async arms' element floor ([Autotune.sketch_params.sk_depth]) -- so a bf16 site
@@ -366,8 +368,11 @@ let bf16_leg ~tag ~build =
   in
   let shape_claims what =
     List.map
-      [ "compiles and runs"; "agrees with the serial twin"; "renders the tensor-core intrinsic" ]
-      ~f:(fun c -> tag ^ " bf16: the " ^ what ^ " candidate " ^ c)
+      [
+        "compiles and runs";
+        "agrees with the serial twin bitwise";
+        "renders the tensor-core intrinsic";
+      ] ~f:(fun c -> tag ^ " bf16: the " ^ what ^ " candidate " ^ c)
   in
   match capability with
   | `Withheld aggregation ->
@@ -380,7 +385,7 @@ let bf16_leg ~tag ~build =
       skipped (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor");
       List.iter shapes ~f:(fun (what, _) -> List.iter (shape_claims what) ~f:skipped)
   | `Advertised ->
-      let close a b = Float.(abs (a - b) <= 0.05 * max 1. (abs b)) in
+      let close = Float.equal in
       let ref_t = build () in
       let want =
         List.hd_exn (run_serial ~name:(tag ^ "_bf16_serial") (Train.forward ref_t) [ ref_t ])
@@ -700,20 +705,37 @@ let () =
     ();
 
   (* --- The out projection at bf16, through the real tensorized pipelines. --- Products are
-     multiples of 1/16 of one sign with sums of typical magnitude ~12 over the 32-term contraction,
-     so bf16 accumulation in the serial twin rounds little and the 5% tolerance is dominated by the
-     tensor core's own rounding; the strictly negative weight against a strictly positive activation
-     keeps every cell nonzero. *)
+     negative multiples of 1/16 (a strictly negative weight against a strictly positive activation,
+     which also keeps every cell nonzero), and the 32-term sums stay within 256 sixteenths (12.625
+     at most), so every partial sum is exact in bf16 (8 significant bits) whatever the association,
+     and of one sign: the tensorized candidates match the serial twin bitwise on every backend,
+     gfx11's WMMA included (gh-ocannl-1420). The premise is derived from the init functions below,
+     not restated. *)
   let hb = 2 and eb = 16 in
-  let wb () =
-    NTDSL.init ~l:"cn_wb" ~prec:Ir.Ops.bfloat16 ~o:[ jj ] ~i:[ hb; eb ]
-      ~f:(Ll_test.cycle ~dims:[| jj; hb; eb |] ~modulus:5 ~offset:(-5.) ~stride:0.5)
-      ()
-  in
+  let wb_f = Ll_test.cycle ~dims:[| jj; hb; eb |] ~modulus:5 ~offset:(-5.) ~stride:0.5 in
+  let attb_f = Ll_test.cycle ~dims:[| bb; ss; hb; eb |] ~modulus:3 ~offset:1. ~stride:0.125 in
+  (let products =
+     List.concat_map (List.range 0 jj) ~f:(fun j ->
+         List.concat_map
+           (List.range 0 (bb * ss))
+           ~f:(fun bs ->
+             List.init (hb * eb) ~f:(fun t ->
+                 let h = t / eb and e = t % eb in
+                 wb_f [| j; h; e |] *. attb_f [| bs / ss; bs % ss; h; e |])))
+   in
+   let sums =
+     List.chunks_of products ~length:(hb * eb) |> List.map ~f:(List.sum (module Float) ~f:Fn.id)
+   in
+   p_all "out_proj bf16 inputs: every product is a negative multiple of 1/16" products ~f:(fun x ->
+       Float.(x < 0.) && Float.is_integer (x *. 16.));
+   (* With one sign, every partial sum of a cell -- in any association -- is a multiple of 1/16 no
+      larger in magnitude than the cell's full sum; at most 16 (256 sixteenths), that needs at most
+      8 significant bits, which bf16 holds. *)
+   p_all "out_proj bf16 inputs: every cell's sum is at most 16 in magnitude, so exact in bf16" sums
+     ~f:(fun x -> Float.(abs x <= 16.)));
+  let wb () = NTDSL.init ~l:"cn_wb" ~prec:Ir.Ops.bfloat16 ~o:[ jj ] ~i:[ hb; eb ] ~f:wb_f () in
   let attb () =
-    NTDSL.init ~l:"cn_attb" ~prec:Ir.Ops.bfloat16 ~b:[ bb; ss ] ~o:[ hb; eb ]
-      ~f:(Ll_test.cycle ~dims:[| bb; ss; hb; eb |] ~modulus:3 ~offset:1. ~stride:0.125)
-      ()
+    NTDSL.init ~l:"cn_attb" ~prec:Ir.Ops.bfloat16 ~b:[ bb; ss ] ~o:[ hb; eb ] ~f:attb_f ()
   in
   bf16_leg ~tag:"out_proj" ~build:(fun () ->
       let wv = wb () and av = attb () in
