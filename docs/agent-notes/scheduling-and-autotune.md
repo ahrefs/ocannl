@@ -1661,9 +1661,10 @@ files.
   zero nest is then an ordinary companion of the merged chain; an unexpanded `Zero_out` would keep
   the uncoalesced chain. Winners persist as plain saved schedules — the `Coalesce` op names its
   loops structurally (`Base`/`Minted` refs, `Coalesce_merged` mint role) — and the menu change
-  bumped `entry_version` to 13. v1 boundary, each a decline rather than a wrong value: unfused
-  GPU scalar blocktile leaves only (`Tensorize` reads an operand's last two axes as its tile, and
-  `Fuse_epilogue`'s tail is a nest over the target's own dims); a companion nest over the
+  bumped `entry_version` to 13. v1 boundary of this (columns) layout, each a decline rather than
+  a wrong value: unfused GPU scalar blocktile leaves only (its OUTPUT is flattened, and both
+  `Tensorize`'s fragment geometry and `Fuse_epilogue`'s per-axis tail relocation decline a
+  `Sub_axis` accumulator index); a companion nest over the
   uncoalesced axes (an elementwise tail) trims the merged chain and refutes the whole branch; one
   pair per site. Seeding discards its probe's minted symbols (`Indexing.discarding_symbols`); the
   prefix a schedule carries keeps its own. `test/operations/schedule_coalesce`; the scalar
@@ -1679,12 +1680,21 @@ files.
   only when the new site is the expected one (the merged loop as `m_k` over `h*e`, the pair gone from
   `m_ko`, output roles unchanged): a weight stored `w[h, j, e]`, a per-head-only operand or a padded
   inner axis declines at the op. The contraction layout enumerates its own bounded K menu
-  (`blocktile_geometries`): depths 256/128/64/32 over two 64-thread shapes (16x16 of 2x2, 32x32 of
-  4x4), never the family's 8/16 (those are the uncoalesced site's own tiles); a depth whose half
-  already covers K is refuted (`k_menu_gate`: only pads). Mind the memory floor: 16x16x256 f32 is
-  exactly Metal's 32 KiB and is admitted (executed bitwise there); 32x32x256 is 64 KiB and refuted on
-  every current GPU, so a test executing seeds must enumerate them under the device's limits, not
-  no-limits. `Stage`, `Privatize` and `Split_reduce` needed no change for the
+  (`blocktile_geometries`): depths 256/128/64/32 over 16x16 of 2x2, 32x32 of 4x4 and (gh-ocannl-1459)
+  64x64 of 4x4 — 256 threads, the block CUDA's uncoalesced winner uses — never the family's 8/16
+  (those are the uncoalesced site's own tiles); a depth whose half already covers K is refuted
+  (`k_menu_gate`: only pads). Mind the memory floor: 16x16x256 f32 is exactly Metal's 32 KiB and is
+  admitted (executed bitwise there); 32x32x256 is 64 KiB and refuted on every current GPU; 64x64
+  needs 32 KiB at depth 64 (CUDA admits 64 and 32, HIP 128 too). So a test executing seeds must
+  enumerate them under the device's limits, not no-limits. The row role is `s` (the batch is a
+  batch loop), so pad waste excludes the 64-row block wherever `s` is below 64 — a fixture pinning it
+  needs 64 rows of `s`, not of `b*s`. Because this layout flattens only the OPERANDS, it also admits
+  (gh-ocannl-1459) the STAGED tensorized leaves and the `Fuse_epilogue` twins of both pipelines:
+  staging rewrites the operand reads into dense cooperative tiles before `Tensorize` looks, and the
+  accumulator and store-back site are the site's own. Its mma menu is a staged K menu (16 or 32 rows,
+  `bn` the lane width, the same depths) with no unstaged `bk = 0` geometry, whose in-place
+  flattened reads `Tensorize` declines (`schedule_coalesce`'s `ckt` legs pin both sides). Hoisted
+  packing is not reached: the branch is GPU-only, and hoisted `Stage` refuses a flattened source. `Stage`, `Privatize` and `Split_reduce` needed no change for the
   merged k (the flattened arm of gh-ocannl-1148/gh-ocannl-1147 already covered it); `schedule_coalesce`'s hand-built
   contraction legs pin that before any seed relies on it. The k-split of the merged loop is not a sketch twin: it stays
   gh-ocannl-1414's `F_split` candidate (`sr_coalesce = Some (h, e)`, label `coalesce:h*e`), seeded only

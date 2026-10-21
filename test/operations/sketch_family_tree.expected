@@ -687,7 +687,7 @@ MMA emission-scope serialization and comparison distinguish accumulator lifetime
 a one-block staged matmul uses the per-statement wide-f16 capability: true
 a multi-axis contraction requires fragment-scope wide-f16 accumulation even with no explicit k-block: true
 == lattice under a 2048-byte workgroup-memory cap ==
-surviving lattice leaves 4; box-level refutations 13, e.g.:
+surviving lattice leaves 3; box-level refutations 11, e.g.:
   fusion=unfused > pipeline=tensorized > geometry=lattice > bm=bm 8..32 > bm=bm 8..16 > bm=bm=8 > bk=bk 8..32 > bk=bk 8..16 > bk=bk=16: staged operand tiles need 2560 bytes of workgroup memory, exceeding the 2048-byte limit
   fusion=unfused > pipeline=tensorized > geometry=lattice > bm=bm 8..32 > bm=bm 8..16 > bm=bm=8 > bk=bk 8..32 > bk=bk 24..32: staged operand tiles need 3840 bytes of workgroup memory, exceeding the 2048-byte limit
 == coarse canonical mma_tile 16^3, format tile 8^3 ==

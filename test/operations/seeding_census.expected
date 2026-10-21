@@ -42,6 +42,8 @@ matmul (GPU): the census's seeds are sketch_seed_params' list: true
 matmul: the census's refutations are the family tree's: true
 matmul: the coalesced census is the coalesced branch's seeds: true
 matmul: each coalesced layout names a refusal exactly when it seeds nothing: true
+out projection: the coalesced contraction line names the 64x64x64 leaf under 48 KiB: true
+out projection: the coalesced contraction line names no 64x64x128 leaf under 48 KiB: true
 matmul: the head line names the family and its refutation count: true
 autotune_log_seeding is on for this run: true
 log_seeding writes exactly the rendered census: true

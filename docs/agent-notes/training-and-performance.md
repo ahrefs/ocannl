@@ -203,9 +203,11 @@ files.
   with the first leaf of the walk, a plain one: `bench_rank_site` `BENCH_PICK=1` reads
   `32x32x8/4x4` at q/k/v (8.8-35x slower than seeded) and `64x64x8/4x4` at the out projection
   (2.6-11x), under gate 32 and `auto` alike. So coalesced leaves stay out of `model_default` until
-  the score prices launch parallelism; they ARE numerics-preserving (`coalesce_numerics`: every
-  `coal-n`/`coal-k` seed computes the scalar family's values bitwise on order-sensitive inputs, on
-  CUDA, HIP and Metal), so admission is a score question only.
+  the score prices launch parallelism; their scalar leaves ARE numerics-preserving
+  (`coalesce_numerics`: every scalar `coal-n`/`coal-k` seed computes the scalar family's values
+  bitwise on order-sensitive inputs, on CUDA, HIP and Metal), so admission is a score question only.
+  The contraction layout's tensorized and fused leaves (gh-ocannl-1459) are no more admissible than
+  their uncoalesced twins: `model_explain`'s coalesced rows judge each leaf by its uncoalesced form.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes

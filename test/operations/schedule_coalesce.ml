@@ -907,8 +907,8 @@ let out_proj ~tag ~bb ~ss ~jj ~hh ~ee () =
   let%op out = w * att in
   (out, w, att)
 
-let contraction_seeds ?(limits = Ir.Backend_intf.no_hardware_limits) opt =
-  Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits opt
+let contraction_seeds ?capabilities ?(limits = Ir.Backend_intf.no_hardware_limits) opt =
+  Autotune.coalesced_seed_params ?capabilities ~is_gpu:true ~is_cpu:false ~limits opt
   |> List.filter ~f:(fun q ->
       Poly.equal q.Autotune.sk_coalesce (Some Autotune.Coalesce_contraction))
 
@@ -1018,8 +1018,10 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
     if on_gpu then contraction_seeds ~limits:(Context.hardware_limits (Context.auto ())) opt
     else seeds
   in
-  Stdio.eprintf "%s: %d contraction seed(s) under this device's limits (not part of the golden)\n"
-    tag (List.length device_seeds);
+  Stdio.eprintf
+    "%s: %d contraction seed(s) under this device's limits: %s (not part of the golden)\n" tag
+    (List.length device_seeds)
+    (String.concat ~sep:", " (List.map device_seeds ~f:Autotune.sketch_params_label));
   gated_all ~when_:on_gpu ~on:backend_name
     (tag ^ ": every contraction seed this device admits executes to the serial reference bitwise")
     device_seeds ~f:(fun q ->
@@ -1038,7 +1040,7 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
    the limit and the 32x32x256 one (64 KiB) is refuted by the workgroup-memory floor. *)
 let () =
   let kk = 8 * 32 in
-  let opt, seeds, device_seeds = contraction_leg ~tag:"ck_proj" ~bb:2 ~ss:32 ~jj:64 ~hh:8 ~ee:32 in
+  let opt, seeds, device_seeds = contraction_leg ~tag:"ck_proj" ~bb:2 ~ss:64 ~jj:64 ~hh:8 ~ee:32 in
   let geom (bm, bn, bk) q =
     q.Autotune.sk_bm = bm && q.Autotune.sk_bn = bn && q.Autotune.sk_bk = bk
   in
@@ -1062,7 +1064,38 @@ let () =
      among the seeds executed above. *)
   gated_exists ~when_:on_gpu ~on:backend_name
     "ck_proj: this device admits, and so executed, the 16x16x256 tile" device_seeds
-    ~f:(geom (16, 16, 256))
+    ~f:(geom (16, 16, 256));
+  (* gh-ocannl-1459: the 64x64 block of 4x4 register tiles (256 threads), the shape CUDA's
+     uncoalesced winner uses. Its two f32 operand tiles need 512 bytes per unit of depth: 32 KiB at
+     depth 64, so CUDA's 48 KiB admits depths 64 and 32 and refutes 128, and Metal's 32 KiB admits
+     64 exactly at the limit. The row role is [s] (the batch [b] is a batch loop), so [s = 64] makes
+     the 64-row block divide it: on a 32-row site it pads 2x and the pad-waste judgment excludes
+     it. *)
+  let is_64x64 q = q.Autotune.sk_bm = 64 && q.Autotune.sk_bn = 64 in
+  p_exists "ck_proj: the menu offers a 64x64 block of 4x4 register tiles" seeds ~f:(fun q ->
+      is_64x64 q && q.Autotune.sk_tm = 4 && q.Autotune.sk_tn = 4);
+  let cuda_like =
+    { Ir.Backend_intf.no_hardware_limits with max_workgroup_memory_bytes = Some 49152 }
+  in
+  let cuda_seeds = contraction_seeds ~limits:cuda_like opt in
+  p_exists "ck_proj: 48 KiB of workgroup memory admits the 64x64x64 tile" cuda_seeds
+    ~f:(geom (64, 64, 64));
+  p_none "ck_proj: 48 KiB of workgroup memory refutes the 64x64x128 tile" cuda_seeds
+    ~f:(geom (64, 64, 128));
+  p_exists "ck_proj: no-limits enumeration offers the 64x64x128 tile the 48 KiB floor refutes" seeds
+    ~f:(geom (64, 64, 128));
+  p_exists "ck_proj: 32 KiB of workgroup memory admits the 64x64x64 tile, exactly at the limit"
+    limited
+    ~f:(geom (64, 64, 64));
+  let thread_cap n =
+    contraction_seeds
+      ~limits:{ Ir.Backend_intf.no_hardware_limits with max_threads_per_workgroup = Some n }
+      opt
+  in
+  p_exists "ck_proj: a 256-thread cap admits the 64x64 block" (thread_cap 256) ~f:is_64x64;
+  p_none "ck_proj: a 255-thread cap refutes the 64x64 block" (thread_cap 255) ~f:is_64x64;
+  gated_exists ~when_:on_gpu ~on:backend_name
+    "ck_proj: this device admits, and so executed, a 64x64 tile" device_seeds ~f:is_64x64
 
 (* An odd K: h = 3 heads of e = 20, K = 60. A depth whose half already covers K would only pad, so
    the menu offers 64 and 32: a 32-deep tile crosses a head boundary in every block and pads the
@@ -1103,3 +1136,357 @@ let () =
   in
   p_exists "ck_hje: the ordinary family still seeds the site" family ~f:blocktile;
   p_empty "ck_hje: the branch offers no contraction seed" ~over:family (contraction_seeds opt)
+
+(* {1 Tensorized contraction seeds (gh-ocannl-1459)}
+
+   The contraction layout flattens only the operands, and the staged tensorized pipeline stages both
+   of them before [Tensorize]: the micro-kernel reads dense cooperative tiles, and the accumulator
+   is the site's own, so the [Sub_axis] decline never fires. The layout's mma menu is a staged K
+   menu (no unstaged geometry), here on [h = 4] heads of [e = 16], K = 64: the merged k admits
+   depths 64 and 32, both crossing a head boundary, where the uncoalesced site's tiles stop at one
+   head.
+
+   Inputs are small integers (the weight in {-3, -2, -1}, the activation in {1, 2, 3}): every
+   product and every partial sum (at most 64 * 9 = 576) is exact in f16, tf32 and f32 in any order,
+   so the candidates must match the serial reference bitwise at either precision. *)
+
+let int_out_proj ~tag ~prec ~bb ~ss ~jj ~hh ~ee () =
+  let w =
+    NTDSL.init ~l:(tag ^ "_w") ~prec ~o:[ jj ] ~i:[ hh; ee ]
+      ~f:(Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:3 ~offset:(-3.) ~stride:1.)
+      ()
+  in
+  let att =
+    NTDSL.init ~l:(tag ^ "_att") ~prec ~b:[ bb; ss ] ~o:[ hh; ee ]
+      ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:3 ~offset:1. ~stride:1.)
+      ()
+  in
+  let%op out = w * att in
+  (out, w, att)
+
+let tensorized_contraction_seeds ?capabilities ~limits opt =
+  contraction_seeds ?capabilities ~limits opt |> List.filter ~f:(fun q -> q.Autotune.sk_mma)
+
+(* Structure, machine-independent: a synthetic f32 8x8x8 tile on a 32-wide simdgroup. *)
+let () =
+  let tag = "ckt" and bb = 2 and ss = 32 and jj = 64 and hh = 4 and ee = 16 in
+  let cand, w, att = int_out_proj ~tag ~prec:Ir.Ops.single ~bb ~ss ~jj ~hh ~ee () in
+  let opt = capture (named (tag ^ "_sched") (Train.forward cand)) in
+  let synthetic =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      mma =
+        Some
+          {
+            Ir.Backend_intf.minimal_mma_capability with
+            mma_tile = (8, 8, 8);
+            mma_format_tiles = [ (Ir.Backend_intf.(Mma_f32, Mma_f32, Mma_f32), (8, 8, 8)) ];
+          };
+    }
+  in
+  let seeds = tensorized_contraction_seeds ~limits:synthetic opt in
+  p_all ~min:1 "ckt: every tensorized contraction seed is staged" seeds ~f:(fun q ->
+      q.Autotune.sk_bk > 0);
+  p_exists "ckt: a tensorized contraction seed's k-tile crosses heads (bk > e = 16)" seeds
+    ~f:(fun q -> q.Autotune.sk_bk > ee);
+  p_none "ckt: no tensorized contraction seed is deeper than the merged K = 64" seeds ~f:(fun q ->
+      q.Autotune.sk_bk > hh * ee);
+  let uncoalesced =
+    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:synthetic opt
+    |> List.filter ~f:(fun q -> q.Autotune.sk_mma && q.Autotune.sk_bk > 0)
+  in
+  p_all ~min:1 "ckt: the uncoalesced family's staged tensorized tiles stay within one head"
+    uncoalesced ~f:(fun q -> q.Autotune.sk_bk <= ee);
+  let applied =
+    List.map seeds ~f:(fun q ->
+        match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt with
+        | o -> (
+            match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
+            | () -> Some o
+            | exception exn ->
+                Stdio.eprintf "%s validate_parallel FAILED: %s\n" tag (Exn.to_string exn);
+                None)
+        | exception exn ->
+            Stdio.eprintf "%s schedule FAILED: %s\n" tag (Exn.to_string exn);
+            None)
+  in
+  p_all ~min:1 "ckt: every tensorized contraction schedule constructs and validates" applied
+    ~f:Option.is_some;
+  (* Staging is what makes the operands dense: the only reads of either source are the staged loads,
+     through the flattened address over K. *)
+  p_all ~min:1
+    "ckt: every tensorized contraction schedule loads both operands through the flattened address"
+    (List.filter_opt applied) ~f:(fun o ->
+      let reads = ref [] in
+      L.walk o.LL.llc ~on_scalar:(function
+        | LL.Get (tn, idcs)
+          when Ir.Tnode.equal tn w.Tensor.value || Ir.Tnode.equal tn att.Tensor.value ->
+            reads := (tn, idcs) :: !reads
+        | _ -> ());
+      let flat_ok tn =
+        let mine = List.filter !reads ~f:(fun (t, _) -> Ir.Tnode.equal t tn) in
+        (not (List.is_empty mine))
+        && List.for_all mine ~f:(fun (t, idcs) ->
+            let n = Array.length idcs in
+            Ir.Indexing.equal_axis_index idcs.(n - 2) Ir.Indexing.Sub_axis
+            && (Ir.Affine.axis_extents ~dims:(Lazy.force t.Ir.Tnode.dims) idcs).(n - 1) = hh * ee)
+      in
+      flat_ok w.Tensor.value && flat_ok att.Tensor.value);
+  (* The boundary the menu keeps: the unstaged full-K form would read the flattened operands in
+     place, and [Tensorize] declines that. *)
+  p "ckt: the unstaged form behind the contraction prefix is declined by Tensorize on Sub_axis"
+    (match seeds with
+    | [] -> false
+    | q :: _ -> (
+        let unstaged = { q with Autotune.sk_bk = 0; sk_bm = 16; sk_swizzle = None; sk_depth = 1 } in
+        match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:unstaged opt) opt with
+        | _ -> false
+        | exception exn -> String.is_substring (Exn.to_string exn) ~substring:"Sub_axis"))
+
+(* Executed on the device, at f32 (CUDA under [tf32_matmuls], scoped to the leg; Metal natively) and
+   at f16. The gate is the seeder's own capability judgment for the site's precisions under the
+   device's limits, never the seed list under test: where the device advertises the tile, an absent
+   tensorized contraction seed is a failed claim. Each seed must match the serial reference bitwise
+   and render tensorized per its routine's mma census, so a scalar fallback cannot pass as one. *)
+let tensorized_leg ~tag ~prec =
+  let bb = 2 and ss = 32 and jj = 64 and hh = 4 and ee = 16 in
+  let saved = Ir.Numerics.get () in
+  Ir.Numerics.set_policy { saved with tf32_matmuls = true };
+  Exn.protect
+    ~finally:(fun () -> Ir.Numerics.set_policy saved)
+    ~f:(fun () ->
+      let reference, _, _ = int_out_proj ~tag:(tag ^ "_ref") ~prec ~bb ~ss ~jj ~hh ~ee () in
+      let want = run_with (named (tag ^ "_ref") (Train.forward reference)) reference Fn.id in
+      p
+        (tag ^ ": no cell of the serial reference is zero")
+        ((not (Array.is_empty want)) && Array.for_all want ~f:(fun v -> Float.(v <> 0.)));
+      let cand, w, att = int_out_proj ~tag ~prec ~bb ~ss ~jj ~hh ~ee () in
+      let fwd = named (tag ^ "_mma") (Train.forward cand) in
+      let opt = capture fwd in
+      let ctx = Context.auto () in
+      let limits = Context.hardware_limits ctx in
+      let capabilities = Context.codegen_capabilities ctx in
+      let gate =
+        Ll_test.tensorized_matmul_capability ~is_gpu:on_gpu ~is_cpu:false ~limits ~a:w.Tensor.value
+          ~b:att.Tensor.value ~d:cand.Tensor.value
+      in
+      let when_, aggregation =
+        match gate with `Advertised -> (true, None) | `Withheld a -> (false, Some a)
+      in
+      let seeds = if when_ then tensorized_contraction_seeds ~capabilities ~limits opt else [] in
+      Stdio.eprintf
+        "%s: backend %s, %d tensorized contraction seed(s): %s (not part of the golden)\n" tag
+        backend_name (List.length seeds)
+        (String.concat ~sep:", " (List.map seeds ~f:Autotune.sketch_params_label));
+      gated_exists ?aggregation ~when_ ~on:backend_name
+        (tag ^ ": the device seeds a tensorized contraction tile crossing heads") seeds ~f:(fun q ->
+          q.Autotune.sk_bk > ee);
+      let runs =
+        List.map seeds ~f:(fun q ->
+            match
+              let ctx, routine =
+                Context.compile
+                  ~lowered_transform:(fun o ->
+                    [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
+                  (Context.auto ()) fwd Ir.Indexing.Empty
+              in
+              let got = Context.get_values (Context.run ctx routine) cand.Tensor.value in
+              (got, routine.Context.mma)
+            with
+            | got, mma ->
+                if not (Ll_test.rendered_tensorized mma) then
+                  Stdio.eprintf "%s: %s rendered %s\n" tag (Autotune.sketch_params_label q)
+                    (Ir.C_syntax.mma_summary_string mma);
+                Some (Array.equal Float.equal got want, Ll_test.rendered_tensorized mma)
+            | exception exn ->
+                Stdio.eprintf "%s seed %s FAILED: %s\n" tag (Autotune.sketch_params_label q)
+                  (Exn.to_string exn);
+                None)
+      in
+      gated_all ?aggregation ~min:1 ~when_ ~on:backend_name
+        (tag ^ ": every tensorized contraction seed executes to the serial reference bitwise") runs
+        ~f:(function
+        | Some (ok, _) -> ok
+        | None -> false);
+      gated_all ?aggregation ~min:1 ~when_ ~on:backend_name
+        (tag ^ ": every tensorized contraction seed renders tensorized per its mma census") runs
+        ~f:(function
+        | Some (_, t) -> t
+        | None -> false))
+
+let () = tensorized_leg ~tag:"ckt_f32" ~prec:Ir.Ops.single
+let () = tensorized_leg ~tag:"ckt_f16" ~prec:Ir.Ops.half
+
+(* {1 Fused contraction seeds (gh-ocannl-1459)}
+
+   [Fuse_epilogue] relocates a tail per axis of the reduction's store-back site, and declines a
+   flattened one; the contraction layout leaves the output's indices alone, so its seeds' fused
+   twins relocate a bias-plus-relu tail like the uncoalesced family's. On a dividing site and on one
+   whose rows, columns and merged K all pad, every fused contraction twin must apply and validate,
+   drop the tail statement its unfused sibling keeps, and (on GPU) execute to the untuned reference
+   bitwise; the tensorized twins, gated on the device's capability, must also render tensorized.
+
+   Inputs are small integers: the weight in {-1, 0, 1}, so the pre-activations take both signs and
+   the relu discriminates, and every sum exact in any order at any precision used here. *)
+
+let fused_leg ~tag ~bb ~ss ~jj ~hh ~ee =
+  let saved = Ir.Numerics.get () in
+  Ir.Numerics.set_policy { saved with tf32_matmuls = true };
+  Exn.protect
+    ~finally:(fun () -> Ir.Numerics.set_policy saved)
+    ~f:(fun () ->
+      let w =
+        NTDSL.init ~l:(tag ^ "_w") ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ]
+          ~f:(Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:3 ~offset:(-1.) ~stride:1.)
+          ()
+      in
+      let att =
+        NTDSL.init ~l:(tag ^ "_att") ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ]
+          ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:3 ~offset:1. ~stride:1.)
+          ()
+      in
+      let bias =
+        NTDSL.init ~l:(tag ^ "_bias") ~prec:Ir.Ops.single ~o:[ jj ]
+          ~f:(Ll_test.cycle ~dims:[| jj |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+          ()
+      in
+      let%op prod = w * att in
+      let%op out = relu (prod + bias) in
+      Train.set_materialized prod.Tensor.value;
+      let fwd = named (tag ^ "_ep") (Train.forward out) in
+      let want = run_with fwd out Fn.id in
+      p
+        (tag ^ ": the relu discriminates: the reference has positive and zero cells")
+        (Array.exists want ~f:(fun v -> Float.(v > 0.))
+        && Array.exists want ~f:(fun v -> Float.(v = 0.)));
+      let opt = capture fwd in
+      let real_stmts (o : LL.optimized) =
+        List.count (LL.flat_lines [ o.LL.llc ]) ~f:(function
+          | LL.Noop | LL.Comment _ -> false
+          | _ -> true)
+      in
+      let scheduled q =
+        let scratch =
+          {
+            opt with
+            LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+            LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+          }
+        in
+        match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q scratch) scratch with
+        | post -> (
+            match LL.validate_parallel post.LL.optimize_ctx.placements post.LL.llc with
+            | () -> Ok post
+            | exception exn -> Error (Exn.to_string exn))
+        | exception exn -> Error (Exn.to_string exn)
+      in
+      let structural what seeds =
+        p_all ~min:1
+          (Printf.sprintf "%s: every fused %s contraction twin applies and validates" tag what)
+          seeds ~f:(fun q ->
+            match scheduled q with
+            | Ok _ -> true
+            | Error msg ->
+                Stdio.eprintf "%s: fused twin %s refused: %s\n" tag (Autotune.sketch_params_label q)
+                  msg;
+                false);
+        p_all ~min:1
+          (Printf.sprintf
+             "%s: every fused %s contraction twin drops the tail statement its unfused sibling \
+              keeps"
+             tag what) seeds ~f:(fun q ->
+            match (scheduled q, scheduled { q with Autotune.sk_epilogue = false }) with
+            | Ok fused, Ok unfused -> real_stmts fused + 1 = real_stmts unfused
+            | _ -> false)
+      in
+      let executed ?aggregation ~when_ what seeds =
+        let runs =
+          if not when_ then []
+          else
+            List.map seeds ~f:(fun q ->
+                match
+                  let ctx, routine =
+                    Context.compile
+                      ~lowered_transform:(fun o ->
+                        [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
+                      (Context.auto ()) fwd Ir.Indexing.Empty
+                  in
+                  ( Context.get_values (Context.run ctx routine) out.Tensor.value,
+                    routine.Context.mma )
+                with
+                | got, mma -> Some (q, Array.equal Float.equal got want, mma)
+                | exception exn ->
+                    Stdio.eprintf "%s fused seed %s FAILED: %s\n" tag
+                      (Autotune.sketch_params_label q) (Exn.to_string exn);
+                    None)
+        in
+        gated_all ?aggregation ~min:1 ~when_ ~on:backend_name
+          (Printf.sprintf "%s: every fused %s contraction twin executes to the reference bitwise"
+             tag what) runs ~f:(function
+          | Some (_, ok, _) -> ok
+          | None -> false);
+        runs
+      in
+      (* Scalar twins: structure under no limits (every backend), executed under the device's. *)
+      let fused seeds = List.filter seeds ~f:(fun q -> q.Autotune.sk_epilogue) in
+      let scalar_seeds = fused (contraction_seeds opt) |> List.filter ~f:blocktile in
+      structural "scalar" scalar_seeds;
+      let ctx = Context.auto () in
+      let limits = Context.hardware_limits ctx in
+      let capabilities = Context.codegen_capabilities ctx in
+      let device = fused (contraction_seeds ~capabilities ~limits opt) in
+      ignore
+        (executed ~when_:on_gpu "scalar" (List.filter device ~f:blocktile)
+          : (Autotune.sketch_params * bool * Ir.C_syntax.mma_summary) option list);
+      (* Tensorized twins, gated on the seeder's own capability judgment for the site. *)
+      let gate =
+        Ll_test.tensorized_matmul_capability ~is_gpu:on_gpu ~is_cpu:false ~limits ~a:w.Tensor.value
+          ~b:att.Tensor.value ~d:prod.Tensor.value
+      in
+      let when_, aggregation =
+        match gate with `Advertised -> (true, None) | `Withheld a -> (false, Some a)
+      in
+      let mma_seeds = if when_ then List.filter device ~f:(fun q -> q.Autotune.sk_mma) else [] in
+      Stdio.eprintf
+        "%s: backend %s, %d fused tensorized contraction twin(s) (not part of the golden)\n" tag
+        backend_name (List.length mma_seeds);
+      let runs = executed ?aggregation ~when_ "tensorized" mma_seeds in
+      gated_all ?aggregation ~min:1 ~when_ ~on:backend_name
+        (tag ^ ": every fused tensorized contraction twin renders tensorized per its mma census")
+        runs ~f:(function
+        | Some (_, _, mma) -> Ll_test.rendered_tensorized mma
+        | None -> false))
+
+let () = fused_leg ~tag:"ckf" ~bb:2 ~ss:32 ~jj:64 ~hh:4 ~ee:16
+let () = fused_leg ~tag:"ckf_odd" ~bb:2 ~ss:20 ~jj:50 ~hh:7 ~ee:10
+
+(* The masked-fragment charge (gh-ocannl-1459). A geometry padding the rows or columns pad-masks the
+   accumulator, and the staged pipeline's [Tensorize] then keeps that [bm x bn] fragment in
+   workgroup-shared memory beside the operand tiles; the seeding floor charges it, or a padded
+   32x32x128 f32 seed (exactly 32 KiB of operand tiles) is proposed on a 32 KiB device and dies at
+   compile on the extra 4 KiB. Rows 20 and columns 50 pad here, K = 70 admits depth 128. *)
+let () =
+  let cand, _, _ =
+    int_out_proj ~tag:"ckm" ~prec:Ir.Ops.single ~bb:2 ~ss:20 ~jj:50 ~hh:7 ~ee:10 ()
+  in
+  let opt = capture (named "ckm_sched" (Train.forward cand)) in
+  let limits bytes =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      max_workgroup_memory_bytes = Some bytes;
+      mma =
+        Some
+          {
+            Ir.Backend_intf.minimal_mma_capability with
+            mma_tile = (8, 8, 8);
+            mma_format_tiles = [ (Ir.Backend_intf.(Mma_f32, Mma_f32, Mma_f32), (8, 8, 8)) ];
+          };
+    }
+  in
+  let deep q = q.Autotune.sk_bm = 32 && q.Autotune.sk_bk = 128 in
+  p_none "ckm: 32 KiB refutes the padded 32x32x128 tensorized seed (operand tiles plus fragment)"
+    (tensorized_contraction_seeds ~limits:(limits 32768) opt)
+    ~f:deep;
+  p_exists "ckm: 36 KiB admits the padded 32x32x128 tensorized seed"
+    (tensorized_contraction_seeds ~limits:(limits 36864) opt)
+    ~f:deep
