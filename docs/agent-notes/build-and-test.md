@@ -392,22 +392,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   directory went to `repo_relative` as ONE component, so a `..` popped all of `test/a` and a
   `(chdir ../b …)` there ran in a top-level `b` -- split a directory (`Scan.split_path`) before
   resolving a path against it.
-  gh-ocannl-723 is the pattern's second instance and shows what a scanner rule costs once the seam
-  exists: the rule is `Scan.artifact_subjects`, `dune_scan_cases` puts it to fifteen stanza/source
-  pairs the repository has no member of, and `config_scan_lexing` does the same for the source side
-  — where the hostile input is the repository's own, since `test/support/generated.ml` names
-  `Generated.init` in half a dozen doc comments and `generated_provenance.ml` asserts on a string
-  literal quoting one, so a text scan would read the module that DEFINES the initializer as its
-  heaviest caller. Two lessons beyond the pattern. First, a decision-table control still leaves the
-  wiring from decision to failure unexercised, and `env_var_deps --control` closes it: it builds a
-  synthetic tree containing the violating pair, hands it to `env_var_deps.exe` as a CHILD, and
-  claims that the child names the stanza and exits 1 without the declaration and exits 0 with it —
-  the `generated_provenance` capture pattern, and worth the fixture because the tree is DERIVED from
-  the check's own exemption and gateless lists and so cannot drift from them. Second, a vacuity
-  floor over a repository census cannot be asked of an arbitrary tree: the artifact caller floor
-  applies only when `Config_key_scan.floor_violations` says the run was handed the repository's scan
-  roots, and WHICH mode the run was in goes into the golden, so a glob that breaks flips that line
-  rather than quietly retiring the floor.
+  A source-side census needs the same hostile input: `config_scan_lexing` puts
+  `Config_key_scan.generated_init_calls_in_source` to the repository's own traps, since
+  `test/support/generated.ml` names `Generated.init` in half a dozen doc comments and
+  `generated_provenance.ml` asserts on a string literal quoting one, so a text scan would read the
+  module that DEFINES the initializer as its heaviest caller. Two lessons beyond the pattern. First,
+  a decision-table control still leaves the wiring from decision to failure unexercised, and
+  `env_var_deps --control` closes it: it builds a synthetic tree containing the violating shape,
+  hands it to `env_var_deps.exe` as a CHILD, and claims that the child names it and exits 1, and
+  that the same tree without it exits 0 — the `generated_provenance` capture pattern, and worth the
+  fixture because the tree is DERIVED from the check's own gateless list and so cannot drift from
+  it. Second, a vacuity floor over a repository census cannot be asked of an arbitrary tree: the
+  family floors apply only when `Config_key_scan.floor_violations` says the run was handed the
+  repository's scan roots, and WHICH mode the run was in goes into the golden, so a glob that breaks
+  flips that line rather than quietly retiring the floor.
   gh-ocannl-800 adds the corresponding refusal ratchet. `env_var_deps` derives scanner sources from
   the repository-wide rules through the shared `per_directory` traversal, extracts literal formats
   handed to `Verdict.fail`, `failwith`, or a Verdict claim form (including `Printf` formats, with
@@ -492,14 +490,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   wrapper runs the executable inside it under the qualified path, so match runners over the whole
   file while resolving modules per group, or descending finds both stanzas and then discards the
   relation between them.
-  Two more, about the rule rather than the scan. A declaration is justified by ANY read of the key it
-  tracks, so phrase the rule over the key (`Config_key_scan.source_reads_key`) and not over the one
-  function that prompted the check — otherwise the documented way of pinning a key becomes unusable
-  for that key. And having widened it that far, widen it in BOTH directions: permitting a
-  declaration for a direct reader while requiring one only of the function's callers leaves exactly
-  the stale run the check exists to prevent. A third: `inline_tests` on a library does not make its
-  modules test-only, so a rule that is about what a module DOES when linked (here, emptying the
-  artifact directory) must not accept a declaration that invalidates the inline-test runner alone.
+  One more, about the rule rather than the scan: `inline_tests` on a library does not make its
+  modules test-only, so a rule that is about what a module DOES when linked (emptying the artifact
+  directory, gh-ocannl-723's library refusal) must not accept anything that scopes to the
+  inline-test runner alone.
   One more trap that costs a debugging round: dune's `glob_files_rec` runs over the BUILD tree,
   where a `<name>.pp.ml` sits beside every ppx-using `<name>.ml` — and a `.pp.ml` is not input the
   compiler's own parser accepts. A scan that parses everything it is handed (rather than only the
@@ -571,8 +565,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   corpus where every member satisfies the rule cannot tell a rule from a tautology. The two landed
   exemplars to copy are `test/operations/marker_backend_vocabulary.ml` (gh-ocannl-689, the marker
   vocabulary against `Backends.all_of_backend`; gh-ocannl-706 added the CPU/GPU classification
-  beside it) and gh-ocannl-723's `artifact_subjects`, which asks the question from the dune scanner
-  that already pairs a stanza with the sources its `(modules …)` name.
+  beside it) and `config_dep_completeness`'s `Config_dep_resolution.analyze`, which asks the
+  question of a tree handed to it as data.
 - Not every hand-written list is a member of that habit, and telling them apart is the test of
   whether it is being applied thoughtfully. A JUDGMENT CALL is not a set the system owns anywhere
   else: `digest_completeness`'s `codegen_stage_modules` says which modules read configuration
@@ -672,9 +666,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   case file's per-snippet catch-all is `attempted ~what ~name ~default`, which reports either as a
   `Verdict.fail`. Each repository scan's two refusals are separate formats, the reader an argument
   of its `*_or_refusal` function so the refusal control can plant a raise and claim that exactly the
-  defect message fired (`routed_case`, gh-ocannl-1292). Not yet routed: `env_var_deps`'s
-  `Generated.init` caller census and its `source_reads_key` probe, and the dune-file readers, whose
-  parse errors are sexplib's or `Dune_stanza_scan`'s rather than located ppxlib ones.
+  defect message fired (`routed_case`, gh-ocannl-1292). Not yet routed: the dune-file readers,
+  whose parse errors are sexplib's or `Dune_stanza_scan`'s rather than located ppxlib ones.
 - Type-check every OCaml snippet a scan's cases feed it before trusting the arm. The parser
   accepts programs the type checker rejects — a duplicate top-level `module` parses cleanly — and
   an arm over such a snippet pins the scanner's reading of code no compiler would build, so its
@@ -1295,9 +1288,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   50 (no switch) unless the harness first exports `OPAMSWITCH=$(cd <repo> && opam switch show)`.
   Resolve the switch before leaving the checkout, as `test-fmt-check.sh` does (gh-ocannl-1178).
   The default command then builds `@test/operations/scans` (gh-ocannl-1321) and prints how long
-  it took. Measured on mac-studio: about 1 s when nothing changed, and 50-55 s after a test-source
-  edit, of which `env_var_deps` alone is 47 s (it re-reads every source and dune file), the other
-  scans running beside it in under 8 s each. `OCANNL_TOOL_FMT_CHECK_SCANS=0` skips the step and
+  it took. Measured on mac-studio: about 1 s when nothing changed, and about 30 s after a
+  test-source edit, its slowest action `env_var_deps` at 10 s beside `codegen_text_inventory` --
+  `env_var_deps` was 47-60 s until gh-ocannl-1425 retired its per-key derivations. `OCANNL_TOOL_FMT_CHECK_SCANS=0` skips the step and
   says so in the verdict line; CI's `fmt` job sets it, since its switch holds no project
   dependency and the build matrix runs the scans anyway. A command given as arguments runs alone,
   which is the form `tools/test-fmt-check.sh` drives with a fake switch: the scans build after a
@@ -1435,9 +1428,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the three -- the carrying copy as the nearest configuration, `ocannl_ambient`, or `(universe)` --
   of every site it requires a configuration of, and checks both producers in `test/config/dune`;
   `Slot_kind` reads the carrying copy as test/config's backend only while its producer has exactly
-  the two-`cat` shape. `env_var_deps`' per-key derivations below (named schedule values, the cc
-  width, guards, `Generated.init`) predate the record and still ask for their declarations, which
-  are redundant for any rule the record reaches.
+  the two-`cat` shape. The per-key declarations that predate the record -- and the derivations in
+  `env_var_deps` that asked for them: named schedule values, the cc width, ambient guards' keys,
+  `Generated.init`'s `build_files_prefix` -- are retired (gh-ocannl-1425), and `env_var_deps` now
+  refuses an `(env_var …)` of any name `Utils.env_var_in_ambient_record` is true of, the predicate
+  `ocannl_ambient_env` writes the record from. What a stanza may still declare is what the record
+  leaves out: `OCANNL_BACKEND` (the rule above), a reserved `OCANNL_TOOL_*` a module reads by name,
+  a tracing gate, and someone else's variable. Checked by hand at the retirement: with every
+  declaration gone and both served from the cache, `OCANNL_VIRTUALIZE_MAX_VISITS=7` reran
+  `profile_precedence`'s rule and its guard refused by name, and
+  `OCANNL_GPU_FISSION_KEEP_MAPPING=false` reran `gpu_serial_lanes`, whose fission claims read it.
 - **The host reaches a test the same way** (gh-ocannl-1038). A verdict can read a capability a
   backend probes on the HOST -- the rocWMMA header tree HIP's tile-MMA support requires, the
   dispatch/OpenMP runtime the cc backend's Grid loops link, the ISA and vector width its SIMD probes
@@ -1457,96 +1457,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`host-capability:` lines) and, through `tools/sweep-unit-state.sh`, says `HOST CAPABILITIES
   CHANGED` with the lines that moved when a unit's record differs from its previous verdict's -- a
   box that lost a capability shows up as a diff between sweeps, not only as a failing test.
-- **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
-  run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
-  `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one
-  reader no commandline flag or config file can outrank. But the guard only executes when dune reruns
-  the rule, and dune reruns only for a variable the rule DECLARES: a key on the guard's list with no
-  `(env_var OCANNL_<KEY>)` beside it is a key the guard never sees, and dune serves the previous
-  golden across a change of it. `env_var_deps` pairs the two (gh-ocannl-749) rather than trusting the
-  hand-written list. `Config_key_scan.env_reader_reads_in_source` reads each literal call or
-  refuses it. A dynamic guard follows the structural contract (gh-ocannl-797): a local
-  `let guarded_keys = ["key"; ...] in Base.List.iter guarded_keys ~f:(fun key -> match
-  Utils.read_env_var key with ...)`. The list and iteration must be adjacent, and the callback
-  begins with that match; a following relationship assertion is allowed. Keys are literal strings,
-  including the parser's decoded quoted or escaped forms. List bindings elsewhere, projections,
-  concatenation, wrapper combinators, callback rebindings and function values refuse with the
-  required shape. The scanner never infers their keys. A source declaring its own `Base` module
-  also refuses this reserved spelling, without resolving its scope. Match arms are ordinary
-  reporting code; any additional reader reach in them is checked independently.
-  `profile_precedence` checks its explicit guard list against the settings table it protects, so
-  reshaping the guard does not replace the table relationship with a second unchecked list.
-  Keys are normalized before the registry is consulted and are asked for known or not: the
-  reader builds `OCANNL_<KEY>` whatever the registry says, so a key OCANNL does not read must be
-  pinned rather than declared, the sibling check refusing a declaration that names none.
-  A variable a run pins with `(setenv …)` is exempt where the pin SCOPES over that run, and pinning
-  is the better option wherever it is available; every rule that runs the program must answer, since
-  dune invalidates each on its own deps. A `(library)` is refused outright, inline tests included:
-  it is linkable by executables that declare nothing, which is the argument `Artifact_in_library`
-  makes for the initializer. The negative control is a third synthetic tree in
-  `env_var_deps --control`, permanent rather than transient, since every guard in the tree declares
-  and a corpus-drawn control would record the absence of the shape.
-  The receiver census still identifies literal reads through aliases and opens, but it does not
-  establish guard-key membership. The old scoping and list-inference fixtures remain in
-  `config_scan_lexing` as refusal controls alongside the structural forms; `env_var_deps --control`
-  still proves missing declarations, unknown keys, library callers and incorrectly scoped pins.
-- **A test that names the schedule pipeline declares the keys it reaches — derived, not
-  hand-listed** (gh-ocannl-1149). A test calling `Ir.Schedule.default_gpu`,
-  `maybe_default_schedules`, `zero_expansion`, `fission_keep_mapping` … is one whose subject is the
-  default schedule, and its keys (`gpu_schedule_block_size`, `gpu_fission_keep_mapping`,
-  `schedule_fission`, …) are the ones flipped while debugging it; the hand lists drifted, and a
-  `gpu_serial_lanes` run with `OCANNL_GPU_FISSION_KEEP_MAPPING` changed came back from the cache as a
-  pass (lukstafi/ocannl-staging#916). `Config_key_scan.top_level_key_reach` reads `schedule.ml`
-  per top-level value: its literal `~arg_name` reads, its `Utils.settings.<key>` fields, and those of
-  everything it calls -- the module's own values in source order, a `Utils` settings predicate
-  through the scanner's `settings_predicates` table, and a `Module.value` (or `Module.Sub.value`)
-  of a sibling module of `arrayjit/lib`, read the same way; a `Utils.settings` field stands for
-  every key its `restore_settings` assignment reads, so `big_models` comes with `large_models`. Following the calls is what makes it the CLASS rather than a
-  list: `Ir.Schedule.apply` reaches `log_level` and `debug_log_from_routines` through
-  `Utils.debug_log_from_routines`, every `Utils.get_global_arg` reaches `profile`, and `Affine`
-  reaches `legality_crosscheck` -- review round 1 found the first of those by hand. `env_var_deps`
-  then requires every key a NAMED value reaches -- through `Ir.Schedule`, an alias of it or an
-  `open` -- of every rule running the program; `setenv` pins answer, and so does a `(universe)`
-  dependency, which no cache serves. Execution-neutral keys are asked for too: the launch trace
-  changes no golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` needs the run to happen.
-  It over-reads where it errs: optional arguments a call supplies and local shadowing are not
-  modeled, so a rerun is the cost. Not followed: functor bodies, functions passed as values,
-  modules outside `arrayjit/lib`, and reads the backend makes on its own while compiling
-  (`Backends.compile` consulting `Schedule.log_launches`) -- that is the `Context.compile` route. Out of scope on purpose: a program reaching the pipeline only through
-  `Context.compile` (every compiled test; the ambient record above answers for it), a library, and
-  an executable no rule runs. The failure
-  message lists the exact `(env_var …)` lines to add; the golden lists the derived key universe, so
-  a new key the pipeline reaches shows up as a diff and as a failure on each stanza that reaches it.
-- **A test that reads the cc vector width declares `(env_var OCANNL_CC_VECTOR_BYTES)` — derived
-  the same way** (gh-ocannl-1320). The local proxy for the ubuntu leg's wider vectors is a rerun at
-  `OCANNL_CC_VECTOR_BYTES=32` (backend-precision-and-simd.md), and an undeclared stanza answers it
-  from the cache. Three things are derived. The values are the `Cc_backend` values whose key reach
-  includes `cc_vector_bytes`. The fields are those `schedulers.ml`'s cc limits record fills from
-  those values: `top_level_key_reach`'s `field_reach`, which follows top-level and function-local
-  helpers and, through `~by_last_component`, matches a width value by its last component, so no
-  alias, `open` or `let open` in between hides it. The record's type (`hardware_limits` in
-  `backend_intf.ml`) supplies the labels, any of which marks a limits update. A program reads the
-  width when its own modules, or a library it links that is not the compiler's (outside `arrayjit/lib`, `tensor`, `lib`) (transitively,
-  through `re_export` and `select` forms too), do one of three things. They name such a value through `Context.Cc_backend` (alias and `open`
-  included). They project such a field or match it in a record pattern. Or they write
-  `{ base with … }`, overwriting any label of the type and leaving a width field to a non-constant
-  base. A constant base is `Ir.Backend_intf.no_hardware_limits` spelled in full (or through
-  a module alias every binding of which names `Ir.Backend_intf`, with no module on the path rebound
-  by the file), or a name every binding of which is a constant record or a function returning one. `{ device_limits with
-  native_fp16_arithmetic = false }` keeps the device's `simd_vector`, so it is a read. Every rule running such a program declares or
-  pins the variable, or depends on `(universe)`. A library with inline tests is a program of its
-  own: its `(inline_tests (deps …))` and every per-module rule running its runner answer for it. A
-  `setenv` whose value reads the variable back through `%{env:…}` pins nothing: `Scan`'s pin walk
-  drops it for every rule that credits pins. Only the width key is asked for, since the
-  SIMD/arch-flag keys move the auto width only through the probe every compiled program runs. A
-  test that merely constructs limits and lets codegen read the width inside the library is the
-  `Context.compile` route above. Field names match without types, so an unrelated
-  `.simd_vector` costs a declaration, never a stale pass. The golden lists the derived values,
-  fields and record type, and each reading stanza; a `Cc_backend` that reads the key outside every
-  named value, or whose values no longer reach it, and a lost anchor (module, fields or record type
-  not found) are refused rather than deriving no reader.
+- **An ambient-environment GUARD runs because the record reruns it.** A test that refuses to run
+  when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
+  `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, which no
+  commandline flag or config file can outrank. The guard only executes when dune reruns the rule,
+  which the ambient record in its `ocannl_config` (or listed `ocannl_ambient`) makes happen on a
+  change of any of them; every rule running the program needs that dependency, since dune
+  invalidates each on its own deps. A `setenv` pin around the run is still the better option where
+  it is available. The guard keys, the schedule pipeline's keys (gh-ocannl-1149) and the cc vector
+  width (gh-ocannl-1320) were once each derived and paired with hand-written declarations; the
+  record made all three redundant (gh-ocannl-1425).
 - **A program that starts a search on cc pins the width or says why it need not** (gh-ocannl-1368).
-  The bullet above makes a rerun at another width happen; this one keeps the DEFAULT run off the
+  The ambient record makes a rerun at another width happen; this rule keeps the DEFAULT run off the
   host's auto-probed width, which on CI's x86 runners is 32 or 64 bytes at random and changed what
   a 0.2 pre-filter kept (gh-ocannl-1363). `env_var_deps` derives the population: programs naming
   `Autotune.tune` or a value of the framework library (`lib/`) that reaches it, transitively
@@ -2229,24 +2151,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   routine twice across changed contents is otherwise reported as an unattributed overwrite. Corollary
   for a leg this backend cannot evaluate: gate it and report `Verdict.skipped` rather than letting it
   reach the read, because an absent artifact is a failure here by design.
-  The dune side of that: `init` READS `build_files_prefix`, so the stanza dune runs the test under
-  must declare `(env_var OCANNL_BUILD_FILES_PREFIX)` — otherwise dune serves the previous run's
-  result when the variable changes, which is gh-ocannl-628's hole one key over. `env_var_deps`
-  requires it of every stanza whose `(modules …)` name a source that calls the initializer, and
-  reports a declaration with no caller behind it as well (gh-ocannl-723); a module built through a
-  `(select …)` answers for its arms too (`Dune_stanza_scan.select_arms`), so a `.real.ml` caller is
-  its stanza's (gh-ocannl-1294). The other way round is closed by `codegen_text_inventory`, which
-  refuses a test source that reads `Utils.build_files_dir`/`Utils.build_file` itself. Where the declaration goes
-  is dune's semantics and not one rule: a `(test)` runs under its own `(deps …)`, an inline-test
-  library under `(inline_tests (deps …))`, and an `(executable)` has no `deps` field at all, so it is
-  the rule that RUNS it that carries the declaration — the same placement as the `ocannl_config` dep
-  and the backend marker, and checked as such (a declaration on a NEIGHBOUR of that rule reruns the
-  neighbour, so it does not count). One name of an `(executables (names a b) …)` is one program, and
-  attribution follows dune's main-module rule: `a` is built from module `a`, a module that is no
-  name's main module is linked into all of them, and `(public_names …)` pairs positionally — so
-  `b.exe`'s rule answers for `b` alone, and only a shared module puts the requirement on every runner
-  (gh-ocannl-747; combining them reported `a` undeclared over a rule linking neither its main module
-  nor its initializer).
+  The dune side of that: `init` READS `build_files_prefix`, which the ambient record in
+  `ocannl_config` carries like every other key, so nothing is declared for it (gh-ocannl-1425).
+  `env_var_deps` still refuses the call in a library module, a `(select …)` arm included: it
+  empties the calling process's artifact directory, so from a library it runs in every executable
+  linking it (gh-ocannl-723). The other way round is closed by `codegen_text_inventory`, which refuses a test source that reads
+  `Utils.build_files_dir`/`Utils.build_file` itself.
 - **Before changing code generation, read the inventory**: `dune build
   @test/operations/runtest-codegen_text_inventory` prints, as its golden, every file in the tree
   that pins the TEXT of emitted code (gh-ocannl-712). Two populations, and no single search finds

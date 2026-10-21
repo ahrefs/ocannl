@@ -29,7 +29,8 @@
    the scan feeds as the untuned pipeline does, and where the backend advertises the tile, its
    tensorized seeds render tensorized. 5. Executed (GPU backends): every GPU seed of the attention's
    score segment gives the untuned forward's output. Device floats stay off the golden: the claims
-   are two-sided tolerance comparisons. *)
+   are two-sided comparisons, bitwise for leg 4's [z] and within a tolerance for the softmax
+   outputs. *)
 
 open Base
 open Ocannl
@@ -194,7 +195,10 @@ let run_seed ~label ~idx ~limits ~keep_mapping ~is_target ~build ~reference =
 
 (* === The independent scan: a half-precision matmul [z] (f32 destination) beside a softmax whose
    online-softmax rewrite is one [Scan_loop] per cell of a [32 x cols] grid, writing the row max and
-   normalizer it carries. The two share no node, so fission merges their nests unconditionally. *)
+   normalizer it carries. The two share no node, so fission merges their nests unconditionally.
+   [z]'s operands are small NONNEGATIVE integers (0..6 against 0..4), so every product and partial
+   sum is exact in f32 and of one sign, which is what makes gfx11's WMMA exactly rounded
+   (gh-ocannl-1420): leg 4 compares [z] bitwise on every backend (gh-ocannl-1432). *)
 let n = 32
 let kk = 32
 let red = 24
@@ -203,12 +207,12 @@ let indep ~tag ~cols =
   Tensor.unsafe_reinitialize ();
   let a =
     NTDSL.init ~l:(tag ^ "_a") ~prec:Ir.Ops.half ~b:[] ~i:[] ~o:[ n; kk ]
-      ~f:(Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:7 ~offset:(-3.) ~stride:1.)
+      ~f:(Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:7 ~offset:0. ~stride:1.)
       ()
   in
   let b =
     NTDSL.init ~l:(tag ^ "_b") ~prec:Ir.Ops.half ~b:[] ~i:[] ~o:[ kk; n ]
-      ~f:(Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ~f:(Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:5 ~offset:0. ~stride:1.)
       ()
   in
   let%op z = a +* "ik;kj=>ij" b in
@@ -335,11 +339,16 @@ let () =
       let build ~transform =
         let comp, _, _, z, sm = indep ~tag:"al" ~cols:n in
         let got, census = execute ?transform ~name:"scan_cov_run" ~init:Fn.id comp [ z; sm ] in
-        (* [z]'s cells are small integers, exact through any f32 accumulation, yet HIP's rocWMMA
-           (f16, f16, f32) seeds return most of them a few f32 ulps off (gfx1151: 5.00000191 for 5),
-           with or without the scan in the kernel -- a property of that intrinsic path, not of
-           coverage. A race or an uncovered companion moves cells by whole units. *)
-        (List.zip_exn got [ 1e-5; 1e-5 ], census)
+        (* [z] bitwise (a tolerance of 0): its cells are sums of nonnegative small-integer products,
+           exact through any f32 accumulation, the tensor unit's included. It once held 1e-5 because
+           HIP's rocWMMA (f16, f16, f32) seeds returned most cells a few f32 ulps off (gfx1151:
+           5.00000191 for 5) -- the mixed-sign residue of the signed operands it had then
+           (gh-ocannl-1420, gh-ocannl-1432). The softmax keeps 1e-5: an f32 [exp] chain whose kernel
+           shapes differ between the seed and the untuned pipeline, compiled without the contraction
+           licence, so a bitwise claim on it would compare two compilers' contraction choices
+           (gh-ocannl-998), not coverage. A race or an uncovered companion moves cells by whole
+           units. *)
+        (List.zip_exn got [ 0.; 1e-5 ], census)
       in
       let reference, _ = build ~transform:None in
       let comp, a, b, z, _ = indep ~tag:"al" ~cols:n in

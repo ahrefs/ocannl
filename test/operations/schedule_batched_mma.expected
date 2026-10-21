@@ -11,15 +11,15 @@ variance-like site: no cpu mma seeds: true
 variance-like site: no gpu mma seeds: true
 batched_lb bf16: the backend's advertised tile is seeded: true
 batched_lb bf16: a sampled batch-serial candidate compiles and runs: true
-batched_lb bf16: every running batch-serial candidate matches the serial twin: true
+batched_lb bf16: every running batch-serial candidate matches the serial twin bitwise: true
 batched_lb bf16: a running batch-serial candidate renders the tensor-core intrinsic: true
 batched_lb bf16: a sampled batch-grid candidate compiles and runs: true
-batched_lb bf16: every running batch-grid candidate matches the serial twin: true
+batched_lb bf16: every running batch-grid candidate matches the serial twin bitwise: true
 batched_lb bf16: a running batch-grid candidate renders the tensor-core intrinsic: true
 batched_ib bf16: the backend's advertised tile is seeded: true
 batched_ib bf16: a sampled batch-serial candidate compiles and runs: true
-batched_ib bf16: every running batch-serial candidate matches the serial twin: true
+batched_ib bf16: every running batch-serial candidate matches the serial twin bitwise: true
 batched_ib bf16: a running batch-serial candidate renders the tensor-core intrinsic: true
 batched_ib bf16: a sampled batch-grid candidate compiles and runs: true
-batched_ib bf16: every running batch-grid candidate matches the serial twin: true
+batched_ib bf16: every running batch-grid candidate matches the serial twin bitwise: true
 batched_ib bf16: a running batch-grid candidate renders the tensor-core intrinsic: true

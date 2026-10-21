@@ -68,7 +68,6 @@ let nonzero name (a : float array) =
   a
 
 let approx_tol _ = 1e-2
-let approx a b = Float.(abs (a - b) < approx_tol b)
 let approx_rel_tol b = Float.(1e-2 * max 1. (abs b))
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
@@ -208,6 +207,11 @@ let staged_half_resident ?(converted_d = false) src =
          else "nvcuda::wmma::store_matrix_sync(__mma_dp")
       ~barrier:"__syncthreads();"
 
+(* HIP's rocWMMA f32 accumulator fragment, and its f16 A operand fragment (the layout argument
+   follows), the declarations the f16 -> f32 legs pin. *)
+let rocwmma_f32_acc = "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+let rocwmma_f16_a = "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, rocwmma::float16_t"
+
 (* HIP's converted [d] boundary (gh-ocannl-1064): the [float] accumulator array [acc] crosses the
    boundary only through the [ocannl_wmma_rc16] coordinate table, and the gh-ocannl-789 element copy
    through a destination-typed staging fragment is GONE — no 16-bit accumulator fragment is declared
@@ -216,7 +220,7 @@ let staged_half_resident ?(converted_d = false) src =
    documents it does not promise. *)
 let hip_table_boundary ~acc src =
   let has s = String.is_substring src ~substring:s in
-  has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+  has rocwmma_f32_acc
   && has "rocwmma::load_matrix_sync(__mma_rc, ocannl_wmma_rc16, 16"
   && has "__device__ __align__(32) float ocannl_wmma_rc16[256]"
   && (not (has "__mma_dstage"))
@@ -534,10 +538,13 @@ let () =
    p "tensorized structure as expected" ok);
 
   (* --- Half precision: [simdgroup_half8x8] on Metal, the wmma f16 path on CUDA (T3 draft), rocWMMA
-     on HIP, the scalar fallback on the C backends. The inputs are multiples of 1/8 and 1/4 with
-     32-term sums bounded by 12, so every product and partial sum is exactly representable in f16:
-     the result is EXACT regardless of accumulation order, and parity is bitwise on every backend
-     and either rendering path. --- *)
+     on HIP, the scalar fallback on the C backends. The inputs are NONNEGATIVE multiples of 1/8 and
+     1/4 with 32-term sums bounded by 24, so every product and partial sum is exactly representable
+     in f16 (multiples of 1/32 below 2^10): the result is EXACT regardless of accumulation order,
+     and parity is bitwise on every backend and either rendering path. One sign matters as much as
+     exactness: gfx11's WMMA is exactly rounded only when every product shares a sign
+     (gh-ocannl-1420), and with [mbh] signed the staged f16 -> f32 leg below missed by f32 ulps on
+     HIP (gh-ocannl-1432). --- *)
   let mah =
     NTDSL.init ~l:"mah" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ]
       ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125)
@@ -545,7 +552,7 @@ let () =
   in
   let mbh =
     NTDSL.init ~l:"mbh" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.25)
+      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.25)
       ()
   in
   let%op mch0 = mah * mbh in
@@ -619,20 +626,21 @@ let () =
   (* --- f16 operands into f32 STORAGE, the direct (per-statement) scope (gh-ocannl-923): Metal's
      mixed [simdgroup_matrix] arm — half A/B fragments, and a [simdgroup_float8x8] accumulator that
      IS the destination's storage type, so it loads and stores [d] with no staging fragment — and
-     the C backends' register tiling with its half operands bridged. The inputs are FULL-PRODUCT:
-     [a] is [1 + t/1024] (eleven significant bits, f16-exact) and [b] a small integer, so a product
-     such as [3 * (1 + 7/1024)] needs twelve bits and is NOT f16-representable, and neither are
-     32-term sums such as those (multiples of 1/1024 below 100) — while every product and partial
-     sum is exact in f32, so ANY association returns the exact sum. Bitwise equality with the host's
-     exact sum therefore fails on a rendering that rounds a product, or an accumulator, to f16
-     anywhere; the host-side claim before it pins that the inputs can tell. Not the numerics of the
-     tensor unit against the scalar fallback: Metal's fallback for this triple computes
-     [fma((float)a, (float)b, acc)] in f32 and is exact too — the structure claim is what tells the
-     two apart. CUDA and HIP are skipped: their f16 -> f32 arms are the staged legs' subject below,
-     and whether their tensor units return this exact sum has not been run (gfx11's WMMA is not
-     exactly rounded even on exact data, per the bf16 legs' table). --- *)
+     the C backends' register tiling with its half operands bridged, and HIP's rocWMMA (f16, f16,
+     f32) fragments (gh-ocannl-1432). The inputs are FULL-PRODUCT: [a] is [1 + t/1024] (eleven
+     significant bits, f16-exact) and [b] a small nonnegative integer, so a product such as [3 * (1
+     + 7/1024)] needs twelve bits and is NOT f16-representable, and neither are 32-term sums such as
+     those (multiples of 1/1024 below 200) — while every product and partial sum is exact in f32, so
+     ANY association returns the exact sum. Bitwise equality with the host's exact sum therefore
+     fails on a rendering that rounds a product, or an accumulator, to f16 anywhere; the host-side
+     claim before it pins that the inputs can tell. Every product is nonnegative, which is what
+     makes gfx11's WMMA exact here (gh-ocannl-1420: exactly rounded only when the products share a
+     sign). Not the numerics of the tensor unit against the scalar fallback: Metal's fallback for
+     this triple computes [fma((float)a, (float)b, acc)] in f32 and is exact too — the structure
+     claim is what tells the two apart. CUDA is skipped: its f16 -> f32 arm is the staged legs'
+     subject below, and whether wmma returns this exact sum has not been run. --- *)
   let h32a = Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:8 ~offset:1024. ~stride:0x1p-10 in
-  let h32b = Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:7 ~offset:(-3.) ~stride:1. in
+  let h32b = Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:7 ~offset:0. ~stride:1. in
   let exact_h32 =
     Array.init (n * n) ~f:(fun t ->
         let i = t / n and j = t % n in
@@ -658,7 +666,7 @@ let () =
     ~f:(fun x -> not (f16_exact x));
   (let claim_value = "f16->f32 direct tensorized matmul equals the exact sum bitwise" in
    let claim_struct = "f16->f32 direct tensorized structure as expected" in
-   if on_gpu && not on_metal then (
+   if on_cuda then (
      skipped claim_value;
      skipped claim_struct)
    else
@@ -681,6 +689,15 @@ let () =
           && has "simdgroup_half8x8 __mma_af"
           && (not (has "__mma_dstage"))
           && not (has "thread_elements()")
+        else if on_hip then
+          if Lazy.force hip_mma then
+            (* f16 operand fragments into an f32 accumulator fragment that is the f32 destination's
+               own type, so [d] loads and stores unconverted (no coordinate table). *)
+            Ll_test.all_rendered ~what:"f16->f32 direct" Ir.C_syntax.Mma_intrinsics census
+            && has (rocwmma_f32_acc ^ " __mma_acc")
+            && has rocwmma_f16_a
+            && not (has "ocannl_wmma_rc16")
+          else Ll_test.all_declined ~what:"f16->f32 direct" census && not (has "rocwmma")
         else
           Ll_test.all_rendered ~what:"f16->f32 direct" Ir.C_syntax.Mma_register_tiled census
           && has "narrow storage bridged: a:half b:half"));
@@ -868,10 +885,12 @@ let () =
      regression on either shows up as a rendering change, not just a timing one. HIP has both
      rocWMMA combinations and Metal has the uniform one ([simdgroup_bfloat8x8]).
 
-     The inputs are multiples of 1/4 and 1/2 with 32-term sums bounded by 16, so every product is a
-     multiple of 1/8 and every partial sum is exactly representable in bf16 (8 mantissa bits): the
-     result is EXACT regardless of accumulation order or accumulator width, and parity is bitwise on
-     every backend and either rendering path. --- *)
+     The inputs are NONNEGATIVE multiples of 1/4 and 1/2, so every product is a nonnegative multiple
+     of 1/8 of at most 1 and every 32-term partial sum a multiple of 1/8 in [0, 32], exactly
+     representable in bf16 (8 significant bits): the result is EXACT regardless of accumulation
+     order or accumulator width, and parity is bitwise on every backend and either rendering path —
+     HIP's included, because the products share a sign (gh-ocannl-1420; gh-ocannl-1432 moved [mbb]
+     off its signed cycle). --- *)
   let mab =
     NTDSL.init ~l:"mab" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
       ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
@@ -879,7 +898,7 @@ let () =
   in
   let mbb =
     NTDSL.init ~l:"mbb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.5)
       ()
   in
   let mtab =
@@ -889,7 +908,7 @@ let () =
   in
   let mtbb =
     NTDSL.init ~l:"mtbb" ~prec:Ir.Ops.bfloat16 ~o:[ n; n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.5)
       ()
   in
   let bf16_leg ?bm ~tag ~acc_prec ~build ~check () =
@@ -918,38 +937,18 @@ let () =
     in
     let ctx_b = Context.run ctx_b routine_b in
     let got = Context.get_values ctx_b mcb1.Tensor.value in
-    (* Bitwise on CUDA and Metal, where the tensor core returns the exactly-rounded dot product for
-       these exactly-representable inputs. NOT bitwise on HIP: gfx1151's WMMA does not, in any of
-       the four rocWMMA format combinations, and the deviation is a hardware property rather than a
-       rendering defect — a standalone rocWMMA program (no OCANNL in the loop) reproduces it cell
-       for cell from the same data. Measured on a single exact 16x16x16 [mma_sync] with a
-       [fill_fragment]-zeroed accumulator, against an exact double reference:
-
-       bf16 x bf16 -> f32 227/256 cells differ, worst 1.19e-07 (one f32 ulp at ~1.0) bf16 x bf16 ->
-       bf16 235/256 cells differ, worst 5.86e-03 f16 x f16 -> f32 227/256 cells differ, worst
-       1.19e-07 f16 x f16 -> f16 18/256 cells differ, worst 5.96e-08
-
-       So the tolerance is per accumulator format, and the narrow-accumulator one has to be wide:
-       the uniform-bf16 combination — HIP's only tensor-core route for a uniformly-bf16 network —
-       loses close to a bf16 ulp at the partial-sum scale. The [staged+tensorized half] leg below
-       already carried this exception for the f16->f32 combination; these legs arrived later
-       (gh-ocannl-545) without AMD hardware in the loop, so they asserted the CUDA/Metal premise on
-       a backend where it does not hold. The [Bf16_wide] legs below take the uniform-bf16
-       combination off the bf16-accumulate unit (gh-ocannl-838). Keeping the comparison numeric
-       rather than dropping it preserves what it is for: a wrong stride or a mis-mapped fragment
-       moves values by O(1), not by 1e-2. *)
-    let eq =
-      (* The exception is the TENSOR UNIT's, so it applies only where the tensor unit runs: with no
-         advertised tile-MMA (gh-ocannl-1032) HIP renders the same scalar fallback as everyone
-         else's decline, and parity is bitwise again. Widening the tolerance there would let a
-         genuine fallback defect of up to 5e-2 through on the host that has no intrinsic to blame it
-         on. *)
-      if (not on_hip) || not (Lazy.force hip_mma) then Float.equal
-      else if Ir.Ops.equal_prec acc_prec Ir.Ops.bfloat16 then fun a b ->
-        Float.(abs (a - b) <= 0.05 * max 1. (abs b))
-      else fun a b -> Float.(abs (a - b) <= 1e-5 * max 1. (abs b))
-    in
-    p_all2 (Printf.sprintf "%s tensorized matmul matches the serial twin" tag) got want ~f:eq;
+    (* Bitwise on every backend, HIP's tensor unit included. These legs used to admit a HIP
+       tolerance (1e-5 at an f32 accumulator, 5e-2 at a bf16 one), measured on a single exact
+       16x16x16 [mma_sync] whose inputs were the old SIGNED [mbb] cycle: 227 of 256 cells off by up
+       to one f32 ulp, 235 of 256 by up to 5.86e-3 in the bf16-accumulate arm. That was the
+       mixed-sign residue of gfx11's WMMA (gh-ocannl-1420), not a property of the format: with every
+       product of one sign the instruction is exactly rounded, so the inputs above are nonnegative
+       and the claim is exact (gh-ocannl-1432). A wrong stride or a mis-mapped fragment moves values
+       by O(1); a sign-mixing input moves them by ulps, which is why a bitwise claim needs the sign
+       discipline and not a tolerance. *)
+    p_all2
+      (Printf.sprintf "%s tensorized matmul matches the serial twin bitwise" tag)
+      got want ~f:Float.equal;
     let src = Generated.read ("mm_" ^ tag ^ "_mma") in
     p
       (Printf.sprintf "%s tensorized structure as expected" tag)
@@ -1037,15 +1036,18 @@ let () =
      significant bits): 32-term sums reach ~77, where bf16's spacing (1/2) cannot hold the
      1/64-multiple partials, while every partial stays exact in f32. The claim is the issue's own
      measure — the worst error against the EXACT product must drop to the narrowing rounding alone,
-     half a bf16 ulp (plus one f32 ulp of slack at the scale of the sum for gfx11's WMMA, whose f32
-     accumulate is not exactly rounded either) — and it is two-sided: the same bound over the same
-     inputs, rendered under the default policy, must FAIL wherever the backend keeps bf16 storage
-     residency, which is what makes passing it evidence rather than a property of easy inputs. On
-     HIP that is no longer the default (its [Bf16_auto] resolves wide since gh-ocannl-1051), so its
-     negative control is the [Bf16_narrow] twin below: gfx11's bf16-accumulate WMMA, or its narrow
-     serial fallback, which the approximate profile still ships. Metal's side of the negative
-     control executes since gh-ocannl-923: its default-policy [simdgroup_bfloat8x8] accumulate
-     exceeds the bound (by 0.0937 on an M4 Max, against -0.0234 under [Bf16_wide]). --- *)
+     half a bf16 ulp, with no slack: the cycles are positive, so gfx11's f32 accumulate is exactly
+     rounded too (gh-ocannl-1420; the f32 ulp of slack it once carried for HIP went with
+     gh-ocannl-1432, which also added the stronger claim beside it: every partial sum is exact in
+     f32, so the tensorized result IS the once-narrowed wide reference, bitwise) — and it is
+     two-sided: the same bound over the same inputs, rendered under the default policy, must FAIL
+     wherever the backend keeps bf16 storage residency, which is what makes passing it evidence
+     rather than a property of easy inputs. On HIP that is no longer the default (its [Bf16_auto]
+     resolves wide since gh-ocannl-1051), so its negative control is the [Bf16_narrow] twin below:
+     gfx11's bf16-accumulate WMMA, or its narrow serial fallback, which the approximate profile
+     still ships. Metal's side of the negative control executes since gh-ocannl-923: its
+     default-policy [simdgroup_bfloat8x8] accumulate exceeds the bound (by 0.0937 on an M4 Max,
+     against -0.0234 under [Bf16_wide]). --- *)
   let bwa = NTDSL.init ~l:"bwa" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwa () in
   let bwb = NTDSL.init ~l:"bwb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwb () in
   let exact_bw =
@@ -1064,10 +1066,10 @@ let () =
          ())
   in
   (* Half a bf16 ulp of the exact value (8 significand bits: [frexp]'s mantissa is in [0.5, 1), so
-     the ulp is [2^(e-8)]), plus one f32 ulp (2^(e-24)) of slack. *)
+     the ulp is [2^(e-8)]). *)
   let narrowing_bound x =
     let _, e = Float.frexp x in
-    Float.ldexp 1. (e - 9) +. Float.ldexp 1. (e - 24)
+    Float.ldexp 1. (e - 9)
   in
   let worst_excess got =
     Array.foldi got ~init:Float.neg_infinity ~f:(fun t acc g ->
@@ -1127,6 +1129,8 @@ let () =
     wide_ref_bw ~f:Float.equal;
   p "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone"
     Float.(worst_excess got_bw <= 0.);
+  p_all2 "Bf16_wide uniform-bf16 tensorized matmul equals the once-narrowed wide reference bitwise"
+    got_bw wide_ref_bw ~f:Float.equal;
   (let claim =
      "the default-policy uniform-bf16 matmul exceeds the narrowing rounding exactly where the \
       backend keeps bf16 storage residency (the inputs discriminate)"
@@ -1749,18 +1753,13 @@ let () =
     in
     let ctx_d = Context.run ctx_d routine_d in
     let got_h_staged = Context.get_values ctx_d mchs.Tensor.value in
-    (* Parity is bitwise on CUDA (wmma computes the exactly-rounded dot product for these f16-exact
-       inputs) and on Metal (likewise its [simdgroup_matrix] f32 accumulate, gh-ocannl-923). On HIP
-       it is only within f32 tolerance: RDNA3's [v_wmma_f32_16x16x16_f16] does not produce the
-       exactly-rounded result (observed max abs diff ~1.3e-7), so the f32 accumulator differs from
-       the f16 serial twin by rounding. The uniform-f16 leg below stays bitwise on every backend. *)
-    let h32_eq =
-      (* The RDNA3 rounding exception belongs to the tensor unit; without an advertised tile-MMA
-         (gh-ocannl-1032) HIP takes the same exact scalar fallback Metal does. *)
-      if on_hip && Lazy.force hip_mma then approx else Float.equal
-    in
-    p_all2 "staged+tensorized half matmul matches the serial twin" got_h_staged got_h_serial
-      ~f:h32_eq;
+    (* Parity is bitwise on every backend: wmma, Metal's [simdgroup_matrix] f32 accumulate
+       (gh-ocannl-923) and RDNA3's [v_wmma_f32_16x16x16_f16] all return the exactly-rounded dot
+       product for these f16-exact inputs of one sign. HIP held a tolerance here while [mbh] was
+       signed (observed max abs diff ~1.3e-7, the mixed-sign residue of gh-ocannl-1420), until
+       gh-ocannl-1432 made the inputs nonnegative. *)
+    p_all2 "staged+tensorized half matmul matches the serial twin bitwise" got_h_staged got_h_serial
+      ~f:Float.equal;
     let src = Generated.read "mm_h_staged_mma" in
     let has s = String.is_substring src ~substring:s in
     (* f16 operands with an f32 accumulator: every tensor-core backend renders the marked
@@ -1783,7 +1782,7 @@ let () =
     in
     p "staged+tensorized half fragment residency" ok)
   else (
-    skipped "staged+tensorized half matmul matches the serial twin";
+    skipped "staged+tensorized half matmul matches the serial twin bitwise";
     skipped "staged+tensorized half fragment residency");
 
   (* --- The same staged half composition with a uniform-f16 accumulator (gh-ocannl-480): the leg
@@ -1935,9 +1934,11 @@ let () =
      fallback for this triple (which accumulates in f32 too and also reaches 2056); the structure
      claims do, and fail on it. CUDA runs it too since gh-ocannl-925 (wmma's [__half] x [__half] ->
      [float] fragments, loading and storing the f32 [d] unconverted; the control's uniform-f16 arm
-     is the [__half] accumulator fragment). HIP's rocWMMA f16 -> f32 arm has not run it — gfx11's
-     WMMA is not exactly rounded, so its claims would need the tolerance the bf16 legs carry — and
-     the CPU backends cannot stage. --- *)
+     is the [__half] accumulator fragment), and so does HIP since gh-ocannl-1432 (rocWMMA's
+     [float16_t] x [float16_t] -> [float] fragments; the control's uniform-f16 arm is the
+     [float16_t] accumulator fragment): every product is nonnegative, where gfx11's WMMA is exactly
+     rounded (gh-ocannl-1420), so the claims stay bitwise there too. The CPU backends cannot stage.
+     --- *)
   let claim_h32k_value scope =
     Printf.sprintf "f16->f32 k-split, %s scope: every cell accumulates to 2056 in f32" scope
   in
@@ -1953,7 +1954,7 @@ let () =
   let claim_h32k_staged_struct =
     "f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconverted"
   in
-  if on_metal || Lazy.force cuda_h32_wmma then (
+  if on_metal || Lazy.force cuda_h32_wmma || (on_hip && Lazy.force hip_mma) then (
     let kw = 144 in
     let ksa =
       NTDSL.init ~l:"h32ksa" ~prec:Ir.Ops.half ~i:[ kw ] ~o:[ n ]
@@ -2010,10 +2011,14 @@ let () =
     p_none (claim_h32k_control "direct") ctl_direct ~f:(Float.equal 2056.);
     p_none (claim_h32k_control "fragment") ctl_staged ~f:(Float.equal 2056.);
     (* Per backend: the f32 accumulator over half operand fragments, and no conversion at [d] —
-       Metal's and CUDA's coordinate tables. *)
+       Metal's, CUDA's and HIP's coordinate tables. *)
+    let f32_acc =
+      if on_metal then "simdgroup_float8x8" else if on_hip then rocwmma_f32_acc else wmma_f32_acc
+    in
     let acc_decl, operand_decl, conversion =
       if on_metal then
         ("simdgroup_float8x8 __mma_acc", "simdgroup_half8x8 __mma_af", "ocannl_mma_rc8")
+      else if on_hip then (rocwmma_f32_acc ^ " __mma_acc", rocwmma_f16_a, "ocannl_wmma_rc16")
       else (wmma_f32_acc ^ " __mma_acc", "matrix_a, 16, 16, 16, __half", "ocannl_wmma_rc16")
     in
     (let has s = String.is_substring src_direct ~substring:s in
@@ -2027,9 +2032,7 @@ let () =
       (Ll_test.all_rendered ~what:"f16->f32 k-split fragment" Ir.C_syntax.Mma_intrinsics
          census_staged
       && staged_half_resident src_staged
-      && has
-           (if on_metal then "simdgroup_float8x8 __mma_fragment_"
-            else wmma_f32_acc ^ " __mma_fragment_")
+      && has (f32_acc ^ " __mma_fragment_")
       && has operand_decl
       && not (has conversion)))
   else (
@@ -2165,12 +2168,14 @@ let () =
     else p_all claim_bw_control got_default ~f:(Float.equal bws_wide);
     if narrow_bf16_narrow then p_none claim_bw_narrow_control got_narrow ~f:(Float.equal bws_wide)
     else p_all claim_bw_narrow_control got_narrow ~f:(Float.equal bws_wide);
-    (* A known answer for the narrow arm, whose rounding the claims above deliberately do not pin
-       (gfx11's bf16-accumulate is not exactly rounded): adding a positive +1 per later block to a
-       bf16 partial can round it down to where it was or up by one ulp, never lower and never more,
-       so any narrowing between blocks lands in [bws_narrow, bws_narrow + ulp * later blocks] — and
-       a wide reading ([bws_wide]) lies inside it too, so the claim is universal. The gh1051 A/B
-       drivers cite this as where the narrow arm's values are pinned. *)
+    (* A known answer for the narrow arm, whose rounding the claims above deliberately do not pin:
+       each later block's 257 is a tie, and how a bf16-accumulate unit rounds a tie is the question,
+       not the sign (the inputs are nonnegative; gfx1151's and gfx1102's arms read [bws_narrow]
+       exactly, gh-ocannl-1432, but nothing here requires that of every backend). Adding a positive
+       +1 per later block to a bf16 partial can round it down to where it was or up by one ulp,
+       never lower and never more, so any narrowing between blocks lands in [bws_narrow, bws_narrow
+       + ulp * later blocks] — and a wide reading ([bws_wide]) lies inside it too, so the claim is
+       universal. The gh1051 A/B drivers cite this as where the narrow arm's values are pinned. *)
     (let ulp =
        let _, e = Float.frexp bws_narrow in
        Float.ldexp 1. (e - 8)

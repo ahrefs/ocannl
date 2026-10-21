@@ -401,10 +401,7 @@
  (name test_shared_builtins)
  (package arrayjit)
  (modules test_shared_builtins)
- (deps
-  ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (deps ocannl_config ocannl_ambient)
  (libraries
   arrayjit.context
   arrayjit.ir

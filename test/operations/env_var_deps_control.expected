@@ -14,14 +14,16 @@ one control marker occurrence covers only one identical diagnostic: true
 a scanner absent from the manifest is detected by the population equality: true
 repo-relative scanner paths keep equal basenames distinct: true
 
-The rule is put to a stanza this repository does not contain: an `(executable)` whose one
-module calls `Test_utils.Generated.init`, run by a rule that does or does not declare
-`(env_var OCANNL_BUILD_FILES_PREFIX)`. Nothing else differs between the two runs.
+The rule is put to a tree this repository does not contain: two rules declaring only
+variables the ambient record leaves out (`HOME`, a reserved tooling name, `OCANNL_BACKEND`), and
+the same tree declaring `(env_var OCANNL_BUILD_FILES_PREFIX)` inside a `(subdir …)` group and
+`(env_var ocannl_backedn)` at the top level besides. Nothing else differs between the two runs.
 
-the checker reports the stanza and exits 1 when the rule running it omits the declaration: true
-the same tree with the declaration added passes and says nothing about it: true
-a select arm reaching the initializer is its stanza's: the stanza is named without it: true
-The credential rule is put to the declaring tree above plus one rule whose only dependency is
+the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir …)` group: true
+an unknown lowercase name the record carries too is named in the same run: true
+the same tree declaring only someone else's variable, a reserved tooling name and the backend passes and says nothing about it: true
+
+The credential rule is put to the passing tree above plus one rule whose only dependency is
 a single `(env_var ...)`: a deny-listed name, a name matched by a pattern, and a near miss;
 then to the same rule reading a name through `%{env:...}` instead, to the program's module
 reading one by name, and to the near miss again with no deny-list and with one the reader
@@ -42,33 +44,6 @@ not one this workspace builds. Nothing else differs between the three runs.
 an external command handed a file this workspace builds is a stanza the rule reaches, reported by name when it declares neither: true
 the same stanza, declaring its backend, passes with the raw-text floor naming it too: true
 the same command handed nothing of this workspace is a stanza neither reader sees: true
-
-The guard rule is put to a tree of one `(executable)` whose module reads a configuration key
-from a LIST it hands to `Utils.read_env_var`. The arms differ in how the rules running it
-answer for `(env_var OCANNL_VIRTUALIZE_MAX_VISITS)`, in whether the stanza writes its `(modules …)` down, and in whether
-the key list is resolvable at all. Nothing else differs between the runs.
-
-the checker reports the key and exits 1 when the rule running the guard neither declares nor pins it: true
-the same tree with the declaration added passes and says nothing about it: true
-and so does the same tree pinning the variable with `setenv` instead: true
-a `setenv` over a SIBLING branch of the same action does not pin this run, and is reported: true
-and an unpinned run of a HELPER beside a pinned guard does not un-pin it: true
-a stanza reaching for dune's default module set is judged too, not skipped for lack of a `(modules …)` field: true
-a program declared inside a `(subdir …)` is reached, not read as a stanza with no modules: true
-a module the stanza names and this check was handed no source for is reported, not read as one that makes no reads: true
-a test directory's own `utils.ml` is not the module that defines the reader, and is not exempt: true
-a key the registry does not know is still asked for, and is reported as undeclarable: true
-and pinning it is the way to answer for one: true
-a stanza dune runs itself pins through its own action, and is not asked to declare besides: true
-a dune file whose module sets this scan cannot place is refused, not approximated: true
-and the same directive inside a `(subdir …)` does not slip past the refusal: true
-a guard in a plain library is reported, there being no `deps` field in reach to declare it: true
-a library with inline tests is refused the same way, being linkable all the same: true
-and declaring the variable in `(inline_tests (deps …))` is no licence: that invalidates the inline runner alone: true
-a second rule running the same executable answers for its own run: one declaring does not cover the other: true
-and the same pair with both declaring passes: true
-a dynamic reach whose keys resolve to nothing is refused rather than passed over in silence: true
-a key spelled in upper case names the same variable, and is asked for under the same name: true
 a local probe declaration is valid with its actual instrumentation owner: true
 a transitive library path proves the probe can link instrumentation: true
 linking instrumentation alone does not declare lifecycle intent: true
@@ -131,10 +106,9 @@ an absolute path ending in the local executable's name is not the local executab
 a rule on a `(test)`'s generated alias that runs ANOTHER directory's binary is not the deliberate gate collision, and is reported: true
 a rule reusing the alias dune generates for a `(test)` in the same `(subdir …)` group is reported there too: true
 a stanza neither derivation calls a member is asked for no family alias: true
-declaring generated-artifact storage without an initializer is refused: true
+declaring a configuration variable the ambient record already carries is refused: true
 a tracing dependency without a module reading it is refused: true
 an exemption whose read disappears is refused: true
-an exemption whose declaration disappears is refused: true
 The per-module inline-test aliases (gh-ocannl-1037) are put to a synthetic library of two
 tested modules and an untested helper, once wired completely and once broken each way.
 
@@ -142,70 +116,6 @@ a rule per tested module passes unaggregated, and the untested helper is asked f
 a tested module with no per-module rule is reported, and the checker exits 1: true
 a rule whose alias names one module and whose run tests another is reported: true
 a per-module alias listed in the `runtest` aggregate is reported as a double run: true
-
-The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module
-names values of a stand-in `Ir.Schedule`, which reads `gpu_schedule_block_size` one call away, the
-launch trace directly, a settings predicate of `Utils`, and a settings field two keys set, from
-a submodule of a sibling module.
-The arms differ in how the stanza answers for the keys, in which values the module names and
-how, and in one stray read in the stand-in.
-
-a test naming the pipeline is reported, with the key its value reaches through the module's own calls and the execution-neutral trace key, when its stanza declares neither: true
-the same stanza declaring the keys passes: true
-and so does the same stanza pinning them with `setenv` around its run: true
-and so does one depending on `(universe)`, which no cache serves: true
-keys read through a `Utils` settings predicate, and through a `Utils.settings` field read in a sibling module's submodule -- with the alias that also sets the field -- are followed and asked for: true
-a value reached under `open Ir.Schedule` is a reference too: true
-another library's `Schedule` is not the pipeline, and asks for nothing: true
-a key the pipeline reads outside every named value is refused, not dropped from every requirement: true
-
-The cc vector-width rule (gh-ocannl-1320) is put to a tree of one `(test)` beside one test-tree
-library, over a stand-in `Cc_backend` reading `cc_vector_bytes` in one value and one call away in
-another, and a stand-in limits record filling two fields from those --
-under a `let open` and through a function-local helper calling through an alias -- and a third
-from a value reading another key.
-The arms differ in how the module reads the width, whether the test links the library that
-reads it, whether that library has inline tests, and how the stanza answers for the variable.
-
-a test projecting a width field off a limits record is reported, naming the variable and the read, when its stanza declares neither: true
-the same stanza declaring the variable passes: true
-and so does the same stanza pinning it with `setenv` around its run: true
-but a `setenv` whose value reads the same variable back through `%{env:…}` pins nothing, and is reported: true
-a `Cc_backend` value reaching the width one call away, named through a module alias of `Context.Cc_backend`, is a read: true
-a limits update overwriting one width field leaves the other to a device base, and is a read: true
-a limits update overwriting only a label the width does not fill copies every width field, and is a read: true
-a read in a test-tree library the test links is the test's read: true
-and the same library, not linked, asks nothing of the test: true
-a read reached through a library's `(re_export …)` dependency is the test's read too: true
-a read in a library with inline tests is asked of its `(inline_tests (deps …))` when nothing links it: true
-and declaring the variable there answers for it: true
-a fully synthetic limits record -- through an alias of the constant base and a function returning an update of it -- an update of another record, a field the width does not fill, and `Cc_backend` values not reaching the width ask for nothing: true
-but a bare `no_hardware_limits` the test binds to a device's limits is that binding, and an update of it is a read: true
-a `Cc_backend` reading the width key outside every named value is refused, not read as having no width readers: true
-and one whose values no longer reach the key at all is refused rather than passing vacuously: true
-a tree holding the limits record but not `Cc_backend` is refused as a lost anchor, not passed with no readers: true
-a field of another record over-read by name adds requirements and keeps the limits type's updates recognised: true
-a `no_hardware_limits` reached through a local module of the test is not the library's constant, and an update of it is a read: true
-a read in a helper library outside the test roots is the linking program's read: true
-a canonical `Ir.Backend_intf.no_hardware_limits` under a file's own `module Ir` is that module's, and an update of it is a read: true
-a `Cc_backend` value exported through `include struct … end` is a width value too: true
-a linked library whose source the scan was never handed is refused, not read as making no reads: true
-and the self-read is recognised case-insensitively, as Windows reads the variable: true
-a `Cc_backend` value re-exported by `include` of a named structure is a width value: true
-a bare `no_hardware_limits` the file does not bind came from an `open`, and an update of it is a read: true
-a library's interface-only module has no source to hand over, and is not refused: true
-a field filled through a `let module` helper still carries the width: true
-a width read inside a record under an unnamed `let ()` stays unplaced, and is refused: true
-a nested submodule's value re-exported by a named `include` is a width value too: true
-a virtual library's default implementation reading the width is the linking program's read: true
-a field filled through a top-level alias of a structure the limits file defines still carries the width: true
-a `Cc_backend` value re-exported by `include` of an alias of a structure is a width value: true
-and so is one bound by a destructuring top-level `let`: true
-an alias of some other module's `Backend_intf` does not name the library's synthetic limits, and an update through it is a read: true
-and a bare `Backend_intf.no_hardware_limits` may come from any `open`, so an update of it is a read: true
-a `Cc_backend` value reached through an alias of its parent module is a read: true
-a linked library with dune's default module set in a directory the globs never reach is refused: true
-a value re-exported by `include` through two module aliases is a width value: true
 
 The cc search rule (gh-ocannl-1368) is put to a tree of one `(test)` whose module starts a
 search of a stand-in `Autotune`, directly or through a stand-in framework or support wrapper,
@@ -279,7 +189,7 @@ canary owner linkage or module drift cannot inherit a configuration-free exempti
 unsupported canary launchers or unresolved alias dependencies cannot claim the exemption: true
 each missing scoped exemption is stale even while its sibling alias remains: true
 The checker is put to one dune file built to trip the marker grammar and the declaration
-checks, beside a source that does not parse, and to a run handed nothing at all.
+checks, and to a run handed nothing at all.
 
 a dune file built to trip the marker grammar and the declaration checks is refused: true
 a run handed no dune file and no source is refused: true
@@ -295,12 +205,6 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:87659b49df04eee3fc19350b0be6629a] repo-relative scanner paths
   [scanner-refusal:8dbf084aae3ed7d3e4ce33fb0d06e710] the credential deny-list
   [scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's
-  [scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated
-  [scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration
-  [scanner-refusal:ea9bbac4c8b7dd80c2aba00aaa7c31ff] vector width key
-  [scanner-refusal:c0d3ae6ca0018d4cbf12e95986af7220] no top-level value
-  [scanner-refusal:3d0e227333c3757cabc427ac4fb81130] program links names
-  [scanner-refusal:cdf0668c2967d73ed0c8b32a7c794932] vector-width derivation lost
   [scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost
   [scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose
   [scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does
@@ -317,10 +221,6 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
   [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
   [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
-  [scanner-refusal:dda5b4655f74eda46ec0c60e320d232b] run's generated artifacts
-  [scanner-refusal:747372ab4b28cca8978c2b6bd8983005] env_var
-  [scanner-refusal:364d32b22a5cb7a70b569db0d8864170] env_var
-  [scanner-refusal:07e7987f0d61b10a9fea6c6590c73d59] env_var
   [scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions
   [scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on
   [scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule
@@ -331,33 +231,28 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the
   [scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that
   [scanner-refusal:7aeca22f89e6555c3b97967f8bbdaba4] credential variable on
-  [scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var
+  [scanner-refusal:92d872e8d8f1d6a3de97bf3499a7170d] env_var
   [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates
   [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing
   [scanner-refusal:2df546d04b63387a24409b3c4c6a9611] declares the tracing
   [scanner-refusal:a53c6b4b54cc85d2f251e80dd90c855c] credential variable on
   [scanner-refusal:e55f77a62871fb685d23199e95c8f173] the environment variable
-  [scanner-refusal:d5f94657407bc4dbf949ba4187e80100] include_subdirs
-  [scanner-refusal:ea6e2adedc7afd62fa55afcf859f251d] names the module
-  [scanner-refusal:55f2feade4e139b5abb073d0b89c42cb] reaches the environment
-  [scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration
-  [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration
-  [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration
-  [scanner-refusal:77abb7920eac5544c6bf60dd498ec9cf] cc vector width
+  [scanner-refusal:b9c87589aecbe6de4db58fc4671f7491] include_subdirs
+  [scanner-refusal:eac17cf643d980bb15c3113087c863c4] names the module
   [scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than
   [scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file
   [scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search
-  [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach
+  [scanner-refusal:591d750b2330cdac197127abc39ce397] executable's own modules
+  [scanner-refusal:f30ace350fdf01fcc307ea64e391a7bf] Test_utils.Generated
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
   [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests
   [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts
-  [scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no
   [scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from
-  [scanner-refusal:96e2132b9ea14b4c19e7573b7725b9ec] omits the declaration
-  [scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes
-  [scanner-refusal:9129542c43718bbbdd95f40fe5b0f98b] reaching the initializer
+  [scanner-refusal:edc9c30307628c25acd76b6959b5a172] record carries declared
+  [scanner-refusal:b127e705a9263d141f051fd084d920f5] unknown lowercase name
+  [scanner-refusal:4a289c3610d53e6f94b45fa13f689381] someone else's variable
   [scanner-refusal:055900a8a1fbefd29b7c64a46953700f] external command handed
   [scanner-refusal:fac924c455e2114b6e6bdebdc44811fd] same stanza declaring
   [scanner-refusal:b4a6c6ad5ae1c0d26b7fe78da5c5aa7f] command handed nothing
@@ -396,82 +291,13 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:0880ce931733097b9e44c86e1f0b7065] ANOTHER directory's binary
   [scanner-refusal:93ed6fc086891252db10d64e8dbfeca0] alias dune generates
   [scanner-refusal:84a1eda5072c0c3e43ecad5c2af6e561] stanza neither derivation
-  [scanner-refusal:5ae6706f247abd51242630658a99a0c1] declaring generated-artifact storage
+  [scanner-refusal:ed4970402e1305b0dfaabed50860c3fe] configuration variable the
   [scanner-refusal:c5caa846079a8640d0b93242bba8fd1b] tracing dependency without
   [scanner-refusal:144d103d186b613dbedbe258066e8ccc] whose read disappears
-  [scanner-refusal:9d94b0b39fc9ad513abc3c717482ae60] whose declaration disappears
-  [scanner-refusal:e38848b2fb4d8a90933cfe88e13cc04e] guard neither declares
-  [scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes
-  [scanner-refusal:605b6d65216f3c4fba7184a09d392f05] pinning the variable
-  [scanner-refusal:351acc91087a8ad372f2b9d40f2c1d20] SIBLING branch of
-  [scanner-refusal:c0e7be9911f1a357c38e840ace916450] pinned guard does
-  [scanner-refusal:c417aa0905f775b98ac3a197ecdd454c] dune's default module
-  [scanner-refusal:bf505697938fab0cadb9434dc171764b] program declared inside
-  [scanner-refusal:9b0ca5fe801d10403fb73978e58049f1] module the stanza
-  [scanner-refusal:3aaf1e15d8b245e1193c7d00698c8d84] utils.ml
-  [scanner-refusal:ba0a6cca6e0d6cef1cf5e8661a56b5a0] reported as undeclarable
-  [scanner-refusal:21fd01e1a9e76489f599ef5a9387c17f] and pinning it
-  [scanner-refusal:23b8372cc11b73d08a28c880b778eaf2] itself pins through
-  [scanner-refusal:67415c1f44643b671427afd9352d8ba4] refused not approximated
-  [scanner-refusal:422d713c4296fbd0c9cc8cace51b682d] same directive inside
-  [scanner-refusal:a317ce82c0267d509ae45cf1d1b349d7] reported there being
-  [scanner-refusal:c0f203aa0cf72d22c483afaf430d5353] library with inline
-  [scanner-refusal:afc8337bcb6f3d267d65774a59ca7f86] inline_tests
-  [scanner-refusal:b850c5e69abfcc5facf9b920af1a291f] same executable answers
-  [scanner-refusal:b098b95e7bbcc632b19f0e470447fd97] both declaring passes
-  [scanner-refusal:d8c7b4408936ac9480281388a26eb873] dynamic reach whose
-  [scanner-refusal:7a38e9cb5b4418e6e5bb8fe3b294d8fd] the same variable
   [scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated
   [scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with
   [scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported
   [scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed
-  [scanner-refusal:7e6affeccdb27fbb0cb1f4badf37de1d] the execution-neutral trace
-  [scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring
-  [scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning
-  [scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe
-  [scanner-refusal:0ef14060bb3652683a114deb420a5f42] Utils.settings
-  [scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule
-  [scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule
-  [scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside
-  [scanner-refusal:ae4c5182763a52487befbd3029c2fd91] stanza declares neither
-  [scanner-refusal:d52ce57d79cc2a310f3f2d2d037e9b2e] declaring the variable
-  [scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning
-  [scanner-refusal:b5b10305ef82fa7d9077db1eceb93561] variable back through
-  [scanner-refusal:6ed1faa93fb2465cb3c3a746f850f77c] Context.Cc_backend
-  [scanner-refusal:d86762f9ec334387db672f5035ac305e] limits update overwriting
-  [scanner-refusal:448ab51835350320d2d9b13f46f2f82e] limits update overwriting
-  [scanner-refusal:40edf1996b7443bf3358507ac01cb7a9] test-tree library the
-  [scanner-refusal:b9fadc4851f264a2b3d506d14c4e1b3a] linked asks nothing
-  [scanner-refusal:ec11239fab853f2292b2255dcbe588e9] re_export
-  [scanner-refusal:7551aca5b9d7dd867c5c5c96562bed10] inline_tests
-  [scanner-refusal:381249352d978e3bfbb8b4bb734d6887] declaring the variable
-  [scanner-refusal:a95d57c661530c8d9f465a25506bb93d] Cc_backend
-  [scanner-refusal:abc9643d1cda7ae5a236d8652b9d56d1] no_hardware_limits
-  [scanner-refusal:4fa531ab8ce35f5bfe13706d82823855] Cc_backend
-  [scanner-refusal:2f4d8b9f7e61558560479600d35f74ac] than passing vacuously
-  [scanner-refusal:7efbc10da3b495bc80f884dd42737612] Cc_backend
-  [scanner-refusal:c408a2684ba7b8916375d06fdb3e7330] type's updates recognised
-  [scanner-refusal:a966ee873537b3b8c382531ffea8f095] no_hardware_limits
-  [scanner-refusal:69ae4cf5f5249bd390b16e305c1f45d7] helper library outside
-  [scanner-refusal:2aa043e6a8bd4e45a080d2f62d8af168] Ir.Backend_intf.no_hardware_limits
-  [scanner-refusal:d5139f7e86708309a46549017b6c0f68] Cc_backend
-  [scanner-refusal:840d9d1ef23497bec8d699caa98d67d6] linked library whose
-  [scanner-refusal:0592d760a046f0395065418e9c342a58] is recognised case-insensitively
-  [scanner-refusal:7e956ea74253311af8c0a9b9fa543587] Cc_backend
-  [scanner-refusal:549301882f72c66accc4981283aad8e2] no_hardware_limits
-  [scanner-refusal:10334c2250270979aa32ddc7a10d93e3] library's interface-only module
-  [scanner-refusal:9c6ae4964c8b00fe27c0607da0135f80] field filled through
-  [scanner-refusal:f9bd0cf9b0592ab82941e27281a7dc4c] let stays unplaced
-  [scanner-refusal:b22617ea23d5bd2270d682426b8c2ac5] submodule's value re-exported
-  [scanner-refusal:823039faeecddef225db5009f088e3b9] library's default implementation
-  [scanner-refusal:e9b61c2f984d21446b37e9e79253a234] defines still carries
-  [scanner-refusal:bea334cae6dc5ff82766eb1a3460ce00] Cc_backend
-  [scanner-refusal:9030a635de21129bfd2b27cbf880edc3] destructuring top-level let
-  [scanner-refusal:284de09cb0fa8165a928b27489ff432b] Backend_intf
-  [scanner-refusal:3571dda50442efc2c734e28a3ad9e4f8] Backend_intf.no_hardware_limits
-  [scanner-refusal:07de1e1a3e2d7b7fc3b4e521233c0397] Cc_backend
-  [scanner-refusal:7bd8773fde8c6bdebc92968b5cfbb687] dune's default module
-  [scanner-refusal:4170b6912074554ea1731ee6535d3426] re-exported by include
   [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree
   [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree
   [scanner-refusal:31948a4b787d4a96777593c36d38abf6] repository-wide scan rule
@@ -539,6 +365,4 @@ Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_o
   [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
   [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's
-  [scanner-refusal:b35f6c5cf70c9d942c2e42a4c1af9975] Test_utils.Generated.init
-  [scanner-refusal:9ad60261dbb2540d4d7e060be725ad4d] repository's census finds
 End of synthetic controls.
