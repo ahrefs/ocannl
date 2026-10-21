@@ -442,8 +442,9 @@ type shipped = {
           compiling what it returned, a shipping compile that failed or was substituted before it
           included (gh-ocannl-1440). 0 when the shipped schedule was a schedule-cache hit: the
           routine is the code the search's validating replay compiled, linked again
-          ({!Context.relink_outcome}). 1 for a searched winner, recompiled from its saved form in
-          the caller's lineage. *)
+          ({!Context.relink_outcome}). One compile's count for a searched winner, recompiled from
+          its saved form in the caller's lineage (1, or 2 on Metal, whose device compile is counted
+          at link). *)
 }
 (** What {!tune_placements} shipped, as its [on_ship] callback receives it (gh-ocannl-1438): the
     identity of the returned artifact, which the arm reports alone do not determine (see

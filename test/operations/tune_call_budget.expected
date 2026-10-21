@@ -37,4 +37,9 @@ mid: the chain measured a flip, then stopped short of the control's flips: true
 generous: a budget never spent changes nothing the control did: true
 generous: no search was cut: true
 per-search: every report carries the per-search budget, the tighter cut: true
+recorded: no search was cut: true
+recorded: the next call replays the recorded decision: true
+stopped: no search was cut by its share: true
+stopped: the call's budget stopped the flips before any: true
+stopped: nothing was recorded, so the next call compares the arms afresh: true
 tune_call_budget: done

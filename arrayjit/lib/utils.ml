@@ -1,5 +1,12 @@
 open Base
 
+(* gh-ocannl-1440: completed backend compiles on this domain -- each code generation a [Context]
+   compile completes, and each device compile a backend defers to link time (Metal's library
+   compile) -- the work a relink of retained code skips. Read through [Context.backend_compiles]. *)
+let count_backend_compile, backend_compiles =
+  let key = Stdlib.Domain.DLS.new_key (fun () -> ref 0) in
+  ((fun () -> Int.incr (Stdlib.Domain.DLS.get key)), fun () -> !(Stdlib.Domain.DLS.get key))
+
 type settings = {
   mutable log_level : int;
   mutable debug_log_from_routines : bool;

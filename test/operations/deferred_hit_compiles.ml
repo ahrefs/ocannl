@@ -112,6 +112,15 @@ let accounted tag c =
     (c.compiled
     = List.sum (module Int) c.reports ~f:(fun r -> r.Autotune.compiles) + c.shipped.ship_compiles)
 
+(* What one compile of the routine counts: 1 where the device compile happens with the code
+   generation (cc, CUDA, HIP), 2 where the backend defers it to the first link (Metal). *)
+let one_compile =
+  let before = Context.backend_compiles () in
+  let ctx, _routine = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
+  let counted = Context.backend_compiles () - before in
+  Context.release ctx;
+  counted
+
 let cold = run "cold"
 let warm = run "warm"
 let bypass = run ~placement_store:false "bypass"
@@ -123,7 +132,7 @@ let () =
     && String.equal cold.shipped.ship_arm "B"
     && not cold.shipped.ship_replayed);
   p "cold: the searched winner's shipped routine is one compile, from its saved form"
-    (cold.shipped.ship_compiles = 1);
+    (one_compile >= 1 && cold.shipped.ship_compiles = one_compile);
   p_all "cold: no search replayed a cached schedule" cold.reports ~f:(fun r ->
       r.Autotune.replay_compiles = 0);
   accounted "cold" cold;

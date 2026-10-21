@@ -2183,7 +2183,9 @@ files.
   `budget_allows`. A first-come deadline let arm A spend everything and compared arm B on its floors
   alone. Both arms always search (the positional `?report` contract, and they are the call's
   floor); the flip chain stops before any alternative once the budget is spent, mid-group included
-  (an unmeasured alternative leaves its node open, like a pruned one). The key is
+  (an unmeasured alternative leaves its node open, like a pruned one), and a decision reached with
+  flips left unsearched is not recorded in the placement store, like one over a cut search. The
+  key is
   `Placement_shaping`: a share follows the wall clock, so it stays out of the trajectory identity,
   and a cut trajectory is a prefix of the same order, which early stopping reads conservatively.
   `test/operations/tune_call_budget.ml` places cuts with two virtual clocks counted in attempts
@@ -2196,8 +2198,11 @@ files.
   `Context.relink_outcome` links it again on that context with a fresh delta and routine id. The
   deferred hit releases the validating replay's context and relinks at `compile_deferred`, so the
   cached schedule compiles once; a relink the device refuses ships the untuned default, as the
-  second compile's failure did. The counters: `Context.backend_compiles` (per domain, completed
-  backend compiles), `report.compiles`/`replay_compiles`, `Autotune.deferred_compiles`, and
+  second compile's failure did. Metal compiles its library at LINK, so a relink alone would compile
+  the source again: the library is memoized on the code value (`Metal_backend`'s `library_memo`),
+  and the link-time compile is counted with the others. The counters: `Context.backend_compiles`
+  (per domain, `Utils.count_backend_compile`: every code generation plus every link-time device
+  compile), `report.compiles`/`replay_compiles`, `Autotune.deferred_compiles`, and
   `Train.shipped.ship_compiles`, which together account for every compile of a call
   (`test/operations/deferred_hit_compiles.ml`). A searched winner still recompiles from its saved
   form: its candidate was compiled in the search lineage, which a `timing_ctx` makes another

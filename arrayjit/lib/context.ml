@@ -309,9 +309,9 @@ type retained = {
   rt_relinked : bool Atomic.t;
 }
 
-(* gh-ocannl-1440: completed backend compiles (codegen and device compile) on this domain. *)
-let compiles_key = Stdlib.Domain.DLS.new_key (fun () -> ref 0)
-let backend_compiles () = !(Stdlib.Domain.DLS.get compiles_key)
+(* gh-ocannl-1440: [Utils.backend_compiles], counted here for code generation and by a backend for a
+   device compile it defers to link time. *)
+let backend_compiles = Utils.backend_compiles
 
 (* The ledger, frontier and routine record of a link, shared by a compile and a relink. *)
 let finish_link ctx comp wrapped
@@ -476,7 +476,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
                   Backend.compile ?name ?lowered_transform ?prelowered bctx.BI.optimize_ctx bindings
                     comp
                 in
-                Int.incr (Stdlib.Domain.DLS.get compiles_key);
+                Utils.count_backend_compile ();
                 (code, Ir.Schedule_outcome.tag Ir.Schedule_outcome.Backend_link (link code))))
       in
       match outcome with

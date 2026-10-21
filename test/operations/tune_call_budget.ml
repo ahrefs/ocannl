@@ -75,11 +75,22 @@ let flip_slots = min inline_flips total_alternatives
 (* One search as the test saw it: its attempts' labels, the call's attempts before it started, and
    its report. *)
 type search = { attempts : string list; started_at : int; report : Autotune.report; flip : bool }
-type call = { searches : search list; output : float array; total_attempts : int }
+
+type call = {
+  searches : search list;
+  output : float array;
+  total_attempts : int;
+  replayed : bool;  (** Whether the shipped placement was the placement store's, replayed. *)
+}
 
 (* Each call searches in a cache of its own: a search must not replay another call's crown. *)
-let run ?call_budget ?(settings = []) ~cache_dir tag =
-  Scripted_search.clear_cache_dir cache_dir;
+(* [?jump] is virtual time the call's clock gains once both arms have reported -- the wall time a
+   decision-surface lowering might take -- so a budget the arms leave untouched is spent before the
+   flips. [?warm] keeps the cache directory an earlier call left. *)
+let run ?call_budget ?(settings = []) ?(placement_store = false) ?(jump = 0.) ?(warm = false)
+    ~cache_dir tag =
+  if not warm then Scripted_search.clear_cache_dir cache_dir;
+  let replayed = ref false in
   (* Each attempt with the search it belongs to: a "baseline" attempt opens a search. *)
   let attempts = ref [] and n_searches = ref 0 in
   let reports = ref [] and n_arm = ref 0 in
@@ -94,14 +105,15 @@ let run ?call_budget ?(settings = []) ~cache_dir tag =
   let (ctx, routine), _record =
     Autotune.Seam.with_value Autotune.on_candidate_attempt on_attempt @@ fun () ->
     Autotune.Seam.with_value Autotune.call_budget_elapsed (fun _real ->
-        Float.of_int (List.length !attempts))
+        Float.of_int (List.length !attempts) +. if !n_arm >= 2 then jump else 0.)
     @@ fun () ->
     Autotune.Seam.with_value Autotune.budget_elapsed (fun _real -> search_attempts ()) @@ fun () ->
     Scripted_search.scripted ~settings
       ~measure:(fun _ -> script ())
       (fun () ->
-        Train.tune_placements ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir ~placement_store:false
+        Train.tune_placements ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir ~placement_store
           ~inline_flips ?call_budget
+          ~on_ship:(fun s -> replayed := s.Train.ship_replayed)
           ~report:(fun r ->
             Int.incr n_arm;
             reports := (false, r) :: !reports)
@@ -127,7 +139,7 @@ let run ?call_budget ?(settings = []) ~cache_dir tag =
               (Option.value_map s.report.Autotune.call_share_s ~default:"-"
                  ~f:(Printf.sprintf "%.4g"))
               (String.concat ~sep:"," s.attempts))));
-  ( { searches; output; total_attempts = List.length attempts },
+  ( { searches; output; total_attempts = List.length attempts; replayed = !replayed },
     List.length attempts = List.length (List.concat_map searches ~f:(fun s -> s.attempts)) )
 
 let arms c = List.filter c.searches ~f:(fun s -> not s.flip)
@@ -237,5 +249,37 @@ let () =
       not s.report.Autotune.budget_cut);
   p_all "per-search: every report carries the per-search budget, the tighter cut"
     per_search.searches ~f:(fun s -> Option.equal Float.equal s.report.Autotune.budget_s (Some 1.))
+
+(* --- the placement store: a decision reached with flips left unsearched is not recorded --- *)
+
+let recorded_cache_dir = "autotune_cache_call_budget_recorded"
+let stopped_cache_dir = "autotune_cache_call_budget_stopped"
+
+let () =
+  (* The control: a budget nothing spends, so the decision is recorded and the next call, with no
+     budget, replays it. *)
+  let recorded, _ =
+    run ~call_budget:10000. ~placement_store:true ~cache_dir:recorded_cache_dir "recorded"
+  in
+  let after_recorded, _ =
+    run ~placement_store:true ~warm:true ~cache_dir:recorded_cache_dir "after-recorded"
+  in
+  (* The arms' shares are never reached, but the clock jumps past the budget before the flips. *)
+  let stopped, _ =
+    run ~call_budget:1000. ~jump:1000. ~placement_store:true ~cache_dir:stopped_cache_dir "stopped"
+  in
+  let after_stopped, _ =
+    run ~placement_store:true ~warm:true ~cache_dir:stopped_cache_dir "after-stopped"
+  in
+  p_all ~min:2 "recorded: no search was cut" recorded.searches ~f:(fun s ->
+      not s.report.Autotune.budget_cut);
+  p "recorded: the next call replays the recorded decision"
+    (after_recorded.replayed && List.length after_recorded.searches = 1);
+  p_all ~min:2 "stopped: no search was cut by its share" stopped.searches ~f:(fun s ->
+      not s.report.Autotune.budget_cut);
+  p_empty "stopped: the call's budget stopped the flips before any" ~over:stopped.searches
+    (flips stopped);
+  p "stopped: nothing was recorded, so the next call compares the arms afresh"
+    ((not after_stopped.replayed) && List.length (arms after_stopped) = 2)
 
 let () = Stdio.printf "tune_call_budget: done\n"

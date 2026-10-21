@@ -225,10 +225,12 @@ val relink_outcome : retained -> (t * routine) Ir.Schedule_outcome.outcome
     it: the relink is the backend's own [link]. *)
 
 val backend_compiles : unit -> int
-(** How many backend compiles -- lowering through codegen and the device compile, the work a
-    {!relink_outcome} skips -- {!compile} and {!compile_outcome} have completed on the calling
-    domain (gh-ocannl-1440). A compile refused inside its transform, before codegen, is not counted.
-    Monotone; read it as a difference around the work in question. *)
+(** How many backend compiles have completed on the calling domain (gh-ocannl-1440): each code
+    generation a {!compile} or {!compile_outcome} completes -- lowering through codegen, and the
+    device compile where the backend does it then (cc, CUDA, HIP) -- and each device compile a
+    backend defers to link time (Metal's library compile, done at a code value's first link and
+    reused by a {!relink_outcome}). A compile refused inside its transform, before codegen, is not
+    counted. Monotone; read it as a difference around the work in question. *)
 
 val lowered_for_decisions :
   ?name:string ->

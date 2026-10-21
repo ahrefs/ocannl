@@ -631,6 +631,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
   let call_budget_spent () =
     Option.exists call_budget ~f:(fun total -> Float.(call_elapsed () >= total))
   in
+  (* Set once the call's budget has stopped the flip refinement: a decision reached with flips left
+     unsearched is this call's, like one over a cut search, and is not recorded. *)
+  let call_budget_stopped_flips = ref false in
   (* gh-ocannl-1440: the backend compiles this call performs outside its searches -- whose own each
      search's report counts ([Autotune.report.compiles]) -- i.e. compiling what ships, a shipping
      compile that failed or was substituted before it included. [shipped.ship_compiles]. *)
@@ -940,14 +943,17 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     match store with
     | None -> ()
     | Some (problem, key, limits, capabilities, backend) ->
-        let unclean = not (List.for_all !observed ~f:placement_evidence_clean) in
+        let unclean =
+          !call_budget_stopped_flips || not (List.for_all !observed ~f:placement_evidence_clean)
+        in
         let outcome_digest =
           Option.value_map shipped ~default:"" ~f:(fun r -> r.Autotune.source_digest)
         in
         if unclean || not (Float.is_finite shipped_ms) then
           logf
             "placement store: decision %s not recorded (a compared search failed, timed nothing, \
-             had contention-refused windows, or was cut by its budget)"
+             had contention-refused windows, or was cut by its budget, or the call's budget \
+             stopped the flip refinement)"
             (SC.shipped_label decision)
         else if String.is_empty outcome_digest then
           logf "placement store: decision %s not recorded (its search reported no source digest)"
@@ -1442,6 +1448,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           let stop_for_call_budget () =
             if (not !call_stopped) && call_budget_spent () then (
               call_stopped := true;
+              call_budget_stopped_flips := true;
               logf "flip refinement stopped: the call budget of %g s is spent (%d flip(s) measured)"
                 (Option.value call_budget ~default:0.)
                 !measured;

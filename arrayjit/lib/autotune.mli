@@ -3269,9 +3269,9 @@ val compile_deferred : deferred -> Context.t * Context.routine
 val deferred_compiles : deferred -> int
 (** The backend compiles ({!Context.backend_compiles}) {!compile_deferred} has performed for this
     call so far (gh-ocannl-1440): 0 before it, and after it 0 for a cache hit, whose routine is the
-    validating replay's code linked again, 1 for a searched winner recompiled from its saved form,
-    and the untuned default's compiles where the call ships that. A memoized second call adds
-    nothing. *)
+    validating replay's code linked again, one compile's count (1, or 2 on Metal, whose device
+    compile is counted at link) for a searched winner recompiled from its saved form, and the
+    untuned default's compiles where the call ships that. A memoized second call adds nothing. *)
 
 val shipped_substitute : deferred -> bool
 (** Whether {!compile_deferred} shipped the untuned default IN PLACE of the schedule the call's
