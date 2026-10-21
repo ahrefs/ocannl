@@ -26,6 +26,18 @@ conv segment: row blocks too large for the 9-row site are noted withheld: true
 conv segment (600-byte workgroup memory): the census's seeds are sketch_seed_params' list: true
 conv segment (600-byte workgroup memory): each conv leg names a refusal exactly when it seeds nothing: true
 a partial workgroup-memory refusal is noted beside the seeds: true
+conv merged gpu whole-routine: the census's seeds are sketch_seed_params' list: true
+conv merged gpu whole-routine: each conv leg names a refusal exactly when it seeds nothing: true
+conv merged gpu segment: the census's seeds are sketch_seed_params' list: true
+conv merged gpu segment: each conv leg names a refusal exactly when it seeds nothing: true
+conv merged: a lowering of three or more real statements the GPU leg seeds: true
+conv merged: no GPU leg refuses on companion coverage: true
+conv channel-sum gpu whole-routine: the census's seeds are sketch_seed_params' list: true
+conv channel-sum gpu whole-routine: each conv leg names a refusal exactly when it seeds nothing: true
+conv channel-sum gpu segment: the census's seeds are sketch_seed_params' list: true
+conv channel-sum gpu segment: each conv leg names a refusal exactly when it seeds nothing: true
+conv channel-sum gpu segment: the census's seeds are sketch_seed_params' list: true
+conv channel-sum: the GPU leg's refusal names companion coverage: true
 matmul (GPU): the census's seeds are sketch_seed_params' list: true
 matmul: the census's refutations are the family tree's: true
 matmul: the coalesced census is the coalesced branch's seeds: true

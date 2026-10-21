@@ -25,12 +25,13 @@
    expands with its own geometry (gh-ocannl-503): every whole-routine GPU seed executed. - The Grid
    conv flavor on aligned-merged segments: with more than one companion nest the pipeline adopts the
    default preset's whole-segment Grid geometry ([Sched.default_cpu]'s aligned cross-nest analysis),
-   value-pinned on the C backends and seeded per fission segment. - Strided rows (gh-ocannl-502):
-   the compacting [Stage] packs a stride-2 window densely, so the strided site seeds the same
-   flavors as a unit-stride one — pinned by the seed counts, by executing {e every} proposed
-   candidate against the natural form (candidates are timed, not value-checked), and by the tuned
-   stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a conv
-   site. *)
+   value-pinned on the C backends and seeded per fission segment; on a GPU the staged leg seeds the
+   same segments (gh-ocannl-1406, executed in conv_merged_gpu_seeds). - Strided rows
+   (gh-ocannl-502): the compacting [Stage] packs a stride-2 window densely, so the strided site
+   seeds the same flavors as a unit-stride one — pinned by the seed counts, by executing {e every}
+   proposed candidate against the natural form (candidates are timed, not value-checked), and by the
+   tuned stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a
+   conv site. *)
 
 open Base
 open Ocannl
@@ -1225,8 +1226,9 @@ let () =
      conv + materialized companions. The whole-segment Grid geometry comes from the aligned
      cross-nest analysis ([Sched.default_cpu]) and the row is blocked SERIALLY for cache residency
      within each pool chunk — so the block flavor fires on fused conv+bias/relu/pool segments, not
-     only conv-alone. Row = 16 (two 8-row panels). The GPU staged conv leg is gated off on
-     multi-companion segments, so this leg is cc-only. === *)
+     only conv-alone. Row = 16 (two 8-row panels). The hand-built pipeline here is the CPU one; the
+     GPU staged leg seeds this segment too since its companion-coverage gate (gh-ocannl-1406), and
+     conv_merged_gpu_seeds executes every such GPU seed. === *)
   let make_merged16 sub =
     let x = make_x16 sub in
     let kern = make_kern8 sub in
@@ -1311,11 +1313,12 @@ let () =
       show_counts "cvmb" r;
       (* cc merged fission segment: serial + aligned-grid + one serial row-block panel, each with
          its fused-epilogue twin (gh-ocannl-501) = 6, all compiling (the aligned twins omit the
-         preset [Retype] on the consumed tail nest — fuse-before-annotate). metal: GPU conv seeds
-         gated off on multi-companion segments. *)
+         preset [Retype] on the consumed tail nest — fuse-before-annotate). A GPU with the f32
+         capability seeds the staged flavors on the merged segment, its companions covered
+         (gh-ocannl-1406; every such seed executed in conv_merged_gpu_seeds). *)
       p "cvmb: blocked flavor seeded on the merged fission segment"
         (if on_cpu then r.Autotune.fiss_sketch_candidates = 6 && r.Autotune.fiss_sketch_timed = 6
-         else if has_uniform_f32_mma then r.Autotune.fiss_sketch_candidates = 0
+         else if Lazy.force gpu_capable then r.Autotune.fiss_sketch_candidates > 0
          else true)
   | _ -> p "cvmb: blocked flavor seeded on the merged fission segment" false);
   p_close "cvmb: tuned merged-blocked conv matches the untuned twin within tolerance" got_mb want_mb
@@ -1400,14 +1403,17 @@ let () =
       (* cc: the whole routine seeds the serial flavor and its fused twin (the routine carries the
          conv's [Zero_out], so the aligned analysis bails there and no Grid flavor is seeded); per
          fission segment serial + aligned-grid, each with its fused-epilogue twin, all four timed
-         (the aligned twin compiles by fuse-before-annotate, gh-ocannl-501). metal: the merged
-         segment has more than one companion — GPU seeds are gated. *)
+         (the aligned twin compiles by fuse-before-annotate, gh-ocannl-501). A GPU with the f32
+         capability seeds the staged flavors on the whole routine and the merged segment, whose
+         companions take the site's geometry (gh-ocannl-1406); one without seeds nothing. *)
       p "cva: aligned-grid conv seeded and timed on the merged fission segment"
         (if on_cpu then
            r.Autotune.sketch_candidates = 2
            && r.Autotune.epilogue_sketch_candidates = 1
            && r.Autotune.fiss_sketch_candidates = 4
            && r.Autotune.fiss_sketch_timed = 4
+         else if Lazy.force gpu_capable then
+           r.Autotune.sketch_candidates > 0 && r.Autotune.fiss_sketch_candidates > 0
          else r.Autotune.sketch_candidates = 0 && r.Autotune.fiss_sketch_candidates = 0)
   | _ -> p "cva: aligned-grid conv seeded and timed on the merged fission segment" false);
   p_close "cva: tuned merged conv graph matches the untuned twin within tolerance" got_m want_m

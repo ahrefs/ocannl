@@ -2555,6 +2555,32 @@ let conv_zero_geometry (site : conv_site) ~(site_syms : (Idx.symbol * int) list)
     in
     (ez :: reorder_swaps ~current:zsyms ~target:(List.map zchain ~f:fst)) @ annotate zchain
 
+(* The chain the GPU conv pipeline annotates, as [companion_geometry] wants it: the outer output
+   loops, the GEMM row, the out-channel column — the conv analog of [matmul_site_chain]. *)
+let conv_site_chain (site : conv_site) =
+  site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ]
+
+(* The GPU conv pipeline's companion query, one spelling for the builder and the seeding witness:
+   the fused flavor skips the epilogue tail nest [Fuse_epilogue] consumes, and a zeroed site's
+   whole-node [Zero_out] is the pipeline's own ([conv_zero_geometry]). *)
+let conv_companion_geometry ~(opt : LL.optimized) ~(fused : bool) ~annotate (site : conv_site) =
+  companion_geometry ~site_syms:(conv_site_chain site)
+    ~skip:(if fused then conv_tail_loop_syms site opt else [])
+    ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
+    ~annotate opt
+
+(* The statically-decidable companion-coverage verdict of the GPU conv seeds (gh-ocannl-1406), the
+   conv analog of [matmul_coverage_witness]: [companion_geometry]'s Ok/Error never depends on the
+   geometry [annotate] emits, so one query with a trivial annotator settles buildability for every
+   flavor of the leg. It replaces a [real_stmts <= 2] count cap, which refused aligned-merged
+   segments (conv + bias/relu + pooling, 3-6 statements) whose companions the pipeline already
+   annotates, and admitted segments whose single companion it cannot. The fused demand is a subset
+   of the unfused one, so an unfused [None] implies the fused one. *)
+let conv_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) : string option =
+  match conv_companion_geometry ~opt ~fused ~annotate:(fun _ -> []) site with
+  | Ok _ -> None
+  | Error why -> Some (Printf.sprintf "GPU conv companion coverage (gh-521): %s" why)
+
 (* The GPU staged leg of the implicit-GEMM conv pipeline (gh-ocannl-493): the same loop
    re-association as the CPU route, with the outer output loops [Grid]-typed (one threadgroup per
    outer coordinate, the kernel-window loops serial inside it) and both slices staged through
@@ -2595,7 +2621,7 @@ let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
      workgroup lane but no column Grid slot: distribute companion columns over that same lane width,
      keeping any column blocks serial. Outer output coordinates and row blocks have the same Grid
      roles in every nest. *)
-  let site_syms = site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ] in
+  let site_syms = conv_site_chain site in
   let annotate chain =
     List.concat_mapi chain ~f:(fun pos (sym, extent) ->
         if pos < List.length site.c_outer then [ Sched.Retype { axis = sym; ty = LL.Grid } ]
@@ -2609,12 +2635,7 @@ let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
           [ sp ])
   in
   let companions =
-    match
-      companion_geometry ~site_syms
-        ~skip:(if sk_epilogue then conv_tail_loop_syms site opt else [])
-        ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
-        ~annotate opt
-    with
+    match conv_companion_geometry ~opt ~fused:sk_epilogue ~annotate site with
     | Ok ops -> ops
     | Error why -> companion_coverage_unsupported ~tensorized:true why
   in
@@ -3092,9 +3113,9 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                 (* The site's covering zero is the pipeline's to annotate, whichever form it
                    arrives in: a GPU fission segment's folded per-cell companion, or — on a
                    whole-routine lowering ([c_zeroed]) — the whole-node [Zero_out], which
-                   [conv_zero_geometry] expands into that same nest (gh-ocannl-503).
-                   [conv_real_stmts] excludes it either way, and the pipeline gives every
-                   companion aligned Grid and lane geometry. *)
+                   [conv_zero_geometry] expands into that same nest (gh-ocannl-503). The
+                   coverage query ([conv_companion_geometry]) excludes it either way, and the
+                   pipeline gives every other companion aligned Grid and lane geometry. *)
                 (* The intrinsic-tile divisibility is now a PER-BLOCK property (gh-ocannl-500): the
                tensorized micro-kernel row is [sk_bm] (the block), not the whole [c_nrow], so a
                staged block flavor is proposable whenever [sk_bm] — a multiple of the intrinsic row
@@ -3134,19 +3155,42 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                       <= cap
                   | None -> true
                 in
+                (* Companion coverage (gh-ocannl-1406): the builder's own [companion_geometry]
+                   verdict, not a statement count. The unfused flavors need it unfused; when they
+                   are refuted but the site has a fusable tail, the fused-epilogue twins
+                   ([family_seeding] flag-flips every seed) may still be covered — the tail was the
+                   failing companion — so the leg seeds and the unfused flavors decline at build,
+                   the regime conv+bias+relu segments have always had. [Error] only when neither
+                   flavor is covered. *)
+                let coverage =
+                  match conv_coverage_witness ~opt ~fused:false site with
+                  | None -> Ok None
+                  | Some unfused -> (
+                      match Sched.fuse_epilogue_witness ~target:site.c_d opt with
+                      | Some _ -> Error unfused
+                      | None -> (
+                          match conv_coverage_witness ~opt ~fused:true site with
+                          | None -> Ok (Some unfused)
+                          | Some fused -> Error (unfused ^ "; fused-epilogue twins: " ^ fused)))
+                in
                 (* Every failing conjunct named, for the census. *)
                 let failing =
                   List.filter_map
                     [
                       (offset_free, lazy conv_offset_witness);
-                      ( n_real <= 2,
-                        lazy
-                          (Printf.sprintf
-                             "companion cap: %d real statements besides the site's own zero, at \
-                              most 2 seed"
-                             n_real) );
+                      ( Result.is_ok coverage,
+                        lazy (match coverage with Error why -> why | Ok _ -> assert false) );
                     ]
                     ~f:(fun (holds, why) -> if holds then None else Some (Lazy.force why))
+                in
+                let coverage_notes =
+                  match coverage with
+                  | Ok (Some unfused) ->
+                      [
+                        "unfused flavors decline at build, only their fused-epilogue twins are \
+                         covered: " ^ unfused;
+                      ]
+                  | Ok None | Error _ -> []
                 in
                 if not (List.is_empty failing) then
                   conv_leg_refused (String.concat ~sep:"; " failing)
@@ -3270,7 +3314,8 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                     Option.value ~default:0 limits.Ir.Backend_intf.max_workgroup_memory_bytes
                   in
                   let withheld_notes =
-                    List.map !withheld ~f:(fun (reason, n) ->
+                    coverage_notes
+                    @ List.map !withheld ~f:(fun (reason, n) ->
                         Printf.sprintf "%d flavors withheld: %s" n reason)
                   in
                   let mem_notes =

@@ -1,0 +1,12 @@
+cm8: the whole routine and its merged conv segment carry three or more real statements: true
+cm8: the GPU leg seeds the whole routine: true
+cm8: the GPU leg seeds the merged segment: true
+cm8: every whole-routine GPU seed compiles and matches the natural form exactly, run twice: true
+cm8: every merged-segment GPU seed compiles and matches the natural form exactly, run twice: true
+cm8: every GPU seed's routine is labeled tensorized: true
+cm16: the whole routine and its merged conv segment carry three or more real statements: true
+cm16: the GPU leg seeds the whole routine: true
+cm16: the GPU leg seeds the merged segment: true
+cm16: every whole-routine GPU seed compiles and matches the natural form exactly, run twice: true
+cm16: every merged-segment GPU seed compiles and matches the natural form exactly, run twice: true
+cm16: every GPU seed's routine is labeled tensorized: true
