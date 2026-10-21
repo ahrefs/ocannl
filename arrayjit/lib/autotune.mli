@@ -1270,7 +1270,9 @@ type report = {
       (** This search's share of [call_budget_s] ({!call_budget}'s [cb_share_s]): what was left of
           the call's budget when the search started, divided among the searches still planned. The
           search is cut at the tighter of this and [budget_s]; zero or less means the call's budget
-          was spent and only the untuned floors were attempted. [None] with [call_budget_s]. *)
+          was spent, so a search attempted only its untuned floors (a schedule-cache hit still
+          replays: the budget gates search attempts, as [autotune_budget_seconds] does, and the
+          replay's compile is the one that ships). [None] with [call_budget_s]. *)
   compiles : int;
       (** Backend compiles ({!Context.backend_compiles}) this call completed before it reported --
           for {!tune} all of them, the shipped routine's included; for {!tune_deferred} all but what
@@ -3242,7 +3244,9 @@ val tune_deferred :
     [Train.tune_placements]' [tune_call_budget_seconds]: the search is cut at the tighter of that
     share and its own [autotune_budget_seconds], by the same rule as the latter (see {!tune}'s
     Budget), and a search the share cut reports [budget_cut] like one its own budget cut. A share of
-    zero or less attempts only the untuned floors. *)
+    zero or less attempts only the untuned floors when the call searches; a schedule-cache hit
+    replays regardless, as under [autotune_budget_seconds] -- its compile is the one that ships
+    (linked again), and skipping it would compile the untuned default in its place. *)
 
 val lineage_identity :
   static_indices:Ir.Indexing.static_symbol list -> Ir.Low_level.optimized -> string
