@@ -35,8 +35,9 @@ this script does not replay.
 
 What model_default actually picks is read off the compile instead (gh-ocannl-1477): an EXPLAIN or
 --pick output carrying a `rank-site: pick label="..."` line (BENCH_PICK=1) gets a `pick` line --
-the label joined to its measured row as above (`seeded` is the F_seeded row), its time, the seeded
-plan's, and their ratio (`pick_over_seeded`). A pick that does not join a measured row is reported
+the label joined to its measured row as above, its time, the seeded plan's, and their ratio
+(`pick_over_seeded`). A `seeded` pick joins only the F_seeded row whose label is the line's
+`seeded_label`, the plan its own configuration seeds (content digest included). A pick that does not join a measured row is reported
 `pick_unmatched` and makes the exit status 1: an acceptance that cannot time the pick has not
 passed. Stdout only; exit 2 on unusable input.
 """
@@ -49,28 +50,39 @@ EXPLAIN = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" rank_ms=(
                      r'(?:.* admitted=(true|false))?')
 
 
-PICK = re.compile(r'rank-site: pick .*?label="((?:[^"\\]|\\.)*)"')
+PICK = re.compile(r'rank-site: pick .*?label="((?:[^"\\]|\\.)*)"'
+                  r'(?:.* seeded_label="((?:[^"\\]|\\.)*)")?')
+
+
+def unescape(text):
+    return None if text is None else text.encode().decode("unicode_escape")
 
 
 def pick_of(path):
+    """(pick label, the seeded plan's label under the pick's configuration, or None)."""
     with open(path) as f:
         for line in f:
             m = PICK.search(line)
             if m:
-                return m.group(1).encode().decode("unicode_escape")
-    return None
+                return unescape(m.group(1)), unescape(m.group(2))
+    return None, None
 
 
 def report_pick(name, path, times):
     """Prints the pick line; False when there is a pick that does not join a measured row."""
-    label = pick_of(path)
+    label, seeded_label = pick_of(path)
     if label is None:
         print(f"{name}: pick none (no `rank-site: pick` line)")
         return True
-    row = row_label(label, times)
     seeded = row_label("seeded", times)
+    if label == "seeded":
+        # The timed seed must be the very plan the pick's configuration seeds: a profile's auto
+        # gate can seed a different plan than the timing cell's pinned threshold.
+        row = seeded_label if seeded_label in times else None
+    else:
+        row = row_label(label, times)
     if row is None:
-        print(f"{name}: pick_unmatched label={label!r}")
+        print(f"{name}: pick_unmatched label={label!r} seeded_label={seeded_label!r}")
         return False
     line = f"{name}: pick label={label!r} row={row!r} measured_ms={times[row]:.6f}"
     if seeded is not None:

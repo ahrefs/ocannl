@@ -105,9 +105,23 @@ let () =
         site label (ms ex.Autotune.ex_rank_ms) (ms ex.ex_compute_ms) (ms ex.ex_memory_ms)
         (ms ex.ex_floor_ms) ex.ex_admitted ex.ex_anchor);
   (* [BENCH_PICK=1] (gh-ocannl-1278): what [Autotune.model_default] actually picks here under the
-     configuration in force -- the selection rule the agreement script replays from the explain
-     lines, read off the compile itself. Nothing is timed. *)
+     configuration in force, read off the compile itself. Nothing is timed. [seeded_label] names the
+     seeded plan under the same configuration as the tuner labels its seed ([F_seeded[...]], the
+     plan's content digest included, gh-ocannl-1477): a pick of ["seeded"] is joined to a timing
+     only where the timed seed is this very plan -- a profile's [auto] gate can seed a different
+     plan than the timing cell's pinned threshold. *)
   (if Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_PICK") (Some "1") then
+     let seeded_label =
+       let limits = Context.hardware_limits ctx in
+       let caps = Context.codegen_capabilities ctx in
+       match
+         Autotune.seeded_plan ~capabilities:caps ~backend:(Context.backend_name ctx) ~limits
+           ~accum_prec:caps.Ir.Backend_intf.accum_prec ~static_indices:[]
+           (Context.lowered_for_decisions ~name:(name ^ "_pick") ctx comp Ir.Indexing.Empty)
+       with
+       | Some plan -> Autotune.seeded_plan_label plan
+       | None -> "none"
+     in
      let pick = ref None in
      let _ctx, _routine =
        Autotune.model_default ~name:(name ^ "_pick")
@@ -117,8 +131,8 @@ let () =
      match !pick with
      | None -> Stdio.printf "rank-site: pick site=%s no report\n%!" site
      | Some c ->
-         Stdio.printf "rank-site: pick site=%s label=%S rank_ms=%s\n%!" site c.Autotune.mc_label
-           (ms c.mc_rank_ms));
+         Stdio.printf "rank-site: pick site=%s label=%S rank_ms=%s seeded_label=%S\n%!" site
+           c.Autotune.mc_label (ms c.mc_rank_ms) seeded_label);
   if tune then
     let report = ref None in
     let _ctx, _routine =
