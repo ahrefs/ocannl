@@ -16,3 +16,12 @@ a HIP cell whose kernels ran on two agents: refused
 a cell with two trace exports: refused
 an incomplete table, a missing trace or result, a short window, an unmapped segment: refused
 a report with a refused cell, or with no cell, fails: true
+back-to-back kernels: the summed durations are the device's busy time, nothing overlaps: true
+overlapping stamps: the union is what the device was busy for, and the exclusive times add up to it: true
+the report states the overlap and shows the exclusive column only where it matters: true
+a device span longer than the host wall time enclosing it is called a clock error: true
+the table carries each kernel's cost-model bytes and the in-step bandwidth they imply, a row without them dashes: true
+two runs of one build name the same kernels and join kernel for kernel: true
+across builds the written nodes, minted staging set aside, join what the segment index no longer does, and name what is new or gone: true
+the report joins each other kernel list against base's, listing what moved, appeared or went: true
+a HIP cell reports its busy shader clock and power from the sysfs samples: true
