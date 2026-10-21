@@ -1300,83 +1300,103 @@ end = struct
     let full_source = r.assemble all in
     write_source_artifact ~name (with_conditional_includes full_source);
     let programs = Array.create ~len:n None in
-    Stdlib.Mutex.protect kernel_compile_lock @@ fun () ->
-    let groups, keys =
-      if not (Kernel_code_cache.enabled kernel_cache) then
-        (* As before the cache: one program of every kernel. *)
-        ([ (hiprtc_options ~target_archs full_source, all) ], [||])
+    let enabled = Kernel_code_cache.enabled kernel_cache in
+    let keyed =
+      if not enabled then [||]
       else
-        let keyed =
-          Array.init n ~f:(fun i ->
-              let source = r.assemble [ i ] in
-              let options = hiprtc_options ~target_archs source in
-              (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
-                 kernel -- rendered with other symbol numbers -- finds this one. Not under device
-                 debugging: the code object then carries the source's names in its debug info, so
-                 only the exact text may share it. *)
-              let canonical =
-                if Utils.with_runtime_debug () then source
-                else Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source
-              in
-              (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
-        in
-        Array.iteri keyed ~f:(fun i (_, key) ->
-            programs.(i) <- Kernel_code_cache.find kernel_cache key);
-        let misses = List.filter all ~f:(fun i -> Option.is_none programs.(i)) in
-        (* Misses grouped by option list, in batch order: one program per distinct list, so a
-           kernel's code always comes from its own option list. *)
-        let same = List.equal String.equal in
-        let distinct =
-          List.fold misses ~init:[] ~f:(fun acc i ->
-              let options = fst keyed.(i) in
-              if List.mem acc options ~equal:same then acc else acc @ [ options ])
-        in
-        ( List.map distinct ~f:(fun options ->
-              (options, List.filter misses ~f:(fun i -> same (fst keyed.(i)) options))),
-          Array.map keyed ~f:snd )
+        Array.init n ~f:(fun i ->
+            let source = r.assemble [ i ] in
+            let options = hiprtc_options ~target_archs source in
+            (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
+               kernel -- rendered with other symbol numbers -- finds this one. Not under device
+               debugging: the code object then carries the source's names in its debug info, so only
+               the exact text may share it. *)
+            let canonical =
+              if Utils.with_runtime_debug () then source
+              else Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source
+            in
+            (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
     in
-    let n_compiled = List.sum (module Int) groups ~f:(fun (_, idxs) -> List.length idxs) in
-    let log_header =
-      Printf.sprintf "/* kernel code cache: compiled %d of %d kernels, reused %d */\n" n_compiled n
-        (n - n_compiled)
+    let lookup idxs =
+      List.iter idxs ~f:(fun i ->
+          if Option.is_none programs.(i) then
+            programs.(i) <- Kernel_code_cache.find kernel_cache (snd keyed.(i)))
     in
-    if Utils.settings.output_debug_files_in_build_directory then (
-      (* The code objects and logs an earlier compile of this name left -- its own and its extra
-         option groups' ([<name>.group<k>], a spelling no routine name takes) -- are not this
-         compile's, so none is left that would read as one; this compile writes its own below. *)
-      let dir = Stdlib.Filename.dirname (Utils.build_file (name ^ ".hsaco")) in
-      let ours file =
-        List.exists [ ".hsaco"; ".hip_log" ] ~f:(fun ext ->
-            String.equal file (name ^ ext)
-            || (String.is_prefix file ~prefix:(name ^ ".group") && String.is_suffix file ~suffix:ext))
+    let misses () = List.filter all ~f:(fun i -> Option.is_none programs.(i)) in
+    (* The lookups run without the lock, so an all-hit compile never waits on another domain's
+       hiprtc; the misses are looked up again under it, where another domain may just have published
+       them. *)
+    if enabled then lookup all;
+    let compile_misses () =
+      if enabled then lookup (misses ());
+      let misses = misses () in
+      let groups =
+        if not enabled then
+          (* As before the cache: one program of every kernel. *)
+          [ (hiprtc_options ~target_archs full_source, all) ]
+        else
+          (* Misses grouped by option list, in batch order: one program per distinct list, so a
+             kernel's code always comes from its own option list. *)
+          let same = List.equal String.equal in
+          let distinct =
+            List.fold misses ~init:[] ~f:(fun acc i ->
+                let options = fst keyed.(i) in
+                if List.mem acc options ~equal:same then acc else acc @ [ options ])
+          in
+          List.map distinct ~f:(fun options ->
+              (options, List.filter misses ~f:(fun i -> same (fst keyed.(i)) options)))
       in
-      (try
-         Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
-             if ours file then
-               try Stdlib.Sys.remove (Stdlib.Filename.concat dir file) with Sys_error _ -> ())
-       with Sys_error _ -> ());
-      if List.is_empty groups then
-        Stdio.Out_channel.write_all (Utils.build_file (name ^ ".hip_log")) ~data:log_header);
-    List.iteri groups ~f:(fun k (options, idxs) ->
-        let artifact = if k = 0 then name else name ^ ".group" ^ Int.to_string k in
-        (* Before the call: a program hiprtc refuses was still given these kernels. *)
-        Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
-        let code =
-          try
-            Compile_cost.time_device (fun () ->
-                compile_program ~name:artifact ~log_header ~options
-                  (with_conditional_includes (r.assemble idxs)))
-          with exn ->
-            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-            r.attribute idxs exn backtrace
+      let n_compiled = List.length misses in
+      let log_header =
+        Printf.sprintf "/* kernel code cache: compiled %d of %d kernels, reused %d */\n" n_compiled
+          n (n - n_compiled)
+      in
+      (* A program of every kernel in batch order is the routine's own source, already written as
+         [<name>.hip]; any other program is written as [<name>.part<k>.hip] beside its code object
+         and log, under the name hiprtc was given, so its diagnostics and debug info point at the
+         text it compiled. [.part<k>] is a spelling no routine name takes. *)
+      let whole = match groups with [ (_, idxs) ] -> List.equal Int.equal idxs all | _ -> false in
+      if Utils.settings.output_debug_files_in_build_directory then (
+        (* What an earlier compile of this name left is not this compile's: remove it, so none is
+           left that would read as one. *)
+        let dir = Stdlib.Filename.dirname (Utils.build_file (name ^ ".hsaco")) in
+        let ours file =
+          List.exists [ ".hsaco"; ".hip_log" ] ~f:(fun ext -> String.equal file (name ^ ext))
+          || String.is_prefix file ~prefix:(name ^ ".part")
         in
-        let program = new_program code in
-        (* Published only now, after hiprtc returned: a failed program leaves no entry. *)
-        if not (Array.is_empty keys) then
-          Kernel_code_cache.publish kernel_cache
-            ~keys:(List.map idxs ~f:(fun i -> keys.(i)))
-            ~bytes:code.Hiprtc.code_length program;
-        List.iter idxs ~f:(fun i -> programs.(i) <- Some program));
+        (try
+           Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
+               if ours file then
+                 try Stdlib.Sys.remove (Stdlib.Filename.concat dir file) with Sys_error _ -> ())
+         with Sys_error _ -> ());
+        if List.is_empty groups then
+          Stdio.Out_channel.write_all (Utils.build_file (name ^ ".hip_log")) ~data:log_header);
+      List.iteri groups ~f:(fun k (options, idxs) ->
+          let artifact = if whole then name else name ^ ".part" ^ Int.to_string k in
+          let source = with_conditional_includes (r.assemble idxs) in
+          if not whole then write_source_artifact ~name:artifact source;
+          (* Before the call: a program hiprtc refuses was still given these kernels. *)
+          Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
+          let code =
+            try
+              Compile_cost.time_device (fun () ->
+                  compile_program ~name:artifact ~log_header ~options source)
+            with exn ->
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              r.attribute idxs exn backtrace
+          in
+          let program = new_program code in
+          (* Published only now, after hiprtc returned: a failed program leaves no entry. *)
+          if enabled then
+            Kernel_code_cache.publish kernel_cache
+              ~keys:(List.map idxs ~f:(fun i -> snd keyed.(i)))
+              ~bytes:code.Hiprtc.code_length program;
+          List.iter idxs ~f:(fun i -> programs.(i) <- Some program))
+    in
+    if List.is_empty (misses ()) then (
+      if Utils.settings.output_debug_files_in_build_directory then
+        Stdlib.Mutex.protect kernel_compile_lock compile_misses)
+    else Stdlib.Mutex.protect kernel_compile_lock compile_misses;
     (Array.map programs ~f:(fun p -> Option.value_exn ~here:[%here] p), r.entries)
 
   let%diagn2_sexp compile ~name bindings lowered =
