@@ -1486,15 +1486,7 @@ let finalize (type dev runner event)
      context that reads live again would run kernels over them. What a failed hook leaves is
      destroyed with its routine, by the bindings' own finalizers, or at exit. Every hook is
      attempted, and the first failure is re-raised. *)
-  let run_release_hooks () =
-    let failure = ref None in
-    List.iter !(ctx.release_hooks) ~f:(fun hook ->
-        try hook ()
-        with exn ->
-          if Option.is_none !failure then failure := Some (exn, Stdlib.Printexc.get_raw_backtrace ()));
-    Option.iter !failure ~f:(fun (exn, backtrace) ->
-        Stdlib.Printexc.raise_with_backtrace exn backtrace)
-  in
+  let run_release_hooks () = Backend_impl.attempt_each !(ctx.release_hooks) in
   if Atomic.compare_and_set ctx.finalized false true then
     match cleanup () with
     | () ->

@@ -43,6 +43,8 @@ let fissioned_chain () =
   let%op qg = qc * qe in
   Train.forward qg
 
+let keep_alive : (Context.t * Context.routine) option ref = ref None
+
 let outcome_name : Utils.exit_teardown_outcome -> string = function
   | Torn_down -> "torn_down"
   | Disabled -> "disabled"
@@ -135,6 +137,10 @@ let () =
               | _ -> None)
         | _ -> None
       in
+      (* Rooted to the end of the process: the backend's registry holds the cache weakly, and a
+         collection before its exit teardown would let the binding's finalizer destroy the graph
+         instead, which the claim would then credit to the teardown. *)
+      keep_alive := Some (ctx, routine);
       Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
       Stdio.printf "cached graphs at exit: %s\n%!" (Option.value cached ~default:"none")
   | Some "never_idle" -> stand_in ~idle:false ()

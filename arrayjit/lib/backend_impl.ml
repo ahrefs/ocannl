@@ -197,6 +197,17 @@ end
 
 let next_global_device_id : Utils.atomic_int = Atomic.make 0
 
+(* Runs every thunk, even after one raises, then re-raises the first failure with its backtrace: for
+   cleanup whose steps are independent, where one failure must not skip the rest. *)
+let attempt_each (thunks : (unit -> unit) list) =
+  let failure = ref None in
+  List.iter thunks ~f:(fun f ->
+      try f ()
+      with exn ->
+        if Option.is_none !failure then failure := Some (exn, Stdlib.Printexc.get_raw_backtrace ()));
+  Option.iter !failure ~f:(fun (exn, backtrace) ->
+      Stdlib.Printexc.raise_with_backtrace exn backtrace)
+
 (* gh-ocannl-1445: the values a backend must still reach at process exit without keeping them alive
    until then. Each is held through a weak pointer, so one whose owner was dropped without a release
    is collected as before (and its own finalizers run), while every one still alive at exit can be

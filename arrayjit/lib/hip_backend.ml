@@ -480,6 +480,9 @@ end = struct
     graphs_device : device;
     cache : (string, H.Graph.exec) Hashtbl.t;
     order : string Queue.t;
+    lock : Stdlib.Mutex.t;
+        (** Held by every run of the routine and by [destroy_graphs]: upload forks share their
+            context's release hooks and can be released from different domains. *)
   }
 
   let graph_caches : graph_cache Backend_impl.Weak_registry.t = Backend_impl.Weak_registry.create ()
@@ -488,26 +491,25 @@ end = struct
     List.sum
       (module Int)
       (Backend_impl.Weak_registry.live graph_caches)
-      ~f:(fun g -> Hashtbl.length g.cache)
+      ~f:(fun g -> Stdlib.Mutex.protect g.lock (fun () -> Hashtbl.length g.cache))
 
   (* Idempotent, and the routine stays runnable: its next run captures afresh. The stream is
-     synchronized first, since a cached exec may still have a launch pending on it. Every exec is
-     attempted; the first failure is re-raised. *)
+     synchronized first, since a cached exec may still have a launch pending on it; the cache is
+     emptied under its lock, and every exec taken out of it is attempted, the first failure
+     re-raised. *)
   let destroy_graphs g =
-    if not (Hashtbl.is_empty g.cache) then (
-      set_ctx g.graphs_device.dev.primary_context;
-      H.Stream.synchronize g.graphs_device.runner;
-      let execs = Hashtbl.data g.cache in
-      Hashtbl.clear g.cache;
-      Queue.clear g.order;
-      let failure = ref None in
-      List.iter execs ~f:(fun exec ->
-          try H.Graph.exec_destroy exec
-          with exn ->
-            if Option.is_none !failure then
-              failure := Some (exn, Stdlib.Printexc.get_raw_backtrace ()));
-      Option.iter !failure ~f:(fun (exn, backtrace) ->
-          Stdlib.Printexc.raise_with_backtrace exn backtrace))
+    let execs =
+      Stdlib.Mutex.protect g.lock (fun () ->
+          if Hashtbl.is_empty g.cache then []
+          else (
+            set_ctx g.graphs_device.dev.primary_context;
+            H.Stream.synchronize g.graphs_device.runner;
+            let execs = Hashtbl.data g.cache in
+            Hashtbl.clear g.cache;
+            Queue.clear g.order;
+            execs))
+    in
+    Backend_impl.attempt_each (List.map execs ~f:(fun exec () -> H.Graph.exec_destroy exec))
 
   (* gh-ocannl-1036: destroy each device's stream at process exit. A HIP stream that is never
      destroyed makes the ROCm runtime report its 77 signals as leaked on stderr when the process
@@ -536,10 +538,15 @@ end = struct
                      teardown =
                        (fun () ->
                          (* gh-ocannl-1445: the device's cached graphs first, then its stream. *)
-                         Backend_impl.Weak_registry.live graph_caches
-                         |> List.filter ~f:(fun g -> phys_equal g.graphs_device device)
-                         |> List.iter ~f:destroy_graphs;
-                         H.Stream.destroy device.runner);
+                         (* Every cache is attempted, and the stream is destroyed whatever
+                            they raise. *)
+                         Exn.protect
+                           ~f:(fun () ->
+                             Backend_impl.Weak_registry.live graph_caches
+                             |> List.filter ~f:(fun g -> phys_equal g.graphs_device device)
+                             |> List.map ~f:(fun g () -> destroy_graphs g)
+                             |> Backend_impl.attempt_each)
+                           ~finally:(fun () -> H.Stream.destroy device.runner));
                    }))
               : Utils.exit_teardown_outcome list))
 
@@ -1449,7 +1456,12 @@ end = struct
       let device = context.device in
       let max_cached_graphs = 128 in
       let graphs =
-        { graphs_device = device; cache = Hashtbl.create (module String); order = Queue.create () }
+        {
+          graphs_device = device;
+          cache = Hashtbl.create (module String);
+          order = Queue.create ();
+          lock = Stdlib.Mutex.create ();
+        }
       in
       Backend_impl.Weak_registry.register graph_caches graphs;
       let cache = graphs.cache and order = graphs.order in
@@ -1497,34 +1509,36 @@ end = struct
               work =
                 (fun () ->
                   if !broken then run_plain ()
-                  else (
-                    set_ctx @@ ctx_of context;
-                    let key = current_key () in
-                    match Hashtbl.find cache key with
-                    | Some exec -> H.Graph.launch exec device.runner
-                    | None -> (
-                        match capture () with
-                        | exec ->
-                            if Queue.length order >= max_cached_graphs then (
-                              let victim = Queue.dequeue_exn order in
-                              (* The evicted exec may still have a pending launch on the stream. *)
-                              H.Stream.synchronize device.runner;
-                              H.Graph.exec_destroy (Hashtbl.find_exn cache victim);
-                              Hashtbl.remove cache victim);
-                            Hashtbl.set cache ~key ~data:exec;
-                            Queue.enqueue order key;
-                            H.Graph.launch exec device.runner
-                        | exception H.Hip_error { status; message } ->
-                            (* E.g. capture unsupported on this runtime: fall back to per-segment
-                               launches for this routine (same-stream FIFO supplies the segment
-                               ordering), and re-run outside capture so a genuine launch failure
-                               surfaces on the plain path. *)
-                            broken := true;
-                            Stdio.eprintf
-                              "ocannl: disabling HIP graph capture for routine %s (%s: %s)\n%!" name
-                              message
-                              (Sexp.to_string_hum @@ H.sexp_of_result status);
-                            run_plain ())));
+                  else
+                    Stdlib.Mutex.protect graphs.lock (fun () ->
+                        set_ctx @@ ctx_of context;
+                        let key = current_key () in
+                        match Hashtbl.find cache key with
+                        | Some exec -> H.Graph.launch exec device.runner
+                        | None -> (
+                            match capture () with
+                            | exec ->
+                                if Queue.length order >= max_cached_graphs then (
+                                  let victim = Queue.dequeue_exn order in
+                                  (* The evicted exec may still have a pending launch on the
+                                     stream. *)
+                                  H.Stream.synchronize device.runner;
+                                  H.Graph.exec_destroy (Hashtbl.find_exn cache victim);
+                                  Hashtbl.remove cache victim);
+                                Hashtbl.set cache ~key ~data:exec;
+                                Queue.enqueue order key;
+                                H.Graph.launch exec device.runner
+                            | exception H.Hip_error { status; message } ->
+                                (* E.g. capture unsupported on this runtime: fall back to
+                                   per-segment launches for this routine (same-stream FIFO supplies
+                                   the segment ordering), and re-run outside capture so a genuine
+                                   launch failure surfaces on the plain path. *)
+                                broken := true;
+                                Stdio.eprintf
+                                  "ocannl: disabling HIP graph capture for routine %s (%s: %s)\n%!"
+                                  name message
+                                  (Sexp.to_string_hum @@ H.sexp_of_result status);
+                                run_plain ())));
             },
           fun () -> destroy_graphs graphs )
 
