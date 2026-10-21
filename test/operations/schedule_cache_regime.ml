@@ -1,9 +1,12 @@
-(* gh-ocannl-835: cache-open prunes one whole generation when the filename-key regime advances.
+(* gh-ocannl-835: a store's cache-open prunes one whole generation when the filename-key regime
+   advances. gh-ocannl-1439: a lookup never does -- it reads a superseded generation as misses and
+   leaves every file in place, so reading a cache another binary wrote cannot destroy it.
 
-   These are synthetic cache directories: the old-stamp case proves that the transition removes a
-   non-empty population exactly once and leaves a current entry alone; the unstamped case exercises
-   the first upgrade from legacy caches; and the future-stamp case proves that an older
-   participating binary refuses both reads and writes without touching what the newer regime owns.
+   These are synthetic cache directories: the old-stamp case proves that a lookup leaves a non-empty
+   superseded population whole, that the next store then removes it exactly once, and that the store
+   leaves a current entry alone; the unstamped case exercises the first upgrade from legacy caches
+   the same way; and the future-stamp case proves that an older participating binary refuses both
+   reads and writes without touching what the newer regime owns.
 
    gh-ocannl-1040: every store and lookup notes what it came to to
    [Schedule_cache.recording_cache_io], the record a test reads to tell a refusal the cache absorbed
@@ -55,39 +58,65 @@ let equal_op a b = Poly.equal (a : SC.cache_op) b
 let equal_record =
   List.equal (fun (o, k, r) (o', k', r') -> equal_op o o' && String.equal k k' && Bool.equal r r')
 
+(* Every entry and the stamp, by name and contents: what a read must leave as it found it. The lock
+   file is left out -- a lookup takes the record lock, creating the permanent lock file, but never
+   writes to it. *)
+let snapshot dir =
+  Stdlib.Sys.readdir dir |> Array.to_list
+  |> List.filter ~f:(fun name -> not (String.equal name SC.regime_lock_filename))
+  |> List.sort ~compare:String.compare
+  |> List.map ~f:(fun name -> (name, read (Stdlib.Filename.concat dir name)))
+
+let equal_snapshot = List.equal (fun (n, c) (n', c') -> String.equal n n' && String.equal c c')
+
 let () =
   let old_cache_dir = "autotune_cache_regime" in
   make_dir old_cache_dir;
   let old_keys = [ "old-a"; "old-b" ] in
   List.iter old_keys ~f:(fun key -> write_entry ~cache_dir:old_cache_dir key (entry key));
   write_stamp old_cache_dir (SC.cache_regime_version - 1);
-  p "an old stamped generation opens as a cache miss"
-    (Option.is_none (SC.lookup ~dir:old_cache_dir ~key:(Some "old-a")));
-  Verdict.p_none ~min:2 "every old-regime entry is swept" old_keys ~f:(fun key ->
+  let old_before = snapshot old_cache_dir in
+  p "an old stamped generation looks up as a miss the lookup decided, not a refusal"
+    (equal_record
+       (recorded (fun () ->
+            p "an old stamped generation opens as a cache miss"
+              (Option.is_none (SC.lookup ~dir:old_cache_dir ~key:(Some "old-a")))))
+       [ (SC.Lookup, "old-a", false) ]);
+  Verdict.p_all ~min:2 "a lookup leaves every old-regime entry in place" old_keys ~f:(fun key ->
       Stdlib.Sys.file_exists (entry_file ~cache_dir:old_cache_dir key));
-  p "the completed sweep atomically advances the regime stamp"
-    (String.equal
-       (String.strip (read (stamp_file old_cache_dir)))
-       (Int.to_string SC.cache_regime_version));
+  p "a lookup changes no entry and leaves the old stamp as it was"
+    (equal_snapshot old_before (snapshot old_cache_dir));
   p "a committed store and an admitted lookup are recorded, neither as a refusal"
     (equal_record
        (recorded (fun () ->
             SC.store ~dir:old_cache_dir ~key:(Some "current") (entry "current");
             ignore (SC.lookup ~dir:old_cache_dir ~key:(Some "absent") : SC.entry option)))
        [ (SC.Store, "current", false); (SC.Lookup, "absent", false) ]);
+  Verdict.p_none ~min:2 "the store sweeps every old-regime entry" old_keys ~f:(fun key ->
+      Stdlib.Sys.file_exists (entry_file ~cache_dir:old_cache_dir key));
+  p "the store's completed sweep atomically advances the regime stamp"
+    (String.equal
+       (String.strip (read (stamp_file old_cache_dir)))
+       (Int.to_string SC.cache_regime_version));
   p "a current entry remains readable across later cache opens"
     (match SC.lookup ~dir:old_cache_dir ~key:(Some "current") with
     | Some value -> String.equal value.SC.backend "current"
     | None -> false);
 
   (* Existing caches predate the stamp itself. Absence is the initial superseded generation, not a
-     reason to preserve the entries that motivated this transition. *)
+     reason to preserve the entries that motivated this transition -- once a store comes. *)
   let legacy_cache_dir = "autotune_cache_regime_legacy" in
   make_dir legacy_cache_dir;
   write_entry ~cache_dir:legacy_cache_dir "legacy" (entry "legacy");
-  p "an unstamped legacy generation is swept and stamped current"
+  let legacy_before = snapshot legacy_cache_dir in
+  p "an unstamped legacy generation looks up as a miss, left whole and unstamped"
     (Option.is_none (SC.lookup ~dir:legacy_cache_dir ~key:(Some "legacy"))
-    && (not (Stdlib.Sys.file_exists (entry_file ~cache_dir:legacy_cache_dir "legacy")))
+    && equal_snapshot legacy_before (snapshot legacy_cache_dir)
+    && not (Stdlib.Sys.file_exists (stamp_file legacy_cache_dir)));
+  SC.store ~dir:legacy_cache_dir ~key:(Some "fresh") (entry "fresh");
+  p "a store sweeps an unstamped legacy generation and stamps it current"
+    ((not (Stdlib.Sys.file_exists (entry_file ~cache_dir:legacy_cache_dir "legacy")))
+    && Stdlib.Sys.file_exists (entry_file ~cache_dir:legacy_cache_dir "fresh")
     && String.equal
          (String.strip (read (stamp_file legacy_cache_dir)))
          (Int.to_string SC.cache_regime_version));
