@@ -17,7 +17,13 @@ a direct failure turned into a claim of the same words leaves its key unresolved
 a control claim reworded into a format with substitutions leaves its label unresolved: true
 a key that answers to no current failure and no rewording is unresolved: true
 a control file's reworded claim is paired old to new, its unchanged one is not: true
+and a one-for-one rewording leaves no old claim unpaired: true
 an evidence label naming a claim reworded outside the rows follows it: true
+a control file's claim reworded beside an insertion leaves the label naming it unresolved: true
+and relabels nothing, where the one-for-one rewording did: true
+a key whose format's two sites were reworded differently is unresolved, as is its marker: true
+and no entry is re-keyed to either successor (the row is still rewritten): true
+and no golden swaps its marker for either successor: true
 the text reader reads the real manifest's rows as compiled: true
 and its direct-evidence entries: true
 and its catalogue-only entries: true

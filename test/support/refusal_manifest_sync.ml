@@ -157,23 +157,25 @@ let align ~equal ~before ~after =
   (List.rev !pairs, List.rev !dropped, List.rev !inserted)
 
 (** The control claims reworded between two versions of one source: the formats of its [Claim]
-    diagnostics that {!align} pairs, old to new, where the text changed. Feeds {!plan} the claims of
-    files outside the manifest's rows -- a [*_cases.ml] control whose claim a [raw_direct_evidence]
-    entry names. *)
+    diagnostics that {!align} pairs, old to new, where the text changed, then the old formats it
+    pairs with nothing -- a claim removed, or reworded beside an insertion or a removal, which no
+    one-for-one pairing settles. Feeds {!plan} the claims of files outside the manifest's rows -- a
+    [*_cases.ml] control whose claim a [raw_direct_evidence] entry names. *)
 let claim_renames ~before ~after =
   let claims source =
     List.filter (Scan.diagnostics source) ~f:(fun d ->
         match d.Scan.kind with Scan.Claim -> true | Scan.Fail -> false)
   in
-  let pairs, _, _ =
+  let pairs, dropped, _ =
     align
       ~equal:(fun a b -> String.equal a.Scan.format b.Scan.format)
       ~before:(claims before) ~after:(claims after)
   in
-  List.filter_map pairs ~f:(fun (old, renamed) ->
-      Option.some_if
-        (not (String.equal old.Scan.format renamed.Scan.format))
-        (old.Scan.format, renamed.Scan.format))
+  ( List.filter_map pairs ~f:(fun (old, renamed) ->
+        Option.some_if
+          (not (String.equal old.Scan.format renamed.Scan.format))
+          (old.Scan.format, renamed.Scan.format)),
+    List.map dropped ~f:(fun d -> d.Scan.format) )
 
 (** What a sync changed or could not. *)
 type change =
@@ -196,16 +198,22 @@ let evidence_suffix = ": true"
 let identity_of text = Stdlib.Digest.string (Scan.normalize text) |> Stdlib.Digest.to_hex
 
 (** The plan for the manifest [text]. [diagnostics_of] gives a row source's current diagnostics
-    ([None] for a source that is gone), and [renamed_claims] the control claims reworded outside the
-    rows, old format to new ({!claim_renames}). *)
-let plan ~text ~diagnostics_of ~renamed_claims =
+    ([None] for a source that is gone), [renamed_claims] the control claims reworded outside the
+    rows, old format to new, and [unpaired_claims] the old formats there that nothing replaced one
+    for one ({!claim_renames}).
+
+    One old diagnostic is followed only to ONE successor: an identity occurring twice in a row (two
+    sites of one format) whose occurrences were reworded differently has no single successor for its
+    key, label or golden marker, and is unresolved -- never the last pairing that happened to win.
+*)
+let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
   let tables = read_tables text in
   let edits = ref [] and changes = ref [] and unresolved = ref [] in
   let unresolved_f fmt = Printf.ksprintf (fun s -> unresolved := s :: !unresolved) fmt in
   (* Per row source: its current diagnostics, and the diagnostic each replaced key's refusal
      became. *)
   let current = Hashtbl.create (module String) and replaced = Hashtbl.create (module String) in
-  let markers = ref [] and claims = ref [] in
+  let markers = ref [] and claims = ref [] and unpaired = ref [] in
   List.iter tables.rows ~f:(fun row ->
       match diagnostics_of row.source with
       | None ->
@@ -227,21 +235,45 @@ let plan ~text ~diagnostics_of ~renamed_claims =
                   removed = Scan.minus row.markers extracted;
                 }
               :: !changes;
-            let pairs, _, _ =
+            let pairs, dropped, _ =
               align
                 ~equal:(fun marker d -> String.equal marker (Scan.marker d))
                 ~before:row.markers ~after:diagnostics
             in
+            (* A dropped marker whose format the source still has elsewhere is no lost claim. *)
+            unpaired :=
+              List.filter_map dropped ~f:marker_identity
+              |> List.filter ~f:(fun identity ->
+                  not (List.exists diagnostics ~f:(fun d -> String.equal d.Scan.identity identity)))
+              |> Fn.flip ( @ ) !unpaired;
             List.iter pairs ~f:(fun (marker, d) ->
                 Option.iter (marker_identity marker) ~f:(fun identity ->
                     if not (String.equal marker (Scan.marker d)) then (
                       markers := (marker, Scan.marker d) :: !markers;
-                      Hashtbl.set replaced ~key:(row.source ^ ":" ^ identity) ~data:d;
+                      Hashtbl.add_multi replaced ~key:(row.source ^ ":" ^ identity) ~data:d;
                       match d.Scan.kind with
                       | Scan.Claim -> claims := (identity, d.Scan.format) :: !claims
                       | Scan.Fail -> ())))));
   List.iter renamed_claims ~f:(fun (old_format, format) ->
       claims := (identity_of old_format, format) :: !claims);
+  unpaired := List.map unpaired_claims ~f:identity_of @ !unpaired;
+  (* One old text to more than one new one: no single successor, so none is chosen. *)
+  let ambiguous pairs =
+    Hashtbl.filter_map
+      (Hashtbl.of_alist_multi (module String) pairs)
+      ~f:(fun successors ->
+        match List.dedup_and_sort successors ~compare:String.compare with
+        | [ _ ] -> None
+        | successors -> Some successors)
+  in
+  let ambiguous_markers = ambiguous !markers and ambiguous_claims = ambiguous !claims in
+  Hashtbl.iteri ambiguous_markers ~f:(fun ~key ~data ->
+      unresolved_f
+        "%s occurs more than once and its occurrences were reworded into %d different successors: \
+         the goldens holding it, and any entry naming it, are a hand edit"
+        key (List.length data));
+  markers := List.filter !markers ~f:(fun (old, _) -> not (Hashtbl.mem ambiguous_markers old));
+  claims := List.filter !claims ~f:(fun (old, _) -> not (Hashtbl.mem ambiguous_claims old));
   let answers_now key =
     match String.rsplit2 key ~on:':' with
     | None -> false
@@ -256,18 +288,28 @@ let plan ~text ~diagnostics_of ~renamed_claims =
         let key = entry.key.value in
         if not (answers_now key) then
           (* A key in [replaced] is a row source's, so it splits. *)
-          match (Hashtbl.find replaced key, String.lsplit2 key ~on:':') with
-          | Some { Scan.kind = Scan.Fail; identity; _ }, Some (source, _) ->
+          let successors =
+            Hashtbl.find_multi replaced key
+            |> List.dedup_and_sort ~compare:(fun a b ->
+                String.compare a.Scan.identity b.Scan.identity)
+          in
+          match (successors, String.lsplit2 key ~on:':') with
+          | _ :: _ :: _, _ ->
+              unresolved_f
+                "%s in `%s` names a format occurring more than once, whose occurrences were \
+                 reworded differently: which successor it answers for is a hand edit"
+                key table
+          | [ { Scan.kind = Scan.Fail; identity; _ } ], Some (source, _) ->
               let new_key = source ^ ":" ^ identity in
               edits := (entry.key.start, entry.key.stop, quote new_key) :: !edits;
               changes := Rekeyed { table; old_key = key; new_key } :: !changes
-          | Some { Scan.kind = Scan.Fail; _ }, None -> ()
-          | Some { Scan.kind = Scan.Claim; format; _ }, _ ->
+          | [ { Scan.kind = Scan.Fail; _ } ], None -> ()
+          | [ { Scan.kind = Scan.Claim; format; _ } ], _ ->
               unresolved_f
                 "%s in `%s` names a direct failure now reworded into a claim (%S): move or drop \
                  the entry by hand"
                 key table format
-          | None, _ ->
+          | [], _ ->
               unresolved_f
                 "%s in `%s` answers to no current direct failure, and no rewording pairs it with \
                  one: re-key or drop it by hand"
@@ -283,7 +325,18 @@ let plan ~text ~diagnostics_of ~renamed_claims =
         | Some label -> (label, evidence_suffix)
         | None -> (value, "")
       in
-      match List.Assoc.find !claims (identity_of label) ~equal:String.equal with
+      let identity = identity_of label in
+      match List.Assoc.find !claims identity ~equal:String.equal with
+      | None when Hashtbl.mem ambiguous_claims identity ->
+          unresolved_f
+            "the claim %s's evidence names occurs more than once and was reworded differently: \
+             write its label by hand"
+            entry.key.value
+      | None when List.mem !unpaired identity ~equal:String.equal ->
+          unresolved_f
+            "the claim %s's evidence names was removed, or reworded beside an insertion or a \
+             removal, so nothing pairs it with a successor: relabel or re-map the entry by hand"
+            entry.key.value
       | None -> ()
       | Some format when String.mem format '%' ->
           unresolved_f

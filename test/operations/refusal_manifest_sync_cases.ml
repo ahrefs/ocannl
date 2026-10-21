@@ -92,7 +92,7 @@ let () =
   let diagnostics_of source =
     Option.some_if (String.equal source "synthetic_scan.ml") (Scan.diagnostics after)
   in
-  let plan = Sync.plan ~text ~diagnostics_of ~renamed_claims:[] in
+  let plan = Sync.plan ~text ~diagnostics_of ~renamed_claims:[] () in
   p_empty "a rewording the row pairs one for one leaves nothing unresolved" ~over:plan.changes
     plan.unresolved;
   let synced = Sync.read_tables (Sync.apply text plan.edits) in
@@ -110,7 +110,7 @@ let () =
        (List.map synced.direct_evidence ~f:(fun e -> e.value.value))
        [ "a malformed tree is refused: true"; "the last claim keeps its words: true" ]);
   p_empty "a synced manifest plans nothing more" ~over:plan.edits
-    (Sync.plan ~text:(Sync.apply text plan.edits) ~diagnostics_of ~renamed_claims:[]).edits;
+    (Sync.plan ~text:(Sync.apply text plan.edits) ~diagnostics_of ~renamed_claims:[] ()).edits;
   p "the plan names the row, the re-key and the relabel"
     (match plan.changes with
     | [ Row { source = "synthetic_scan.ml"; added; removed }; Rekeyed _; Relabeled _ ] ->
@@ -140,7 +140,7 @@ let () =
       Option.some_if (String.equal source "synthetic_scan.ml") (Scan.diagnostics after)
     in
     let text = manifest ~rows:[ ("synthetic_scan.ml", markers before) ] ~evidence ~catalogue in
-    (Sync.plan ~text ~diagnostics_of ~renamed_claims:[]).unresolved
+    (Sync.plan ~text ~diagnostics_of ~renamed_claims:[] ()).unresolved
   in
   let inserted =
     String.substr_replace_first after ~pattern:"  Verdict.p \"a malformed"
@@ -190,21 +190,71 @@ let () =
           ())
     = 1);
   (* A control claim outside the rows, reworded in its own file: [claim_renames] pairs it. *)
-  let renamed_claims = Sync.claim_renames ~before ~after in
+  let renamed_claims, unpaired_claims = Sync.claim_renames ~before ~after in
   p "a control file's reworded claim is paired old to new, its unchanged one is not"
     (Poly.equal renamed_claims [ ("the malformed tree is refused", "a malformed tree is refused") ]);
+  p_empty "and a one-for-one rewording leaves no old claim unpaired" ~over:renamed_claims
+    unpaired_claims;
   let outside =
     manifest
       ~rows:[ ("synthetic_scan.ml", markers after) ]
       ~evidence:[ ("synthetic_scan.ml:" ^ first, "the malformed tree is refused: true") ]
       ~catalogue:[]
   in
-  let outside_plan = Sync.plan ~text:outside ~diagnostics_of ~renamed_claims in
+  let outside_plan = Sync.plan ~text:outside ~diagnostics_of ~renamed_claims () in
   p "an evidence label naming a claim reworded outside the rows follows it"
     (List.equal String.equal
        (List.map (Sync.read_tables (Sync.apply outside outside_plan.edits)).direct_evidence
           ~f:(fun e -> e.value.value))
        [ "a malformed tree is refused: true" ]);
+  (* The same control file with a claim inserted beside the rewording: nothing pairs the old claim,
+     so the label naming it is unresolved rather than left stale behind "nothing to sync". *)
+  let beside =
+    String.substr_replace_first after ~pattern:"  Verdict.p \"a malformed"
+      ~with_:"  Verdict.p \"an inserted claim\" ok;\n  Verdict.p \"a malformed"
+  in
+  let renamed_claims, unpaired_claims = Sync.claim_renames ~before ~after:beside in
+  let beside_plan = Sync.plan ~text:outside ~diagnostics_of ~renamed_claims ~unpaired_claims () in
+  p "a control file's claim reworded beside an insertion leaves the label naming it unresolved"
+    (List.length beside_plan.unresolved = 1);
+  p_empty "and relabels nothing, where the one-for-one rewording did" ~over:outside_plan.edits
+    beside_plan.edits;
+  (* One format at two sites, its occurrences reworded differently: no single successor. *)
+  let twice =
+    {ocaml|
+let check () =
+  Verdict.fail "a refusal at two sites";
+  Verdict.fail "a refusal at two sites"
+|ocaml}
+  in
+  let twice_after =
+    {ocaml|
+let check () =
+  Verdict.fail "a refusal at the first site";
+  Verdict.fail "a refusal at the second site"
+|ocaml}
+  in
+  let twice_key = "synthetic_scan.ml:" ^ identity_of twice "a refusal at two sites" in
+  let twice_text =
+    manifest
+      ~rows:[ ("synthetic_scan.ml", markers twice) ]
+      ~evidence:[ (twice_key, "x: true") ]
+      ~catalogue:[]
+  in
+  let twice_plan =
+    Sync.plan ~text:twice_text
+      ~diagnostics_of:(fun _ -> Some (Scan.diagnostics twice_after))
+      ~renamed_claims:[] ()
+  in
+  p "a key whose format's two sites were reworded differently is unresolved, as is its marker"
+    (List.length twice_plan.unresolved = 2);
+  p_none ~min:1 "and no entry is re-keyed to either successor (the row is still rewritten)"
+    twice_plan.changes ~f:(function
+    | Sync.Rekeyed _ -> true
+    | Row _ | Relabeled _ -> false);
+  p "and no golden swaps its marker for either successor"
+    (let golden = String.concat (List.map (markers twice) ~f:(fun m -> m ^ "\n")) in
+     String.equal (Sync.rewrite_golden twice_plan golden) golden);
   (* The text reader against the real manifest's compiled tables: every row, key and label it would
      rewrite is the one the tests read. *)
   let live_text = In_channel.read_all "../support/refusal_control_manifest.ml" in

@@ -24,21 +24,35 @@ let diagnostics_of source =
      crash. *)
   if Stdlib.Sys.file_exists path then Some (Scan.diagnostics (In_channel.read_all path)) else None
 
-(* The control claims reworded since [base] in the test sources the working tree changed. A source
-   that does not parse on either side contributes nothing: the scans report it, not this. *)
-let renamed_claims base =
+let refuse fmt =
+  Printf.ksprintf
+    (fun message ->
+      eprintf "refusal-manifest-sync: %s\n" message;
+      Stdlib.exit 2)
+    fmt
+
+(* The control claims reworded since [base] in the test sources the working tree changed, and the
+   old ones nothing replaced one for one. A [base] git cannot diff against refuses: read as "nothing
+   changed", it would report a stale label as nothing to sync. A source new since [base] has no old
+   claims; one that does not parse on either side contributes nothing (the scans report it). *)
+let claim_changes base =
   let changed =
-    Option.value_map
-      (git [ "diff"; "--name-only"; base; "--"; "test/operations"; "test/support" ])
-      ~default:[] ~f:String.split_lines
-    |> List.filter ~f:(fun path ->
-        String.is_suffix path ~suffix:".ml" && Stdlib.Sys.file_exists path)
+    match git [ "diff"; "--name-only"; base; "--"; "test/operations"; "test/support" ] with
+    | None -> refuse "git cannot diff against --base %s" base
+    | Some listing ->
+        String.split_lines listing
+        |> List.filter ~f:(fun path ->
+            String.is_suffix path ~suffix:".ml" && Stdlib.Sys.file_exists path)
   in
-  List.concat_map changed ~f:(fun path ->
-      match git [ "show"; base ^ ":" ^ path ] with
-      | None -> []
-      | Some before -> (
-          try Sync.claim_renames ~before ~after:(In_channel.read_all path) with _ -> []))
+  let renamed, unpaired =
+    List.map changed ~f:(fun path ->
+        match git [ "show"; base ^ ":" ^ path ] with
+        | None -> ([], [])
+        | Some before -> (
+            try Sync.claim_renames ~before ~after:(In_channel.read_all path) with _ -> ([], [])))
+    |> List.unzip
+  in
+  (List.concat renamed, List.concat unpaired)
 
 (* Each catalogued source's goldens: the refusal_control_scan_cases stanza's argument pairs. *)
 let catalogue () =
@@ -77,8 +91,14 @@ let () =
         Stdlib.exit 2
   in
   parse (List.tl_exn (Array.to_list (Sys.get_argv ())));
+  (* Every argument is checked before anything is written: a refusal leaves the tree as it was. *)
+  let catalogue = catalogue () in
+  List.iter !named ~f:(fun source ->
+      if not (List.Assoc.mem catalogue source ~equal:String.equal) then
+        refuse "%s is no source the refusal_control_scan_cases stanza catalogues" source);
+  let renamed_claims, unpaired_claims = claim_changes !base in
   let text = In_channel.read_all manifest_path in
-  let plan = Sync.plan ~text ~diagnostics_of ~renamed_claims:(renamed_claims !base) in
+  let plan = Sync.plan ~text ~diagnostics_of ~renamed_claims ~unpaired_claims () in
   List.iter plan.changes ~f:(function
     | Sync.Row { source; added; removed } ->
         printf "row %s: %d marker(s) added, %d removed\n" source (List.length added)
@@ -92,13 +112,6 @@ let () =
   List.iter plan.unresolved ~f:(printf "UNRESOLVED: %s\n");
   if (not !dry_run) && not (List.is_empty plan.edits) then
     Out_channel.write_all manifest_path ~data:(Sync.apply text plan.edits);
-  let catalogue = catalogue () in
-  List.iter !named ~f:(fun source ->
-      if not (List.Assoc.mem catalogue source ~equal:String.equal) then (
-        eprintf
-          "refusal-manifest-sync: %s is no source the refusal_control_scan_cases stanza catalogues\n"
-          source;
-        Stdlib.exit 2));
   let sources = List.dedup_and_sort (Sync.touched_sources plan @ !named) ~compare:String.compare in
   (* The goldens the rewording's text reaches, rewritten in place unless this is a dry run. *)
   let rewritten =
