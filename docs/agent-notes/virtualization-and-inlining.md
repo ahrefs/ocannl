@@ -433,10 +433,10 @@ files.
   entry, the fan-in guard, footprint eligibility, flip pricing — then sees only reads that execute,
   so such a read neither taints nor registers provenance. The issue proposed storing the
   `simplify_llc` residual instead; that was built and refuted: a template can replay beneath a
-  threefry operand, which the consumer's simplify never enters, and there the simplifier's own folds
-  change values — `Embed_index (Fixed_idx 0)` folded to `Constant 0.` converts to `uint4x32` through
-  `double_to_uint4x32` instead of `int32_to_uint4x32` (it changed `test_block_tensor`'s random
-  stream), and constant folds round in double. Elision changes no evaluated expression, so it is
+  threefry operand, which the consumer's simplify never enters, so a simplified template would carry
+  there folds that change values (constant folds round in double; what simplify changes is in
+  backend-precision-and-simd.md, the floating-point licences entry). Elision changes no evaluated
+  expression, so it is
   exact wherever the template replays; the consumer's simplify still folds the decided `Where` in
   every ordinary position. Decisions must hold wherever the template replays: the loops of the write
   index's symbols do not extend the interval environment (the inliner substitutes the read site's
