@@ -1197,9 +1197,59 @@ files.
   alike. Operands of one sign (all nonnegative, or all nonpositive) are exact on both widths, f32
   sums up to 53760 included. So a HIP tensorized leg that claims bitwise equality with a serial
   twin needs same-sign operands (`fragment_scope_move_legality` cycles over `[0, modulus)`), and
-  signed data needs a bound, as the bf16 legs carry. `tools/hip_wmma_sign_probe.hip` is the
-  standalone reproducer: its exit status says whether the same-sign rule still holds on a new
-  target or toolkit, and it reports the mixed-sign cases without judging them.
+  signed data needs a stated bound. `tools/hip_wmma_sign_probe.hip` is the standalone reproducer:
+  its exit status says whether the same-sign rule still holds on a new target or toolkit, and it
+  reports the mixed-sign cases without judging them. Re-run it after a ROCm upgrade, and extend it
+  to gfx12's builtins when a gfx12 box exists.
+- **A HIP bitwise claim rests on two conditions, and a HIP tolerance needs a reason that is
+  neither** (gh-ocannl-1432; gh-ocannl-1457, backend enforcement of the licence, builds on this
+  rule). The rule, as the sweep applied it:
+  - *One sign.* Every product a HIP-tensorized reduction sums shares a sign (half and bf16 operands:
+    HIP tensorizes nothing else; f32 and fp8 decline to the scalar fallback). Say so in the data's
+    comment; derive it host-side where it is cheap (`schedule_contraction_nest`'s `out_proj bf16
+    inputs` claims compute it from the init functions).
+  - *The contraction licence for two kernel shapes over inexact arithmetic.* HIP's clang
+    `-ffast-math` contracts `acc + a * b` per kernel, so two kernel shapes (a seed and the default
+    schedule, a fission against no fission) round differently whenever a product or partial sum is
+    not exact. A bitwise claim between them sets `OCANNL_FP_CONTRACT=true` (both shapes then carry
+    an explicit FMA), and on cc also `cc_backend_fp_contract=off`, so gcc cannot contract by its own
+    choice (`seeded_default`, `seeded_refine_blocks`, `zero_elision`). Data whose every product and
+    partial sum is exact (dyadic, within the precision) needs neither licence: any association and
+    any contraction return the exact value. Most tensorized legs take this route.
+  - *A tolerance on a HIP tensorized leg names a reason that is not the sign.* Same-sign exact data
+    gives bitwise; a residue of a few ulps under a tolerance is the signature of signed data. Never
+    loosen a check for one backend: gate that backend on a filed defect and keep it exact
+    (gh-ocannl-1420 was handled that way until its root cause was found).
+  - *A claim gated on several GPU backends gets a leg on each before merge.* In wave-20261018o three
+    master reds came from HIP-only behaviour (half_ops' `-0.0`, two-kernel-shape contraction) under
+    CUDA-only legs.
+  - The bf16 builtins obey the same rule, though the probe covers only the f16 ones: with
+    nonnegative operands every bf16 leg of the ledger below is bitwise on gfx1151 and gfx1102, both
+    accumulator widths, and the bf16-accumulate arm rounds the k-split discriminator's ties to even.
+- **The gh-ocannl-1432 sweep's ledger**, so the next audit of HIP tensorized claims starts from it.
+  Made bitwise with nonnegative data: `schedule_mma_matmul`'s bf16 legs (`bf32`, `bfu*`; the old
+  1e-5/5e-2 HIP tolerances were measured on a signed `mbb`), its staged f16->f32 leg (`approx` on
+  HIP), the Bf16_wide bound (its f32-ulp HIP slack is gone, and a bitwise claim against the
+  once-narrowed reference joins it), and the half legs' `mbh`; `scan_companion_coverage` leg 4's `z`
+  (1e-5); `schedule_batched_mma`'s bf16 legs (5%). Already one-signed, made bitwise:
+  `schedule_contraction_nest`'s `out_proj` bf16 leg (5%; its sums never leave bf16's exact range).
+  Newly run on HIP, bitwise: `schedule_mma_matmul`'s f16->f32 direct full-product leg and its
+  f16->f32 k-split legs. Tolerances that stay, each for a reason other than the sign:
+  `qkv_zero_init`'s f16-operand leg (`2^-8` relative: the serial reference may round each product to
+  f16, which the tensor unit does not); `schedule_strided_1x1`'s f16 legs (1e-3 absolute on integer
+  sums of at least 16, where f16's spacing is `2^-6`, so it admits only exact matches); the
+  Bf16_narrow k-split envelope (how a bf16-accumulate unit rounds a tie is the subject, not the
+  sign); `scan_companion_coverage`'s softmax outputs (an f32 `exp` chain over two kernel shapes
+  without the licence); and the f32 legs at `approx_tol`, which are Metal's reassociating f32 tile
+  (HIP declines f32). Not tensorized on HIP and so out of the sign rule, though their inputs are
+  signed: `schedule_ldmatrix_matmul` (HIP declines swizzled operands) and `tile_mma_narrow` (no
+  `Tensorize` on a GPU). The negative control (the signed operands restored under the bitwise
+  claims, on gfx1102) fails every claim with an f32 or bf16 result: the five bf16 legs, the staged
+  and the direct f16->f32 legs, leg 4's `z` (5.00000191 for 5 in 5 of 9 seeds) and
+  `schedule_batched_mma`'s four. The f16-accumulator claims (`mm_h`, the staged uniform-f16 leg)
+  pass even signed, because f16's rounding absorbs the residue outside exact-zero cells, which those
+  data lack; one sign keeps them from depending on that. A signed `out_proj` input passes its
+  bitwise claims for the same reason at bf16, and fails the derived one-sign premise instead.
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
   `((vtyp){0} + x)` returns `+0.0` for `x = -0.0` (IEEE `(+0.0) + (-0.0) = +0.0`), so use
