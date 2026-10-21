@@ -6817,7 +6817,10 @@ class VenvInterpreterTest(unittest.TestCase):
         self.assertEqual(self.resolve()[0], windows)
 
     def test_a_dangling_checkout_link_falls_through_to_the_shared_venv(self):
-        (self.dir / ".venv").symlink_to(self.dir.parent / "no-such-venv")
+        try:
+            (self.dir / ".venv").symlink_to(self.dir.parent / "no-such-venv")
+        except OSError as e:  # Windows without the symlink privilege
+            self.skipTest(f"cannot create a symlink here: {e}")
         shared = self.make(self.shared)
         self.assertEqual(self.resolve(), (shared, f"shared venv {self.shared}"))
 
