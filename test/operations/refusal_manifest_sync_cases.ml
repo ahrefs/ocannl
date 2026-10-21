@@ -163,6 +163,16 @@ let () =
           ~evidence:[ ("synthetic_scan.ml:" ^ second_before, "x: true") ]
           ())
     = 1);
+  let same_words =
+    String.substr_replace_first before ~pattern:"Verdict.fail \"the second refusal reads the old way\""
+      ~with_:"Verdict.p \"the second refusal reads the old way\" ok"
+  in
+  p "a direct failure turned into a claim of the same words leaves its key unresolved"
+    (List.length
+       (unresolved ~after:same_words
+          ~evidence:[ ("synthetic_scan.ml:" ^ second_before, "x: true") ]
+          ())
+    = 1);
   let formatted =
     String.substr_replace_first after ~pattern:"Verdict.p \"a malformed tree is refused\" ok"
       ~with_:"Verdict.pf \"a malformed %s is refused\" name ok"

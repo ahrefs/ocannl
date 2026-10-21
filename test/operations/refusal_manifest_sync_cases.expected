@@ -13,6 +13,7 @@ a golden's replaced markers and reworded claim rows are rewritten, and nothing e
 a golden holding none of them is unchanged: true
 a key whose failure was reworded beside an insertion is unresolved, not guessed: true
 a direct failure reworded into a claim leaves its key unresolved: true
+a direct failure turned into a claim of the same words leaves its key unresolved: true
 a control claim reworded into a format with substitutions leaves its label unresolved: true
 a key that answers to no current failure and no rewording is unresolved: true
 a control file's reworded claim is paired old to new, its unchanged one is not: true
