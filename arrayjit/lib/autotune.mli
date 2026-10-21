@@ -2101,17 +2101,22 @@ val model_default :
     validation, or compilation failure fall back to the ordinary default pipeline — the reported
     {!model_choice} then says ["default"]. On CUDA and HIP with the seeding on (as for
     {!seeded_default}), the model starts from the seeded untuned plan instead (gh-ocannl-1253,
-    {!seeded_plan} under the configured gate, [auto] included): it is the incumbent every candidate
-    must strictly beat and the pick when none does ([mc_label] ["seeded"], even where no segment
-    seeds and the plan is the default pipeline -- a plan the compile then does not retry on a
-    backend failure, as for the default), the candidates compete on the program after the plan's
-    split prelude, and the sketch candidates are restricted to the seeding's numerics-preserving
-    forms — scalar block tiles at a site accumulating at its storage precision — so the pick never
-    changes a value the untuned compile computes. Fatal failures propagate without retrying. Once
-    the compile is on that pipeline there is nothing left to fall back to, so its failures propagate
-    as they would from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is
-    executed and no cache is involved — results depend only on the computation, backend, and
-    envelope constants.
+    {!seeded_plan} under the configured gate, [auto] included): it is the incumbent and the pick
+    when no candidate strictly beats it ([mc_label] ["seeded"], even where no segment seeds and the
+    plan is the default pipeline -- a plan the compile then does not retry on a backend failure, as
+    for the default). Each family walk -- the whole routine's, and each keyed segment's of the
+    per-segment substitution -- is anchored at the seeded plan's own sketch on that program, scored
+    as the walk's leaves are (gh-ocannl-1477): the plan runs its zero-fill as a kernel of its own,
+    which the per-kernel score charges separately while a leaf hides it under its compute leg, so
+    without the anchor a leaf that only ties the seeded geometry beat the plan. A leaf the score
+    separates from it still can. The candidates compete on the program after the plan's split
+    prelude, and the sketch candidates are restricted to the seeding's numerics-preserving forms —
+    scalar block tiles at a site accumulating at its storage precision — so the pick never changes a
+    value the untuned compile computes. Fatal failures propagate without retrying. Once the compile
+    is on that pipeline there is nothing left to fall back to, so its failures propagate as they
+    would from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed
+    and no cache is involved — results depend only on the computation, backend, and envelope
+    constants.
 
     Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the routine
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic
@@ -2295,6 +2300,13 @@ val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
     override is a calibration and keeps [Ranked], even with both tiers off. Raises
     [Utils.Invalid_config_value] naming the key on anything else (gh-ocannl-1332). *)
 
+val model_seeding :
+  backend:string -> limits:Ir.Backend_intf.hardware_limits -> (seed_gate * int * bool) option
+(** Whether {!model_default} starts from the seeded untuned plan on this backend under the current
+    configuration (CUDA and HIP with the seeding settings resolving): its gate, split threshold and
+    reduction-sink flag, as {!seeded_default} resolves them; [None] where the incumbent is the
+    default pipeline. *)
+
 (** What the seeded plan does with one segment (gh-ocannl-1388). *)
 type seeded_segment =
   | Seeded_preset  (** The default preset, as the default pipeline schedules the segment. *)
@@ -2465,6 +2477,12 @@ type explain = {
       (** Whether {!model_default}'s numerics-preserving restriction (in force where it starts from
           the seeded plan, CUDA and HIP) admits the candidate to its ranking; the incumbent always
           is. *)
+  ex_anchor : bool;
+      (** Whether this sketch leaf is the one {!model_default} anchors the walk at (gh-ocannl-1477):
+          the seeded plan's own sketch on the program, as the seeding's per-segment decision puts it
+          there. A leaf must rank strictly below it, as below the incumbent, to be picked. At most
+          one per walk, and only where the model starts from the seeded plan; listed after the
+          walk's leaves when they do not include it. *)
 }
 (** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
 
@@ -2474,9 +2492,10 @@ type segment_explain = {
           labels ([F_sketch[...]]) and {!model_default}'s pick name it. *)
   xs_candidates : (string * explain) list;
       (** ["preset"] first -- the segment under its default preset, the incumbent its sketches must
-          strictly beat -- then every sketch leaf {!model_default}'s family search visits on the
-          segment, in visiting order, each labeled [<sketch parameters> @<key tag>] as an [F_sketch]
-          label renders its entries ({!sketch_params_label}). *)
+          strictly beat, as must they the segment's [ex_anchor] leaf where there is one -- then
+          every sketch leaf {!model_default}'s family search visits on the segment, in visiting
+          order, each labeled [<sketch parameters> @<key tag>] as an [F_sketch] label renders its
+          entries ({!sketch_params_label}). *)
 }
 
 type explanation = {

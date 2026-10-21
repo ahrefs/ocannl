@@ -342,10 +342,11 @@
 # search trajectory's identity, so this key and the two below shape a search like the autotune_*
 # keys: a cached crown replays under any value, but a search's timed trajectory is kept only for
 # one seeding the same plan. Under model_default_schedule=true the model starts from this plan
-# (gh-ocannl-1253): it is the incumbent a candidate must strictly beat, and the candidates are
-# restricted to the same numerics-preserving sketches; the model's pick, which the search does
-# not reproduce, is then the untuned compile, so there the search's floor is this plan rather than
-# the untuned step. Ignored on a budgeted compile (memory_budget), and on Metal and the CPU
+# (gh-ocannl-1253): it is the incumbent a candidate must strictly beat -- and so must it the plan's
+# own sketch, scored as the candidates are (gh-ocannl-1477), so a score tie never displaces it --
+# and the candidates are restricted to the same numerics-preserving sketches; the model's pick,
+# which the search does not reproduce, is then the untuned compile, so there the search's floor is
+# this plan rather than the untuned step. Ignored on a budgeted compile (memory_budget), and on Metal and the CPU
 # backends.
 #gpu_default_sketch_min_reduction=auto
 
@@ -994,9 +995,11 @@
 # scheduled form fails that same check are excluded from the ranking, so the model chooses
 # among schedules that can actually be built. On CUDA and HIP the model starts from the seeded
 # untuned plan instead of the default pipeline (gh-ocannl-1253, gpu_default_sketch_min_reduction),
-# and its sketch candidates are restricted to the seeding's numerics-preserving forms (scalar
-# register-blocktiled sketches at a site accumulating at its storage precision: no tensor-core
-# or conv form), so the pick never changes a value the untuned compile computes. The coalesced
+# which a candidate displaces only by ranking strictly below the plan's own sketch scored as the
+# candidates are (gh-ocannl-1477: the score ties every scalar sketch of a site however its work is
+# launched, and a batch-serial one measured up to 35x slower), and its sketch candidates are
+# restricted to the seeding's numerics-preserving forms (scalar register-blocktiled sketches at a
+# site accumulating at its storage precision: no tensor-core or conv form), so the pick never changes a value the untuned compile computes. The coalesced
 # layouts the autotuner seeds preserve values too, but the model does not rank them: its score
 # cannot tell them from their uncoalesced twins (gh-ocannl-1278).
 #model_default_schedule=false

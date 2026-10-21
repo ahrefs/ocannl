@@ -7200,6 +7200,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1477: under seeding, model_default never displaces the seeded plan with a sketch that
+; only ties the seeded plan's own sketch: on CUDA/HIP each walk (whole-routine, and per segment of a
+; fissioned chain) is anchored at that sketch, the pick ranks strictly below it or is the seeded
+; plan, and the picked routine is bitwise the seeded plan's. The seeding threshold and the FMA
+; contraction are pinned in the source; elsewhere no walk is anchored. Backend-uniform golden.
+
+(test
+ (name model_seeded_anchor)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules model_seeded_anchor)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1413: the seeded untuned default's site refinement compares its segmentation with the
 ; finer arity_cuts one block by block: Autotune.refine_segments on synthetic segmentations, then an
 ; attention score product whose finer cut moves a boundary is seeded on CUDA/HIP (nothing elsewhere)
