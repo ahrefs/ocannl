@@ -325,6 +325,9 @@ val update_operand_prec : t -> Ir.Ops.prec -> unit
 (** Sets an operand's precision ahead of an operation that requires it; refused (raises
     [Session_error]) when it would change a closed operand's precision. *)
 
+val update_operands_prec : t list -> Ir.Ops.prec -> unit
+(** {!update_operand_prec} over several operands, all validated before any is written. *)
+
 val check_not_discarded : what:string -> t -> unit
 (** Raises [Session_error] when the tensor's value or gradient node was discarded by a rewind. *)
 

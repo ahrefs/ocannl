@@ -150,7 +150,6 @@ let exempt_zero_reference_exports =
     "Operation.stretch";
     "Operation.sub";
     "Operation.tanh";
-    "Operation.threefry4x32_crypto";
     "Operation.threefry4x32_light";
     "Operation.transpose_op_of_spec";
     "Operation.tropical";

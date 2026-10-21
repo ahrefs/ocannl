@@ -31,6 +31,8 @@ discarded big: used as an operand, refused naming the rewind and the failure: tr
 discarded big: compiled, refused: true
 discarded big: read through the context, refused: true
 discarded big: printed, refused: true
+a program that only writes a discarded node: compiled, refused: true
+a [%cd] assignment into a discarded tensor is refused at construction: true
 discarded [%cd] program: compiled, refused: true
 model B's context values survive the rewind: true
 a new consumer of the compiled model B runs: true

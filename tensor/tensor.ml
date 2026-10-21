@@ -306,25 +306,30 @@ let check_not_discarded ~what t =
     closed operand's precision is part of its committed state (gh-ocannl-1301): an update that would
     change it is refused before writing; an equal one (or a settled precision, which
     [Tn.update_prec] checks itself) passes. *)
-let update_operand_prec t prec =
+let prec_update_is_noop t prec =
   let tn = t.value in
-  let unchanged =
-    Lazy.is_val tn.Tn.storage_prec
-    ||
-    match tn.Tn.delayed_prec_unsafe with
-    | Tn.Specified p -> Ir.Ops.equal_prec p prec
-    | _ -> false
-  in
-  if t.shape.Shape.closed && not unchanged then
+  Lazy.is_val tn.Tn.storage_prec
+  || match tn.Tn.delayed_prec_unsafe with Tn.Specified p -> Ir.Ops.equal_prec p prec | _ -> false
+
+let check_operand_prec t prec =
+  let tn = t.value in
+  if t.shape.Shape.closed && not (prec_update_is_noop t prec) then
     raise
     @@ Session_error
          ( [%string
              "the operand %{Tn.debug_name tn} is closed (committed by an earlier \
               finish_inference), but this operation would set its precision to \
               %{Ir.Ops.prec_string prec}; build the operation before closing the operand"],
-           Some t );
-  if not unchanged then Row.note_mutation ();
-  Tn.update_prec tn prec
+           Some t )
+
+(** Sets the operands' precision; every operand is validated before any is written. *)
+let update_operands_prec ts prec =
+  List.iter ts ~f:(fun t -> check_operand_prec t prec);
+  List.iter ts ~f:(fun t ->
+      if not (prec_update_is_noop t prec) then Row.note_mutation ();
+      Tn.update_prec t.value prec)
+
+let update_operand_prec t prec = update_operands_prec [ t ] prec
 
 let () =
   Tn.session_gate := Shape.check_untainted;
@@ -369,6 +374,7 @@ let buffer_of ~is_grad ~is_merge (t : t) : Asgns.buffer =
 
 let raw_accum ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~shape_logic
     ~(rhs : Asgns.accum_rhs) : Asgns.t =
+  check_not_discarded ~what:"%cd assignment" t;
   let update_step =
     register_update_step
       ~neutral_elem:(Some (Ir.Ops.neutral_elem accum))
@@ -799,7 +805,13 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     let diff = Some { grad = g; zero_grads; backprop = Asgns.empty_comp } in
     let t = { t with diff } in
-    let backprop = Asgns.sequence @@ (grad_asn ~t ~g ~projections :: bcks) in
+    (* [grad_asn] runs inside the construction window too: the operands' roots are already removed
+       and the result's not yet installed, so a closure here would checkpoint an incomplete graph
+       (gh-ocannl-1301). *)
+    let backprop =
+      Asgns.sequence
+      @@ (Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) :: bcks)
+    in
     let backprop =
       {
         Asgns.asgns = backprop.asgns;

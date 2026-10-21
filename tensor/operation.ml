@@ -471,8 +471,7 @@ let threefry4x32_crypto ?spec =
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   fun t1 t2 ->
-    Tensor.update_operand_prec t1 Ir.Ops.uint4x32;
-    Tensor.update_operand_prec t2 Ir.Ops.uint4x32;
+    Tensor.update_operands_prec [ t1; t2 ] Ir.Ops.uint4x32;
     fun ?grad_spec
       ?label
       ?batch_dims
@@ -498,8 +497,7 @@ let threefry4x32_light ?spec =
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   fun t1 t2 ->
-    Tensor.update_operand_prec t1 Ir.Ops.uint4x32;
-    Tensor.update_operand_prec t2 Ir.Ops.uint4x32;
+    Tensor.update_operands_prec [ t1; t2 ] Ir.Ops.uint4x32;
     fun ?grad_spec
       ?label
       ?batch_dims

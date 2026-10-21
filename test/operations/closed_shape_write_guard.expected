@@ -9,5 +9,7 @@ a second padded consumer of a closed, already-padded operand runs (equal writes)
 a pointwise consumer of the closed operand runs (equal row writes): true
 a uint4x32 operation over a closed float operand is refused: true
 the operand's precision is unchanged: true
+a two-operand uint4x32 operation with a closed float operand is refused: true
+and its open operand's precision was not written either: true
 the refusal did not taint the session: true
 a parameter whose initializer returns a closed tensor is refused: true

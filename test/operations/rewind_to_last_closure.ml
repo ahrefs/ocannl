@@ -103,6 +103,9 @@ let scenario () =
      consumer [h] of [y] (drops its backprop root), a second consumer of [bz]; then a failure. *)
   let acc = leaf "rw_acc" [| 0.; 0.; 0. |] in
   let acc_code = [%cd acc =+ y] in
+  (* A program that only WRITES a discarded node (reads the live, compiled [bz]). *)
+  let out = leaf "rw_out" [| 0.; 0.; 0. |] in
+  let out_code = [%cd out =: bz] in
   let%op h = y *. 3. in
   let%op bh = bz + 1. in
   let big =
@@ -147,6 +150,12 @@ let scenario () =
         (refused_with
            (fun () -> Tensor.print ~force:false ~with_code:false ~with_grad:false `Inline t)
            ~substrings:[ discarded ]));
+  p "a program that only writes a discarded node: compiled, refused"
+    (refused_with
+       (fun () -> Context.compile ctx out_code Ir.Indexing.Empty)
+       ~substrings:[ discarded ]);
+  p "a [%cd] assignment into a discarded tensor is refused at construction"
+    (refused_with (fun () -> [%cd out =: bz]) ~substrings:[ discarded; "%cd assignment" ]);
   p "discarded [%cd] program: compiled, refused"
     (refused_with
        (fun () -> Context.compile ctx acc_code Ir.Indexing.Empty)

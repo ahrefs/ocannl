@@ -120,6 +120,15 @@ let () =
        ~substrings:[ "is closed"; "uint4x32" ]);
   p "the operand's precision is unchanged"
     (Option.equal Ir.Ops.equal_prec prec_before (Ir.Tnode.get_specified_prec f.Tensor.value));
+  let open_operand = leaf "cg_open" [| 1.; 2. |] in
+  let open_before = Ir.Tnode.get_specified_prec open_operand.Tensor.value in
+  p "a two-operand uint4x32 operation with a closed float operand is refused"
+    (refused_with
+       (fun () -> Ocannl.Operation.threefry4x32_crypto open_operand f ())
+       ~substrings:[ "is closed"; "uint4x32" ]);
+  p "and its open operand's precision was not written either"
+    (Option.equal Ir.Ops.equal_prec open_before
+       (Ir.Tnode.get_specified_prec open_operand.Tensor.value));
   p "the refusal did not taint the session"
     (Result.is_ok (outcome (fun () -> Shape.to_dims (TDSL.O.relu f).Tensor.shape)));
   (* (e) Parameterizing a closed tensor is refused before any write. *)

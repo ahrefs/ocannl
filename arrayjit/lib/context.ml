@@ -290,8 +290,10 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
      compiles nothing, and no program reaches the backend over a node the frontend discarded. *)
   !Tn.session_gate ();
   Option.iter !Tn.validity_check ~f:(fun check ->
-      let read, _ = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
-      Set.iter (Set.union read comp.Ir.Assignments.embedded_nodes) ~f:check);
+      let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
+      Set.iter
+        (Set.union_list (module Tn) [ read; written; comp.Ir.Assignments.embedded_nodes ])
+        ~f:check);
   (* Compile and link on the wrapped backend context; only backend-independent routine components
      (and, via [with_backend]'s rebuilt constructor, the updated context) escape the dispatch. *)
   let wrapped, backend_outcome =
