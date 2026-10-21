@@ -223,4 +223,22 @@ let () =
   p_all2 "refused relink: the untuned default computes the cold output bit for bit"
     (run_routine shipped) cold.output ~f:Float.equal
 
+(* --- A [retain] callback that raises (review round 1): the routine linked before it ran is
+   released, so the caller, who receives no context, leaks nothing. --- *)
+
+let () =
+  let live () = (Ir.Alloc_census.snapshot ()).Ir.Alloc_census.live_working_bytes in
+  let before = live () in
+  let raised =
+    match
+      Context.compile_outcome ~provenance:Ir.Schedule_outcome.User_schedule
+        ~retain:(fun _ -> raise Stdlib.Exit)
+        (Context.auto ()) comp Ir.Indexing.Empty
+    with
+    | _ -> false
+    | exception Stdlib.Exit -> true
+  in
+  p "retain raising: its exception propagates" raised;
+  p "retain raising: the routine linked before it holds no working bytes" (live () = before)
+
 let () = Stdio.printf "deferred_hit_compiles: done\n"

@@ -1278,6 +1278,16 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         winner
     in
     if inline_flips <= 0 then ship_winner ()
+    else if call_budget_spent () then (
+      (* gh-ocannl-1440 review round 1: no flip can start, so the decision surface -- a lowering and
+         its analyses, which can block for long on a large step -- is not read either. *)
+      call_budget_stopped_flips := true;
+      logf "flip refinement skipped: the call budget of %g s is spent after the arms"
+        (Option.value call_budget ~default:0.);
+      Autotune.progressf "event=call_budget_spent budget_s=%g elapsed_s=%.1f measured=0"
+        (Option.value call_budget ~default:0.)
+        (call_clock ());
+      ship_winner ())
     else
       let (* gh-555: greedy per-node refinement over the inlining decision vector. The vector lives
              on the default-policy arm (arm B's placements are caller-seeded wholesale, so its
@@ -1435,15 +1445,17 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       (Exn.to_string exn);
                     None)
           in
-          (* gh-ocannl-1440: the flip slots the call budget's split plans -- the flip budget, or the
-             surface's alternatives if fewer -- and the stop once the call's budget is spent,
-             checked before every alternative, a group's included: each alternative measured is
-             compared against the same incumbent, and a group whose alternatives were not all
-             measured leaves its node open, as a pruned alternative does. *)
-          let flip_slots =
-            min inline_flips
-              (List.sum (module Int) candidates ~f:(fun fc -> List.length fc.LL.fc_alternatives))
+          (* gh-ocannl-1440: the flip searches the call budget's split still plans -- the flip
+             budget left, or the alternatives not yet considered if fewer (a pruned or twinned
+             alternative is considered without a search; review round 1) -- and the stop once the
+             call's budget is spent, checked before every alternative, a group's included: each
+             alternative measured is compared against the same incumbent, and a group whose
+             alternatives were not all measured leaves its node open, as a pruned alternative
+             does. *)
+          let unconsidered =
+            ref (List.sum (module Int) candidates ~f:(fun fc -> List.length fc.LL.fc_alternatives))
           in
+          let flips_left () = max 1 (min (inline_flips - !measured) !unconsidered) in
           let call_stopped = ref false in
           let stop_for_call_budget () =
             if (not !call_stopped) && call_budget_spent () then (
@@ -1478,6 +1490,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                    not between a node's alternatives, or the comparison against the same incumbent
                    that the group exists for would be cut short by an exhausted budget. *)
                 let try_alternative (fa : LL.flip_alternative) =
+                  Int.decr unconsidered;
                   let arm =
                     Printf.sprintf "flip %s %s (cost %d%s)"
                       (LL.reading_to_string fa.LL.fa_flip)
@@ -1516,8 +1529,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                           let ctx' = apply base_ctx in
                           let timing' = Option.map base_timing ~f:apply in
                           let r, ms, rep =
-                            tune ~to_report:flip_report
-                              ~left:(max 1 (flip_slots - !measured))
+                            tune ~to_report:flip_report ~left:(flips_left ())
                               ~progress_note:
                                 (Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
                               ?abandon arm ctx' timing'

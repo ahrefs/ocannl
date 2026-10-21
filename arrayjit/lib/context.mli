@@ -211,8 +211,8 @@ val compile_outcome :
   (t * routine) Ir.Schedule_outcome.outcome
 (** Internal containment-aware form of {!compile}. The caller supplies the schedule provenance;
     public user code should continue to use {!compile}. [retain], called once on success before the
-    result is returned, receives the compiled code for a later {!relink_outcome} (gh-ocannl-1440).
-*)
+    result is returned, receives the compiled code for a later {!relink_outcome} (gh-ocannl-1440);
+    an exception it raises propagates after the routine just linked has been released. *)
 
 val relink_outcome : retained -> (t * routine) Ir.Schedule_outcome.outcome
 (** Links retained code again on the context it was compiled from, as a fresh link of the same code:

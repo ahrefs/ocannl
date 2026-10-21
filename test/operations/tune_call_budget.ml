@@ -70,8 +70,6 @@ let total_alternatives =
     surface.Autotune.ps_candidates
     ~f:(fun fc -> List.length fc.LL.fc_alternatives)
 
-let flip_slots = min inline_flips total_alternatives
-
 (* One search as the test saw it: its attempts' labels, the call's attempts before it started, and
    its report. *)
 type search = { attempts : string list; started_at : int; report : Autotune.report; flip : bool }
@@ -155,7 +153,9 @@ let expected_shares ~budget c =
         | 0 -> 2 + inline_flips
         | 1 -> 1 + inline_flips
         | _ ->
-            let l = max 1 (flip_slots - !measured) in
+            (* The flip budget left, or the alternatives not yet considered if fewer: this fixture
+               has no twins and prunes nothing, so every alternative considered was measured. *)
+            let l = max 1 (min (inline_flips - !measured) (total_alternatives - !measured)) in
             Int.incr measured;
             l
       in

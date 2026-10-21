@@ -500,19 +500,35 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
       | Error failure -> Error failure
       | Ok (code, (wrapped, payload)) ->
           let census = (mma, peel, volatility, segments) in
+          (* After the link, which has allocated the routine's working pools: a [retain] that raises
+             leaves the caller no context to release them through, so they are freed here before its
+             exception propagates (review round 1). *)
+          let release_linked () =
+            Backends.query wrapped
+              {
+                q =
+                  (fun (type d r e) ((module B) : (d, r, e) Backends.backend_module) c ->
+                    Backends.finalize (module B) c);
+              }
+          in
           Option.iter retain ~f:(fun keep ->
-              keep
-                {
-                  rt_ctx = ctx;
-                  rt_comp = comp;
-                  rt_census = census;
-                  rt_link =
-                    (fun () ->
-                      Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure
-                        ~provenance ~phase:Ir.Schedule_outcome.Backend_link ?candidate (link code));
-                  rt_gate = frontend_gate;
-                  rt_relinked = Atomic.make false;
-                });
+              try
+                keep
+                  {
+                    rt_ctx = ctx;
+                    rt_comp = comp;
+                    rt_census = census;
+                    rt_link =
+                      (fun () ->
+                        Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure
+                          ~provenance ~phase:Ir.Schedule_outcome.Backend_link ?candidate (link code));
+                    rt_gate = frontend_gate;
+                    rt_relinked = Atomic.make false;
+                  }
+              with exn ->
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                (try release_linked () with _ -> ());
+                Stdlib.Printexc.raise_with_backtrace exn backtrace);
           Ok (finish_link ctx comp wrapped payload census))
 
 let relink_outcome rt =
