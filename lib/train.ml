@@ -1489,8 +1489,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 (* A group started is a group finished: the budget is checked between candidates,
                    not between a node's alternatives, or the comparison against the same incumbent
                    that the group exists for would be cut short by an exhausted budget. *)
-                let try_alternative (fa : LL.flip_alternative) =
-                  Int.decr unconsidered;
+                let consider (fa : LL.flip_alternative) =
                   let arm =
                     Printf.sprintf "flip %s %s (cost %d%s)"
                       (LL.reading_to_string fa.LL.fa_flip)
@@ -1541,6 +1540,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                           | Error (Autotune.Search_abandoned _, _) -> Int.incr abandoned
                           | Ok _ | Error _ -> ());
                           Some (`Measured (fa, r, ms, ctx', timing', rep, (arm, identity))))
+                in
+                (* The alternative leaves [unconsidered] once its own share is taken (review round
+                   3): its search is among those still planned when it starts. *)
+                let try_alternative fa =
+                  Exn.protect ~f:(fun () -> consider fa) ~finally:(fun () -> Int.decr unconsidered)
                 in
                 let outcomes = List.filter_map fc.LL.fc_alternatives ~f:try_alternative in
                 let results =

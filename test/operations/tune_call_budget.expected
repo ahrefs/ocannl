@@ -24,6 +24,13 @@ generous: each search's share is what was left over the searches still planned: 
 generous: no non-floor attempt started at or past its search's cut: true
 generous: no flip search started once the call's budget was spent: true
 generous: the shipped routine computes the untuned output bit for bit: true
+all-slots: every attempt belongs to a reported search: true
+all-slots: both arms searched and reported, in position: true
+all-slots: every report carries the call's budget: true
+all-slots: each search's share is what was left over the searches still planned: true
+all-slots: no non-floor attempt started at or past its search's cut: true
+all-slots: no flip search started once the call's budget was spent: true
+all-slots: the shipped routine computes the untuned output bit for bit: true
 per-search: every attempt belongs to a reported search: true
 per-search: both arms searched and reported, in position: true
 per-search: every report carries the call's budget: true

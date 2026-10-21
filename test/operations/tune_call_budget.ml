@@ -79,6 +79,7 @@ type call = {
   output : float array;
   total_attempts : int;
   replayed : bool;  (** Whether the shipped placement was the placement store's, replayed. *)
+  flips_budget : int;  (** The call's [inline_flips]. *)
 }
 
 (* Each call searches in a cache of its own: a search must not replay another call's crown. *)
@@ -86,7 +87,7 @@ type call = {
    decision-surface lowering might take -- so a budget the arms leave untouched is spent before the
    flips. [?warm] keeps the cache directory an earlier call left. *)
 let run ?call_budget ?(settings = []) ?(placement_store = false) ?(jump = 0.) ?(warm = false)
-    ~cache_dir tag =
+    ?(flips_budget = inline_flips) ~cache_dir tag =
   if not warm then Scripted_search.clear_cache_dir cache_dir;
   let replayed = ref false in
   (* Each attempt with the search it belongs to: a "baseline" attempt opens a search. *)
@@ -110,7 +111,7 @@ let run ?call_budget ?(settings = []) ?(placement_store = false) ?(jump = 0.) ?(
       ~measure:(fun _ -> script ())
       (fun () ->
         Train.tune_placements ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir ~placement_store
-          ~inline_flips ?call_budget
+          ~inline_flips:flips_budget ?call_budget
           ~on_ship:(fun s -> replayed := s.Train.ship_replayed)
           ~report:(fun r ->
             Int.incr n_arm;
@@ -137,7 +138,7 @@ let run ?call_budget ?(settings = []) ?(placement_store = false) ?(jump = 0.) ?(
               (Option.value_map s.report.Autotune.call_share_s ~default:"-"
                  ~f:(Printf.sprintf "%.4g"))
               (String.concat ~sep:"," s.attempts))));
-  ( { searches; output; total_attempts = List.length attempts; replayed = !replayed },
+  ( { searches; output; total_attempts = List.length attempts; replayed = !replayed; flips_budget },
     List.length attempts = List.length (List.concat_map searches ~f:(fun s -> s.attempts)) )
 
 let arms c = List.filter c.searches ~f:(fun s -> not s.flip)
@@ -150,12 +151,13 @@ let expected_shares ~budget c =
   List.mapi c.searches ~f:(fun i s ->
       let left =
         match i with
-        | 0 -> 2 + inline_flips
-        | 1 -> 1 + inline_flips
+        | 0 -> 2 + c.flips_budget
+        | 1 -> 1 + c.flips_budget
         | _ ->
-            (* The flip budget left, or the alternatives not yet considered if fewer: this fixture
-               has no twins and prunes nothing, so every alternative considered was measured. *)
-            let l = max 1 (min (inline_flips - !measured) (total_alternatives - !measured)) in
+            (* The flip budget left, or the alternatives not yet considered if fewer, the current
+               one included: this fixture has no twins and prunes nothing, so every alternative
+               considered before it was measured. *)
+            let l = max 1 (min (c.flips_budget - !measured) (total_alternatives - !measured)) in
             Int.incr measured;
             l
       in
@@ -225,6 +227,14 @@ let mid_budget = 7.
 let mid = run ~call_budget:mid_budget ~cache_dir:mid_cache_dir "mid"
 let generous = run ~call_budget:10000. ~cache_dir:generous_cache_dir "generous"
 
+(* A flip budget past the surface's alternatives, so the alternatives left decide the divisor
+   (review round 3: the alternative being searched is among them). *)
+let all_slots_cache_dir = "autotune_cache_call_budget_all_slots"
+
+let all_slots =
+  run ~call_budget:10000. ~flips_budget:(total_alternatives + 1) ~cache_dir:all_slots_cache_dir
+    "all-slots"
+
 let per_search =
   run ~call_budget:10000.
     ~settings:[ ("autotune_budget_seconds", "1") ]
@@ -234,6 +244,7 @@ let () =
   check ~tag:"tight" ~budget:3. tight;
   check ~tag:"mid" ~budget:mid_budget mid;
   check ~tag:"generous" ~budget:10000. generous;
+  check ~tag:"all-slots" ~budget:10000. all_slots;
   check ~tag:"per-search" ~per_search:1. ~budget:10000. per_search;
   let tight, _ = tight and mid, _ = mid and generous, _ = generous and per_search, _ = per_search in
   p "tight: the call attempted fewer candidates than the control"

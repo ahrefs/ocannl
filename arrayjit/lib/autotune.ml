@@ -9159,7 +9159,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
 type deferred = {
   compile : unit -> Context.t * Context.routine;
   substituted : bool ref;
-  compiles : int ref;
+  compiles : int Atomic.t;
 }
 
 let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
@@ -9170,7 +9170,7 @@ let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block
   with_streams ?log ?progress (fun () ->
       {
         substituted;
-        compiles = ref 0;
+        compiles = Atomic.make 0;
         compile =
           tune_in_stream_scope ~defer:true ~substituted ?name ?search ?beam_width ?rounds ?repeats
             ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx
@@ -9179,8 +9179,11 @@ let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block
 
 let compile_deferred d =
   let before = Context.backend_compiles () in
+  (* Atomic (review round 3): a memoized call on another domain adds its zero concurrently with the
+     compiling call's count. The counter itself is per domain, and the compile runs on the
+     caller's. *)
   Exn.protect ~f:d.compile ~finally:(fun () ->
-      d.compiles := !(d.compiles) + (Context.backend_compiles () - before))
+      ignore (Atomic.fetch_and_add d.compiles (Context.backend_compiles () - before) : int))
 
-let deferred_compiles d = !(d.compiles)
+let deferred_compiles d = Atomic.get d.compiles
 let shipped_substitute d = !(d.substituted)
