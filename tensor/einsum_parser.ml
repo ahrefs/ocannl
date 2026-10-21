@@ -49,6 +49,33 @@ let misspelled_row_variable spec =
   in
   find 0
 
+(* In multichar mode axes are separated by commas, and no axis spec can directly follow another: an
+   identifier, integer or [_] followed, across whitespace only, by another one never parses there.
+   Writing [s a] for two axes is the single-char habit carried into a spec that a [^] (or another
+   trigger) switched to multichar mode (gh-ocannl-1454). Returns [spec] with each such whitespace
+   gap replaced by [", "], if it has any. *)
+let whitespace_separated_axes spec =
+  let n = String.length spec in
+  let is_axis_char c = Char.is_alphanum c || Char.equal c '_' in
+  let buf = Buffer.create (n + 8) in
+  let found = ref false in
+  let rec go i =
+    if i < n then
+      if Char.is_whitespace spec.[i] && i > 0 && is_axis_char spec.[i - 1] then (
+        let rec gap_end j = if j < n && Char.is_whitespace spec.[j] then gap_end (j + 1) else j in
+        let j = gap_end i in
+        if j < n && is_axis_char spec.[j] then (
+          found := true;
+          Buffer.add_string buf ", ")
+        else Buffer.add_string buf (String.sub spec ~pos:i ~len:(j - i));
+        go j)
+      else (
+        Buffer.add_char buf spec.[i];
+        go (i + 1))
+  in
+  go 0;
+  if !found then Some (Buffer.contents buf) else None
+
 let parse entry spec =
   let multichar = is_multichar spec in
   let lexbuf = Lexing.from_string spec in
@@ -58,7 +85,7 @@ let parse entry spec =
       let pos = lexbuf.Lexing.lex_curr_p in
       let line = pos.Lexing.pos_lnum in
       let col = pos.Lexing.pos_cnum - pos.Lexing.pos_bol in
-      let hint =
+      let row_variable_hint =
         match misspelled_row_variable spec with
         | None -> ""
         | Some name ->
@@ -77,6 +104,16 @@ let parse entry spec =
                `..%s..`, not `...%s..`%s"
               name name multichar_note
       in
+      let separator_hint =
+        match (Lexer.multichar_trigger spec, whitespace_separated_axes spec) with
+        | Some trigger, Some fixed ->
+            Printf.sprintf
+              "; hint: the `%c` puts this spec in multichar mode, where axes are separated by \
+               commas, not whitespace: write `%s`"
+              trigger fixed
+        | _ -> ""
+      in
+      let hint = row_variable_hint ^ separator_hint in
       raise
         (Parse_error
            (Printf.sprintf "Parse error at line %d, column %d in spec: %s%s" line col spec hint))
