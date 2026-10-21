@@ -8283,11 +8283,8 @@ struct
 
   (** Renders a batch without compiling it: the kernels are rendered by one syntax instance over the
       whole batch, exactly as {!compile_batch} renders them, so a kernel's text is the same
-      whichever subset of the batch is later assembled into a translation unit. [transform_kernel]
-      rewrites each kernel's rendered definition before anything is assembled from it (HIP's
-      per-kernel renaming of loop symbols, gh-ocannl-1314); it must keep the kernel's meaning. *)
-  let render_batch ?(transform_kernel = fun ~name:_ text -> text) ~names bindings lowereds ~includes
-      ~builtins ?(conditional_includes = []) () =
+      whichever subset of the batch is later assembled into a translation unit. *)
+  let render_batch ~names bindings lowereds ~includes ~builtins ?(conditional_includes = []) () =
     let module Syntax = C_syntax (Config (struct
       let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
     end))
@@ -8298,7 +8295,7 @@ struct
     let rendered =
       Array.map2_exn names lowereds ~f:(fun name lowered ->
           let kparams, doc, launch = Syntax.compile_proc ~name idx_params lowered in
-          ((kparams, name, launch), transform_kernel ~name (Syntax.render_doc doc)))
+          ((kparams, name, launch), Syntax.render_doc doc))
     in
     let assemble idxs =
       (* Each kernel's document starts at column 0 after a hard line, so rendering them apart and

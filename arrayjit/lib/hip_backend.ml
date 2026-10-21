@@ -1242,22 +1242,20 @@ end = struct
      earlier compile in this process produced -- its cache misses -- as ONE program, and reuses the
      rest.
 
-     Every kernel is rendered with its loop and static-index symbols renamed by first occurrence
-     ([Kernel_code_cache.canonical_symbols]): symbols are minted fresh by every lowering and every
-     loop-splitting schedule op, so without it an unchanged kernel of the next candidate renders
-     with other numbers and never hits. The renaming is per kernel and bijective, so the code means
-     what codegen emitted; hiprtc compiles, and the [.hip] artifact shows, the renamed text.
-
      A kernel's key is its standalone source ([render_batch]'s [assemble [i]]: the includes, the
-     builtins it uses, its definition, including its name) and the complete hiprtc option list that
-     source compiles under ([hiprtc_options]: the device set's target architectures, the include
-     paths, the numerics flags, the debug flag). Misses with different option lists compile as
-     separate programs, so a kernel's code always came from its own option list. The reused code was
-     compiled from the identical kernel text, possibly beside other kernels: the builtins are
-     [__forceinline__] helpers and read-only constants, so a companion changes nothing it computes.
-     Process-local and bounded by [hip_kernel_cache_mib]; 0 disables it, and every batch compiles as
-     one program of all its kernels, as before. Parameters, bindings and launch geometry always come
-     from the current rendering, and every kernel still goes through [link_proc]'s checks. *)
+     builtins it uses, its definition, including its name) with its minted names -- loop and
+     static-index symbols, scope-local names -- renamed by first occurrence
+     ([Kernel_code_cache.canonical_symbols]), and the complete hiprtc option list that source
+     compiles under ([hiprtc_options]: the device set's target architectures, the include paths, the
+     numerics flags, the debug flag). Misses with different option lists compile as separate
+     programs, so a kernel's code always came from its own option list. The reused code was compiled
+     from the same kernel text up to that renaming -- a bijection on names the kernel owns, which an
+     emitted kernel's meaning and its machine code do not depend on -- possibly beside other
+     kernels: the builtins are [__forceinline__] helpers and read-only constants, so a companion
+     changes nothing it computes. Process-local and bounded by [hip_kernel_cache_mib]; 0 disables
+     it, and every batch compiles as one program of all its kernels, as before. Parameters, bindings
+     and launch geometry always come from the current rendering, and every kernel still goes through
+     [link_proc]'s checks. *)
   let kernel_cache_capacity_bytes =
     lazy
       (let mib = Utils.get_global_arg ~default:"256" ~arg_name:"hip_kernel_cache_mib" in
@@ -1274,10 +1272,8 @@ end = struct
   let compile_kernels ~batch ~names bindings lowereds =
     Compile_cost.record_reuse_capable ();
     let r =
-      Compile.render_batch
-        ~transform_kernel:(fun ~name text ->
-          Kernel_code_cache.canonical_symbols ~keep:[ name ] text)
-        ~names bindings lowereds ~includes:hip_includes ~builtins:Builtins_hip.builtins
+      Compile.render_batch ~names bindings lowereds ~includes:hip_includes
+        ~builtins:Builtins_hip.builtins
         ~conditional_includes:Cuda_like_config.Hip.conditional_includes ()
     in
     let n = Array.length r.entries in
@@ -1291,9 +1287,9 @@ end = struct
     in
     Lazy.force ensure_initialized;
     let target_archs = hiprtc_target_archs () in
-    (* The routine's full source -- every kernel, loop symbols renamed as compiled -- is its [.hip]
-       artifact whatever was compiled: the debug view of what codegen emitted (and what tests read)
-       does not depend on what the cache held. *)
+    (* The routine's full source, as codegen emitted it, is its [.hip] artifact whatever was
+       compiled: the debug view of what codegen emitted (and what tests read) does not depend on
+       what the cache held. The renaming is the key's alone; hiprtc compiles the emitted text. *)
     let full_source = r.assemble all in
     write_source_artifact ~name (with_conditional_includes full_source);
     let programs = Array.create ~len:n None in
@@ -1306,7 +1302,12 @@ end = struct
           Array.init n ~f:(fun i ->
               let source = r.assemble [ i ] in
               let options = hiprtc_options ~target_archs source in
-              (options, Kernel_code_cache.key ~parts:(options @ [ source ])))
+              (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
+                 kernel -- rendered with other symbol numbers -- finds this one. *)
+              let canonical =
+                Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source
+              in
+              (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
         in
         Array.iteri keyed ~f:(fun i (_, key) ->
             programs.(i) <- Kernel_code_cache.find kernel_cache key);

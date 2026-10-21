@@ -380,11 +380,12 @@ files.
   i.e. a fixed 0.34 s (0.14 s) per program, and 4, 8 or 16 threads changed nothing although
   hipjit's bindings release the runtime lock. So neither per-kernel modules nor in-process parallel
   compiles pay; compiling FEWER kernels in one program does.
-- `Hip_backend`'s batch compile therefore renders each kernel with its symbols renamed by first
-  occurrence (`Ir.Kernel_code_cache.canonical_symbols`: every lowering and every loop-splitting op
-  mints fresh `i<N>` symbols, so without it no kernel of the next candidate ever matched), keys it
-  by that standalone source
-  (`Compile_driver.render_batch`'s `assemble [i]`, name included) plus its complete hiprtc option
+- `Hip_backend`'s batch compile therefore keys each kernel by its standalone source
+  (`Compile_driver.render_batch`'s `assemble [i]`, name included) with its minted names renamed by
+  first occurrence (`Ir.Kernel_code_cache.canonical_symbols`: every lowering and every
+  loop-splitting op mints fresh `i<N>` symbols and `v<N>_` locals, so without it no kernel of the
+  next candidate ever matched; the renaming is the KEY's only, since tests and the volatility census
+  read the emitted names) plus its complete hiprtc option
   list (`hiprtc_options`), reuses the code of every kernel an earlier compile in the process
   produced, and compiles the misses as ONE program per distinct option list, published to the cache
   only after hiprtc returns (`Ir.Kernel_code_cache`: bounded FIFO by bytes,
